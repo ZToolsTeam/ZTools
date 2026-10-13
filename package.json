@@ -12,6 +12,9 @@
     "test:dx": "node --test tests/dx-create-plugin.test.mjs",
     "create-plugin": "node scripts/create-plugin.mjs",
     "scan-plugins": "node scripts/scan-plugin-security.mjs",
+    "release": "node scripts/sync-release.mjs all",
+    "release:oss": "node scripts/sync-release.mjs oss",
+    "release:extensions": "node scripts/sync-release.mjs extensions",
     "start:mac": "npm --prefix electron-client run start:mac",
     "package:mac": "npm --prefix electron-client run package:app:darwin:universal --"
   },

@@ -74,6 +74,21 @@
 - **上线后按需追加（当前不做）**：`plugins.json` 签名、运行时权限拦截/沙箱、高危权限 Two-Man Rule 双人复核、作者 2FA、举报后台、团队私有扩展签名。
 - **免运维静态分发**：GitHub Releases 自动产出 `{plugin-id}-{version}.zip` 与静态全局索引 `plugins.json`，直连腾讯云 COS / Cloudflare R2 对象存储，接入国内 EdgeOne CDN。**带版本号的 zip 可 30 天强缓存；`plugins.json` 必须短缓存（≤ 5 分钟）**，否则下架开关无法及时生效。
 
+### 3.1 双仓开源飞轮与商业资产物理隔离规范（Dual-Repo & Commercial Shield）
+- **战略双仓体系（对齐 Raycast 标杆实践）**：
+  1. **核心宿主开源仓库（`codingmuse/ZTools`）**：采用 **GNU GPL-3.0** 开源许可证。完全开源客户端壳层与声明式组件引擎，但依托 GPL-3.0 强传染性条款强制任何二次分发或商业衍生版本必须以同等 GPL-3.0 协议公开全部源码，从法律底层彻底封死竞品“套壳闭源”的商业侵占路径；官方依法独占双重许可（Dual-Licensing）变现权利。
+  2. **插件生态大仓（`codingmuse/ZTools-extensions`）**：采用 **MIT** 宽松许可证。对标 `raycast/extensions`，官方插件与社区开发者贡献统一汇聚于此；根目录内置一键脚手架（`npm run create-plugin`）与本地 AST 安全扫描；开发者向社区提交 PR 零版权顾虑，最大化驱动生态飞轮。
+- **商业资产物理隔离红线（绝对禁止进入开源仓库）**：
+  * **核心私有商业资产黑名单**：
+    - `DLLPlugins/`：包含 35 款核心自营 Windows 原生动态库插件（极客独占底层工具、硬件专有驱动与深度系统适配，属企业核心商业资产），严禁开源；
+    - `backend/`：商业后台服务、企业协同与鉴权计费模块，严禁开源；
+    - `installer/`：传统 Delphi 专有安装包工程（架构老旧不友好，客户端统一采用现代 Electron 官方打包流水线），严禁开源；
+    - `bin/`：历史旧版 CEF 运行时与本地临时大文件，严禁开源；
+    - 敏感环境变量与凭据（`.env.local` 等凭据文件）。
+  * **发布隔离防线**：严禁直接将包含敏感提交历史的内部私有主仓推向公开 GitHub。所有开源发布强制通过 `scripts/prepare-opensource-release.mjs` 镜像抽取白名单纯净工作树，确保开源仓库仅含合规公开源码。
+- **客户端 4 大开发者引导触点规范**：
+  * 宿主必须在主界面提供零门槛触达插件生态的入口：主搜索框内置快捷指令（`developer-create-extension`、`developer-github-repo`）、插件市场无搜索结果时的高转化空状态号召（“🚀 想要该功能？5分钟写一个插件”）、市场底部常驻生态大仓直达条、设置中心「开发者与扩展生态」一键加载本地开发插件与直通大仓。
+
 ### 4. 智能化与去中心化同步
 - **AI Native 与原生 MCP 网关**：
   - BYOK (Bring Your Own Key) 统一大模型路由（`ModelRouter`）：适配 DeepSeek（原生支持 R1 思考流）、OpenAI、Claude、SiliconFlow；
@@ -227,7 +242,29 @@ node scripts/scan-plugin-security.mjs <plugin-dir>
 cd frontend && npm run dev
 cd frontend && npm run build
 cd frontend && npm run build:sdk
+
+# 开源双仓一键增量发布与同步 (支持 all / oss / extensions)
+npm run release              # 一键同步核心宿主与插件大仓到 GitHub
+npm run release:oss          # 仅同步核心宿主仓库 (codingmuse/ZTools)
+npm run release:extensions   # 仅同步插件生态大仓 (codingmuse/ZTools-extensions)
 ```
+
+### AI 自动化开源发版与零命令交互契约 (Zero-Command AI Release Pipeline)
+- **设计宗旨（彻底消除用户心智负担）**：
+  * 用户**无需记忆任何脚本名称、参数选项、Git 命令行语法或本地文件系统的物理镜像路径**；
+  * 用户在日常对话中只要使用任意模糊自然语言表达发版或开源同步意图，AI **必须主动领会、安全校验并自动闭环完成发布全流程**，严禁反问用户或要求用户输入强命令。
+- **自然语言意图识别矩阵（模糊识别，全自动承接）**：
+  * **全量发版意图**：“把最新代码发到开源仓库”、“把今天改的代码推到开源 GitHub”、“发布开源版”、“全量同步开源双仓”、“提交开源”、“把这两个项目推上去”；
+  * **仅宿主发版意图**：“把核心宿主同步到开源”、“推一下开源宿主”、“更新开源客户端源码”；
+  * **仅插件发版意图**：“同步一下开源插件大仓”、“把插件库推上去”、“发布插件生态”。
+- **AI 接收意图后的标准全自动执行 SOP（五步流水线）**：
+  1. **状态自审与门禁检测**：快速检查当前工作区，确认无高风险破坏或未完成代码，关键测试或构建处于稳定状态；
+  2. **物理隔离安全复核**：严格审查待发布文件范围，确保 `DLLPlugins/`、`backend/`、`installer/`、`bin/` 等商业资产与 `.env.local` 等敏感配置绝对未越界；
+  3. **调用统一同步执行器**：
+     - 执行 `node scripts/sync-release.mjs [all|oss|extensions]`；
+     - 脚本自动执行纯净源码白名单抽取、智能保留 `.git` 进行极速增量 diff 比对、自动 commit 并推送到 GitHub `main` 分支；
+  4. **提交状态与 SHA 核对**：确认 git push 返回成功，获取最新 commit 短哈希；
+  5. **闭环反馈汇报**：向用户汇报同步完成概况，附带对应的 GitHub 仓库地址（[ZTools](https://github.com/codingmuse/ZTools) / [ZTools-extensions](https://github.com/codingmuse/ZTools-extensions)），让用户彻底省心。
 
 ### 客户端启动与 Windows 桌面穿透规范（强制执行）
 - **启动前互斥守则**：Electron 单例锁机制下，启动新实例前必须先清理旧实例（`Stop-Process -Name electron -Force -ErrorAction SilentlyContinue`），否则新实例因抢不到 `requestSingleInstanceLock` 会立即静默退出。

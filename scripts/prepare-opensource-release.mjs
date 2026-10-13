@@ -95,12 +95,16 @@ function copyRecursive(srcDir, destDir, baseRel = '') {
   }
 }
 
-// 3. 执行清洗与创建目标目录
+// 3. 执行清洗与创建目标目录 (严格保留 .git 版本库以实现增量 diff 与极速同步)
 if (fs.existsSync(targetRoot)) {
-  console.log(`[清理] 清除旧的开源暂存目录: ${targetRoot}...`)
-  fs.rmSync(targetRoot, { recursive: true, force: true })
+  console.log(`[清理] 清除旧的开源暂存文件 (保留 .git 版本库)...`)
+  for (const item of fs.readdirSync(targetRoot)) {
+    if (item === '.git') continue
+    fs.rmSync(path.join(targetRoot, item), { recursive: true, force: true })
+  }
+} else {
+  fs.mkdirSync(targetRoot, { recursive: true })
 }
-fs.mkdirSync(targetRoot, { recursive: true })
 
 // 4. 复制根文件
 console.log('[1/4] 复制根目录基础合规文件...')

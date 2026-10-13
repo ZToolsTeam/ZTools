@@ -26,9 +26,14 @@ console.log(`源工程目录:   ${srcRoot}`)
 console.log(`插件大仓目录: ${targetRoot}\n`)
 
 if (fs.existsSync(targetRoot)) {
-  fs.rmSync(targetRoot, { recursive: true, force: true })
+  console.log(`[清理] 清除旧的插件暂存文件 (保留 .git 版本库)...`)
+  for (const item of fs.readdirSync(targetRoot)) {
+    if (item === '.git') continue
+    fs.rmSync(path.join(targetRoot, item), { recursive: true, force: true })
+  }
+} else {
+  fs.mkdirSync(targetRoot, { recursive: true })
 }
-fs.mkdirSync(targetRoot, { recursive: true })
 fs.mkdirSync(path.join(targetRoot, 'extensions'), { recursive: true })
 fs.mkdirSync(path.join(targetRoot, 'scripts'), { recursive: true })
 
