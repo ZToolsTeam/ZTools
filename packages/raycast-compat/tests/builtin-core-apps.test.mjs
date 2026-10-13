@@ -58,9 +58,9 @@ describe("Raycast Compat: Official Built-in Core Applications Suite", () => {
       assert.ok(pinnedOnly.every(item => item.pinned));
 
       // 3. Search query matching
-      const searchRes = filterClipboardItems(SAMPLE_CLIPBOARD_ITEMS, { query: "Raycast" });
+      const searchRes = filterClipboardItems(SAMPLE_CLIPBOARD_ITEMS, { query: "现代化架构" });
       assert.equal(searchRes.length, 1);
-      assert.match(searchRes[0].content, /Raycast/);
+      assert.match(searchRes[0].content, /现代化架构/);
 
       // 4. Search file path
       const fileRes = filterClipboardItems(SAMPLE_CLIPBOARD_ITEMS, { query: "hosts" });
@@ -133,13 +133,13 @@ describe("Raycast Compat: Official Built-in Core Applications Suite", () => {
       let desc = root.getLatest();
 
       // 1. Search text change
-      desc.props.onSearchTextChange("Raycast");
+      desc.props.onSearchTextChange("现代化架构");
       await new Promise(r => queueMicrotask(r));
       desc = root.getLatest();
 
       let sec = desc.children[0];
       assert.equal(sec.children.length, 1);
-      assert.match(sec.children[0].props.title, /Raycast/);
+      assert.match(sec.children[0].props.title, /现代化架构/);
 
       // Reset search
       desc.props.onSearchTextChange("");

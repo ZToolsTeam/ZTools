@@ -537,7 +537,14 @@ function createMainWindowInstance(): BrowserWindow {
     icon: mainApplicationIcon, webRoot: activeWebRoot(), registry,
     showOnReady: initialLaunchIntent?.autostart !== true, darkMode: nativeTheme.shouldUseDarkColors,
     ...(initialMainWindowSize ? { initialSize: initialMainWindowSize } : {}),
-    persistNormalBounds: bounds => { void services?.config.setMainWindowSize(bounds.width, bounds.height).catch(error => console.warn('保存主窗口尺寸失败', error)) }
+    persistNormalBounds: bounds => { void services?.config.setMainWindowSize(bounds.width, bounds.height).catch(error => console.warn('保存主窗口尺寸失败', error)) },
+    onToggleLauncher: () => {
+      if (launcher) {
+        launcher.show()
+      } else if (mainWindow && !mainWindow.isDestroyed()) {
+        mainWindow.webContents.send('ztools:toggle_launcher_mode')
+      }
+    }
   })
   mainWindow = window
   updateMainWindowTheme(window, nativeTheme.shouldUseDarkColors)

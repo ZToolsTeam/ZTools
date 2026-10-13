@@ -52,6 +52,8 @@ export function normalizeEventKeyCombo(event) {
   let key = event.key || ''
   if (key === 'Escape' || key === 'Esc') {
     key = 'Escape'
+  } else if (key === ' ' || event.code === 'Space') {
+    key = 'Space'
   } else if (key.length === 1) {
     key = key.toUpperCase()
   }

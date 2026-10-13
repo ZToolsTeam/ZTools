@@ -37,8 +37,11 @@ lerna-debug.log*
 .tmp/
 *.tmp
 
-# 测试覆盖率
-coverage/
+# 临时/废弃工具与AI引导目录
+.kiro/
+devtools/
+examples/
+design-system/
 .nyc_output/
 public/sdk/ztools-api.js
 public/version.json

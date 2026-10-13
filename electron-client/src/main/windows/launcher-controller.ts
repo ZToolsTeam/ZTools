@@ -20,6 +20,26 @@ export interface LauncherControllerOptions {
   }
 }
 
+export interface LauncherInputController {
+  hide(): void
+}
+
+export function handleLauncherBeforeInputEvent(
+  event: { preventDefault: () => void },
+  input: { alt?: boolean; code?: string; key?: string; type?: string },
+  controller: LauncherInputController
+): boolean {
+  // 对标 Raycast: 极客条内按下 Alt+Space 彻底阻止原生菜单并收起隐藏 (Toggle Hide)
+  if (input.alt && (input.key === ' ' || input.code === 'Space')) {
+    event.preventDefault()
+    if (input.type === 'keyDown') {
+      controller.hide()
+    }
+    return true
+  }
+  return false
+}
+
 export class LauncherController {
   #window: BrowserWindow | null = null
   #frameSyncManager: FrameSyncManager | null = null
@@ -138,6 +158,10 @@ export class LauncherController {
     })
 
     this.options.registry.registerMain(window.webContents)
+
+    window.webContents.on('before-input-event', (event, input) => {
+      handleLauncherBeforeInputEvent(event, input, this)
+    })
 
     window.on('blur', () => {
       if (!window.isDestroyed() && window.isVisible()) {

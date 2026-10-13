@@ -4,6 +4,8 @@ build/
 .agent/
 .claude/
 .cursor/
+.kiro/
+**/.kiro/
 .playwright-mcp/
 .vite/
 .vscode/

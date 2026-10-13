@@ -1,6 +1,6 @@
 import { getHotkey } from '@/api/apiserver'
 
-export const DEFAULT_GLOBAL_WAKE_HOTKEY = 'Ctrl+Shift+Z'
+export const DEFAULT_GLOBAL_WAKE_HOTKEY = 'Alt+Space'
 
 const GLOBAL_WAKE_TRIGGER_ID = 'global_wake_hotkey'
 

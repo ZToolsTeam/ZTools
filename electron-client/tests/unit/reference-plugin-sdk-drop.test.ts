@@ -5,7 +5,7 @@ import path from 'node:path'
 import vm from 'node:vm'
 
 interface PluginSDK { onFileDrop(callback: (files: unknown, errors: unknown) => void): () => void }
-const source = fs.readFileSync(path.resolve('../frontend/src/sdk/plugin-sdk.js'), 'utf8')
+const source = fs.readFileSync(path.resolve('../frontend/public/sdk/plugin-sdk.js'), 'utf8')
 const file = { grantId: 'a'.repeat(43), displayName: 'literal:back\\slash\n.txt', kind: 'file', operations: ['read'],
   fileUrl: 'ztools://file/' + 'a'.repeat(43) + '/' + encodeURIComponent('literal:back\\slash\n.txt') }
 function fixture(version = 2) {

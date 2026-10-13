@@ -142,6 +142,20 @@ const handleGlobalKeydown = (event) => {
         ? WINDOW_MODES.DASHBOARD
         : WINDOW_MODES.LAUNCHER
     )
+    return
+  }
+
+  // Alt+Space 快速进入极客条模式（并阻止默认事件，阻止 Windows 原生系统菜单弹出）
+  const isAltSpace = event.altKey && (event.code === 'Space' || event.key === ' ' || event.keyCode === 32)
+  if (isAltSpace) {
+    event.preventDefault()
+    event.stopPropagation()
+    switchWindowMode(
+      windowModeState.currentMode === WINDOW_MODES.LAUNCHER
+        ? WINDOW_MODES.DASHBOARD
+        : WINDOW_MODES.LAUNCHER
+    )
+    return
   }
 }
 
@@ -221,11 +235,16 @@ onMounted(async () => {
     if (window.ztools?.events) {
       await window.ztools.events.subscribe('hotkey_conflicts_detected').catch(() => {})
       window.ztools.events.on('hotkey_conflicts_detected', handleHotkeyConflictsDetected)
+      window.ztools.events.on('toggle_launcher_mode', handleToggleLauncher)
     }
   } catch (e) {
     // 静默处理
   }
 })
+
+const handleToggleLauncher = () => {
+  switchWindowMode(WINDOW_MODES.LAUNCHER)
+}
 
 onBeforeUnmount(() => {
   window.removeEventListener('keydown', handleGlobalKeydown)
@@ -233,9 +252,10 @@ onBeforeUnmount(() => {
   delete window.__showUpdateNotification
   delete window.__silentWebUpdate
   delete window.__updateComplete
-  // 清理快捷键冲突事件监听
+  // 清理快捷键与极客模式事件监听
   try {
     window.ztools?.events?.off?.('hotkey_conflicts_detected', handleHotkeyConflictsDetected)
+    window.ztools?.events?.off?.('toggle_launcher_mode', handleToggleLauncher)
   } catch (e) {
     // 静默处理
   }

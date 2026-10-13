@@ -64,7 +64,19 @@ const IGNORE_PATTERNS = [
   /\.obj$/,
   /\.mp4$/,
   /\.m4a$/,
-  /\.wav$/
+  /\.wav$/,
+  // 3. 历史废弃与冗余模块黑名单（严禁进入开源发布）
+  /[\\/]\.kiro([\\/]|$)/,
+  /[\\/]devtools([\\/]|$)/,
+  /[\\/]examples([\\/]|$)/,
+  /[\\/]design-system([\\/]|$)/,
+  /[\\/]src[\\/]sdk([\\/]|$)/,
+  /[\\/]create-ztools-plugin([\\/]|$)/,
+  /[\\/]migrate-utools([\\/]|$)/,
+  /[\\/]SETUP_TESTS\.md$/,
+  /[\\/]MOCK_DEVELOPMENT\.md$/,
+  /[\\/]验证证据\.md$/,
+  /[\\/]resources[\\/]app[\\/]README\.md$/
 ]
 
 function shouldIgnore(relPath) {

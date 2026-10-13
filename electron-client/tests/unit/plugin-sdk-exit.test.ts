@@ -3,7 +3,7 @@ import test from 'node:test'
 import fs from 'node:fs'
 import vm from 'node:vm'
 
-const source = fs.readFileSync('../frontend/src/sdk/plugin-sdk.js', 'utf8')
+const source = fs.readFileSync('../frontend/public/sdk/plugin-sdk.js', 'utf8')
 interface SDK { onPluginOut(callback: (isKill: boolean) => unknown): () => void }
 function fixture() {
   const handlers = new Map<string, (value: unknown) => Promise<void>>()

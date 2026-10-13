@@ -106,7 +106,7 @@ describe('keymap 统一快捷键分发器测试套件', () => {
     expect(audit).toEqual(['declarative_esc_passthrough', 'global_esc'])
   })
 
-  it('3. [核心设计键位规范匹配] Enter, Ctrl+Enter, Ctrl+K, Esc, Ctrl+M, Ctrl+F', () => {
+  it('3. [核心设计键位规范匹配] Enter, Ctrl+Enter, Ctrl+K, Esc, Ctrl+M, Ctrl+F, Alt+Space', () => {
     const triggered = []
 
     registerKeyHandler(KEYMAP_SCOPES.GLOBAL, {
@@ -115,7 +115,8 @@ describe('keymap 统一快捷键分发器测试套件', () => {
       'Ctrl+K': () => { triggered.push('ctrl_k'); return true },
       'Escape': () => { triggered.push('esc'); return true },
       'Ctrl+M': () => { triggered.push('ctrl_m'); return true },
-      'Ctrl+F': () => { triggered.push('ctrl_f'); return true }
+      'Ctrl+F': () => { triggered.push('ctrl_f'); return true },
+      'Alt+Space': () => { triggered.push('alt_space'); return true }
     })
 
     dispatchKeyEvent({ key: 'Enter' })
@@ -124,6 +125,7 @@ describe('keymap 统一快捷键分发器测试套件', () => {
     dispatchKeyEvent({ key: 'Escape' })
     dispatchKeyEvent({ key: 'm', metaKey: true }) // Cmd+M on macOS
     dispatchKeyEvent({ key: 'f', ctrlKey: true })
+    dispatchKeyEvent({ key: ' ', altKey: true, code: 'Space' })
 
     expect(triggered).toEqual([
       'enter',
@@ -131,8 +133,14 @@ describe('keymap 统一快捷键分发器测试套件', () => {
       'ctrl_k',
       'esc',
       'ctrl_m',
-      'ctrl_f'
+      'ctrl_f',
+      'alt_space'
     ])
+
+    // 验证 normalizeEventKeyCombo 正确格式化 Space
+    expect(normalizeEventKeyCombo({ key: ' ', altKey: true, code: 'Space' })).toBe('Alt+Space')
+    expect(normalizeEventKeyCombo({ key: ' ', code: 'Space' })).toBe('Space')
+    expect(normalizeEventKeyCombo({ key: ' ', ctrlKey: true, code: 'Space' })).toBe('Ctrl+Space')
   })
 
   it('4. [Beyond Happy Path 异常容错] 非法输入、空事件、异常隔离与注销幂等', () => {

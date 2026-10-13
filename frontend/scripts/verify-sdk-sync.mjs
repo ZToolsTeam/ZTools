@@ -5,7 +5,6 @@ import { fileURLToPath } from 'node:url'
 const frontendRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 const repositoryRoot = resolve(frontendRoot, '..')
 const canonicalDirectory = resolve(frontendRoot, 'public/sdk')
-const pluginSdkSourcePath = resolve(frontendRoot, 'src/sdk/plugin-sdk.js')
 const sdkFiles = ['ztools-api.js', 'plugin-sdk.js']
 const targets = [
   {
@@ -50,28 +49,6 @@ function readRequiredFile(filePath, description) {
 for (const fileName of sdkFiles) {
   const sourcePath = resolve(canonicalDirectory, fileName)
   const sourceBytes = readRequiredFile(sourcePath, 'canonical SDK file')
-
-  if (fileName === 'plugin-sdk.js') {
-    const maintainedBytes = readRequiredFile(
-      pluginSdkSourcePath,
-      'maintained Plugin SDK source'
-    )
-    const canonicalPluginSdk = sourceBytes
-      ?.toString('utf8')
-      .replace(/\r\n?/g, '\n')
-    const maintainedPluginSdk = maintainedBytes
-      ?.toString('utf8')
-      .replace(/\r\n?/g, '\n')
-    if (
-      canonicalPluginSdk !== undefined &&
-      maintainedPluginSdk !== undefined &&
-      canonicalPluginSdk !== maintainedPluginSdk
-    ) {
-      errors.push(
-        `[sdk-sync] Content mismatch between maintained source ${pluginSdkSourcePath} and ${sourcePath}`
-      )
-    }
-  }
 
   for (const target of targets) {
     const targetPath = resolve(target.directory, fileName)

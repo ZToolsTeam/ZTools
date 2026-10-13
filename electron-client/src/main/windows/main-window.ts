@@ -42,6 +42,7 @@ export interface MainWindowOptions {
   darkMode?: boolean
   initialSize?: { width: number; height: number }
   persistNormalBounds?: (bounds: Electron.Rectangle) => void
+  onToggleLauncher?: (() => void) | undefined
 }
 
 export function secureWebPreferences(): Electron.WebPreferences {
@@ -75,6 +76,44 @@ export function configureSessionSecurity(files: FileSystemService, referencesOrS
       callback({ cancel: !allowed })
     }
   )
+}
+
+export interface BeforeInputEventLike {
+  preventDefault(): void
+}
+
+export interface InputDetailsLike {
+  type?: string
+  key?: string
+  code?: string
+  alt?: boolean
+  control?: boolean
+  shift?: boolean
+  meta?: boolean
+}
+
+export function handleMainWindowBeforeInputEvent(
+  event: BeforeInputEventLike,
+  input: InputDetailsLike,
+  options: {
+    onToggleLauncher?: (() => void) | undefined
+    isDestroyed?: (() => boolean) | undefined
+    sendIpc?: ((channel: string) => void) | undefined
+  }
+): boolean {
+  // 对标 Raycast: 拦截 Windows 系统菜单快捷键 Alt+Space (SC_KEYMENU)，彻底切断原生系统菜单并切换极客条
+  if (input.alt && (input.key === ' ' || input.code === 'Space')) {
+    event.preventDefault()
+    if (input.type === 'keyDown') {
+      if (typeof options.onToggleLauncher === 'function') {
+        options.onToggleLauncher()
+      } else if (!options.isDestroyed?.()) {
+        options.sendIpc?.('ztools:toggle_launcher_mode')
+      }
+    }
+    return true
+  }
+  return false
 }
 
 export function createMainWindow(options: MainWindowOptions): BrowserWindow {
@@ -167,6 +206,13 @@ export function createMainWindow(options: MainWindowOptions): BrowserWindow {
   })
   window.webContents.setWindowOpenHandler(() => ({ action: 'deny' }))
   window.webContents.on('will-attach-webview', (event) => event.preventDefault())
+  window.webContents.on('before-input-event', (event, input) => {
+    handleMainWindowBeforeInputEvent(event, input, {
+      ...(options.onToggleLauncher ? { onToggleLauncher: options.onToggleLauncher } : {}),
+      isDestroyed: () => window.isDestroyed(),
+      sendIpc: (channel) => window.webContents.send(channel)
+    })
+  })
   if (options.showOnReady !== false) {
     window.once('ready-to-show', () => {
       console.log('MAIN_WINDOW_READY_TO_SHOW triggered')
