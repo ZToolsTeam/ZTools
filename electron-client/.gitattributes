@@ -1,0 +1,13 @@
+/.gitattributes text eol=lf
+/native/** text eol=lf
+/scripts/build-native-host32.ps1 text eol=lf
+/scripts/build-ztools-service.ps1 text eol=lf
+/scripts/prepare-debug-service.ps1 text eol=lf
+/scripts/package-installer.mjs text eol=lf
+/scripts/test-native-host32.mjs text eol=lf
+/scripts/test-ztools-service.mjs text eol=lf
+/src/main/native-host/** text eol=lf
+/src/main/service/** text eol=lf
+/resources/** text eol=lf
+/tests/unit/native-host-protocol.test.ts text eol=lf
+/tests/unit/service-protocol.test.ts text eol=lf

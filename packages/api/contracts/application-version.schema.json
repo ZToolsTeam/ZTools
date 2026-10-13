@@ -1,0 +1,8 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ztools.cn/contracts/application-version.schema.json",
+  "title": "ZTools application version",
+  "description": "Three- or four-part numeric App release version. Each component contains 1 to 15 decimal digits; surrounding whitespace and SemVer suffixes are not accepted. A missing fourth component is normalized to zero for legacy compatibility.",
+  "type": "string",
+  "pattern": "^[0-9]{1,15}\\.[0-9]{1,15}\\.[0-9]{1,15}(?:\\.[0-9]{1,15})?$"
+}

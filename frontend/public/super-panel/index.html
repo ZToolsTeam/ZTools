@@ -1,0 +1,826 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>超级面板</title>
+  <script>
+    window.__superPanelSetDarkMode = isDark => {
+      document.documentElement.classList.toggle('dark', Boolean(isDark))
+    }
+    window.__superPanelSetDarkMode(
+      new URLSearchParams(window.location.search).get('theme') === 'dark'
+    )
+  </script>
+  <style>
+    :root {
+      --bg: #ffffff;
+      --text: #1f2328;
+      --muted: #6b7280;
+      --line: #e4e7ec;
+      --window-border: #d5dbe6;
+      --primary: #2563eb;
+      --primary-soft: #eef4ff;
+      --panel: #f8fafc;
+      --toolbar-bg: rgba(255, 255, 255, .96);
+      --control-border: #d7dce4;
+      --control-text: #4b5563;
+      --control-muted: #8a93a1;
+      --control-hover: #f1f5f9;
+      --tabs-bg: #ffffff;
+      --tab-text: #5f6877;
+      --tab-active-bg: #eff6ff;
+      --scrollbar: #cbd5e1;
+      --item-bg: #ffffff;
+      --item-hover-border: #b9d1ff;
+      --item-hover-bg: #f3f7ff;
+      --pin-bg: rgba(255, 255, 255, .88);
+      --pin-muted: #cbd5e1;
+      --item-text: #242b36;
+      --footer-text: #697386;
+      --kbd-bg: #ffffff;
+      --kbd-border: #d8dde6;
+      --kbd-border-bottom: #c5ccd8;
+    }
+
+    :root.dark {
+      --bg: #141414;
+      --text: #f5f5f5;
+      --muted: #a6a6a6;
+      --line: #303030;
+      --window-border: #3c3c3c;
+      --primary: #4a8cff;
+      --primary-soft: rgba(74, 140, 255, .16);
+      --panel: #1f1f1f;
+      --toolbar-bg: rgba(20, 20, 20, .96);
+      --control-border: #424242;
+      --control-text: #d9d9d9;
+      --control-muted: #8c8c8c;
+      --control-hover: #2a2a2a;
+      --tabs-bg: #141414;
+      --tab-text: #bfbfbf;
+      --tab-active-bg: rgba(74, 140, 255, .16);
+      --scrollbar: #4a4a4a;
+      --item-bg: #141414;
+      --item-hover-border: rgba(74, 140, 255, .65);
+      --item-hover-bg: rgba(74, 140, 255, .12);
+      --pin-bg: rgba(42, 42, 42, .92);
+      --pin-muted: #595959;
+      --item-text: #f0f0f0;
+      --footer-text: #a6a6a6;
+      --kbd-bg: #262626;
+      --kbd-border: #434343;
+      --kbd-border-bottom: #595959;
+    }
+
+    * { box-sizing: border-box; }
+
+    html,
+    body {
+      width: 100%;
+      height: 100%;
+      margin: 0;
+      overflow: hidden;
+      background: var(--bg);
+      color: var(--text);
+      font-family: "Microsoft YaHei UI", "Segoe UI", sans-serif;
+      font-size: 12px;
+    }
+
+    button,
+    input {
+      font: inherit;
+    }
+
+    .window {
+      width: 100%;
+      height: 100%;
+      min-width: 0;
+      min-height: 0;
+      display: grid;
+      grid-template-rows: 40px 34px minmax(0, 1fr) 30px;
+      overflow: hidden;
+      border: 1px solid var(--window-border);
+      background: var(--bg);
+    }
+
+    .toolbar {
+      display: grid;
+      grid-template-columns: 1fr 64px;
+      align-items: center;
+      gap: 8px;
+      padding: 7px 9px 6px;
+      border-bottom: 1px solid var(--line);
+      background: var(--toolbar-bg);
+      user-select: none;
+      -webkit-app-region: drag;
+    }
+
+    .toolbar input,
+    .toolbar button,
+    .toolbar .search,
+    .toolbar .actions {
+      -webkit-app-region: no-drag;
+    }
+
+    .search {
+      height: 26px;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      min-width: 0;
+      padding: 0 8px;
+      border: 1px solid var(--control-border);
+      border-radius: 7px;
+      background: var(--panel);
+    }
+
+    .search span {
+      flex: none;
+      color: var(--control-muted);
+    }
+
+    .search input {
+      width: 100%;
+      min-width: 0;
+      border: 0;
+      outline: 0;
+      background: transparent;
+      color: var(--text);
+      font-size: 12px;
+    }
+
+    .search input::placeholder {
+      color: var(--control-muted);
+    }
+
+    .actions {
+      display: flex;
+      justify-content: flex-end;
+      gap: 4px;
+    }
+
+    .icon-btn {
+      width: 26px;
+      height: 26px;
+      display: grid;
+      place-items: center;
+      border: 0;
+      border-radius: 7px;
+      background: transparent;
+      color: var(--control-text);
+      font-size: 15px;
+      line-height: 1;
+      cursor: pointer;
+    }
+
+    .icon-btn:hover {
+      background: var(--control-hover);
+    }
+
+    .icon-btn.primary {
+      background: var(--primary-soft);
+      color: var(--primary);
+      font-weight: 700;
+    }
+
+    .tabs {
+      display: grid;
+      grid-template-columns: repeat(5, 1fr);
+      gap: 4px;
+      padding: 6px 10px 4px;
+      background: var(--tabs-bg);
+    }
+
+    .tab {
+      display: grid;
+      place-items: center;
+      border: 0;
+      border-radius: 7px;
+      background: transparent;
+      color: var(--tab-text);
+      font-size: 12px;
+      font-weight: 600;
+      cursor: pointer;
+    }
+
+    .tab.active {
+      background: var(--tab-active-bg);
+      color: var(--primary);
+    }
+
+    .content {
+      padding: 8px 10px;
+      min-height: 0;
+      overflow-x: hidden;
+      overflow-y: auto;
+      scrollbar-width: thin;
+      scrollbar-color: var(--scrollbar) transparent;
+    }
+
+    .content::-webkit-scrollbar {
+      width: 7px;
+    }
+
+    .content::-webkit-scrollbar-thumb {
+      border-radius: 999px;
+      background: var(--scrollbar);
+    }
+
+    .content::-webkit-scrollbar-track {
+      background: transparent;
+    }
+
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(76px, 1fr));
+      gap: 7px 6px;
+      justify-content: start;
+      align-content: start;
+    }
+
+    .item {
+      position: relative;
+      min-width: 0;
+      height: 78px;
+      display: grid;
+      justify-items: center;
+      align-content: center;
+      gap: 5px;
+      border: 1px solid transparent;
+      border-radius: 8px;
+      background: var(--item-bg);
+      cursor: pointer;
+      user-select: none;
+    }
+
+    .item:hover,
+    .item.selected {
+      border-color: var(--item-hover-border);
+      background: var(--item-hover-bg);
+    }
+
+    .pin {
+      position: absolute;
+      top: 3px;
+      right: 4px;
+      width: 18px;
+      height: 18px;
+      border: 0;
+      border-radius: 999px;
+      background: var(--pin-bg);
+      color: #c18400;
+      display: grid;
+      place-items: center;
+      padding: 0;
+      cursor: pointer;
+      box-shadow: 0 1px 4px rgba(15, 23, 42, 0.14);
+    }
+
+    .pin-icon {
+      width: 13px;
+      height: 13px;
+      fill: currentColor;
+      transform: rotate(-35deg);
+      transform-origin: 50% 55%;
+      transition: transform 120ms ease, color 120ms ease;
+    }
+
+    .pin.pinned .pin-icon {
+      transform: rotate(0deg);
+    }
+
+    .pin:not(.pinned) {
+      color: var(--pin-muted);
+      opacity: 0;
+      box-shadow: none;
+    }
+
+    .item:hover .pin,
+    .pin.pinned {
+      opacity: 1;
+    }
+
+    .app-icon,
+    .fallback-icon {
+      width: 30px;
+      height: 30px;
+      border-radius: 9px;
+      overflow: hidden;
+      font-size: 12px;
+    }
+
+    .app-icon {
+      object-fit: contain;
+    }
+
+    .fallback-icon {
+      display: grid;
+      place-items: center;
+      color: #fff;
+      font-weight: 800;
+      background: linear-gradient(135deg, var(--primary), #0f766e);
+    }
+
+    .name {
+      width: min(78px, 100%);
+      height: 28px;
+      overflow: hidden;
+      color: var(--item-text);
+      font-size: 11px;
+      line-height: 14px;
+      text-align: center;
+      display: -webkit-box;
+      -webkit-box-orient: vertical;
+      -webkit-line-clamp: 2;
+      overflow-wrap: anywhere;
+    }
+
+    .empty {
+      height: 100%;
+      display: grid;
+      place-items: center;
+      color: var(--control-muted);
+      font-size: 12px;
+    }
+
+    .empty[hidden] {
+      display: none;
+    }
+
+    .footer {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 0 10px;
+      border-top: 1px solid var(--line);
+      background: var(--panel);
+      color: var(--footer-text);
+      font-size: 11px;
+      user-select: none;
+      -webkit-app-region: drag;
+    }
+
+    .keys {
+      display: flex;
+      align-items: center;
+      gap: 4px;
+    }
+
+    kbd {
+      min-width: 18px;
+      padding: 1px 5px 2px;
+      border: 1px solid var(--kbd-border);
+      border-bottom-color: var(--kbd-border-bottom);
+      border-radius: 5px;
+      background: var(--kbd-bg);
+      color: var(--control-text);
+      font: 10px "Segoe UI", sans-serif;
+      text-align: center;
+    }
+  </style>
+</head>
+<body>
+  <main class="window">
+    <header class="toolbar">
+      <label class="search">
+        <span>⌕</span>
+        <input id="searchInput" autocomplete="off" spellcheck="false" placeholder="搜索插件、本地软件、系统工具、/快捷方式">
+      </label>
+      <div class="actions">
+        <button class="icon-btn primary" id="addBtn" data-system-tooltip="添加本地软件" aria-label="添加本地软件">+</button>
+        <button class="icon-btn" id="settingsBtn" data-system-tooltip="设置" aria-label="设置">⚙</button>
+      </div>
+    </header>
+
+    <nav class="tabs" id="tabs">
+      <button class="tab active" data-tab="history">历史</button>
+      <button class="tab" data-tab="pinned">固定</button>
+      <button class="tab" data-tab="local">本地</button>
+      <button class="tab" data-tab="system_tools">系统工具</button>
+      <button class="tab" data-tab="all">全部</button>
+    </nav>
+
+    <section class="content">
+      <div class="grid" id="grid"></div>
+      <div class="empty" id="empty" hidden>未找到匹配的项目</div>
+    </section>
+
+    <footer class="footer">
+      <div class="keys">
+        <kbd>↑</kbd><kbd>↓</kbd><span>选择</span>
+        <kbd>Enter</kbd><span>打开</span>
+        <kbd>Esc</kbd><span>关闭</span>
+      </div>
+    </footer>
+  </main>
+
+  <script src="ztools://web/shared/pinyin-pro.js"></script>
+  <script src="ztools://web/shared/fuzzy-search.js"></script>
+  <script>
+    const tabs = document.getElementById('tabs')
+    const grid = document.getElementById('grid')
+    const empty = document.getElementById('empty')
+    const searchInput = document.getElementById('searchInput')
+    const addBtn = document.getElementById('addBtn')
+    const settingsBtn = document.getElementById('settingsBtn')
+    const { FuzzySearchEngine, FUZZY_SEARCH_COLLECTIONS } = window.ZToolsFuzzySearch
+    const fuzzySearch = new FuzzySearchEngine()
+    const searchCollection = FUZZY_SEARCH_COLLECTIONS.SUPER_PANEL
+
+    function getPluginFullText(item) {
+      const keywords = Array.isArray(item.keywords) ? item.keywords : []
+      return [item.name, ...keywords].filter(Boolean).join(' ')
+    }
+
+    const state = {
+      activeTab: 'history',
+      defaultTab: 'history',
+      selectedIndex: 0,
+      query: '',
+      items: [],
+      shortcuts: [],
+      rendered: []
+    }
+
+    const pending = new Map()
+    let dataLoaded = false
+    let reloadPromise = null
+    let resetReloadTimer = 0
+    let tooltipShowTimer = 0
+    let activeTooltipTrigger = null
+    let tooltipVisible = false
+
+    const SYSTEM_TOOLTIP_ATTRIBUTE = 'data-system-tooltip'
+    const SYSTEM_TOOLTIP_SHOW_DELAY = 500
+
+    window.ztools = window.ztools || {}
+    window.ztools._transport = {
+      handleMessage(type, data) {
+        const payload = typeof data === 'string' ? JSON.parse(data) : data
+        const id = payload && payload._messageId
+        if (!id || !pending.has(id)) return
+        const entry = pending.get(id)
+        pending.delete(id)
+        if (payload && payload.success === false) {
+          entry.reject(new Error(payload.error || '调用失败'))
+        } else {
+          entry.resolve(payload)
+        }
+      }
+    }
+
+    function callNative(method, params = {}) {
+      if (window.__ztoolsSuperPanel && typeof window.__ztoolsSuperPanel.call === 'function') {
+        return window.__ztoolsSuperPanel.call(method, params)
+      }
+      return new Promise((resolve, reject) => {
+        if (!window.ztools || typeof window.ztools._sendMessage !== 'function') {
+          reject(new Error('ZTools bridge unavailable'))
+          return
+        }
+        const id = `sp_${Date.now()}_${Math.random().toString(16).slice(2)}`
+        pending.set(id, { resolve, reject })
+        window.ztools._sendMessage(method, JSON.stringify({ ...params, _messageId: id }))
+      })
+    }
+
+    function hideSystemTooltip() {
+      if (tooltipShowTimer) {
+        clearTimeout(tooltipShowTimer)
+        tooltipShowTimer = 0
+      }
+      activeTooltipTrigger = null
+      if (!tooltipVisible) return
+
+      tooltipVisible = false
+      callNative('window_hide_tooltip').catch(error => {
+        console.error('[SuperPanel] hide system tooltip failed', error)
+      })
+    }
+
+    function scheduleSystemTooltip(element) {
+      hideSystemTooltip()
+      const text = element.getAttribute(SYSTEM_TOOLTIP_ATTRIBUTE)?.trim()
+      if (!text) return
+
+      activeTooltipTrigger = element
+      tooltipShowTimer = setTimeout(() => {
+        tooltipShowTimer = 0
+        if (activeTooltipTrigger !== element || !element.isConnected) return
+
+        const currentText = element.getAttribute(SYSTEM_TOOLTIP_ATTRIBUTE)?.trim()
+        if (!currentText) return
+        tooltipVisible = true
+        callNative('window_show_tooltip', { text: currentText }).catch(error => {
+          tooltipVisible = false
+          console.error('[SuperPanel] show system tooltip failed', error)
+        })
+      }, SYSTEM_TOOLTIP_SHOW_DELAY)
+    }
+
+    function findSystemTooltipTrigger(target) {
+      if (!(target instanceof Element)) return null
+      return target.closest(`[${SYSTEM_TOOLTIP_ATTRIBUTE}]`)
+    }
+
+    document.addEventListener('mouseover', event => {
+      const element = findSystemTooltipTrigger(event.target)
+      if (element && element !== activeTooltipTrigger) scheduleSystemTooltip(element)
+    }, true)
+
+    document.addEventListener('mouseout', event => {
+      if (!activeTooltipTrigger) return
+      if (event.relatedTarget instanceof Node && activeTooltipTrigger.contains(event.relatedTarget)) return
+      if (activeTooltipTrigger.contains(event.target)) hideSystemTooltip()
+    }, true)
+
+    document.addEventListener('focusin', event => {
+      const element = findSystemTooltipTrigger(event.target)
+      if (element) scheduleSystemTooltip(element)
+    }, true)
+
+    document.addEventListener('focusout', event => {
+      if (activeTooltipTrigger?.contains(event.target)) hideSystemTooltip()
+    }, true)
+
+    document.addEventListener('scroll', hideSystemTooltip, true)
+    window.addEventListener('resize', hideSystemTooltip)
+    window.addEventListener('blur', hideSystemTooltip)
+
+    function escapeAttribute(value) {
+      return String(value ?? '').replace(/[&<>"']/g, character => ({
+        '&': '&amp;',
+        '<': '&lt;',
+        '>': '&gt;',
+        '"': '&quot;',
+        "'": '&#39;'
+      })[character])
+    }
+
+    function focusSearchInput(retry = true) {
+      const applyFocus = () => {
+        searchInput.focus()
+        const cursor = searchInput.value.length
+        try {
+          searchInput.setSelectionRange(cursor, cursor)
+        } catch (_) {}
+      }
+
+      applyFocus()
+      if (!retry) return
+
+      requestAnimationFrame(applyFocus)
+      setTimeout(applyFocus, 0)
+      setTimeout(applyFocus, 60)
+      setTimeout(applyFocus, 160)
+    }
+
+    window.__superPanelFocusSearch = () => focusSearchInput()
+
+    function initials(name) {
+      const source = (name || '?').trim()
+      if (!source) return '?'
+      const ascii = source.match(/[a-z0-9]+/i)
+      if (ascii) return ascii[0].slice(0, 3).toUpperCase()
+      return source.slice(0, 2)
+    }
+
+    function shortcutItems(query) {
+      const prefix = query.slice(1).toLowerCase()
+      const items = []
+      if (!prefix) {
+        items.push({
+          id: '__virtual_shortcut_settings__',
+          type: 'shortcut_settings',
+          name: '设置快捷方式',
+          description: '',
+          virtual: true
+        })
+      }
+      for (const mapping of state.shortcuts) {
+        const rawPrefix = String(mapping.prefix || '')
+        const mapPrefix = (rawPrefix.charAt(0) === '/' ? rawPrefix.slice(1) : rawPrefix).toLowerCase()
+        if (!prefix || mapPrefix.startsWith(prefix)) {
+          const item = state.items.find(it => it.id === mapping.pluginId && it.type === 'plugin')
+          if (item) items.push({ ...item, shortcutPrefix: mapping.prefix })
+        }
+      }
+      return items
+    }
+
+    function currentItems() {
+      const query = state.query.trim()
+      if (query.startsWith('/')) return shortcutItems(query)
+
+      let list = state.items
+      if (!query) {
+        if (state.activeTab === 'history') list = list.filter(item => item.recent)
+        if (state.activeTab === 'pinned') list = list.filter(item => item.pinned)
+        if (state.activeTab === 'local') list = list.filter(item => item.type === 'local')
+        if (state.activeTab === 'system_tools') list = list.filter(item => item.type === 'system_tool')
+        if (state.activeTab === 'all') list = list.filter(item => item.type !== 'shortcut_settings')
+        return list
+      }
+
+      return fuzzySearch.search(searchCollection, query).map(row => row.item)
+    }
+
+    function renderIcon(item) {
+      if (item.iconUrl) {
+        return `<img class="app-icon" src="${item.iconUrl}" alt="" onerror="this.replaceWith(fallbackIcon('${initials(item.name)}'))">`
+      }
+      return `<div class="fallback-icon">${initials(item.name)}</div>`
+    }
+
+    window.fallbackIcon = text => {
+      const node = document.createElement('div')
+      node.className = 'fallback-icon'
+      node.textContent = text
+      return node
+    }
+
+    function render() {
+      hideSystemTooltip()
+      state.rendered = currentItems()
+      if (state.selectedIndex >= state.rendered.length) state.selectedIndex = Math.max(0, state.rendered.length - 1)
+
+      for (const tab of tabs.querySelectorAll('.tab')) {
+        tab.classList.toggle('active', tab.dataset.tab === state.activeTab)
+      }
+
+      grid.innerHTML = state.rendered.map((item, index) => `
+        <div class="item ${index === state.selectedIndex ? 'selected' : ''}" data-index="${index}" data-type="${item.type}" data-system-tooltip="${escapeAttribute(item.description || item.name)}">
+          ${['plugin', 'local'].includes(item.type) ? `<button class="pin ${item.pinned ? 'pinned' : ''}" data-pin="1" data-system-tooltip="${item.pinned ? '取消固定' : '固定'}" aria-label="${item.pinned ? '取消固定' : '固定'}"><svg class="pin-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M15.2 3.3l5.5 5.5-2.1 2.1-1.2-.4-4.1 4.1.4 3.2-1.2 1.2-3.3-3.3-4.9 4.9-.9-.9 4.9-4.9-3.3-3.3 1.2-1.2 3.2.4 4.1-4.1-.4-1.2 2.1-2.1z"/></svg></button>` : ''}
+          ${renderIcon(item)}
+          <div class="name">${item.shortcutPrefix || item.name}</div>
+        </div>
+      `).join('')
+      empty.hidden = state.rendered.length > 0
+    }
+
+    function normalizeTab(tab) {
+      return ['history', 'pinned', 'local', 'system_tools', 'all'].includes(tab) ? tab : 'history'
+    }
+
+    async function openSelected() {
+      const item = state.rendered[state.selectedIndex]
+      if (!item) return
+      if (item.type === 'shortcut_settings') {
+        await callNative('super_panel_open_shortcut_settings')
+        return
+      }
+      await callNative('super_panel_open_item', {
+        id: item.id,
+        itemType: item.type,
+        query: state.query
+      })
+    }
+
+    async function reloadData() {
+      if (reloadPromise) return reloadPromise
+
+      reloadPromise = (async () => {
+        const response = await callNative('super_panel_get_data')
+        state.items = response.items || []
+        fuzzySearch.setCollection(searchCollection, state.items, {
+          fields: [
+            { key: 'name', weight: 100, polyphonic: true },
+            { key: 'keywords', weight: 85 },
+            { getValue: getPluginFullText, weight: 60, pinyin: false },
+            { key: 'description', weight: 30, pinyin: false },
+            { key: 'id', weight: 45, pinyin: false }
+          ]
+        })
+        state.shortcuts = response.shortcuts || []
+        state.defaultTab = normalizeTab(response.defaultTab)
+        state.selectedIndex = 0
+        dataLoaded = true
+        render()
+      })()
+
+      try {
+        return await reloadPromise
+      } finally {
+        reloadPromise = null
+      }
+    }
+
+    function scheduleResetReload(delay) {
+      if (resetReloadTimer) {
+        clearTimeout(resetReloadTimer)
+        resetReloadTimer = 0
+      }
+
+      resetReloadTimer = setTimeout(() => {
+        resetReloadTimer = 0
+        reloadData()
+          .then(() => {
+            state.activeTab = state.defaultTab
+            render()
+          })
+          .catch(error => {
+            console.error('[SuperPanel] reset reload failed', error)
+          })
+          .finally(() => focusSearchInput(false))
+      }, delay)
+    }
+
+    window.__superPanelReset = () => {
+      state.query = ''
+      state.selectedIndex = 0
+      searchInput.value = ''
+      state.activeTab = state.defaultTab
+      render()
+      focusSearchInput()
+      scheduleResetReload(dataLoaded ? 0 : 120)
+    }
+
+    tabs.addEventListener('click', event => {
+      const btn = event.target.closest('.tab')
+      if (!btn) return
+      state.activeTab = btn.dataset.tab
+      state.selectedIndex = 0
+      render()
+    })
+
+    grid.addEventListener('click', async event => {
+      const itemNode = event.target.closest('.item')
+      if (!itemNode) return
+      state.selectedIndex = Number(itemNode.dataset.index) || 0
+      const item = state.rendered[state.selectedIndex]
+      if (event.target.closest('[data-pin]') && item) {
+        await callNative('super_panel_toggle_pin', { id: item.id, itemType: item.type })
+        await reloadData()
+        return
+      }
+      render()
+      await openSelected()
+    })
+
+    searchInput.addEventListener('input', () => {
+      state.query = searchInput.value
+      state.selectedIndex = 0
+      render()
+    })
+
+    addBtn.addEventListener('click', async () => {
+      addBtn.disabled = true
+      try {
+        await callNative('super_panel_add_local_app')
+        await reloadData()
+      } catch (error) {
+        console.error('添加本地软件后刷新面板失败', error)
+      } finally {
+        addBtn.disabled = false
+        searchInput.focus()
+      }
+    })
+    settingsBtn.addEventListener('click', () => callNative('super_panel_open_settings'))
+
+    function startWindowDrag(event) {
+      if (event.button !== 0) return
+      if (event.target.closest('input, button, .search, .actions')) return
+      if (window.__ztoolsSuperPanel) return
+      event.preventDefault()
+      callNative('super_panel_drag').catch(error => {
+        console.error('[SuperPanel] drag failed', error)
+      })
+    }
+
+    document.querySelector('.toolbar').addEventListener('mousedown', startWindowDrag)
+    document.querySelector('.footer').addEventListener('mousedown', startWindowDrag)
+
+    window.addEventListener('keydown', async event => {
+      if (event.key === 'Escape') {
+        hideSystemTooltip()
+        event.preventDefault()
+        await callNative('super_panel_hide')
+      } else if (event.key === 'Enter') {
+        event.preventDefault()
+        await openSelected()
+      } else if (event.key === 'ArrowRight' || event.key === 'ArrowDown') {
+        event.preventDefault()
+        if (state.rendered.length) state.selectedIndex = (state.selectedIndex + 1) % state.rendered.length
+        render()
+      } else if (event.key === 'ArrowLeft' || event.key === 'ArrowUp') {
+        event.preventDefault()
+        if (state.rendered.length) state.selectedIndex = (state.selectedIndex - 1 + state.rendered.length) % state.rendered.length
+        render()
+      }
+    })
+
+    reloadData()
+      .then(() => {
+        state.activeTab = state.defaultTab
+        render()
+      })
+      .catch(error => {
+        console.error('[SuperPanel] load failed', error)
+        empty.hidden = false
+        empty.textContent = '加载失败'
+      })
+      .finally(() => focusSearchInput())
+  </script>
+</body>
+</html>

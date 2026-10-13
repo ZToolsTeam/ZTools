@@ -1,0 +1,41 @@
+{
+  "$schema": "https://www.raycast.com/schemas/extension.json",
+  "name": "ip-geolocation",
+  "title": "IP Geolocation",
+  "description": "Show local and public IPv4/IPv6 address. Query geolocation for any IP address or domain.",
+  "icon": "icon.png",
+  "author": "koinzhang",
+  "categories": ["Developer Tools", "Web"],
+  "license": "MIT",
+  "platforms": ["macOS", "Windows"],
+  "commands": [
+    {
+      "name": "query-ip-geolocation",
+      "title": "Query IP Geolocation",
+      "description": "Query geolocation for any IP address or domain.",
+      "mode": "view",
+      "arguments": [
+        {
+          "name": "ipAddress",
+          "placeholder": "IP Address or Domain",
+          "type": "text",
+          "required": false
+        }
+      ]
+    }
+  ],
+  "preferences": [
+    {
+      "name": "language",
+      "title": "Language",
+      "description": "Language of location information display.",
+      "type": "dropdown",
+      "required": false,
+      "default": "en"
+    }
+  ],
+  "dependencies": {
+    "@raycast/api": "^1.100.3",
+    "@raycast/utils": "^2.2.0"
+  }
+}

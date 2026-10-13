@@ -1,0 +1,31 @@
+{
+  "id": "f11-process-chain-test",
+  "name": "F11 TEST ONLY Process Chain",
+  "version": "1.0.0",
+  "description": "TEST ONLY: isolated Windows SDK1 process-chain verification fixture.",
+  "category": [],
+  "author": "ZTools Test Fixture",
+  "entry": "index.html",
+  "keyword": "test-only,F11,process-chain",
+  "targets": [
+    {
+      "id": "windows-electron-x64",
+      "platform": "windows",
+      "runtime": "electron",
+      "arch": "x64"
+    }
+  ],
+  "nativeComponents": [],
+  "window": {
+    "width": 760,
+    "height": 680,
+    "minWidth": 680,
+    "minHeight": 560,
+    "resizable": true,
+    "controls": {
+      "minimize": true,
+      "maximize": true
+    },
+    "singleInstance": true
+  }
+}

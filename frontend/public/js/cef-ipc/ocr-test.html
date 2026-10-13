@@ -1,0 +1,742 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>OCR 文字识别测试</title>
+
+    <!-- 引入 Element Plus CSS -->
+    <link
+      rel="stylesheet"
+      href="https://unpkg.com/element-plus@2.4.4/dist/index.css"
+    />
+    <!-- 引入 Vue 3 -->
+    <script src="https://unpkg.com/vue@3.3.11/dist/vue.global.js"></script>
+    <!-- 引入 Element Plus -->
+    <script src="https://unpkg.com/element-plus@2.4.4/dist/index.full.js"></script>
+    <!-- 引入 Element Plus 图标 -->
+    <script src="https://unpkg.com/@element-plus/icons-vue@2.3.1/dist/index.iife.min.js"></script>
+
+    <style>
+      /* 遵循规范：基础间距8px整数倍、圆角8px、边框1px */
+      * {
+        margin: 0;
+        padding: 0;
+        box-sizing: border-box;
+      }
+
+      body {
+        font-family:
+          -apple-system, BlinkMacSystemFont, 'Microsoft YaHei', 'Segoe UI',
+          Arial, sans-serif;
+        background-color: var(--el-bg-color-page);
+        padding: 24px;
+        transition: background-color 300ms ease;
+      }
+
+      .ocr-container {
+        max-width: 1200px;
+        margin: 0 auto;
+        border: 1px solid var(--el-border-color);
+        border-radius: 8px;
+        background-color: var(--el-bg-color);
+        overflow: hidden;
+        box-shadow: 0 2px 12px 0 rgba(0, 0, 0, 0.1);
+      }
+
+      /* 标题栏 */
+      .ocr-header {
+        padding: 16px 24px;
+        border-bottom: 1px solid var(--el-border-color);
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        background-color: var(--el-bg-color);
+      }
+
+      .ocr-title {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+      }
+
+      /* 主内容区 */
+      .ocr-content {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 1px;
+        background-color: var(--el-border-color);
+      }
+
+      .ocr-panel {
+        background-color: var(--el-bg-color);
+        padding: 24px;
+      }
+
+      .panel-title {
+        margin-bottom: 16px;
+        padding-bottom: 8px;
+        border-bottom: 1px solid var(--el-border-color);
+      }
+
+      /* 上传区域 */
+      .upload-area {
+        border: 2px dashed var(--el-border-color);
+        border-radius: 8px;
+        padding: 40px 24px;
+        text-align: center;
+        background-color: var(--el-bg-color-page);
+        cursor: pointer;
+        transition: all 300ms ease;
+        margin-bottom: 16px;
+      }
+
+      .upload-area:hover {
+        border-color: var(--el-color-primary);
+        background-color: var(--el-color-primary-light-9);
+      }
+
+      .upload-area.dragover {
+        border-color: var(--el-color-primary);
+        background-color: var(--el-color-primary-light-9);
+        transform: scale(1.02);
+      }
+
+      .upload-icon {
+        font-size: 48px;
+        margin-bottom: 16px;
+        color: var(--el-text-color-secondary);
+      }
+
+      /* 按钮组 */
+      .btn-group {
+        display: flex;
+        gap: 16px;
+        margin-bottom: 16px;
+      }
+
+      .btn-group .el-button {
+        flex: 1;
+      }
+
+      /* 图片预览 */
+      .image-preview {
+        border: 1px solid var(--el-border-color);
+        border-radius: 8px;
+        padding: 16px;
+        background-color: var(--el-bg-color-page);
+        margin-bottom: 16px;
+      }
+
+      .image-preview img {
+        max-width: 100%;
+        height: auto;
+        border-radius: 4px;
+        display: block;
+      }
+
+      .image-info {
+        margin-top: 8px;
+        padding: 8px;
+        background-color: var(--el-bg-color);
+        border-radius: 4px;
+      }
+
+      /* 结果区域 */
+      .result-area {
+        border: 1px solid var(--el-border-color);
+        border-radius: 8px;
+        min-height: 300px;
+        background-color: var(--el-bg-color-page);
+        overflow: hidden;
+      }
+
+      .result-area .el-textarea {
+        height: 100%;
+      }
+
+      .result-area .el-textarea__inner {
+        min-height: 300px;
+        border: none;
+        background-color: var(--el-bg-color-page);
+        font-family: 'Consolas', 'Monaco', monospace;
+        line-height: 1.5;
+      }
+
+      /* 空状态 */
+      .empty-state {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        min-height: 300px;
+        color: var(--el-text-color-secondary);
+      }
+
+      .empty-state .el-icon {
+        font-size: 64px;
+        margin-bottom: 16px;
+        opacity: 0.3;
+      }
+
+      /* 统计信息 */
+      .stats-area {
+        display: grid;
+        grid-template-columns: repeat(3, 1fr);
+        gap: 16px;
+        margin-top: 16px;
+      }
+
+      .stat-card {
+        padding: 16px;
+        border-radius: 8px;
+        background-color: var(--el-bg-color-page);
+        border: 1px solid var(--el-border-color);
+        text-align: center;
+      }
+
+      .stat-value {
+        font-size: 24px;
+        font-weight: 600;
+        color: var(--el-color-primary);
+        margin-bottom: 8px;
+      }
+
+      .stat-label {
+        font-size: 12px;
+        color: var(--el-text-color-secondary);
+      }
+
+      /* 工具栏 */
+      .ocr-toolbar {
+        padding: 16px 24px;
+        border-top: 1px solid var(--el-border-color);
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        background-color: var(--el-bg-color);
+      }
+
+      .toolbar-group {
+        display: flex;
+        gap: 16px;
+      }
+
+      /* 隐藏文件输入 */
+      #imageInput {
+        display: none;
+      }
+
+      /* 响应式适配 */
+      @media (max-width: 1200px) {
+        .ocr-content {
+          grid-template-columns: 1fr;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <div id="app">
+      <div class="ocr-container">
+        <!-- 标题栏 -->
+        <div class="ocr-header">
+          <div class="ocr-title">
+            <el-icon :size="24"><Document /></el-icon>
+            <el-text class="el-text--large" style="font-weight: 600"
+              >OCR 文字识别测试</el-text
+            >
+          </div>
+          <div style="display: flex; align-items: center; gap: 16px">
+            <el-text type="info" class="el-text--small"
+              >测试 ZTools OCR API</el-text
+            >
+            <el-switch
+              v-model="isDarkTheme"
+              active-text="暗黑"
+              inactive-text="明亮"
+              @change="toggleTheme"
+            />
+          </div>
+        </div>
+
+        <!-- 主内容区 -->
+        <div class="ocr-content">
+          <!-- 左侧：图片输入区 -->
+          <div class="ocr-panel">
+            <div class="panel-title">
+              <el-text type="primary" style="font-weight: 600">
+                <el-icon><Upload /></el-icon>
+                图片输入
+              </el-text>
+            </div>
+
+            <!-- 上传区域 -->
+            <div
+              class="upload-area"
+              :class="{ dragover: isDragOver }"
+              @click="selectImage"
+              @dragover.prevent="isDragOver = true"
+              @dragleave.prevent="isDragOver = false"
+              @drop.prevent="handleDrop"
+            >
+              <div class="upload-icon">
+                <el-icon><picture /></el-icon>
+              </div>
+              <el-text type="primary" style="margin-bottom: 8px"
+                >点击选择图片或拖拽图片到这里</el-text
+              >
+              <br />
+              <el-text type="info" class="el-text--small"
+                >支持 PNG、JPG、JPEG、BMP 格式</el-text
+              >
+            </div>
+
+            <input
+              type="file"
+              id="imageInput"
+              accept="image/*"
+              @change="handleFileSelect"
+            />
+
+            <!-- 操作按钮 -->
+            <div class="btn-group">
+              <el-button @click="selectImage">
+                <el-icon><Folder /></el-icon>
+                选择图片
+              </el-button>
+              <el-button @click="testWithSample">
+                <el-icon><picture /></el-icon>
+                示例图片
+              </el-button>
+            </div>
+
+            <div class="btn-group">
+              <el-button
+                type="danger"
+                :disabled="!currentImage"
+                @click="clearAll"
+              >
+                <el-icon><Delete /></el-icon>
+                清空
+              </el-button>
+            </div>
+
+            <!-- 图片预览 -->
+            <div v-if="currentImage" class="image-preview">
+              <img :src="currentImage" alt="预览图" />
+              <div class="image-info">
+                <el-text class="el-text--small">
+                  <strong>文件名：</strong>{{ imageFileName }}<br />
+                  <strong>大小：</strong>{{ imageSizeKB }} KB
+                </el-text>
+              </div>
+            </div>
+
+            <!-- 语言选择 -->
+            <el-form label-width="80px">
+              <el-form-item label="识别语言">
+                <el-select
+                  v-model="language"
+                  placeholder="选择语言"
+                  size="medium"
+                >
+                  <el-option label="简体中文" value="chi_sim" />
+                  <el-option label="英文" value="eng" />
+                  <el-option label="繁体中文" value="chi_tra" />
+                  <el-option label="日文" value="jpn" />
+                  <el-option label="韩文" value="kor" />
+                </el-select>
+              </el-form-item>
+            </el-form>
+          </div>
+
+          <!-- 右侧：识别结果区 -->
+          <div class="ocr-panel">
+            <div class="panel-title">
+              <el-text type="primary" style="font-weight: 600">
+                <el-icon><Document /></el-icon>
+                识别结果
+              </el-text>
+            </div>
+
+            <!-- 操作按钮 -->
+            <div class="btn-group">
+              <el-button
+                type="primary"
+                :disabled="!currentImage || isLoading"
+                :loading="isLoading"
+                @click="recognizeText"
+              >
+                <el-icon v-if="!isLoading"><View /></el-icon>
+                {{ isLoading ? '识别中...' : '开始识别' }}
+              </el-button>
+            </div>
+
+            <div class="btn-group">
+              <el-button :disabled="!ocrResult" @click="copyResult">
+                <el-icon><CopyDocument /></el-icon>
+                复制结果
+              </el-button>
+              <el-button :disabled="!ocrResult" @click="downloadResult">
+                <el-icon><Download /></el-icon>
+                下载TXT
+              </el-button>
+            </div>
+
+            <!-- 结果显示区 -->
+            <div class="result-area">
+              <div v-if="!ocrResult" class="empty-state">
+                <el-icon><Document /></el-icon>
+                <el-text type="info">识别结果将显示在这里</el-text>
+              </div>
+              <el-input
+                v-else
+                v-model="ocrResult"
+                type="textarea"
+                :rows="15"
+                placeholder="识别结果..."
+                readonly
+              />
+            </div>
+
+            <!-- 统计信息 -->
+            <div v-if="ocrResult" class="stats-area">
+              <div class="stat-card">
+                <div class="stat-value">{{ charCount }}</div>
+                <div class="stat-label">字符数</div>
+              </div>
+              <div class="stat-card">
+                <div class="stat-value">{{ lineCount }}</div>
+                <div class="stat-label">行数</div>
+              </div>
+              <div class="stat-card">
+                <div class="stat-value">{{ timeUsed }}ms</div>
+                <div class="stat-label">耗时</div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- 底部工具栏 -->
+        <div class="ocr-toolbar">
+          <el-text type="info" class="el-text--small">
+            <el-icon><InfoFilled /></el-icon>
+            提示：支持 Ctrl+V 粘贴图片
+          </el-text>
+          <div class="toolbar-group">
+            <el-tag v-if="statusType" :type="statusType" effect="plain">
+              {{ statusMessage }}
+            </el-tag>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- 引入 ZTools API -->
+    <script src="./dist/ztools.min.js"></script>
+
+    <script>
+      const { createApp, ref, computed } = Vue
+      const {
+        ElMessage,
+        ElLoading,
+        Document,
+        Upload,
+        Picture,
+        Folder,
+        Delete,
+        View,
+        CopyDocument,
+        Download,
+        InfoFilled
+      } = ElementPlus
+      const ElementPlusIconsVue = window.ElementPlusIconsVue
+
+      createApp({
+        components: {
+          Document,
+          Upload,
+          Picture,
+          Folder,
+          Delete,
+          View,
+          CopyDocument,
+          Download,
+          InfoFilled
+        },
+        setup() {
+          // 状态管理
+          const isDarkTheme = ref(false)
+          const isDragOver = ref(false)
+          const currentImage = ref(null)
+          const imageFileName = ref('')
+          const imageSizeKB = ref(0)
+          const language = ref('chi_sim')
+          const isLoading = ref(false)
+          const ocrResult = ref('')
+          const timeUsed = ref(0)
+          const statusType = ref('')
+          const statusMessage = ref('')
+
+          // 计算属性
+          const charCount = computed(() =>
+            ocrResult.value ? ocrResult.value.length : 0
+          )
+          const lineCount = computed(() =>
+            ocrResult.value ? ocrResult.value.split('\n').length : 0
+          )
+
+          // 主题切换
+          const toggleTheme = () => {
+            const html = document.documentElement
+            if (isDarkTheme.value) {
+              html.classList.add('dark')
+            } else {
+              html.classList.remove('dark')
+            }
+          }
+
+          // 显示状态消息
+          const showStatus = (type, message) => {
+            statusType.value = type
+            statusMessage.value = message
+            setTimeout(() => {
+              statusType.value = ''
+              statusMessage.value = ''
+            }, 3000)
+          }
+
+          // 选择图片
+          const selectImage = () => {
+            document.getElementById('imageInput').click()
+          }
+
+          // 处理文件选择
+          const handleFileSelect = (event) => {
+            const file = event.target.files[0]
+            if (file) {
+              handleImageFile(file)
+            }
+          }
+
+          // 处理拖拽上传
+          const handleDrop = (event) => {
+            isDragOver.value = false
+            const files = event.dataTransfer.files
+            if (files.length > 0 && files[0].type.startsWith('image/')) {
+              handleImageFile(files[0])
+            } else {
+              ElMessage.error('请拖拽图片文件')
+            }
+          }
+
+          // 处理图片文件
+          const handleImageFile = (file) => {
+            if (!file.type.startsWith('image/')) {
+              ElMessage.error('请选择图片文件')
+              return
+            }
+
+            imageFileName.value = file.name
+            imageSizeKB.value = (file.size / 1024).toFixed(2)
+
+            const reader = new FileReader()
+            reader.onload = (e) => {
+              currentImage.value = e.target.result
+              ElMessage.success(`已加载图片: ${file.name}`)
+              showStatus('success', '图片加载成功')
+            }
+            reader.onerror = () => {
+              ElMessage.error('读取图片失败')
+            }
+            reader.readAsDataURL(file)
+          }
+
+          // 使用示例图片
+          const testWithSample = () => {
+            const canvas = document.createElement('canvas')
+            canvas.width = 600
+            canvas.height = 200
+            const ctx = canvas.getContext('2d')
+
+            ctx.fillStyle = 'white'
+            ctx.fillRect(0, 0, canvas.width, canvas.height)
+
+            ctx.fillStyle = 'black'
+            ctx.font = '32px Arial'
+            ctx.fillText('Hello, OCR!', 50, 60)
+            ctx.fillText('这是一个测试图片', 50, 120)
+            ctx.fillText('ZTools OCR API', 50, 170)
+
+            canvas.toBlob((blob) => {
+              const file = new File([blob], 'sample.png', { type: 'image/png' })
+              handleImageFile(file)
+            })
+          }
+
+          // 识别文字
+          const recognizeText = async () => {
+            if (!currentImage.value) {
+              ElMessage.error('请先选择图片')
+              return
+            }
+
+            isLoading.value = true
+            showStatus('warning', '正在识别中...')
+
+            const startTime = Date.now()
+
+            try {
+              // 检查 ZTools API
+              if (!window.ztools || !window.ztools.ocr) {
+                throw new Error('OCR API 不可用，请确保在 ZTools 环境中运行')
+              }
+
+              const base64 = currentImage.value.split(',')[1]
+              const result = await window.ztools.ocr.fromImage(base64, {
+                language: language.value
+              })
+
+              timeUsed.value = Date.now() - startTime
+
+              if (result && result.text) {
+                ocrResult.value = result.text
+                ElMessage.success(`识别成功！耗时 ${timeUsed.value}ms`)
+                showStatus('success', `识别完成，耗时 ${timeUsed.value}ms`)
+              } else {
+                throw new Error('识别结果为空')
+              }
+            } catch (err) {
+              ElMessage.error('识别失败: ' + err.message)
+              showStatus('danger', '识别失败')
+              console.error('OCR Error:', err)
+            } finally {
+              isLoading.value = false
+            }
+          }
+
+          // 复制结果
+          const copyResult = () => {
+            if (!ocrResult.value) {
+              ElMessage.error('没有可复制的内容')
+              return
+            }
+
+            navigator.clipboard
+              .writeText(ocrResult.value)
+              .then(() => {
+                ElMessage.success('已复制到剪贴板')
+                showStatus('success', '已复制')
+              })
+              .catch(() => {
+                // 降级方案
+                const textarea = document.createElement('textarea')
+                textarea.value = ocrResult.value
+                document.body.appendChild(textarea)
+                textarea.select()
+                document.execCommand('copy')
+                document.body.removeChild(textarea)
+                ElMessage.success('已复制到剪贴板')
+                showStatus('success', '已复制')
+              })
+          }
+
+          // 下载结果
+          const downloadResult = () => {
+            if (!ocrResult.value) {
+              ElMessage.error('没有可下载的内容')
+              return
+            }
+
+            const blob = new Blob([ocrResult.value], {
+              type: 'text/plain;charset=utf-8'
+            })
+            const url = URL.createObjectURL(blob)
+            const a = document.createElement('a')
+            a.href = url
+            a.download = `ocr_result_${Date.now()}.txt`
+            a.click()
+            URL.revokeObjectURL(url)
+
+            ElMessage.success('结果已下载')
+            showStatus('success', '下载完成')
+          }
+
+          // 清空
+          const clearAll = () => {
+            currentImage.value = null
+            imageFileName.value = ''
+            imageSizeKB.value = 0
+            ocrResult.value = ''
+            timeUsed.value = 0
+            document.getElementById('imageInput').value = ''
+
+            ElMessage.info('已清空')
+            showStatus('info', '已清空')
+          }
+
+          // 粘贴事件监听
+          const handlePaste = (e) => {
+            const items = e.clipboardData?.items
+            if (!items) return
+
+            for (const item of items) {
+              if (item.type.startsWith('image/')) {
+                const file = item.getAsFile()
+                if (file) {
+                  handleImageFile(file)
+                  ElMessage.success('已从剪贴板粘贴图片')
+                }
+                break
+              }
+            }
+          }
+
+          // 初始化
+          const init = () => {
+            // 检查 API
+            if (!window.ztools || !window.ztools.ocr) {
+              ElMessage.warning('OCR API 不可用，请确保在 ZTools 环境中运行')
+              showStatus('warning', 'OCR API 不可用')
+            } else {
+              showStatus('success', 'OCR API 已就绪')
+            }
+
+            // 监听粘贴事件
+            document.addEventListener('paste', handlePaste)
+          }
+
+          // 页面加载后初始化
+          setTimeout(init, 100)
+
+          return {
+            isDarkTheme,
+            isDragOver,
+            currentImage,
+            imageFileName,
+            imageSizeKB,
+            language,
+            isLoading,
+            ocrResult,
+            timeUsed,
+            statusType,
+            statusMessage,
+            charCount,
+            lineCount,
+            toggleTheme,
+            selectImage,
+            handleFileSelect,
+            handleDrop,
+            testWithSample,
+            recognizeText,
+            copyResult,
+            downloadResult,
+            clearAll
+          }
+        }
+      })
+        .use(ElementPlus)
+        .mount('#app')
+    </script>
+  </body>
+</html>

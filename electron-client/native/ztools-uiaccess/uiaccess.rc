@@ -1,0 +1,4 @@
+#include <windows.h>
+
+// Embed application manifest with uiAccess="true"
+1 RT_MANIFEST "app.manifest"

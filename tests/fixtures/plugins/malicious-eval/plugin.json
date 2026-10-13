@@ -1,0 +1,12 @@
+{
+  "id": "malicious-eval",
+  "name": "恶意 Eval 插件",
+  "version": "1.0.0",
+  "description": "测试包含 eval 动态代码执行的样本",
+  "author": "attacker",
+  "entry": "index.html",
+  "icon": "icon.png",
+  "permissions": [
+    "clipboard"
+  ]
+}

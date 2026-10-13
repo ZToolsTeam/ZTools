@@ -1,0 +1,14 @@
+{
+  "contractVersion": 1,
+  "target": {
+    "platform": "macos",
+    "runtime": "electron",
+    "arch": "x64"
+  },
+  "capability": "system.hibernate",
+  "implementation": "unsupported",
+  "authorization": "granted",
+  "osPermission": "not-required",
+  "revision": 2,
+  "reasonCode": "UNSUPPORTED_BY_PLATFORM"
+}

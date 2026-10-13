@@ -1,0 +1,75 @@
+import type { CallerIdentity, CallerType } from './capabilities.js'
+import type { ReferenceMethod } from './reference-transport.js'
+
+const ordinary: readonly CallerType[] = Object.freeze(['main', 'plugin'])
+const mainOnly: readonly CallerType[] = Object.freeze(['main'])
+
+/** Ordinary capability policy only; Endpoint and grants separately enforce full identity and object rights. */
+export const referenceMethodCallers = Object.freeze({
+  filesystem_write_file: ordinary,
+  filesystem_write_cache: ordinary,
+  filesystem_delete_file: ordinary,
+  filesystem_copy_file: ordinary,
+  filesystem_move_file: ordinary,
+  filesystem_create_directory: ordinary,
+  filesystem_delete_directory: ordinary,
+  network_http_download: ordinary,
+  clipboard_copy_text: ordinary,
+  clipboard_copy_image: ordinary,
+  clipboard_clear: ordinary,
+  clipboard_copy_file: ordinary,
+  clipboard_copy_files: ordinary,
+  shell_trash_item: ordinary,
+  clipboard_read_image: ordinary,
+  screen_capture: ordinary,
+  screen_capture_region: ordinary,
+  image_transform: ordinary,
+  image_encode_base64: ordinary,
+  image_decode_base64: ordinary,
+  image_preview: ordinary,
+  image_to_pdf: ordinary,
+  image_to_gif: ordinary,
+  image_preview_gif: ordinary,
+  zip_compress: ordinary,
+  zip_extract: ordinary,
+  filesystem_read_file: ordinary,
+  filesystem_read_file_range: ordinary,
+  filesystem_read_cache: ordinary,
+  filesystem_file_exists: ordinary,
+  filesystem_get_file_size: ordinary,
+  filesystem_directory_exists: ordinary,
+  filesystem_get_directory_contents: ordinary,
+  filesystem_get_current_directory: ordinary,
+  filesystem_set_current_directory: ordinary,
+  filesystem_find_files: ordinary,
+  filesystem_find_directories: ordinary,
+  filesystem_derive_read: ordinary,
+  filesystem_derive_save: ordinary,
+  filesystem_derive_directory: ordinary,
+  filesystem_describe: ordinary,
+  filesystem_revoke: ordinary,
+  window_show_open_dialog: ordinary,
+  window_show_save_dialog: ordinary,
+  window_show_select_folder_dialog: ordinary,
+  network_http_upload: ordinary,
+  clipboard_read_files: ordinary,
+  filesystem_list_write_recovery: mainOnly,
+  filesystem_inspect_write_recovery: mainOnly,
+  sqlite_read_browser_snapshot: ordinary,
+  ocr_local_languages: ordinary,
+  ocr_recognize_reference: ordinary,
+  clipboard_read_text: ordinary,
+  image_get_info: ordinary,
+  zip_list: ordinary,
+  zip_test: ordinary,
+  screen_get_cursor_pos: ordinary,
+  screen_get_primary_display: ordinary,
+  screen_get_all_displays: ordinary,
+  screen_get_display_nearest: ordinary,
+  screen_get_display_matching: ordinary,
+} satisfies Record<ReferenceMethod, readonly CallerType[]>)
+
+export function canCallReferenceMethod(method: unknown, caller: CallerIdentity): boolean {
+  return typeof method === 'string' && Object.hasOwn(referenceMethodCallers, method) &&
+    (referenceMethodCallers[method as ReferenceMethod] as readonly CallerType[]).includes(caller.type)
+}

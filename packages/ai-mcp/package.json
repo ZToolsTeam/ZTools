@@ -1,0 +1,50 @@
+{
+  "name": "@ztools/ai-mcp",
+  "version": "1.0.0",
+  "description": "ZTools AI Native 基础设施与原生 MCP (Model Context Protocol) 核心网关",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./router": {
+      "types": "./dist/router/index.d.ts",
+      "import": "./dist/router/index.js"
+    },
+    "./mcp": {
+      "types": "./dist/mcp/index.d.ts",
+      "import": "./dist/mcp/index.js"
+    },
+    "./tools": {
+      "types": "./dist/tools/index.d.ts",
+      "import": "./dist/tools/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "src",
+    "README.md"
+  ],
+  "scripts": {
+    "build": "node ../../electron-client/node_modules/typescript/bin/tsc",
+    "test": "npm run build && node --test tests/*.test.mjs",
+    "test:only": "node --test tests/*.test.mjs"
+  },
+  "keywords": [
+    "ztools",
+    "ai",
+    "mcp",
+    "model-context-protocol",
+    "byok",
+    "llm",
+    "deepseek",
+    "openai",
+    "claude",
+    "ollama"
+  ],
+  "author": "ZTools Team",
+  "license": "MIT"
+}

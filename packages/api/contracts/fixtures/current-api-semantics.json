@@ -1,0 +1,68 @@
+{
+  "snapshotVersion": 1,
+  "screen": {
+    "pointUnit": "electron-dip",
+    "rectUnit": "electron-dip",
+    "displayBoundsUnit": "electron-dip",
+    "displayWorkAreaUnit": "electron-dip",
+    "negativeVirtualDesktopCoordinates": true,
+    "capturePngPixelsPerDip": 1,
+    "displayIdScope": "runtime-only",
+    "displayIdPersistent": false,
+    "displayIndexScope": "current-list-order",
+    "displayIndexPersistent": false
+  },
+  "hotkeys": {
+    "storedCtrlMeaning": "portable-primary-modifier",
+    "ctrlMapping": {
+      "windows": "Control",
+      "macos": "Command",
+      "electronAdapterToken": "CommandOrControl"
+    },
+    "controlMeaning": "physical-Control",
+    "altMapping": {
+      "windows": "Alt",
+      "macos": "Option"
+    },
+    "adapterRewritesOnlyCtrl": true,
+    "macosGlobalShortcutDeviceValidation": "required"
+  },
+  "ipcRequestTimeout": {
+    "defaultMs": 10000,
+    "maximumMs": 120000,
+    "infiniteWaitMethods": [
+      "window_show_open_dialog",
+      "window_show_save_dialog",
+      "window_show_select_folder_dialog",
+      "process_wait"
+    ],
+    "timeoutGuaranteesHandlerStopped": false
+  },
+  "asyncTasks": {
+    "genericTaskApiExists": false,
+    "dllPlugin": {
+      "scope": "windows-nativehost-legacy",
+      "supportedPlatforms": ["windows"],
+      "macosSupported": false,
+      "states": ["invoking", "running", "completed", "cancelled", "error"],
+      "cancelledMayBeOverwrittenByLaterEvent": true,
+      "retentionAndCleanupFollowUp": "T12"
+    }
+  },
+  "errorSources": {
+    "timeoutCodes": [
+      { "code": "REQUEST_TIMEOUT", "source": "electron-main-ipc" },
+      { "code": "CALL_TIMEOUT", "source": "legacy-js-transport" },
+      {
+        "code": "TIMEOUT",
+        "source": "legacy-event-request",
+        "resultShape": { "ok": false, "code": "TIMEOUT" }
+      }
+    ],
+    "timeoutCodesUnified": false,
+    "screenFailure": {
+      "rawDetailExposed": false,
+      "status": "fixed-sanitized"
+    }
+  }
+}

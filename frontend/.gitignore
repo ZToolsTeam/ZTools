@@ -1,0 +1,44 @@
+# 依赖
+node_modules/
+.codegraph/
+
+# 构建输出
+dist/
+dist.zip
+dist-ssr/
+*.local
+
+# 日志
+logs/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+
+# 环境变量
+.env
+.env.local
+.env.*.local
+
+# IDE 和编辑器
+.idea/
+.vscode/*
+!.vscode/extensions.json
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+.DS_Store
+
+# 临时文件
+.tmp/
+*.tmp
+
+# 测试覆盖率
+coverage/
+.nyc_output/
+public/sdk/ztools-api.js
+public/version.json

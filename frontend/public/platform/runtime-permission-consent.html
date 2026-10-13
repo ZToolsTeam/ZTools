@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>插件屏幕访问权限申请</title>
+    <style>
+      :root { color-scheme: light dark; font-family: "Segoe UI", "Microsoft YaHei", sans-serif; }
+      body { margin: 0; padding: 28px; color: CanvasText; background: Canvas; }
+      h1 { margin: 0 0 18px; font-size: 21px; }
+      p { margin: 10px 0; line-height: 1.55; overflow-wrap: anywhere; }
+      .identity { padding: 12px; border-radius: 8px; background: color-mix(in srgb, CanvasText 8%, Canvas); }
+      .label { color: color-mix(in srgb, CanvasText 68%, Canvas); }
+      .actions { display: flex; justify-content: flex-end; gap: 10px; margin-top: 24px; }
+      button { min-width: 112px; padding: 9px 14px; border: 1px solid color-mix(in srgb, CanvasText 22%, Canvas); border-radius: 6px; font: inherit; cursor: pointer; }
+      button:disabled { cursor: wait; opacity: .65; }
+      #runtime-capability-allow { color: white; background: #1677ff; border-color: #1677ff; }
+      #runtime-capability-deny { color: CanvasText; background: Canvas; }
+    </style>
+  </head>
+  <body>
+    <main data-testid="runtime-capability-prompt" aria-labelledby="prompt-title">
+      <h1 id="prompt-title">是否允许该插件获取屏幕画面？</h1>
+      <p class="identity"><span class="label">申请插件：</span><strong data-testid="runtime-capability-plugin-name"></strong><br />
+        <span class="label">插件标识：</span><code data-testid="runtime-capability-plugin-id"></code></p>
+      <p data-testid="runtime-capability-purpose"></p>
+      <p>本次授权仅在当前插件打开期间有效。关闭插件窗口或在高级设置中撤销后，将自动失效。</p>
+      <div class="actions">
+        <button id="runtime-capability-deny" data-testid="runtime-capability-deny" type="button">拒绝</button>
+        <button id="runtime-capability-allow" data-testid="runtime-capability-allow" type="button">允许访问</button>
+      </div>
+    </main>
+    <script src="./runtime-permission-consent.js"></script>
+  </body>
+</html>

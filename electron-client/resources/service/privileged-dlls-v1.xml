@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<privilegedDllManifest version="1">
+  <plugin id="context-menu">
+    <dll id="ContextMenuPlugin" path="lib/ContextMenuPlugin.dll" sha256="face15f4d1e6eed04e422bc67c63c498057646428e829a8ee81a6b8e2dd69d52" arch="x86">
+      <function name="CheckAdmin"/>
+      <function name="ScanMenuItems"/>
+      <function name="EnableMenuItem"/>
+      <function name="DisableMenuItem"/>
+      <function name="DeleteMenuItem"/>
+      <function name="AddCustomMenuItem"/>
+      <function name="InspectMenuItems"/>
+      <function name="RefreshExplorer"/>
+    </dll>
+  </plugin>
+</privilegedDllManifest>

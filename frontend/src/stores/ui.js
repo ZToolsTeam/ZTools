@@ -1,0 +1,71 @@
+import { defineStore } from 'pinia'
+import { isOnline } from '@/config/runtime-mode'
+
+export const FOCUS_STATES = Object.freeze({
+  SEARCH: 'SEARCH',
+  GRID: 'GRID',
+  DECLARATIVE: 'DECLARATIVE'
+})
+
+export const useUIStore = defineStore('ui', {
+  state: () => ({
+    showCloseConfirm: false,
+    closeConfirmOrigin: 'closeButton',
+    showLoginModal: false,
+    // 三态焦点状态机：SEARCH (搜索框) | GRID (卡片网格) | DECLARATIVE (声明式舞台)
+    focusState: FOCUS_STATES.SEARCH,
+    // 声明式舞台当前首要 Action（用于主界面底栏动态联动）
+    declarativePrimaryAction: null,
+    // 主界面动作面板可见性
+    globalActionPanelVisible: false
+  }),
+  getters: {
+    isSearchFocused: (state) => state.focusState === FOCUS_STATES.SEARCH,
+    isGridFocused: (state) => state.focusState === FOCUS_STATES.GRID,
+    isDeclarativeFocused: (state) => state.focusState === FOCUS_STATES.DECLARATIVE
+  },
+  actions: {
+    setFocusState(newState) {
+      if (!Object.values(FOCUS_STATES).includes(newState)) {
+        console.warn(`[UIStore] 无效的焦点状态: ${newState}`)
+        return
+      }
+      this.focusState = newState
+    },
+    focusSearch() {
+      this.setFocusState(FOCUS_STATES.SEARCH)
+    },
+    focusGrid() {
+      this.setFocusState(FOCUS_STATES.GRID)
+    },
+    focusDeclarative() {
+      this.setFocusState(FOCUS_STATES.DECLARATIVE)
+    },
+    setDeclarativePrimaryAction(action) {
+      this.declarativePrimaryAction = action || null
+    },
+    clearDeclarativePrimaryAction() {
+      this.declarativePrimaryAction = null
+    },
+    setGlobalActionPanelVisible(visible) {
+      this.globalActionPanelVisible = Boolean(visible)
+    },
+    toggleGlobalActionPanel() {
+      this.globalActionPanelVisible = !this.globalActionPanelVisible
+    },
+    openCloseConfirm(origin) {
+      this.closeConfirmOrigin = origin || 'closeButton'
+      this.showCloseConfirm = true
+    },
+    closeCloseConfirm() {
+      this.showCloseConfirm = false
+    },
+    openLoginModal() {
+      if (!isOnline) return
+      this.showLoginModal = true
+    },
+    closeLoginModal() {
+      this.showLoginModal = false
+    }
+  }
+})

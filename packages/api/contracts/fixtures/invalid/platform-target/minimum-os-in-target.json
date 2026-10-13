@@ -1,0 +1,6 @@
+{
+  "platform": "macos",
+  "runtime": "electron",
+  "arch": "universal",
+  "minimumOS": "14.0"
+}

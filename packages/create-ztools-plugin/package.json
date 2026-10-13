@@ -1,0 +1,34 @@
+{
+  "name": "create-ztools-plugin",
+  "version": "1.0.0",
+  "description": "ZTools 官方插件脚手架工具 (Official ZTools Plugin Scaffolding CLI)",
+  "type": "module",
+  "bin": {
+    "create-ztools-plugin": "./bin/index.js"
+  },
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "files": [
+    "bin",
+    "dist",
+    "templates",
+    "README.md"
+  ],
+  "scripts": {
+    "build": "bun build ./src/index.ts --outdir ./dist --target node --format esm",
+    "dev": "bun run src/index.ts",
+    "start": "node bin/index.js",
+    "test": "bun test tests/cli.test.ts"
+  },
+  "keywords": [
+    "ztools",
+    "plugin",
+    "cli",
+    "scaffold",
+    "vue",
+    "react",
+    "desktop"
+  ],
+  "author": "ZTools Team",
+  "license": "MIT"
+}

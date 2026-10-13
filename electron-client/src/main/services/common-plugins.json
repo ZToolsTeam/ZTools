@@ -1,0 +1,13 @@
+[
+  {
+    "id": "ScreenCapturePlugin",
+    "path": "ScreenCapturePlugin/ScreenCapturePlugin.dll",
+    "requireAdmin": false
+  },
+  {
+    "id": "SQLitePlugin",
+    "path": "SQLitePlugin/SQLitePlugin.dll",
+    "requireAdmin": false
+  }
+]
+

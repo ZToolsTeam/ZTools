@@ -1,0 +1,267 @@
+/* 引入 Raycast 双模设计标记系统 */
+@import './raycast-theme.css';
+/* 引入通用样式（包含滚动条等） */
+@import './common.css';
+/* 引入设置中心卡片与列表设计系统 */
+@import './settings.css';
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer utilities {
+  .content-auto {
+    content-visibility: auto;
+  }
+
+  /* 侧边栏项目 - Raycast 沉浸极简风格 */
+  .sidebar-item {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 0 10px;
+    height: 32px;
+    border-radius: var(--rc-radius-md, 8px);
+    color: var(--rc-text-secondary);
+    cursor: pointer;
+    transition: all 0.15s cubic-bezier(0.16, 1, 0.3, 1);
+    font-size: 13px;
+    font-weight: 500;
+    user-select: none;
+  }
+
+  .sidebar-item:hover {
+    background: var(--rc-surface-hover);
+    color: var(--rc-text-primary);
+  }
+
+  .sidebar-item.active {
+    background: var(--rc-surface-active);
+    color: var(--rc-text-primary) !important;
+    font-weight: 600;
+    box-shadow: inset 2.5px 0 0 0 var(--rc-accent);
+  }
+
+  .sidebar-item.active i,
+  .sidebar-item.active svg {
+    color: var(--rc-accent) !important;
+  }
+
+  /* 确保图标颜色继承 */
+  .sidebar-item i,
+  .sidebar-item svg {
+    transition: color 0.15s ease;
+  }
+
+  /* 工具卡片 - 符合设计规范 */
+  .tool-card {
+    background-color: var(--color-surface);
+    border-radius: var(--radius-xl);
+    border: 1px solid var(--color-border);
+    padding: var(--spacing-md);
+    cursor: pointer;
+    transition: all var(--duration-standard) var(--easing-standard);
+    box-shadow: var(--shadow-sm);
+  }
+
+  .tool-card:hover {
+    transform: translateY(-4px);
+    border-color: var(--color-primary);
+    box-shadow: var(--shadow-lg);
+  }
+
+  /* 插件卡片 - 符合设计规范 */
+  .plugin-card {
+    min-width: 200px;
+    background-color: var(--color-surface);
+    border-radius: var(--radius-xl);
+    border: 1px solid var(--color-border);
+    padding: var(--spacing-md);
+    cursor: pointer;
+    transition: all var(--duration-standard) var(--easing-standard);
+    box-shadow: var(--shadow-sm);
+  }
+
+  .plugin-card:hover {
+    transform: translateY(-4px);
+    border-color: var(--color-primary);
+    box-shadow: var(--shadow-lg);
+  }
+}
+
+/* 全局重置 */
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+html {
+  overflow: hidden;
+  height: 100vh;
+}
+
+body {
+  font-family: var(--font-family-base);
+  font-size: var(--font-size-body-m);
+  line-height: 1.6;
+  color: var(--color-text);
+  background: var(--color-background);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  overflow: hidden;
+  height: 100vh;
+  transition:
+    background-color var(--duration-standard) var(--easing-smooth),
+    color var(--duration-standard) var(--easing-smooth);
+}
+
+#app {
+  height: 100vh;
+  overflow: hidden;
+}
+
+/* 链接样式 */
+a {
+  color: var(--zt-primary);
+  text-decoration: none;
+  transition: color var(--zt-transition-fast);
+}
+
+a:hover {
+  color: var(--zt-primary-hover);
+}
+
+/* 修复 Ant Design 按钮图标对齐 */
+.ant-btn > span {
+  display: inline-flex !important;
+}
+
+/* Ant Design Modal 滚动 */
+.ant-modal-body {
+  overflow-y: auto;
+  overflow-x: hidden;
+}
+
+/* ============================================
+   Ant Design 组件样式覆盖 - 使用 CSS 变量
+   ============================================ */
+
+/* Input 输入框 */
+.ant-input,
+.ant-input-affix-wrapper {
+  background-color: var(--zt-bg-elevated) !important;
+  border-color: var(--zt-border) !important;
+  color: var(--zt-text) !important;
+}
+
+.ant-input::placeholder,
+.ant-input-affix-wrapper input::placeholder {
+  color: var(--zt-text-secondary) !important;
+  opacity: 0.6;
+}
+
+.ant-input:hover,
+.ant-input-affix-wrapper:hover {
+  border-color: var(--zt-primary) !important;
+}
+
+.ant-input:focus,
+.ant-input-affix-wrapper-focused {
+  border-color: var(--zt-primary) !important;
+  box-shadow: 0 0 0 2px var(--zt-primary-bg) !important;
+}
+
+/* Input 前缀/后缀图标 */
+.ant-input-prefix,
+.ant-input-suffix {
+  color: var(--zt-text-secondary) !important;
+}
+
+/* Select 选择器 */
+.ant-select-selector {
+  background-color: var(--zt-bg-elevated) !important;
+  border-color: var(--zt-border) !important;
+  color: var(--zt-text) !important;
+}
+
+.ant-select-arrow {
+  color: var(--zt-text-secondary) !important;
+}
+
+/* Dropdown 下拉菜单 */
+.ant-dropdown,
+.ant-select-dropdown {
+  background-color: var(--zt-bg-elevated) !important;
+  border: none !important;
+  box-shadow: var(--shadow-lg, 0 8px 24px rgba(0, 0, 0, 0.08)) !important;
+  border-radius: var(--radius-lg, 16px) !important;
+  padding: 4px !important;
+}
+
+.ant-dropdown-menu {
+  background-color: transparent !important;
+  border: none !important;
+  box-shadow: none !important;
+  padding: 0 !important;
+}
+
+.ant-dropdown-menu-item,
+.ant-select-item {
+  color: var(--zt-text) !important;
+  border-radius: var(--radius-md, 12px) !important;
+}
+
+.ant-dropdown-menu-item:hover,
+.ant-select-item-option-active {
+  background-color: var(--zt-bg-hover) !important;
+}
+
+/* Menu 菜单 */
+.ant-menu {
+  background-color: var(--zt-bg-elevated) !important;
+  color: var(--zt-text) !important;
+}
+
+.ant-menu-item {
+  color: var(--zt-text) !important;
+}
+
+.ant-menu-item:hover {
+  background-color: var(--zt-bg-hover) !important;
+}
+
+/* Modal 模态框 */
+.ant-modal-content {
+  background-color: var(--zt-bg-elevated) !important;
+  color: var(--zt-text) !important;
+}
+
+.ant-modal-header {
+  background-color: var(--zt-bg-elevated) !important;
+  border-bottom-color: var(--zt-border) !important;
+}
+
+.ant-modal-title {
+  color: var(--zt-text) !important;
+}
+
+.ant-modal-close {
+  color: var(--zt-text-secondary) !important;
+}
+
+.ant-modal-close:hover {
+  color: var(--zt-text) !important;
+  background-color: var(--zt-bg-hover) !important;
+}
+
+/* Divider 分隔线 */
+.ant-divider {
+  border-color: var(--zt-border) !important;
+}
+
+/* Image Preview 图片预览 - 确保预览图不占满整个窗口 */
+.ant-image-preview-img {
+  max-width: calc(100vw - 120px) !important;
+  max-height: calc(100vh - 120px) !important;
+}

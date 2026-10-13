@@ -1,0 +1,218 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ztools.cn/schemas/plugin.schema.json",
+  "title": "ZTools Plugin Manifest Specification",
+  "description": "ZTools GitOps 插件清单标准定义与校验规约",
+  "type": "object",
+  "required": [
+    "id",
+    "name",
+    "version",
+    "description",
+    "author",
+    "entry",
+    "icon",
+    "permissions"
+  ],
+  "properties": {
+    "id": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9_-]{1,63}$",
+      "description": "插件唯一标识符，必须以小写字母开头，仅允许小写字母、数字、短横线与下划线，长度 2-64 字符"
+    },
+    "name": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 50,
+      "description": "插件显示名称，1-50 个字符"
+    },
+    "version": {
+      "type": "string",
+      "pattern": "^\\d+\\.\\d+\\.\\d+(?:-[0-9A-Za-z.-]+)?$",
+      "description": "符合 SemVer 2.0 规范的版本号，如 1.0.0, 1.2.3-beta.1"
+    },
+    "description": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 500,
+      "description": "插件简要功能描述，1-500 个字符"
+    },
+    "author": {
+      "anyOf": [
+        {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 100
+        },
+        {
+          "type": "object",
+          "required": ["name"],
+          "properties": {
+            "name": { "type": "string", "minLength": 1, "maxLength": 100 },
+            "email": { "type": "string", "format": "email" },
+            "url": { "type": "string", "format": "uri" }
+          },
+          "additionalProperties": false
+        }
+      ],
+      "description": "插件作者信息，支持字符串或包含 name/email/url 的对象"
+    },
+    "permissions": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": {
+        "type": "string",
+        "enum": [
+          "network",
+          "clipboard",
+          "dialog",
+          "notification",
+          "shell",
+          "fs",
+          "child_process",
+          "database",
+          "sqlite",
+          "system",
+          "screen",
+          "tray",
+          "crypto",
+          "audio",
+          "video"
+        ]
+      },
+      "description": "插件声明申请的系统和运行时权限白名单列表"
+    },
+    "entry": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "^(?!/)(?!\\\\)(?!.*(?:^|[\\\\/])\\.\\.(?:[\\\\/]|$))[a-zA-Z0-9_./-]+\\.(?:html|js|mjs)$",
+      "description": "插件入口文件相对路径（如 index.html, dist/index.html），禁止目录穿越或绝对路径"
+    },
+    "icon": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "^(?!/)(?!\\\\)(?!.*(?:^|[\\\\/])\\.\\.(?:[\\\\/]|$))[a-zA-Z0-9_./-]+\\.(?:png|svg|jpg|jpeg|webp|ico)$",
+      "description": "插件图标相对路径（如 icon.png, assets/icon.svg），禁止目录穿越或绝对路径"
+    },
+    "category": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 30
+      },
+      "default": [],
+      "description": "插件分类标签列表"
+    },
+    "keywords": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 30
+      },
+      "default": [],
+      "description": "插件搜索关键字列表"
+    },
+    "homepage": {
+      "type": "string",
+      "format": "uri",
+      "description": "插件主页或文档 URL"
+    },
+    "repository": {
+      "type": "string",
+      "format": "uri",
+      "description": "插件开源仓库地址"
+    },
+    "license": {
+      "type": "string",
+      "description": "开源许可证标识，如 MIT, Apache-2.0"
+    },
+    "minZToolsVersion": {
+      "type": "string",
+      "pattern": "^\\d+\\.\\d+\\.\\d+$",
+      "description": "运行插件所需的最低 ZTools 宿主版本号"
+    },
+    "requireAdmin": {
+      "type": "boolean",
+      "default": false,
+      "description": "是否需要管理员提升权限执行"
+    },
+    "window": {
+      "type": "object",
+      "properties": {
+        "width": { "type": "integer", "minimum": 200, "maximum": 3840 },
+        "height": { "type": "integer", "minimum": 150, "maximum": 2160 },
+        "minWidth": { "type": "integer", "minimum": 0 },
+        "minHeight": { "type": "integer", "minimum": 0 },
+        "resizable": { "type": "boolean" },
+        "singleInstance": { "type": "boolean" },
+        "alwaysOnTop": { "type": "boolean" }
+      },
+      "additionalProperties": true,
+      "description": "插件独立窗口展示参数"
+    },
+    "mode": {
+      "type": "string",
+      "enum": ["view", "no-view", "menu-bar"],
+      "default": "view",
+      "description": "插件运行模式：view (窗口视图模式), no-view (轻量后台命令且完成弹出 HUD), menu-bar (状态栏菜单)"
+    },
+    "alias": {
+      "type": "string",
+      "maxLength": 32,
+      "description": "插件短别名 (如 t 对应翻译，c 对应计算器)"
+    },
+    "shortcut": {
+      "type": "string",
+      "description": "全局快捷键 (如 CommandOrControl+Shift+C)"
+    },
+    "features": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["code", "explain"],
+        "properties": {
+          "code": { "type": "string", "minLength": 1 },
+          "explain": { "type": "string", "minLength": 1 },
+          "icon": { "type": "string" },
+          "mode": {
+            "type": "string",
+            "enum": ["view", "no-view", "menu-bar"],
+            "default": "view",
+            "description": "命令运行模式：view (展示窗口界面), no-view (后台静默执行并弹出轻量 HUD 提示), menu-bar (状态栏菜单)"
+          },
+          "alias": {
+            "type": "string",
+            "maxLength": 32,
+            "description": "命令短别名 (如 t 对应翻译，c 对应计算器)"
+          },
+          "shortcut": {
+            "type": "string",
+            "description": "命令绑定的全局快捷键"
+          },
+          "cmds": {
+            "type": "array",
+            "items": {
+              "anyOf": [
+                { "type": "string", "minLength": 1 },
+                { "type": "object" }
+              ]
+            }
+          }
+        },
+        "additionalProperties": false
+      },
+      "description": "功能与指令配置列表"
+    },
+    "targets": {
+      "type": "array",
+      "description": "平台目标兼容性声明"
+    },
+    "nativeComponents": {
+      "type": "array",
+      "description": "关联的原生动态库及组件声明"
+    }
+  },
+  "additionalProperties": true
+}

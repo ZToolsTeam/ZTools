@@ -1,0 +1,10 @@
+{
+  "id": "{{ID}}",
+  "name": "{{NAME}}",
+  "version": "1.0.0",
+  "description": "{{DESCRIPTION}}",
+  "author": "{{AUTHOR}}",
+  "entry": "dist/index.js",
+  "icon": "icon.svg",
+  "permissions": []
+}

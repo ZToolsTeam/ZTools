@@ -1,0 +1,12 @@
+{
+  "id": "malicious-hex-obfuscated",
+  "name": "恶意混淆插件",
+  "version": "1.0.0",
+  "description": "测试包含十六进制字符串混淆的样本",
+  "author": "attacker",
+  "entry": "index.html",
+  "icon": "icon.png",
+  "permissions": [
+    "dialog"
+  ]
+}

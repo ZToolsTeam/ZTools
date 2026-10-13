@@ -1,0 +1,14 @@
+{
+  "name": "ztools-frontend-test",
+  "version": "1.0.0",
+  "description": "ZTools 前端 API 测试和端到端测试（基于 CDP）",
+  "scripts": {
+    "test": "node runner.main.cjs",
+    "test:api": "node runner.main.cjs --suite=api",
+    "test:e2e": "node runner.main.cjs --suite=e2e",
+    "test:verbose": "node runner.main.cjs --verbose"
+  },
+  "dependencies": {
+    "ws": "^8.18.3"
+  }
+}

@@ -1,0 +1,205 @@
+import {
+  BrowserWindow,
+  screen,
+  ipcMain
+} from 'electron'
+import { secureWebPreferences } from './main-window.js'
+import type { WindowRegistry } from './window-registry.js'
+import { calculateCenteredBounds } from './display-bounds.js'
+import { FrameSyncManager } from '../services/frame-sync-manager.js'
+
+export const LAUNCHER_CALL_CHANNEL = 'ztools:launcher_call' as const
+
+export interface LauncherControllerOptions {
+  icon: Electron.NativeImage
+  registry: WindowRegistry
+  showMainWindow(): void
+  hideMainWindow(): void
+  sidecars?: {
+    trimProcessMemory(pid?: number): Promise<{ success: boolean; pid: number; trimmed: boolean }>
+  }
+}
+
+export class LauncherController {
+  #window: BrowserWindow | null = null
+  #frameSyncManager: FrameSyncManager | null = null
+  #registered = false
+  #screenListenerAttached = false
+
+  constructor(private readonly options: LauncherControllerOptions) {}
+
+  register(): void {
+    if (this.#registered) return
+    ipcMain.handle(LAUNCHER_CALL_CHANNEL, async (_event, action: unknown) => {
+      if (action === 'expand_to_dashboard') {
+        this.hide()
+        this.options.showMainWindow()
+        return { success: true }
+      }
+      if (action === 'hide') {
+        this.hide()
+        return { success: true }
+      }
+      if (action === 'show') {
+        this.show()
+        return { success: true }
+      }
+      if (action === 'toggle') {
+        this.toggle()
+        return { success: true }
+      }
+      return { success: false, error: '未知动作' }
+    })
+    this.#registered = true
+  }
+
+  isVisible(): boolean {
+    return Boolean(this.#window && !this.#window.isDestroyed() && this.#window.isVisible())
+  }
+
+  show(): void {
+    this.options.hideMainWindow()
+    const window = this.#ensureWindow()
+    this.#positionWindow(window)
+    if (this.#frameSyncManager) {
+      void this.#frameSyncManager.showWindow().catch(() => {
+        if (!window.isDestroyed()) {
+          if (window.isMinimized()) window.restore()
+          window.show()
+          window.focus()
+        }
+      })
+    } else {
+      if (window.isMinimized()) window.restore()
+      window.show()
+      window.focus()
+    }
+  }
+
+  hide(): void {
+    if (this.#window && !this.#window.isDestroyed() && this.#window.isVisible()) {
+      if (this.#frameSyncManager) {
+        this.#frameSyncManager.hideWindow()
+      } else {
+        this.#window.hide()
+      }
+    }
+  }
+
+  toggle(): void {
+    if (this.isVisible()) {
+      this.hide()
+    } else {
+      this.show()
+    }
+  }
+
+  #onDisplayMetricsChanged = (): void => {
+    if (this.#window && !this.#window.isDestroyed() && this.#window.isVisible()) {
+      this.#positionWindow(this.#window)
+    }
+  }
+
+  #attachScreenListeners(): void {
+    if (this.#screenListenerAttached || typeof screen?.on !== 'function') return
+    screen.on('display-metrics-changed', this.#onDisplayMetricsChanged)
+    screen.on('display-removed', this.#onDisplayMetricsChanged)
+    this.#screenListenerAttached = true
+  }
+
+  #detachScreenListeners(): void {
+    if (!this.#screenListenerAttached || typeof screen?.removeListener !== 'function') return
+    screen.removeListener('display-metrics-changed', this.#onDisplayMetricsChanged)
+    screen.removeListener('display-removed', this.#onDisplayMetricsChanged)
+    this.#screenListenerAttached = false
+  }
+
+  #ensureWindow(): BrowserWindow {
+    if (this.#window && !this.#window.isDestroyed()) return this.#window
+
+    this.#attachScreenListeners()
+
+    const window = new BrowserWindow({
+      icon: this.options.icon,
+      width: 680,
+      height: 480,
+      frame: false,
+      transparent: true,
+      alwaysOnTop: true,
+      skipTaskbar: true,
+      resizable: false,
+      show: false,
+      backgroundColor: '#00000000',
+      autoHideMenuBar: true,
+      webPreferences: {
+        ...secureWebPreferences(),
+        additionalArguments: ['--ztools-window-mode=launcher']
+      }
+    })
+
+    this.options.registry.registerMain(window.webContents)
+
+    window.on('blur', () => {
+      if (!window.isDestroyed() && window.isVisible()) {
+        window.hide()
+      }
+    })
+
+    window.once('closed', () => {
+      if (this.#frameSyncManager) {
+        this.#frameSyncManager.dispose()
+        this.#frameSyncManager = null
+      }
+      if (this.#window === window) {
+        this.#window = null
+      }
+      this.#detachScreenListeners()
+    })
+
+    this.#frameSyncManager = new FrameSyncManager({
+      suspendTimeoutMs: 15000,
+      frameSyncTimeoutMs: 150,
+      trimMemory: async () => {
+        if (this.options.sidecars?.trimProcessMemory) {
+          await this.options.sidecars.trimProcessMemory(process.pid)
+        }
+      }
+    })
+    this.#frameSyncManager.attach(window)
+
+    void window.loadURL('ztools://web/index.html?mode=launcher#/launcher').catch((err) => {
+      console.error('极客悬浮窗加载失败:', err)
+    })
+
+    this.#window = window
+    return window
+  }
+
+  #positionWindow(window: BrowserWindow): void {
+    const point = typeof screen?.getCursorScreenPoint === 'function'
+      ? screen.getCursorScreenPoint()
+      : { x: 0, y: 0 }
+    const display = typeof screen?.getDisplayNearestPoint === 'function'
+      ? (screen.getDisplayNearestPoint(point) || (typeof screen?.getPrimaryDisplay === 'function' ? screen.getPrimaryDisplay() : undefined))
+      : undefined
+    if (display) {
+      // 居中偏上（Raycast / uTools 黄金高度，距离顶部 18%），自动考虑多屏负坐标与工作区边界 clamp
+      const bounds = calculateCenteredBounds({ width: 680, height: 480 }, display, 0.18)
+      window.setBounds(bounds)
+    } else {
+      window.setBounds({ x: 0, y: 0, width: 680, height: 480 })
+    }
+  }
+
+  stop(): void {
+    this.#detachScreenListeners()
+    if (this.#frameSyncManager) {
+      this.#frameSyncManager.dispose()
+      this.#frameSyncManager = null
+    }
+    if (this.#window && !this.#window.isDestroyed()) {
+      this.#window.destroy()
+      this.#window = null
+    }
+  }
+}

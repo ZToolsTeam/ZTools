@@ -1,0 +1,6 @@
+{
+  "id": "invalid-unknown-platform",
+  "platform": "linux",
+  "runtime": "electron",
+  "arch": "x64"
+}

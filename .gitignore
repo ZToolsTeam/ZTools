@@ -1,0 +1,54 @@
+node_modules/
+logs/
+build/
+.agent/
+.claude/
+.cursor/
+.playwright-mcp/
+.vite/
+.vscode/
+.git.backup/
+*.log
+*.out.txt
+compile_temp.bat
+nul
+.mcp-ssh.lock
+package-lock.json
+.trae/mcp.json
+.trae/rules/build_local.md
+.codex/config.toml
+ztools-devops-mcp/env.config.json
+/.codegraph
+scratch/
+dist/
+out-test*/
+*.png
+*.jpg
+*.jpeg
+.env
+.env.*
+!.env.example
+
+# ---------------------------------------------------------------------------
+# 私有商业资产与闭源模块（严格隔离在本地/内部代码平台，严禁推送到公开 GitHub）
+# ---------------------------------------------------------------------------
+DLLPlugins/
+backend/
+installer/
+bin/
+official-website/
+suno-copyright/
+
+# ---------------------------------------------------------------------------
+# 打包产物与大文件防护（防止触发 GitHub 100MB 拦截）
+# ---------------------------------------------------------------------------
+artifacts/
+**/artifacts/
+*.pch
+*.pdb
+*.lib
+*.obj
+*.mp4
+*.m4a
+*.wav
+

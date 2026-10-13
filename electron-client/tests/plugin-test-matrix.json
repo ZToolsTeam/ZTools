@@ -1,0 +1,33 @@
+{
+  "version": 1,
+  "representatives": [
+    {
+      "kind": "pure-js",
+      "pluginId": "todo",
+      "unitTests": [
+        "src/plugins/todo/__tests__/todo.unit.test.ts"
+      ]
+    },
+    {
+      "kind": "standard-dll",
+      "pluginId": "clipboard-manager",
+      "dllId": "ClipboardManagerPlugin",
+      "probeFunction": "GetStatus",
+      "unitTests": [
+        "src/plugins/clipboard-manager/__tests__/clipboard-manager.unit.test.ts",
+        "src/plugins/clipboard-manager/__tests__/clipboard-manager.business.test.ts"
+      ]
+    },
+    {
+      "kind": "privileged-dll",
+      "pluginId": "context-menu",
+      "dllId": "ContextMenuPlugin",
+      "probeFunction": "CheckAdmin",
+      "unitTests": [
+        "src/plugins/context-menu/__tests__/context-menu.unit.test.ts",
+        "src/plugins/context-menu/__tests__/context-menu.component.test.ts",
+        "src/plugins/context-menu/__tests__/context-menu.business.test.ts"
+      ]
+    }
+  ]
+}

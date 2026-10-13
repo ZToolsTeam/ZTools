@@ -1,0 +1,22 @@
+{
+  "contractVersion": 1,
+  "appVersion": "1.0.0.0",
+  "target": {
+    "platform": "macos",
+    "runtime": "electron",
+    "arch": "universal"
+  },
+  "os": {
+    "productVersion": "unknown",
+    "arch": "unknown"
+  },
+  "process": {
+    "arch": "unknown",
+    "translationMode": "unknown"
+  },
+  "nativeHost": {
+    "state": "unknown",
+    "arch": "unknown",
+    "protocolVersion": null
+  }
+}

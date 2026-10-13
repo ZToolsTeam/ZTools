@@ -1,0 +1,294 @@
+/* ===================================================================
+   ZTools 设计标记系统 (Design Tokens)
+   基于 design-system/DESIGN-SPECIFICATION.md
+   ================================================================= */
+
+:root {
+  /* ===== 1. 色彩系统 (Color System) ===== */
+
+  /* 1.1 主色调 (Primary Colors) - 亮色模式 */
+  --color-primary: #2d71ff;
+  --color-primary-rgb: 45, 113, 255;
+
+  /* 1.2 辅助色 (Secondary Colors) - 亮色模式 */
+  --color-orange: #ffaf41;
+  --color-orange-rgb: 255, 175, 65;
+  --color-cyan: #4ed7c2;
+  --color-cyan-rgb: 78, 215, 194;
+
+  /* 1.3 灰度色阶 (Gray Scale) - 亮色模式 */
+  --color-gray-50: #fafafa;
+  --color-gray-100: #f5f5f5;
+  --color-gray-200: #eeeeee;
+  --color-gray-300: #e0e0e0;
+  --color-gray-400: #bdbdbd;
+  --color-gray-500: #9e9e9e;
+  --color-gray-600: #757575;
+  --color-gray-700: #616161;
+  --color-gray-800: #424242;
+  --color-gray-900: #212121;
+
+  /* 1.4 功能色 (Functional Colors) - 亮色模式 */
+  --color-success: #10b981;
+  --color-success-rgb: 16, 185, 129;
+  --color-warning: #f59e0b;
+  --color-warning-rgb: 245, 158, 11;
+  --color-error: #ef4444;
+  --color-error-rgb: 239, 68, 68;
+  --color-info: #3b82f6;
+  --color-info-rgb: 59, 130, 246;
+
+  /* 1.5 背景和表面色 - 亮色模式 */
+  --color-background: #ffffff;
+  --color-background-secondary: #fafafa;
+  --color-surface: #ffffff;
+  --color-hover: #f5f5f5;
+
+  /* 1.6 文本颜色 - 亮色模式 */
+  --color-text: #212121;
+  --color-text-secondary: #757575;
+  --color-text-disabled: #bdbdbd;
+
+  /* 1.7 边框颜色 */
+  --color-border: #eeeeee;
+  --color-border-strong: #e0e0e0;
+
+  /* ===== 2. 字体系统 (Typography System) ===== */
+
+  /* 2.1 字体家族 */
+  --font-family-base:
+    -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC',
+    'Hiragino Sans GB', 'Microsoft YaHei', 'Helvetica Neue', Helvetica, Arial,
+    sans-serif;
+  --font-family-mono:
+    'SF Mono', Monaco, 'Cascadia Code', 'Roboto Mono', Consolas, 'Courier New',
+    monospace;
+
+  /* 2.2 标题字号系统 */
+  --font-size-h1: 48px;
+  --font-size-h2: 32px;
+  --font-size-h3: 24px;
+  --font-size-h4: 20px;
+  --font-size-h5: 17px;
+
+  /* 2.3 正文字号系统 */
+  --font-size-body-l: 16px;
+  --font-size-body-m: 14px;
+  --font-size-body-s: 13px;
+  --font-size-body-xs: 12px;
+
+  /* 2.4 行高系统 */
+  --line-height-h1: 56px;
+  --line-height-h2: 40px;
+  --line-height-h3: 32px;
+  --line-height-h4: 28px;
+  --line-height-h5: 24px;
+  --line-height-body-l: 24px;
+  --line-height-body-m: 22px;
+  --line-height-body-s: 20px;
+  --line-height-body-xs: 18px;
+
+  /* 2.5 字重系统 */
+  --font-weight-regular: 400;
+  --font-weight-semibold: 600;
+  --font-weight-bold: 700;
+
+  /* ===== 3. 间距系统 (Spacing System) ===== */
+  /* 基于 4px 网格系统 */
+  --spacing-xs: 4px;
+  --spacing-sm: 8px;
+  --spacing-md: 16px;
+  --spacing-lg: 24px;
+  --spacing-xl: 32px;
+
+  /* ===== 4. 圆角系统 (Border Radius System) ===== */
+  --radius-sm: 4px;
+  --radius-md: 8px;
+  --radius-lg: 12px;
+  --radius-xl: 16px;
+  --radius-2xl: 20px;
+  --radius-full: 50%;
+
+  /* ===== 5. 阴影系统 (Shadow System) ===== */
+  /* 亮色模式阴影 */
+  --shadow-sm: 0 1px 2px 0 rgba(47, 47, 70, 0.04);
+  --shadow-md: 0 2px 4px 0 rgba(47, 47, 70, 0.08);
+  --shadow-lg: 0 4px 8px 0 rgba(47, 47, 70, 0.12);
+  --shadow-xl: 0 8px 16px 0 rgba(47, 47, 70, 0.16);
+
+  /* ===== 6. 动画系统 (Animation System) ===== */
+  --duration-fast: 0.2s;
+  --duration-standard: 0.3s;
+  --duration-slow: 0.5s;
+
+  --easing-standard: cubic-bezier(0.34, 1.56, 0.64, 1);
+  --easing-ease: ease;
+  --easing-ease-in: ease-in;
+  --easing-ease-out: ease-out;
+
+  /* ===== 7. 布局系统 (Layout System) ===== */
+  --header-height: 48px;
+  --sidebar-width: 140px;
+  --content-padding: 16px;
+
+  /* ===== 8. 响应式断点 (Breakpoints) ===== */
+  --breakpoint-xs: 480px;
+  --breakpoint-sm: 768px;
+  --breakpoint-md: 992px;
+  --breakpoint-lg: 1200px;
+  --breakpoint-xl: 1400px;
+}
+
+/* ===================================================================
+   暗色模式 (Dark Mode) - 与插件保持一致
+   ================================================================= */
+
+.dark {
+  /* 1.1 主色调 - 暗色模式 */
+  --color-primary: #4a8cff;
+  --color-primary-rgb: 74, 140, 255;
+
+  /* 1.2 辅助色 - 暗色模式 */
+  --color-orange: #ffb84d;
+  --color-orange-rgb: 255, 184, 77;
+  --color-cyan: #5de0ca;
+  --color-cyan-rgb: 93, 224, 202;
+
+  /* 1.3 灰度色阶 - 暗色模式，gray-100 调亮用于按钮背景 */
+  --color-gray-50: #0a0a0a;
+  --color-gray-100: #2a2a2a; /* 按钮默认背景 */
+  --color-gray-200: #353535; /* 按钮悬停背景 */
+  --color-gray-300: #404040;
+  --color-gray-400: #4f4f4f;
+  --color-gray-500: #5c5c5c;
+  --color-gray-600: #7a7a7a;
+  --color-gray-700: #9e9e9e;
+  --color-gray-800: #bdbdbd;
+  --color-gray-900: #e0e0e0;
+
+  /* 1.4 功能色 - 暗色模式 */
+  --color-success: #34d399;
+  --color-success-rgb: 52, 211, 153;
+  --color-warning: #fbbf24;
+  --color-warning-rgb: 251, 191, 36;
+  --color-error: #f87171;
+  --color-error-rgb: 248, 113, 113;
+  --color-info: #4a8cff;
+  --color-info-rgb: 74, 140, 255;
+
+  /* 1.5 背景和表面色 - 暗色模式 */
+  --color-background: #0f0f0f;
+  --color-background-secondary: #1a1a1a;
+  --color-surface: #1f1f1f;
+  --color-hover: #2a2a2a;
+
+  /* 1.6 文本颜色 - 暗色模式 */
+  --color-text: #e0e0e0;
+  --color-text-secondary: #9e9e9e;
+  --color-text-disabled: #5c5c5c;
+
+  /* 1.7 边框颜色 - 暗色模式 */
+  --color-border: #2a2a2a;
+  --color-border-strong: #3a3a3a;
+
+  /* 5. 阴影系统 - 暗色模式下淡化 */
+  --shadow-sm: 0 1px 2px 0 rgba(0, 0, 0, 0.15);
+  --shadow-md: 0 2px 4px 0 rgba(0, 0, 0, 0.18);
+  --shadow-lg: 0 4px 8px 0 rgba(0, 0, 0, 0.2);
+  --shadow-xl: 0 8px 16px 0 rgba(0, 0, 0, 0.25);
+}
+
+/* ===================================================================
+   兼容性映射 - 保持向后兼容
+   将旧的 --zt- 变量映射到新的设计标记
+   ================================================================= */
+
+:root {
+  /* 背景色映射 */
+  --zt-bg: var(--color-background);
+  --zt-bg-secondary: var(--color-background-secondary);
+  --zt-bg-elevated: var(--color-surface);
+  --zt-bg-hover: var(--color-hover);
+  --zt-bg-active: rgba(var(--color-primary-rgb), 0.1);
+
+  /* 文字颜色映射 */
+  --zt-text: var(--color-text);
+  --zt-text-secondary: var(--color-text-secondary);
+  --zt-text-disabled: var(--color-text-disabled);
+
+  /* 主题色映射 */
+  --zt-primary: var(--color-primary);
+  --zt-primary-hover: var(--color-primary);
+  --zt-primary-active: var(--color-primary);
+  --zt-primary-bg: rgba(var(--color-primary-rgb), 0.1);
+  --zt-primary-border: rgba(var(--color-primary-rgb), 0.3);
+
+  /* 状态色映射 */
+  --zt-success: var(--color-success);
+  --zt-success-bg: rgba(var(--color-success-rgb), 0.1);
+  --zt-warning: var(--color-orange);
+  --zt-warning-bg: rgba(var(--color-orange-rgb), 0.1);
+  --zt-error: var(--color-error);
+  --zt-error-bg: rgba(var(--color-error-rgb), 0.1);
+  --zt-info: var(--color-info);
+  --zt-info-bg: rgba(var(--color-info-rgb), 0.1);
+
+  /* 边框映射 */
+  --zt-border: var(--color-border);
+  --zt-border-strong: var(--color-border-strong);
+
+  /* 阴影映射 */
+  --zt-shadow: var(--shadow-md);
+  --zt-shadow-strong: var(--shadow-lg);
+
+  /* 圆角映射 */
+  --zt-radius-sm: var(--radius-sm);
+  --zt-radius: var(--radius-md);
+  --zt-radius-lg: var(--radius-lg);
+  --zt-radius-xl: var(--radius-xl);
+
+  /* 间距映射 */
+  --zt-spacing-xs: var(--spacing-xs);
+  --zt-spacing-sm: var(--spacing-sm);
+  --zt-spacing: var(--spacing-md);
+  --zt-spacing-lg: var(--spacing-lg);
+  --zt-spacing-xl: var(--spacing-xl);
+
+  /* 过渡映射 */
+  --zt-transition-fast: var(--duration-fast) var(--easing-ease);
+  --zt-transition: var(--duration-standard) var(--easing-standard);
+  --zt-transition-slow: var(--duration-slow) var(--easing-ease);
+
+  /* 布局映射 */
+  --zt-sidebar-width: var(--sidebar-width);
+  --zt-header-height: var(--header-height);
+}
+
+/* ===================================================================
+   响应式设计 (Responsive Design)
+   ================================================================= */
+
+/* 移动端 (< 768px) */
+@media (max-width: 767px) {
+  :root {
+    --header-height: 44px;
+    --content-padding: var(--spacing-sm);
+    --font-size-h1: 32px;
+    --font-size-h2: 24px;
+    --font-size-h3: 20px;
+  }
+}
+
+/* 平板 (768px - 991px) */
+@media (min-width: 768px) and (max-width: 991px) {
+  :root {
+    --content-padding: var(--spacing-md);
+  }
+}
+
+/* 桌面 (≥ 992px) */
+@media (min-width: 992px) {
+  :root {
+    --content-padding: var(--spacing-md);
+  }
+}

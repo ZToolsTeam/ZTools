@@ -1,0 +1,23 @@
+{
+  "contractVersion": 1,
+  "appVersion": "1.0.0",
+  "target": {
+    "platform": "windows",
+    "runtime": "legacy-delphi",
+    "arch": "ia32"
+  },
+  "os": {
+    "productVersion": "10.0.22631",
+    "kernelVersion": "10.0.22631",
+    "arch": "x64"
+  },
+  "process": {
+    "arch": "ia32",
+    "translationMode": "translated"
+  },
+  "nativeHost": {
+    "state": "not-applicable",
+    "arch": "unknown",
+    "protocolVersion": null
+  }
+}

@@ -1,0 +1,8 @@
+{
+  "id": "windows-electron-ia32",
+  "platform": "windows",
+  "runtime": "electron",
+  "arch": "ia32",
+  "abi": "ztools-native-host@1.0.0",
+  "minSdkContractVersion": 1
+}

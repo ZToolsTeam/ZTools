@@ -1,0 +1,31 @@
+{
+  "name": "ztools",
+  "version": "1.0.0",
+  "private": true,
+  "description": "ZTools - 纯粹开源、免费极客、轻量宿主、极致性能的现代化双端效率中枢平台",
+  "type": "module",
+  "scripts": {
+    "dev": "npm --prefix electron-client start",
+    "test": "node --test tests/e2e-cross-module-resilience.test.mjs",
+    "test:anti-reverse": "node --test tests/anti-reverse-resilience.test.mjs",
+    "test:quick": "npm --prefix electron-client run test:quick",
+    "test:dx": "node --test tests/dx-create-plugin.test.mjs",
+    "create-plugin": "node scripts/create-plugin.mjs",
+    "scan-plugins": "node scripts/scan-plugin-security.mjs",
+    "start:mac": "npm --prefix electron-client run start:mac",
+    "package:mac": "npm --prefix electron-client run package:app:darwin:universal --"
+  },
+  "workspaces": [
+    "packages/*"
+  ],
+  "keywords": [
+    "ztools",
+    "raycast-compat",
+    "productivity",
+    "launcher",
+    "declarative-ui",
+    "mcp"
+  ],
+  "author": "ZTools Team",
+  "license": "MIT"
+}

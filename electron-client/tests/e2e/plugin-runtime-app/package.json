@@ -1,0 +1,6 @@
+{
+  "name": "ztools-electron-plugin-runtime-test",
+  "private": true,
+  "type": "module",
+  "main": "main.mjs"
+}

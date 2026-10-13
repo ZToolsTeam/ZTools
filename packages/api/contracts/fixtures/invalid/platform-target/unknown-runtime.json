@@ -1,0 +1,6 @@
+{
+  "id": "invalid-unknown-runtime",
+  "platform": "macos",
+  "runtime": "unknown",
+  "arch": "arm64"
+}

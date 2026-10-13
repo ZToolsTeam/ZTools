@@ -1,0 +1,22 @@
+{
+  "$schema": "https://www.raycast.com/schemas/extension.json",
+  "name": "hacker-news",
+  "title": "Hacker News",
+  "description": "Get the latest Hacker News stories.",
+  "icon": "icon.png",
+  "author": "koinzhang",
+  "categories": ["News", "Developer Tools"],
+  "license": "MIT",
+  "commands": [
+    {
+      "name": "frontpage",
+      "title": "Front Page Stories",
+      "description": "Browse Hacker News top stories",
+      "mode": "view"
+    }
+  ],
+  "dependencies": {
+    "@raycast/api": "^1.94.0",
+    "@raycast/utils": "^1.19.1"
+  }
+}

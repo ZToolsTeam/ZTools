@@ -1,0 +1,7 @@
+LIBRARY ZToolsServiceSessionFixture
+EXPORTS
+  DllPlugin_Init
+  DllPlugin_Destroy
+  DllPlugin_GetInfo
+  DllPlugin_Call
+  DllPlugin_CallWithCallback

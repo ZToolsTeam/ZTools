@@ -1,0 +1,5 @@
+{
+  "platform": "macos",
+  "runtime": "electron",
+  "arch": "x64"
+}

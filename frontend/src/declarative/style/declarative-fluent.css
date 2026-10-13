@@ -1,0 +1,57 @@
+/**
+ * Fluent 2.0 / Mica 声明式渲染器沉浸式设计系统
+ */
+:root {
+  --mica-bg: rgba(26, 27, 38, 0.78);
+  --mica-bg-solid: #1a1b26;
+  --mica-surface: rgba(255, 255, 255, 0.04);
+  --mica-surface-hover: rgba(255, 255, 255, 0.08);
+  --mica-surface-active: rgba(255, 255, 255, 0.12);
+  --mica-border: rgba(255, 255, 255, 0.09);
+  --mica-border-subtle: rgba(255, 255, 255, 0.05);
+  --mica-accent: #38bdf8;
+  --mica-accent-subtle: rgba(56, 189, 248, 0.15);
+  --mica-text-primary: #f1f5f9;
+  --mica-text-secondary: #94a3b8;
+  --mica-text-muted: #64748b;
+  --mica-badge-bg: rgba(255, 255, 255, 0.08);
+}
+
+.declarative-mica-shell {
+  background: var(--mica-bg);
+  backdrop-filter: blur(28px) saturate(180%);
+  -webkit-backdrop-filter: blur(28px) saturate(180%);
+  border: 1px solid var(--mica-border);
+  box-shadow: 0 16px 48px -8px rgba(0, 0, 0, 0.5), 0 0 1px 1px rgba(255, 255, 255, 0.06) inset;
+  color: var(--mica-text-primary);
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", sans-serif;
+}
+
+.declarative-item-active {
+  background: var(--mica-surface-hover);
+  border-left: 3px solid var(--mica-accent);
+}
+
+.declarative-focus-ring:focus-visible {
+  outline: 2px solid var(--mica-accent);
+  outline-offset: -1px;
+}
+
+/* 自定义细腻滚动条 */
+.declarative-scrollbar::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+.declarative-scrollbar::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.declarative-scrollbar::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.14);
+  border-radius: 9999px;
+}
+
+.declarative-scrollbar::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 255, 255, 0.25);
+}

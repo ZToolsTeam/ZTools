@@ -1,0 +1,618 @@
+<Shapes xmlns="http://www.evolus.vn/Namespace/Pencil"
+        xmlns:p="http://www.evolus.vn/Namespace/Pencil"
+        xmlns:svg="http://www.w3.org/2000/svg"
+        xmlns:xlink="http://www.w3.org/1999/xlink"
+        id="ztools_ui_kit"
+        displayName="ZTools UI Kit"
+        description="ZTools 工具管理平台 UI 设计规范组件库"
+        author="ZTools Design Team"
+        url="https://ztools.com">
+
+    <!-- 颜色定义 -->
+    <Properties>
+        <!-- 主色调 - 亮色模式 -->
+        <PropertyGroup name="Primary Colors (Light)">
+            <Property name="primaryColor" displayName="Primary" type="Color">#2D71FFff</Property>
+            <Property name="primaryHover" displayName="Primary Hover" type="Color">#1A5FE6ff</Property>
+            <Property name="primaryActive" displayName="Primary Active" type="Color">#0A4FCCff</Property>
+            <Property name="primaryLight" displayName="Primary Light" type="Color">#E8EFFFff</Property>
+            <Property name="primaryLighter" displayName="Primary Lighter" type="Color">#F5F8FFff</Property>
+        </PropertyGroup>
+
+        <!-- 辅助色 -->
+        <PropertyGroup name="Accent Colors">
+            <Property name="accentOrange" displayName="Orange" type="Color">#FFAF41ff</Property>
+            <Property name="accentCyan" displayName="Cyan" type="Color">#4ED7C2ff</Property>
+        </PropertyGroup>
+
+        <!-- 中性色 - 亮色模式 -->
+        <PropertyGroup name="Neutral Colors (Light)">
+            <Property name="white" displayName="White" type="Color">#FFFFFFff</Property>
+            <Property name="gray50" displayName="Gray 50" type="Color">#F6F7FAff</Property>
+            <Property name="gray100" displayName="Gray 100" type="Color">#F6F7FAff</Property>
+            <Property name="gray200" displayName="Gray 200" type="Color">#E8E9EDff</Property>
+            <Property name="gray300" displayName="Gray 300" type="Color">#D1D3DBff</Property>
+            <Property name="gray400" displayName="Gray 400" type="Color">#8F91A1ff</Property>
+            <Property name="gray500" displayName="Gray 500" type="Color">#8F91A1ff</Property>
+            <Property name="gray600" displayName="Gray 600" type="Color">#5D5F74ff</Property>
+            <Property name="gray700" displayName="Gray 700" type="Color">#2F2F46ff</Property>
+            <Property name="gray900" displayName="Gray 900" type="Color">#1A1A2Eff</Property>
+        </PropertyGroup>
+
+        <!-- 功能色 -->
+        <PropertyGroup name="Functional Colors">
+            <Property name="success" displayName="Success" type="Color">#4ED7C2ff</Property>
+            <Property name="warning" displayName="Warning" type="Color">#FFAF41ff</Property>
+            <Property name="error" displayName="Error" type="Color">#FF6B6Bff</Property>
+            <Property name="info" displayName="Info" type="Color">#2D71FFff</Property>
+        </PropertyGroup>
+    </Properties>
+
+
+    <!-- 主要按钮 (Primary Button) -->
+    <Shape id="PrimaryButton" displayName="Primary Button" icon="Icons/button.png">
+        <Properties>
+            <PropertyGroup>
+                <Property name="box" displayName="Box" type="Dimension">120,40</Property>
+                <Property name="label" displayName="Label" type="PlainText">启动</Property>
+                <Property name="textColor" displayName="Text Color" type="Color">#FFFFFFff</Property>
+                <Property name="textFont" displayName="Text Font" type="Font">PingFang SC|normal|600|13px|none</Property>
+            </PropertyGroup>
+        </Properties>
+        <Behaviors>
+            <For ref="bg">
+                <Box>$box</Box>
+                <Fill>
+                    <LinearGradient>
+                        <Stop offset="0%">#5B8CFFff</Stop>
+                        <Stop offset="100%">#2D71FFff</Stop>
+                    </LinearGradient>
+                </Fill>
+                <StrokeColor>#00000000</StrokeColor>
+                <StrokeStyle>0|</StrokeStyle>
+                <Radius rx="12" ry="12"/>
+                <Filter>
+                    <DropShadow dx="0" dy="4" stdDeviation="6" color="#2D71FF40"/>
+                </Filter>
+            </For>
+            <For ref="text">
+                <TextContent>$label</TextContent>
+                <Font>$textFont</Font>
+                <Color>$textColor</Color>
+                <BoxFit>
+                    <Arg>$box</Arg>
+                    <Arg>new Bound(0, 0, 0, 0)</Arg>
+                    <Arg>new Alignment(1, 1)</Arg>
+                </BoxFit>
+            </For>
+        </Behaviors>
+        <p:Content xmlns:p="http://www.evolus.vn/Namespace/Pencil" xmlns="http://www.w3.org/2000/svg">
+            <rect id="bg" />
+            <text id="text" />
+        </p:Content>
+    </Shape>
+
+    <!-- 次要按钮 (Secondary Button) -->
+    <Shape id="SecondaryButton" displayName="Secondary Button" icon="Icons/button.png">
+        <Properties>
+            <PropertyGroup>
+                <Property name="box" displayName="Box" type="Dimension">120,40</Property>
+                <Property name="label" displayName="Label" type="PlainText">下载</Property>
+                <Property name="bgColor" displayName="Background" type="Color">#F6F7FAff</Property>
+                <Property name="textColor" displayName="Text Color" type="Color">#5D5F74ff</Property>
+                <Property name="textFont" displayName="Text Font" type="Font">PingFang SC|normal|600|13px|none</Property>
+            </PropertyGroup>
+        </Properties>
+        <Behaviors>
+            <For ref="bg">
+                <Box>$box</Box>
+                <Fill>$bgColor</Fill>
+                <StrokeColor>#00000000</StrokeColor>
+                <StrokeStyle>0|</StrokeStyle>
+                <Radius rx="12" ry="12"/>
+            </For>
+            <For ref="text">
+                <TextContent>$label</TextContent>
+                <Font>$textFont</Font>
+                <Color>$textColor</Color>
+                <BoxFit>
+                    <Arg>$box</Arg>
+                    <Arg>new Bound(0, 0, 0, 0)</Arg>
+                    <Arg>new Alignment(1, 1)</Arg>
+                </BoxFit>
+            </For>
+        </Behaviors>
+        <p:Content xmlns:p="http://www.evolus.vn/Namespace/Pencil" xmlns="http://www.w3.org/2000/svg">
+            <rect id="bg" />
+            <text id="text" />
+        </p:Content>
+    </Shape>
+
+    <!-- 图标按钮 (Icon Button) -->
+    <Shape id="IconButton" displayName="Icon Button" icon="Icons/button.png">
+        <Properties>
+            <PropertyGroup>
+                <Property name="box" displayName="Box" type="Dimension">36,36</Property>
+                <Property name="bgColor" displayName="Background" type="Color">#F6F7FAff</Property>
+                <Property name="iconColor" displayName="Icon Color" type="Color">#8F91A1ff</Property>
+            </PropertyGroup>
+        </Properties>
+        <Behaviors>
+            <For ref="bg">
+                <Box>$box</Box>
+                <Fill>$bgColor</Fill>
+                <StrokeColor>#00000000</StrokeColor>
+                <StrokeStyle>0|</StrokeStyle>
+                <Radius rx="10" ry="10"/>
+            </For>
+        </Behaviors>
+        <p:Content xmlns:p="http://www.evolus.vn/Namespace/Pencil" xmlns="http://www.w3.org/2000/svg">
+            <rect id="bg" />
+        </p:Content>
+    </Shape>
+
+
+    <!-- 插件卡片 (Plugin Card) -->
+    <Shape id="PluginCard" displayName="Plugin Card" icon="Icons/card.png">
+        <Properties>
+            <PropertyGroup>
+                <Property name="box" displayName="Box" type="Dimension">240,280</Property>
+                <Property name="title" displayName="Title" type="PlainText">插件标题</Property>
+                <Property name="description" displayName="Description" type="PlainText">这是插件的描述信息</Property>
+                <Property name="bgColor" displayName="Background" type="Color">#FFFFFFff</Property>
+                <Property name="titleColor" displayName="Title Color" type="Color">#1A1A2Eff</Property>
+                <Property name="descColor" displayName="Description Color" type="Color">#8F91A1ff</Property>
+            </PropertyGroup>
+        </Properties>
+        <Behaviors>
+            <For ref="card">
+                <Box>$box</Box>
+                <Fill>$bgColor</Fill>
+                <StrokeColor>#00000000</StrokeColor>
+                <StrokeStyle>0|</StrokeStyle>
+                <Radius rx="16" ry="16"/>
+                <Filter>
+                    <DropShadow dx="0" dy="2" stdDeviation="4" color="#2F2F460F"/>
+                </Filter>
+            </For>
+            <For ref="iconBg">
+                <Transform>translate(24, 24)</Transform>
+                <Box>64,64</Box>
+                <Fill>
+                    <LinearGradient>
+                        <Stop offset="0%">#F5F8FFff</Stop>
+                        <Stop offset="100%">#E8EFFFff</Stop>
+                    </LinearGradient>
+                </Fill>
+                <StrokeColor>#00000000</StrokeColor>
+                <Radius rx="20" ry="20"/>
+                <Filter>
+                    <DropShadow dx="0" dy="2" stdDeviation="4" color="#2D71FF14"/>
+                </Filter>
+            </For>
+            <For ref="titleText">
+                <Transform>translate(24, 104)</Transform>
+                <TextContent>$title</TextContent>
+                <Font>PingFang SC|normal|600|17px|none</Font>
+                <Color>$titleColor</Color>
+            </For>
+            <For ref="descText">
+                <Transform>translate(24, 132)</Transform>
+                <TextContent>$description</TextContent>
+                <Font>PingFang SC|normal|400|13px|none</Font>
+                <Color>$descColor</Color>
+            </For>
+        </Behaviors>
+        <p:Content xmlns:p="http://www.evolus.vn/Namespace/Pencil" xmlns="http://www.w3.org/2000/svg">
+            <rect id="card" />
+            <rect id="iconBg" />
+            <text id="titleText" />
+            <text id="descText" />
+        </p:Content>
+    </Shape>
+
+    <!-- 搜索框 (Search Input) -->
+    <Shape id="SearchInput" displayName="Search Input" icon="Icons/input.png">
+        <Properties>
+            <PropertyGroup>
+                <Property name="box" displayName="Box" type="Dimension">400,40</Property>
+                <Property name="placeholder" displayName="Placeholder" type="PlainText">搜索插件...</Property>
+                <Property name="bgColor" displayName="Background" type="Color">#F6F7FAff</Property>
+                <Property name="textColor" displayName="Text Color" type="Color">#8F91A1ff</Property>
+            </PropertyGroup>
+        </Properties>
+        <Behaviors>
+            <For ref="bg">
+                <Box>$box</Box>
+                <Fill>$bgColor</Fill>
+                <StrokeColor>#00000000</StrokeColor>
+                <StrokeStyle>0|</StrokeStyle>
+                <Radius rx="20" ry="20"/>
+            </For>
+            <For ref="text">
+                <Transform>translate(44, 0)</Transform>
+                <TextContent>$placeholder</TextContent>
+                <Font>PingFang SC|normal|400|14px|none</Font>
+                <Color>$textColor</Color>
+                <BoxFit>
+                    <Arg>new Dimension($box.w - 60, $box.h)</Arg>
+                    <Arg>new Bound(0, 0, 0, 0)</Arg>
+                    <Arg>new Alignment(0, 1)</Arg>
+                </BoxFit>
+            </For>
+        </Behaviors>
+        <p:Content xmlns:p="http://www.evolus.vn/Namespace/Pencil" xmlns="http://www.w3.org/2000/svg">
+            <rect id="bg" />
+            <text id="text" />
+        </p:Content>
+    </Shape>
+
+    <!-- 导航项 (Nav Item) -->
+    <Shape id="NavItem" displayName="Nav Item" icon="Icons/nav.png">
+        <Properties>
+            <PropertyGroup>
+                <Property name="box" displayName="Box" type="Dimension">200,40</Property>
+                <Property name="label" displayName="Label" type="PlainText">系统工具</Property>
+                <Property name="isActive" displayName="Is Active" type="Bool">false</Property>
+                <Property name="bgColor" displayName="Background" type="Color">#00000000</Property>
+                <Property name="activeBgColor" displayName="Active Background" type="Color">#2D71FFff</Property>
+                <Property name="textColor" displayName="Text Color" type="Color">#5D5F74ff</Property>
+                <Property name="activeTextColor" displayName="Active Text Color" type="Color">#FFFFFFff</Property>
+            </PropertyGroup>
+        </Properties>
+        <Behaviors>
+            <For ref="bg">
+                <Box>$box</Box>
+                <Fill>$isActive ? $activeBgColor : $bgColor</Fill>
+                <StrokeColor>#00000000</StrokeColor>
+                <StrokeStyle>0|</StrokeStyle>
+                <Radius rx="12" ry="12"/>
+                <Visibility>$isActive</Visibility>
+            </For>
+            <For ref="text">
+                <Transform>translate(16, 0)</Transform>
+                <TextContent>$label</TextContent>
+                <Font>PingFang SC|normal|$isActive ? 500 : 400|14px|none</Font>
+                <Color>$isActive ? $activeTextColor : $textColor</Color>
+                <BoxFit>
+                    <Arg>new Dimension($box.w - 32, $box.h)</Arg>
+                    <Arg>new Bound(0, 0, 0, 0)</Arg>
+                    <Arg>new Alignment(0, 1)</Arg>
+                </BoxFit>
+            </For>
+        </Behaviors>
+        <p:Content xmlns:p="http://www.evolus.vn/Namespace/Pencil" xmlns="http://www.w3.org/2000/svg">
+            <rect id="bg" />
+            <text id="text" />
+        </p:Content>
+    </Shape>
+
+
+    <!-- Toast 提示 (Toast) -->
+    <Shape id="Toast" displayName="Toast Notification" icon="Icons/toast.png">
+        <Properties>
+            <PropertyGroup>
+                <Property name="box" displayName="Box" type="Dimension">200,44</Property>
+                <Property name="message" displayName="Message" type="PlainText">操作成功</Property>
+                <Property name="bgColor" displayName="Background" type="Color">#2F2F46F2</Property>
+                <Property name="textColor" displayName="Text Color" type="Color">#FFFFFFff</Property>
+            </PropertyGroup>
+        </Properties>
+        <Behaviors>
+            <For ref="bg">
+                <Box>$box</Box>
+                <Fill>$bgColor</Fill>
+                <StrokeColor>#00000000</StrokeColor>
+                <StrokeStyle>0|</StrokeStyle>
+                <Radius rx="12" ry="12"/>
+                <Filter>
+                    <DropShadow dx="0" dy="8" stdDeviation="12" color="#2F2F464D"/>
+                </Filter>
+            </For>
+            <For ref="text">
+                <TextContent>$message</TextContent>
+                <Font>PingFang SC|normal|500|14px|none</Font>
+                <Color>$textColor</Color>
+                <BoxFit>
+                    <Arg>$box</Arg>
+                    <Arg>new Bound(24, 12, 24, 12)</Arg>
+                    <Arg>new Alignment(1, 1)</Arg>
+                </BoxFit>
+            </For>
+        </Behaviors>
+        <p:Content xmlns:p="http://www.evolus.vn/Namespace/Pencil" xmlns="http://www.w3.org/2000/svg">
+            <rect id="bg" />
+            <text id="text" />
+        </p:Content>
+    </Shape>
+
+    <!-- 分页按钮 (Pagination Button) -->
+    <Shape id="PaginationButton" displayName="Pagination Button" icon="Icons/button.png">
+        <Properties>
+            <PropertyGroup>
+                <Property name="box" displayName="Box" type="Dimension">40,40</Property>
+                <Property name="label" displayName="Label" type="PlainText">1</Property>
+                <Property name="isActive" displayName="Is Active" type="Bool">false</Property>
+                <Property name="bgColor" displayName="Background" type="Color">#FFFFFFff</Property>
+                <Property name="activeBgColor" displayName="Active Background" type="Color">#2D71FFff</Property>
+                <Property name="textColor" displayName="Text Color" type="Color">#5D5F74ff</Property>
+                <Property name="activeTextColor" displayName="Active Text Color" type="Color">#FFFFFFff</Property>
+            </PropertyGroup>
+        </Properties>
+        <Behaviors>
+            <For ref="bg">
+                <Box>$box</Box>
+                <Fill>$isActive ? $activeBgColor : $bgColor</Fill>
+                <StrokeColor>#00000000</StrokeColor>
+                <StrokeStyle>0|</StrokeStyle>
+                <Radius rx="12" ry="12"/>
+                <Filter>
+                    <DropShadow dx="0" dy="2" stdDeviation="4" color="#2F2F460A"/>
+                </Filter>
+            </For>
+            <For ref="text">
+                <TextContent>$label</TextContent>
+                <Font>PingFang SC|normal|$isActive ? 600 : 500|14px|none</Font>
+                <Color>$isActive ? $activeTextColor : $textColor</Color>
+                <BoxFit>
+                    <Arg>$box</Arg>
+                    <Arg>new Bound(0, 0, 0, 0)</Arg>
+                    <Arg>new Alignment(1, 1)</Arg>
+                </BoxFit>
+            </For>
+        </Behaviors>
+        <p:Content xmlns:p="http://www.evolus.vn/Namespace/Pencil" xmlns="http://www.w3.org/2000/svg">
+            <rect id="bg" />
+            <text id="text" />
+        </p:Content>
+    </Shape>
+
+    <!-- 进度条 (Progress Bar) -->
+    <Shape id="ProgressBar" displayName="Progress Bar" icon="Icons/progress.png">
+        <Properties>
+            <PropertyGroup>
+                <Property name="box" displayName="Box" type="Dimension">200,6</Property>
+                <Property name="progress" displayName="Progress (%)" type="PlainText">60</Property>
+                <Property name="bgColor" displayName="Background" type="Color">#E8E9EDff</Property>
+                <Property name="fillColor" displayName="Fill Color" type="Color">#2D71FFff</Property>
+            </PropertyGroup>
+        </Properties>
+        <Behaviors>
+            <For ref="bg">
+                <Box>$box</Box>
+                <Fill>$bgColor</Fill>
+                <StrokeColor>#00000000</StrokeColor>
+                <StrokeStyle>0|</StrokeStyle>
+                <Radius rx="3" ry="3"/>
+            </For>
+            <For ref="fill">
+                <Box>new Dimension($box.w * parseInt($progress) / 100, $box.h)</Box>
+                <Fill>$fillColor</Fill>
+                <StrokeColor>#00000000</StrokeColor>
+                <StrokeStyle>0|</StrokeStyle>
+                <Radius rx="3" ry="3"/>
+            </For>
+        </Behaviors>
+        <p:Content xmlns:p="http://www.evolus.vn/Namespace/Pencil" xmlns="http://www.w3.org/2000/svg">
+            <rect id="bg" />
+            <rect id="fill" />
+        </p:Content>
+    </Shape>
+
+    <!-- VIP 标签 (Badge) -->
+    <Shape id="Badge" displayName="Badge" icon="Icons/badge.png">
+        <Properties>
+            <PropertyGroup>
+                <Property name="box" displayName="Box" type="Dimension">50,22</Property>
+                <Property name="label" displayName="Label" type="PlainText">VIP</Property>
+                <Property name="bgColor" displayName="Background" type="Color">#FFAF4126</Property>
+                <Property name="textColor" displayName="Text Color" type="Color">#FFAF41ff</Property>
+            </PropertyGroup>
+        </Properties>
+        <Behaviors>
+            <For ref="bg">
+                <Box>$box</Box>
+                <Fill>$bgColor</Fill>
+                <StrokeColor>#00000000</StrokeColor>
+                <StrokeStyle>0|</StrokeStyle>
+                <Radius rx="12" ry="12"/>
+            </For>
+            <For ref="text">
+                <TextContent>$label</TextContent>
+                <Font>PingFang SC|normal|600|11px|0.5px</Font>
+                <Color>$textColor</Color>
+                <BoxFit>
+                    <Arg>$box</Arg>
+                    <Arg>new Bound(10, 4, 10, 4)</Arg>
+                    <Arg>new Alignment(1, 1)</Arg>
+                </BoxFit>
+            </For>
+        </Behaviors>
+        <p:Content xmlns:p="http://www.evolus.vn/Namespace/Pencil" xmlns="http://www.w3.org/2000/svg">
+            <rect id="bg" />
+            <text id="text" />
+        </p:Content>
+    </Shape>
+
+    <!-- 用户头像 (Avatar) -->
+    <Shape id="Avatar" displayName="Avatar" icon="Icons/avatar.png">
+        <Properties>
+            <PropertyGroup>
+                <Property name="box" displayName="Box" type="Dimension">40,40</Property>
+                <Property name="borderColor" displayName="Border Color" type="Color">#00000000</Property>
+                <Property name="imageUrl" displayName="Image URL" type="ImageData"></Property>
+            </PropertyGroup>
+        </Properties>
+        <Behaviors>
+            <For ref="circle">
+                <Box>$box</Box>
+                <Fill>#E8E9EDff</Fill>
+                <StrokeColor>$borderColor</StrokeColor>
+                <StrokeStyle>2|</StrokeStyle>
+                <Filter>
+                    <DropShadow dx="0" dy="2" stdDeviation="4" color="#2F2F461A"/>
+                </Filter>
+            </For>
+            <For ref="image">
+                <Visibility>$imageUrl.w &gt; 0</Visibility>
+                <ImageData>$imageUrl</ImageData>
+                <Box>$box</Box>
+            </For>
+        </Behaviors>
+        <p:Content xmlns:p="http://www.evolus.vn/Namespace/Pencil" xmlns="http://www.w3.org/2000/svg">
+            <circle id="circle" cx="20" cy="20" r="20"/>
+            <image id="image" clip-path="circle(20px at 20px 20px)"/>
+        </p:Content>
+    </Shape>
+
+
+    <!-- Header 顶部导航栏 -->
+    <Shape id="Header" displayName="Header" icon="Icons/header.png">
+        <Properties>
+            <PropertyGroup>
+                <Property name="box" displayName="Box" type="Dimension">1200,64</Property>
+                <Property name="bgColor" displayName="Background" type="Color">#FFFFFFCC</Property>
+                <Property name="borderColor" displayName="Border Color" type="Color">#2F2F460F</Property>
+            </PropertyGroup>
+        </Properties>
+        <Behaviors>
+            <For ref="bg">
+                <Box>$box</Box>
+                <Fill>$bgColor</Fill>
+                <StrokeColor>$borderColor</StrokeColor>
+                <StrokeStyle>0,0,0,1|</StrokeStyle>
+            </For>
+            <For ref="logo">
+                <Transform>translate(24, 20)</Transform>
+                <TextContent>ZTools</TextContent>
+                <Font>PingFang SC|normal|700|24px|-0.5px</Font>
+                <Color>#2D71FFff</Color>
+            </For>
+        </Behaviors>
+        <p:Content xmlns:p="http://www.evolus.vn/Namespace/Pencil" xmlns="http://www.w3.org/2000/svg">
+            <rect id="bg" />
+            <text id="logo" />
+        </p:Content>
+    </Shape>
+
+    <!-- Sidebar 侧边栏 -->
+    <Shape id="Sidebar" displayName="Sidebar" icon="Icons/sidebar.png">
+        <Properties>
+            <PropertyGroup>
+                <Property name="box" displayName="Box" type="Dimension">240,600</Property>
+                <Property name="bgColor" displayName="Background" type="Color">#FFFFFF99</Property>
+                <Property name="borderColor" displayName="Border Color" type="Color">#2F2F460F</Property>
+            </PropertyGroup>
+        </Properties>
+        <Behaviors>
+            <For ref="bg">
+                <Box>$box</Box>
+                <Fill>$bgColor</Fill>
+                <StrokeColor>$borderColor</StrokeColor>
+                <StrokeStyle>0,1,0,0|</StrokeStyle>
+            </For>
+        </Behaviors>
+        <p:Content xmlns:p="http://www.evolus.vn/Namespace/Pencil" xmlns="http://www.w3.org/2000/svg">
+            <rect id="bg" />
+        </p:Content>
+    </Shape>
+
+    <!-- 标题文字 (Heading) -->
+    <Shape id="Heading1" displayName="Heading 1" icon="Icons/text.png">
+        <Properties>
+            <PropertyGroup>
+                <Property name="content" displayName="Content" type="PlainText">页面标题</Property>
+                <Property name="textColor" displayName="Text Color" type="Color">#1A1A2Eff</Property>
+            </PropertyGroup>
+        </Properties>
+        <Behaviors>
+            <For ref="text">
+                <TextContent>$content</TextContent>
+                <Font>PingFang SC|normal|700|48px|-0.8px</Font>
+                <Color>$textColor</Color>
+            </For>
+        </Behaviors>
+        <p:Content xmlns:p="http://www.evolus.vn/Namespace/Pencil" xmlns="http://www.w3.org/2000/svg">
+            <text id="text" />
+        </p:Content>
+    </Shape>
+
+    <Shape id="Heading2" displayName="Heading 2" icon="Icons/text.png">
+        <Properties>
+            <PropertyGroup>
+                <Property name="content" displayName="Content" type="PlainText">区块标题</Property>
+                <Property name="textColor" displayName="Text Color" type="Color">#1A1A2Eff</Property>
+            </PropertyGroup>
+        </Properties>
+        <Behaviors>
+            <For ref="text">
+                <TextContent>$content</TextContent>
+                <Font>PingFang SC|normal|700|32px|-0.8px</Font>
+                <Color>$textColor</Color>
+            </For>
+        </Behaviors>
+        <p:Content xmlns:p="http://www.evolus.vn/Namespace/Pencil" xmlns="http://www.w3.org/2000/svg">
+            <text id="text" />
+        </p:Content>
+    </Shape>
+
+    <Shape id="Heading3" displayName="Heading 3" icon="Icons/text.png">
+        <Properties>
+            <PropertyGroup>
+                <Property name="content" displayName="Content" type="PlainText">小节标题</Property>
+                <Property name="textColor" displayName="Text Color" type="Color">#1A1A2Eff</Property>
+            </PropertyGroup>
+        </Properties>
+        <Behaviors>
+            <For ref="text">
+                <TextContent>$content</TextContent>
+                <Font>PingFang SC|normal|600|24px|-0.5px</Font>
+                <Color>$textColor</Color>
+            </For>
+        </Behaviors>
+        <p:Content xmlns:p="http://www.evolus.vn/Namespace/Pencil" xmlns="http://www.w3.org/2000/svg">
+            <text id="text" />
+        </p:Content>
+    </Shape>
+
+    <!-- 正文文字 (Body Text) -->
+    <Shape id="BodyText" displayName="Body Text" icon="Icons/text.png">
+        <Properties>
+            <PropertyGroup>
+                <Property name="content" displayName="Content" type="PlainText">这是正文内容</Property>
+                <Property name="textColor" displayName="Text Color" type="Color">#2F2F46ff</Property>
+            </PropertyGroup>
+        </Properties>
+        <Behaviors>
+            <For ref="text">
+                <TextContent>$content</TextContent>
+                <Font>PingFang SC|normal|400|14px|none</Font>
+                <Color>$textColor</Color>
+            </For>
+        </Behaviors>
+        <p:Content xmlns:p="http://www.evolus.vn/Namespace/Pencil" xmlns="http://www.w3.org/2000/svg">
+            <text id="text" />
+        </p:Content>
+    </Shape>
+
+    <!-- 辅助文字 (Caption) -->
+    <Shape id="Caption" displayName="Caption" icon="Icons/text.png">
+        <Properties>
+            <PropertyGroup>
+                <Property name="content" displayName="Content" type="PlainText">辅助说明文字</Property>
+                <Property name="textColor" displayName="Text Color" type="Color">#8F91A1ff</Property>
+            </PropertyGroup>
+        </Properties>
+        <Behaviors>
+            <For ref="text">
+                <TextContent>$content</TextContent>
+                <Font>PingFang SC|normal|400|12px|0.5px</Font>
+                <Color>$textColor</Color>
+            </For>
+        </Behaviors>
+        <p:Content xmlns:p="http://www.evolus.vn/Namespace/Pencil" xmlns="http://www.w3.org/2000/svg">
+            <text id="text" />
+        </p:Content>
+    </Shape>
+
+</Shapes>

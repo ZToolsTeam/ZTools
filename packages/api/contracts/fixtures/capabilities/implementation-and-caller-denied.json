@@ -1,0 +1,15 @@
+{
+  "contractVersion": 1,
+  "target": {
+    "id": "windows-electron-ia32",
+    "platform": "windows",
+    "runtime": "electron",
+    "arch": "ia32"
+  },
+  "capability": "clipboard.files.read",
+  "implementation": "supported",
+  "authorization": "denied",
+  "osPermission": "not-required",
+  "revision": 4,
+  "reasonCode": "CALLER_NOT_ALLOWED"
+}
