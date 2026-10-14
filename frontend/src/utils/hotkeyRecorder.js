@@ -29,8 +29,6 @@ export async function getHotkeyHostCapabilities() {
     const ztools = typeof window === 'undefined' ? undefined : window.ztools
     if (typeof ztools?.isElectron === 'function' && ztools.isElectron()) {
       hostEnvironment = 'electron'
-    } else if (typeof ztools?.isCEF === 'function' && ztools.isCEF()) {
-      hostEnvironment = 'cef'
     }
   } catch {
     // Unknown host identity must not enable a host-specific gesture.
@@ -38,7 +36,7 @@ export async function getHotkeyHostCapabilities() {
   return {
     platform,
     hostEnvironment,
-    supportsDoubleModifierHotkeys: platform === 'windows' && hostEnvironment === 'cef'
+    supportsDoubleModifierHotkeys: false
   }
 }
 

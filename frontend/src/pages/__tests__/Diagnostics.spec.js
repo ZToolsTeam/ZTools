@@ -144,7 +144,6 @@ function createHost(platform, { failPlatformRead = false, runtime = 'electron' }
 
   const ztools = {
     isElectron: vi.fn().mockReturnValue(runtime === 'electron'),
-    isCEF: vi.fn().mockReturnValue(runtime === 'cef'),
     sys,
     fs,
     db,
@@ -307,14 +306,5 @@ describe('Diagnostics batch platform filtering', () => {
     expect(fetch).not.toHaveBeenCalled()
     expect(wrapper.text()).not.toMatch(/\[PASS\] (文件存在性|读取文件|协议URL生成|协议读取|特权服务)/)
     expect(wrapper.text()).not.toMatch(/\[FAIL\] (文件存在性|读取文件|协议URL生成|协议读取|特权服务)/)
-  })
-
-  it('在 Windows CEF 旧宿主执行按键注入测试', async () => {
-    const { ztools } = await mountDiagnostics('windows', { runtime: 'cef' })
-
-    expect(wrapper.find('[data-test="batch-fail-count"]').text()).toBe('失败: 0')
-    expect(wrapper.find('[data-test="batch-skip-count"]').text()).toBe('已跳过: 0')
-    expect(ztools.sys.simulateKeyPress).toHaveBeenCalledWith('Esc')
-    expect(wrapper.find('[data-test="input-simulation-disabled"]').exists()).toBe(false)
   })
 })

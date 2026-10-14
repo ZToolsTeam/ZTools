@@ -160,7 +160,7 @@ function handleClose() {
   emit('update:open', false)
 }
 
-// 暴露给外部调用（Delphi 端通过 window.__openShortcutSettings 触发）
+// 暴露给外部调用（宿主端通过 window.__openShortcutSettings 触发）
 defineExpose({ open: () => emit('update:open', true) })
 </script>
 

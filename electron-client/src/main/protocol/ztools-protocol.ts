@@ -20,7 +20,6 @@ export interface ZToolsProtocolRoots {
 
 export interface PluginZToolsProtocolRoots extends ZToolsProtocolRoots {
   plugin: string
-  migrationPage?: string
 }
 
 type ProtocolTarget = Pick<Protocol, 'handle'>
@@ -28,9 +27,6 @@ type ProtocolTarget = Pick<Protocol, 'handle'>
 function resolveResourceRoot(root: ResourceRoot): string {
   return typeof root === 'function' ? root() : root
 }
-
-export const COMPATIBILITY_MIGRATION_PATH = '/.ztools-compatibility-migration.html'
-export const COMPATIBILITY_MIGRATION_PAGE = '<!doctype html><meta charset="utf-8"><title>Compatibility</title>'
 
 export function registerZToolsScheme(): void {
   protocol.registerSchemesAsPrivileged([
@@ -157,18 +153,6 @@ export function installPluginZToolsProtocol(
       const url = new URL(request.url)
       switch (url.host.toLowerCase()) {
         case 'plugins':
-          if (
-            roots.migrationPage !== undefined &&
-            url.pathname === COMPATIBILITY_MIGRATION_PATH
-          ) {
-            return new Response(roots.migrationPage, {
-              status: 200,
-              headers: {
-                'Cache-Control': 'no-store',
-                'Content-Type': 'text/html; charset=utf-8'
-              }
-            })
-          }
           return await rootedFileResponse(
             request,
             roots.plugin,

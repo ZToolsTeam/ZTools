@@ -93,7 +93,7 @@ export function useAppUpdate() {
     try {
       updateStore.setError(null)
 
-      // 发送下载请求（Delphi 端弹出原生进度窗体，异步执行）
+      // 发送下载请求（宿主端异步执行下载并启动安装器）
       const result = await window.ztools.update.downloadAndInstall({
         version: updateStore.versionInfo.version,
         downloadUrl: updateStore.versionInfo.downloadUrl,

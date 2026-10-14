@@ -18,7 +18,7 @@ function stringField(document: Record<string, unknown>, key: keyof StoredUserAcc
   return typeof value === 'string' ? value : ''
 }
 
-function formatDelphiDateTime(value: Date): string {
+function formatLocalDateTime(value: Date): string {
   return new Intl.DateTimeFormat(undefined, {
     dateStyle: 'short',
     timeStyle: 'medium',
@@ -63,8 +63,8 @@ export class UserAccountService {
       email: params.email ?? '',
       current_token: params.token,
       refresh_token: params.refresh_token,
-      token_expires_at: formatDelphiDateTime(expiresAt),
-      last_login_at: formatDelphiDateTime(now)
+      token_expires_at: formatLocalDateTime(expiresAt),
+      last_login_at: formatLocalDateTime(now)
     })
   }
 

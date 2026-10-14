@@ -1,5 +1,5 @@
 // Native API Implementation
-// Encapsulates interactions with the Delphi host via window.ztools
+// Encapsulates interactions with the Electron host via window.ztools
 
 import { isOfficialPlugin } from '@/utils/officialPlugins'
 

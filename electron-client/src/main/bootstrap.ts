@@ -57,7 +57,6 @@ import { createAndAttachElectronReferenceRuntime } from './platform/electron-ref
 if (process.platform === 'darwin') configureMacosUserDataPath(app)
 import { RuntimeLock } from './runtime/runtime-lock.js'
 import { resolveRuntimePaths } from './runtime/runtime-paths.js'
-import { CompatibilityCoordinator } from './runtime/compatibility-coordinator.js'
 import { PluginStateService } from './services/plugin-state-service.js'
 import { SystemToolsService } from './services/system-tools-service.js'
 import {
@@ -831,10 +830,6 @@ if (!app.requestSingleInstanceLock()) {
     lifecycleLog('INFO', 'Electron app ready', { durationMs: Date.now() - processStartedAt })
     runtimeLock = await runLifecyclePhase('runtime-lock.acquire', () => RuntimeLock.acquire(runtimePaths))
     if (!applicationLifecycle.canContinueStartup()) { await runtimeLock.release(); runtimeLock = null; return }
-    await runLifecyclePhase('compatibility.prepare', () => new CompatibilityCoordinator(runtimePaths, {
-      targetClientVersion: app.getVersion()
-    }).prepare())
-    if (!applicationLifecycle.canContinueStartup()) return
     const resources = new WebResourceService({ bundledRoot: webRoot, runtimePaths })
     webResources = resources
     await runLifecyclePhase('web-resources.initialize', () => resources.initialize())

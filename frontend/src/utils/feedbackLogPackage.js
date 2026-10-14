@@ -13,7 +13,7 @@ const formatDateDashed = (date) => {
 const normalizePath = (path) => (path || '').replace(/[\\/]+/g, '\\').replace(/\\$/, '')
 
 // ZipAPI 只有传入进度回调时才会使用 DLL 插件的后台任务通道。
-// 反馈日志可能较大，必须显式走异步压缩，避免阻塞客户端 UI/CEF 线程。
+// 反馈日志可能较大，必须显式走异步压缩，避免阻塞客户端主线程。
 const keepZipCompressionAsync = () => {}
 
 const pathJoin = (...parts) =>

@@ -196,8 +196,6 @@ import {
   createSuperPanelInputService,
   type SuperPanelInputService
 } from '../super-panel/input-service.js'
-import { LegacyBrowserStorageMigrator } from '../runtime/legacy-browser-storage.js'
-import { legacyCefProfileRoot } from '../runtime/runtime-paths.js'
 import type { WindowRegistry } from '../windows/window-registry.js'
 import { PluginWindowManager } from '../windows/plugin-window-manager.js'
 import { constructWithRouterRollback, type RouterConstructionScope } from './router-construction.js'
@@ -718,15 +716,10 @@ export class IpcRouter {
       (dllPlugins) => dllPlugins.stop()
     )
     const dllPlugins = this.#dllPlugins
-    const legacyBrowserStorage = new LegacyBrowserStorageMigrator({
-      sourceRoot: legacyCefProfileRoot(services.runtimePaths),
-      transactionRoot: services.runtimePaths.transactionRoot
-    })
     this.#pluginSessions = new PluginSessionManager({
       ...options.pluginResources,
       files,
       browserProfileRoot: services.runtimePaths.browserProfileRoot,
-      legacyStorage: legacyBrowserStorage,
       getReferenceResources: () => this.#referenceRuntime?.resources
     })
     this.#pluginWindows = constructionScope.own(

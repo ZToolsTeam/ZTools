@@ -78,9 +78,7 @@ const diagnosticPlatform = ref('unknown')
 const diagnosticPlatformReadFailed = ref(false)
 const diagnosticRuntime = ref('unknown')
 const isWindowsDiagnosticsAvailable = computed(() => diagnosticPlatform.value === 'windows')
-const isInputSimulationAvailable = computed(
-  () => diagnosticPlatform.value === 'windows' && diagnosticRuntime.value === 'cef'
-)
+const isInputSimulationAvailable = computed(() => false)
 const windowsOnlyDiagnosticsMessage = computed(() => {
   if (diagnosticPlatformReadFailed.value) {
     return '无法确认宿主平台；为避免误读或修改文件、系统注册表，Windows 专用手动诊断已关闭。'
@@ -97,14 +95,13 @@ const inputSimulationUnavailableMessage = computed(() => {
   if (diagnosticPlatform.value === 'windows' && diagnosticRuntime.value === 'electron') {
     return '当前 Electron 宿主尚未接入按键注入 provider；按键模拟已关闭。'
   }
-  return '未确认支持按键注入的 Windows CEF 宿主；按键模拟已关闭。'
+  return '当前宿主未启用按键注入 provider；按键模拟已关闭。'
 })
 
 const detectDiagnosticRuntime = () => {
   try {
     const host = window.ztools
     if (typeof host?.isElectron === 'function' && host.isElectron()) return 'electron'
-    if (typeof host?.isCEF === 'function' && host.isCEF()) return 'cef'
   } catch {}
   return 'unknown'
 }
@@ -512,7 +509,7 @@ const batchTestList = [
     id: 'simulate.key',
     name: '按键模拟 (simulate.keyPress)',
     platforms: ['windows'],
-    runtimes: ['cef'],
+    runtimes: ['native-input'],
     run: async () => {
       // 模拟一个常见的按键（Esc）
       await window.ztools.sys.simulateKeyPress('Esc')
@@ -552,7 +549,7 @@ const runBatchTest = async () => {
   const isKnownPlatform = platform === 'windows' || platform === 'macos'
   const platformLabel = platform || 'unknown'
   if (isKnownPlatform) {
-    const runtimeLabel = runtime === 'electron' ? 'Electron' : runtime === 'cef' ? 'CEF' : '宿主未知'
+    const runtimeLabel = runtime === 'electron' ? 'Electron' : '宿主未知'
     batchPlatformStatus.value = `检测平台：${platform === 'windows' ? 'Windows' : 'macOS'}（${runtimeLabel}）`
   } else if (platformReadFailed) {
     batchPlatformStatus.value =

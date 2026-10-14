@@ -81,7 +81,7 @@ const clearSearchFocusTimers = () => {
 const scheduleSearchFocus = () => {
   clearSearchFocusTimers()
 
-  // CEF 首次显示窗口时可能晚于 Vue 挂载，短延迟重试确保焦点落到输入框。
+  // 原生窗口首次显示时可能晚于 Vue 挂载，短延迟重试确保焦点落到输入框。
   const focusDelays = [0, 120, 360]
   focusDelays.forEach((delay) => {
     const timer = window.setTimeout(() => {

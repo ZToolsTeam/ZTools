@@ -2,7 +2,7 @@
 /**
  * 启动快捷键管理弹窗
  * 展示所有已安装插件和已加入面板的本地软件，支持设置/修改/清除全局快捷键
- * 通过 IPC trigger 系列接口与 Delphi 端交互
+ * 通过 IPC trigger 系列接口与原生宿主端交互
  */
 import { ref, computed, nextTick, onBeforeUnmount } from 'vue'
 import { usePluginsStore } from '@/stores/plugins'

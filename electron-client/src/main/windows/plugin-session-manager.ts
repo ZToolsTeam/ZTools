@@ -3,12 +3,10 @@ import fs from 'node:fs/promises'
 import path from 'node:path'
 import { session, type Session } from 'electron'
 import {
-  COMPATIBILITY_MIGRATION_PAGE,
   installPluginZToolsProtocol
 } from '../protocol/ztools-protocol.js'
 import type { ReferenceFileResources } from '../protocol/reference-file-resources.js'
 import type { ResourceRoot } from '../protocol/ztools-protocol.js'
-import type { LegacyBrowserStorageMigrator } from '../runtime/legacy-browser-storage.js'
 import type { FileSystemService } from '../services/file-system-service.js'
 import { configureSessionSecurity } from './main-window.js'
 
@@ -23,7 +21,6 @@ export interface PluginSessionManagerOptions {
   pluginRoot: string
   files: FileSystemService
   browserProfileRoot?: string
-  legacyStorage?: LegacyBrowserStorageMigrator
   createSession?: (partition: string) => Session
 }
 
@@ -70,16 +67,12 @@ export class PluginSessionManager implements PluginSessionProvider {
       {
         web: this.options.webRoot,
         plugin: path.join(this.options.pluginRoot, pluginId),
-        ...(this.options.legacyStorage
-          ? { migrationPage: COMPATIBILITY_MIGRATION_PAGE }
-          : {}),
         ...scopedRoots
       },
       this.options.files,
       pluginId,
       targetSession.protocol
     )
-    await this.options.legacyStorage?.migratePlugin(pluginId, targetSession)
     return targetSession
   }
 }

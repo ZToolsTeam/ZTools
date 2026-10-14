@@ -6,7 +6,6 @@ import {
   classifyExternalPath,
   findPluginIdConflicts,
   getPlatformCapabilities,
-  legacyCefProfileRoot,
   resolvePortableRuntimePaths,
 } from '../../src/main/runtime/portable-platform.js'
 import {
@@ -25,7 +24,6 @@ test('portable runtime paths preserve platform-specific path semantics', () => {
     ownerId: 'tester',
   })
   assert.equal(windows.businessDataRoot, 'C:\\Users\\tester\\AppData\\Roaming\\ZTools\\Data')
-  assert.equal(legacyCefProfileRoot(windows), 'D:\\Apps\\ZTools\\CEF Libraries\\cache')
 
   const linux = resolvePortableRuntimePaths({
     platform: 'linux',

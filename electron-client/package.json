@@ -68,8 +68,7 @@
     "test:media-dll-lifecycle": "tsc -p tsconfig.json && node scripts/build-sandbox-preload.mjs && node scripts/test-media-dll-lifecycle.mjs",
     "test:common-dll-resources": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build-native-host32.ps1 -Configuration Release -BuildTestFixture && tsc -p tsconfig.json && node scripts/build-sandbox-preload.mjs && node scripts/test-common-dll-resources.mjs",
     "test:service-data-root": "npm run build:ztools-service && npm exec -- tsc -p tsconfig.json && node scripts/build-sandbox-preload.mjs && node scripts/test-service-data-root.mjs",
-    "test:portable-contract": "tsc -p tsconfig.test.json && node scripts/run-tests.mjs portable-contract",
-    "test:legacy-upgrade": "node scripts/test-legacy-upgrade.mjs"
+    "test:portable-contract": "tsc -p tsconfig.test.json && node scripts/run-tests.mjs portable-contract"
   },
   "engines": {
     "node": ">=22.12.0"

@@ -100,7 +100,7 @@ http.interceptors.request.use(
     if (!isOnline) {
       throw createOfflineError()
     }
-    // 从后端获取 Token（CEF环境）或 localStorage（Mock环境）
+    // 从原生宿主环境或 localStorage（Mock环境）获取 Token
     // 如果没有token也允许继续请求
     if (window.ztools && window.ztools.user) {
       try {

@@ -81,10 +81,6 @@ export function runtimePathsForBusinessDataRoot(
   })
 }
 
-export function legacyCefProfileRoot(paths: Pick<RuntimePaths, 'installRoot'>): string {
-  return path.join(paths.installRoot, 'CEF Libraries', 'cache')
-}
-
 export function resolveOwnerId(
   platform = process.platform,
   environment: NodeJS.ProcessEnv = process.env

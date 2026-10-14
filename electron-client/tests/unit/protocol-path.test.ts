@@ -3,11 +3,9 @@ import fs from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 import test from 'node:test'
-import type { Protocol, Session } from 'electron'
+import type { Session } from 'electron'
 import { resolveSafeFile } from '../../src/main/protocol/safe-path.js'
 import {
-  COMPATIBILITY_MIGRATION_PATH,
-  installPluginZToolsProtocol,
   pluginResourcePath
 } from '../../src/main/protocol/ztools-protocol.js'
 import type { FileSystemService } from '../../src/main/services/file-system-service.js'
@@ -44,42 +42,6 @@ test('plugin protocol strips only its bound plugin id', () => {
   assert.throws(() =>
     pluginResourcePath('ztools://web/plugin.test/index.html', 'plugin.test')
   )
-})
-
-test('plugin protocol serves the isolated compatibility page before plugin files', async () => {
-  let handler: ((request: Request) => Promise<Response>) | undefined
-  const targetProtocol = {
-    handle(_scheme: string, callback: (request: Request) => Promise<Response>) {
-      handler = callback
-    }
-  } as unknown as Pick<Protocol, 'handle'>
-  const files = {
-    async resolveFileCapability() {
-      throw new Error('not used')
-    }
-  } as unknown as FileSystemService
-
-  installPluginZToolsProtocol(
-    {
-      web: 'C:\\web',
-      plugin: 'C:\\plugins\\plugin.test',
-      cache: 'C:\\cache',
-      temp: 'C:\\temp',
-      migrationPage: '<!doctype html><title>migration</title>'
-    },
-    files,
-    'plugin.test',
-    targetProtocol
-  )
-
-  assert.ok(handler)
-  const response = await handler({
-    method: 'GET',
-    url: 'ztools://plugins' + COMPATIBILITY_MIGRATION_PATH
-  } as Request)
-  assert.equal(response.status, 200)
-  assert.equal(await response.text(), '<!doctype html><title>migration</title>')
-  assert.equal(response.headers.get('Content-Type'), 'text/html; charset=utf-8')
 })
 
 test('plugin session partitions are persistent, stable and isolated by plugin id', () => {

@@ -226,18 +226,17 @@ describe('parseSupportedHotkeyEvent', () => {
 })
 
 describe('getHotkeyHostCapabilities', () => {
-  it('allows legacy double modifier shortcuts only for the Windows CEF host', async () => {
+  it('identifies the Electron host and disables legacy double modifier shortcuts', async () => {
     const previousZtools = window.ztools
     try {
       window.ztools = {
         sys: { getInfo: vi.fn().mockResolvedValue({ platform: 'windows' }) },
-        isElectron: () => false,
-        isCEF: () => true
+        isElectron: () => false
       }
       await expect(getHotkeyHostCapabilities()).resolves.toMatchObject({
         platform: 'windows',
-        hostEnvironment: 'cef',
-        supportsDoubleModifierHotkeys: true
+        hostEnvironment: 'unknown',
+        supportsDoubleModifierHotkeys: false
       })
 
       window.ztools.isElectron = () => true

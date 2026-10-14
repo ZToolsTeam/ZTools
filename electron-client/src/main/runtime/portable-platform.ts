@@ -112,11 +112,6 @@ export function resolvePortableRuntimePaths(options: PortableRuntimePathOptions)
   }
 }
 
-export function legacyCefProfileRoot(paths: PortableRuntimePaths): string {
-  const api = getPathApi(paths.platform)
-  return api.join(paths.installRoot, 'CEF Libraries', 'cache')
-}
-
 export function pluginIdComparisonKey(platform: PortablePlatform, pluginId: string): string {
   const normalized = pluginId.trim()
   if (!normalized) {
@@ -200,7 +195,7 @@ export function getPlatformCapabilities(
         : capability('unsupported', 'privileged service is only available on Windows')
       : capability('unsupported', 'package does not contain the privileged service'),
     browserProfileImport: platform === 'win32'
-      ? capability('supported', 'legacy CEF local storage can be imported lazily')
+      ? capability('supported', 'Electron profile storage is isolated per plugin session')
       : capability('degraded', 'browser profile import requires a platform-specific adapter'),
     encryptedCredentials: hasEncryptedCredentials
       ? capability('requires-user-action', 'encrypted credentials are never copied as portable ciphertext')

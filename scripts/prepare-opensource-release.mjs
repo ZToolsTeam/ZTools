@@ -18,7 +18,9 @@ import { fileURLToPath } from 'node:url'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const srcRoot = path.resolve(__dirname, '..')
-const targetRoot = path.resolve(srcRoot, '..', 'ZTools-opensource')
+const targetRoot = process.argv[2]
+  ? path.resolve(process.argv[2])
+  : path.resolve(srcRoot, '..', 'ZTools-opensource')
 
 console.log('========================================================')
 console.log('       ZTools 开源发布镜像抽取与安全隔离工具')
@@ -76,7 +78,8 @@ const IGNORE_PATTERNS = [
   /[\\/]SETUP_TESTS\.md$/,
   /[\\/]MOCK_DEVELOPMENT\.md$/,
   /[\\/]验证证据\.md$/,
-  /[\\/]resources[\\/]app[\\/]README\.md$/
+  /[\\/]resources[\\/]app[\\/]README\.md$/,
+  /[\\/]installer-ui-and-cleanup\.test\.mjs$/
 ]
 
 function shouldIgnore(relPath) {
@@ -174,6 +177,11 @@ function scanDir(dir) {
       // 检查大于 50MB
       if (stat.size > 50 * 1024 * 1024) {
         console.error(`  ❌ [CRITICAL] 发现超大文件 (>50MB): ${fullPath} (${(stat.size / 1024 / 1024).toFixed(2)} MB)`)
+        violations++
+      }
+      // 严禁任何商业版专有 Delphi 安装器源码 (.pas/.dpr/.dproj/.dfm) 混入开源仓
+      if (/\.(pas|dpr|dpk|dproj|dfm)$/i.test(entry.name)) {
+        console.error(`  ❌ [CRITICAL] 发现未隔离的商业专有安装器源码: ${fullPath}`)
         violations++
       }
     }

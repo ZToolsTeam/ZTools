@@ -723,7 +723,7 @@ export const usePluginsStore = defineStore('plugins', {
         const localIds = (locals || []).map((p) => String(p.pluginId))
         const officialIds = officialList.map((p) => String(p.pluginId))
 
-        // 合并：保留当前 installedSet 中已有、Delphi 尚未返回的 ID，以及所有官方内置标杆应用 ID
+        // 合并：保留当前 installedSet 中已有、宿主尚未返回的 ID，以及所有官方内置标杆应用 ID
         const merged = new Set([...localIds, ...officialIds])
         for (const id of this.installedSet) {
           merged.add(id)
@@ -804,7 +804,7 @@ export const usePluginsStore = defineStore('plugins', {
           // 等 fetchInstalledPlugins 刷新本地版本后，下次进入页面自然会重新检查
 
           // 延迟获取完整的已安装插件列表，避免覆盖刚设置的 installedSet
-          // Delphi 端 ScanPlugins 可能还未完全刷新缓存
+          // 宿主端插件目录扫描可能还未完全刷新缓存
           setTimeout(() => {
             this.fetchInstalledPlugins()
           }, 1500)
