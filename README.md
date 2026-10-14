@@ -26,6 +26,51 @@ ZTools 彻底卸下历史兼容包袱，吸纳 **Raycast** 验证过的顶尖工
 
 ---
 
+## 📸 界面预览与实机展示 (Screenshots)
+
+### 1. 双模态一体化：大主界面工作台 (Dashboard) 与 极客悬浮搜索条 (Launcher)
+> 支持 `Ctrl/Cmd + M` 一键在“全能大主界面”与“极客悬浮搜索条”之间丝滑切换，共用统一搜索内核与声明式渲染舞台。
+
+<p align="center">
+  <img src="assets/screenshots/01-dashboard-workspace.png" alt="ZTools 大主界面工作台 (Dashboard Mode)" width="100%">
+</p>
+<p align="center">
+  <em>▲ 全能大主界面工作台（Dashboard）：内置 38 款第一方核心生产力套件与市场热门扩展，支持方向键网格聚焦高亮与一键启动</em>
+</p>
+
+<p align="center">
+  <img src="assets/screenshots/07-geek-launcher-bar.png" alt="ZTools 极客悬浮搜索条 (Launcher Mode)" width="100%">
+</p>
+<p align="center">
+  <em>▲ 极客悬浮搜索条（Launcher）：毫秒级呼出，支持中文拼音首字母匹配、Frecency 频度衰减排序与纯键盘流操作</em>
+</p>
+
+### 2. 第一方核心内置套件：剪贴板历史 & 快捷短语宏展开 (Snippets)
+> 开箱即用、零网络依赖，数据 100% 本地 SQLite WAL 持久化，支持主列表 `<List>` + 右侧代码/Markdown 预览 + Metadata 属性面板。
+
+| 剪贴板历史与流水粘贴 (`clipboard-history`) | 快捷短语与动态宏展开 (`snippets`) |
+|---|---|
+| ![剪贴板历史与流水粘贴](assets/screenshots/02-clipboard-history-stage.png) | ![快捷短语与宏展开](assets/screenshots/03-snippets-macro-stage.png) |
+| *支持文本/代码/图片/文件/颜色分类过滤、敏感密码脱敏与顺序流水粘贴* | *全局触发词实时监听退格展开，支持 `{clipboard}` / `{date}` / `{cursor}` 宏* |
+
+### 3. 纯粹声明式 UI 舞台 (`<Form>` / `<Detail>`) 与 `Ctrl+K` 极客动作面板 (`ActionPanel`)
+> 彻底封杀原生 DOM/CSS 自由注入，由 `@ztools/raycast-compat` 统一转译虚拟视图描述符，按下 `Ctrl/Cmd + K` 即刻唤起上下文动作面板。
+
+| 声明式表单与实时类型推导 (`DeclarativeView`) | `Ctrl+K` 极客动作面板 (`ActionPanel`) |
+|---|---|
+| ![声明式 UI 舞台](assets/screenshots/04-declarative-ui-stage.png) | ![Ctrl+K 动作面板](assets/screenshots/05-action-panel-ctrl-k.png) |
+| *JSON 实时校验、格式化与 TypeScript / Rust / Go 类型推导* | *四级快捷键分发器，一键触发首要/次要动作或模糊检索全部操作* |
+
+### 4. 现代化偏好设置与快捷键中心
+<p align="center">
+  <img src="assets/screenshots/06-settings-center.png" alt="ZTools 高级设置中心" width="100%">
+</p>
+<p align="center">
+  <em>▲ 偏好设置中心：支持明暗主题切换、全局唤醒快捷键、默认呼出形态（应用工作台 / 极客悬浮条）与独立插件热键映射</em>
+</p>
+
+---
+
 ## 🏗️ 架构与生态（双仓飞轮）
 
 ZTools 采用**“核心宿主大仓 + 插件生态大仓”**的双仓解耦模式：

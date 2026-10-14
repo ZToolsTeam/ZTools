@@ -41,6 +41,7 @@ const WHITELIST_FILES = [
 ]
 
 const WHITELIST_DIRS = [
+  'assets',
   'electron-client',
   'frontend',
   'packages',
