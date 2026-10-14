@@ -33,6 +33,7 @@ const WHITELIST_FILES = [
   'package.json',
   'LICENSE',
   'README.md',
+  'ROADMAP.md',
   '.env.example',
   '.gitignore',
   'AGENTS.md',

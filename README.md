@@ -88,6 +88,19 @@ npm test
 
 ---
 
+## 🗺️ 开发路线图 (Roadmap)
+
+ZTools 全面吸纳 **Raycast** 验证过的交互与生态范式，规避其多语言缝合包袱，按阶段高速推进跨平台全覆盖（依托 AI 驱动研发，不设固定排期限制，以工程验收门禁为准绳持续迭代）：
+
+- **Stage 1（核心底座与双模态统一）**：纯 TS 宿主 + 预编译 Rust 侧车（NTFS MFT 百万文件秒搜 & UIAccess 穿透）、悬浮窗与大主界面双模态（`Ctrl/Cmd+M`）、四级快捷键分发器、38 款第一方核心内置套件基座与 BYOK/本地离线 AI 路由；
+- **Stage 2（扩展宿主与生态大仓闭环）**：`utilityProcess` + `worker_threads` 隔离扩展宿主（100MB 堆上限与预热池）、兼容 `@raycast.*` 的 `Script Commands` 脚本引擎、扩展 `tool` 自动接入 MCP、市场一键静默安装与 AST 安全扫描上架闭环；
+- **Stage 3（macOS 原生体验全量交付）**：Universal (`arm64` + `x86_64`) 双架构构建与 Apple 自动公证、`AXUIElement` 跨进程取词与菜单栏导航、Spotlight 秒搜与 `Quick Look` 预览、`ScreenCaptureKit` 高分屏截屏与 TCC 权限自愈引导；
+- **Stage 4（Linux 极客桌面与团队协同）**：Wayland (`XDG GlobalShortcuts Portal` / `wlr-layer-shell`) 与 X11 双栈适配、KWin/Mutter/Hyprland/Sway 多后端窗口分屏、`AT-SPI2` 取词与 Fcitx5 中文输入法兼容、AppImage/Flatpak/AUR 全渠道分发及 ZTools for Teams 协同。
+
+👉 查看完整的架构图、38 款内置套件清单与三大平台技术细节：**[ROADMAP.md](ROADMAP.md)**
+
+---
+
 ## 📄 开源协议 (License)
 
 - 本仓库核心宿主代码基于 [GNU General Public License v3.0 (GPL-3.0)](LICENSE) 协议开源，严格禁止任何第三方闭源套壳分发。
