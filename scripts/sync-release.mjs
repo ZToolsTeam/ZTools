@@ -74,7 +74,7 @@ function syncRepo({ name, repoDir, prepareScript, commitPrefix, githubUrl }) {
   // 3. 提交与推送
   console.log(`\n[步骤 3/3] 提交并推送到 GitHub...`)
   const dateStr = new Date().toISOString().replace('T', ' ').substring(0, 19)
-  const defaultMsg = `${commitPrefix}: sync latest updates (${dateStr})`
+  const defaultMsg = `${commitPrefix}: 同步最新开源版本变更 (${dateStr})`
   const commitMsg = customMsg ? `${commitPrefix}: ${customMsg}` : defaultMsg
 
   try {
