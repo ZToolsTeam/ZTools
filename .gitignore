@@ -27,6 +27,11 @@ out-test*/
 *.png
 *.jpg
 *.jpeg
+!assets/
+!assets/**
+!assets/screenshots/*.png
+!assets/screenshots/*.jpg
+!assets/screenshots/*.jpeg
 .env
 .env.*
 !.env.example
