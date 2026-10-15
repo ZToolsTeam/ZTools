@@ -1,6 +1,6 @@
 # 🗺️ ZTools 官方开发路线图 (Product & Engineering Roadmap)
 
-> **项目愿景**：全面对标并吸纳行业标杆 **Raycast** 验证过的顶尖产品哲学与工程实践，同时彻底规避其多语言臃肿缝合与闭源黑盒包袱。致力于打造**“纯粹开源、免费极客、轻量宿主、极致性能”**，完整覆盖 **Windows、macOS、Linux** 三大桌面操作系统的下一代效率启动器与智能中枢。
+> **项目愿景**：采用现代桌面极客产品哲学与工程实践，彻底规避传统多语言臃肿缝合与闭源黑盒包袱。致力于打造**“纯粹开源、免费极客、轻量宿主、极致性能”**，完整覆盖 **Windows、macOS、Linux** 三大桌面操作系统的下一代效率启动器与智能中枢。
 
 <p align="center">
   <img src="https://img.shields.io/badge/Status-Active%20Evolution-brightgreen.svg" alt="Status">
@@ -12,7 +12,7 @@
 ---
 
 ## 📑 目录
-1. [为什么选择并超越 Raycast：学其长，避其短](#-为什么选择并超越-raycast学其长避其短)
+1. [为什么选择 ZTools：告别传统启动器痛点，重塑现代桌面效率](#-为什么选择-ztools告别传统启动器痛点重塑现代桌面效率)
 2. [现代化核心架构与双模态交互体系](#-现代化核心架构与双模态交互体系)
 3. [第一方 38 款核心内置应用全景矩阵](#-第一方-38-款核心内置应用全景矩阵)
 4. [跨平台三大系统硬核落地规划 (Windows / macOS / Linux)](#-跨平台三大系统硬核落地规划-windows--macos--linux)
@@ -26,18 +26,18 @@
 
 ---
 
-## 🎯 为什么选择并超越 Raycast：学其长，避其短
+## 🎯 为什么选择 ZTools：告别传统启动器痛点，重塑现代桌面效率
 
-Raycast 确立了现代桌面效率工具的交互与生态标杆，但在跨平台工程化与开源开放性上也存在明显妥协。ZTools 坚持**“像素级吸纳其优秀范式，工程上重塑轻量跨平台解耦架构”**：
+传统桌面启动器在跨平台工程化、扩展一致性与开源开放性上普遍存在明显妥协。ZTools 坚持**“原生声明式交互范式 + 工程上重塑轻量跨平台解耦架构”**：
 
-| 维度 | Raycast 验证过的顶尖实践 (全盘吸纳) | Raycast 存在的短板与包袱 (坚决规避) | ZTools 现代化极客方案 (差异化超越) |
+| 维度 | 核心设计准则 | 传统工具常见的短板与包袱 (坚决规避) | ZTools 现代化极客方案 (差异化超越) |
 |---|---|---|---|
-| **界面与视觉** | **严格声明式 UI**：封杀原生 DOM/CSS 自由发挥，扩展只产出语义化描述符，宿主统一呈现毛玻璃质感与主题。 | — | 继承声明式规范（`<List>`, `<Detail>`, `<Form>`, `<ActionPanel>`），杜绝样式污染、闪烁与内存泄漏。 |
+| **界面与视觉** | **严格声明式 UI**：封杀原生 DOM/CSS 自由发挥，扩展只产出语义化描述符，宿主统一呈现毛玻璃质感与主题。 | 任意注入 DOM/CSS 容易导致样式混乱與卡顿。 | 统一声明式规范（`<List>`, `<Detail>`, `<Form>`, `<ActionPanel>`），杜绝样式污染、闪烁与内存泄漏。 |
 | **模态与空间** | 经典悬浮搜索框（Launcher），高频用完即走。 | **无大主界面（Dashboard）**：在逛市场、看长文档、复杂配置与系统诊断时空间局促，新手面对空搜索框门槛高。 | **首创双模态一体化（Launcher + Dashboard）**：`Ctrl/Cmd+M` 一键无缝切换悬浮窗与大主界面，共用搜索内核与声明式舞台。 |
-| **交互哲学** | **纯粹键盘流**：`Enter` 首选、`Ctrl/Cmd+K` 动作面板、方向键聚焦、`Esc` 逐级回退，双手不离键盘。 | — | 统一四级优先级快捷键分发器（`动作面板 > 声明式舞台 > 页面 > 全局`），支持卡片网格全键盘导航与拼音首字母秒搜。 |
-| **宿主架构** | 独立扩展进程 + Worker 线程隔离 + 特权能力下沉。 | **臃肿五语言缝合**：.NET 10 + Node + Rust + Swift + WebView2，安装包 **450MB+**，待机常驻内存 **300MB+**，编译门槛极高。 | **纯 TypeScript 宿主 (Electron 43) + 独立预编译 Rust 侧车**：安装包 **~100MB**，待机内存 **<200MB**，唤醒延迟 **SLA <100ms**。 |
-| **开源与信任** | 社区扩展仓库开源，官方审核 + GitOps 分发。 | 客户端核心为**闭源黑盒商业软件**；官方 AI 订阅存在强绑定倾向。 | **核心宿主 GPL-3.0 开源 + 插件生态 MIT 开源**；支持 **BYOK（自带大模型 Key）+ 本地离线模型直连** + 端到端加密（E2EE）自建同步。 |
-| **操作系统支持** | 深耕 macOS，近期拓展 Windows。 | **官方明确无 Linux 支持计划**；Windows 版体积笨重且大量原生能力仍在补齐。 | **三大桌面平台全覆盖**：Windows 硬件级穿透 + macOS 原生体验 + **填补 Linux 现代效率启动器空白**。 |
+| **交互哲学** | **纯粹键盘流**：`Enter` 首选、`Ctrl/Cmd+K` 动作面板、方向键聚焦、`Esc` 逐级回退，双手不离键盘。 | 弹窗嵌套繁琐，键鼠频繁切换。 | 统一四级优先级快捷键分发器（`动作面板 > 声明式舞台 > 页面 > 全局`），支持卡片网格全键盘导航与拼音首字母秒搜。 |
+| **宿主架构** | 独立扩展进程 + Worker 线程隔离 + 特权能力下沉。 | **臃肿多语言缝合**：安装包高达数百 MB，待机常驻内存偏高，本地编译门槛极高。 | **纯 TypeScript 宿主 (Electron 43) + 独立预编译 Rust 侧车**：安装包 **~100MB**，待机内存 **<200MB**，唤醒延迟 **SLA <100ms**。 |
+| **开源与信任** | 社区扩展仓库开源，官方审核 + GitOps 分发。 | 客户端核心为**闭源黑盒商业软件**；AI 订阅存在强绑定倾向。 | **核心宿主 GPL-3.0 开源 + 插件生态 MIT 开源**；支持 **BYOK（自带大模型 Key）+ 本地离线模型直连** + 端到端加密（E2EE）自建同步。 |
+| **操作系统支持** | 统一平台适配层，全平台一致开发体验。 | **单平台局限或缺乏 Linux 支持**。 | **三大桌面平台全覆盖**：Windows 硬件级穿透 + macOS 原生体验 + **填补 Linux 现代效率启动器空白**。 |
 
 ---
 
@@ -58,14 +58,14 @@ flowchart TB
     subgraph Core ["Electron 主进程微内核 (TypeScript)"]
         Search["统一搜索内核 (useCommandSearch)<br/>拼音首字母匹配 + Frecency 频度衰减排序"]
         Builtins["第一方 38 款内置核心套件服务<br/>(剪贴板 / 短语宏 / 窗口管理 / 系统动作)"]
-        ScriptEngine["Script Commands 脚本引擎<br/>(兼容 @raycast.* 注释 / 进程树级管控)"]
+        ScriptEngine["Script Commands 脚本引擎<br/>(支持 @ztools.* 元数据注释 / 进程树级管控)"]
         SQLite["本地存储引擎 (SQLite WAL 强缓存 / FTS5)"]
     end
 
     subgraph ExtHost ["独立扩展宿主进程 (utilityProcess)"]
         Pool["Worker 预热池 (零冷启动延迟)"]
         Workers["worker_threads 隔离执行<br/>(单命令独立 Worker / 100MB 堆上限 / NODE_COMPILE_CACHE)"]
-        Compat["@ztools/raycast-compat 运行时<br/>(NODE_PATH 裸模块映射 / 视图树 Diff)"]
+        Compat["@ztools/declarative-ui 运行时<br/>(NODE_PATH 裸模块映射 / 视图树 Diff)"]
         Pool --> Workers --> Compat
     end
 
@@ -104,7 +104,7 @@ flowchart TB
 | 5 | `window-management` | **窗口极速调度与分屏** | 覆盖左/右半屏、上/下半屏、四分之一屏、最大化、居中、合理尺寸、跨显示器迁移等 **15+ 种无延迟分屏动作**与 HUD 提示 |
 | 6 | `system` | **系统极客运维面板** | 锁屏、睡眠、重启、关机、清空回收站、隐藏其他应用、安全弹出所有磁盘、音量/静音切换、强杀无响应进程（带高危二次确认） |
 | 7 | `quicklinks` | **快捷直达链接引擎** | 支持自定义带参模板（如 `gh: https://github.com/{query}`），参数自动 URL 编码与非法协议安全拦截 |
-| 8 | `script-commands` | **本地极客脚本命令** | 自动扫描本地脚本目录，**100% 兼容 `@raycast.*` 头部注释规范**，直接将 `.ps1` / `.sh` / `.py` / `.js` 转化为可视化交互命令 |
+| 8 | `script-commands` | **本地极客脚本命令** | 自动扫描本地脚本目录，**100% 支持 `@ztools.*` 头部元数据注释规范**，直接将 `.ps1` / `.sh` / `.py` / `.js` 转化为可视化交互命令 |
 
 ### 二、 日常高频实用工具（8 大套件）
 | # | 套件标识 | 名称 | 核心命令与能力亮点 |
@@ -154,13 +154,13 @@ flowchart TB
 | 35 | `core-updater` | **版本更新与变更日志** | 增量更新检测、原子化升级回滚保护、内置版本更新日志（What's New）渲染 |
 | 36 | `account` | **账户与端到端密钥管理** | 本地主密码（Master Password）管理、Argon2id 密钥派生状态与同步设备会话管理 |
 | 37 | `organizations` | **团队与组织协同中心** | 团队私有扩展源配置、团队共享 Snippets 快捷短语与共享 Quicklinks 同步 |
-| 38 | `onboarding` | **极客新手指引与生态向导** | 交互式键盘快捷键训练营、核心功能导览与一键从旧工具（uTools / Raycast / Alfred）导入配置 |
+| 38 | `onboarding` | **极客新手指引与生态向导** | 交互式键盘快捷键训练营、核心功能导览与一键从旧启动器工具导入配置 |
 
 ---
 
 ## 💻 跨平台三大系统硬核落地规划 (Windows / macOS / Linux)
 
-ZTools 通过统一的 `PlatformAdapter` 接口将平台差异全部下沉至底层，上层业务逻辑与 `window.ztools` / `@ztools/raycast-compat` SDK 保持 **100% 跨平台签名一致**。
+ZTools 通过统一的 `PlatformAdapter` 接口将平台差异全部下沉至底层，上层业务逻辑与 `window.ztools` / `@ztools/declarative-ui` SDK 保持 **100% 跨平台签名一致**。
 
 ### 1. Windows 平台：特权穿透与硬件级底层深化
 
@@ -186,7 +186,7 @@ ZTools 通过统一的 `PlatformAdapter` 接口将平台差异全部下沉至底
 
 ### 3. Linux 平台：填补桌面极客空白的全协议攻坚
 
-> **战略意义**：Raycast 官方明确不支持 Linux，而 Linux 现有的开源启动器（Rofi / Wofi / Albert / Ulauncher）普遍存在“配置晦涩、UI 简陋、缺乏现代声明式扩展生态、Wayland 兼容性差”的痛点。ZTools 将打造 **Linux 桌面首个具备完整 Raycast 级声明式扩展生态与原生性能的现代效率中枢**。
+> **战略意义**：Linux 现有的开源启动器（Rofi / Wofi / Albert / Ulauncher）普遍存在“配置晦涩、UI 简陋、缺乏现代声明式扩展生态、Wayland 兼容性差”的痛点。ZTools 将打造 **Linux 桌面首个具备完整声明式扩展生态与原生性能的现代效率中枢**。
 
 | 核心领域 | 工程技术方案与细节 | 状态 |
 |---|---|---|
@@ -205,14 +205,14 @@ ZTools 通过统一的 `PlatformAdapter` 接口将平台差异全部下沉至底
 - **Worker 预热池与字节码缓存**：维护大小为 1 的常驻预热 Worker 池（`pop()` 即刻借出，`setImmediate` 后台异步补齐，窗口挂起时自动清池释放内存），并开启 Node.js `NODE_COMPILE_CACHE` 字节码缓存，实现扩展毫秒级冷启动。
 - **代码与数据目录物理分离**：扩展代码存放在 `extensions/<id>`，用户配置与持久化数据独立存放在 `support/extensions/<id>`。**更新或卸载扩展时仅替换代码目录**，用户数据 100% 安全保留（提供单独的一键清理数据选项）。
 
-### 2. `@ztools/raycast-compat` 兼容层与生态吸收
-- **原生级 API 兼容**：提供与 `@raycast/api` 及 `@raycast/utils` 高度兼容的组件与 Hooks（`<List>`, `<Detail>`, `<Form>`, `<Grid>`, `<ActionPanel>`, `useFetch`, `useCachedPromise`, `useSQL`, `LocalStorage`, `Clipboard`, `showToast`, `showHUD`）。
+### 2. `@ztools/declarative-ui` 运行时与生态
+- **原生级 API 与组件**：提供一套完整的声明式组件与 Hooks（`<List>`, `<Detail>`, `<Form>`, `<Grid>`, `<ActionPanel>`, `useFetch`, `useCachedPromise`, `useSQL`, `LocalStorage`, `Clipboard`, `showToast`, `showHUD`）。
 - **视图树 Diff 与防抖**：在运行时出口内置 `onPromoteTree` 增量视图树对比，状态未发生实质变化时仅发送轻量 `renderEmpty` 帧，连续 20 次无意义空渲染自动输出性能诊断告警。
-- **双仓开源飞轮与一键迁移**：
-  - 社区开发者可在 [`codingmuse/ZTools-extensions`](https://github.com/codingmuse/ZTools-extensions) 仓库通过 `npm create ztools-plugin` 10 分钟编写新插件；
-  - 同时支持通过自动化构建脚本（配置 `NODE_PATH` 裸模块映射），将开源社区上千款 MIT 协议的优质 Raycast 扩展平滑编译接入 ZTools 插件市场。
+- **双仓开源飞轮与极简脚手架**：
+  - 社区开发者可在 [`codingmuse/ZTools-extensions`](https://github.com/codingmuse/ZTools-extensions) 仓库通过 `npm run create-plugin` 10 分钟编写新插件并提交 PR；
+  - 依托统一的纯声明式组件规范，生态插件完全解耦于宿主实现，免受底层技术栈迁移影响。
 
-### 3. 开放投稿与 4 项必要安全门禁（对齐 Store 审核制）
+### 3. 开放投稿与 4 项必要安全门禁（对齐审核制）
 - **投稿即 PR，合并即上架**：任何开发者均可向插件大仓提交 PR，每次版本更新同样审阅 Diff。
 - **四大硬核安全防线**：
   1. **CI 自动 AST 静态扫描（`scan-plugin-security.mjs`）**：严厉拦截动态 `eval()`、`new Function()`、字符串拼接绕过（`window["ev"+"al"]`）、原型链逃逸（`({}).constructor.constructor`）、十六进制代码混淆及未声明的高危原生模块；
@@ -263,7 +263,7 @@ flowchart LR
 ### 📍 Stage 2：扩展宿主隔离、极客脚本与插件市场 GitOps 闭环
 - [x] `utilityProcess` 独立扩展宿主进程 + `worker_threads` 预热池 + 100MB 内存硬上限与崩溃自愈；
 - [x] `NODE_PATH` 裸模块解析、`NODE_COMPILE_CACHE` 字节码缓存、扩展代码目录与数据目录物理分离；
-- [x] `Script Commands` 本地脚本命令引擎（兼容 `@raycast.*` 注释规范、进程树级超时清理、UTF-8/GBK 双编码容错）；
+- [x] `Script Commands` 本地脚本命令引擎（支持 `@ztools.*` 元数据注释规范、进程树级超时清理、UTF-8/GBK 双编码容错）；
 - [x] 社区扩展 `tool` 入口自动桥接注册为 `@ztools/ai-mcp` 工具；
 - [x] 插件市场一键静默安装、AST 静态安全扫描门禁（25+ 对抗用例）、SHA-256 强校验与 `revoked` 远程下架开关；
 - [ ] 持续扩充 [`ZTools-extensions`](https://github.com/codingmuse/ZTools-extensions) 官方与社区精选扩展库规模。
@@ -291,7 +291,7 @@ flowchart LR
 ZTools 坚信开源社区的力量，无论你是前端开发者、Rust/C++ 系统极客，还是效率工具重度用户，都非常欢迎加入我们：
 
 1. **体验与反馈**：遇到任何 Bug 或有功能建议，欢迎直接在 [GitHub Issues](https://github.com/codingmuse/ZTools/issues) 中提交。
-2. **开发与投稿插件**：前往插件生态大仓 **[codingmuse/ZTools-extensions](https://github.com/codingmuse/ZTools-extensions)**，使用 `@ztools/raycast-compat` 声明式组件库编写插件并提交 PR，审核合并后即可向全网用户分发。
+2. **开发与投稿插件**：前往插件生态大仓 **[codingmuse/ZTools-extensions](https://github.com/codingmuse/ZTools-extensions)**，使用 `@ztools/declarative-ui` 声明式组件库编写插件并提交 PR，审核合并后即可向全网用户分发。
 3. **参与跨平台底层攻坚**：非常欢迎熟悉 **macOS (AppKit / Accessibility / ScreenCaptureKit)** 或 **Linux (Wayland / XDG Portal / AT-SPI2 / Hyprland / KWin)** 的开发者提交 PR 共建平台适配层（[`electron-client/src/main/platform/`](electron-client/src/main/platform)）。
 4. **工程质量红线**：所有 PR 必须包含跨模块集成测试与破坏性异常边界测试（拒绝纯 Happy Path），并通过 `npm run test:quick` 与 `npm test` 全量门禁。
 
@@ -300,5 +300,5 @@ ZTools 坚信开源社区的力量，无论你是前端开发者、Rust/C++ 系�
 ## 📄 开源协议与商业准则 (License & Philosophy)
 
 - **核心宿主仓库（`codingmuse/ZTools`）**：基于 **[GNU GPL-3.0](LICENSE)** 协议开源，确保客户端核心代码永久公开透明，严禁任何第三方闭源套壳商业化。
-- **插件生态与 SDK（`codingmuse/ZTools-extensions` & `@ztools/raycast-compat`）**：基于宽松的 **[MIT License](https://opensource.org/licenses/MIT)** 授权，给予插件作者最大的创作与分发自由。
+- **插件生态与 SDK（`codingmuse/ZTools-extensions` & `@ztools/declarative-ui`）**：基于宽松的 **[MIT License](https://opensource.org/licenses/MIT)** 授权，给予插件作者最大的创作与分发自由。
 - **纯粹极客承诺**：个人端全部核心能力、38 款内置套件、无限制社区插件、BYOK 自定义大模型与自建 WebDAV/Gist 端到端加密同步 **100% 永久免费、零广告、不作恶**。

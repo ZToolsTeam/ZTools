@@ -1,22 +1,25 @@
 {
-  "name": "@ztools/raycast-compat",
+  "name": "@ztools/declarative-ui",
   "version": "1.0.0",
-  "description": "ZTools 声明式组件体系与 Raycast 兼容运行时，提供纯净安全且遵循 Fluent 样式的 JSON View Descriptors 抽象及系统级 API",
+  "description": "ZTools 声明式组件体系与运行时，提供纯净安全且遵循 Fluent 样式的 JSON View Descriptors 抽象及系统级 API",
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "exports": {
     ".": {
       "types": "./dist/index.d.ts",
-      "import": "./dist/index.js"
+      "import": "./dist/index.js",
+      "default": "./dist/index.js"
     },
     "./api": {
       "types": "./dist/api/index.d.ts",
-      "import": "./dist/api/index.js"
+      "import": "./dist/api/index.js",
+      "default": "./dist/api/index.js"
     },
     "./utils": {
       "types": "./dist/utils/index.d.ts",
-      "import": "./dist/utils/index.js"
+      "import": "./dist/utils/index.js",
+      "default": "./dist/utils/index.js"
     }
   },
   "files": [
@@ -30,7 +33,6 @@
   },
   "keywords": [
     "ztools",
-    "raycast",
     "declarative",
     "components",
     "virtual-view",

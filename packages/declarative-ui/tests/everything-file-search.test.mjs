@@ -202,7 +202,7 @@ describe("Everything File Search Application Suite (自研零依赖引擎 + 标�
   describe("5. Raycast 原版 ActionPanel 动作集与文件治理", () => {
     it("openFile 能够成功处理有效文件并拦截不存在文件", async () => {
       // 成功案例 (使用自身当前测试脚本路径)
-      const resSuccess = await openFile("packages/raycast-compat/tests/everything-file-search.test.mjs");
+      const resSuccess = await openFile("packages/declarative-ui/tests/everything-file-search.test.mjs");
       assert.equal(resSuccess.success, true);
 
       // 不存在文件拦截
@@ -218,7 +218,7 @@ describe("Everything File Search Application Suite (自研零依赖引擎 + 标�
     });
 
     it("revealFile 能够在资源管理器中定位选定文件", async () => {
-      const res = await revealFile("packages/raycast-compat/package.json");
+      const res = await revealFile("packages/declarative-ui/package.json");
       assert.equal(res.success, true);
     });
 
@@ -234,11 +234,11 @@ describe("Everything File Search Application Suite (自研零依赖引擎 + 标�
     });
 
     it("calculateFileSha256 与 calculateFileMd5 准确计算真实哈希摘要", async () => {
-      const sha = await calculateFileSha256("packages/raycast-compat/package.json");
+      const sha = await calculateFileSha256("packages/declarative-ui/package.json");
       assert.ok(typeof sha === "string");
       assert.equal(sha.length, 64, "SHA-256 必须是 64 位十六进制字符串");
 
-      const md5 = await calculateFileMd5("packages/raycast-compat/package.json");
+      const md5 = await calculateFileMd5("packages/declarative-ui/package.json");
       assert.ok(typeof md5 === "string");
       assert.equal(md5.length, 32, "MD5 必须是 32 位十六进制字符串");
     });

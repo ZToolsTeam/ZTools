@@ -1,13 +1,13 @@
 /**
  * ZTools Developer Service (M1.5-17)
  * 
- * 逆向参考依据：
- * - 源码提取自 Raycast Windows `backend/index.mjs` (key: `developer`)
- * - 命令结构：`L_({ key: 'developer', title: 'Developer', commands: { createExtension: V(...), importExtension: V(...), manageExtensions: V(...), extensionDiagnostics: V(...), aiExtension: V(...) } })`
- * - 设置项：useNodeProductionEnvironment, autoReloadOnSave, keepWindowVisibleDuringDevelopment, disablePopToRootSearch, openRaycastInDevelopmentMode
+ * 架构规范：
+ * - 声明式扩展体系开发者服务中心
+ * - 命令结构：包含 createExtension, importExtension, manageExtensions, extensionDiagnostics, aiExtension
+ * - 设置项：useNodeProductionEnvironment, autoReloadOnSave, keepWindowVisibleDuringDevelopment, disablePopToRootSearch
  * 
  * 本地化工程改造：
- * - 零门槛扩展脚手架（基于轻量 TypeScript + @ztools/raycast-compat 模板）；
+ * - 零门槛扩展脚手架（基于轻量 TypeScript + @ztools/declarative-ui 模板）；
  * - 本地开发扩展热重载与快速导入目录监听；
  * - 扩展 Worker 运行健康度诊断（堆内存占用、心跳响应延迟、事件循环耗时、异常捕获次数统计）；
  * - 支持中文拼音首字母模糊检索已安装与开发中扩展。
@@ -168,10 +168,10 @@ export class DeveloperService {
 
     switch (template) {
       case 'detail':
-        entryCode = `import { Detail, ActionPanel, Action } from '@ztools/raycast-compat'\n\nexport default function Command() {\n  return (\n    <Detail\n      markdown="# ${title}\\n\\n${description}"\n      actions={\n        <ActionPanel>\n          <Action.CopyToClipboard content="${title}" />\n        </ActionPanel>\n      }\n    />\n  )\n}\n`
+        entryCode = `import { Detail, ActionPanel, Action } from '@ztools/declarative-ui'\n\nexport default function Command() {\n  return (\n    <Detail\n      markdown="# ${title}\\n\\n${description}"\n      actions={\n        <ActionPanel>\n          <Action.CopyToClipboard content="${title}" />\n        </ActionPanel>\n      }\n    />\n  )\n}\n`
         break
       case 'form':
-        entryCode = `import { Form, ActionPanel, Action, showToast, Toast } from '@ztools/raycast-compat'\n\nexport default function Command() {\n  return (\n    <Form\n      actions={\n        <ActionPanel>\n          <Action.SubmitForm\n            title="Submit"\n            onSubmit={(values) => showToast({ style: Toast.Style.Success, title: "Submitted", message: JSON.stringify(values) })}\n          />\n        </ActionPanel>\n      }\n    >\n      <Form.TextField id="text" title="Input Text" placeholder="Type here..." />\n    </Form>\n  )\n}\n`
+        entryCode = `import { Form, ActionPanel, Action, showToast, Toast } from '@ztools/declarative-ui'\n\nexport default function Command() {\n  return (\n    <Form\n      actions={\n        <ActionPanel>\n          <Action.SubmitForm\n            title="Submit"\n            onSubmit={(values) => showToast({ style: Toast.Style.Success, title: "Submitted", message: JSON.stringify(values) })}\n          />\n        </ActionPanel>\n      }\n    >\n      <Form.TextField id="text" title="Input Text" placeholder="Type here..." />\n    </Form>\n  )\n}\n`
         break
       case 'script':
       case 'ai-tool':
@@ -180,7 +180,7 @@ export class DeveloperService {
         break
       case 'list':
       default:
-        entryCode = `import { List, ActionPanel, Action } from '@ztools/raycast-compat'\n\nexport default function Command() {\n  return (\n    <List searchBarPlaceholder="Search items...">\n      <List.Item\n        title="${title} Item 1"\n        subtitle="${description}"\n        actions={\n          <ActionPanel>\n            <Action.CopyToClipboard content="${title} Item 1" />\n          </ActionPanel>\n        }\n      />\n    </List>\n  )\n}\n`
+        entryCode = `import { List, ActionPanel, Action } from '@ztools/declarative-ui'\n\nexport default function Command() {\n  return (\n    <List searchBarPlaceholder="Search items...">\n      <List.Item\n        title="${title} Item 1"\n        subtitle="${description}"\n        actions={\n          <ActionPanel>\n            <Action.CopyToClipboard content="${title} Item 1" />\n          </ActionPanel>\n        }\n      />\n    </List>\n  )\n}\n`
         break
     }
 

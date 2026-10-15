@@ -8,7 +8,7 @@
  * 1. 规范化校验插件 ID 与参数合法性；
  * 2. 检查目录冲突保护，严防意外覆盖；
  * 3. 自动生成符合 packages/ztools-plugins-spec 规约的标准工程；
- * 4. 采用现代 Raycast 声明式 UI 体系（零 DOM / 零 CSS / 语义化组件）；
+ * 4. 采用现代声明式 UI 体系（零 DOM / 零 CSS / 语义化组件）；
  * 5. 支持命令行快速调用与交互式问答模式。
  */
 
@@ -136,7 +136,7 @@ export async function createPlugin({
       test: 'node --test tests/*.test.mjs'
     },
     dependencies: {
-      '@ztools/raycast-compat': '^1.0.0'
+      '@ztools/declarative-ui': '^1.0.0'
     },
     devDependencies: {
       typescript: '^5.8.0'
@@ -159,7 +159,7 @@ export async function createPlugin({
       outDir: './dist',
       rootDir: './src',
       paths: {
-        '@ztools/raycast-compat': ['../../packages/raycast-compat/dist/index.d.ts']
+        '@ztools/declarative-ui': ['../../packages/declarative-ui/dist/index.d.ts']
       }
     },
     include: ['src/**/*']
@@ -192,7 +192,7 @@ export async function createPlugin({
   Clipboard,
   useState,
   React
-} from "@ztools/raycast-compat";
+} from "@ztools/declarative-ui";
 
 interface FeatureItem {
   id: string;
@@ -290,7 +290,7 @@ export default function Command() {
   Clipboard,
   useState,
   React
-} from "@ztools/raycast-compat";
+} from "@ztools/declarative-ui";
 
 const INITIAL_FEATURES = [
   {
@@ -373,7 +373,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { renderDeclarativeRoot } from "@ztools/raycast-compat";
+import { renderDeclarativeRoot } from "@ztools/declarative-ui";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const pluginDir = path.resolve(__dirname, "..");
@@ -435,8 +435,8 @@ describe("插件自动化验证: ${pluginId}", () => {
 
 ---
 
-## 核心设计哲学 (Raycast 对齐规范)
-1. **纯声明式 UI**：严禁直接编写原生 HTML 标签与 CSS 样式。所有界面均基于 \`@ztools/raycast-compat\` 提供的语义化组件（\`<List>\`, \`<Detail>\`, \`<Form>\`, \`<ActionPanel>\`, \`<Action>\`），由宿主统一呈现沉浸式 Fluent / Mica 亚克力亚态视觉；
+## 核心设计哲学 (声明式 UI 规范)
+1. **纯声明式 UI**：严禁直接编写原生 HTML 标签与 CSS 样式。所有界面均基于 \`@ztools/declarative-ui\` 提供的语义化组件（\`<List>\`, \`<Detail>\`, \`<Form>\`, \`<ActionPanel>\`, \`<Action>\`），由宿主统一呈现沉浸式 Fluent / Mica 亚克力亚态视觉；
 2. **纯粹键盘优先**：上下键浏览切换、\`Enter\` 触发首要动作、\`Ctrl+K\` 呼出动作面板、\`Esc\` 返回上级栈；
 3. **安全与轻量**：严格通过 AST 静态语法树门禁，严禁代码混淆、动态 \`eval\` 与越权访问。
 

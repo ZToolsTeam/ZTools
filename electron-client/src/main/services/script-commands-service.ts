@@ -210,7 +210,7 @@ export function terminateProcessTree(pid: number): void {
 }
 
 /**
- * 解析 Raycast 官方脚本头部注释元数据
+ * 解析脚本命令头部注释元数据
  */
 export function parseScriptMetadata(
   content: string,
@@ -388,7 +388,7 @@ export function resolveScriptInterpreter(
 }
 
 /**
- * 构造声明式 Detail 视图描述符（符合 @ztools/raycast-compat 规约）
+ * 构造声明式 Detail 视图描述符（符合 @ztools/declarative-ui 规约）
  */
 export function createDetailViewDescriptor(
   title: string,

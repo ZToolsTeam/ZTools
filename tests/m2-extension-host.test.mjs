@@ -27,7 +27,7 @@ const require = createRequire(import.meta.url);
 const { ExtensionHostProcess } = require('../electron-client/out-test/src/main/extension-host/host-process.js');
 const { WorkerPool, PooledWorker } = require('../electron-client/out-test/src/main/extension-host/worker-pool.js');
 const { resolveExtensionDirectories } = require('../electron-client/out-test/src/main/extension-host/paths.js');
-const { DeclarativeRenderInstance, areViewTreesEqual } = require('../packages/raycast-compat/dist/index.js');
+const { DeclarativeRenderInstance, areViewTreesEqual } = require('../packages/declarative-ui/dist/index.js');
 
 describe('M2-1: 独立扩展宿主进程生命周期与崩溃自愈', () => {
   it('宿主进程支持懒启动，首次执行命令时拉起并在退出时优雅销毁', async () => {

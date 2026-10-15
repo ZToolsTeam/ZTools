@@ -1,5 +1,5 @@
 import { ref, computed, shallowRef, onUnmounted, toRaw } from "vue";
-import { setDeclarativeBridge, renderDeclarativeRoot } from "@ztools/raycast-compat";
+import { setDeclarativeBridge, renderDeclarativeRoot } from "@ztools/declarative-ui";
 
 export function useDeclarativeStack(initialRoot) {
   // 导航栈数组，每一项存储当前层级的 { descriptor, component, root }

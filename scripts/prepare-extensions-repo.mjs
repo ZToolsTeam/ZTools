@@ -67,7 +67,7 @@ console.log('✔ 已生成 MIT LICENSE')
 const packageJson = {
   name: '@ztools/extensions',
   version: '1.0.0',
-  description: 'ZTools 官方开源插件与生态扩展大仓 | Raycast 声明式 UI 标准、一键脚手架与 GitOps 自动化分发',
+  description: 'ZTools 官方开源插件与生态扩展大仓 | 纯声明式 UI 标准、一键脚手架与 GitOps 自动化分发',
   private: false,
   license: 'MIT',
   scripts: {
@@ -76,7 +76,7 @@ const packageJson = {
     'scan': 'node scripts/scan-plugin-security.mjs extensions'
   },
   devDependencies: {
-    '@ztools/raycast-compat': '^1.0.0',
+    '@ztools/declarative-ui': '^1.0.0',
     '@ztools/ztools-plugins-spec': '^1.0.0'
   }
 }
@@ -187,7 +187,7 @@ git push origin feat/my-tool
 
 ---
 
-## 🎨 核心规范（Raycast 声明式 UI 对齐）
+## 🎨 核心规范（纯声明式 UI 规范）
 
 - **彻底封杀原生 DOM/CSS 自由发挥**：严禁直接操作 HTML DOM，严禁手写自定义 CSS；
 - **纯语义化组件**：统一使用 \`<List>\`, \`<Detail>\`, \`<Form>\`, \`<ActionPanel>\`, \`<Action>\`，由宿主统一样式与主题呈现；

@@ -12,7 +12,7 @@ import {
   Color,
   JsonFormatCommand,
   QrCodeCommand
-} from "@ztools/raycast-compat";
+} from "@ztools/declarative-ui";
 
 describe("DeclarativeView 统一宿主渲染器与纯键盘流", () => {
   beforeEach(() => {
@@ -300,7 +300,7 @@ describe("端到端移植应用集成渲染验证", () => {
   });
 
   it("集成验证 3: GoogleTranslateCommand 响应式状态更新链路与即时翻译视图联动", async () => {
-    const { GoogleTranslateCommand } = await import("@ztools/raycast-compat");
+    const { GoogleTranslateCommand } = await import("@ztools/declarative-ui");
     const wrapper = mount(DeclarativeView, {
       props: {
         rootComponent: GoogleTranslateCommand

@@ -18,7 +18,7 @@ import {
   usePromise,
   useCachedPromise,
   useCachedState
-} from '../packages/raycast-compat/dist/index.js'
+} from '../packages/declarative-ui/dist/index.js'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const rootDir = path.resolve(__dirname, '..')

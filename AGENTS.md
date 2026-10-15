@@ -1,18 +1,18 @@
 # AGENTS.md
 
 ## 适用范围与战略定位
-- **项目战略定调**：ZTools 彻底卸下历史兼容包袱，不再投入精力维护同步转异步 Shim、黑盒环境模拟与非标兼容层。全面转向**“纯粹开源、免费极客、轻量宿主、极致性能”**的现代化架构体系，吸纳 Raycast 验证过的顶尖工程实践，打造对标国际一流的 Windows & macOS 双端效率中枢平台。
+- **项目战略定调**：ZTools 彻底卸下历史兼容包袱，不再投入精力维护同步转异步 Shim、黑盒环境模拟与非标兼容层。全面转向**“纯粹开源、免费极客、轻量宿主、极致性能”**的现代化架构体系，采用现代极客工程实践，打造对标国际一流的 Windows & macOS 双端效率中枢平台。
 - **本文件地位**：本文件是 ZTools 父仓库及其所有子模块的**唯一且最高权威规则文档**。
 - **沟通基准**：全面且强制使用中文进行沟通、思考、Git 提交备注（Commit Message）以及技术文档输出。
 - **开发原则**：坚持 KISS 原则，拒绝过度设计与重复造轮子。先找根因再改，事实导向，发现高风险问题必须暂停实现并等待确认，严禁“先写再说”。删除文件或覆盖核心配置前必须先确认。
-- **核心架构参考依据**：针对声明式 UI、Native 侧车（UIAccess 穿透 / MFT 硬件级索引）、React Reconciler 虚拟视图描述符与现代扩展兼容层，严格遵循本文件与 `@ztools/raycast-compat` 标准架构规范进行研发与测试。
+- **核心架构参考依据**：针对声明式 UI、Native 侧车（UIAccess 穿透 / MFT 硬件级索引）、React Reconciler 虚拟视图描述符与现代扩展兼容层，严格遵循本文件与 `@ztools/declarative-ui` 标准架构规范进行研发与测试。
 - **疑难困境工程设计准则**：当遇到复杂系统设计、技术瓶颈或方案选型时，**严禁闭门造车或凭空盲猜**。必须坚持以事实和成熟工业级工程实践为导向，全面评估并发模型、状态机契约与异常边界，确保方案经过严密自审与全异常测试后再行编码。
 
 ---
 
-## 对齐 Raycast 标杆法则：商业模式与开发方案核心规范 (Raycast Alignment Rules)
+## 现代极客工程标杆法则：商业模式与开发方案核心规范 (Core Engineering Rules)
 
-为了确保 ZTools 保持世界一流的极客水准与长久健康的生态活力，**项目在商业模式、产品哲学与技术开发方案上全面对标并吸纳 Raycast 经过市场与时间验证的核心优点**，同时规避其历史包袱（坚决拒绝臃肿的多语言跨端缝合架构）。本规则作为全局最高准则，贯穿所有规划、研发与运营阶段：
+为了确保 ZTools 保持世界一流的极客水准与长久健康的生态活力，**项目在商业模式、产品哲学与技术开发方案上全面吸纳经过市场与时间验证的核心优点**，同时规避历史包袱（坚决拒绝臃肿的多语言跨端缝合架构）。本规则作为全局最高准则，贯穿所有规划、研发与运营阶段：
 
 ### 一、 商业模式对齐规则 (Business Model Principles)
 1. **个人端极致纯净与完全免费（Freemium 极客底座）**：
@@ -20,7 +20,7 @@
    - **杜绝骚扰与功能限制**：严禁在基础功能中插入弹窗广告、诱导付费、刻意降低免费体验以逼迫充值的行为。
 2. **开发者即一等公民与开源生态飞轮 (Developer-First Ecology)**：
    - **把 DX（开发者体验）作为第一优先级**：统一且优雅的声明式 SDK、热重载开发体验、完善的 TypeScript 类型定义；
-   - **开放投稿、官方审核上架**：插件生态完全开源（GitHub 协作），任何人都可以提交插件，但是否上架由官方人工审核决定（对齐 Raycast Store 模式），保证市场质量；通过 GitOps 静态分发，零抽成、零中间剥削。
+   - **开放投稿、官方审核上架**：插件生态完全开源（GitHub 协作），任何人都可以提交插件，但是否上架由官方人工审核决定，保证市场质量；通过 GitOps 静态分发，零抽成、零中间剥削。
 3. **商业化聚焦组织协同与高级 AI 增值 (Teams & AI Monetization)**：
    - **团队协同变现 (ZTools for Teams)**：商业价值锚定在企业/团队协同场景——企业统一配置管理、团队私有扩展分发、共享 Snippets/指令、组织级合规审计与权限管控；
    - **高级 AI 增值服务 (ZTools Pro / AI)**：提供官方集成的高性能算力通道与多端云同步增值服务；
@@ -60,12 +60,12 @@
   - `ztools-uiaccess.exe`：Rust/Win32 编写的 UIAccess 特权穿透 Worker 进程（穿透 UIPI，读取高权限窗口选中文本与活跃浏览器 Tab URL）；
   - **Prebuilt 二进制随包分发**：CI 预编译全平台二进制，普通开发者直接运行现成二进制，无需本地编译底层 Native。
 
-### 2. 交互与生态：Raycast 声明式组件规范（严禁插件写 CSS/HTML）
-- **彻底封杀原生 CSS/DOM**：所有扩展应用必须基于统一的声明式组件库（`@ztools/raycast-compat`），仅生成结构化 JSON 视图描述符（View Descriptors），严禁插件自定义原生 HTML 标签与 CSS 样式。
+### 2. 交互与生态：声明式组件规范（严禁插件写 CSS/HTML）
+- **彻底封杀原生 CSS/DOM**：所有扩展应用必须基于统一的声明式组件库（`@ztools/declarative-ui`），仅生成结构化 JSON 视图描述符（View Descriptors），严禁插件自定义原生 HTML 标签与 CSS 样式。
 - **核心组件抽象**：`<List>`（含 Item, Section, Dropdown）、`<Detail>`（含 Markdown 与 Metadata 侧边栏）、`<Form>`（含 TextField, TextArea, Checkbox, Dropdown）、`<ActionPanel>`、`<Action>`。
 - **统一极客键盘流**：上下键自动滚屏聚焦、`Enter` 激活首要动作、`Ctrl+K` 弹出 ActionPanel 操作面板、`Esc` 导航栈后退；界面统一呈现沉浸式 Fluent / Mica 亚克力毛玻璃视觉。
 
-### 3. 分发体系：开放投稿 + 官方审核上架（对齐 Raycast Store）
+### 3. 分发体系：开放投稿 + 官方审核上架
 - **投稿即 PR**：任何人都可按 `plugins/{author}/{plugin-id}` 向官方公开插件仓库提交 PR；**官方合并 = 批准上架**，拒绝合并即不上架。插件**每次更新同样走 PR 审核**（审 diff 即可）。
 - **上线前必做的 4 项安全门禁（只做必要的）**：
   1. **官方人工审核**：审功能质量、交互体验、命名是否重复/仿冒、权限申请是否合理；
@@ -76,9 +76,9 @@
 - **免运维静态分发**：GitHub Releases 自动产出 `{plugin-id}-{version}.zip` 与静态全局索引 `plugins.json`，直连腾讯云 COS / Cloudflare R2 对象存储，接入国内 EdgeOne CDN。**带版本号的 zip 可 30 天强缓存；`plugins.json` 必须短缓存（≤ 5 分钟）**，否则下架开关无法及时生效。
 
 ### 3.1 双仓开源飞轮与商业资产物理隔离规范（Dual-Repo & Commercial Shield）
-- **战略双仓体系（对齐 Raycast 标杆实践）**：
+- **战略双仓体系**：
   1. **核心宿主开源仓库（`codingmuse/ZTools`）**：采用 **GNU GPL-3.0** 开源许可证。完全开源客户端壳层与声明式组件引擎，但依托 GPL-3.0 强传染性条款强制任何二次分发或商业衍生版本必须以同等 GPL-3.0 协议公开全部源码，从法律底层彻底封死竞品“套壳闭源”的商业侵占路径；官方依法独占双重许可（Dual-Licensing）变现权利。
-  2. **插件生态大仓（`codingmuse/ZTools-extensions`）**：采用 **MIT** 宽松许可证。对标 `raycast/extensions`，官方插件与社区开发者贡献统一汇聚于此；根目录内置一键脚手架（`npm run create-plugin`）与本地 AST 安全扫描；开发者向社区提交 PR 零版权顾虑，最大化驱动生态飞轮。
+  2. **插件生态大仓（`codingmuse/ZTools-extensions`）**：采用 **MIT** 宽松许可证。官方插件与社区开发者贡献统一汇聚于此；根目录内置一键脚手架（`npm run create-plugin`）与本地 AST 安全扫描；开发者向社区提交 PR 零版权顾虑，最大化驱动生态飞轮。
 - **商业资产物理隔离红线（绝对禁止进入开源仓库）**：
   * **核心私有商业资产黑名单**：
     - `DLLPlugins/`：包含 35 款核心自营 Windows 原生动态库插件（极客独占底层工具、硬件专有驱动与深度系统适配，属企业核心商业资产），严禁开源；
@@ -112,7 +112,7 @@
   - 去中心化端到端加密同步（`@ztools/sync-crypto`）：基于 Argon2id 派生密钥与 AES-256-GCM 认证加密；WebDAV 适配器基于 ETag 乐观锁并发控制防覆盖；GitHub Gist 适配器实现多端无冲突云同步。
 
 ### 5. 第一方内置应用套件研发与适配准则
-- **统一标准实现**：针对声明式 UI、React Reconciler 虚拟视图树转译、Native 侧车（UIAccess UIPI 特权穿透 / MFT USN 极速索引）、插件兼容层（`@ztools/raycast-compat`）或 IPC 协议的研发，严格基于 `@ztools/raycast-compat` 与原生契约推进；
+- **统一标准实现**：针对声明式 UI、React Reconciler 虚拟视图树转译、Native 侧车（UIAccess UIPI 特权穿透 / MFT USN 极速索引）、插件规范（`@ztools/declarative-ui`）或 IPC 协议的研发，严格基于 `@ztools/declarative-ui` 与原生契约推进；
 - **高质量原生套件工程落地**：构建核心内置套件时，严格遵循标准化命令元数据树、参数模型、声明式视图切片与快捷键交互流；深度对接 `window.ztools`、本地 SQLite WAL 强缓存、中文拼音模糊搜索与预编译 Rust 侧车，实现真正零延迟开箱即用。
 
 ---
@@ -175,7 +175,7 @@
 - `electron-client/`：Electron 43 主程序（TypeScript main/preload、C++ NativeHost32、ZToolsService 与 `native/` 原生侧车源码目录）。
 - `frontend/`：Vue 3 Renderer 壳层与统一声明式渲染器源码（`src/declarative/`）。
 - `packages/`：现代架构解耦核心包目录：
-  - `packages/raycast-compat/`：Raycast 声明式 API 兼容包（`@ztools/raycast-compat`）与首批 10 款经典开源应用；
+  - `packages/declarative-ui/`：声明式组件与运行时规范包（`@ztools/declarative-ui`）与内置核心应用；
   - `packages/ai-mcp/`：AI Native 基础设施与原生 MCP 协议栈网关（`@ztools/ai-mcp`）；
   - `packages/sync-crypto/`：去中心化 E2EE 加密核心与 WebDAV/Gist 同步适配器（`@ztools/sync-crypto`）；
   - `packages/ztools-plugins-spec/`：GitOps 插件规范、JSON Schema 与元数据校验器；
@@ -200,7 +200,7 @@
 
 ### 2. 现代扩展（JS 插件）规范
 - 插件资源必须使用 `ztools://` 协议访问，严禁使用相对路径或绕过入口的 `file://` 协议。
-- 扩展严格遵循 Raycast 声明式组件规范（`<List>`, `<Detail>`, `<Form>`, `<ActionPanel>`），**严禁直接操作 DOM 或编写 CSS**。
+- 扩展严格遵循统一声明式组件规范（`<List>`, `<Detail>`, `<Form>`, `<ActionPanel>`），**严禁直接操作 DOM 或编写 CSS**。
 - 所有样式由统一宿主渲染器（`frontend/src/declarative/`）沉浸式呈现，自动适配深浅主题。
 
 ### 3. Frontend 规范
@@ -240,8 +240,8 @@ npm --prefix electron-client run test:quick
 # Electron 原生侧车构建与百万级文件压测
 node electron-client/scripts/test-sidecars.mjs
 
-# Raycast 声明式兼容包与 10 款应用测试
-node --test packages/raycast-compat/tests/all-ten-apps.test.mjs
+# 声明式组件与应用测试
+node --test packages/declarative-ui/tests/all-ten-apps.test.mjs
 
 # AI Native 与原生 MCP 协议栈测试
 node --test packages/ai-mcp/tests/e2e-agent-loop.test.mjs packages/ai-mcp/tests/mcp-protocol.test.mjs packages/ai-mcp/tests/model-router.test.mjs packages/ai-mcp/tests/system-tools.test.mjs
@@ -257,31 +257,46 @@ cd frontend && npm run dev
 cd frontend && npm run build
 cd frontend && npm run build:sdk
 
-# 开源双仓一键增量发布与同步 (支持 all / oss / extensions)
-npm run release              # 一键同步核心宿主与插件大仓到 GitHub
-npm run release:oss          # 仅同步核心宿主仓库 (codingmuse/ZTools)
+# 开源双仓一键增量发布与同步 (支持 all / oss / extensions，默认同时推送 GitHub + Gitee)
+npm run release              # 一键同步核心宿主与插件大仓到 GitHub & Gitee
+npm run release:oss          # 仅同步核心宿主仓库 (GitHub: codingmuse/ZTools + Gitee: hoposky/ZTools)
 npm run release:extensions   # 仅同步插件生态大仓 (codingmuse/ZTools-extensions)
+
+# 发行版执行文件双包构建与上传 GitHub Releases (同时产出 EXE 安装包 + ZIP 免安装包)
+npm run package:release      # 一键编译最新 Delphi 安装器并同时打包 EXE 离线安装包 + ZIP 免安装便携包
+npm run release:binaries     # 同时打包 EXE 安装包 + ZIP 免安装包并自动上传至 GitHub Releases
 ```
 
 ### AI 自动化开源发版与零命令交互契约 (Zero-Command AI Release Pipeline)
-- **核心前提铁律（“发布到 GitHub = 100% 推开源版”）**：
-  * **商业版绝对不推 GitHub**：内部商业版母仓包含私有核心资产（`DLLPlugins/`、`backend/`、`installer/` 等），**永远不可能直接推送到 GitHub**；
-  * **默认唯一语义映射**：只要用户提到**“发布到 GitHub”、“推到 GitHub”、“公布到 GitHub”、“同步到 GitHub”、“上传 GitHub”**（无论用户是否显式说出“开源”二字），**100% 唯一指的就是通过开源发布流水线（`scripts/sync-release.mjs`）将脱敏抽取后的开源版本推送到 GitHub 公开仓库**！严禁反问“是推商业版还是开源版”，也严禁在母仓直接执行裸 `git push`。
+- **核心前提铁律（“发布源码到 GitHub / Gitee = 100% 推开源版，且默认双端同推”）**：
+  * **商业私有源码绝对不推公开仓**：内部商业版母仓包含私有核心源码资产（`DLLPlugins/`、`backend/`、`installer/` 源码等），**永远不可能直接将私有源码推送到 GitHub 或 Gitee**；
+  * **GitHub 与 Gitee 双平台默认同时推送铁律**：**以后无论用户说“推送到 GitHub”还是说“推送到 Gitee”（或发布/同步/上传到 GitHub / Gitee），一律默认同时推送至 GitHub（`https://github.com/codingmuse/ZTools.git`）和 Gitee（`https://gitee.com/hoposky/ZTools.git`）双远端！**
+  * **凭据安全隔离**：GitHub 与 Gitee 访问令牌（`GITHUB_TOKEN`、`GITEE_TOKEN`）统一保存在本地 `.env.local`（已被 `.gitignore` 严格忽略且位于开源抽取白名单之外，严禁写入受跟踪文件），由 `scripts/sync-release.mjs` 自动读取并配置远端完成双推；
+  * **默认唯一语义映射**：只要用户提到**“发布到 GitHub”、“推到 GitHub”、“发布到 Gitee”、“推到 Gitee”、“公布到 GitHub/Gitee”、“同步到 GitHub/Gitee”、“上传 GitHub/Gitee”**（无论用户是否显式说出“开源”二字），涉及源码同步时 **100% 唯一指的就是通过开源发布流水线（`scripts/sync-release.mjs`）将脱敏抽取后的开源版本同时推送到 GitHub 与 Gitee 公开仓库**！严禁反问“是推商业版还是开源版”，严禁只推单边平台，也严禁在母仓直接执行裸 `git push`。
+- **执行文件（Release 二进制产物）双包齐发强制铁律（EXE 安装包 + ZIP 免安装包）**：
+  * **双格式产物缺一不可**：凡是打包商业版/发行版执行文件，或将构建好的执行文件上传至 GitHub Releases（`codingmuse/ZTools`）时，**必须同时打包并同时上传以下两种标准格式产物（及其 `.sha256` 校验文件），严禁只打单包或只传单一格式**：
+    1. **EXE 离线安装包**：`ZTools-<version>-win32-x64.exe`（及 `ZTools-<version>-win32-x64.exe.sha256`）—— 内置极简 Direct2D GPU 安装向导、支持一键平滑升级与空间不足智能换盘；
+    2. **ZIP 免安装便携包**：`ZTools-<version>-win32-x64-portable.zip`（及 `ZTools-<version>-win32-x64-portable.zip.sha256`）—— 解压即用免安装版。
+  * **统一标准复用脚本**：
+    - 仅本地打包双产物：`npm run package:release`（即 `node scripts/package-release-binaries.mjs`）；
+    - 打包双产物并一键上传至 GitHub Releases：`npm run release:binaries`（即 `node scripts/package-release-binaries.mjs --upload`）；
+    - 底层打包器 `electron-client/scripts/package-installer.mjs` 与校验器 `electron-client/scripts/verify-artifacts.mjs` 均已强制绑定双产物契约，任一产物缺失或 SHA-256 不一致即阻断发布。
 - **设计宗旨（彻底消除用户心智负担）**：
   * 用户**无需记忆任何脚本名称、参数选项、Git 命令行语法或本地文件系统的物理镜像路径**；
-  * 用户在日常对话中只要使用任意模糊自然语言表达发版或 GitHub 同步意图，AI **必须主动领会、安全校验并自动闭环完成开源发布全流程**，严禁反问用户或要求用户输入强命令。
+  * 用户在日常对话中只要使用任意模糊自然语言表达发版、打包执行文件或 GitHub / Gitee 同步意图，AI **必须主动领会、安全校验并自动闭环完成全流程（默认同时推送 GitHub 与 Gitee）**，严禁反问用户或要求用户输入强命令。
 - **自然语言意图识别矩阵（模糊识别，全自动承接）**：
-  * **默认/全量发版意图**：“发布到 GitHub”、“推到 GitHub”、“公布到 GitHub”、“把最新代码发到开源仓库”、“发布开源版”、“全量同步开源双仓”、“提交开源”、“把这两个项目推上去”；
-  * **仅宿主发版意图**：“把核心宿主同步到 GitHub/开源”、“推一下开源宿主”、“更新开源客户端源码”；
-  * **仅插件发版意图**：“同步一下开源插件大仓”、“把插件库推上去”、“发布插件生态”。
+  * **默认/全量源码发版意图（同时推 GitHub + Gitee）**：“发布到 GitHub”、“推到 GitHub”、“发布到 Gitee”、“推到 Gitee”、“公布到 GitHub/Gitee”、“把最新代码发到开源仓库”、“发布开源版”、“全量同步开源双仓”、“提交开源”、“把这两个项目推上去”；
+  * **仅宿主源码发版意图（同时推 GitHub + Gitee）**：“把核心宿主同步到 GitHub/Gitee/开源”、“推一下开源宿主”、“更新开源客户端源码”；
+  * **仅插件源码发版意图**：“同步一下开源插件大仓”、“把插件库推上去”、“发布插件生态”；
+  * **打包/上传执行文件（Release 产物）意图**：“打包商业版执行文件”、“打包安装包和免安装包”、“把最新安装包上传到 GitHub Release”、“发个新版本二进制包” → 自动执行 `node scripts/package-release-binaries.mjs`（若需上传则带 `--upload`）。
 - **AI 接收意图后的标准全自动执行 SOP（五步流水线）**：
   1. **状态自审与门禁检测**：快速检查当前工作区，确认无高风险破坏或未完成代码，关键测试或构建处于稳定状态；
-  2. **物理隔离安全复核**：严格审查待发布文件范围，确保 `DLLPlugins/`、`backend/`、`installer/`、`bin/` 等商业资产与 `.env.local` 等敏感配置绝对未越界；
-  3. **调用统一同步执行器**：
-     - 执行 `node scripts/sync-release.mjs [all|oss|extensions] [--msg "中文提交说明"]`；
-     - 脚本自动执行纯净源码白名单抽取、智能保留 `.git` 进行极速增量 diff 比对、自动 commit 并推送到 GitHub `main` 分支；
-  4. **提交状态与 SHA 核对**：确认 git push 返回成功，获取最新 commit 短哈希；
-  5. **闭环反馈汇报**：向用户汇报同步完成概况，附带对应的 GitHub 仓库地址（[ZTools](https://github.com/codingmuse/ZTools) / [ZTools-extensions](https://github.com/codingmuse/ZTools-extensions)），让用户彻底省心。
+  2. **物理隔离安全复核**：严格审查待发布文件范围，确保 `DLLPlugins/`、`backend/`、`installer/`、`bin/` 等商业源码资产与 `.env.local` 等敏感配置绝对未越界；
+  3. **调用统一同步/打包执行器**：
+     - 源码同步（自动双推 GitHub + Gitee）：执行 `node scripts/sync-release.mjs [all|oss|extensions] [--msg "中文提交说明"]`；
+     - 二进制双包构建与上传：执行 `node scripts/package-release-binaries.mjs [--upload]`，同时产出并校验 `.exe` 安装包与 `-portable.zip` 免安装包；
+  4. **提交状态、SHA 与双包完整性核对**：确认 GitHub 与 Gitee 双远端 git push 或 GitHub Release 上传均返回成功，核对最新 commit 短哈希及 `.exe` + `-portable.zip` 双包 SHA-256；
+  5. **闭环反馈汇报**：向用户汇报同步或打包上传完成概况，附带对应的 GitHub 与 Gitee 仓库/Release 地址（GitHub: [codingmuse/ZTools](https://github.com/codingmuse/ZTools) / Gitee: [hoposky/ZTools](https://gitee.com/hoposky/ZTools) / [ZTools-extensions](https://github.com/codingmuse/ZTools-extensions)），让用户彻底省心。
 
 ### 客户端启动与 Windows 桌面穿透规范（强制执行）
 - **启动前互斥守则**：Electron 单例锁机制下，启动新实例前必须先清理旧实例（`Stop-Process -Name electron -Force -ErrorAction SilentlyContinue`），否则新实例因抢不到 `requestSingleInstanceLock` 会立即静默退出。

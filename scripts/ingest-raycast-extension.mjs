@@ -7,7 +7,7 @@
  * 功能：
  * 1. 解析官方扩展 package.json 清单（commands, preferences, arguments）；
  * 2. 静态审计平台兼容性与安全门禁：拦截 macOS 专有（AppleScript/osascript）与恶意混淆代码；
- * 3. 使用 esbuild 将 TSX/JSX 零配置编译为标准化 Bundle，无缝桥接 @ztools/raycast-compat；
+ * 3. 使用 esbuild 将 TSX/JSX 零配置编译为标准化 Bundle，无缝桥接 @ztools/declarative-ui；
  * 4. 自动生成符合 ZTools GitOps 规范的 plugin.json 与资产包；
  * 5. 支持作为 Node.js 库函数导入，亦支持 CLI 独立执行。
  */
@@ -179,8 +179,8 @@ export async function ingestRaycastExtension(extDir, options = {}) {
   }
 
   const esbuild = await getEsbuild()
-  const raycastCompatDist = path.join(rootDir, 'packages/raycast-compat/dist/index.js')
-  const raycastUtilsDist = path.join(rootDir, 'packages/raycast-compat/dist/utils/index.js')
+  const raycastCompatDist = path.join(rootDir, 'packages/declarative-ui/dist/index.js')
+  const raycastUtilsDist = path.join(rootDir, 'packages/declarative-ui/dist/utils/index.js')
 
   const ztoolsFeatures = []
 

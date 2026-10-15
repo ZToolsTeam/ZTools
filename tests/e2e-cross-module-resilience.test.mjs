@@ -27,8 +27,8 @@ import { FrecencyRankingService } from '../electron-client/out/main/services/fre
 import { HudService, NoViewCommandDispatcher } from '../electron-client/out/main/services/hud-service.js';
 import { FrameSyncManager } from '../electron-client/out/main/services/frame-sync-manager.js';
 import { ClipboardHistoryService, isHighEntropyPassword, SENSITIVE_CLIPBOARD_FORMATS } from '../electron-client/out/main/services/clipboard-history-service.js';
-import { getFileQuickLook, calculateFileSha256 } from '../packages/raycast-compat/dist/examples/everything-file-search/search-service.js';
-import { detectClipboardContentType, parseColorDetails } from '../packages/raycast-compat/dist/examples/clipboard-history/clipboard-storage.js';
+import { getFileQuickLook, calculateFileSha256 } from '../packages/declarative-ui/dist/examples/everything-file-search/search-service.js';
+import { detectClipboardContentType, parseColorDetails } from '../packages/declarative-ui/dist/examples/clipboard-history/clipboard-storage.js';
 
 // 导入各大核心模块
 import {
@@ -71,7 +71,7 @@ import {
   TrialNudgesCommand,
   WindowsShortcutsCommand,
   getWindowsShortcuts
-} from '../packages/raycast-compat/dist/index.js';
+} from '../packages/declarative-ui/dist/index.js';
 
 import {
   scanPluginSecurity,

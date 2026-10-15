@@ -1,6 +1,6 @@
-# @ztools/raycast-compat
+# @ztools/declarative-ui
 
-ZTools 声明式组件体系与 Raycast 兼容运行时。
+ZTools 原生纯声明式组件体系与运行时。
 
 ## 核心设计理念
 1. **严格禁止插件写原生 CSS/DOM**：
@@ -16,7 +16,7 @@ ZTools 声明式组件体系与 Raycast 兼容运行时。
 - **Form**: `Form`, `Form.TextField`, `Form.TextArea`, `Form.Checkbox`, `Form.Dropdown`
 - **ActionPanel**: `ActionPanel`, `ActionPanel.Section`
 - **Action**: `Action`, `Action.CopyToClipboard`, `Action.OpenInBrowser`, `Action.Push`, `Action.SubmitForm`
-- **Icon & Color**: 标准 Raycast 图标与颜色集合
+- **Icon & Color**: 标准桌面 Fluent / 极客图标与语义色彩集合
 
 ## 核心系统 API
 - `showToast(options | style, title, message)` / `Toast`

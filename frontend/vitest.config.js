@@ -28,7 +28,8 @@ export default defineConfig({
       '@components': path.resolve(__dirname, './src/components'),
       '@stores': path.resolve(__dirname, './src/stores'),
       '@composables': path.resolve(__dirname, './src/composables'),
-      '@ztools/raycast-compat': path.resolve(__dirname, '../packages/raycast-compat/dist/index.js')
+      '@ztools/declarative-ui': path.resolve(__dirname, '../packages/declarative-ui/dist/index.js'),
+      '@ztools/raycast-compat': path.resolve(__dirname, '../packages/declarative-ui/dist/index.js')
     }
   }
 })

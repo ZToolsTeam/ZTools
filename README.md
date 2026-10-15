@@ -15,7 +15,7 @@
 
 ## 💡 为什么选择 ZTools？
 
-ZTools 彻底卸下历史兼容包袱，吸纳 **Raycast** 验证过的顶尖工程实践，致力于打造对标国际一流的下一代桌面效率平台：
+ZTools 彻底卸下历史兼容包袱，采用现代极客工程实践，致力于打造对标国际一流的下一代桌面效率平台：
 
 - 🚀 **毫秒级极速启动与出窗**：唤醒延迟严格压制在 100ms 以内（SLA < 100ms），待机时主动释放 GPU 资源，常驻托盘内存轻量稳定。
 - ⚡ **硬件级 NTFS MFT / USN 秒级索引**：内置 Rust 编写的高性能侧车引擎，实测 100 万文件检索平均延迟仅 **0.035ms**，告别传统扫描卡顿。
@@ -54,7 +54,7 @@ ZTools 彻底卸下历史兼容包袱，吸纳 **Raycast** 验证过的顶尖工
 | *支持文本/代码/图片/文件/颜色分类过滤、敏感密码脱敏与顺序流水粘贴* | *全局触发词实时监听退格展开，支持 `{clipboard}` / `{date}` / `{cursor}` 宏* |
 
 ### 3. 纯粹声明式 UI 舞台 (`<Form>` / `<Detail>`) 与 `Ctrl+K` 极客动作面板 (`ActionPanel`)
-> 彻底封杀原生 DOM/CSS 自由注入，由 `@ztools/raycast-compat` 统一转译虚拟视图描述符，按下 `Ctrl/Cmd + K` 即刻唤起上下文动作面板。
+> 彻底封杀原生 DOM/CSS 自由注入，由 `@ztools/declarative-ui` 统一转译虚拟视图描述符，按下 `Ctrl/Cmd + K` 即刻唤起上下文动作面板。
 
 | 声明式表单与实时类型推导 (`DeclarativeView`) | `Ctrl+K` 极客动作面板 (`ActionPanel`) |
 |---|---|
@@ -78,12 +78,12 @@ ZTools 采用**“核心宿主大仓 + 插件生态大仓”**的双仓解耦模
 1. **核心宿主大仓（当前仓库）**：
    - `electron-client/`：基于 Electron 43 + TypeScript 打造的轻量现代化宿主；
    - `frontend/`：Vue 3 纯声明式渲染器；
-   - `packages/`：公共核心基础设施（`@ztools/raycast-compat` SDK、`@ztools/ai-mcp` 网关、`@ztools/sync-crypto` 加密核心等）；
+   - `packages/`：公共核心基础设施（`@ztools/declarative-ui` SDK、`@ztools/ai-mcp` 网关、`@ztools/sync-crypto` 加密核心等）；
    - 随包内置预编译的 Rust Native 侧车（`ztools-indexer.exe` 与 `ztools-uiaccess.exe`），普通开发者无需配置 C++ 或 Rust 编译环境。
 2. **插件生态大仓（[ZTools-extensions](https://github.com/codingmuse/ZTools-extensions)）**：
    - 包含日常开源通用插件与社区提交插件；
    - 内置一键脚手架（`npm run create-plugin`）；
-   - 对标 Raycast 模式：**开放投稿，投稿即 PR，经 CI AST 安全扫描后官方审核合并，免运维静态分发**。
+   - 开放治理模式：**开放投稿，投稿即 PR，经 CI AST 安全扫描后官方审核合并，免运维静态分发**。
 
 ---
 
@@ -135,10 +135,10 @@ npm test
 
 ## 🗺️ 开发路线图 (Roadmap)
 
-ZTools 全面吸纳 **Raycast** 验证过的交互与生态范式，规避其多语言缝合包袱，按阶段高速推进跨平台全覆盖（依托 AI 驱动研发，不设固定排期限制，以工程验收门禁为准绳持续迭代）：
+ZTools 采用现代声明式交互与开源插件生态范式，规避多语言臃肿缝合包袱，按阶段高速推进跨平台全覆盖（依托 AI 驱动研发，不设固定排期限制，以工程验收门禁为准绳持续迭代）：
 
 - **Stage 1（核心底座与双模态统一）**：纯 TS 宿主 + 预编译 Rust 侧车（NTFS MFT 百万文件秒搜 & UIAccess 穿透）、悬浮窗与大主界面双模态（`Ctrl/Cmd+M`）、四级快捷键分发器、38 款第一方核心内置套件基座与 BYOK/本地离线 AI 路由；
-- **Stage 2（扩展宿主与生态大仓闭环）**：`utilityProcess` + `worker_threads` 隔离扩展宿主（100MB 堆上限与预热池）、兼容 `@raycast.*` 的 `Script Commands` 脚本引擎、扩展 `tool` 自动接入 MCP、市场一键静默安装与 AST 安全扫描上架闭环；
+- **Stage 2（扩展宿主与生态大仓闭环）**：`utilityProcess` + `worker_threads` 隔离扩展宿主（100MB 堆上限与预热池）、支持 `@ztools.*` 元数据注释的 `Script Commands` 脚本引擎、扩展 `tool` 自动接入 MCP、市场一键静默安装与 AST 安全扫描上架闭环；
 - **Stage 3（macOS 原生体验全量交付）**：Universal (`arm64` + `x86_64`) 双架构构建与 Apple 自动公证、`AXUIElement` 跨进程取词与菜单栏导航、Spotlight 秒搜与 `Quick Look` 预览、`ScreenCaptureKit` 高分屏截屏与 TCC 权限自愈引导；
 - **Stage 4（Linux 极客桌面与团队协同）**：Wayland (`XDG GlobalShortcuts Portal` / `wlr-layer-shell`) 与 X11 双栈适配、KWin/Mutter/Hyprland/Sway 多后端窗口分屏、`AT-SPI2` 取词与 Fcitx5 中文输入法兼容、AppImage/Flatpak/AUR 全渠道分发及 ZTools for Teams 协同。
 
@@ -149,4 +149,4 @@ ZTools 全面吸纳 **Raycast** 验证过的交互与生态范式，规避其多
 ## 📄 开源协议 (License)
 
 - 本仓库核心宿主代码基于 [GNU General Public License v3.0 (GPL-3.0)](LICENSE) 协议开源，严格禁止任何第三方闭源套壳分发。
-- 插件生态（`@ztools/raycast-compat` 及官方通用扩展）基于宽松的 [MIT License](https://opensource.org/licenses/MIT) 授权，保障社区开发者最大自由度。
+- 插件生态（`@ztools/declarative-ui` 及官方通用扩展）基于宽松的 [MIT License](https://opensource.org/licenses/MIT) 授权，保障社区开发者最大自由度。

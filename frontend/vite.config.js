@@ -105,43 +105,14 @@ export default defineConfig({
             console.error('❌ 部署失败:', err.message)
           }
         }
-
-        // 复制 SDK 文件到 create-plugin
-        console.log('🚀 开始部署 SDK 到 create-plugin...')
-        const createPluginSdkDir = path.resolve(
-          __dirname,
-          '../plugins/create-plugin/public/sdk'
-        )
-        const sdkFiles = ['ztools-api.js', 'plugin-sdk.js']
-
-        try {
-          if (!existsSync(createPluginSdkDir)) {
-            mkdirSync(createPluginSdkDir, { recursive: true })
-          }
-
-          sdkFiles.forEach((filename) => {
-            const sdkFile = path.resolve(__dirname, `public/sdk/${filename}`)
-            const targetFile = path.resolve(createPluginSdkDir, filename)
-
-            if (existsSync(sdkFile)) {
-              copyFileSync(sdkFile, targetFile)
-              console.log(
-                `✅ 已成功部署 ${filename} 到 plugins/create-plugin/public/sdk`
-              )
-            } else {
-              console.warn(`⚠️ SDK 文件不存在: ${filename}`)
-            }
-          })
-        } catch (err) {
-          console.error('❌ 部署 SDK 失败:', err.message)
-        }
       }
     }
   ],
   resolve: {
     alias: {
       '@': path.resolve(__dirname, './src'),
-      '@ztools/raycast-compat': path.resolve(__dirname, '../packages/raycast-compat/dist/index.js')
+      '@ztools/declarative-ui': path.resolve(__dirname, '../packages/declarative-ui/dist/index.js'),
+      '@ztools/raycast-compat': path.resolve(__dirname, '../packages/declarative-ui/dist/index.js')
     }
   },
   build: {

@@ -744,7 +744,7 @@ export async function scanPluginSecurity(pluginDir, options = {}) {
       file: relPath,
       line: 1,
       column: 0,
-      message: `检测到禁止的样式文件 "${relPath}"。ZTools 纯声明式插件架构严格禁止在扩展内编写自定义 CSS/LESS/SCSS 样式代码，视图必须完全通过 @ztools/raycast-compat 语义化组件由宿主统一渲染`
+      message: `检测到禁止的样式文件 "${relPath}"。ZTools 纯声明式插件架构严格禁止在扩展内编写自定义 CSS/LESS/SCSS 样式代码，视图必须完全通过 @ztools/declarative-ui 语义化组件由宿主统一渲染`
     })
   }
 

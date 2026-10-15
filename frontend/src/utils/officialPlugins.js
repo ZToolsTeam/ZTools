@@ -43,7 +43,7 @@ import {
   ScreenshotsCommand,
   ApplicationsCommand,
   DictionaryCommand
-} from '@ztools/raycast-compat'
+} from '@ztools/declarative-ui'
 
 /**
  * 官方标杆应用唯一标识清单
