@@ -566,6 +566,14 @@ export class SidecarManager {
   // --- Indexer Methods with Graceful Degradation ---
 
   public async searchFiles(query: string, limit = 50): Promise<SearchFilesResult> {
+    const trimmed = String(query || '').trim()
+    if (trimmed.toLowerCase().startsWith('dir:')) {
+      const targetDir = trimmed.slice(4).trim()
+      if (targetDir) {
+        return await this.scanDirectoryTreeReal(targetDir, limit)
+      }
+    }
+
     if (this.indexerProcess.state === 'running') {
       try {
         return await this.indexerProcess.sendRequest<SearchFilesResult>('search_files', { query, limit })
@@ -595,6 +603,188 @@ export class SidecarManager {
       elapsed_ms: elapsedMs,
       total_indexed: this.fallbackFiles.length,
       degraded: true
+    }
+  }
+
+  private async scanDirectoryTreeReal(
+    rootDir: string,
+    limit: number,
+    maxEntries = 2000
+  ): Promise<SearchFilesResult & { total_bytes?: number; subdirs?: Array<{ name: string; path: string; fileCount: number; sizeBytes: number }> }> {
+    const t0 = performance.now()
+    const resolvedRoot = path.resolve(rootDir)
+    if (!fs.existsSync(resolvedRoot)) {
+      return {
+        files: [],
+        count: 0,
+        total_matches: 0,
+        total_bytes: 0,
+        subdirs: [],
+        elapsed_us: 0,
+        elapsed_ms: 0,
+        total_indexed: 0
+      }
+    }
+
+    const visitedReal = new Set<string>()
+    const subdirStats = new Map<string, { name: string; path: string; fileCount: number; sizeBytes: number; topFiles: FileRecord[] }>()
+    const allTopFiles: FileRecord[] = []
+    let totalFiles = 0
+    let totalBytes = 0
+    let visitedCount = 0
+
+    const queue: Array<{ dirPath: string; topSubdir: string; isSymlink?: boolean }> = [
+      { dirPath: resolvedRoot, topSubdir: '', isSymlink: true }
+    ]
+
+    while (queue.length > 0 && visitedCount < maxEntries) {
+      const current = queue.shift()!
+      let realCurrent = current.dirPath
+      if (current.isSymlink) {
+        try {
+          realCurrent = await fs.promises.realpath(current.dirPath)
+        } catch {
+          // keep original path if realpath fails
+        }
+      }
+      const realKey = realCurrent.toLowerCase()
+      if (visitedReal.has(realKey)) continue
+      visitedReal.add(realKey)
+
+      let entries: fs.Dirent[] = []
+      try {
+        entries = await fs.promises.readdir(current.dirPath, { withFileTypes: true })
+      } catch {
+        continue
+      }
+
+      for (const ent of entries) {
+        visitedCount++
+        if (visitedCount > maxEntries) break
+        const fullPath = path.join(current.dirPath, ent.name)
+        const topSub = current.topSubdir || ent.name
+
+        const isSym = ent.isSymbolicLink()
+        let isDir = ent.isDirectory()
+        let isFile = ent.isFile()
+        let statObj: fs.Stats | null = null
+
+        if (isSym || isFile) {
+          try {
+            statObj = await fs.promises.stat(fullPath)
+            isDir = statObj.isDirectory()
+            isFile = statObj.isFile()
+          } catch {
+            continue
+          }
+        }
+
+        if (isDir) {
+          const lowerName = ent.name.toLowerCase()
+          if (
+            lowerName === '$recycle.bin' ||
+            lowerName === 'system volume information' ||
+            lowerName === 'node_modules' ||
+            lowerName === '.git'
+          ) {
+            continue
+          }
+          if (!current.topSubdir && !subdirStats.has(topSub)) {
+            subdirStats.set(topSub, {
+              name: topSub,
+              path: fullPath,
+              fileCount: 0,
+              sizeBytes: 0,
+              topFiles: []
+            })
+          }
+          queue.push({ dirPath: fullPath, topSubdir: topSub, isSymlink: isSym })
+        } else if (isFile && statObj) {
+          const sz = Number(statObj.size || 0)
+          const mtimeMs = Math.round(Number(statObj.mtimeMs || Date.now()))
+          totalFiles++
+          totalBytes += sz
+
+          const rec: FileRecord = {
+            name: ent.name,
+            path: fullPath,
+            is_dir: false,
+            size: sz,
+            mtime: mtimeMs,
+            acronym: ent.name.slice(0, 6).toLowerCase(),
+            pinyin: ent.name.toLowerCase()
+          }
+
+          let subEntry = subdirStats.get(topSub)
+          if (!subEntry) {
+            subEntry = {
+              name: topSub,
+              path: path.join(resolvedRoot, topSub),
+              fileCount: 0,
+              sizeBytes: 0,
+              topFiles: []
+            }
+            subdirStats.set(topSub, subEntry)
+          }
+          subEntry.fileCount++
+          subEntry.sizeBytes += sz
+          if (subEntry.topFiles.length < 40) {
+            subEntry.topFiles.push(rec)
+          } else {
+            let minIdx = 0
+            for (let i = 1; i < subEntry.topFiles.length; i++) {
+              if (subEntry.topFiles[i]!.size < subEntry.topFiles[minIdx]!.size) {
+                minIdx = i
+              }
+            }
+            if (sz > subEntry.topFiles[minIdx]!.size) {
+              subEntry.topFiles[minIdx] = rec
+            }
+          }
+
+          if (allTopFiles.length < limit * 2) {
+            allTopFiles.push(rec)
+          } else if (sz > allTopFiles[allTopFiles.length - 1]!.size) {
+            allTopFiles[allTopFiles.length - 1] = rec
+            allTopFiles.sort((a, b) => b.size - a.size)
+          }
+        }
+      }
+    }
+
+    const mergedMap = new Map<string, FileRecord>()
+    const sortedSubdirs = Array.from(subdirStats.values()).sort((a, b) => b.sizeBytes - a.sizeBytes)
+    for (const sub of sortedSubdirs) {
+      sub.topFiles.sort((a, b) => b.size - a.size)
+      for (const f of sub.topFiles.slice(0, 18)) {
+        if (mergedMap.size < limit) {
+          mergedMap.set(f.path, f)
+        }
+      }
+    }
+    allTopFiles.sort((a, b) => b.size - a.size)
+    for (const f of allTopFiles) {
+      if (mergedMap.size >= limit) break
+      mergedMap.set(f.path, f)
+    }
+
+    const finalFiles = Array.from(mergedMap.values()).sort((a, b) => b.size - a.size).slice(0, limit)
+    const elapsedMs = performance.now() - t0
+
+    return {
+      files: finalFiles,
+      count: finalFiles.length,
+      total_matches: totalFiles,
+      total_bytes: totalBytes,
+      subdirs: sortedSubdirs.map(({ name, path: p, fileCount, sizeBytes }) => ({
+        name,
+        path: p,
+        fileCount,
+        sizeBytes
+      })),
+      elapsed_us: Math.round(elapsedMs * 1000),
+      elapsed_ms: elapsedMs,
+      total_indexed: totalBytes
     }
   }
 

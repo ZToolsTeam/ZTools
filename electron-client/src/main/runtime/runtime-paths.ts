@@ -49,7 +49,7 @@ export function resolveRuntimePaths(options: RuntimePathsOptions): RuntimePaths 
   )
   const businessDataRoot = options.businessDataRoot ?? (
     options.mode === 'production'
-      ? path.join(appDataRoot, 'ZTools', 'Data')
+      ? path.join(appDataRoot, 'ZTools', 'DataV2')
       : path.join(normalizedProductRoot, 'Data')
   )
   const normalizedDataRoot = requireAbsolute('businessDataRoot', businessDataRoot)

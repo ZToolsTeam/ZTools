@@ -124,8 +124,8 @@ export function createMainWindow(options: MainWindowOptions): BrowserWindow {
 
   const minWidth = Math.min(900, maxWidth)
   const minHeight = Math.min(600, maxHeight)
-  const width = Math.min(maxWidth, Math.max(minWidth, Math.min(8192, options.initialSize?.width ?? 900)))
-  const height = Math.min(maxHeight, Math.max(minHeight, Math.min(8192, options.initialSize?.height ?? 600)))
+  const width = Math.min(maxWidth, Math.max(minWidth, Math.min(8192, options.initialSize?.width ?? 1040)))
+  const height = Math.min(maxHeight, Math.max(minHeight, Math.min(8192, options.initialSize?.height ?? 680)))
   const isDark = options.darkMode === true
   const isWin = process.platform === 'win32'
   const isMac = process.platform === 'darwin'

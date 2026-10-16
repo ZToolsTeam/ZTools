@@ -6,6 +6,7 @@ import { useNavStore } from '@/stores/nav'
 import { useCategoriesStore } from '@/stores/categories'
 import { useFeedbackUnreadStore } from '@/stores/feedbackUnread'
 import { useUserStore } from '@/stores/user'
+import { useUIStore } from '@/stores/ui'
 import { ROUTES } from '@/router/routes'
 import { isOnline } from '@/config/runtime-mode'
 
@@ -17,6 +18,9 @@ const nav = useNavStore()
 const categoriesStore = useCategoriesStore()
 const feedbackUnreadStore = useFeedbackUnreadStore()
 const userStore = useUserStore()
+const uiStore = useUIStore()
+
+const isCollapsed = computed(() => uiStore.isSidebarCollapsed)
 
 // 响应式路由与即时操作融合的高亮判断：点击瞬间即时高亮反馈，彻底消除假死与卡顿感
 const isMyActive = computed(() => {
@@ -110,17 +114,13 @@ const goAbout = () => {
 
 <template>
   <aside
-    class="h-full overflow-hidden border-r select-none"
-    style="
-      width: 168px;
-      background-color: var(--rc-surface-subtle);
-      border-color: var(--rc-border);
-      color: var(--rc-text-primary);
-    "
+    class="sidebar-root h-full select-none flex-shrink-0"
+    :class="{ 'is-collapsed': isCollapsed }"
+    :aria-hidden="isCollapsed"
   >
     <nav
-      class="h-full flex flex-col overflow-y-auto custom-scrollbar"
-      style="padding: 10px 8px"
+      class="sidebar-content h-full flex flex-col overflow-y-auto custom-scrollbar"
+      style="width: 184px; padding: 12px 10px"
     >
       <!-- 工作空间分栏 (WORKSPACE) -->
       <div class="mb-3">
@@ -278,3 +278,63 @@ const goAbout = () => {
     </nav>
   </aside>
 </template>
+
+<style scoped>
+.sidebar-root {
+  width: 184px;
+  background-color: var(--rc-surface-translucent, var(--rc-surface-subtle));
+  backdrop-filter: blur(24px) saturate(180%);
+  -webkit-backdrop-filter: blur(24px) saturate(180%);
+  border-right: 1px solid var(--rc-border-subtle, rgba(15, 23, 42, 0.05));
+  color: var(--rc-text-primary);
+  overflow: hidden;
+  transition: width 0.22s cubic-bezier(0.4, 0, 0.2, 1), opacity 0.18s ease;
+  will-change: width, opacity;
+}
+
+.sidebar-root.is-collapsed {
+  width: 0px !important;
+  opacity: 0;
+  border-right-color: transparent;
+  pointer-events: none;
+}
+
+.sidebar-content {
+  width: 184px;
+  min-width: 184px;
+}
+
+.sidebar-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 32px;
+  padding: 0 8px;
+  border-radius: var(--rc-radius-md, 8px);
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--rc-text-secondary);
+  cursor: pointer;
+  transition: all 0.15s cubic-bezier(0.4, 0, 0.2, 1);
+  user-select: none;
+}
+
+.sidebar-item:hover {
+  background-color: var(--rc-surface-hover);
+  color: var(--rc-text-primary);
+}
+
+.sidebar-item:active {
+  transform: scale(0.98);
+}
+
+.sidebar-item.active {
+  background-color: var(--rc-accent-subtle, rgba(2, 132, 199, 0.1));
+  color: var(--rc-accent, #0284c7);
+  font-weight: 600;
+}
+
+.sidebar-item.active svg {
+  color: var(--rc-accent, #0284c7);
+}
+</style>

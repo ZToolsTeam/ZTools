@@ -24,11 +24,13 @@ export interface InstalledApplicationRecord {
   readonly name: string
   readonly version: string
   readonly publisher: string
+  readonly installDate?: string | undefined
   readonly installLocation: string
   readonly uninstallString: string
   readonly quietUninstallString?: string | undefined
   readonly displayIcon?: string | undefined
   readonly estimatedSizeKb?: number | undefined
+  readonly estimatedSize?: number | undefined
   readonly isSystemComponent: boolean
   readonly pinyin: string
   readonly pinyinInitials: string
@@ -74,16 +76,18 @@ export class WindowsRegistryScanner implements ApplicationRegistryScanner {
       return []
     }
 
-    // PowerShell 查询 3 大标准注册表卸载路径并输出 JSON
+    // PowerShell 查询 3 大标准注册表卸载路径并输出 UTF-8 编码 JSON
     const psScript = `
+      [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
+      $ErrorActionPreference = 'SilentlyContinue'
       $paths = @(
         "HKLM:\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\*",
         "HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\*",
         "HKLM:\\Software\\Wow6432Node\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\*"
       )
       $apps = Get-ItemProperty $paths -ErrorAction SilentlyContinue |
-        Where-Object { $_.DisplayName -and $_.UninstallString } |
-        Select-Object DisplayName, DisplayVersion, Publisher, InstallLocation, UninstallString, QuietUninstallString, DisplayIcon, EstimatedSize, SystemComponent |
+        Where-Object { $_.DisplayName -and $_.UninstallString -and -not $_.ParentKeyName } |
+        Select-Object DisplayName, DisplayVersion, Publisher, InstallLocation, InstallDate, UninstallString, QuietUninstallString, DisplayIcon, EstimatedSize, SystemComponent |
         Sort-Object DisplayName -Unique
       $apps | ConvertTo-Json -Compress
     `
@@ -94,7 +98,7 @@ export class WindowsRegistryScanner implements ApplicationRegistryScanner {
         '-NonInteractive',
         '-Command',
         psScript
-      ], { maxBuffer: 10 * 1024 * 1024, windowsHide: true, timeout: 15000 })
+      ], { maxBuffer: 30 * 1024 * 1024, windowsHide: true, timeout: 15000, encoding: 'utf8' })
 
       const raw = stdout.trim()
       if (!raw) return []
@@ -105,11 +109,13 @@ export class WindowsRegistryScanner implements ApplicationRegistryScanner {
       return list.map((item: Record<string, unknown>, index: number): InstalledApplicationRecord => {
         const name = String(item.DisplayName || '').trim()
         const { pinyin, initials } = computePinyin(name)
+        const sizeKb = typeof item.EstimatedSize === 'number' && item.EstimatedSize > 0 ? item.EstimatedSize : undefined
         return {
           id: `app-${index}-${Buffer.from(name).toString('base64url').slice(0, 12)}`,
           name,
           version: String(item.DisplayVersion || ''),
           publisher: String(item.Publisher || ''),
+          installDate: String(item.InstallDate || ''),
           installLocation: String(item.InstallLocation || ''),
           uninstallString: String(item.UninstallString || ''),
           isSystemComponent: Number(item.SystemComponent) === 1,
@@ -117,7 +123,7 @@ export class WindowsRegistryScanner implements ApplicationRegistryScanner {
           pinyinInitials: initials,
           ...(item.QuietUninstallString ? { quietUninstallString: String(item.QuietUninstallString) } : {}),
           ...(item.DisplayIcon ? { displayIcon: String(item.DisplayIcon) } : {}),
-          ...(typeof item.EstimatedSize === 'number' ? { estimatedSizeKb: item.EstimatedSize } : {})
+          ...(sizeKb !== undefined ? { estimatedSizeKb: sizeKb, estimatedSize: sizeKb * 1024 } : {})
         }
       })
     } catch (err) {
@@ -158,7 +164,7 @@ export class ApplicationsService {
    */
   public async getInstalledApplications(forceRefresh = false): Promise<readonly InstalledApplicationRecord[]> {
     const now = Date.now()
-    if (!forceRefresh && this.cachedApps.length > 0 && now - this.lastScanned < this.cacheTtlMs) {
+    if (!forceRefresh && this.lastScanned > 0 && now - this.lastScanned < this.cacheTtlMs) {
       return this.cachedApps
     }
 
@@ -171,9 +177,12 @@ export class ApplicationsService {
   /**
    * 搜索软件（支持中英文名称、发布者与拼音）
    */
-  public async searchApplications(query: string = '', options: { includeSystemComponents?: boolean | undefined } = {}): Promise<readonly InstalledApplicationRecord[]> {
+  public async searchApplications(
+    query: string = '',
+    options: { includeSystemComponents?: boolean | undefined; forceRefresh?: boolean | undefined } = {}
+  ): Promise<readonly InstalledApplicationRecord[]> {
     const raw = (typeof query === 'string' ? query : '').trim().toLowerCase()
-    const all = await this.getInstalledApplications()
+    const all = await this.getInstalledApplications(options.forceRefresh)
 
     return all.filter((app) => {
       if (!options.includeSystemComponents && app.isSystemComponent) {

@@ -63,6 +63,18 @@ useKeymap(KEYMAP_SCOPES.GLOBAL, {
     openGlobalActions()
     return true
   },
+  'Ctrl+B': () => {
+    uiStore.toggleSidebar()
+    return true
+  },
+  'Cmd+B': () => {
+    uiStore.toggleSidebar()
+    return true
+  },
+  'Cmd+S': () => {
+    uiStore.toggleSidebar()
+    return true
+  },
   'Ctrl+M': () => {
     switchWindowMode(WINDOW_MODES.LAUNCHER).catch(() => {})
     return true
@@ -86,15 +98,15 @@ useKeymap(KEYMAP_SCOPES.GLOBAL, {
     class="h-screen overflow-hidden flex flex-col"
     style="background: var(--rc-canvas); color: var(--rc-text-primary)"
   >
-    <Header />
+    <Header v-if="!isDeclarativeView" />
     <div class="flex flex-1 overflow-hidden">
-      <Sidebar :activeCategory="nav.currentCategory" />
+      <Sidebar v-if="!isDeclarativeView" :activeCategory="nav.currentCategory" />
       <main
         class="flex-1 overflow-y-auto custom-scrollbar"
-        style="
-        background: var(--rc-canvas);
-        padding: 14px 18px;
-        "
+        :style="{
+          background: 'var(--rc-canvas)',
+          padding: isDeclarativeView ? '0' : '14px 18px'
+        }"
       >
         <router-view v-slot="{ Component }">
           <transition name="fade" mode="out-in">
@@ -106,6 +118,7 @@ useKeymap(KEYMAP_SCOPES.GLOBAL, {
 
     <!-- Raycast 风格全局底部状态与动作栏 (Action Bar) -->
     <footer
+      v-if="!isDeclarativeView"
       class="border-t flex items-center justify-between select-none px-4"
       style="
         height: 36px;
@@ -135,8 +148,19 @@ useKeymap(KEYMAP_SCOPES.GLOBAL, {
         </div>
       </div>
 
-      <!-- 右侧动作命令提示与状态 (按规范呈现“动作”与“Ctrl+F 搜索”) -->
+      <!-- 右侧动作命令提示与状态 (按规范呈现“动作”、“Ctrl+F 搜索”与“侧栏切换”) -->
       <div class="flex items-center gap-2">
+        <button
+          type="button"
+          class="flex items-center gap-1.5 px-2.5 py-1 rounded-md transition-colors hover:bg-[var(--rc-surface-hover)] cursor-pointer"
+          style="border: 1px solid var(--rc-border-subtle, var(--rc-border)); background: var(--rc-surface-subtle); color: var(--rc-text-secondary);"
+          @click="uiStore.toggleSidebar"
+          :title="uiStore.isSidebarCollapsed ? '展开分类侧栏' : '收起分类侧栏'"
+        >
+          <span class="text-xs font-medium">{{ uiStore.isSidebarCollapsed ? '展开侧栏' : '收起侧栏' }}</span>
+          <kbd class="rc-kbd text-[10px] ml-1">Ctrl B</kbd>
+        </button>
+
         <button
           type="button"
           class="flex items-center gap-1.5 px-2.5 py-1 rounded-md transition-colors hover:bg-[var(--rc-surface-hover)] cursor-pointer"

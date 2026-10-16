@@ -67,7 +67,8 @@ describe('官方标杆声明式应用注册表与端到端集成测试', () => {
         'speedtest',
         'winget',
         'currency-exchange',
-        'kill-process'
+        'kill-process',
+        'cleaner'
       ]
 
       expect(OFFICIAL_PLUGINS_LIST.length).toBeGreaterThanOrEqual(10)
@@ -201,6 +202,70 @@ describe('官方标杆声明式应用注册表与端到端集成测试', () => {
       await backBtn.trigger('click')
 
       expect(mockPush).toHaveBeenCalledWith({ name: 'my' })
+    })
+
+    it('点击【独立窗口】按钮时应携带状态弹出独立窗口，并在原生 IPC 异常时平滑降级至 /popout 路由', async () => {
+      const wrapper = mount(DeclarativePage, {
+        props: { pluginId: 'software-manager' }
+      })
+
+      await nextTick()
+
+      const popoutBtn = wrapper.find('.declarative-popout-btn')
+      expect(popoutBtn.exists()).toBe(true)
+      await popoutBtn.trigger('click')
+
+      // 在测试环境 (无 Electron 原生窗口句柄) 下，平滑降级跳转至 popout 独立路由
+      expect(mockPush).toHaveBeenCalledWith(
+        expect.objectContaining({
+          name: 'popout',
+          params: { pluginId: 'software-manager' }
+        })
+      )
+    })
+
+    it('独立常驻窗口模式 (isPopout=true) 应展示置顶与收回控制，且根视图按 Esc 严禁误触发退出', async () => {
+      const wrapper = mount(DeclarativePage, {
+        props: { pluginId: 'process-monitor', isPopout: true }
+      })
+
+      await nextTick()
+
+      expect(wrapper.find('.declarative-pin-btn').exists()).toBe(true)
+      expect(wrapper.find('.declarative-dock-btn').exists()).toBe(true)
+      expect(wrapper.find('.declarative-popout-btn').exists()).toBe(false)
+      expect(wrapper.text()).toContain('独立常驻防误关')
+
+      // 在独立常驻模式根视图下触发 exit 事件，handleExit 必须拦截，不得跳转回主页
+      const view = wrapper.findComponent({ name: 'DeclarativeView' })
+      view.vm.$emit('exit')
+      await nextTick()
+      expect(mockPush).not.toHaveBeenCalled()
+    })
+
+    it('列表项点击鼠标右键 (@contextmenu) 应自动高亮选中并就地呼出 ActionPanel', async () => {
+      const wrapper = mount(DeclarativePage, {
+        props: { pluginId: 'software-manager' }
+      })
+
+      await nextTick()
+
+      const view = wrapper.findComponent({ name: 'DeclarativeView' })
+      expect(view.exists()).toBe(true)
+
+      const itemEls = wrapper.findAll('.cursor-pointer')
+      const firstItem = itemEls.find(el => el.text().includes('微信') || el.text().includes('Chrome'))
+      expect(firstItem).toBeDefined()
+
+      // 触发 contextmenu 右键事件
+      await firstItem.trigger('contextmenu')
+      await nextTick()
+
+      // 断言动作面板已弹出并携带目标项目名称
+      const modal = wrapper.findComponent({ name: 'ActionPanelModal' })
+      expect(modal.exists()).toBe(true)
+      expect(modal.props('visible')).toBe(true)
+      expect(modal.props('targetTitle')).toBeTruthy()
     })
   })
 

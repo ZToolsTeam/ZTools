@@ -3,7 +3,9 @@ import assert from 'node:assert/strict'
 import {
   StoreCatalogManager,
   normalizePluginId,
-  matchPlugin
+  matchPlugin,
+  isOfficialAuthor,
+  isOfficialPluginItem
 } from '../frontend/src/utils/storeCatalogManager.js'
 
 describe('StoreCatalogManager 本地优先商店数据层 (Beyond Happy Path & Chaos Testing)', () => {
@@ -15,7 +17,8 @@ describe('StoreCatalogManager 本地优先商店数据层 (Beyond Happy Path & C
       description: '自然语言换算与公式计算',
       category: '系统工具',
       keywords: ['calc', 'math', '计算'],
-      version: '1.0.0'
+      version: '1.0.0',
+      isBuiltin: true
     },
     {
       pluginId: 'clipboard-history',
@@ -24,7 +27,8 @@ describe('StoreCatalogManager 本地优先商店数据层 (Beyond Happy Path & C
       description: '支持搜索历史剪贴板内容与失焦回贴',
       category: '办公效率',
       keywords: ['copy', 'paste', 'clipboard'],
-      version: '1.0.0'
+      version: '1.0.0',
+      isBuiltin: true
     }
   ]
 
@@ -241,6 +245,85 @@ describe('StoreCatalogManager 本地优先商店数据层 (Beyond Happy Path & C
       assert.equal(p0.page, 1)
       assert.equal(p0.pageSize, 20)
       assert.equal(p0.list.length, 2)
+    })
+  })
+
+  describe('6. 官方自营 vs 社区精选归类与防伪边界测试', () => {
+    it('isOfficialAuthor 与 isOfficialPluginItem 应正确识别官方标识并拦截仿冒或空值异常', () => {
+      assert.equal(isOfficialAuthor('ZTools Team'), true)
+      assert.equal(isOfficialAuthor('  ztools team  '), true)
+      assert.equal(isOfficialAuthor('ztools'), true)
+      assert.equal(isOfficialAuthor('ZTools Official'), true)
+      assert.equal(isOfficialAuthor('ZTools Fake Community'), false)
+      assert.equal(isOfficialAuthor(''), false)
+      assert.equal(isOfficialAuthor(null), false)
+      assert.equal(isOfficialAuthor(undefined), false)
+      assert.equal(isOfficialAuthor(12345), false)
+
+      assert.equal(isOfficialPluginItem(null), false)
+      assert.equal(isOfficialPluginItem(undefined), false)
+      assert.equal(
+        isOfficialPluginItem({ id: 'everything-search', author: 'ZTools Team', is_official: false }),
+        true,
+        '后端历史存量返回 is_official: false 但 author 为 ZTools Team 时必须判定为官方自营'
+      )
+      assert.equal(
+        isOfficialPluginItem({ id: 'calculator', is_official: false }, { isBuiltin: true }),
+        true,
+        '命中本地内置插件清单时不应被远端 is_official: false 覆盖为非自营'
+      )
+      assert.equal(
+        isOfficialPluginItem({ id: 'community-ext', author: 'geek-user', is_official: false }),
+        false
+      )
+    })
+
+    it('当远端返回 ZTools Team 插件且 is_official=false 时，不应误入「社区精选」，且必须归入「官方自营」', async () => {
+      const remotePluginsFromApi = [
+        { id: 'software-manager', name: '软件管理', category: '系统工具', author: 'ZTools Team', is_official: false, isOfficial: false },
+        { id: 'process-monitor', name: '进程监控', category: '系统工具', author: 'ZTools Team', is_official: false, isOfficial: false },
+        { id: 'cleaner', name: '垃圾清理', category: '系统工具', author: 'ZTools Team', is_official: false, isOfficial: false },
+        { id: 'calculator', name: '计算器', category: '系统工具', author: 'ZTools Team', is_official: false, isOfficial: false },
+        { id: 'everything-search', name: 'Everything 文件搜索', category: '系统工具', author: 'ZTools Team', is_official: false, isOfficial: false },
+        { id: 'context-menu-manager', name: '右键管理', category: '系统工具', author: 'ZTools Team', is_official: false, isOfficial: false },
+        { id: 'boot-accelerator', name: '开机加速', category: '系统工具', author: 'ZTools Team', is_official: false, isOfficial: false },
+        { id: 'large-file-mover', name: '大文件搬家', category: '系统工具', author: 'ZTools Team', is_official: false, isOfficial: false },
+        { id: 'hosts-switcher', name: 'Hosts 切换管理', category: '系统工具', author: 'ZTools Team', is_official: false, isOfficial: false },
+        { id: 'wechat-cleaner', name: '微信清理', category: '系统工具', author: 'ZTools Team', is_official: false, isOfficial: false },
+        { id: 'auto-shutdown', name: '定时关机', category: '系统工具', author: 'ZTools Team', is_official: false, isOfficial: false },
+        { id: 'hardware-info', name: '硬件信息查看', category: '系统工具', author: 'ZTools Team', is_official: false, isOfficial: false },
+        { id: 'qq-cleaner', name: 'QQ清理', category: '系统工具', author: 'ZTools Team', is_official: false, isOfficial: false },
+        { id: 'third-party-tool', name: '社区第三方工具', category: '系统工具', author: 'CommunityDev', is_official: false, isOfficial: false }
+      ]
+
+      const manager = new StoreCatalogManager({
+        fetchRemote: async () => ({ list: remotePluginsFromApi }),
+        getOfficialList: () => sampleOfficialList
+      })
+
+      // 1. 查询「社区精选」：13 款 ZTools Team 自营插件绝不能出现在社区精选中
+      const communityRes = await manager.query({
+        category: '系统工具',
+        filterType: 'community',
+        pageSize: 50
+      })
+      assert.equal(communityRes.total, 1, '社区精选下应仅有 1 款真正的第三方社区插件')
+      assert.equal(communityRes.list[0].pluginId, 'third-party-tool')
+      assert.equal(communityRes.list[0].is_official, false)
+
+      // 2. 查询「官方自营」：13 款系统工具自营插件应全部归入官方自营并带有徽章标识
+      const officialRes = await manager.query({
+        category: '系统工具',
+        filterType: 'official',
+        pageSize: 50
+      })
+      assert.equal(officialRes.total, 13, '13 款系统工具自营插件应全部出现在官方自营列表')
+      for (const item of officialRes.list) {
+        assert.equal(item.is_official, true, `${item.pluginId} 的 is_official 必须为 true`)
+        assert.equal(item.isOfficial, true, `${item.pluginId} 的 isOfficial 必须为 true`)
+        assert.equal(item.official_badge, '官方自营', `${item.pluginId} 必须包含官方自营徽章`)
+        assert.equal(item.source_type, 'official', `${item.pluginId} 的 source_type 必须为 official`)
+      }
     })
   })
 })

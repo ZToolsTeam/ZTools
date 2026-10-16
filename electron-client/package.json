@@ -7,6 +7,7 @@
   "type": "commonjs",
   "scripts": {
     "lint": "tsc --noEmit -p tsconfig.json && node scripts/verify-source.mjs",
+    "build:test": "tsc -p tsconfig.test.json",
     "test": "tsc -p tsconfig.test.json && node scripts/run-tests.mjs",
     "test:preload:sandbox": "node --test scripts/test-sandbox-preload-bundle.mjs",
     "test:quick": "node scripts/run-test-workflow.mjs quick",

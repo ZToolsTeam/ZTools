@@ -25,6 +25,15 @@ const router = createRouter({
       component: () => import('../components/LauncherBar.vue')
     },
     {
+      path: '/popout/:pluginId',
+      name: 'popout',
+      component: () => import('../pages/DeclarativePage.vue'),
+      props: (route) => ({
+        pluginId: route.params.pluginId,
+        isPopout: true
+      })
+    },
+    {
       path: '/',
       component: MainLayout,
       children: [

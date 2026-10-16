@@ -19,8 +19,8 @@ interface HooksAdapter {
 // 探测是否处于标准 React 运行时环境
 function getHooks(): HooksAdapter {
   try {
-    // eslint-disable-next-line @typescript-eslint/no-var-requires
-    const react = (globalThis as any).React || (typeof require === "function" ? require("react") : null);
+    const req = typeof (globalThis as any).require === "function" ? (globalThis as any).require : null;
+    const react = (globalThis as any).React || (req ? req("react") : null);
     if (react && typeof react.useState === "function") {
       return {
         useState: react.useState,

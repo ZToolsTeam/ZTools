@@ -1,4 +1,4 @@
-import { app, BrowserWindow, dialog, screen, webContents } from 'electron'
+import { app, BrowserWindow, dialog, nativeTheme, screen, webContents } from 'electron'
 import path from 'node:path'
 import type { CallerIdentity } from '../../contracts/capabilities.js'
 import { errorCodes, ZToolsError } from '../../contracts/errors.js'
@@ -17,8 +17,14 @@ import { PathReferenceDialogs } from './path-reference-dialogs.js'
 import { createElectronReferenceDialogProvider } from '../platform/electron-reference-dialog.js'
 import type { WindowRegistry } from '../windows/window-registry.js'
 import { clampBoundsToWorkArea } from '../windows/display-bounds.js'
+import {
+  getTitleBarOverlayOptions,
+  isWindows11OrLater,
+  secureWebPreferences
+} from '../windows/main-window.js'
 
 const localWebOrigin = 'ztools://web'
+const MAX_POPOUT_WINDOWS = 8
 
 function callerWindow(caller: CallerIdentity): BrowserWindow {
   const contents = webContents.fromId(caller.webContentsId)
@@ -29,7 +35,7 @@ function callerWindow(caller: CallerIdentity): BrowserWindow {
   return window
 }
 
-function requireLocalUrl(value: string): string {
+export function requireLocalUrl(value: string): string {
   let url: URL
   try {
     url = new URL(value, `${localWebOrigin}/`)
@@ -40,6 +46,18 @@ function requireLocalUrl(value: string): string {
     throw new ZToolsError(errorCodes.permissionDenied, '只允许访问 ztools://web 本地页面')
   }
   return url.toString()
+}
+
+export function extractPopoutKey(localUrl: string): string {
+  const normalized = requireLocalUrl(localUrl)
+  const parsed = new URL(normalized)
+  const hash = parsed.hash || ''
+  const pluginMatch = /^#\/(?:popout|declarative)\/([A-Za-z0-9._-]+)/.exec(hash)
+  if (pluginMatch?.[1]) {
+    return `plugin:${pluginMatch[1].toLowerCase()}`
+  }
+  const hashPath = (hash.split('?')[0] || '#').trim()
+  return `route:${parsed.pathname}${hashPath}`
 }
 
 export function parseDialogFilters(value?: string): Electron.FileFilter[] | undefined {
@@ -242,15 +260,22 @@ export class WindowService {
   #tooltipGeneration = 0
   #recordBar: BrowserWindow | null = null
   #recordBarOwnerId: number | null = null
+  readonly #registry: WindowRegistry | undefined
+  readonly #createWindow: (options: Electron.BrowserWindowConstructorOptions) => BrowserWindow
+  readonly #popoutWindows = new Map<string, BrowserWindow>()
+  readonly #popoutBounds = new Map<string, Electron.Rectangle>()
   readonly #removeRegistryListener: (() => void) | null
 
   constructor(
     private readonly files: FileSystemService,
     grantsOrRegistry?: PathGrantService | WindowRegistry,
-    explicitRegistry?: WindowRegistry
+    explicitRegistry?: WindowRegistry,
+    createWindow: (options: Electron.BrowserWindowConstructorOptions) => BrowserWindow = (opts) => new BrowserWindow(opts)
   ) {
     const registry = grantsOrRegistry && 'onRemoved' in grantsOrRegistry ? grantsOrRegistry : explicitRegistry
     const pathGrants = grantsOrRegistry && !('onRemoved' in grantsOrRegistry) ? grantsOrRegistry : undefined
+    this.#registry = registry
+    this.#createWindow = createWindow
     this.#referenceDialogs = pathGrants ? new PathReferenceDialogs(
       createElectronReferenceDialogProvider(callerWindow, parseDialogFilters, normalizeOpenDialogProperties), pathGrants) : undefined
     this.#removeRegistryListener = registry?.onRemoved((webContentsId) => {
@@ -266,6 +291,119 @@ export class WindowService {
 
   unsupported(feature: string): never {
     throw new ZToolsError(errorCodes.notSupported, `${feature} 在当前 Electron 架构中不受支持`)
+  }
+
+  async open(
+    params: WindowUrlParams,
+    caller: CallerIdentity
+  ): Promise<{ success: true; windowInstanceStatus: 'created' | 'reused'; popoutKey: string }> {
+    if (caller.type !== 'main') {
+      throw new ZToolsError(errorCodes.permissionDenied, '仅主宿主界面允许弹出独立窗口')
+    }
+    const targetUrl = requireLocalUrl(params.url)
+    const popoutKey = extractPopoutKey(targetUrl)
+
+    for (const [key, win] of this.#popoutWindows.entries()) {
+      if (win.isDestroyed()) {
+        this.#popoutWindows.delete(key)
+      }
+    }
+
+    const existing = this.#popoutWindows.get(popoutKey)
+    if (existing && !existing.isDestroyed()) {
+      if (existing.isMinimized()) existing.restore()
+      existing.show()
+      existing.focus()
+      await existing.loadURL(targetUrl)
+      return { success: true, windowInstanceStatus: 'reused', popoutKey }
+    }
+
+    if (this.#popoutWindows.size >= MAX_POPOUT_WINDOWS) {
+      throw new ZToolsError(errorCodes.pluginBusy, `独立窗口数量已达上限 (${MAX_POPOUT_WINDOWS})`)
+    }
+
+    const primaryDisplay = typeof screen?.getPrimaryDisplay === 'function' ? screen.getPrimaryDisplay() : undefined
+    const workArea = primaryDisplay?.workArea ?? { x: 0, y: 0, width: 1920, height: 1080 }
+    const saved = this.#popoutBounds.get(popoutKey)
+    const defaultWidth = Math.min(1140, Math.max(820, workArea.width - 120))
+    const defaultHeight = Math.min(760, Math.max(540, workArea.height - 100))
+    const initialBounds = clampBoundsToWorkArea(
+      saved ?? {
+        x: Math.round(workArea.x + (workArea.width - defaultWidth) / 2),
+        y: Math.round(workArea.y + (workArea.height - defaultHeight) / 2),
+        width: defaultWidth,
+        height: defaultHeight
+      },
+      workArea
+    )
+
+    const isDark = nativeTheme?.shouldUseDarkColors ?? true
+    const isWin = process.platform === 'win32'
+    const isMac = process.platform === 'darwin'
+    const hasMica = isWindows11OrLater()
+
+    const popout = this.#createWindow({
+      x: initialBounds.x,
+      y: initialBounds.y,
+      width: initialBounds.width,
+      height: initialBounds.height,
+      minWidth: Math.min(820, workArea.width),
+      minHeight: Math.min(540, workArea.height),
+      show: false,
+      backgroundColor: isDark ? '#0f172a' : '#f8fafc',
+      autoHideMenuBar: true,
+      titleBarStyle: isMac ? 'hiddenInset' : 'hidden',
+      ...(isWin ? { titleBarOverlay: getTitleBarOverlayOptions(isDark) } : {}),
+      ...(hasMica ? { backgroundMaterial: 'mica' } : {}),
+      ...(isMac ? { vibrancy: 'sidebar' } : {}),
+      webPreferences: secureWebPreferences()
+    })
+
+    if (this.#registry && popout.webContents && typeof popout.webContents.id === 'number') {
+      try {
+        this.#registry.registerMain(popout.webContents)
+      } catch {
+        // Ignore if already registered in mock test environment
+      }
+    }
+
+    const savePopoutBounds = (): void => {
+      if (popout.isDestroyed() || popout.isMinimized() || popout.isMaximized() || popout.isFullScreen()) return
+      const b = typeof popout.getNormalBounds === 'function' ? popout.getNormalBounds() : popout.getBounds()
+      this.#popoutBounds.set(popoutKey, b)
+    }
+
+    popout.on('resize', savePopoutBounds)
+    popout.on('move', savePopoutBounds)
+    popout.once('closed', () => {
+      if (this.#popoutWindows.get(popoutKey) === popout) {
+        this.#popoutWindows.delete(popoutKey)
+      }
+    })
+
+    if (popout.webContents?.on) {
+      popout.webContents.on('will-navigate', (event, url) => {
+        if (!url.startsWith('ztools://web/')) event.preventDefault()
+      })
+      popout.webContents.setWindowOpenHandler?.(() => ({ action: 'deny' }))
+      popout.webContents.on('will-attach-webview', (event) => event.preventDefault())
+    }
+
+    this.#popoutWindows.set(popoutKey, popout)
+
+    try {
+      await popout.loadURL(targetUrl)
+      if (!popout.isDestroyed()) {
+        popout.show()
+        popout.focus()
+      }
+    } catch (error) {
+      this.#popoutWindows.delete(popoutKey)
+      if (!popout.isDestroyed()) popout.destroy()
+      throw error
+    }
+
+    return { success: true, windowInstanceStatus: 'created', popoutKey }
   }
 
   close(caller: CallerIdentity): { success: true } {
@@ -563,6 +701,14 @@ export class WindowService {
     this.#tooltip?.destroy()
     this.#tooltip = null
     this.#tooltipOwner = null
+    for (const popout of this.#popoutWindows.values()) {
+      try {
+        if (!popout.isDestroyed()) popout.destroy()
+      } catch {
+        // Ignore destruction errors on shutdown
+      }
+    }
+    this.#popoutWindows.clear()
   }
 
   setSize(params: WindowSetSizeParams, caller: CallerIdentity): { success: true } {

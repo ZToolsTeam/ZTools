@@ -3,6 +3,8 @@ import { getDeclarativeBridge } from "./bridge.js";
 export interface ConfirmAlertOptions {
   title: string;
   message?: string;
+  primaryActionTitle?: string;
+  dismissActionTitle?: string;
   primaryAction?: {
     title: string;
     style?: "default" | "destructive";
@@ -18,9 +20,18 @@ export interface ConfirmAlertOptions {
  * 弹出确认警告对话框，返回用户是否点击了 primaryAction
  */
 export async function confirmAlert(options: ConfirmAlertOptions): Promise<boolean> {
+  const normalized: ConfirmAlertOptions = {
+    ...options,
+    primaryAction:
+      options.primaryAction ||
+      (options.primaryActionTitle ? { title: options.primaryActionTitle, style: "destructive" } : undefined),
+    dismissAction:
+      options.dismissAction ||
+      (options.dismissActionTitle ? { title: options.dismissActionTitle } : undefined)
+  };
   const bridge = getDeclarativeBridge();
   if (bridge?.confirmAlert) {
-    return await bridge.confirmAlert(options);
+    return await bridge.confirmAlert(normalized);
   }
 
   if (typeof (globalThis as any).window !== "undefined" && typeof (globalThis as any).window.confirm === "function") {

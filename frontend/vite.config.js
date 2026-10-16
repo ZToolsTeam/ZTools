@@ -115,6 +115,9 @@ export default defineConfig({
       '@ztools/raycast-compat': path.resolve(__dirname, '../packages/declarative-ui/dist/index.js')
     }
   },
+  optimizeDeps: {
+    exclude: ['@ztools/declarative-ui', 'react']
+  },
   build: {
     outDir: 'dist',
     assetsDir: 'assets',

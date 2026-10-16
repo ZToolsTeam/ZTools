@@ -49,6 +49,10 @@ export function getWindowsInstallerFileName(artifactVersion) {
   return `ZTools-${artifactVersion}-${WINDOWS_TARGET.artifactDirectory}.exe`
 }
 
+export function getWindowsPortableZipFileName(artifactVersion) {
+  return `ZTools-${artifactVersion}-${WINDOWS_TARGET.artifactDirectory}-portable.zip`
+}
+
 export function createWindowsPackagerOptions({ clientRoot, outputRoot, applicationIcon }) {
   return {
     dir: clientRoot,

@@ -81,14 +81,17 @@ const files = [
   'index.js'
 ]
 
-// plugin-sdk.js 的可维护源码位于 frontend/src/sdk；public/sdk 保留当前文件行尾风格。
+// plugin-sdk.js 的可维护源码位于 frontend/src/sdk；若已迁移至 public/sdk 则直接复用。
 function syncPluginSdkSource() {
   const sourcePath = path.resolve(__dirname, '../../../src/sdk/plugin-sdk.js')
+  const outputPath = path.join(config.distDir, 'plugin-sdk.js')
   if (!fs.existsSync(sourcePath)) {
+    if (fs.existsSync(outputPath)) {
+      return
+    }
     throw new Error(`Plugin SDK 源文件不存在: ${sourcePath}`)
   }
 
-  const outputPath = path.join(config.distDir, 'plugin-sdk.js')
   const outputEol = fs.existsSync(outputPath) &&
       fs.readFileSync(outputPath, 'utf8').includes('\r\n')
     ? '\r\n'
@@ -200,10 +203,6 @@ function copyToOutputDirectories(sourcePath) {
       dir: path.join(projectRoot, 'bin/WebResources/sdk'),
       label: 'bin/WebResources/sdk'
     }] : []),
-    {
-      dir: path.join(projectRoot, 'plugins/create-plugin/public/sdk'),
-      label: 'plugins/create-plugin/public/sdk'
-    },
     {
       dir: path.join(projectRoot, 'packages/api/runtime'),
       label: 'packages/api/runtime'

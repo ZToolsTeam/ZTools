@@ -254,7 +254,7 @@ function mainProbeExpression() {
     pid: process.pid, execPath: process.execPath, electronVersion: process.versions.electron,
     appPath: app.getAppPath(), appName: app.getName(), appVersion: app.getVersion(), isPackaged: app.isPackaged,
     appDataPath: app.getPath('appData'), userDataPath: app.getPath('userData'), sessionDataPath: app.getPath('sessionData'),
-    dataRoot: path.join(app.getPath('appData'), 'ZTools', 'Data'), pluginRoot: path.join(app.getPath('appData'), 'ZTools', 'Data', 'Plugins'),
+    dataRoot: path.join(app.getPath('appData'), 'ZTools', 'DataV2'), pluginRoot: path.join(app.getPath('appData'), 'ZTools', 'DataV2', 'Plugins'),
     argv: process.argv, execArgv: process.execArgv
   };`)
 }
@@ -266,7 +266,7 @@ function isolatedPathsExpression(profile) {
     app.setPath('sessionData', ${JSON.stringify(profile.sessionDataPath)});
     const path = requireMain('node:path');
     return { appDataPath: app.getPath('appData'), userDataPath: app.getPath('userData'), sessionDataPath: app.getPath('sessionData'),
-      dataRoot: path.join(app.getPath('appData'), 'ZTools', 'Data'), pluginRoot: path.join(app.getPath('appData'), 'ZTools', 'Data', 'Plugins') };`)
+      dataRoot: path.join(app.getPath('appData'), 'ZTools', 'DataV2'), pluginRoot: path.join(app.getPath('appData'), 'ZTools', 'DataV2', 'Plugins') };`)
 }
 
 function appQuitExpression() { return mainRequire(`requireMain('electron').app.quit(); return true;`) }
@@ -798,7 +798,7 @@ export class WindowsNormalAppHarness {
   async install(session, { pluginId, zipPath, zipInfo, zipUrl, version, pluginRoot }) {
     const id = safePluginId(pluginId)
     const resolvedZip = zipInfo ?? validateFreshPluginZip(zipPath, pluginRoot, id)
-    const directory = path.join(session.profile.appDataPath, 'ZTools', 'Data', 'Plugins', id)
+    const directory = path.join(session.profile.appDataPath, 'ZTools', 'DataV2', 'Plugins', id)
     if (fs.existsSync(directory)) throw new Error('PLUGIN_ALREADY_PRESENT_IN_FRESH_PROFILE')
     const { accepted, completion } = await session.browserPage.page.evaluate(publicPluginInstallExpression({
       pluginId: id, zipUrl, version, checksum: resolvedZip.checksum, fileSize: resolvedZip.fileSize
@@ -815,7 +815,7 @@ export class WindowsNormalAppHarness {
     }, value => Boolean(value), 90_000, 'PLUGIN_INSTALL_FILES_NOT_READY')
     const refresh = await session.browserPage.page.evaluate('window.ztools.plugin.refresh()')
     if (refresh?.success === false) throw new Error('PLUGIN_LIST_REFRESH_FAILED')
-    const root = path.join(session.profile.appDataPath, 'ZTools', 'Data', 'Plugins')
+    const root = path.join(session.profile.appDataPath, 'ZTools', 'DataV2', 'Plugins')
     const relative = path.relative(root, directory)
     if (path.isAbsolute(relative) || relative === '..' || relative.startsWith(`..${path.sep}`)) throw new Error('INSTALLED_PLUGIN_PATH_NOT_ISOLATED')
     const names = installed.entries.filter(name => name === 'plugin.json' || name === 'index.html' || name === 'app.js')

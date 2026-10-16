@@ -15,7 +15,7 @@
           ref="searchInputRef"
           v-model="query"
           type="text"
-          placeholder="查找动作..."
+          :placeholder="targetTitle ? `对 “${targetTitle}” 执行动作...` : '查找动作...'"
           class="w-full bg-transparent text-sm text-slate-100 placeholder-slate-400 outline-none"
         />
         <kbd class="px-1.5 py-0.5 text-xs text-slate-400 bg-white/10 rounded">ESC</kbd>
@@ -30,18 +30,24 @@
           无匹配动作
         </div>
 
-        <div
-          v-for="(action, idx) in filteredActions"
-          :key="idx"
-          class="flex items-center justify-between px-3 py-2 rounded-lg text-sm cursor-pointer transition-colors"
-          :class="[
-            selectedIndex === idx
-              ? 'bg-sky-500/20 text-white font-medium shadow-sm'
-              : 'text-slate-200 hover:bg-white/5'
-          ]"
-          @click="executeAction(action)"
-          @mouseenter="selectedIndex = idx"
-        >
+        <template v-for="(action, idx) in filteredActions" :key="idx">
+          <div
+            v-if="action._sectionTitle && (idx === 0 || filteredActions[idx - 1]._sectionTitle !== action._sectionTitle)"
+            class="px-3 pt-2.5 pb-1 text-[11px] font-semibold tracking-wider text-slate-400 uppercase select-none border-t border-white/5 first:border-t-0 first:pt-1"
+          >
+            {{ action._sectionTitle }}
+          </div>
+
+          <div
+            class="flex items-center justify-between px-3 py-2 rounded-lg text-sm cursor-pointer transition-colors"
+            :class="[
+              selectedIndex === idx
+                ? 'bg-sky-500/20 text-white font-medium shadow-sm'
+                : 'text-slate-200 hover:bg-white/5'
+            ]"
+            @click="executeAction(action)"
+            @mouseenter="selectedIndex = idx"
+          >
           <div class="flex items-center gap-2.5 min-w-0">
             <DeclarativeIcon
               :icon="action.props?.icon || 'check'"
@@ -68,6 +74,7 @@
             Enter
           </div>
         </div>
+        </template>
       </div>
 
       <!-- 底部提示 -->
@@ -91,6 +98,10 @@ const props = defineProps({
   actions: {
     type: Array,
     default: () => []
+  },
+  targetTitle: {
+    type: String,
+    default: ""
   }
 });
 

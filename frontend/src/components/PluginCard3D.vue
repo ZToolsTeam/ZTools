@@ -2,6 +2,8 @@
 import { computed, ref } from 'vue'
 import { downloadPluginUpdate } from '@/api/apiserver'
 import { usePluginsStore } from '@/stores/plugins'
+import { isOfficialPluginItem } from '@/utils/storeCatalogManager'
+import { isOfficialPlugin } from '@/utils/officialPlugins'
 
 const props = defineProps({
   plugin: { type: Object, required: true },
@@ -31,7 +33,7 @@ const revokedReason = computed(() =>
   props.plugin.revoked_reason || props.plugin.revokedReason || pluginsStore.getRevokedReason(props.plugin.pluginId) || '该插件已被官方下架禁用'
 )
 const isOfficial = computed(() =>
-  Boolean(props.plugin.is_official || props.plugin.isOfficial || props.plugin.isBuiltin || props.plugin.author === 'ZTools Official')
+  isOfficialPluginItem(props.plugin) || isOfficialPlugin(props.plugin.pluginId || props.plugin.id)
 )
 const officialBadge = computed(() =>
   props.plugin.official_badge || props.plugin.officialBadge || '官方自营'

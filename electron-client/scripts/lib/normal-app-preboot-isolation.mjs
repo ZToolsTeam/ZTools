@@ -224,8 +224,8 @@ function configurePathsExpression(profile) {
     app.setPath('sessionData', ${JSON.stringify(profile.sessionDataPath)});
     const path = requireMain('node:path');
     return { appDataPath: app.getPath('appData'), userDataPath: app.getPath('userData'),
-      sessionDataPath: app.getPath('sessionData'), dataRoot: path.join(app.getPath('appData'), 'ZTools', 'Data'),
-      pluginRoot: path.join(app.getPath('appData'), 'ZTools', 'Data', 'Plugins') };
+      sessionDataPath: app.getPath('sessionData'), dataRoot: path.join(app.getPath('appData'), 'ZTools', 'DataV2'),
+      pluginRoot: path.join(app.getPath('appData'), 'ZTools', 'DataV2', 'Plugins') };
   })()`
 }
 

@@ -49,6 +49,8 @@ DropdownComponent.Section = function ListDropdownSection(
   return createDescriptor("List.Dropdown.Section", props, ...children);
 };
 
+import { normalizeDistributionBarProps, normalizeFilterBarProps } from "./segmented.js";
+
 /**
  * List 顶层列表容器
  */
@@ -56,7 +58,37 @@ export const List: ListComponent = function List(
   props?: ListProps,
   ...children: any[]
 ): ViewDescriptor<ListProps> {
-  return createDescriptor("List", props, ...children);
+  if (!props) {
+    return createDescriptor("List", {} as ListProps, ...children);
+  }
+  const normalized: ListProps = { ...props };
+
+  // 支持从 header 数组中自动提取 MetricGrid / DistributionBar / FilterBar / SegmentedControl
+  if (Array.isArray(normalized.header)) {
+    for (const node of normalized.header) {
+      if (!node || typeof node !== "object") continue;
+      if (node.type === "MetricGrid" && !normalized.metricGrid) {
+        normalized.metricGrid = node;
+      } else if (node.type === "DistributionBar" && !normalized.distributionBar) {
+        normalized.distributionBar = node;
+      } else if (node.type === "FilterBar" && !normalized.filterBar) {
+        normalized.filterBar = node;
+      } else if (node.type === "SegmentedControl" && !normalized.segmentedControl) {
+        normalized.segmentedControl = node;
+      }
+    }
+  }
+
+  if (normalized.distributionBar && !(normalized.distributionBar as any).$$typeof) {
+    normalized.distributionBar = normalizeDistributionBarProps(
+      normalized.distributionBar as any
+    );
+  }
+  if (normalized.filterBar && !(normalized.filterBar as any).$$typeof) {
+    normalized.filterBar = normalizeFilterBarProps(normalized.filterBar as any);
+  }
+
+  return createDescriptor("List", normalized, ...children);
 } as any;
 
 const ListItemComponent: any = function ListItem(props: ListItemProps): ViewDescriptor<ListItemProps> {

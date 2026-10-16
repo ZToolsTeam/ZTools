@@ -17,12 +17,24 @@ export const useUIStore = defineStore('ui', {
     // 声明式舞台当前首要 Action（用于主界面底栏动态联动）
     declarativePrimaryAction: null,
     // 主界面动作面板可见性
-    globalActionPanelVisible: false
+    globalActionPanelVisible: false,
+    // 侧边栏折叠状态：默认 false（展开，兼顾小白用户首屏发现），支持本地持久化
+    sidebarCollapsed: (() => {
+      try {
+        if (typeof window !== 'undefined' && window.localStorage) {
+          return window.localStorage.getItem('ztools_sidebar_collapsed') === 'true'
+        }
+      } catch (e) {
+        // 静默降级
+      }
+      return false
+    })()
   }),
   getters: {
     isSearchFocused: (state) => state.focusState === FOCUS_STATES.SEARCH,
     isGridFocused: (state) => state.focusState === FOCUS_STATES.GRID,
-    isDeclarativeFocused: (state) => state.focusState === FOCUS_STATES.DECLARATIVE
+    isDeclarativeFocused: (state) => state.focusState === FOCUS_STATES.DECLARATIVE,
+    isSidebarCollapsed: (state) => Boolean(state.sidebarCollapsed)
   },
   actions: {
     setFocusState(newState) {
@@ -66,6 +78,19 @@ export const useUIStore = defineStore('ui', {
     },
     closeLoginModal() {
       this.showLoginModal = false
+    },
+    setSidebarCollapsed(collapsed) {
+      this.sidebarCollapsed = Boolean(collapsed)
+      try {
+        if (typeof window !== 'undefined' && window.localStorage) {
+          window.localStorage.setItem('ztools_sidebar_collapsed', String(this.sidebarCollapsed))
+        }
+      } catch (e) {
+        // 静默降级
+      }
+    },
+    toggleSidebar() {
+      this.setSidebarCollapsed(!this.sidebarCollapsed)
     }
   }
 })

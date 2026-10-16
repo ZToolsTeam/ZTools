@@ -289,3 +289,71 @@ test('process window lookup preserves the visible HWND contract and fixed query'
   )
   assert.equal(called, false)
 })
+
+test('handleProcessMonitorCall provides rich snapshot, detail, services, and critical process shield', async () => {
+  const context = await createContext()
+  try {
+    const statusRes = await context.service.handleProcessMonitorCall('GetStatus', {}, signal())
+    assert.equal(statusRes.success, true)
+    assert.equal((statusRes.data as { status: string }).status, 'ready')
+
+    const sysInfoRes = await context.service.handleProcessMonitorCall('GetSystemInfo', {}, signal())
+    assert.equal(sysInfoRes.success, true)
+    const sysData = sysInfoRes.data as { totalMemoryBytes: number; memoryUsagePercent: number; processCount: number }
+    assert.ok(sysData.totalMemoryBytes > 0)
+    assert.ok(sysData.memoryUsagePercent >= 0 && sysData.memoryUsagePercent <= 100)
+    assert.ok(sysData.processCount > 0)
+
+    const listRes = await context.service.handleProcessMonitorCall('GetProcessList', { includeCommandLine: true }, signal())
+    assert.equal(listRes.success, true)
+    const processes = (listRes.data as { processes: Array<Record<string, unknown>> }).processes
+    assert.ok(Array.isArray(processes) && processes.length > 0)
+    const currentProc = processes.find((p) => p.pid === process.pid)
+    assert.ok(currentProc, 'current Node process should appear in rich process snapshot')
+    assert.ok(typeof currentProc.workingSetBytes === 'number' && currentProc.workingSetBytes > 0)
+    assert.ok(typeof currentProc.threadCount === 'number' && currentProc.threadCount >= 1)
+
+    const detailRes = await context.service.handleProcessMonitorCall('GetProcessDetail', { pid: process.pid }, signal())
+    assert.equal(detailRes.success, true)
+    const detail = detailRes.data as Record<string, unknown>
+    assert.equal(detail.pid, process.pid)
+    assert.ok(typeof detail.path === 'string' && detail.path.length > 0)
+
+    // Fault injection & security boundary assertions
+    const invalidDetail = await context.service.handleProcessMonitorCall('GetProcessDetail', { pid: -99 }, signal())
+    assert.match(String((invalidDetail.data as { error?: string }).error), /INVALID_PID/)
+
+    const criticalKill = await context.service.handleProcessMonitorCall(
+      'TerminateProcessByPID',
+      { pid: 4, name: 'System', mode: 'force' },
+      signal()
+    )
+    assert.match(String((criticalKill.data as { error?: string }).error), /SECURITY_INTERCEPTED/)
+
+    const csrssKill = await context.service.handleProcessMonitorCall(
+      'TerminateProcessByPID',
+      { pid: 612, name: 'csrss.exe', mode: 'tree' },
+      signal()
+    )
+    assert.match(String((csrssKill.data as { error?: string }).error), /SECURITY_INTERCEPTED/)
+
+    const invalidKill = await context.service.handleProcessMonitorCall(
+      'TerminateProcessByPID',
+      { pid: 0, name: 'Idle' },
+      signal()
+    )
+    assert.match(String((invalidKill.data as { error?: string }).error), /INVALID_PID/)
+
+    const unknownMethod = await context.service.handleProcessMonitorCall('UnknownMethodXYZ', {}, signal())
+    assert.match(String((unknownMethod.data as { error?: string }).error), /UNSUPPORTED_PROCESS_MONITOR_METHOD/)
+
+    const aborted = new AbortController()
+    aborted.abort()
+    await assert.rejects(
+      () => context.service.handleProcessMonitorCall('GetStatus', {}, aborted.signal)
+    )
+  } finally {
+    await dispose(context)
+  }
+})
+

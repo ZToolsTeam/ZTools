@@ -102,6 +102,17 @@
   * 环境已全局就绪配置 GitHub 官方 CLI（`gh`，位于 `%LOCALAPPDATA%\Programs\GitHub CLI\bin`，已绑定 `codingmuse` 官方账号与 `repo`/`workflow` 权限）；
   * AI 助手在后续会话中遇到用户需要“查询 Issues/PR”、“新建/关闭 Issue”、“配置 Webhooks”或“发版 Release”时，**必须优先利用 `gh` 命令或已封装的 API 为用户代劳执行，严禁让用户进行繁琐的人工重复搬运**。
 
+### 3.3 微软官方 Windows Package Manager (Winget) 自动化分发规范（WinGet Distribution Pipeline）
+- **会话触发与操作基准**：
+  * 当用户在会话中提出**“要提交到 winget”**、**“发布到 winget”**或需要同步新版本安装包至微软官方源时，**AI 助手必须优先直接代劳执行 `npm run release:winget`**（或调用 `node scripts/publish-winget.mjs`），严禁让用户进行繁琐的人工清单编写或手动提 PR；
+  * 若仅需本地生成清单并验证，使用 `npm run release:winget:dry-run`；运行全量测试使用 `npm run test:winget`。
+- **自动化流水线 5 步严密闭环**：
+  1. **工具链自动诊断**：自动定位系统 `winget` 与 `wingetcreate`（若缺失则通过 winget 自动安装 `Microsoft.WingetCreate`），并通过 `gh auth token` 动态获取鉴权凭据；
+  2. **产物与直链校验**：自动校验 GitHub Release `v<version>` 上的离线安装包（`ZTools-<version>-win32-x64.exe`）与本地 SHA-256，若远端未就绪可搭配 `--package` 自动触发双包构建并上传；
+  3. **标准 Manifest 自动化生成**：生成 4 份符合微软 1.6.0+ 标准架构规范的 YAML 清单（版本清单、安装器清单、中文 defaultLocale、英文 locale），严格遵循 `Scope: user`、`InstallerType: exe`、`Silent: /S` 与 `Moniker: ztools` 约束；
+  4. **严格本地模式校验**：调用 `winget validate` 执行语法与语义实体验证，确保 100% 达成 0 错误 0 警告；
+  5. **自动化提交 PR**：通过 `wingetcreate submit` 自动 Fork 微软官方仓库 `microsoft/winget-pkgs`、创建分支并提交 Pull Request，向用户汇报 PR 链接。
+
 ### 4. 智能化与去中心化同步
 - **AI Native 与原生 MCP 网关**：
   - BYOK (Bring Your Own Key) 统一大模型路由（`ModelRouter`）：适配 DeepSeek（原生支持 R1 思考流）、OpenAI、Claude、SiliconFlow；
@@ -298,12 +309,17 @@ npm run release:binaries     # 同时打包 EXE 安装包 + ZIP 免安装包并�
   4. **提交状态、SHA 与双包完整性核对**：确认 GitHub 与 Gitee 双远端 git push 或 GitHub Release 上传均返回成功，核对最新 commit 短哈希及 `.exe` + `-portable.zip` 双包 SHA-256；
   5. **闭环反馈汇报**：向用户汇报同步或打包上传完成概况，附带对应的 GitHub 与 Gitee 仓库/Release 地址（GitHub: [codingmuse/ZTools](https://github.com/codingmuse/ZTools) / Gitee: [hoposky/ZTools](https://gitee.com/hoposky/ZTools) / [ZTools-extensions](https://github.com/codingmuse/ZTools-extensions)），让用户彻底省心。
 
-### 客户端启动与 Windows 桌面穿透规范（强制执行）
+### 客户端启动与 Windows 桌面穿透规范（零容忍最高高压线，违者必究）
+
+> [!CAUTION]
+> **严禁直接在后台子进程中运行 `electron .`、`npx electron .` 或 `npm start`！**
+> **根本原因**：AI 代理环境下的执行终端（pwsh / bash）属于非交互式沙盒上下文（Session/Desktop 隔离），如果直接在当前子进程启动 GUI，Windows 会将其隔离在不可见的虚拟桌面中，**用户物理主屏幕（`WinSta0\Default`）绝对无法看到任何窗口**！必须且只能使用任务计划程序（`schtasks /IT`）交互式投递到用户前台主桌面！
+
 - **启动前互斥守则**：Electron 单例锁机制下，启动新实例前必须先清理旧实例（`Stop-Process -Name electron -Force -ErrorAction SilentlyContinue`），否则新实例因抢不到 `requestSingleInstanceLock` 会立即静默退出。
-- **Windows 交互桌面穿透规范**：
-  * **背景与根因**：在 Windows 平台上，自动化 Agent / 子进程经常运行在虚拟或沙盒桌面（如 `exebox-...`）中，若直接通过后台普通子进程启动 GUI，窗口会被系统隔离在不可见的虚拟桌面中，用户的物理主屏幕（`WinSta0\Default`）无法看到窗口。
-  * **标准唤起方式（首选）**：使用 Windows Task Scheduler 的 `/IT`（交互式任务）模式将进程直接投递到当前登录用户的物理桌面：
+- **Windows 交互桌面穿透规范（强制执行唯一合法标准）**：
+  * **标准唤起方式（首选且唯一标准）**：使用 Windows Task Scheduler 的 `/IT`（交互式任务）模式将进程直接投递到当前登录用户的物理桌面：
     ```powershell
+    Stop-Process -Name electron -Force -ErrorAction SilentlyContinue
     schtasks /create /tn 'LaunchZTools' /tr 'E:\csdwork3\git\ZTools\start-client.bat' /sc once /st 00:00 /f /it
     schtasks /run /tn 'LaunchZTools'
     Start-Sleep -Seconds 1

@@ -16,6 +16,10 @@ import {
 
 export interface ActionComponent {
   (props: ActionProps): ViewDescriptor<ActionProps>;
+  Style: {
+    readonly Regular: "regular";
+    readonly Destructive: "destructive";
+  };
   CopyToClipboard: (props: ActionCopyToClipboardProps) => ViewDescriptor<ActionCopyToClipboardProps>;
   Paste: (props: ActionPasteProps) => ViewDescriptor<ActionPasteProps>;
   OpenInBrowser: (props: ActionOpenInBrowserProps) => ViewDescriptor<ActionOpenInBrowserProps>;
@@ -38,6 +42,11 @@ export interface ActionPanelComponent {
 export const Action: ActionComponent = function Action(props: ActionProps): ViewDescriptor<ActionProps> {
   return createDescriptor("Action", props);
 } as any;
+
+Action.Style = {
+  Regular: "regular",
+  Destructive: "destructive"
+};
 
 Action.CopyToClipboard = function CopyToClipboard(
   props: ActionCopyToClipboardProps

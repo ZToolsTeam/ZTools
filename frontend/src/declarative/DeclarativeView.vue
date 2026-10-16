@@ -37,9 +37,11 @@
         v-if="currentDescriptor?.type === 'List'"
         ref="listRendererRef"
         :descriptor="currentDescriptor"
+        :initialSnapshot="initialSnapshot"
         @select="onItemSelected"
         @trigger-primary="triggerPrimaryAction"
         @action-panel-change="onActionPanelChange"
+        @open-action-panel="openActionPanel"
       />
 
       <!-- 2. Detail 视图 -->
@@ -69,22 +71,58 @@
 
     <!-- 底部 Fluent 风格快捷栏 -->
     <div class="px-4 py-2 border-t border-white/10 flex items-center justify-between bg-black/30 text-xs text-slate-400">
-      <!-- 左侧：主要 Action 提示 -->
+      <!-- 左侧：主要 Action 提示与分栏切换 -->
       <div class="flex items-center gap-4">
-        <div v-if="primaryAction" class="flex items-center gap-1.5">
+        <div
+          v-if="primaryAction"
+          class="flex items-center gap-1.5 cursor-pointer hover:text-white transition-colors"
+          title="执行首要动作 (Enter)"
+          @click="executeAction(primaryAction)"
+        >
           <span class="text-slate-200 font-medium">{{ primaryAction.props?.title }}</span>
           <kbd class="px-1.5 py-0.5 bg-white/10 text-slate-300 rounded font-mono text-[10px]">Enter</kbd>
         </div>
-        <div v-if="canGoBack" class="flex items-center gap-1 text-slate-400">
+        <div
+          v-if="toggleDetailAction"
+          class="flex items-center gap-1.5 cursor-pointer hover:text-white transition-colors"
+          :title="toggleDetailAction.props?.title"
+          @click="executeAction(toggleDetailAction)"
+        >
+          <span class="text-slate-300">{{ toggleDetailAction.props?.title }}</span>
+          <kbd class="px-1.5 py-0.5 bg-white/10 text-slate-300 rounded font-mono text-[10px]">Ctrl+D</kbd>
+        </div>
+        <div
+          v-if="canGoBack"
+          class="flex items-center gap-1 text-slate-400 cursor-pointer hover:text-white transition-colors"
+          title="后退上一级 (Esc)"
+          @click="handleBack"
+        >
           <span>后退</span>
           <kbd class="px-1.5 py-0.5 bg-white/10 text-slate-300 rounded font-mono text-[10px]">Esc</kbd>
+        </div>
+        <div
+          v-else-if="!isPopout"
+          class="flex items-center gap-1 text-slate-400 cursor-pointer hover:text-white transition-colors"
+          title="返回工作台 (Esc)"
+          @click="emit('exit')"
+        >
+          <span>返回工作台</span>
+          <kbd class="px-1.5 py-0.5 bg-white/10 text-slate-300 rounded font-mono text-[10px]">Esc</kbd>
+        </div>
+        <div
+          v-else
+          class="flex items-center gap-1.5 text-emerald-400/90 font-mono text-[11px]"
+          title="独立常驻模式下按 Esc 仅清空搜索框，防止误触关闭盯盘窗口"
+        >
+          <span class="inline-block w-1.5 h-1.5 rounded-full bg-emerald-400"></span>
+          <span>独立常驻防误关 (Esc 仅清过滤)</span>
         </div>
       </div>
 
       <!-- 右侧：ActionPanel 呼出按钮 -->
       <div class="flex items-center gap-2">
         <button
-          class="flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-white/5 hover:bg-white/10 text-slate-300 border border-white/10 transition-colors"
+          class="flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-white/5 hover:bg-white/10 text-slate-300 border border-white/10 transition-colors cursor-pointer"
           @click="toggleActionPanel"
         >
           <span>动作面板</span>
@@ -97,6 +135,7 @@
     <ActionPanelModal
       :visible="actionPanelVisible"
       :actions="activeActions"
+      :target-title="currentSelectedItem?.props?.title || ''"
       @close="actionPanelVisible = false"
       @trigger="executeAction"
     />
@@ -133,6 +172,18 @@ const props = defineProps({
     default: false
   },
   initialDescriptor: {
+    type: Object,
+    default: null
+  },
+  hideRootTitle: {
+    type: Boolean,
+    default: false
+  },
+  isPopout: {
+    type: Boolean,
+    default: false
+  },
+  initialSnapshot: {
     type: Object,
     default: null
   }
@@ -213,8 +264,22 @@ const navigationTitle = computed(() => {
 });
 
 const hasHeader = computed(() => {
-  return canGoBack.value || Boolean(navigationTitle.value);
+  return canGoBack.value || (!props.hideRootTitle && Boolean(navigationTitle.value));
 });
+
+// 辅助函数：深度查找 List 描述符里的第一个 List.Item
+function findFirstItem(desc) {
+  if (!desc || !desc.children) return null;
+  for (const child of desc.children) {
+    if (child.type === "List.Item") return child;
+    if (child.type === "List.Section" && child.children) {
+      for (const sub of child.children) {
+        if (sub.type === "List.Item") return sub;
+      }
+    }
+  }
+  return null;
+}
 
 // 解析所有可用的 Actions
 const activeActions = computed(() => {
@@ -223,9 +288,10 @@ const activeActions = computed(() => {
 
   let panel = null;
 
-  // 1. 如果是 List，优先看当前选中 item 的 actions，再看 list 级 actions
+  // 1. 如果是 List，优先看当前选中 item 的 actions，再看首项或 list 级 actions
   if (desc.type === "List") {
-    panel = currentSelectedItem.value?.props?.actions || desc.props?.actions;
+    const item = currentSelectedItem.value || findFirstItem(desc);
+    panel = item?.props?.actions || desc.props?.actions;
   } else if (desc.type === "Detail") {
     panel = desc.props?.actions;
   } else if (desc.type === "Form") {
@@ -234,16 +300,21 @@ const activeActions = computed(() => {
 
   if (!panel) return [];
 
-  // 展开 ActionPanel.Section 与 Action
+  // 展开 ActionPanel.Section 与 Action，并保留所属 Section 标题
   const flat = [];
-  function extract(node) {
+  function extract(node, sectionTitle = "") {
     if (!node) return;
-    if (node.type === "ActionPanel" || node.type === "ActionPanel.Section") {
+    if (node.type === "ActionPanel") {
       for (const child of node.children || []) {
-        extract(child);
+        extract(child, sectionTitle);
       }
-    } else if (node.type && node.type.startsWith("Action")) {
-      flat.push(node);
+    } else if (node.type === "ActionPanel.Section") {
+      const currentTitle = node.props?.title || sectionTitle;
+      for (const child of node.children || []) {
+        extract(child, currentTitle);
+      }
+    } else if (node.type && (node.type === "Action" || node.type.startsWith("Action."))) {
+      flat.push({ ...node, _sectionTitle: sectionTitle });
     }
   }
 
@@ -256,6 +327,20 @@ const primaryAction = computed(() => {
   return activeActions.value[0] || null;
 });
 
+// 详情切换 Action (例如 Ctrl+D 切换分栏预览)
+const toggleDetailAction = computed(() => {
+  return activeActions.value.find((act) => {
+    const title = act.props?.title || "";
+    const key = act.props?.shortcut?.key?.toLowerCase();
+    return (
+      key === "d" ||
+      title.includes("详情预览分栏") ||
+      title.includes("Toggle Details") ||
+      title.includes("预览分栏")
+    );
+  }) || null;
+});
+
 function onItemSelected(item) {
   currentSelectedItem.value = item;
 }
@@ -266,6 +351,10 @@ function onActionPanelChange(panel) {
 
 function toggleActionPanel() {
   actionPanelVisible.value = !actionPanelVisible.value;
+}
+
+function openActionPanel() {
+  actionPanelVisible.value = true;
 }
 
 function handleBack() {
@@ -373,14 +462,32 @@ useKeymap(KEYMAP_SCOPES.DECLARATIVE, {
     toggleActionPanel();
     return true;
   },
+  'Ctrl+D': () => {
+    if (actionPanelVisible.value) return false;
+    if (toggleDetailAction.value) {
+      executeAction(toggleDetailAction.value);
+      return true;
+    }
+    return false;
+  },
   'Escape': () => {
     if (actionPanelVisible.value) {
       actionPanelVisible.value = false;
       return true;
-    } else {
+    }
+    if (canGoBack.value) {
       handleBack();
       return true;
     }
+    if (listRendererRef.value?.hasSearchText?.()) {
+      listRendererRef.value.clearSearch();
+      return true;
+    }
+    if (props.isPopout) {
+      return true;
+    }
+    handleBack();
+    return true;
   },
   'ArrowDown': (e, { inInput }) => {
     if (actionPanelVisible.value) return false;
@@ -454,12 +561,17 @@ function handleGlobalKeyDown(e) {
   dispatchKeyEvent(e);
 }
 
+function getViewStateSnapshot() {
+  return listRendererRef.value?.getViewStateSnapshot?.() || {};
+}
+
 defineExpose({
   push,
   pop,
   getStack: () => stack.value,
   getCurrentDescriptor: () => currentDescriptor.value,
   executeAction,
-  triggerPrimaryAction
+  triggerPrimaryAction,
+  getViewStateSnapshot
 });
 </script>

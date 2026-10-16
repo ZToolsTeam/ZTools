@@ -76,7 +76,7 @@ export function useDeclarativeStack(initialRoot) {
           onUpdate: (newDesc) => {
             node.descriptor = newDesc;
             const top = stack.value[stack.value.length - 1];
-            if (top && (toRaw(top) === node || top.root === root)) {
+            if (top && (toRaw(top) === node || top.root === root || toRaw(top?.root) === root)) {
               currentDescriptor.value = newDesc;
             }
           },
@@ -143,6 +143,20 @@ export function useDeclarativeStack(initialRoot) {
         return await navigator.clipboard.readText();
       }
       return "";
+    },
+    confirmAlert: async (options) => {
+      if (typeof window !== "undefined" && typeof window.confirm === "function") {
+        const text = options.message ? `${options.title}\n\n${options.message}` : options.title;
+        const ok = window.confirm(text);
+        if (ok) {
+          options.primaryAction?.onAction?.();
+        } else {
+          options.dismissAction?.onAction?.();
+        }
+        return ok;
+      }
+      options.primaryAction?.onAction?.();
+      return true;
     }
   });
 

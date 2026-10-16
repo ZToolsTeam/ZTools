@@ -8,12 +8,33 @@ import HeaderGeekModeTrigger from './HeaderGeekModeTrigger.vue'
 
 import { isNative, sys } from '@/api/apiserver'
 import { useUserStore } from '@/stores/user'
+import { useUIStore } from '@/stores/ui'
+import { useNavStore } from '@/stores/nav'
 import { isOnline } from '@/config/runtime-mode'
 import { ROUTES, routeUtils } from '@/router/routes'
 
 const router = useRouter()
 const route = useRoute()
 const userStore = useUserStore()
+const uiStore = useUIStore()
+const nav = useNavStore()
+
+const isSidebarCollapsed = computed(() => uiStore.isSidebarCollapsed)
+const toggleSidebar = () => uiStore.toggleSidebar()
+
+const isMacPlatform = ref(
+  typeof navigator !== 'undefined' &&
+    (navigator.userAgent.includes('Mac') || navigator.platform?.includes('Mac'))
+)
+
+const currentCategoryTitle = computed(() => {
+  if (route.name === 'my') return '我的插件'
+  if (route.name === 'list') return nav.currentCategory || '全部插件'
+  if (route.name === 'wish-wall') return '反馈建议'
+  if (route.name === 'advanced-settings') return '偏好设置'
+  if (route.name === 'about') return '关于'
+  return ''
+})
 
 const keyword = ref('')
 const searchBarRef = ref(null)
@@ -22,7 +43,9 @@ const searchFocusTimers = new Set()
 
 const isDevelopment = import.meta.env.DEV
 const isNativeDebug = ref(false)
-const isWindowsPlatform = ref(typeof navigator !== 'undefined' && navigator.userAgent.includes('Windows'))
+const isWindowsPlatform = ref(
+  typeof navigator !== 'undefined' && navigator.userAgent.includes('Windows')
+)
 
 // 诊断/调试信息显示逻辑：
 // 1. 如果是原生壳子环境(isNative)，严格遵循后端返回的 debug 标识
@@ -70,7 +93,7 @@ const openContactQrcode = () => {
 
 const focusSearchInput = async () => {
   await nextTick()
-  searchBarRef.value?.focusInput()
+  searchBarRef.value?.focusInput?.()
 }
 
 const clearSearchFocusTimers = () => {
@@ -132,22 +155,50 @@ onUnmounted(() => {
   <header
     class="border-b select-none flex items-center justify-between"
     style="
-      height: 44px;
+      height: 46px;
       background: var(--rc-surface-translucent, var(--rc-surface));
-      border-color: var(--rc-border);
+      border-color: var(--rc-border-subtle, var(--rc-border));
       backdrop-filter: blur(24px) saturate(180%);
+      -webkit-backdrop-filter: blur(24px) saturate(180%);
       -webkit-app-region: drag;
     "
   >
     <div
       class="h-full w-full flex items-center justify-between"
       :style="{
-        paddingLeft: '16px',
-        paddingRight: isWindowsPlatform ? '142px' : '16px'
+        paddingLeft: isMacPlatform ? '78px' : '14px',
+        paddingRight: isWindowsPlatform ? '142px' : '14px'
       }"
     >
-      <!-- Logo区域 -->
+      <!-- Logo与侧栏折叠控制区域 -->
       <div class="flex items-center" style="gap: 8px; -webkit-app-region: no-drag">
+        <!-- 侧栏折叠/展开切换按钮 (macOS 风格) -->
+        <button
+          type="button"
+          class="sidebar-toggle-btn"
+          :class="{ 'is-active': !isSidebarCollapsed }"
+          :title="
+            isSidebarCollapsed
+              ? (isMacPlatform ? '展开侧边栏 (⌘B)' : '展开侧边栏 (Ctrl+B)')
+              : (isMacPlatform ? '收起侧边栏 (⌘B)' : '收起侧边栏 (Ctrl+B)')
+          "
+          @click="toggleSidebar"
+        >
+          <svg
+            class="w-4 h-4"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="2"
+            stroke-linecap="round"
+            stroke-linejoin="round"
+          >
+            <rect x="3" y="3" width="18" height="18" rx="2" ry="2" />
+            <line x1="9" y1="3" x2="9" y2="21" />
+          </svg>
+        </button>
+
+        <!-- Logo -->
         <button
           @click="goHome"
           class="flex items-center hover:opacity-85 transition-opacity"
@@ -163,6 +214,17 @@ onUnmounted(() => {
             ZTools
           </span>
         </button>
+
+        <!-- 当侧边栏收起时展示当前分类面包屑胶囊，给小白用户提供确定性指示与快速展开入口 -->
+        <div
+          v-if="isSidebarCollapsed && currentCategoryTitle"
+          class="category-breadcrumb-pill flex items-center gap-1.5 px-2 py-0.5 rounded-md text-xs font-medium cursor-pointer transition-colors"
+          @click="toggleSidebar"
+          title="点击展开侧边栏"
+        >
+          <span class="w-1.5 h-1.5 rounded-full bg-[var(--rc-accent)]"></span>
+          <span>{{ currentCategoryTitle }}</span>
+        </div>
 
         <!-- 调试信息 - 仅开发环境显示 -->
         <span
@@ -214,6 +276,46 @@ onUnmounted(() => {
 </template>
 
 <style scoped>
+.sidebar-toggle-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border-radius: var(--rc-radius-md, 6px);
+  color: var(--rc-text-secondary);
+  background: transparent;
+  border: 1px solid transparent;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.sidebar-toggle-btn:hover {
+  background-color: var(--rc-surface-hover);
+  color: var(--rc-text-primary);
+  border-color: var(--rc-border-subtle);
+}
+
+.sidebar-toggle-btn:active {
+  transform: scale(0.95);
+}
+
+.sidebar-toggle-btn.is-active {
+  color: var(--rc-text-primary);
+}
+
+.category-breadcrumb-pill {
+  background-color: var(--rc-surface-subtle);
+  color: var(--rc-text-secondary);
+  border: 1px solid var(--rc-border-subtle);
+}
+
+.category-breadcrumb-pill:hover {
+  background-color: var(--rc-surface-hover);
+  color: var(--rc-text-primary);
+  border-color: var(--rc-border);
+}
+
 /* 修复 Ant Design Spin 内部元素的垂直对齐（深度选择器） */
 .header-spin :deep(.ant-spin-dot) {
   vertical-align: middle;

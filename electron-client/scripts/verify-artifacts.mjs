@@ -7,6 +7,7 @@ import { listPackage } from '@electron/asar'
 import {
   getWindowsArtifactRoot,
   getWindowsInstallerFileName,
+  getWindowsPortableZipFileName,
   verifyWindowsPathAccessBrokerDependency,
   WINDOWS_ELECTRON_VERSION,
   WINDOWS_TARGET
@@ -188,14 +189,32 @@ const expectedChecksum = `${installerSha256}  ${expectedInstallerName}`
 if (fs.readFileSync(installerChecksum, 'utf8').trim() !== expectedChecksum) {
   throw new Error('最终安装包 SHA-256 校验文件无效')
 }
+
+const expectedPortableZipName = getWindowsPortableZipFileName(artifactVersion)
+const portableZip = path.join(artifactRoot, expectedPortableZipName)
+const portableZipChecksum = `${portableZip}.sha256`
+if (!fs.existsSync(portableZip) || !fs.statSync(portableZip).isFile()) {
+  throw new Error(`最终免安装 ZIP 便携包不存在: ${portableZip}`)
+}
+if (!fs.existsSync(portableZipChecksum) || !fs.statSync(portableZipChecksum).isFile()) {
+  throw new Error(`最终免安装 ZIP 校验文件不存在: ${portableZipChecksum}`)
+}
+const portableZipSha256 = sha256(portableZip)
+const expectedPortableChecksum = `${portableZipSha256}  ${expectedPortableZipName}`
+if (fs.readFileSync(portableZipChecksum, 'utf8').trim() !== expectedPortableChecksum) {
+  throw new Error('最终免安装 ZIP SHA-256 校验文件无效')
+}
+
 if (
   manifest.distribution?.format !== 'original-delphi-offline-installer' ||
   manifest.distribution?.installerFile !== expectedInstallerName ||
   manifest.distribution?.installerSha256 !== installerSha256 ||
+  manifest.distribution?.portableZipFile !== expectedPortableZipName ||
+  manifest.distribution?.portableZipSha256 !== portableZipSha256 ||
   manifest.distribution?.uninstallerFile !== 'ZToolsUninstall.exe' ||
   manifest.distribution?.minWindowsVersion !== '10.0'
 ) {
-  throw new Error('原 Delphi 安装器/卸载器发布元数据无效')
+  throw new Error('原 Delphi 安装器/卸载器或免安装 ZIP 发布元数据无效')
 }
 for (const file of [setupSource, uninstallerSource]) {
   if (!fs.existsSync(file) || !fs.statSync(file).isFile()) throw new Error(`原安装/卸载器不存在: ${file}`)

@@ -9,15 +9,17 @@ import {
   resolveRuntimePaths,
   runtimePathsForBusinessDataRoot
 } from '../../src/main/runtime/runtime-paths.js'
+import { PluginInstallService } from '../../src/main/services/plugin-install-service.js'
 
-test('production paths keep the business data root and isolate runtime state', () => {
+test('production paths keep the business data root on DataV2 and isolate runtime state from legacy Data', () => {
   const paths = resolveRuntimePaths({
     mode: 'production',
     appDataRoot: 'C:\\Users\\tester\\AppData\\Roaming',
     installRoot: 'D:\\Apps\\ZTools',
     ownerId: 'S-1-5-21-test'
   })
-  assert.equal(paths.businessDataRoot, 'C:\\Users\\tester\\AppData\\Roaming\\ZTools\\Data')
+  assert.equal(paths.businessDataRoot, 'C:\\Users\\tester\\AppData\\Roaming\\ZTools\\DataV2')
+  assert.notEqual(paths.businessDataRoot, 'C:\\Users\\tester\\AppData\\Roaming\\ZTools\\Data')
   assert.equal(paths.browserProfileRoot, 'C:\\Users\\tester\\AppData\\Roaming\\ZTools\\ElectronProfile')
   assert.equal(paths.ownerId, 'S-1-5-21-test')
   assert.notEqual(paths.cacheRoot, paths.businessDataRoot)
@@ -127,3 +129,60 @@ test('runtime lock preserves a live PID when acquisition time cannot be verified
     await fs.rm(root, { recursive: true, force: true })
   }
 })
+
+test('production DataV2 completely isolates PluginInstallService from corrupted or incompatible plugins in legacy Data directory', async () => {
+  const appDataRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'ztools-datav2-isolation-'))
+  try {
+    // 1. 构造旧版 Data 目录中的破坏性异常数据（畸形 JSON 插件、缺少 targets 的旧版不兼容插件、损坏的 plugin_state.json）
+    const legacyDataRoot = path.join(appDataRoot, 'ZTools', 'Data')
+    const legacyCorruptPluginDir = path.join(legacyDataRoot, 'Plugins', 'corrupt-legacy-plugin')
+    const legacyIncompatiblePluginDir = path.join(legacyDataRoot, 'Plugins', 'incompatible-v1-plugin')
+    await fs.mkdir(legacyCorruptPluginDir, { recursive: true })
+    await fs.mkdir(legacyIncompatiblePluginDir, { recursive: true })
+    await fs.writeFile(path.join(legacyCorruptPluginDir, 'plugin.json'), '{ invalid json !!!', 'utf8')
+    await fs.writeFile(path.join(legacyIncompatiblePluginDir, 'plugin.json'), JSON.stringify({
+      id: 'incompatible-v1-plugin',
+      name: 'Old V1 Plugin',
+      version: '1.0.0',
+      entry: 'missing-index.html'
+    }), 'utf8')
+    await fs.writeFile(path.join(legacyDataRoot, 'plugin_state.json'), '<<<corrupted-state>>>', 'utf8')
+
+    // 2. 通过生产模式 resolveRuntimePaths 解析路径，应当指向 DataV2
+    const runtimePaths = resolveRuntimePaths({
+      mode: 'production',
+      appDataRoot,
+      installRoot: path.join(appDataRoot, 'Install'),
+      ownerId: 'test-owner'
+    })
+    assert.equal(runtimePaths.businessDataRoot, path.join(appDataRoot, 'ZTools', 'DataV2'))
+
+    // 3. 启动 PluginInstallService，验证完全视为全新用户（零报错、不扫描旧 Data 目录）
+    const publishedEvents: Array<{ type: string; payload: unknown }> = []
+    const installService = new PluginInstallService(runtimePaths.businessDataRoot, {
+      publishHostToMain(type, payload) {
+        publishedEvents.push({ type, payload })
+        return { success: true, delivered: 1 }
+      }
+    })
+
+    try {
+      const listResult = await installService.list()
+      assert.equal(listResult.success, true)
+      assert.deepEqual(listResult.data, [])
+      // 断言绝未触发任何 plugin_manifest_invalid 异常事件
+      assert.equal(publishedEvents.filter((e) => e.type === 'plugin_manifest_invalid').length, 0)
+
+      // 断言尝试打开旧目录中的插件时，明确抛出 pluginNotFound 错误而非解析崩溃
+      await assert.rejects(
+        installService.withPluginManifest('corrupt-legacy-plugin', async () => 'should-not-run'),
+        (error) => error instanceof ZToolsError && error.code === errorCodes.pluginNotFound
+      )
+    } finally {
+      await installService.stop()
+    }
+  } finally {
+    await fs.rm(appDataRoot, { recursive: true, force: true })
+  }
+})
+

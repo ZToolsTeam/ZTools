@@ -23,6 +23,53 @@ export function normalizePluginId(value) {
   return String(value).trim()
 }
 
+const OFFICIAL_AUTHORS = new Set([
+  'ztools',
+  'ztools team',
+  'ztools-team',
+  'ztools official',
+  'ztools official team',
+  'official'
+])
+
+/**
+ * 判断作者名称是否属于官方自营团队
+ * @param {string} [author]
+ * @returns {boolean}
+ */
+export function isOfficialAuthor(author) {
+  if (!author || typeof author !== 'string') return false
+  const normalized = author.trim().toLowerCase()
+  if (!normalized) return false
+  return OFFICIAL_AUTHORS.has(normalized) || normalized.includes('official')
+}
+
+/**
+ * 统一判定插件条目是否为官方自营
+ * 修复 `item.is_official ?? ...` 在后端返回默认布尔值 `false` 时直接短路、
+ * 从而忽略 builtinMatch 与官方作者（如 'ZTools Team'）的缺陷
+ * @param {object} item
+ * @param {object|null} [builtinMatch]
+ * @returns {boolean}
+ */
+export function isOfficialPluginItem(item, builtinMatch = null) {
+  if (!item || typeof item !== 'object') return false
+  if (item.is_official === true || item.isOfficial === true) return true
+  if (item.source_type === 'official' || item.sourceType === 'official') return true
+  if (
+    item.isBuiltin === true ||
+    builtinMatch?.is_official === true ||
+    builtinMatch?.isOfficial === true ||
+    builtinMatch?.isBuiltin === true
+  ) {
+    return true
+  }
+  if (isOfficialAuthor(item.author) || isOfficialAuthor(builtinMatch?.author)) {
+    return true
+  }
+  return false
+}
+
 /**
  * 简易拼音/模糊匹配评分器
  * @param {object} plugin - 插件对象
@@ -249,6 +296,13 @@ export class StoreCatalogManager {
 
     // 5. 规范化并解析官方自营金标插件
     const officialList = this.getOfficialList() || []
+    const officialMap = new Map()
+    for (const off of officialList) {
+      const opid = normalizePluginId(off.pluginId || off.id)
+      if (opid) {
+        officialMap.set(opid.toLowerCase(), off)
+      }
+    }
     const seenIds = new Set()
     const mergedList = []
     const newRevokedMap = {}
@@ -259,30 +313,57 @@ export class StoreCatalogManager {
       if (!pid || seenIds.has(pid.toLowerCase())) continue
       seenIds.add(pid.toLowerCase())
 
-      const isOfficial = Boolean(
-        item.is_official ??
-        item.isOfficial ??
-        (item.author && String(item.author).toLowerCase().includes('official')) ??
-        false
-      )
-      const officialBadge = item.official_badge || item.officialBadge || (isOfficial ? '官方自营' : null)
-      const homepageUrl = item.homepage_url || item.homepageUrl || item.homepage || ''
+      const builtinMatch = officialMap.get(pid.toLowerCase())
+
+      const isOfficial = isOfficialPluginItem(item, builtinMatch)
+      const officialBadge =
+        item.official_badge ||
+        item.officialBadge ||
+        builtinMatch?.official_badge ||
+        builtinMatch?.officialBadge ||
+        (isOfficial ? '官方自营' : null)
+      const homepageUrl =
+        item.homepage_url ||
+        item.homepageUrl ||
+        item.homepage ||
+        builtinMatch?.homepage_url ||
+        builtinMatch?.homepageUrl ||
+        builtinMatch?.homepage ||
+        ''
+
+      let mergedCategory = item.category || builtinMatch?.category || '实用工具'
+      if (builtinMatch?.category && item.category) {
+        const catA = Array.isArray(item.category) ? item.category : [item.category]
+        const catB = Array.isArray(builtinMatch.category)
+          ? builtinMatch.category
+          : [builtinMatch.category]
+        const combined = Array.from(new Set([...catA, ...catB].filter(Boolean)))
+        mergedCategory = combined.length === 1 ? combined[0] : combined
+      }
+
+      const sourceType = isOfficial
+        ? 'official'
+        : item.source_type || item.sourceType || 'community'
 
       const normalizedItem = {
+        ...(builtinMatch || {}),
         ...item,
         id: pid,
         pluginId: pid,
-        name: item.name || pid,
-        title: item.title || item.name || pid,
-        version: item.version || '1.0.0',
-        description: item.description || '',
-        category: item.category || '实用工具',
+        name: item.name || builtinMatch?.name || pid,
+        title: item.title || item.name || builtinMatch?.title || pid,
+        version: item.version || builtinMatch?.version || '1.0.0',
+        description: item.description || builtinMatch?.description || '',
+        category: mergedCategory,
+        isBuiltin: Boolean(item.isBuiltin || builtinMatch?.isBuiltin),
         downloads: Number(item.downloads || item.downloadsCount || 0),
         rating: Number(item.rating || 5.0),
         is_official: isOfficial,
         isOfficial: isOfficial,
         official_badge: officialBadge,
         officialBadge: officialBadge,
+        source_type: sourceType,
+        sourceType: sourceType,
         homepage_url: homepageUrl,
         homepageUrl: homepageUrl
       }
@@ -314,6 +395,8 @@ export class StoreCatalogManager {
             isOfficial: true,
             official_badge: official.official_badge || official.officialBadge || '官方自营',
             officialBadge: official.official_badge || official.officialBadge || '官方自营',
+            source_type: 'official',
+            sourceType: 'official',
             homepage_url: official.homepage_url || official.homepageUrl || official.homepage || '',
             homepageUrl: official.homepage_url || official.homepageUrl || official.homepage || ''
           })
@@ -390,7 +473,7 @@ export class StoreCatalogManager {
       }
 
       // 来源类型过滤 (all / official / community)
-      const itemIsOfficial = Boolean(item.is_official || item.isOfficial)
+      const itemIsOfficial = isOfficialPluginItem(item)
       if (filterType === 'official' && !itemIsOfficial) {
         return false
       }
@@ -421,8 +504,8 @@ export class StoreCatalogManager {
 
     // 2. 本地排序：官方自营插件置顶
     filtered.sort((a, b) => {
-      const aOfficial = Boolean(a.is_official || a.isOfficial) ? 1 : 0
-      const bOfficial = Boolean(b.is_official || b.isOfficial) ? 1 : 0
+      const aOfficial = isOfficialPluginItem(a) ? 1 : 0
+      const bOfficial = isOfficialPluginItem(b) ? 1 : 0
       if (aOfficial !== bOfficial) {
         return bOfficial - aOfficial // 官方自营置顶
       }
@@ -433,7 +516,16 @@ export class StoreCatalogManager {
       if (typeof valA === 'string') {
         return direction * valA.localeCompare(String(valB || ''))
       }
-      return direction * ((Number(valA) || 0) - (Number(valB) || 0))
+      const numDiff = direction * ((Number(valA) || 0) - (Number(valB) || 0))
+      if (numDiff !== 0) {
+        return numDiff
+      }
+      const aBuiltin = Boolean(a.isBuiltin) ? 1 : 0
+      const bBuiltin = Boolean(b.isBuiltin) ? 1 : 0
+      if (aBuiltin !== bBuiltin) {
+        return bBuiltin - aBuiltin
+      }
+      return 0
     })
 
     // 3. 本地分页
@@ -478,6 +570,18 @@ export class StoreCatalogManager {
     const pid = normalizePluginId(pluginId).toLowerCase()
     if (!pid) return
     this._revokedMap[pid] = { revoked: true, reason }
+  }
+
+  /**
+   * 同步从内存缓存中按 ID 获取插件条目
+   * @param {string} pluginId
+   * @returns {object|null}
+   */
+  getById(pluginId) {
+    const pid = normalizePluginId(pluginId).toLowerCase()
+    if (!pid || !Array.isArray(this._catalog)) return null
+    const found = this._catalog.find((p) => String(p.pluginId || p.id).toLowerCase() === pid)
+    return found ? { ...found } : null
   }
 
   /**

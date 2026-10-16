@@ -6,6 +6,7 @@ import { fileURLToPath } from 'node:url'
 import {
   getWindowsArtifactRoot,
   getWindowsInstallerFileName,
+  getWindowsPortableZipFileName,
   WINDOWS_TARGET
 } from './windows-package-contract.mjs'
 import { assertPeMachine, PE_MACHINE_X86 } from './windows-pe-architecture.mjs'
@@ -18,6 +19,8 @@ const buildQualifier = process.env.ZTOOLS_BUILD_QUALIFIER ?? ''
 if (buildQualifier && !/^[a-z0-9][a-z0-9-]{0,31}$/.test(buildQualifier)) {
   throw new Error('ZTOOLS_BUILD_QUALIFIER 格式无效')
 }
+const forceOverwrite =
+  process.argv.includes('--force') || process.env.ZTOOLS_PACKAGE_FORCE === '1'
 
 const artifactVersion = buildQualifier ? `${packageJson.version}-${buildQualifier}` : packageJson.version
 const artifactRoot = getWindowsArtifactRoot(root, artifactVersion)
@@ -32,6 +35,9 @@ const resourceHackerRuntimeSource = path.join(installerResources, 'rw32core.dll'
 const installerName = getWindowsInstallerFileName(artifactVersion)
 const installerOutput = path.join(artifactRoot, installerName)
 const checksumOutput = `${installerOutput}.sha256`
+const portableZipName = getWindowsPortableZipFileName(artifactVersion)
+const portableZipOutput = path.join(artifactRoot, portableZipName)
+const portableZipChecksumOutput = `${portableZipOutput}.sha256`
 const temporaryParent = path.join(root, 'out', 'installer')
 
 function requireFile(file, description) {
@@ -85,8 +91,22 @@ for (const [file, description] of [
   [path.join(installerResources, 'logo.ico'), '安装器图标']
 ]) requireFile(file, description)
 
-if (fs.existsSync(installerOutput) || fs.existsSync(checksumOutput)) {
-  throw new Error(`安装包输出已存在，请归档后重试: ${installerOutput}`)
+if (forceOverwrite) {
+  for (const target of [
+    installerOutput,
+    checksumOutput,
+    portableZipOutput,
+    portableZipChecksumOutput
+  ]) {
+    fs.rmSync(target, { force: true })
+  }
+} else if (
+  fs.existsSync(installerOutput) ||
+  fs.existsSync(checksumOutput) ||
+  fs.existsSync(portableZipOutput) ||
+  fs.existsSync(portableZipChecksumOutput)
+) {
+  throw new Error(`安装包或免安装 ZIP 输出已存在，请归档后重试或传入 --force: ${installerOutput}`)
 }
 for (const file of [setupSource, uninstallerSource]) {
   assertPeMachine(file, PE_MACHINE_X86, '原安装/卸载引导器')
@@ -106,6 +126,7 @@ if (
 const distribution = {
   format: 'original-delphi-offline-installer',
   installerFile: installerName,
+  portableZipFile: portableZipName,
   setupSourceSha256: digest(setupSource, 'sha256'),
   uninstallerFile: 'ZToolsUninstall.exe',
   uninstallerSourceSha256: digest(uninstallerSource, 'sha256'),
@@ -122,6 +143,8 @@ const temporaryInstaller = path.join(temporaryRoot, installerName)
 let completed = false
 let installerCreated = false
 let checksumCreated = false
+let portableZipCreated = false
+let portableZipChecksumCreated = false
 
 try {
   fs.cpSync(applicationRoot, stageRoot, { recursive: true, errorOnExist: true })
@@ -175,15 +198,29 @@ try {
   assertPeMachine(temporaryInstaller, PE_MACHINE_X86, '最终离线安装包引导器')
 
   const installerSha256 = digest(temporaryInstaller, 'sha256')
+  const portableZipSha256 = digest(archivePath, 'sha256')
+
+  // 1. 输出 EXE 离线安装包与 SHA-256
   fs.copyFileSync(temporaryInstaller, installerOutput, fs.constants.COPYFILE_EXCL)
   installerCreated = true
   fs.writeFileSync(checksumOutput, `${installerSha256}  ${installerName}\n`, { encoding: 'utf8', flag: 'wx' })
   checksumCreated = true
+
+  // 2. 同时输出 ZIP 免安装便携包与 SHA-256（复用同一份 stage 归档，零重复压缩开销）
+  fs.copyFileSync(archivePath, portableZipOutput, fs.constants.COPYFILE_EXCL)
+  portableZipCreated = true
+  fs.writeFileSync(portableZipChecksumOutput, `${portableZipSha256}  ${portableZipName}\n`, { encoding: 'utf8', flag: 'wx' })
+  portableZipChecksumCreated = true
+
   fs.writeFileSync(
     applicationManifestPath,
     `${JSON.stringify({
       ...applicationManifest,
-      distribution: { ...distribution, installerSha256 }
+      distribution: {
+        ...distribution,
+        installerSha256,
+        portableZipSha256
+      }
     }, null, 2)}\n`,
     'utf8'
   )
@@ -191,10 +228,14 @@ try {
   completed = true
   console.log(installerOutput)
   console.log(checksumOutput)
+  console.log(portableZipOutput)
+  console.log(portableZipChecksumOutput)
 } finally {
   if (!completed) {
     if (installerCreated) fs.rmSync(installerOutput, { force: true })
     if (checksumCreated) fs.rmSync(checksumOutput, { force: true })
+    if (portableZipCreated) fs.rmSync(portableZipOutput, { force: true })
+    if (portableZipChecksumCreated) fs.rmSync(portableZipChecksumOutput, { force: true })
   }
   fs.rmSync(temporaryRoot, { recursive: true, force: true })
 }

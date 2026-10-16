@@ -659,11 +659,13 @@ async function runCli() {
 
   const dir = getArg('--dir', path.join(rootDir, 'dist/plugins'))
   const cdnBaseUrl = getArg('--cdn-base-url', process.env.CDN_BASE_URL || 'https://plugins.ztools.cn')
+  const ossPrefix = getArg('--oss-prefix', process.env.OSS_PREFIX || 'plugins/')
   const dryRun = args.includes('--dry-run')
 
   await deployPluginsStorage({
     dir,
     cdnBaseUrl,
+    ossPrefix,
     dryRun
   })
 }

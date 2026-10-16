@@ -123,6 +123,9 @@ export interface ListItemProps extends BaseProps {
   icon?: IconResolvable;
   accessories?: ListItemAccessory[];
   keywords?: string[];
+  checkable?: boolean;
+  checked?: boolean | "indeterminate";
+  onCheckChange?: (checked: boolean) => void;
   actions?: ViewDescriptor | any;
   detail?: ViewDescriptor | any;
 }
@@ -130,6 +133,9 @@ export interface ListItemProps extends BaseProps {
 export interface ListSectionProps extends BaseProps {
   title?: string;
   subtitle?: string;
+  checkable?: boolean;
+  checked?: boolean | "indeterminate";
+  onCheckChange?: (checked?: any) => void;
   children?: any;
 }
 
@@ -152,6 +158,77 @@ export interface ListDropdownProps extends BaseProps {
   children?: any;
 }
 
+export interface DistributionBarSegment {
+  id: string;
+  label: string;
+  valueText?: string;
+  formattedSize?: string;
+  formattedValue?: string;
+  sizeBytes?: number;
+  subLabel?: string;
+  value?: number;
+  percent?: number;
+  color: string;
+  count?: number;
+}
+
+export interface DistributionBarProps extends BaseProps {
+  title?: string;
+  totalText?: string;
+  totalLabel?: string;
+  totalValue?: number;
+  activeId?: string;
+  activeSegmentId?: string;
+  segments: DistributionBarSegment[];
+  onSelect?: (id: string) => void;
+  onSelectSegment?: (segId: string | undefined) => void;
+  onSegmentClick?: (segId: string) => void;
+}
+
+export interface FilterBarOption {
+  value: string;
+  label: string;
+  badge?: string | number;
+  count?: number;
+}
+
+export interface FilterBarGroup {
+  id: string;
+  label?: string;
+  value: string;
+  options: FilterBarOption[];
+  onChange?: (value: string) => void;
+}
+
+export interface FilterBarAction {
+  id: string;
+  label?: string;
+  title?: string;
+  icon?: IconResolvable;
+  style?: "primary" | "destructive" | "danger" | "secondary" | string;
+  badge?: string | number;
+  disabled?: boolean;
+  onAction?: () => void;
+}
+
+export interface WizardStepItem {
+  id?: string;
+  step?: number;
+  label: string;
+  status: "done" | "active" | "pending" | string;
+  onSelect?: () => void;
+}
+
+export interface FilterBarProps extends BaseProps {
+  title?: string;
+  wizardSteps?: WizardStepItem[];
+  groups?: FilterBarGroup[];
+  actions?: FilterBarAction[];
+  summaryText?: string;
+}
+
+export type ViewNode = ViewDescriptor<any> | any;
+
 export interface ListProps extends BaseProps {
   isLoading?: boolean;
   searchText?: string;
@@ -162,6 +239,11 @@ export interface ListProps extends BaseProps {
   selectedItemId?: string;
   onSelectionChange?: (id: string | null) => void;
   searchBarAccessory?: ViewDescriptor | any;
+  header?: ViewDescriptor[] | any;
+  metricGrid?: ViewDescriptor | MetricGridProps | any;
+  distributionBar?: DistributionBarProps | ViewDescriptor;
+  segmentedControl?: ViewDescriptor | SegmentedControlProps | any;
+  filterBar?: FilterBarProps | ViewDescriptor;
   actions?: ViewDescriptor | any;
   children?: any;
 }
@@ -262,6 +344,38 @@ export interface FormDescriptionProps extends BaseProps {
 }
 
 export interface FormPasswordFieldProps extends FormTextFieldProps {}
+
+export interface MetricCardProps extends BaseProps {
+  id?: string;
+  label: string;
+  value: string | number;
+  subValue?: string;
+  subtitle?: string;
+  icon?: IconResolvable;
+  progress?: number;
+  trend?: "up" | "down" | "stable";
+  status?: "normal" | "warning" | "danger" | "success";
+  color?: ColorResolvable;
+}
+
+export interface MetricGridProps extends BaseProps {
+  columns?: number;
+  items?: MetricCardProps[];
+  children?: any;
+}
+
+export interface SegmentedControlOption {
+  value: string;
+  label: string;
+  icon?: IconResolvable;
+  badge?: number | string;
+}
+
+export interface SegmentedControlProps extends BaseProps {
+  value: string;
+  options: SegmentedControlOption[];
+  onChange?: (value: string) => void;
+}
 
 export interface FormProps extends BaseProps {
   navigationTitle?: string;

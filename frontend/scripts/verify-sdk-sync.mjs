@@ -10,10 +10,6 @@ const targets = [
   {
     label: 'packages/api/runtime',
     directory: resolve(repositoryRoot, 'packages/api/runtime')
-  },
-  {
-    label: 'plugins/create-plugin/public/sdk',
-    directory: resolve(repositoryRoot, 'plugins/create-plugin/public/sdk')
   }
 ]
 const isElectronBuild = process.env.ZTOOLS_BUILD_TARGET === 'electron' ||

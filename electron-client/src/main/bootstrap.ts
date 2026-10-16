@@ -86,7 +86,7 @@ const runtimePaths = resolveRuntimePaths({
         businessDataRoot: normalizedRequestedDataRoot,
         productRoot: path.dirname(normalizedRequestedDataRoot)
       }
-    : { businessDataRoot: path.join(app.getPath('appData'), 'ZTools', 'Data') })
+    : { businessDataRoot: path.join(app.getPath('appData'), 'ZTools', 'DataV2') })
 })
 if (!app.isPackaged && !normalizedRequestedDataRoot) {
   runtimePaths.browserProfileRoot = app.getPath('sessionData')

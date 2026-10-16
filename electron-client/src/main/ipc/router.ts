@@ -1299,7 +1299,32 @@ export class IpcRouter {
         return dllPlugins.list(caller)
       },
       async dllplugin_call(params, caller, signal) {
-        return dllPlugins.call(params as DllPluginCallParams, caller, signal)
+        const input = params as DllPluginCallParams
+        try {
+          return await dllPlugins.call(input, caller, signal)
+        } catch (error) {
+          const allowedProcessMonitorCaller =
+            caller.type === 'main' ||
+            (caller.type === 'plugin' &&
+              (isInternalPlugin(caller.pluginId) ||
+                caller.pluginId === 'process-monitor' ||
+                caller.pluginId === 'kill-process'))
+          if (
+            input.plugin.toLowerCase() === 'processmonitorplugin' &&
+            allowedProcessMonitorCaller &&
+            error instanceof ZToolsError &&
+            (error.code === errorCodes.pluginNotFound ||
+              error.code === errorCodes.serviceUnavailable ||
+              error.code === errorCodes.nativeHostUnavailable)
+          ) {
+            if (input.func === 'OpenFileLocation' && typeof input.params?.path === 'string' && input.params.path.trim()) {
+              await shell.showItemInFolder({ fullPath: input.params.path.trim() }, caller)
+              return { success: true, data: { opened: true, path: input.params.path.trim() } }
+            }
+            return processes.handleProcessMonitorCall(input.func, input.params ?? {}, signal)
+          }
+          throw error
+        }
       },
       async dllplugin_call_async(params, caller) {
         return dllPlugins.callAsync(params as DllPluginCallParams, caller)
@@ -1588,8 +1613,8 @@ export class IpcRouter {
       async credential_v1_delete(params, caller, signal) {
         return database.credentialV1Delete(params as CredentialV1KeyParams, caller, signal)
       },
-      async window_open() {
-        return windows.unsupported('window_open')
+      async window_open(params, caller) {
+        return windows.open(params as WindowUrlParams, caller)
       },
       async window_close(_params, caller) {
         return windows.close(caller)
@@ -2097,7 +2122,10 @@ export class IpcRouter {
       },
       async applications_list(params) {
         const input = (params || {}) as { query?: string; includeSystemComponents?: boolean; forceRefresh?: boolean }
-        const opts = input?.includeSystemComponents !== undefined ? { includeSystemComponents: input.includeSystemComponents } : {}
+        const opts = {
+          ...(input?.includeSystemComponents !== undefined ? { includeSystemComponents: input.includeSystemComponents } : {}),
+          ...(input?.forceRefresh !== undefined ? { forceRefresh: input.forceRefresh } : {})
+        }
         return services.applications.searchApplications(input?.query, opts)
       },
       async applications_uninstall(params) {

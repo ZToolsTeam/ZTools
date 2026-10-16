@@ -210,6 +210,7 @@ export async function buildPluginsRelease(options = {}) {
   const pluginsDir = path.resolve(options.pluginsDir || path.join(rootDir, 'plugins'))
   const outputDir = path.resolve(options.outputDir || path.join(rootDir, 'dist/plugins'))
   const cdnBaseUrl = (options.cdnBaseUrl || process.env.CDN_BASE_URL || 'https://plugins.ztools.cn').replace(/\/$/, '')
+  const urlPrefix = (options.urlPrefix !== undefined ? String(options.urlPrefix) : (process.env.PLUGIN_URL_PREFIX || 'plugins')).replace(/^\/+|\/+$/g, '')
   const failFast = !!options.failFast
   const skipScan = !!options.skipScan
 
@@ -218,19 +219,21 @@ export async function buildPluginsRelease(options = {}) {
   console.log('🚀 开始执行 ZTools GitOps 插件打包与发布流程...')
   console.log(`📂 插件扫描源: ${pluginsDir}`)
   console.log(`📦 产物输出目录: ${outputDir}`)
-  console.log(`🌐 静态 CDN 域名: ${cdnBaseUrl}\n`)
+  console.log(`🌐 静态 CDN 域名: ${cdnBaseUrl}${urlPrefix ? '/' + urlPrefix : ''}\n`)
 
   const pluginEntries = discoverPluginDirectories(pluginsDir)
   if (pluginEntries.length === 0) {
     console.warn(`⚠️ 未在目录 ${pluginsDir} 下发现有效的插件工程！`)
     const emptyIndex = {
-      schemaVersion: '1.0.0',
+      schemaVersion: '2.0.0',
       generatedAt: new Date().toISOString(),
       cdnBaseUrl,
       total: 0,
+      list: [],
       plugins: []
     }
     fs.writeFileSync(path.join(outputDir, 'plugins.json'), JSON.stringify(emptyIndex, null, 2), 'utf8')
+    fs.writeFileSync(path.join(outputDir, 'catalog.json'), JSON.stringify({ success: true, ...emptyIndex }, null, 2), 'utf8')
     return {
       success: true,
       total: 0,
@@ -247,8 +250,13 @@ export async function buildPluginsRelease(options = {}) {
 
   for (const entry of pluginEntries) {
     const { author, pluginId, dir } = entry
+    const authorSlug = String(author || 'official')
+      .toLowerCase()
+      .trim()
+      .replace(/[^a-z0-9_-]+/g, '-')
+      .replace(/^-+|-+$/g, '') || 'official'
     console.log(`\n------------------------------------------------------------`)
-    console.log(`🔨 正在处理插件: [${author}/${pluginId}] (路径: ${dir})`)
+    console.log(`🔨 正在处理插件: [${authorSlug}/${pluginId}] (路径: ${dir})`)
 
     const manifestPath = path.join(dir, 'plugin.json')
     const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'))
@@ -277,7 +285,7 @@ export async function buildPluginsRelease(options = {}) {
 
     // 2. 打包为 ZIP 文件
     const zipFileName = `${pluginId}-${version}.zip`
-    const pluginOutputDir = path.join(outputDir, author, pluginId)
+    const pluginOutputDir = path.join(outputDir, authorSlug, pluginId)
     fs.mkdirSync(pluginOutputDir, { recursive: true })
 
     const zipFilePath = path.join(pluginOutputDir, zipFileName)
@@ -292,7 +300,8 @@ export async function buildPluginsRelease(options = {}) {
 
     console.log(`✓ 压缩打包完成: 大小 ${(size / 1024).toFixed(2)} KB, SHA256 = ${sha256}`)
 
-    const downloadRelPath = `plugins/${author}/${pluginId}/${zipFileName}`
+    const relPrefix = urlPrefix ? `${urlPrefix}/${authorSlug}/${pluginId}` : `${authorSlug}/${pluginId}`
+    const downloadRelPath = `${relPrefix}/${zipFileName}`
     const downloadUrl = `${cdnBaseUrl}/${downloadRelPath}`
 
     // 4. 拷贝图标至输出目录以便 CDN 静态分发
@@ -302,15 +311,24 @@ export async function buildPluginsRelease(options = {}) {
       const iconTargetName = `icon${iconExt}`
       const iconTargetPath = path.join(pluginOutputDir, iconTargetName)
       fs.copyFileSync(path.join(dir, manifest.icon), iconTargetPath)
-      iconUrl = `${cdnBaseUrl}/plugins/${author}/${pluginId}/${iconTargetName}`
+      iconUrl = `${cdnBaseUrl}/${relPrefix}/${iconTargetName}`
     }
 
     const twoManReviewStatus = (scanResult && scanResult.requiresTwoManReview)
       ? { required: true, reasons: scanResult.twoManReviewReasons, status: 'pending' }
       : { required: false, reasons: [], status: 'approved' }
 
+    const authorDisplay = typeof manifest.author === 'string'
+      ? manifest.author
+      : (manifest.author?.name || author)
+    const isOfficial =
+      authorSlug === 'official' ||
+      authorSlug === 'ztools-team' ||
+      String(authorDisplay || '').toLowerCase().includes('ztools')
+
     const pluginMetadata = {
       id: manifest.id,
+      pluginId: manifest.id,
       name: manifest.name,
       version: manifest.version,
       description: manifest.description,
@@ -320,20 +338,28 @@ export async function buildPluginsRelease(options = {}) {
       permissions: manifest.permissions || [],
       icon: iconUrl,
       entry: manifest.entry,
-      minZToolsVersion: manifest.minZToolsVersion || '1.0.0',
+      minZToolsVersion: manifest.minZToolsVersion || '2.0.0',
       requireAdmin: !!manifest.requireAdmin,
+      targets: Array.isArray(manifest.targets) && manifest.targets.length > 0
+        ? manifest.targets
+        : ['windows-electron-any', 'macos-electron-any'],
+      nativeComponents: Array.isArray(manifest.nativeComponents) ? manifest.nativeComponents : [],
+      is_official: isOfficial,
+      official_badge: isOfficial ? '官方自营' : '',
       window: manifest.window,
       features: manifest.features || [],
       downloadUrl,
       sha256,
+      checksum: sha256,
       size,
+      file_size: size,
       twoManReview: twoManReviewStatus,
       publishedAt: new Date().toISOString()
     }
 
     catalogList.push(pluginMetadata)
     publishedPackages.push({
-      author,
+      author: authorSlug,
       pluginId,
       version,
       zipPath: zipFilePath,
@@ -343,19 +369,25 @@ export async function buildPluginsRelease(options = {}) {
     })
   }
 
-  // 5. 生成包含全量插件元数据的静态全网索引 plugins.json
+  // 5. 生成包含全量插件元数据的静态全网索引 plugins.json 与 catalog.json
+  const generatedAt = new Date().toISOString()
   const pluginsIndex = {
-    schemaVersion: '1.0.0',
-    generatedAt: new Date().toISOString(),
+    schemaVersion: '2.0.0',
+    generatedAt,
     cdnBaseUrl,
     total: catalogList.length,
+    list: catalogList,
     plugins: catalogList
   }
 
   const indexPath = path.join(outputDir, 'plugins.json')
   fs.writeFileSync(indexPath, JSON.stringify(pluginsIndex, null, 2), 'utf8')
+
+  const catalogPath = path.join(outputDir, 'catalog.json')
+  fs.writeFileSync(catalogPath, JSON.stringify({ success: true, ...pluginsIndex }, null, 2), 'utf8')
+
   console.log(`\n============================================================`)
-  console.log(`📄 静态全网索引 plugins.json 已生成: ${indexPath}`)
+  console.log(`📄 静态全网索引 plugins.json & catalog.json 已生成: ${indexPath}`)
   console.log(`📊 统计: 共发现 ${pluginEntries.length} 个插件，成功打包 ${catalogList.length} 个，拦截拒绝 ${rejectedCount} 个`)
   console.log(`============================================================\n`)
 
@@ -380,6 +412,7 @@ async function runCli() {
   --plugins-dir <path>    插件源码根目录 (默认: plugins)
   --output-dir <path>     产物输出目录 (默认: dist/plugins)
   --cdn-base-url <url>    静态分发 CDN 域名 (默认: https://plugins.ztools.cn)
+  --url-prefix <prefix>   CDN 相对路径前缀 (默认: plugins, V2 通道传 plugins-v2)
   --fail-fast             遇错立即退出
   --skip-scan             跳过安全扫描 (仅限调试)
   --help, -h              显示帮助信息
@@ -396,6 +429,7 @@ async function runCli() {
   const pluginsDir = getArg('--plugins-dir', path.join(rootDir, 'plugins'))
   const outputDir = getArg('--output-dir', path.join(rootDir, 'dist/plugins'))
   const cdnBaseUrl = getArg('--cdn-base-url', process.env.CDN_BASE_URL || 'https://plugins.ztools.cn')
+  const urlPrefix = getArg('--url-prefix', process.env.PLUGIN_URL_PREFIX || 'plugins')
   const failFast = args.includes('--fail-fast')
   const skipScan = args.includes('--skip-scan')
 
@@ -403,6 +437,7 @@ async function runCli() {
     pluginsDir,
     outputDir,
     cdnBaseUrl,
+    urlPrefix,
     failFast,
     skipScan
   })

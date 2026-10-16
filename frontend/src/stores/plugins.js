@@ -21,7 +21,15 @@ import { fetchVersions, checkCompat } from '@/composables/useVersionCompat'
 import { formatLogArg } from '@/utils/logFormat'
 import { isPluginSupportedOnCurrentPlatform } from '@/utils/platform'
 import { isOnline } from '@/config/runtime-mode'
-import { StoreCatalogManager, resolveApiBaseUrl } from '@/utils/storeCatalogManager'
+import {
+  StoreCatalogManager,
+  resolveApiBaseUrl,
+  isOfficialPluginItem
+} from '@/utils/storeCatalogManager'
+import {
+  loadInstalledDeclarativePlugin,
+  V2_CATALOG_CDN_URL
+} from '@/utils/declarativePluginLoader'
 
 /**
  * 规范化插件 ID（业务标识符）
@@ -158,12 +166,12 @@ export const usePluginsStore = defineStore('plugins', {
 
     // 官方自营插件列表
     officialPlugins: (state) => {
-      return state.items.filter((item) => Boolean(item.is_official || item.isOfficial))
+      return state.items.filter((item) => isOfficialPluginItem(item))
     },
 
     // 社区精选插件列表
     communityPlugins: (state) => {
-      return state.items.filter((item) => !Boolean(item.is_official || item.isOfficial))
+      return state.items.filter((item) => !isOfficialPluginItem(item))
     },
 
     // 检查指定插件是否为官方自营
@@ -172,7 +180,7 @@ export const usePluginsStore = defineStore('plugins', {
       const found = state.items.find(
         (item) => normalizePluginId(item.pluginId || item.id).toLowerCase() === pid
       )
-      return Boolean(found?.is_official || found?.isOfficial)
+      return isOfficialPluginItem(found) || isOfficialPlugin(pid)
     }
   },
 
@@ -349,15 +357,55 @@ export const usePluginsStore = defineStore('plugins', {
         const apiBase = resolveApiBaseUrl()
         this._catalogManager = new StoreCatalogManager({
           apiBaseUrl: apiBase,
+          staticCatalogUrl: V2_CATALOG_CDN_URL,
+          getStaticCatalog: async () => {
+            const res = await fetch(V2_CATALOG_CDN_URL, {
+              headers: { Accept: 'application/json' }
+            })
+            return res.ok ? await res.json() : null
+          },
           fetchRemote: async (url) => {
-            if (url) {
+            if (apiBase) {
+              const v2CatalogUrl = `${apiBase.replace(/\/+$/, '')}/api/v2/plugins/catalog`
               try {
-                const res = await fetch(url, { headers: { Accept: 'application/json' } })
+                const v2Res = await fetch(v2CatalogUrl, {
+                  headers: { Accept: 'application/json' }
+                })
+                if (v2Res.ok) {
+                  return await v2Res.json()
+                }
+              } catch (e) {
+                console.warn('[plugins] V2 catalog 拉取失败，尝试回退:', e)
+              }
+              try {
+                const v2CdnRes = await fetch(V2_CATALOG_CDN_URL, {
+                  headers: { Accept: 'application/json' }
+                })
+                if (v2CdnRes.ok) {
+                  return await v2CdnRes.json()
+                }
+              } catch (e) {
+                console.warn('[plugins] V2 CDN 静态索引拉取失败，尝试回退:', e)
+              }
+              if (url) {
+                try {
+                  const res = await fetch(url, { headers: { Accept: 'application/json' } })
+                  if (res.ok) {
+                    return await res.json()
+                  }
+                } catch (e) {
+                  console.warn('[plugins] 官方 catalog 拉取失败，回退默认接口:', e)
+                }
+              }
+            } else {
+              const targetUrl = url || V2_CATALOG_CDN_URL
+              try {
+                const res = await fetch(targetUrl, { headers: { Accept: 'application/json' } })
                 if (res.ok) {
                   return await res.json()
                 }
               } catch (e) {
-                console.warn('[plugins] 官方 catalog 拉取失败，回退默认接口:', e)
+                console.warn('[plugins] 静态 catalog 拉取失败，回退默认接口:', e)
               }
             }
             return apiGetMarketPlugins({ per_page: 500, page: 1 })
@@ -613,9 +661,14 @@ export const usePluginsStore = defineStore('plugins', {
     _patchInstalledIcons() {
       if (!this.installedPlugins?.length) return
       const marketMap = {}
-      for (const item of this.items) {
-        if (item.pluginId && item.icon && item.icon.startsWith('http')) {
-          marketMap[String(item.pluginId)] = item.icon
+      const catalogSource = [
+        ...(Array.isArray(this._catalogManager?._catalog) ? this._catalogManager._catalog : []),
+        ...(Array.isArray(this.items) ? this.items : [])
+      ]
+      for (const item of catalogSource) {
+        const pid = item?.pluginId || item?.id
+        if (pid && item.icon && item.icon.startsWith('http')) {
+          marketMap[String(pid)] = item.icon
         }
       }
 
@@ -730,15 +783,40 @@ export const usePluginsStore = defineStore('plugins', {
         }
         this.installedSet = merged
 
-        // 合并插件列表：本地插件 + 官方标杆应用（若本地已有同 ID 则优先本地）
+        // 合并插件列表：本地插件 + 官方标杆应用（若本地已有同 ID 则优先本地，并补齐官方自营标识）
+        const officialMap = new Map(
+          officialList.map((p) => [String(p.pluginId || '').toLowerCase(), p])
+        )
         const localMap = new Map(
           (locals || []).map((p) => [String(p.pluginId || '').toLowerCase(), p])
         )
-        const combined = [...(locals || [])]
+        const combined = (locals || []).map((p) => {
+          const key = String(p.pluginId || p.id || '').toLowerCase()
+          const builtinMatch = officialMap.get(key)
+          const isOff = isOfficialPluginItem(p, builtinMatch)
+          if (isOff) {
+            const badge = p.official_badge || p.officialBadge || builtinMatch?.official_badge || builtinMatch?.officialBadge || '官方自营'
+            return {
+              ...p,
+              is_official: true,
+              isOfficial: true,
+              official_badge: badge,
+              officialBadge: badge
+            }
+          }
+          return p
+        })
         for (const official of officialList) {
           const key = String(official.pluginId || '').toLowerCase()
           if (!localMap.has(key)) {
-            combined.push({ ...official })
+            const badge = official.official_badge || official.officialBadge || '官方自营'
+            combined.push({
+              ...official,
+              is_official: true,
+              isOfficial: true,
+              official_badge: badge,
+              officialBadge: badge
+            })
           }
         }
 
@@ -865,8 +943,31 @@ export const usePluginsStore = defineStore('plugins', {
           throw new Error(`无法启动：该插件已被官方下架禁用（原因：${reason}）`)
         }
 
-        // 1. 若为官方标杆声明式应用：直接路由或唤起声明式运行时
-        if (isOfficialPlugin(normalizedId)) {
+        const lowerId = normalizedId.toLowerCase()
+        const installedMatch = (this.installedPlugins || []).find(
+          (p) => normalizePluginId(p.pluginId || p.id).toLowerCase() === lowerId
+        )
+        const catalogMatch =
+          this._catalogManager?.getById?.(normalizedId) ||
+          this._catalogManager?._catalog?.find?.(
+            (p) => normalizePluginId(p.pluginId || p.id).toLowerCase() === lowerId
+          ) ||
+          (this.items || []).find(
+            (p) => normalizePluginId(p.pluginId || p.id).toLowerCase() === lowerId
+          )
+
+        const isDeclarativePlugin = Boolean(
+          isOfficialPlugin(normalizedId) ||
+            installedMatch?.isDeclarative === true ||
+            catalogMatch?.isDeclarative === true ||
+            (typeof installedMatch?.entry === 'string' &&
+              installedMatch.entry.trim().toLowerCase().endsWith('.js')) ||
+            (typeof catalogMatch?.entry === 'string' &&
+              catalogMatch.entry.trim().toLowerCase().endsWith('.js'))
+        )
+
+        // 1. 若为官方标杆或已安装 V2 (.js) 声明式应用：直接路由或唤起声明式运行时
+        if (isDeclarativePlugin) {
           await this.markRecent(normalizedId)
 
           // 悬浮启动器模式嗅探
@@ -934,10 +1035,40 @@ export const usePluginsStore = defineStore('plugins', {
       }
 
       try {
-        // 4. 获取下载签名与包信息
+        // 4. 获取下载签名与包信息（优先使用内存中已有的 V2 条目）
         let downloadInfo = options.downloadInfo
         if (!downloadInfo) {
-          downloadInfo = await getDownloadSign(pid)
+          const lowerPid = pid.toLowerCase()
+          const v2Candidate =
+            this._catalogManager?.getById?.(pid) ||
+            this._catalogManager?._catalog?.find?.(
+              (i) => normalizePluginId(i.pluginId || i.id).toLowerCase() === lowerPid
+            ) ||
+            (this.items || []).find(
+              (i) => normalizePluginId(i.pluginId || i.id).toLowerCase() === lowerPid
+            )
+          if (
+            v2Candidate &&
+            v2Candidate.downloadUrl &&
+            (v2Candidate.sha256 || v2Candidate.checksum)
+          ) {
+            const sha256 = v2Candidate.sha256 || v2Candidate.checksum
+            const size =
+              Number(v2Candidate.size ?? v2Candidate.fileSize ?? v2Candidate.file_size ?? 0) || 0
+            downloadInfo = {
+              ...v2Candidate,
+              id: v2Candidate.id || pid,
+              pluginId: pid,
+              version: v2Candidate.version || '1.0.0',
+              downloadUrl: v2Candidate.downloadUrl,
+              sha256,
+              checksum: v2Candidate.checksum || sha256,
+              size,
+              fileSize: size
+            }
+          } else {
+            downloadInfo = await getDownloadSign(pid)
+          }
         }
         const downloadUrl = downloadInfo?.downloadUrl
         if (!downloadUrl) {
@@ -963,6 +1094,75 @@ export const usePluginsStore = defineStore('plugins', {
         const result = await installPluginNative(pid, downloadInfo)
         if (!result || result.success === false) {
           throw new Error(result?.error || '安装执行失败')
+        }
+
+        // 6b. 若宿主返回异步 operationId，等待 plugin_install_complete 事件完成（30秒超时保护）
+        if (
+          result?.operationId &&
+          typeof window !== 'undefined' &&
+          typeof window.ztools?.events?.on === 'function'
+        ) {
+          await new Promise((resolve, reject) => {
+            let settled = false
+            let timer = null
+            const cleanup = () => {
+              if (timer) {
+                clearTimeout(timer)
+                timer = null
+              }
+              try {
+                window.ztools?.events?.off?.('plugin_install_complete', onInstallEvent)
+              } catch {}
+            }
+            const onInstallEvent = (evt) => {
+              const payload =
+                evt?.payload && typeof evt.payload === 'object' ? evt.payload : evt
+              if (normalizePluginId(payload?.pluginId) !== pid) return
+              if (settled) return
+              settled = true
+              cleanup()
+              if (payload?.success === false) {
+                reject(new Error(payload.error || '安装失败'))
+              } else {
+                resolve(payload)
+              }
+            }
+            timer = setTimeout(() => {
+              if (settled) return
+              settled = true
+              cleanup()
+              reject(new Error('插件安装等待超时 (30s)'))
+            }, 30 * 1000)
+            try {
+              window.ztools.events.subscribe?.('plugin_install_complete')?.catch?.(() => {})
+            } catch {}
+            window.ztools.events.on('plugin_install_complete', onInstallEvent)
+          })
+        }
+
+        // 若安装的插件为 V2 声明式插件，预先补充到 installedPlugins 列表以供 openPlugin 即时识别
+        if (
+          downloadInfo &&
+          (downloadInfo.isDeclarative ||
+            downloadInfo.channel === 'v2' ||
+            downloadInfo.sha256 ||
+            (typeof downloadInfo.entry === 'string' && downloadInfo.entry.endsWith('.js')))
+        ) {
+          const existsInInstalled = (this.installedPlugins || []).some(
+            (p) => normalizePluginId(p.pluginId || p.id).toLowerCase() === pid.toLowerCase()
+          )
+          if (!existsInInstalled) {
+            this.installedPlugins = [
+              {
+                ...downloadInfo,
+                id: pid,
+                pluginId: pid,
+                entry: downloadInfo.entry || 'dist/index.js',
+                isDeclarative: true
+              },
+              ...(this.installedPlugins || [])
+            ]
+          }
         }
 
         // 7. 安装完成状态同步

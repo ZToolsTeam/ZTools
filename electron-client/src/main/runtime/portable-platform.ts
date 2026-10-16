@@ -93,7 +93,7 @@ export function resolvePortableRuntimePaths(options: PortableRuntimePathOptions)
     api,
     'businessDataRoot',
     options.mode === 'production'
-      ? api.join(appDataRoot, 'ZTools', 'Data')
+      ? api.join(appDataRoot, 'ZTools', 'DataV2')
       : (options.businessDataRoot ?? api.join(productRoot, 'Data')),
   )
 

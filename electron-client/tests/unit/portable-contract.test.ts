@@ -23,7 +23,7 @@ test('portable runtime paths preserve platform-specific path semantics', () => {
     installRoot: 'D:\\Apps\\ZTools',
     ownerId: 'tester',
   })
-  assert.equal(windows.businessDataRoot, 'C:\\Users\\tester\\AppData\\Roaming\\ZTools\\Data')
+  assert.equal(windows.businessDataRoot, 'C:\\Users\\tester\\AppData\\Roaming\\ZTools\\DataV2')
 
   const linux = resolvePortableRuntimePaths({
     platform: 'linux',

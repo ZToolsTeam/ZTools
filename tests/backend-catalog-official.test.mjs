@@ -168,6 +168,29 @@ const samplePlugins = [
     is_official: true,
     revoked: false,
     revoked_reason: null
+  },
+  {
+    id: 7,
+    plugin_id: 'everything-search',
+    name: 'Everything 文件搜索',
+    pinyin: 'EVERYTHINGWENJIANSOUSUO',
+    description: '基于 Everything 的毫秒级文件搜索工具',
+    category_id: 1,
+    sort_order: 88,
+    author: 'ZTools Team',
+    icon: 'icon.png',
+    cdn_download_url: 'https://cdn.ztools.cn/plugins-zip/zips/everything-search-1.3.0.zip',
+    status: 'active',
+    rating: 5,
+    download_count: 3500,
+    version: '1.3.0',
+    file_size: 158720,
+    keywords: ['everything', '文件搜索'],
+    is_official: false,
+    source_type: 'community',
+    official_badge: null,
+    revoked: false,
+    revoked_reason: null
   }
 ]
 
@@ -262,6 +285,19 @@ const sampleVersions = [
     min_app_version: '3.0.0',
     min_web_version: '1.0.0',
     release_date: '2026-05-01'
+  },
+  {
+    id: 701,
+    plugin_id: 7,
+    version: '1.3.0',
+    download_url: 'https://cdn.ztools.cn/plugins-zip/zips/everything-search-1.3.0.zip',
+    size: 158720,
+    checksum: '1'.repeat(64),
+    sha256: '1'.repeat(64),
+    platform: 'windows',
+    min_app_version: '1.0.0',
+    min_web_version: '1.0.0',
+    release_date: '2026-08-01'
   }
 ]
 
@@ -530,18 +566,23 @@ describe('ZTools 扩展商店双轨 Catalog 与安全熔断测试套件 (Beyond 
   // Suite 2: 双轨筛选与客户端版本协商 (type, category, search, app_version)
   // --------------------------------------------------------------------------
   describe('2. 双轨筛选与版本协商', () => {
-    it('type=official 仅返回自营插件', async () => {
+    it('type=official 仅返回自营插件（含 author 为 ZTools Team 的历史存量自营插件）', async () => {
       const res = await app.request('/api/plugins/catalog?type=official')
       const body = await res.json()
 
       assert.ok(body.plugins.length > 0)
       for (const p of body.plugins) {
         assert.equal(p.is_official, true, `不应包含社区插件: ${p.id}`)
+        assert.equal(p.official_badge, '官方自营', `自营插件必须输出官方自营徽章: ${p.id}`)
       }
+      assert.ok(
+        body.plugins.some((p) => p.id === 'everything-search'),
+        'author="ZTools Team" 且数据库 is_official=false 的插件必须被识别为官方自营'
+      )
       assert.ok(!body.plugins.some((p) => p.id === 'json-viewer'))
     })
 
-    it('type=community 仅返回社区插件', async () => {
+    it('type=community 仅返回社区插件（严禁混入 ZTools Team 自营插件）', async () => {
       const res = await app.request('/api/plugins/catalog?type=community')
       const body = await res.json()
 
@@ -550,6 +591,10 @@ describe('ZTools 扩展商店双轨 Catalog 与安全熔断测试套件 (Beyond 
         assert.equal(p.is_official, false, `不应包含自营插件: ${p.id}`)
       }
       assert.ok(!body.plugins.some((p) => p.id === 'calculator'))
+      assert.ok(
+        !body.plugins.some((p) => p.id === 'everything-search'),
+        'author="ZTools Team" 的自营插件绝不能出现在社区精选中'
+      )
       assert.ok(body.plugins.some((p) => p.id === 'json-viewer'))
     })
 

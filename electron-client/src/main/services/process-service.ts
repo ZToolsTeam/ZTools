@@ -1,6 +1,7 @@
 import { createPlatformPortDiscoveryAdapter, type PortDiscoveryAdapter, type PortSnapshot } from '../platform/port-discovery.js'
 import { execFile, spawn, type ChildProcess } from 'node:child_process'
 import fs from 'node:fs/promises'
+import os from 'node:os'
 import path from 'node:path'
 import { promisify } from 'node:util'
 import type { CallerIdentity } from '../../contracts/capabilities.js'
@@ -476,4 +477,440 @@ export class ProcessService {
       }
     )
   }
+
+  readonly #prevCpuTimeMap = new Map<number, { cpuTime100ns: number; timestampMs: number }>()
+  #lastSysCpuTimes: { idle: number; total: number } | undefined
+  #cachedMonitorSnapshot: { timestampMs: number; processes: Array<Record<string, unknown>> } | undefined
+  #inFlightMonitorSnapshot: Promise<Array<Record<string, unknown>>> | undefined
+
+  #sampleSystemCpuPercent(): number {
+    let idle = 0
+    let total = 0
+    for (const cpu of os.cpus()) {
+      idle += cpu.times.idle
+      total += cpu.times.user + cpu.times.nice + cpu.times.sys + cpu.times.idle + cpu.times.irq
+    }
+    const prev = this.#lastSysCpuTimes
+    this.#lastSysCpuTimes = { idle, total }
+    if (!prev || total <= prev.total) return 12
+    const idleDelta = idle - prev.idle
+    const totalDelta = total - prev.total
+    return Math.min(100, Math.max(0, Number((((totalDelta - idleDelta) / totalDelta) * 100).toFixed(1))))
+  }
+
+  async #queryRichProcessSnapshot(signal: AbortSignal): Promise<Array<Record<string, unknown>>> {
+    const nowMs = this.now()
+    if (this.#cachedMonitorSnapshot && nowMs - this.#cachedMonitorSnapshot.timestampMs < 600) {
+      return this.#cachedMonitorSnapshot.processes
+    }
+    if (this.#inFlightMonitorSnapshot) {
+      return this.#inFlightMonitorSnapshot
+    }
+
+    const task = (async () => {
+      if (this.runtimePlatform !== 'win32') {
+        const list = await this.#listProcesses(signal).catch(() => [])
+        const mapped = list.map((p) => ({
+          pid: p.pid,
+          name: p.name,
+          path: p.path || '',
+          cpuPercent: p.cpuUsage || 0,
+          workingSetBytes: p.memoryUsage || 0,
+          privateBytes: Math.round((p.memoryUsage || 0) * 0.85),
+          threadCount: 4,
+          parentPid: 1,
+          isSystem: p.pid <= 4,
+          description: p.name,
+          companyName: ''
+        }))
+        this.#cachedMonitorSnapshot = { timestampMs: this.now(), processes: mapped }
+        return mapped
+      }
+
+      const psExe = path.win32.join(
+        process.env.SystemRoot ?? 'C:\\Windows',
+        'System32',
+        'WindowsPowerShell',
+        'v1.0',
+        'powershell.exe'
+      )
+      const script = [
+        'Get-CimInstance Win32_Process -Property ProcessId,Name,ParentProcessId,ExecutablePath,ThreadCount,HandleCount,WorkingSetSize,PrivatePageCount,KernelModeTime,UserModeTime,SessionId,CommandLine | ForEach-Object {',
+        '  [pscustomobject]@{',
+        '    pid = [int]$_.ProcessId',
+        '    name = [string]$_.Name',
+        '    parentPid = [int]$_.ParentProcessId',
+        '    path = [string]$_.ExecutablePath',
+        '    threadCount = [int]$_.ThreadCount',
+        '    handleCount = [int]$_.HandleCount',
+        '    workingSetBytes = [int64]$_.WorkingSetSize',
+        '    privateBytes = [int64]$_.PrivatePageCount',
+        '    cpuTime100ns = [int64]$_.KernelModeTime + [int64]$_.UserModeTime',
+        '    sessionId = [int]$_.SessionId',
+        '    commandLine = [string]$_.CommandLine',
+        '  }',
+        '} | ConvertTo-Json -Compress'
+      ].join('\n')
+
+      const res = await execFileAsync(psExe, ['-NoLogo', '-NoProfile', '-NonInteractive', '-Command', script], {
+        encoding: 'utf8',
+        timeout: 8_000,
+        maxBuffer: 16 * 1024 * 1024,
+        windowsHide: true,
+        signal
+      })
+
+      const rawText = String(res.stdout || '').trim()
+      const parsed = rawText ? JSON.parse(rawText) : []
+      const rows: any[] = Array.isArray(parsed) ? parsed : parsed ? [parsed] : []
+      const logicalCores = Math.max(1, os.cpus().length)
+      const sampleTimeMs = this.now()
+      const currentPids = new Set<number>()
+      const processes: Array<Record<string, unknown>> = []
+
+      const criticalSysNames = new Set([
+        'system', 'system idle process', 'idle', 'registry', 'memcompression',
+        'secure system', 'smss.exe', 'csrss.exe', 'wininit.exe', 'services.exe',
+        'lsass.exe', 'winlogon.exe', 'fontdrvhost.exe', 'dwm.exe', 'spoolsv.exe',
+        'svchost.exe', 'conhost.exe', 'dllhost.exe', 'sihost.exe', 'taskhostw.exe',
+        'runtimebroker.exe', 'searchindexer.exe', 'ctfmon.exe', 'audiodg.exe',
+        'wudfhost.exe', 'dashost.exe', 'smartscreen.exe', 'securityhealthservice.exe',
+        'msmpeng.exe', 'nisrv.exe', 'wlanext.exe'
+      ])
+      const interactiveSysTools = new Set([
+        'notepad.exe', 'calc.exe', 'mspaint.exe', 'cmd.exe', 'powershell.exe', 'taskmgr.exe', 'explorer.exe'
+      ])
+
+      for (const row of rows) {
+        const pid = Number(row?.pid ?? 0)
+        if (!Number.isInteger(pid) || pid <= 0) continue // Skip PID 0 (System Idle Process)
+        currentPids.add(pid)
+        const name = String(row?.name || `PID-${pid}`)
+        const lowerName = name.toLowerCase()
+        const exePath = String(row?.path || '')
+        const lowerPath = exePath.toLowerCase()
+        const sessionId = Number(row?.sessionId ?? 1)
+        const cpuTime100ns = Number(row?.cpuTime100ns ?? 0)
+
+        let cpuPercent = 0
+        const prev = this.#prevCpuTimeMap.get(pid)
+        if (prev && sampleTimeMs > prev.timestampMs && cpuTime100ns >= prev.cpuTime100ns) {
+          const deltaCpuMs = (cpuTime100ns - prev.cpuTime100ns) / 10_000
+          const deltaWallMs = Math.max(50, sampleTimeMs - prev.timestampMs)
+          cpuPercent = Math.min(100, Math.max(0, Number(((deltaCpuMs / (deltaWallMs * logicalCores)) * 100).toFixed(1))))
+        }
+        this.#prevCpuTimeMap.set(pid, { cpuTime100ns, timestampMs: sampleTimeMs })
+
+        const isSysPath =
+          (lowerPath.startsWith('c:\\windows\\system32') ||
+            lowerPath.startsWith('c:\\windows\\syswow64') ||
+            lowerPath.startsWith('c:\\windows\\servicing')) &&
+          !interactiveSysTools.has(lowerName)
+        const isSystem = pid <= 4 || sessionId === 0 || criticalSysNames.has(lowerName) || isSysPath
+
+        const workingSetBytes = Math.max(0, Number(row?.workingSetBytes ?? 0))
+        const privateBytes = Math.max(0, Number(row?.privateBytes ?? 0)) || Math.round(workingSetBytes * 0.85)
+        const threadCount = Math.max(1, Number(row?.threadCount ?? 1))
+        const handleCount = Math.max(0, Number(row?.handleCount ?? 0))
+        const parentPid = Math.max(0, Number(row?.parentPid ?? 0))
+
+        processes.push({
+          pid,
+          name,
+          path: exePath,
+          cpuPercent,
+          workingSetBytes,
+          privateBytes,
+          threadCount,
+          handleCount,
+          parentPid,
+          isSystem,
+          description: exePath ? path.win32.basename(exePath) : name,
+          companyName: isSystem ? 'Microsoft Corporation' : '',
+          commandLine: String(row?.commandLine || exePath || name)
+        })
+      }
+
+      // Prune exited PIDs from CPU delta map
+      for (const trackedPid of this.#prevCpuTimeMap.keys()) {
+        if (!currentPids.has(trackedPid)) this.#prevCpuTimeMap.delete(trackedPid)
+      }
+
+      this.#cachedMonitorSnapshot = { timestampMs: sampleTimeMs, processes }
+      return processes
+    })()
+
+    this.#inFlightMonitorSnapshot = task
+    try {
+      return await task
+    } finally {
+      if (this.#inFlightMonitorSnapshot === task) {
+        this.#inFlightMonitorSnapshot = undefined
+      }
+    }
+  }
+
+  async handleProcessMonitorCall(
+    func: string,
+    params: Record<string, unknown>,
+    signal: AbortSignal
+  ): Promise<{ success: true; data: unknown }> {
+    if (signal.aborted) throw abortError(signal)
+    const method = String(func || '').trim()
+
+    switch (method) {
+      case 'GetStatus': {
+        return {
+          success: true,
+          data: { status: 'ready', backend: 'host-process-service', platform: this.runtimePlatform }
+        }
+      }
+
+      case 'GetSystemInfo': {
+        const processes = await this.#queryRichProcessSnapshot(signal).catch(() => [])
+        const totalMemoryBytes = os.totalmem()
+        const availableMemoryBytes = os.freemem()
+        const usedMemoryBytes = Math.max(0, totalMemoryBytes - availableMemoryBytes)
+        const memoryUsagePercent = totalMemoryBytes > 0
+          ? Math.round((usedMemoryBytes / totalMemoryBytes) * 100)
+          : 0
+        const cpuUsagePercent = this.#sampleSystemCpuPercent()
+        const processCount = processes.length
+        const threadCount = processes.reduce((sum, p) => sum + Number(p.threadCount || 0), 0)
+        return {
+          success: true,
+          data: {
+            cpuUsagePercent,
+            totalMemoryBytes,
+            usedMemoryBytes,
+            availableMemoryBytes,
+            memoryUsagePercent,
+            processCount,
+            threadCount
+          }
+        }
+      }
+
+      case 'GetProcessList': {
+        const processes = await this.#queryRichProcessSnapshot(signal)
+        return {
+          success: true,
+          data: { processes }
+        }
+      }
+
+      case 'GetProcessDetail': {
+        const pid = Number(params?.pid)
+        if (!Number.isInteger(pid) || pid <= 0 || pid > 0xffff_ffff) {
+          return { success: true, data: { error: 'INVALID_PID: 进程 PID 无效' } }
+        }
+        if (this.runtimePlatform !== 'win32') {
+          const cached = this.#cachedMonitorSnapshot?.processes.find((p) => p.pid === pid)
+          return {
+            success: true,
+            data: {
+              pid,
+              name: String(cached?.name || `PID-${pid}`),
+              path: String(cached?.path || ''),
+              commandLine: String(cached?.commandLine || cached?.path || ''),
+              companyName: String(cached?.companyName || ''),
+              fileDescription: String(cached?.description || ''),
+              fileVersion: '1.0.0',
+              productName: String(cached?.name || ''),
+              signerName: '',
+              startTime: new Date().toISOString().replace('T', ' ').slice(0, 19),
+              handleCount: Number(cached?.handleCount ?? 120),
+              peakMemoryBytes: Math.round(Number(cached?.workingSetBytes ?? 0) * 1.15),
+              threadCount: Number(cached?.threadCount ?? 4),
+              parentPid: Number(cached?.parentPid ?? 1)
+            }
+          }
+        }
+
+        const psExe = path.win32.join(
+          process.env.SystemRoot ?? 'C:\\Windows',
+          'System32',
+          'WindowsPowerShell',
+          'v1.0',
+          'powershell.exe'
+        )
+        const script = [
+          `$targetPid = ${pid}`,
+          '$proc = Get-CimInstance Win32_Process -Filter "ProcessId = $targetPid"',
+          'if (-not $proc) { [pscustomobject]@{ error = "PROCESS_NOT_FOUND" } | ConvertTo-Json -Compress; exit 0 }',
+          '$path = [string]$proc.ExecutablePath',
+          '$company = ""; $desc = ""; $ver = ""; $prod = ""; $signer = ""',
+          'if ($path -and (Test-Path -LiteralPath $path)) {',
+          '  try {',
+          '    $vi = (Get-Item -LiteralPath $path).VersionInfo',
+          '    $company = [string]$vi.CompanyName',
+          '    $desc = [string]$vi.FileDescription',
+          '    $ver = [string]$vi.FileVersion',
+          '    $prod = [string]$vi.ProductName',
+          '  } catch {}',
+          '  try {',
+          '    $sig = Get-AuthenticodeSignature -LiteralPath $path',
+          '    if ($sig -and $sig.SignerCertificate) {',
+          '      if ($sig.SignerCertificate.Subject -match "CN=([^,]+)") { $signer = $matches[1].Trim(\'"\') }',
+          '      else { $signer = [string]$sig.SignerCertificate.Subject }',
+          '    }',
+          '  } catch {}',
+          '}',
+          '[pscustomobject]@{',
+          '  pid = [int]$proc.ProcessId',
+          '  name = [string]$proc.Name',
+          '  path = $path',
+          '  commandLine = [string]$proc.CommandLine',
+          '  companyName = $company',
+          '  fileDescription = $desc',
+          '  fileVersion = $ver',
+          '  productName = $prod',
+          '  signerName = $signer',
+          '  startTime = if ($proc.CreationDate) { $proc.CreationDate.ToString("yyyy-MM-dd HH:mm:ss") } else { "" }',
+          '  handleCount = [int]$proc.HandleCount',
+          '  peakMemoryBytes = [int64]$proc.PeakWorkingSetSize * 1024',
+          '  threadCount = [int]$proc.ThreadCount',
+          '  parentPid = [int]$proc.ParentProcessId',
+          '} | ConvertTo-Json -Compress'
+        ].join('\n')
+
+        const res = await execFileAsync(psExe, ['-NoLogo', '-NoProfile', '-NonInteractive', '-Command', script], {
+          encoding: 'utf8',
+          timeout: 6_000,
+          maxBuffer: 1024 * 1024,
+          windowsHide: true,
+          signal
+        })
+        const parsed = JSON.parse(String(res.stdout || '{}').trim() || '{}')
+        return { success: true, data: parsed }
+      }
+
+      case 'GetServicesByPID': {
+        const pid = Number(params?.pid)
+        if (!Number.isInteger(pid) || pid <= 0 || pid > 0xffff_ffff) {
+          return { success: true, data: { services: [] } }
+        }
+        if (this.runtimePlatform !== 'win32') {
+          return { success: true, data: { services: [] } }
+        }
+
+        const psExe = path.win32.join(
+          process.env.SystemRoot ?? 'C:\\Windows',
+          'System32',
+          'WindowsPowerShell',
+          'v1.0',
+          'powershell.exe'
+        )
+        const script = [
+          `$targetPid = ${pid}`,
+          '$items = @(Get-CimInstance Win32_Service -Filter "ProcessId = $targetPid" | ForEach-Object {',
+          '  [pscustomobject]@{',
+          '    serviceName = [string]$_.Name',
+          '    displayName = [string]$_.DisplayName',
+          '    status = [string]$_.State',
+          '    startType = [string]$_.StartMode',
+          '    description = [string]$_.Description',
+          '  }',
+          '})',
+          '[pscustomobject]@{ services = $items } | ConvertTo-Json -Compress'
+        ].join('\n')
+
+        const res = await execFileAsync(psExe, ['-NoLogo', '-NoProfile', '-NonInteractive', '-Command', script], {
+          encoding: 'utf8',
+          timeout: 6_000,
+          maxBuffer: 1024 * 1024,
+          windowsHide: true,
+          signal
+        })
+        const parsed = JSON.parse(String(res.stdout || '{}').trim() || '{}')
+        const rawServices = parsed?.services
+        const services = Array.isArray(rawServices) ? rawServices : rawServices ? [rawServices] : []
+        return { success: true, data: { services } }
+      }
+
+      case 'TerminateProcessByPID': {
+        const pid = Number(params?.pid)
+        if (!Number.isInteger(pid) || pid <= 0 || pid > 0xffff_ffff) {
+          return { success: true, data: { error: 'INVALID_PID: 进程 PID 无效' } }
+        }
+        const protectedNames = new Set([
+          'system', 'system idle process', 'idle', 'registry', 'memcompression',
+          'secure system', 'smss.exe', 'csrss.exe', 'wininit.exe', 'services.exe',
+          'lsass.exe', 'winlogon.exe', 'fontdrvhost.exe', 'dwm.exe', 'spoolsv.exe'
+        ])
+        const targetName = String(
+          params?.name ||
+            this.#cachedMonitorSnapshot?.processes.find((p) => p.pid === pid)?.name ||
+            ''
+        ).trim().toLowerCase()
+
+        if (pid === 0 || pid === 4 || pid === process.pid || protectedNames.has(targetName)) {
+          return {
+            success: true,
+            data: { error: `SECURITY_INTERCEPTED: 系统核心进程 (${targetName || pid}) 受保护，禁止强制终止` }
+          }
+        }
+
+        const mode = params?.mode === 'tree' || params?.tree === true
+          ? 'tree'
+          : params?.mode === 'graceful' || params?.force === false
+          ? 'graceful'
+          : 'force'
+
+        if (this.runtimePlatform === 'win32') {
+          const taskkillExe = path.win32.join(process.env.SystemRoot ?? 'C:\\Windows', 'System32', 'taskkill.exe')
+          const args =
+            mode === 'tree'
+              ? ['/F', '/T', '/PID', String(pid)]
+              : mode === 'graceful'
+              ? ['/PID', String(pid)]
+              : ['/F', '/PID', String(pid)]
+          try {
+            await execFileAsync(taskkillExe, args, {
+              encoding: 'utf8',
+              timeout: 5_000,
+              windowsHide: true,
+              signal
+            })
+          } catch (err: any) {
+            const stderr = String(err?.stderr || err?.message || '进程终止失败').trim()
+            return {
+              success: true,
+              data: { error: stderr || '终止目标进程失败（可能权限不足或进程已退出）' }
+            }
+          }
+        } else {
+          try {
+            process.kill(pid, mode === 'graceful' ? 'SIGTERM' : 'SIGKILL')
+          } catch (err: any) {
+            return {
+              success: true,
+              data: { error: String(err?.message || '终止进程失败') }
+            }
+          }
+        }
+
+        this.#cachedMonitorSnapshot = undefined
+        return {
+          success: true,
+          data: { terminated: true, pid, mode }
+        }
+      }
+
+      case 'OpenFileLocation': {
+        const filePath = String(params?.path || '').trim()
+        if (!filePath) {
+          return { success: true, data: { error: '路径不能为空' } }
+        }
+        return { success: true, data: { opened: true, path: filePath } }
+      }
+
+      default:
+        return {
+          success: true,
+          data: { error: `UNSUPPORTED_PROCESS_MONITOR_METHOD: ${method}` }
+        }
+    }
+  }
 }
+

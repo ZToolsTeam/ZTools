@@ -121,6 +121,18 @@ export function installZToolsProtocol(
           const target = await resolveSafeFile(resolveResourceRoot(roots.web), url.pathname)
           return net.fetch(pathToFileURL(target).toString())
         }
+        case 'plugins': {
+          if (!roots.plugins) {
+            return new Response('Not Found', { status: 404 })
+          }
+          requireLocalUrl(request.url, 'plugins')
+          return await rootedFileResponse(
+            request,
+            resolveResourceRoot(roots.plugins),
+            url.pathname,
+            'ztools://web'
+          )
+        }
         case 'cache':
           requireLocalUrl(request.url, 'cache')
           return await rootedFileResponse(request, roots.cache, url.pathname, 'ztools://web')

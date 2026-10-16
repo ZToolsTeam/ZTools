@@ -7,8 +7,71 @@
 import http from '../utils/http'
 import { createOfflineError, isOnline } from '../config/runtime-mode'
 import { getLocalPlugins } from './native'
+import { V2_CATALOG_CDN_URL } from '../utils/declarativePluginLoader'
 
 export const PLUGIN_VERSION_INCOMPATIBLE = 'PLUGIN_VERSION_INCOMPATIBLE'
+
+let _v2CatalogCache = null
+let _v2CatalogCacheTime = 0
+const V2_CATALOG_CACHE_TTL_MS = 60 * 1000
+
+async function findInV2StaticCatalog(pluginId) {
+  const pid = String(pluginId || '').trim().toLowerCase()
+  if (!pid || typeof fetch !== 'function') return null
+
+  const now = Date.now()
+  let list = null
+  if (_v2CatalogCache && now - _v2CatalogCacheTime < V2_CATALOG_CACHE_TTL_MS) {
+    list = _v2CatalogCache
+  } else {
+    try {
+      const controller = typeof AbortController !== 'undefined' ? new AbortController() : null
+      const timer = controller ? setTimeout(() => controller.abort(), 2500) : null
+      try {
+        const res = await fetch(V2_CATALOG_CDN_URL, {
+          headers: { Accept: 'application/json' },
+          signal: controller ? controller.signal : undefined
+        })
+        if (res.ok) {
+          const raw = await res.json()
+          list = Array.isArray(raw)
+            ? raw
+            : Array.isArray(raw?.plugins)
+              ? raw.plugins
+              : Array.isArray(raw?.list)
+                ? raw.list
+                : null
+          if (list) {
+            _v2CatalogCache = list
+            _v2CatalogCacheTime = Date.now()
+          }
+        }
+      } finally {
+        if (timer) clearTimeout(timer)
+      }
+    } catch {
+      return null
+    }
+  }
+
+  if (!Array.isArray(list)) return null
+  const found = list.find(
+    (item) => String(item?.id || item?.pluginId || '').trim().toLowerCase() === pid
+  )
+  if (!found) return null
+
+  const sha256 = found.sha256 || found.checksum || ''
+  return {
+    ...found,
+    id: found.id || found.pluginId || pluginId,
+    pluginId: found.pluginId || found.id || pluginId,
+    version: found.version || '1.0.0',
+    downloadUrl: found.downloadUrl || '',
+    sha256,
+    checksum: sha256,
+    size: Number(found.size ?? found.file_size ?? found.fileSize ?? 0) || 0
+  }
+}
 
 function normalizePluginVersionError(payload = {}) {
   const data = payload.data || payload
@@ -124,23 +187,6 @@ export async function getMarketPlugins(params = {}) {
  * 获取插件详情
  * @param {string} pluginId - 插件标识符
  * @returns {Promise<Object>} 插件详情对象
- * 返回字段包括：
- * - id: 插件标识符
- * - pluginId: 插件标识符
- * - name: 插件名称
- * - version: 当前版本号（最新版本）
- * - description: 描述
- * - category: 分类
- * - author: 作者
- * - rating: 评分
- * - downloads: 下载次数
- * - size: 文件大小
- * - downloadUrl: 下载地址（最新版本）
- * - icon: 图标
- * - keywords: 关键词数组
- * - screenshots: 截图列表
- * - features: 功能列表
- * - changelogs: 更新日志
  */
 export async function getPluginDetails(pluginId) {
   if (!isOnline) {
@@ -161,6 +207,34 @@ export async function getPluginDetails(pluginId) {
     // 获取版本失败时静默忽略
   }
 
+  // 1. 优先尝试请求 V2 隔离通道详情
+  try {
+    const v2Res = await http.get(`/api/v2/plugins/${pluginId}`, { params })
+    if (
+      v2Res?.success &&
+      v2Res.data &&
+      (v2Res.data.channel === 'v2' || v2Res.data.sha256 || v2Res.data.checksum)
+    ) {
+      const sha256 = v2Res.data.sha256 || v2Res.data.checksum || ''
+      return {
+        ...v2Res.data,
+        id: v2Res.data.id || v2Res.data.pluginId || pluginId,
+        pluginId: v2Res.data.pluginId || v2Res.data.id || pluginId,
+        sha256,
+        checksum: v2Res.data.checksum || sha256
+      }
+    }
+  } catch {
+    // V2 接口不可用或未命中时继续尝试静态索引与旧接口
+  }
+
+  // 2. 尝试从 V2 静态索引匹配
+  const staticMatch = await findInV2StaticCatalog(pluginId)
+  if (staticMatch) {
+    return staticMatch
+  }
+
+  // 3. 回退旧版 /api/plugins/:pluginId
   const response = await http.get(`/api/plugins/${pluginId}`, { params })
 
   if (response.success) {
@@ -191,7 +265,7 @@ export async function getPluginDownloadUrl(pluginId) {
  * 获取下载签名
  * 携带客户端 appVersion 和 webVersion，由服务端返回兼容的最佳版本
  * @param {string} pluginId - 插件标识符
- * @returns {Promise<Object>} { downloadUrl, pluginId }
+ * @returns {Promise<Object>} { id, pluginId, version, downloadUrl, sha256, checksum, size }
  */
 export async function getDownloadSign(pluginId) {
   // 尝试获取客户端版本信息，用于服务端兼容性过滤
@@ -208,6 +282,65 @@ export async function getDownloadSign(pluginId) {
     // 获取版本失败时静默忽略，回退到旧客户端行为
   }
 
+  // 1. 优先尝试 V2 隔离通道下载签名
+  try {
+    const v2Res = await http.get(`/api/v2/plugins/${pluginId}/download`, { params })
+    if (
+      v2Res &&
+      ((v2Res.success && v2Res.data === null) || v2Res.code === PLUGIN_VERSION_INCOMPATIBLE)
+    ) {
+      throw normalizePluginVersionError(v2Res)
+    }
+    if (
+      v2Res?.success &&
+      v2Res.data &&
+      v2Res.data.downloadUrl &&
+      (v2Res.data.channel === 'v2' || v2Res.data.sha256 || v2Res.data.checksum)
+    ) {
+      const d = v2Res.data
+      const sha256 = d.sha256 || d.checksum || ''
+      const size = Number(d.size ?? d.fileSize ?? d.file_size ?? 0) || 0
+      return {
+        ...d,
+        id: d.id || d.pluginId || pluginId,
+        pluginId: d.pluginId || d.id || pluginId,
+        version: d.version || '1.0.0',
+        downloadUrl: d.downloadUrl,
+        sha256,
+        checksum: d.checksum || sha256,
+        size
+      }
+    }
+  } catch (v2Err) {
+    if (isPluginVersionIncompatibleError(v2Err)) {
+      throw normalizePluginVersionError(v2Err)
+    }
+    if (v2Err?.code === 'PLUGIN_REVOKED' || v2Err?.data?.code === 'PLUGIN_REVOKED') {
+      throw v2Err
+    }
+  }
+
+  // 2. 尝试从 V2 静态索引匹配
+  const staticMatch = await findInV2StaticCatalog(pluginId)
+  if (staticMatch && staticMatch.downloadUrl) {
+    if (staticMatch.revoked) {
+      const reason = staticMatch.revokedReason || staticMatch.revoked_reason || '该插件已被官方安全下架'
+      const err = new Error(`插件已被官方安全下架: ${reason}`)
+      err.code = 'PLUGIN_REVOKED'
+      throw err
+    }
+    return {
+      id: staticMatch.id,
+      pluginId: staticMatch.pluginId,
+      version: staticMatch.version,
+      downloadUrl: staticMatch.downloadUrl,
+      sha256: staticMatch.sha256,
+      checksum: staticMatch.checksum,
+      size: staticMatch.size
+    }
+  }
+
+  // 3. 回退原有的 /api/download/sign/:pluginId
   try {
     const response = await http.get(`/api/download/sign/${pluginId}`, { params })
     return ensureDownloadInfo(response)

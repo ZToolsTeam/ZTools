@@ -132,10 +132,16 @@ const native = {
   async installPluginNative(pluginId, downloadInfo) {
     try {
       const plugin = getNativeModule('plugin')
-      const info =
+      const rawInfo =
         typeof downloadInfo === 'string'
           ? { downloadUrl: downloadInfo }
           : downloadInfo || {}
+      const info = {
+        ...rawInfo,
+        checksum: rawInfo.checksum || rawInfo.sha256 || '',
+        sha256: rawInfo.sha256 || rawInfo.checksum || '',
+        fileSize: Number(rawInfo.fileSize ?? rawInfo.file_size ?? rawInfo.size ?? 0) || 0
+      }
       return await plugin.install(pluginId, info.downloadUrl || '', info)
     } catch (e) {
       return { success: false, error: e.message }
@@ -296,6 +302,9 @@ const native = {
   // 3. 窗口控制 (Window Control)
   // ==========================================
   win: {
+    async open(url) {
+      return await getNativeModule('win').open(url)
+    },
     async minimize() {
       return await getNativeModule('win').minimize()
     },

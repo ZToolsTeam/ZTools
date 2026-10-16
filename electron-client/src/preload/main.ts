@@ -288,10 +288,16 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 function invokeMethod(method: PreloadMethod, request: unknown): Promise<unknown> {
   const source = isRecord(request) ? request : {}
+  const hasEnvelope = 'messageId' in source || 'params' in source
+  const messageId = (typeof source.messageId === 'string' && source.messageId)
+    ? source.messageId
+    : nextMessageId()
+  const params = hasEnvelope ? source.params : request
+
   return ipcRenderer.invoke(IPC_CALL_CHANNEL, {
-    messageId: source.messageId,
+    messageId,
     method,
-    params: source.params,
+    params,
     ...(Object.hasOwn(source, 'timeoutMs') ? { timeoutMs: source.timeoutMs } : {})
   })
 }

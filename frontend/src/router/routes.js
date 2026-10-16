@@ -18,7 +18,8 @@ export const ROUTES = {
   ADVANCED_SETTINGS: { name: 'advanced-settings' },
   ABOUT: { name: 'about' },
   DEVTOOLS: { name: 'devtools' },
-  DECLARATIVE: { name: 'declarative' }
+  DECLARATIVE: { name: 'declarative' },
+  POPOUT: { name: 'popout' }
 }
 
 /**
@@ -29,6 +30,13 @@ export const routeUtils = {
   toDeclarative: (pluginId) => ({
     ...ROUTES.DECLARATIVE,
     params: { pluginId }
+  }),
+
+  // 跳转到独立窗口声明式应用页
+  toPopout: (pluginId, query = {}) => ({
+    ...ROUTES.POPOUT,
+    params: { pluginId },
+    query
   }),
 
   // 跳转到列表页并搜索

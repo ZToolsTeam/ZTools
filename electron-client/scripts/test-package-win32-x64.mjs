@@ -9,6 +9,7 @@ import {
   createWindowsPackagerOptions,
   getWindowsArtifactRoot,
   getWindowsInstallerFileName,
+  getWindowsPortableZipFileName,
   verifyWindowsPathAccessBrokerDependency,
   WINDOWS_TARGET
 } from './windows-package-contract.mjs'
@@ -88,6 +89,7 @@ test('records x64 main-process support and keeps isolated native processes expli
   assert.equal(getWindowsArtifactRoot('C:/workspace/electron-client', '1.1.7.1'),
     path.join('C:/workspace/electron-client', 'artifacts', '1.1.7.1', 'win32-x64'))
   assert.equal(getWindowsInstallerFileName('1.1.7.1'), 'ZTools-1.1.7.1-win32-x64.exe')
+  assert.equal(getWindowsPortableZipFileName('1.1.7.1'), 'ZTools-1.1.7.1-win32-x64-portable.zip')
 })
 
 test('records and verifies optional PathAccessBroker status, SHA-256 and x64 PE without promoting SDK 1', () => {
