@@ -275,6 +275,62 @@ type PreloadMethod =
   | 'dictionary_toggle_favorite'
   | 'dictionary_get_favorites'
   | 'dictionary_get_history'
+  | 'focus_start'
+  | 'focus_toggle'
+  | 'focus_pause'
+  | 'focus_resume'
+  | 'focus_complete'
+  | 'focus_cancel'
+  | 'focus_get_current'
+  | 'focus_list_categories'
+  | 'focus_create_category'
+  | 'focus_get_stats'
+  | 'screen_awareness_selected_text'
+  | 'screen_awareness_screen'
+  | 'screen_awareness_screen_area'
+  | 'screen_awareness_focused_window'
+  | 'dictation_start'
+  | 'dictation_finish'
+  | 'dictation_cancel'
+  | 'dictation_get_last'
+  | 'dictation_search'
+  | 'dictation_add_word'
+  | 'dictation_list_words'
+  | 'calendar_create_event'
+  | 'calendar_upcoming_events'
+  | 'calendar_list_events'
+  | 'calendar_delete_event'
+  | 'calendar_export_ics'
+  | 'navigation_list_windows'
+  | 'navigation_activate_window'
+  | 'navigation_close_window'
+  | 'web_search'
+  | 'url_quick_open'
+  | 'browser_get_active_tab'
+  | 'contacts_list'
+  | 'contacts_create'
+  | 'contacts_delete'
+  | 'filesearch_quick_look'
+  | 'system_execute_action'
+  | 'shortcuts_list'
+  | 'shortcuts_run'
+  | 'shortcuts_view'
+  | 'navigation_search_menu_items'
+  | 'navigation_click_menu_item'
+  | 'audio_get_devices'
+  | 'audio_set_default_device'
+  | 'audio_set_volume'
+  | 'audio_toggle_mute'
+  | 'wifi_get_profiles'
+  | 'wifi_get_password'
+  | 'dictionary_speak'
+  | 'brew_exec'
+  | 'taskbar_set_dock_position'
+  | 'taskbar_restart_dock'
+  | 'script_commands_list'
+  | 'script_commands_execute'
+  | 'script_commands_create'
+  | 'script_commands_reload'
 
 function nextMessageId(): string {
   sequence = (sequence + 1) % Number.MAX_SAFE_INTEGER
@@ -629,7 +685,63 @@ const bridge = Object.freeze({
       dictionary_suggestions: (request: unknown) => invokeMethod('dictionary_suggestions', request),
       dictionary_toggle_favorite: (request: unknown) => invokeMethod('dictionary_toggle_favorite', request),
       dictionary_get_favorites: (request: unknown) => invokeMethod('dictionary_get_favorites', request),
-      dictionary_get_history: (request: unknown) => invokeMethod('dictionary_get_history', request)
+      dictionary_get_history: (request: unknown) => invokeMethod('dictionary_get_history', request),
+      focus_start: (request: unknown) => invokeMethod('focus_start', request),
+      focus_toggle: (request: unknown) => invokeMethod('focus_toggle', request),
+      focus_pause: (request: unknown) => invokeMethod('focus_pause', request),
+      focus_resume: (request: unknown) => invokeMethod('focus_resume', request),
+      focus_complete: (request: unknown) => invokeMethod('focus_complete', request),
+      focus_cancel: (request: unknown) => invokeMethod('focus_cancel', request),
+      focus_get_current: (request: unknown) => invokeMethod('focus_get_current', request),
+      focus_list_categories: (request: unknown) => invokeMethod('focus_list_categories', request),
+      focus_create_category: (request: unknown) => invokeMethod('focus_create_category', request),
+      focus_get_stats: (request: unknown) => invokeMethod('focus_get_stats', request),
+      screen_awareness_selected_text: (request: unknown) => invokeMethod('screen_awareness_selected_text', request),
+      screen_awareness_screen: (request: unknown) => invokeMethod('screen_awareness_screen', request),
+      screen_awareness_screen_area: (request: unknown) => invokeMethod('screen_awareness_screen_area', request),
+      screen_awareness_focused_window: (request: unknown) => invokeMethod('screen_awareness_focused_window', request),
+      dictation_start: (request: unknown) => invokeMethod('dictation_start', request),
+      dictation_finish: (request: unknown) => invokeMethod('dictation_finish', request),
+      dictation_cancel: (request: unknown) => invokeMethod('dictation_cancel', request),
+      dictation_get_last: (request: unknown) => invokeMethod('dictation_get_last', request),
+      dictation_search: (request: unknown) => invokeMethod('dictation_search', request),
+      dictation_add_word: (request: unknown) => invokeMethod('dictation_add_word', request),
+      dictation_list_words: (request: unknown) => invokeMethod('dictation_list_words', request),
+      calendar_create_event: (request: unknown) => invokeMethod('calendar_create_event', request),
+      calendar_upcoming_events: (request: unknown) => invokeMethod('calendar_upcoming_events', request),
+      calendar_list_events: (request: unknown) => invokeMethod('calendar_list_events', request),
+      calendar_delete_event: (request: unknown) => invokeMethod('calendar_delete_event', request),
+      calendar_export_ics: (request: unknown) => invokeMethod('calendar_export_ics', request),
+      navigation_list_windows: (request: unknown) => invokeMethod('navigation_list_windows', request),
+      navigation_activate_window: (request: unknown) => invokeMethod('navigation_activate_window', request),
+      navigation_close_window: (request: unknown) => invokeMethod('navigation_close_window', request),
+      web_search: (request: unknown) => invokeMethod('web_search', request),
+      url_quick_open: (request: unknown) => invokeMethod('url_quick_open', request),
+      browser_get_active_tab: (request: unknown) => invokeMethod('browser_get_active_tab', request),
+      contacts_list: (request: unknown) => invokeMethod('contacts_list', request),
+      contacts_create: (request: unknown) => invokeMethod('contacts_create', request),
+      contacts_delete: (request: unknown) => invokeMethod('contacts_delete', request),
+      filesearch_quick_look: (request: unknown) => invokeMethod('filesearch_quick_look', request),
+      system_execute_action: (request: unknown) => invokeMethod('system_execute_action', request),
+      shortcuts_list: (request: unknown) => invokeMethod('shortcuts_list', request),
+      shortcuts_run: (request: unknown) => invokeMethod('shortcuts_run', request),
+      shortcuts_view: (request: unknown) => invokeMethod('shortcuts_view', request),
+      navigation_search_menu_items: (request: unknown) => invokeMethod('navigation_search_menu_items', request),
+      navigation_click_menu_item: (request: unknown) => invokeMethod('navigation_click_menu_item', request),
+      audio_get_devices: (request: unknown) => invokeMethod('audio_get_devices', request),
+      audio_set_default_device: (request: unknown) => invokeMethod('audio_set_default_device', request),
+      audio_set_volume: (request: unknown) => invokeMethod('audio_set_volume', request),
+      audio_toggle_mute: (request: unknown) => invokeMethod('audio_toggle_mute', request),
+      wifi_get_profiles: (request: unknown) => invokeMethod('wifi_get_profiles', request),
+      wifi_get_password: (request: unknown) => invokeMethod('wifi_get_password', request),
+      dictionary_speak: (request: unknown) => invokeMethod('dictionary_speak', request),
+      brew_exec: (request: unknown) => invokeMethod('brew_exec', request),
+      taskbar_set_dock_position: (request: unknown) => invokeMethod('taskbar_set_dock_position', request),
+      taskbar_restart_dock: (request: unknown) => invokeMethod('taskbar_restart_dock', request),
+      script_commands_list: (request: unknown) => invokeMethod('script_commands_list', request),
+      script_commands_execute: (request: unknown) => invokeMethod('script_commands_execute', request),
+      script_commands_create: (request: unknown) => invokeMethod('script_commands_create', request),
+      script_commands_reload: (request: unknown) => invokeMethod('script_commands_reload', request)
     }, referenceTransport?.methods ?? {})),
     ...(Object.keys(cancellations).length ? { cancellations } : {}),
     setMessageCallback: (callback: unknown) => {

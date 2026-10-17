@@ -81,10 +81,22 @@ export interface WindowsShortcutItem {
   description: string;
   targetPath: string; // .lnk 路径或可执行文件路径
   arguments?: string;
-  commandType: "lnk" | "powershell" | "cmd" | "task_scheduler" | "uri";
+  commandType: "lnk" | "powershell" | "cmd" | "task_scheduler" | "uri" | "apple_shortcut";
   commandScript: string;
   category: "apps" | "system" | "network" | "dev" | "productivity";
   iconName: string;
   requiresAdmin?: boolean;
   destructive?: boolean;
+  folder?: string;
 }
+
+export interface AppleShortcutItem {
+  id: string;
+  name: string;
+  folder?: string;
+  description: string;
+  category: "apps" | "system" | "network" | "dev" | "productivity";
+  iconName: string;
+  acceptsInput?: boolean;
+}
+

@@ -1,5 +1,5 @@
 import { ref, computed, shallowRef, onUnmounted, toRaw, h } from "vue";
-import { setDeclarativeBridge, renderDeclarativeRoot } from "@ztools/declarative-ui";
+import { setDeclarativeBridge, renderDeclarativeRoot, getComponentFactory } from "@ztools/declarative-ui";
 import { Modal } from "ant-design-vue";
 
 
@@ -150,15 +150,23 @@ export function useDeclarativeStack(initialRoot) {
     let component = null;
     let root = null;
 
-    if (typeof target === "function") {
-      component = target;
+    const rawTarget = toRaw(target);
+    const targetFn =
+      typeof rawTarget === "function"
+        ? rawTarget
+        : typeof getComponentFactory === "function"
+          ? getComponentFactory(rawTarget)
+          : undefined;
+
+    if (typeof targetFn === "function") {
+      component = targetFn;
       try {
         const node = {
           descriptor: null,
           component,
           root: null
         };
-        root = renderDeclarativeRoot(target, {
+        root = renderDeclarativeRoot(targetFn, {
           onUpdate: (newDesc) => {
             node.descriptor = newDesc;
             const top = stack.value[stack.value.length - 1];
@@ -380,9 +388,11 @@ export function useDeclarativeStack(initialRoot) {
     currentDescriptor,
     currentLevel,
     toasts,
+    showToast,
     push,
     pop,
     clear,
     replaceTopDescriptor
   };
 }
+

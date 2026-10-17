@@ -79,4 +79,5 @@ export interface FetchWifiProfilesOptions {
   executor?: WifiCommandExecutor;
   fallbackToSample?: boolean;
   interfaceName?: string;
+  hostOverride?: any;
 }

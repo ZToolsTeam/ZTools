@@ -448,11 +448,11 @@ describe("M1.5 第四组: 宿主治理、系统设置与组织套件 (Governance
       }
     });
 
-    test("5.2 apple-shortcuts 兼容别名规范映射", () => {
+    test("5.2 apple-shortcuts 一等公民注册与规范映射", () => {
       assert.equal(isOfficialPlugin("apple-shortcuts"), true);
       const aliased = getOfficialPlugin("apple-shortcuts");
       assert.ok(aliased);
-      assert.equal(aliased.id, "windows-shortcuts");
+      assert.equal(aliased.id, "apple-shortcuts");
     });
   });
 });

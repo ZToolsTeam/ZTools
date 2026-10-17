@@ -1,4 +1,10 @@
 import { ApplicationRecord, ApplicationCategory, ApplicationActionResult } from "./types.js";
+import {
+  callHostTransport,
+  isRealElectronHost,
+  openRealPath,
+  showRealItemInFolder
+} from "../shared/native-ipc.js";
 
 /**
  * 拼音与首字母映射表（支持常用高频软件与系统工具）
@@ -302,35 +308,101 @@ export const INITIAL_APPLICATIONS: ApplicationRecord[] = [
 ];
 
 export class ApplicationsManager {
-  private apps: ApplicationRecord[] = [...INITIAL_APPLICATIONS];
+  private apps: ApplicationRecord[] = isRealElectronHost() ? [] : [...INITIAL_APPLICATIONS];
 
-  public async getApplications(forceRefresh = false): Promise<ApplicationRecord[]> {
+  private mapHostAppRecord(r: any): ApplicationRecord {
+    const name = String(r?.name || r?.displayName || "Unknown App");
+    const py = computePinyin(name);
+    const isMacApp = typeof r?.path === "string" && r.path.endsWith(".app");
+    const defaultInstallLoc = isMacApp
+      ? r.path.replace(/\/[^/]+\.app$/i, "")
+      : r?.installLocation || "";
+    const resolvedPath =
+      typeof r?.path === "string" && r.path
+        ? r.path
+        : r?.installLocation
+        ? `${r.installLocation}\\${name}.exe`
+        : name;
+
+    return {
+      id: String(r?.id || r?.bundleId || `app-${name.toLowerCase().replace(/[^a-z0-9]+/g, "-")}`),
+      name,
+      version: String(r?.version || "1.0.0"),
+      publisher: String(r?.publisher || (isMacApp ? "Apple / macOS Developer" : "Unknown")),
+      installLocation: String(defaultInstallLoc),
+      path: resolvedPath,
+      architecture:
+        r?.architecture === "arm64" || r?.architecture === "x86" || r?.architecture === "neutral"
+          ? r.architecture
+          : "x64",
+      category:
+        r?.category === "developer" || r?.category === "game" || r?.category === "system"
+          ? r.category
+          : r?.isSystemComponent
+          ? "system"
+          : "installed",
+      bundleId: r?.bundleId || r?.id,
+      uninstallString: r?.uninstallString,
+      quietUninstallString: r?.quietUninstallString,
+      displayIcon: r?.displayIcon || r?.icon,
+      estimatedSizeKb: typeof r?.estimatedSizeKb === "number" ? r.estimatedSizeKb : undefined,
+      isSystemComponent: Boolean(r?.isSystemComponent),
+      isUwp: Boolean(r?.isUwp),
+      pinyin: r?.pinyin || py.pinyin,
+      pinyinInitials: r?.pinyinInitials || py.initials,
+      isRunning: Boolean(r?.isRunning),
+      pid: typeof r?.pid === "number" ? r.pid : undefined,
+      isGame: Boolean(r?.isGame),
+      autoQuitEnabled: Boolean(r?.autoQuitEnabled),
+      leftoverPaths: Array.isArray(r?.leftoverPaths)
+        ? r.leftoverPaths.map((p: any) => String(p))
+        : undefined
+    };
+  }
+
+  /**
+   * 从宿主同步真实已安装应用列表 (Windows 注册表/Appx 或 macOS mdfind/system_profiler + ~/Library 残留分析)
+   */
+  public async syncFromHost(forceRefresh = false, hostOverride?: any): Promise<ApplicationRecord[]> {
+    const res = await callHostTransport<any>(
+      "applications_list",
+      { forceRefresh },
+      hostOverride
+    );
+    if (res.ok && res.data) {
+      const rawList = Array.isArray(res.data)
+        ? res.data
+        : Array.isArray(res.data?.applications)
+        ? res.data.applications
+        : Array.isArray(res.data?.apps)
+        ? res.data.apps
+        : [];
+      if (rawList.length > 0) {
+        const mapped = rawList.map((r: any) => this.mapHostAppRecord(r));
+        this.apps = mapped;
+        return [...this.apps];
+      }
+    }
+    return [...this.apps];
+  }
+
+  public async getApplications(forceRefresh = false, hostOverride?: any): Promise<ApplicationRecord[]> {
     try {
-      const ztools = (globalThis as any).ztools;
+      const ztools = hostOverride ?? (globalThis as any).ztools;
       if (ztools?.applications?.searchApplications) {
-        const remote = await ztools.applications.searchApplications("", { includeSystemComponents: true });
+        const remote = await ztools.applications.searchApplications("", {
+          includeSystemComponents: true,
+          forceRefresh
+        });
         if (Array.isArray(remote) && remote.length > 0) {
-          return remote.map((r: any) => ({
-            id: r.id,
-            name: r.name,
-            version: r.version || "1.0.0",
-            publisher: r.publisher || "Unknown",
-            installLocation: r.installLocation || "",
-            path: r.installLocation ? `${r.installLocation}\\${r.name}.exe` : r.name,
-            architecture: "x64" as const,
-            category: r.isSystemComponent ? ("system" as const) : ("installed" as const),
-            bundleId: r.id,
-            uninstallString: r.uninstallString,
-            quietUninstallString: r.quietUninstallString,
-            displayIcon: r.displayIcon,
-            estimatedSizeKb: r.estimatedSizeKb,
-            isSystemComponent: Boolean(r.isSystemComponent),
-            pinyin: r.pinyin || computePinyin(r.name).pinyin,
-            pinyinInitials: r.pinyinInitials || computePinyin(r.name).initials,
-            isRunning: false,
-            isGame: false,
-            autoQuitEnabled: false
-          }));
+          return remote.map((r: any) => this.mapHostAppRecord(r));
+        }
+      }
+
+      if (hostOverride || isRealElectronHost()) {
+        const synced = await this.syncFromHost(forceRefresh, hostOverride);
+        if (synced.length > 0) {
+          return synced;
         }
       }
     } catch {
@@ -370,7 +442,8 @@ export class ApplicationsManager {
 
   public async openApplication(
     app: ApplicationRecord,
-    options: { runAsAdmin?: boolean } = {}
+    options: { runAsAdmin?: boolean } = {},
+    hostOverride?: any
   ): Promise<ApplicationActionResult> {
     if (!app || !app.path) {
       return { success: false, message: "应用路径无效或为空", error: "INVALID_PATH" };
@@ -382,9 +455,11 @@ export class ApplicationsManager {
     }
 
     try {
-      const ztools = (globalThis as any).ztools;
+      const ztools = hostOverride ?? (globalThis as any).ztools;
       if (ztools?.applications?.open) {
         await ztools.applications.open({ raycastAppId: app.bundleId || app.id, runAsAdmin: options.runAsAdmin });
+      } else if (hostOverride || isRealElectronHost()) {
+        await openRealPath(app.path, hostOverride);
       }
 
       const idx = this.apps.findIndex((a) => a.id === app.id);
@@ -407,7 +482,7 @@ export class ApplicationsManager {
     }
   }
 
-  public async revealApplication(app: ApplicationRecord): Promise<ApplicationActionResult> {
+  public async revealApplication(app: ApplicationRecord, hostOverride?: any): Promise<ApplicationActionResult> {
     if (!app || !app.path) {
       return { success: false, message: "无效的应用路径", error: "INVALID_PATH" };
     }
@@ -416,8 +491,10 @@ export class ApplicationsManager {
       const launcher = (globalThis as any).__ztoolsLauncher;
       if (launcher?.showItemInFolder) {
         await launcher.showItemInFolder(app.path);
+      } else if (hostOverride || isRealElectronHost()) {
+        await showRealItemInFolder(app.path, hostOverride);
       }
-      return { success: true, message: `已在资源管理器中定位 [${app.name}]`, app };
+      return { success: true, message: `已在资源管理器中定位 (Finder) [${app.name}]`, app };
     } catch (err: any) {
       return { success: false, message: `定位失败: ${err.message || String(err)}`, error: "REVEAL_FAILED" };
     }
@@ -472,7 +549,10 @@ export class ApplicationsManager {
     return this.openApplication(app);
   }
 
-  public async uninstallApplication(app: ApplicationRecord): Promise<ApplicationActionResult> {
+  public async uninstallApplication(
+    app: ApplicationRecord,
+    hostOverride?: any
+  ): Promise<ApplicationActionResult> {
     if (!app) {
       return { success: false, message: "应用对象为空", error: "NULL_APP" };
     }
@@ -480,12 +560,13 @@ export class ApplicationsManager {
     if (app.isSystemComponent && !app.uninstallString) {
       return {
         success: false,
-        message: `应用 [${app.name}] 为系统核心组件，不允许直接卸载`,
+        message: `应用 [${app.name}] 为系统核心组件 (Windows System / macOS /System/Applications)，不允许直接卸载`,
         error: "SYSTEM_COMPONENT_LOCKED"
       };
     }
 
-    if (!app.uninstallString && !app.isUwp) {
+    const isMacBundle = Boolean(app.path?.endsWith(".app") || (app.leftoverPaths && app.leftoverPaths.length > 0));
+    if (!app.uninstallString && !app.isUwp && !isMacBundle && !hostOverride && !isRealElectronHost()) {
       return {
         success: false,
         message: `应用 [${app.name}] 未找到有效的卸载注册表项`,
@@ -494,13 +575,37 @@ export class ApplicationsManager {
     }
 
     try {
-      const ztools = (globalThis as any).ztools;
+      const ztools = hostOverride ?? (globalThis as any).ztools;
       if (ztools?.applications?.launchUninstall) {
         await ztools.applications.launchUninstall(app.id);
+      } else if (hostOverride || isRealElectronHost()) {
+        const res = await callHostTransport<any>(
+          "applications_uninstall",
+          {
+            id: app.id,
+            appId: app.id,
+            bundleId: app.bundleId,
+            path: app.path,
+            command: app.uninstallString || app.id,
+            leftoverPaths: app.leftoverPaths
+          },
+          hostOverride
+        );
+        if (!res.ok) {
+          return {
+            success: false,
+            message: `启动卸载失败: ${res.error || "宿主卸载通道返回异常"}`,
+            error: "UNINSTALL_FAILED"
+          };
+        }
       }
+      const leftoverHint =
+        app.leftoverPaths && app.leftoverPaths.length > 0
+          ? `（已同步清理 ${app.leftoverPaths.length} 项 ~/Library 关联残留）`
+          : "";
       return {
         success: true,
-        message: `已调起 [${app.name}] 官方卸载向导`,
+        message: `已调起 [${app.name}] 官方卸载向导${leftoverHint}`,
         app
       };
     } catch (err: any) {

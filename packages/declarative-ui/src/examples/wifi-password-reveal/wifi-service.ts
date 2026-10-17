@@ -15,6 +15,7 @@ import {
   WifiSortBy,
   FetchWifiProfilesOptions
 } from "./types.js";
+import { callHostTransport, isRealElectronHost } from "../shared/native-ipc.js";
 
 export const SAMPLE_WIFI_PROFILES: readonly WifiProfileInfo[] = Object.freeze([
   {
@@ -439,16 +440,109 @@ export function filterAndSortWifiProfiles(
 }
 
 /**
- * 跨平台获取已保存的 Wi-Fi 密码列表（支持注入自定义执行器用于集成与混沌测试）
+ * 通过宿主 IPC 通道按需提取指定 SSID 的明文密码 (macOS Keychain / Windows netsh)
+ */
+export async function revealWifiPasswordFromHost(ssid: string, hostOverride?: any): Promise<string> {
+  const cleanSsid = (ssid || "").trim();
+  if (!cleanSsid) return "";
+  const res = await callHostTransport<any>("wifi_get_password", { ssid: cleanSsid }, hostOverride);
+  if (res.ok && res.data !== undefined) {
+    if (typeof res.data === "string") return res.data.trim();
+    if (typeof res.data?.password === "string") return res.data.password.trim();
+  }
+  return "";
+}
+
+/**
+ * 跨平台获取已保存的 Wi-Fi 密码列表（支持宿主 IPC wifi_get_profiles / wifi_get_password 与自定义执行器）
  */
 export async function fetchSavedWifiProfiles(
   options: FetchWifiProfilesOptions = {}
 ): Promise<WifiProfileInfo[]> {
-  const fallback = options.fallbackToSample ?? true;
+  const realHost = isRealElectronHost(options.hostOverride);
+  const fallback = options.fallbackToSample ?? !realHost;
   const executor = options.executor;
 
   if (!executor) {
-    return [...SAMPLE_WIFI_PROFILES];
+    if (options.hostOverride || realHost) {
+      try {
+        const res = await callHostTransport<any>(
+          "wifi_get_profiles",
+          { interfaceName: options.interfaceName },
+          options.hostOverride
+        );
+        if (res.ok && res.data) {
+          const rawList = Array.isArray(res.data)
+            ? res.data
+            : Array.isArray(res.data?.profiles)
+            ? res.data.profiles
+            : [];
+          if (rawList.length > 0) {
+            const mapped = await Promise.all(
+              rawList.map(async (item: any, idx: number): Promise<WifiProfileInfo | null> => {
+                const shouldPrefetchPwd = idx < 5;
+                if (typeof item === "string") {
+                  const ssid = item.trim();
+                  if (!ssid) return null;
+                  const pwd = shouldPrefetchPwd
+                    ? await revealWifiPasswordFromHost(ssid, options.hostOverride)
+                    : "";
+                  return {
+                    id: `host-wifi-${ssid}`,
+                    ssid,
+                    password: pwd,
+                    authType: "WPA2-Personal",
+                    isOpenNetwork: false,
+                    isEnterprise: false,
+                    signalPercent: 88
+                  };
+                }
+                if (item && typeof item === "object") {
+                  const ssid = String(item.ssid || item.name || "").trim();
+                  if (!ssid) return null;
+                  const pwd =
+                    typeof item.password === "string" && item.password
+                      ? item.password
+                      : shouldPrefetchPwd
+                      ? await revealWifiPasswordFromHost(ssid, options.hostOverride)
+                      : "";
+                  const authType = item.authType
+                    ? normalizeSecurityType(String(item.authType))
+                    : "WPA2-Personal";
+                  return {
+                    id: String(item.id || `host-wifi-${ssid}`),
+                    ssid,
+                    password: pwd,
+                    authType,
+                    cipher: item.cipher || "CCMP (AES)",
+                    band: item.band || "Dual-Band (2.4/5 GHz)",
+                    isConnected: Boolean(item.isConnected),
+                    isOpenNetwork: Boolean(item.isOpenNetwork ?? authType === "Open"),
+                    isEnterprise: Boolean(item.isEnterprise ?? authType.includes("Enterprise")),
+                    signalPercent: typeof item.signalPercent === "number" ? item.signalPercent : 88,
+                    interfaceName: item.interfaceName || options.interfaceName || "WLAN",
+                    lastConnected: item.lastConnected || "已保存",
+                    pinyin: item.pinyin,
+                    notes: item.notes
+                  };
+                }
+                return null;
+              })
+            );
+            const valid = mapped.filter((x): x is WifiProfileInfo => x !== null);
+            if (valid.length > 0) {
+              return valid;
+            }
+          }
+        }
+      } catch {
+        // 忽略 IPC 异常
+      }
+      if (realHost) {
+        return [];
+      }
+    }
+    return fallback ? [...SAMPLE_WIFI_PROFILES] : [];
   }
 
   const platform = options.platform || "win32";

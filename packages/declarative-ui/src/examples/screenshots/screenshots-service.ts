@@ -4,6 +4,15 @@ import {
   ScreenshotCategory,
   ScreenshotActionResult
 } from "./types.js";
+import {
+  callHostTransport,
+  isRealElectronHost,
+  getRealSystemPath,
+  readRealDirectory,
+  openRealPath,
+  showRealItemInFolder,
+  trashRealItem
+} from "../shared/native-ipc.js";
 
 const PINNED_STORAGE_KEY = "@ztools/screenshots/pinned";
 
@@ -154,12 +163,75 @@ All tests passed: 197 / 197. Ready to merge.`,
 ];
 
 export class ScreenshotsManager {
-  private items: ScreenshotItem[] = [...INITIAL_SCREENSHOTS];
+  private items: ScreenshotItem[] = isRealElectronHost() ? [] : [...INITIAL_SCREENSHOTS];
   private pinnedSet = new Set<string>(["ss-ide-01", "ss-dash-03"]);
   private scanned = false;
 
+  private mapHostScreenshot(raw: any): ScreenshotItem {
+    const filename = String(raw?.filename || raw?.name || "Screenshot.png");
+    const fullPath = String(raw?.path || filename);
+    const width = Number(raw?.width) > 0 ? Number(raw.width) : 2560;
+    const height = Number(raw?.height) > 0 ? Number(raw.height) : 1440;
+    const sizeBytes = Number(raw?.sizeBytes ?? raw?.size) > 0 ? Number(raw.sizeBytes ?? raw.size) : 1048576;
+    const sizeMb = (sizeBytes / (1024 * 1024)).toFixed(2);
+    const modifiedAt = Number(raw?.modifiedAt ?? raw?.mtimeMs) > 0 ? Number(raw.modifiedAt ?? raw.mtimeMs) : Date.now();
+    const createdAt = Number(raw?.createdAt ?? raw?.birthtimeMs) > 0 ? Number(raw.createdAt ?? raw.birthtimeMs) : modifiedAt;
+    const id = String(raw?.id || `ss-${filename.replace(/[^a-zA-Z0-9_-]/g, "")}`);
+
+    return {
+      id,
+      filename,
+      path: fullPath,
+      width,
+      height,
+      dimensions: String(raw?.dimensions || `${width} x ${height}`),
+      sizeBytes,
+      formattedSize: String(raw?.formattedSize || `${sizeMb} MB`),
+      createdAt,
+      modifiedAt,
+      formattedDate: String(raw?.formattedDate || new Date(modifiedAt).toLocaleTimeString()),
+      pinned: Boolean(raw?.pinned) || this.pinnedSet.has(id),
+      ocrText: String(raw?.ocrText || `系统自动提取文件文本 [${filename}]`),
+      ocrStatus: raw?.ocrStatus === "pending" || raw?.ocrStatus === "failed" ? raw.ocrStatus : "ready",
+      thumbnailSvg: String(raw?.thumbnailSvg || generateScreenshotThumbnailSvg(filename, width, height, "#0078D4"))
+    };
+  }
+
   /**
-   * 探测系统默认截图目录
+   * 立即截取当前屏幕并加入截图历史 (调用宿主 screen_capture IPC)
+   */
+  public async captureScreenNow(hostOverride?: any): Promise<ScreenshotActionResult> {
+    try {
+      const capRes = await callHostTransport<any>("screen_capture", {}, hostOverride);
+      if (capRes.ok && capRes.data) {
+        const raw = capRes.data;
+        if (typeof raw === "object" && (raw.path || raw.filename || raw.name)) {
+          const capturedItem = this.mapHostScreenshot(raw);
+          this.items = [capturedItem, ...this.items.filter((i) => i.id !== capturedItem.id)];
+          return {
+            success: true,
+            message: `已截取当前屏幕: ${capturedItem.filename}`,
+            screenshot: capturedItem
+          };
+        }
+      }
+      const list = await this.loadScreenshots(true, hostOverride);
+      return {
+        success: true,
+        message: `已完成屏幕截取，当前共 ${list.length} 张截图`,
+        screenshot: list[0]
+      };
+    } catch (err: any) {
+      return {
+        success: false,
+        message: `截屏失败: ${err?.message || String(err)}`,
+        error: "CAPTURE_FAILED"
+      };
+    }
+  }
+
+  /**
+   * 探测系统默认截图目录 (支持 Windows Pictures/Screenshots 与 macOS Desktop / Pictures)
    */
   public getDefaultLocations(): readonly string[] {
     const locations: string[] = [];
@@ -168,9 +240,15 @@ export class ScreenshotsManager {
       : "";
 
     if (home) {
-      locations.push(`${home}\\Pictures\\Screenshots`);
-      locations.push(`${home}\\OneDrive\\Pictures\\Screenshots`);
-      locations.push(`${home}\\Pictures`);
+      if (home.startsWith("/")) {
+        locations.push(`${home}/Desktop`);
+        locations.push(`${home}/Pictures/Screenshots`);
+        locations.push(`${home}/Pictures`);
+      } else {
+        locations.push(`${home}\\Pictures\\Screenshots`);
+        locations.push(`${home}\\OneDrive\\Pictures\\Screenshots`);
+        locations.push(`${home}\\Pictures`);
+      }
     } else {
       locations.push("C:\\Users\\User\\Pictures\\Screenshots");
     }
@@ -179,10 +257,11 @@ export class ScreenshotsManager {
   }
 
   /**
-   * 扫描系统磁盘中的截图文件 (优先使用真实系统截图，支持平滑降级)
+   * 扫描系统磁盘中的截图文件 (优先通过 screenshots_scan IPC 调用主进程扫描 macOS com.apple.screencapture / mdfind 或 Windows 目录，支持平滑降级)
    */
-  public async loadScreenshots(forceRefresh = false): Promise<ScreenshotItem[]> {
-    if (this.scanned && !forceRefresh) {
+  public async loadScreenshots(forceRefresh = false, hostOverride?: any): Promise<ScreenshotItem[]> {
+    const realHost = isRealElectronHost(hostOverride);
+    if (this.scanned && !forceRefresh && !hostOverride) {
       return [...this.items];
     }
 
@@ -195,7 +274,74 @@ export class ScreenshotsManager {
       // ignore
     }
 
-    // 尝试读取真实系统截图
+    // 1. 优先尝试通过宿主 IPC 通道 screenshots_scan 获取跨平台截图列表
+    try {
+      if (hostOverride || realHost) {
+        let scanRes = await callHostTransport<any>("screenshots_scan", { forceRefresh }, hostOverride);
+        if (!scanRes.ok) {
+          scanRes = await callHostTransport<any>("screenshots_search", { forceRefresh }, hostOverride);
+        }
+        if (scanRes.ok && scanRes.data) {
+          const rawList = Array.isArray(scanRes.data)
+            ? scanRes.data
+            : Array.isArray(scanRes.data?.screenshots)
+            ? scanRes.data.screenshots
+            : Array.isArray(scanRes.data?.items)
+            ? scanRes.data.items
+            : [];
+          if (rawList.length > 0) {
+            const mapped = rawList.map((r: any) => this.mapHostScreenshot(r));
+            const map = new Map<string, ScreenshotItem>();
+            for (const item of mapped) map.set(item.id, item);
+            if (!realHost) {
+              for (const item of this.items) {
+                if (!map.has(item.id)) map.set(item.id, item);
+              }
+            }
+            this.items = Array.from(map.values());
+          }
+        }
+
+        // 在真实宿主环境下若 screenshots_scan 为空，扫描用户真实的 Pictures / Desktop 目录中的图片文件
+        if (realHost && this.items.length === 0) {
+          const [picturesDir, desktopDir] = await Promise.all([
+            getRealSystemPath("pictures", hostOverride),
+            getRealSystemPath("desktop", hostOverride)
+          ]);
+          const candidateDirs = [
+            picturesDir ? (picturesDir.startsWith("/") ? `${picturesDir}/Screenshots` : `${picturesDir}\\Screenshots`) : "",
+            picturesDir,
+            desktopDir
+          ].filter(Boolean);
+          const dirLists = await Promise.all(candidateDirs.map((d) => readRealDirectory(d, hostOverride)));
+          const discoveredReal: ScreenshotItem[] = [];
+          const seenPaths = new Set<string>();
+          for (const entries of dirLists) {
+            for (const entry of entries) {
+              if (entry.isDir || !entry.path || seenPaths.has(entry.path)) continue;
+              const ext = (entry.ext || entry.name.slice(entry.name.lastIndexOf("."))).toLowerCase();
+              if (ext === ".png" || ext === ".jpg" || ext === ".jpeg" || ext === ".webp") {
+                seenPaths.add(entry.path);
+                discoveredReal.push(
+                  this.mapHostScreenshot({
+                    id: `real-ss-${discoveredReal.length}-${entry.name.replace(/[^a-zA-Z0-9_-]/g, "")}`,
+                    filename: entry.name,
+                    path: entry.path,
+                    sizeBytes: entry.size,
+                    modifiedAt: entry.mtimeMs
+                  })
+                );
+              }
+            }
+          }
+          this.items = discoveredReal;
+        }
+      }
+    } catch {
+      // 忽略 IPC 异常，继续本地扫描或内置数据降级
+    }
+
+    // 2. 尝试读取本地文件系统真实系统截图
     try {
       if (typeof process !== "undefined" && process.versions?.node) {
         const fs = await import("node:fs").catch(() => null);
@@ -349,10 +495,24 @@ export class ScreenshotsManager {
   }
 
   /**
-   * 快速回贴最新一张截图
+   * 快速回贴最新一张截图 (优先调用 screenshots_paste_latest IPC)
    */
-  public async pasteLatestScreenshot(): Promise<ScreenshotActionResult> {
-    const list = await this.loadScreenshots();
+  public async pasteLatestScreenshot(hostOverride?: any): Promise<ScreenshotActionResult> {
+    if (hostOverride || isRealElectronHost()) {
+      const ipcRes = await callHostTransport<any>("screenshots_paste_latest", {}, hostOverride);
+      if (ipcRes.ok) {
+        const target = ipcRes.data?.screenshot
+          ? this.mapHostScreenshot(ipcRes.data.screenshot)
+          : this.items[0];
+        return {
+          success: true,
+          message: ipcRes.data?.message || `已将最新截图 [${target?.filename || "Latest"}] 回贴到前台活动窗口`,
+          screenshot: target
+        };
+      }
+    }
+
+    const list = await this.loadScreenshots(false, hostOverride);
     if (list.length === 0) {
       return { success: false, message: "未找到近期截图", error: "NO_SCREENSHOTS" };
     }
@@ -408,15 +568,17 @@ export class ScreenshotsManager {
   }
 
   /**
-   * 在资源管理器中定位 (Show in Explorer)
+   * 在 Finder / 资源管理器中定位 (Show in Finder / Explorer)
    */
-  public async showInExplorer(item: ScreenshotItem): Promise<ScreenshotActionResult> {
+  public async showInExplorer(item: ScreenshotItem, hostOverride?: any): Promise<ScreenshotActionResult> {
     if (!item || !item.path) return { success: false, message: "无效的文件路径", error: "INVALID_PATH" };
 
     try {
       const launcher = (globalThis as any).__ztoolsLauncher;
       if (launcher?.showItemInFolder) {
         await launcher.showItemInFolder(item.path);
+      } else if (hostOverride || isRealElectronHost()) {
+        await showRealItemInFolder(item.path, hostOverride);
       }
     } catch {
       // ignore
@@ -424,7 +586,7 @@ export class ScreenshotsManager {
 
     return {
       success: true,
-      message: `已在资源管理器中定位: ${item.filename}`,
+      message: `已在 Finder / 资源管理器中定位: ${item.filename}`,
       screenshot: item
     };
   }
@@ -432,13 +594,15 @@ export class ScreenshotsManager {
   /**
    * 用默认图片查看器打开 (Open with Default App)
    */
-  public async openWithDefaultApp(item: ScreenshotItem): Promise<ScreenshotActionResult> {
+  public async openWithDefaultApp(item: ScreenshotItem, hostOverride?: any): Promise<ScreenshotActionResult> {
     if (!item || !item.path) return { success: false, message: "无效的文件路径", error: "INVALID_PATH" };
 
     try {
       const ztools = (globalThis as any).ztools;
       if (ztools?.fileSystem?.openFile) {
         await ztools.fileSystem.openFile({ path: item.path });
+      } else if (hostOverride || isRealElectronHost()) {
+        await openRealPath(item.path, hostOverride);
       }
     } catch {
       // ignore
@@ -452,13 +616,15 @@ export class ScreenshotsManager {
   }
 
   /**
-   * 删除截图文件 (移至回收站)
+   * 删除截图文件 (移至废纸篓 / 回收站)
    */
-  public async deleteScreenshot(item: ScreenshotItem): Promise<ScreenshotActionResult> {
+  public async deleteScreenshot(item: ScreenshotItem, hostOverride?: any): Promise<ScreenshotActionResult> {
     if (!item) return { success: false, message: "截图记录为空", error: "NULL_ITEM" };
 
     try {
-      if (typeof process !== "undefined" && process.versions?.node) {
+      if (hostOverride || isRealElectronHost()) {
+        await trashRealItem(item.path, hostOverride);
+      } else if (typeof process !== "undefined" && process.versions?.node) {
         const fs = await import("node:fs").catch(() => null);
         if (fs && fs.existsSync(item.path)) {
           try {

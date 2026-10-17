@@ -15,7 +15,12 @@
  */
 
 import { execFile, spawn } from 'node:child_process'
+import fs from 'node:fs'
+import fsPromises from 'node:fs/promises'
+import os from 'node:os'
+import path from 'node:path'
 import { promisify } from 'node:util'
+import { shell } from 'electron'
 
 const execFileAsync = promisify(execFile)
 
@@ -34,6 +39,8 @@ export interface InstalledApplicationRecord {
   readonly isSystemComponent: boolean
   readonly pinyin: string
   readonly pinyinInitials: string
+  readonly bundleId?: string | undefined
+  readonly leftoverPaths?: readonly string[] | undefined
 }
 
 export interface ApplicationRegistryScanner {
@@ -41,7 +48,7 @@ export interface ApplicationRegistryScanner {
 }
 
 export interface ApplicationUninstaller {
-  uninstall(command: string): Promise<{ success: boolean; error?: string }>
+  uninstall(command: string, record?: InstalledApplicationRecord): Promise<{ success: boolean; error?: string; removedPaths?: string[] }>
 }
 
 /**
@@ -65,6 +72,196 @@ function computePinyin(name: string): { pinyin: string; initials: string } {
   }
   const clean = name.toLowerCase().replace(/[^a-z0-9]/g, '')
   return { pinyin: clean, initials: clean.slice(0, 4) }
+}
+
+/**
+ * 将 Windows 卸载命令行拆分为可执行文件与参数数组（避免 shell: true）
+ */
+export function splitCommandArgs(commandLine: string): { executable: string; args: string[] } {
+  const tokens: string[] = []
+  let current = ''
+  let inQuotes = false
+
+  for (let i = 0; i < commandLine.length; i++) {
+    const ch = commandLine[i]!
+    if (ch === '"') {
+      inQuotes = !inQuotes
+      continue
+    }
+    if (!inQuotes && /\s/.test(ch)) {
+      if (current.length > 0) {
+        tokens.push(current)
+        current = ''
+      }
+      continue
+    }
+    current += ch
+  }
+  if (current.length > 0) {
+    tokens.push(current)
+  }
+  return {
+    executable: tokens[0] ?? '',
+    args: tokens.slice(1)
+  }
+}
+
+/**
+ * 检索 macOS 应用程序在 ~/Library 下的关联残留路径
+ */
+export async function findMacosAppLeftovers(
+  bundleId: string,
+  appName: string,
+  homeDir: string = os.homedir()
+): Promise<string[]> {
+  const cleanBundle = String(bundleId ?? '').trim().toLowerCase()
+  const cleanName = String(appName ?? '').trim().toLowerCase()
+  if (!cleanBundle && cleanName.length < 3) {
+    return []
+  }
+
+  const libraryDirs = [
+    path.join(homeDir, 'Library', 'Application Support'),
+    path.join(homeDir, 'Library', 'Caches'),
+    path.join(homeDir, 'Library', 'Preferences'),
+    path.join(homeDir, 'Library', 'Saved Application State'),
+    path.join(homeDir, 'Library', 'Containers'),
+    path.join(homeDir, 'Library', 'Logs')
+  ]
+
+  const matchedPaths: string[] = []
+
+  for (const dir of libraryDirs) {
+    try {
+      const entries = await fsPromises.readdir(dir)
+      for (const entry of entries) {
+        const lower = entry.toLowerCase()
+        const matchByBundle = cleanBundle.length > 0 && lower.includes(cleanBundle)
+        const matchByName = cleanName.length >= 3 && (
+          lower === cleanName ||
+          lower.startsWith(`${cleanName}.`) ||
+          lower.includes(`.${cleanName}.`)
+        )
+        if (matchByBundle || matchByName) {
+          matchedPaths.push(path.join(dir, entry))
+        }
+      }
+    } catch {
+      // 忽略不存在或无权限的子目录
+    }
+  }
+
+  return matchedPaths
+}
+
+/**
+ * macOS `.app` 应用程序包扫描器
+ */
+export class MacosApplicationScanner implements ApplicationRegistryScanner {
+  private readonly searchDirs: readonly string[]
+
+  constructor(searchDirs?: readonly string[]) {
+    const home = os.homedir()
+    this.searchDirs = searchDirs ?? [
+      '/Applications',
+      '/System/Applications',
+      '/System/Applications/Utilities',
+      ...(home ? [path.join(home, 'Applications')] : [])
+    ]
+  }
+
+  async scan(): Promise<readonly InstalledApplicationRecord[]> {
+    const records: InstalledApplicationRecord[] = []
+    const seenPaths = new Set<string>()
+    let index = 0
+
+    for (const rootDir of this.searchDirs) {
+      let entries: fs.Dirent[] = []
+      try {
+        entries = await fsPromises.readdir(rootDir, { withFileTypes: true })
+      } catch {
+        continue
+      }
+
+      for (const entry of entries) {
+        if (!entry.isDirectory() || !entry.name.toLowerCase().endsWith('.app')) {
+          continue
+        }
+
+        const appPath = path.join(rootDir, entry.name)
+        if (seenPaths.has(appPath)) continue
+        seenPaths.add(appPath)
+
+        const fallbackName = entry.name.replace(/\.app$/i, '')
+        let displayName = fallbackName
+        let version = ''
+        let bundleId = ''
+        let publisher = ''
+
+        const plistPath = path.join(appPath, 'Contents', 'Info.plist')
+        if (fs.existsSync(plistPath)) {
+          try {
+            const { stdout } = await execFileAsync('/usr/bin/plutil', [
+              '-convert',
+              'json',
+              '-o',
+              '-',
+              plistPath
+            ], { encoding: 'utf8', timeout: 3000 })
+            const plist = JSON.parse(String(stdout ?? '{}')) as Record<string, unknown>
+            const rawName = plist.CFBundleDisplayName || plist.CFBundleName || fallbackName
+            if (typeof rawName === 'string' && rawName.trim()) {
+              displayName = rawName.trim()
+            }
+            if (typeof plist.CFBundleShortVersionString === 'string') {
+              version = plist.CFBundleShortVersionString.trim()
+            } else if (typeof plist.CFBundleVersion === 'string') {
+              version = plist.CFBundleVersion.trim()
+            }
+            if (typeof plist.CFBundleIdentifier === 'string') {
+              bundleId = plist.CFBundleIdentifier.trim()
+              const parts = bundleId.split('.')
+              if (parts.length >= 2) {
+                publisher = parts[1] ?? ''
+              }
+            }
+          } catch {
+            // fallback to directory name
+          }
+        }
+
+        const isSystemComponent = appPath.startsWith('/System/Applications') || bundleId.startsWith('com.apple.')
+        const { pinyin, initials } = computePinyin(displayName)
+        const leftovers = isSystemComponent ? [] : await findMacosAppLeftovers(bundleId, displayName)
+
+        let mtimeDate = ''
+        try {
+          const stat = await fsPromises.stat(appPath)
+          mtimeDate = stat.mtime.toISOString().slice(0, 10)
+        } catch {
+          // ignore
+        }
+
+        records.push({
+          id: `app-${index++}-${Buffer.from(appPath).toString('base64url').slice(0, 12)}`,
+          name: displayName,
+          version: version || '1.0',
+          publisher: publisher || (isSystemComponent ? 'Apple Inc.' : 'macOS Application'),
+          installDate: mtimeDate,
+          installLocation: appPath,
+          uninstallString: appPath,
+          displayIcon: appPath,
+          isSystemComponent,
+          pinyin,
+          pinyinInitials: initials,
+          ...(bundleId ? { bundleId } : {}),
+          ...(leftovers.length > 0 ? { leftoverPaths: leftovers } : {})
+        })
+      }
+    }
+
+    return records
+  }
 }
 
 /**
@@ -133,12 +330,72 @@ export class WindowsRegistryScanner implements ApplicationRegistryScanner {
   }
 }
 
+async function movePathToTrash(targetPath: string): Promise<void> {
+  if (shell && typeof shell.trashItem === 'function') {
+    await shell.trashItem(targetPath)
+    return
+  }
+  if (process.platform === 'darwin') {
+    await execFileAsync('/usr/bin/osascript', [
+      '-l',
+      'JavaScript',
+      '-e',
+      'function run(argv) { var app = Application("Finder"); app.delete(Path(argv[0])); }',
+      targetPath
+    ], { timeout: 10000 })
+    return
+  }
+  await fsPromises.rm(targetPath, { recursive: true, force: true })
+}
+
 export class DefaultApplicationUninstaller implements ApplicationUninstaller {
-  async uninstall(command: string): Promise<{ success: boolean; error?: string }> {
-    if (!command?.trim()) throw new Error('卸载指令为空')
+  async uninstall(
+    command: string,
+    record?: InstalledApplicationRecord
+  ): Promise<{ success: boolean; error?: string; removedPaths?: string[] }> {
+    const trimmed = command?.trim()
+    if (!trimmed) throw new Error('卸载指令为空')
+
+    // macOS `.app` 包与残留文件安全移入废纸篓
+    if (process.platform === 'darwin' || trimmed.toLowerCase().endsWith('.app')) {
+      if (
+        record?.isSystemComponent ||
+        trimmed.startsWith('/System/Applications') ||
+        record?.installLocation?.startsWith('/System/Applications')
+      ) {
+        return { success: false, error: `系统应用 [${record?.name ?? trimmed}] 受系统保护，禁止卸载` }
+      }
+      try {
+        const removedPaths: string[] = []
+        if (fs.existsSync(trimmed)) {
+          await movePathToTrash(trimmed)
+          removedPaths.push(trimmed)
+        }
+        const leftovers = record?.leftoverPaths ?? (
+          record?.bundleId ? await findMacosAppLeftovers(record.bundleId, record.name) : []
+        )
+        for (const itemPath of leftovers) {
+          try {
+            if (fs.existsSync(itemPath)) {
+              await movePathToTrash(itemPath)
+              removedPaths.push(itemPath)
+            }
+          } catch {
+            // 忽略单个残留清理失败
+          }
+        }
+        return { success: true, removedPaths }
+      } catch (err) {
+        return { success: false, error: err instanceof Error ? err.message : String(err) }
+      }
+    }
+
     try {
-      // 启动卸载程序进程
-      const child = spawn(command, { shell: true, detached: true, stdio: 'ignore' })
+      const { executable, args } = splitCommandArgs(trimmed)
+      if (!executable) {
+        return { success: false, error: '无效的卸载程序路径' }
+      }
+      const child = spawn(executable, args, { shell: false, detached: true, stdio: 'ignore', windowsHide: false })
       child.unref()
       return { success: true }
     } catch (err) {
@@ -155,7 +412,9 @@ export class ApplicationsService {
   private readonly cacheTtlMs = 60000 // 60秒缓存
 
   constructor(options: { scanner?: ApplicationRegistryScanner; uninstaller?: ApplicationUninstaller } = {}) {
-    this.scanner = options.scanner || new WindowsRegistryScanner()
+    this.scanner = options.scanner || (
+      process.platform === 'darwin' ? new MacosApplicationScanner() : new WindowsRegistryScanner()
+    )
     this.uninstaller = options.uninstaller || new DefaultApplicationUninstaller()
   }
 
@@ -194,12 +453,13 @@ export class ApplicationsService {
       if (app.publisher.toLowerCase().includes(raw)) return true
       if (app.pinyin.includes(raw)) return true
       if (app.pinyinInitials.includes(raw)) return true
+      if (app.bundleId && app.bundleId.toLowerCase().includes(raw)) return true
       return false
     })
   }
 
   /**
-   * 启动官方卸载器
+   * 启动官方卸载器或将 macOS .app 移至废纸篓
    */
   public async launchUninstall(appIdOrName: string, quiet = false): Promise<{ success: boolean; message: string; error?: string }> {
     const all = await this.getInstalledApplications()
@@ -207,6 +467,13 @@ export class ApplicationsService {
 
     if (!matched) {
       throw new Error(`未找到应用程序: ${appIdOrName}`)
+    }
+
+    if (
+      matched.installLocation.startsWith('/System/Applications') ||
+      matched.uninstallString.startsWith('/System/Applications')
+    ) {
+      throw new Error(`系统核心应用 [${matched.name}] 受系统保护，禁止卸载`)
     }
 
     const uninstallCmd = (quiet && matched.quietUninstallString)
@@ -217,7 +484,7 @@ export class ApplicationsService {
       throw new Error(`应用 [${matched.name}] 未提供有效卸载命令`)
     }
 
-    const res = await this.uninstaller.uninstall(uninstallCmd)
+    const res = await this.uninstaller.uninstall(uninstallCmd, matched)
     if (!res.success) {
       throw new Error(res.error || `启动卸载程序失败: ${matched.name}`)
     }

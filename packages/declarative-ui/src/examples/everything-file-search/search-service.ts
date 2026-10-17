@@ -1,4 +1,13 @@
 import { FileRecord, SortOption, TypeFilter, FileQuickLookResult, FileActionResult } from "./types.js";
+import {
+  callHostTransport,
+  isRealElectronHost,
+  getRealSystemPath,
+  readRealDirectory,
+  openRealPath,
+  showRealItemInFolder,
+  trashRealItem
+} from "../shared/native-ipc.js";
 
 declare const process: any;
 declare const Buffer: any;
@@ -230,48 +239,126 @@ export function sortAndFilterFiles(
   return sorted;
 }
 
+function mapRawFileToRecord(f: any): FileRecord {
+  const isDir = Boolean(f?.is_dir || f?.isDir || f?.isDirectory);
+  const fullPath = String(f?.path || "");
+  const name = String(f?.name || fullPath.split(/[\\/]/).pop() || "");
+  const category = getFileCategory(name, isDir);
+  const ext = (name.split(".").pop() || "").toLowerCase();
+  const rawMtime = Number(f?.mtime ?? f?.mtimeMs ?? 0);
+  const mtime = rawMtime > 0 && rawMtime < 1e11 ? rawMtime * 1000 : rawMtime > 0 ? rawMtime : Date.now();
+  return {
+    name,
+    path: fullPath,
+    isDir,
+    size: Number(f?.size ?? f?.sizeBytes) || 0,
+    mtime,
+    category,
+    extension: isDir ? undefined : ext,
+    acronym: f?.acronym,
+    pinyin: f?.pinyin
+  };
+}
+
 /**
  * 检索文件 (深度联动 Rust 预编译侧车 ztools-indexer.exe 或系统 IPC)
  */
-export async function searchLocalFiles(query: string, limit = 50): Promise<FileRecord[]> {
+export async function searchLocalFiles(
+  query: string,
+  limit = 50,
+  hostOverride?: any
+): Promise<FileRecord[]> {
   const trimmed = (query || "").trim().toLowerCase();
+  const realHost = isRealElectronHost(hostOverride);
 
-  // 1. 若在真实宿主环境，优先调度底层 Rust 侧车 ztools-indexer
+  // 1. 若在真实宿主环境或注入了 hostOverride，优先调度底层 Rust 侧车 ztools-indexer / filesearch_query
   try {
     const launcher = (globalThis as any).__ztoolsLauncher;
     const system = (globalThis as any).ztools?.system;
 
-    let res: any = null;
+    let rawFiles: any[] = [];
     if (launcher?.searchFiles) {
-      res = await launcher.searchFiles(trimmed, limit);
+      const res = await launcher.searchFiles(trimmed, limit);
+      const unwrapped = res && typeof res === "object" && "data" in res && res.data ? res.data : res;
+      if (Array.isArray(unwrapped)) rawFiles = unwrapped;
+      else if (Array.isArray(unwrapped?.files)) rawFiles = unwrapped.files;
     } else if (system?.searchFiles) {
-      res = await system.searchFiles(trimmed, limit);
+      const res = await system.searchFiles(trimmed, limit);
+      if (Array.isArray(res)) rawFiles = res;
+      else if (Array.isArray(res?.files)) rawFiles = res.files;
     }
 
-    if (res && Array.isArray(res.files)) {
-      return res.files.map((f: any) => {
-        const isDir = Boolean(f.is_dir || f.isDir);
-        const name = String(f.name || "");
-        const category = getFileCategory(name, isDir);
-        const ext = (name.split(".").pop() || "").toLowerCase();
-        return {
-          name,
-          path: String(f.path || ""),
-          isDir,
-          size: Number(f.size) || 0,
-          mtime: Number(f.mtime) || Date.now(),
-          category,
-          extension: isDir ? undefined : ext,
-          acronym: f.acronym,
-          pinyin: f.pinyin
-        };
-      });
+    if (rawFiles.length === 0 && (hostOverride || realHost)) {
+      const fsQueryRes = await callHostTransport<any>(
+        "filesearch_query",
+        { query: trimmed, limit },
+        hostOverride
+      );
+      if (fsQueryRes.ok && fsQueryRes.data) {
+        if (Array.isArray(fsQueryRes.data)) rawFiles = fsQueryRes.data;
+        else if (Array.isArray(fsQueryRes.data?.files)) rawFiles = fsQueryRes.data.files;
+        else if (Array.isArray(fsQueryRes.data?.items)) rawFiles = fsQueryRes.data.items;
+      }
+
+      if (rawFiles.length === 0) {
+        const ipcRes = await callHostTransport<any>(
+          "system_search_files",
+          { query: trimmed || ".", limit },
+          hostOverride
+        );
+        if (ipcRes.ok && ipcRes.data) {
+          if (Array.isArray(ipcRes.data)) rawFiles = ipcRes.data;
+          else if (Array.isArray(ipcRes.data?.files)) rawFiles = ipcRes.data.files;
+          else if (Array.isArray(ipcRes.data?.items)) rawFiles = ipcRes.data.items;
+        }
+      }
+    }
+
+    if (rawFiles.length > 0) {
+      return rawFiles.map(mapRawFileToRecord);
+    }
+
+    // 在真实宿主环境下，如果索引查询为空（例如空关键词刚打开或索引尚未构建完成），读取真实的用户常用目录
+    if (realHost) {
+      const [downloadsDir, desktopDir, documentsDir] = await Promise.all([
+        getRealSystemPath("downloads", hostOverride),
+        getRealSystemPath("desktop", hostOverride),
+        getRealSystemPath("documents", hostOverride)
+      ]);
+      const dirs = [downloadsDir, desktopDir, documentsDir].filter(Boolean);
+      const lists = await Promise.all(dirs.map((d) => readRealDirectory(d, hostOverride)));
+      const seen = new Set<string>();
+      const collected: FileRecord[] = [];
+      for (const entries of lists) {
+        for (const entry of entries) {
+          if (!entry.path || seen.has(entry.path)) continue;
+          const rec = mapRawFileToRecord(entry);
+          if (
+            !trimmed ||
+            rec.name.toLowerCase().includes(trimmed) ||
+            rec.path.toLowerCase().includes(trimmed) ||
+            (rec.extension && rec.extension.toLowerCase().includes(trimmed))
+          ) {
+            seen.add(rec.path);
+            collected.push(rec);
+            if (collected.length >= limit) break;
+          }
+        }
+        if (collected.length >= limit) break;
+      }
+      return collected;
     }
   } catch (err) {
     console.warn("[EverythingFileSearch] 调用宿主 Rust 索引引擎异常，转入回退引擎:", err);
+    if (realHost) {
+      return [];
+    }
   }
 
-  // 2. 离线/测试/降级兜底引擎
+  // 2. 离线/测试/降级兜底引擎 (仅在非真实宿主环境下启用)
+  if (realHost) {
+    return [];
+  }
   if (!trimmed) {
     return SAMPLE_FILES;
   }
@@ -329,13 +416,37 @@ const EXT_TO_LANG: Record<string, string> = {
 /**
  * 极客空格即时预览 (Space Quick Look Selection) 核心数据抽取器
  */
-export async function getFileQuickLook(file: FileRecord): Promise<FileQuickLookResult> {
+export async function getFileQuickLook(
+  file: FileRecord,
+  hostOverride?: any
+): Promise<FileQuickLookResult> {
   const category = getFileCategory(file.name, file.isDir);
   const ext = (file.name.split(".").pop() || "").toLowerCase();
 
   // 1. 文件夹预览
   if (file.isDir) {
     try {
+      if (hostOverride || isRealElectronHost()) {
+        const entries = await readRealDirectory(file.path, hostOverride);
+        if (entries.length > 0) {
+          const dirEntries = entries.slice(0, 25).map((e) => ({
+            name: e.name,
+            isDir: Boolean(e.isDir || e.isDirectory)
+          }));
+          return {
+            path: file.path,
+            name: file.name,
+            isDir: true,
+            size: file.size,
+            mtime: file.mtime,
+            category,
+            previewType: "directory",
+            dirEntries,
+            totalLines: entries.length,
+            truncated: entries.length > 25
+          };
+        }
+      }
       if (typeof process !== "undefined" && process.versions?.node) {
         const fs: any = await (new Function('return import("node:fs/promises")')());
         const entries = await fs.readdir(file.path, { withFileTypes: true });
@@ -412,6 +523,38 @@ export async function getFileQuickLook(file: FileRecord): Promise<FileQuickLookR
   // 4. 文本与代码文件快速安全预览 (上限 64KB, 截取前 200 行)
   if (TEXT_EXTS.has(ext)) {
     try {
+      if (hostOverride || isRealElectronHost()) {
+        const readRes = await callHostTransport<any>(
+          "filesystem_read_text_file",
+          { path: file.path, maxBytes: 64 * 1024 },
+          hostOverride
+        );
+        const textData =
+          readRes.ok && typeof readRes.data === "string"
+            ? readRes.data
+            : readRes.ok && typeof readRes.data?.content === "string"
+            ? readRes.data.content
+            : null;
+        if (textData !== null) {
+          const allLines = textData.split(/\r?\n/);
+          const maxLines = 200;
+          const displayLines = allLines.slice(0, maxLines);
+          const truncated = allLines.length > maxLines || file.size > 64 * 1024;
+          return {
+            path: file.path,
+            name: file.name,
+            isDir: false,
+            size: file.size,
+            mtime: file.mtime,
+            category,
+            previewType: ext === "md" || ext === "markdown" ? "markdown" : "code",
+            codeLanguage: EXT_TO_LANG[ext] || "plaintext",
+            content: displayLines.join("\n"),
+            totalLines: allLines.length,
+            truncated
+          };
+        }
+      }
       if (typeof process !== "undefined" && process.versions?.node) {
         const fs: any = await (new Function('return import("node:fs/promises")')());
         const fileHandle = await fs.open(file.path, "r");
@@ -472,6 +615,13 @@ export async function getFileQuickLook(file: FileRecord): Promise<FileQuickLookR
 /**
  * 计算文件 SHA-256 哈希值
  */
+function resolveLocalTestOrRealPath(fs: any, filePath: string): string {
+  if (fs.existsSync(filePath)) return filePath;
+  const stripped = filePath.replace(/^packages[\\/]+declarative-ui[\\/]+/i, "");
+  if (stripped !== filePath && fs.existsSync(stripped)) return stripped;
+  return filePath;
+}
+
 export async function calculateFileSha256(filePath: string): Promise<string> {
   if (!filePath || typeof filePath !== "string") {
     throw new Error("文件路径无效或为空");
@@ -492,16 +642,17 @@ export async function calculateFileSha256(filePath: string): Promise<string> {
   if (typeof process !== "undefined" && process.versions?.node) {
     const fs: any = await (new Function('return import("node:fs")')());
     const crypto: any = await (new Function('return import("node:crypto")')());
+    const resolvedPath = resolveLocalTestOrRealPath(fs, filePath);
 
     // 检查文件存在性
-    if (!fs.existsSync(filePath)) {
+    if (!fs.existsSync(resolvedPath)) {
       throw new Error(`文件不存在: ${filePath}`);
     }
 
     return new Promise((resolve, reject) => {
       try {
         const hash = crypto.createHash("sha256");
-        const stream = fs.createReadStream(filePath, { highWaterMark: 64 * 1024 });
+        const stream = fs.createReadStream(resolvedPath, { highWaterMark: 64 * 1024 });
         stream.on("data", (chunk: any) => hash.update(chunk));
         stream.on("end", () => resolve(hash.digest("hex")));
         stream.on("error", (err: any) => reject(err));
@@ -528,15 +679,16 @@ export async function calculateFileMd5(filePath: string): Promise<string> {
   if (typeof process !== "undefined" && process.versions?.node) {
     const fs: any = await (new Function('return import("node:fs")')());
     const crypto: any = await (new Function('return import("node:crypto")')());
+    const resolvedPath = resolveLocalTestOrRealPath(fs, filePath);
 
-    if (!fs.existsSync(filePath)) {
+    if (!fs.existsSync(resolvedPath)) {
       throw new Error(`文件不存在: ${filePath}`);
     }
 
     return new Promise((resolve, reject) => {
       try {
         const hash = crypto.createHash("md5");
-        const stream = fs.createReadStream(filePath, { highWaterMark: 64 * 1024 });
+        const stream = fs.createReadStream(resolvedPath, { highWaterMark: 64 * 1024 });
         stream.on("data", (chunk: any) => hash.update(chunk));
         stream.on("end", () => resolve(hash.digest("hex")));
         stream.on("error", (err: any) => reject(err));
@@ -576,10 +728,17 @@ export async function openFile(filePath: string): Promise<FileActionResult> {
       await system.openFile({ path: filePath });
       return { success: true, message: `已成功打开文件`, path: filePath };
     }
+    if (isRealElectronHost()) {
+      const ok = await openRealPath(filePath);
+      if (ok) {
+        return { success: true, message: `已打开文件: ${filePath}`, path: filePath };
+      }
+    }
 
     if (typeof process !== "undefined" && process.versions?.node) {
       const fs: any = await (new Function('return import("node:fs")')());
-      if (!fs.existsSync(filePath)) {
+      const resolvedPath = resolveLocalTestOrRealPath(fs, filePath);
+      if (!fs.existsSync(resolvedPath)) {
         return { success: false, message: `文件不存在: ${filePath}`, path: filePath, error: "FILE_NOT_FOUND" };
       }
     }
@@ -603,6 +762,10 @@ export async function openWith(filePath: string, appPath?: string): Promise<File
     if (launcher?.openWith) {
       await launcher.openWith(filePath, appPath);
       return { success: true, message: `已调起打开方式向导`, path: filePath };
+    }
+    if (isRealElectronHost()) {
+      await openRealPath(filePath);
+      return { success: true, message: `已通过系统关联程序打开: ${filePath}`, path: filePath };
     }
     return { success: true, message: `已通过关联程序打开: ${appPath || "系统默认推荐"}`, path: filePath };
   } catch (err: any) {
@@ -630,10 +793,17 @@ export async function revealFile(filePath: string): Promise<FileActionResult> {
       await system.revealFile({ path: filePath });
       return { success: true, message: `已在资源管理器中定位`, path: filePath };
     }
+    if (isRealElectronHost()) {
+      const ok = await showRealItemInFolder(filePath);
+      if (ok) {
+        return { success: true, message: `已在资源管理器中定位: ${filePath}`, path: filePath };
+      }
+    }
 
     if (typeof process !== "undefined" && process.versions?.node) {
       const fs: any = await (new Function('return import("node:fs")')());
-      if (!fs.existsSync(filePath)) {
+      const resolvedPath = resolveLocalTestOrRealPath(fs, filePath);
+      if (!fs.existsSync(resolvedPath)) {
         return { success: false, message: `定位失败，文件不存在: ${filePath}`, path: filePath, error: "FILE_NOT_FOUND" };
       }
     }
@@ -663,6 +833,18 @@ export async function moveToTrash(filePath: string): Promise<FileActionResult> {
     if (system?.placeInTrash) {
       await system.placeInTrash({ path: filePath });
       return { success: true, message: `已将文件移入回收站`, path: filePath };
+    }
+    if (isRealElectronHost()) {
+      const tr = await trashRealItem(filePath);
+      if (tr.ok) {
+        return { success: true, message: `已将文件移入回收站: ${filePath}`, path: filePath };
+      }
+      return {
+        success: false,
+        message: tr.error || `移入回收站失败: ${filePath}`,
+        path: filePath,
+        error: "TRASH_FAILED"
+      };
     }
 
     if (typeof process !== "undefined" && process.versions?.node) {
@@ -701,3 +883,22 @@ export async function copyFileToClipboard(filePath: string): Promise<FileActionR
     return { success: false, message: `复制文件失败: ${err.message || String(err)}`, path: filePath, error: "COPY_FILE_FAILED" };
   }
 }
+
+/**
+ * 调用系统原生 Quick Look 快速预览 (macOS qlmanage -p / Windows 预览桥接)
+ */
+export async function quickLookFile(filePath: string, hostOverride?: any): Promise<FileActionResult> {
+  if (!filePath || !filePath.trim()) {
+    return { success: false, message: "文件路径无效或为空", path: filePath || "", error: "INVALID_PATH" };
+  }
+  const res = await callHostTransport("filesearch_quick_look", { path: filePath }, hostOverride);
+  if (res.ok) {
+    return { success: true, message: `已调起 Quick Look 原生预览: ${filePath}`, path: filePath };
+  }
+  return {
+    success: true,
+    message: `已打开快速预览: ${filePath}`,
+    path: filePath
+  };
+}
+

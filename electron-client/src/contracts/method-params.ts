@@ -1987,9 +1987,11 @@ export function validateMethodParams(method: AllowedMethod, params: unknown): vo
       requireHttpUrl(params, 'url')
       return
     case 'shell_beep':
-    case 'process_list':
     case 'process_list_ports':
       rejectUnknownKeys(params, [])
+      return
+    case 'process_list':
+      rejectUnknownKeys(params, ['limit'])
       return
     case 'shell_exec':
       rejectUnknownKeys(params, ['command'])
@@ -2182,16 +2184,31 @@ export function validateMethodParams(method: AllowedMethod, params: unknown): vo
     case 'snippets_export':
       rejectUnknownKeys(params, [])
       return
-    case 'filesearch_query':
+    case 'filesearch_query': {
       rejectUnknownKeys(params, ['query', 'limit'])
-      requireString(params, 'query', { min: 1, max: 1024 })
+      const obj = typeof params === 'object' && params !== null
+        ? (params as Record<string, unknown>)
+        : {}
+      if ('query' in obj && obj.query !== undefined) {
+        requireString(params, 'query', { min: 0, max: 1024 })
+      }
       return
+    }
     case 'filesearch_open':
     case 'filesearch_reveal':
     case 'filesearch_sha256':
-      rejectUnknownKeys(params, ['fullPath'])
-      requireString(params, 'fullPath', { min: 1, max: 4096 })
+    case 'filesearch_quick_look': {
+      rejectUnknownKeys(params, ['path', 'fullPath'])
+      const obj = typeof params === 'object' && params !== null
+        ? (params as Record<string, unknown>)
+        : {}
+      if ('path' in obj && obj.path !== undefined) {
+        requireString(params, 'path', { min: 1, max: 4096 })
+      } else {
+        requireString(params, 'fullPath', { min: 1, max: 4096 })
+      }
       return
+    }
     case 'window_manage_action':
       rejectUnknownKeys(params, ['action'])
       requireString(params, 'action', { min: 1, max: 64 })
@@ -2274,7 +2291,7 @@ export function validateMethodParams(method: AllowedMethod, params: unknown): vo
     case 'calendar_create_event':
       return
     case 'calendar_upcoming_events':
-      rejectUnknownKeys(params, ['withinHours'])
+      rejectUnknownKeys(params, ['withinHours', 'scope'])
       return
     case 'calendar_list_events':
       return
@@ -2283,18 +2300,26 @@ export function validateMethodParams(method: AllowedMethod, params: unknown): vo
       requireString(params, 'id', { min: 1, max: 128 })
       return
     case 'calendar_export_ics':
-      rejectUnknownKeys(params, ['events'])
+      rejectUnknownKeys(params, ['events', 'eventIds'])
       return
     case 'navigation_list_windows':
-      rejectUnknownKeys(params, ['search'])
+      rejectUnknownKeys(params, ['search', 'query'])
       return
     case 'navigation_activate_window':
     case 'navigation_close_window':
-      rejectUnknownKeys(params, ['hwnd'])
+      rejectUnknownKeys(params, ['hwnd', 'handle', 'id', 'windowId'])
+      return
+    case 'navigation_search_menu_items':
+      rejectUnknownKeys(params, ['search', 'query'])
+      return
+    case 'navigation_click_menu_item':
+      rejectUnknownKeys(params, ['id', 'appName', 'path'])
       return
     case 'web_search':
-      rejectUnknownKeys(params, ['engine', 'query'])
-      requireString(params, 'query', { min: 1, max: 4096 })
+      rejectUnknownKeys(params, ['engine', 'query', 'url'])
+      if (params.query !== undefined) {
+        requireString(params, 'query', { min: 0, max: 4096 })
+      }
       return
     case 'url_quick_open':
       rejectUnknownKeys(params, ['url'])
@@ -2304,7 +2329,7 @@ export function validateMethodParams(method: AllowedMethod, params: unknown): vo
       rejectUnknownKeys(params, [])
       return
     case 'contacts_list':
-      rejectUnknownKeys(params, ['search', 'limit'])
+      rejectUnknownKeys(params, ['search', 'query', 'limit'])
       return
     case 'contacts_create':
       return
@@ -2418,6 +2443,12 @@ export function validateMethodParams(method: AllowedMethod, params: unknown): vo
     case 'taskbar_status':
       rejectUnknownKeys(params, [])
       return
+    case 'taskbar_set_dock_position':
+      rejectUnknownKeys(params, ['edge', 'position'])
+      return
+    case 'taskbar_restart_dock':
+      rejectUnknownKeys(params, [])
+      return
     case 'screenshots_scan':
       rejectUnknownKeys(params, ['query', 'limit', 'pinnedFirst', 'forceRefresh'])
       return
@@ -2436,7 +2467,7 @@ export function validateMethodParams(method: AllowedMethod, params: unknown): vo
       rejectUnknownKeys(params, ['query', 'includeSystemComponents', 'forceRefresh'])
       return
     case 'applications_uninstall':
-      rejectUnknownKeys(params, ['command'])
+      rejectUnknownKeys(params, ['command', 'id', 'appId', 'bundleId', 'path', 'leftoverPaths'])
       requireString(params, 'command', { min: 1, max: 4096 })
       return
     case 'dictionary_lookup':
@@ -2455,6 +2486,60 @@ export function validateMethodParams(method: AllowedMethod, params: unknown): vo
       rejectUnknownKeys(params, [])
       return
     case 'dictionary_get_history':
+      rejectUnknownKeys(params, [])
+      return
+    case 'dictionary_speak':
+      rejectUnknownKeys(params, ['word', 'language', 'text'])
+      requireString(params, 'word', { min: 1, max: 4096 })
+      return
+    case 'system_execute_action':
+      rejectUnknownKeys(params, ['actionKey', 'action', 'volume', 'level', 'muted', 'params'])
+      return
+    case 'shortcuts_list':
+      rejectUnknownKeys(params, [])
+      return
+    case 'shortcuts_run':
+      rejectUnknownKeys(params, ['name', 'input'])
+      requireString(params, 'name', { min: 1, max: 512 })
+      return
+    case 'shortcuts_view':
+      rejectUnknownKeys(params, ['name'])
+      requireString(params, 'name', { min: 1, max: 512 })
+      return
+    case 'audio_get_devices':
+      rejectUnknownKeys(params, [])
+      return
+    case 'audio_set_default_device':
+      rejectUnknownKeys(params, ['id', 'name', 'idOrName', 'type'])
+      return
+    case 'audio_set_volume':
+      rejectUnknownKeys(params, ['volume', 'type'])
+      return
+    case 'audio_toggle_mute':
+      rejectUnknownKeys(params, ['muted'])
+      return
+    case 'wifi_get_profiles':
+      rejectUnknownKeys(params, ['interfaceName', 'forceRefresh'])
+      return
+    case 'wifi_get_password':
+      rejectUnknownKeys(params, ['ssid'])
+      requireString(params, 'ssid', { min: 1, max: 256 })
+      return
+    case 'brew_exec':
+      rejectUnknownKeys(params, ['action', 'pkg', 'cask', 'query'])
+      requireString(params, 'action', { min: 1, max: 32 })
+      return
+    case 'script_commands_list':
+      rejectUnknownKeys(params, ['query', 'search'])
+      return
+    case 'script_commands_execute':
+      rejectUnknownKeys(params, ['id', 'commandId', 'scriptPath', 'filePath', 'args', 'timeoutMs'])
+      return
+    case 'script_commands_create':
+      rejectUnknownKeys(params, ['title', 'mode', 'template', 'language', 'packageName', 'description', 'sourceCode'])
+      requireString(params, 'title', { min: 1, max: 256 })
+      return
+    case 'script_commands_reload':
       rejectUnknownKeys(params, [])
       return
     default: {

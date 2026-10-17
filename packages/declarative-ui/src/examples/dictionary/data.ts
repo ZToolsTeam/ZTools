@@ -628,3 +628,74 @@ export function getOnlineDictionaryUrls(word: string): {
     wordReference: `https://www.wordreference.com/enzh/${enc}`
   };
 }
+
+/**
+ * 在真实 Electron 宿主中通过 dictionary_lookup / dictionary_define IPC 查询系统词典
+ */
+export async function lookupWordFromHost(
+  word: string,
+  hostOverride?: any
+): Promise<DictWordEntry | null> {
+  const clean = (word || "").trim();
+  if (!clean) return null;
+
+  const { callHostTransport, isRealElectronHost } = await import("../shared/native-ipc.js");
+  if (!hostOverride && !isRealElectronHost()) {
+    const local = lookupWord(clean, BUILTIN_DICTIONARY);
+    return local.exactMatches[0] || local.suggestions[0] || null;
+  }
+
+  let res = await callHostTransport<any>("dictionary_lookup", { word: clean }, hostOverride);
+  if (!res.ok || !res.data) {
+    res = await callHostTransport<any>("dictionary_define", { word: clean }, hostOverride);
+  }
+
+  if (res.ok && res.data) {
+    const d = res.data;
+    const targetWord = String(d.word || clean);
+    const posList = Array.isArray(d.pos)
+      ? d.pos.map(String)
+      : typeof d.partOfSpeech === "string"
+        ? [d.partOfSpeech]
+        : ["n."];
+    const defZh = String(d.definitionZh || d.translation || d.meaning || d.definition || "");
+    const defEn = String(d.definitionEn || d.definition || defZh || "");
+    if (defZh || defEn) {
+      return {
+        word: targetWord,
+        phoneticUs: String(d.phoneticUs || d.phonetic || `/${targetWord}/`),
+        phoneticUk: String(d.phoneticUk || d.phonetic || `/${targetWord}/`),
+        pos: posList,
+        definitionZh: defZh || defEn,
+        definitionEn: defEn || defZh,
+        definitions: Array.isArray(d.definitions) ? d.definitions : [],
+        synonyms: Array.isArray(d.synonyms) ? d.synonyms.map(String) : [],
+        antonyms: Array.isArray(d.antonyms) ? d.antonyms.map(String) : [],
+        examples: Array.isArray(d.examples) ? d.examples : [],
+        tags: Array.isArray(d.tags) ? d.tags.map(String) : ["HOST"],
+        frequencyRank: Number(d.frequencyRank || 4)
+      };
+    }
+  }
+
+  const fallback = lookupWord(clean, BUILTIN_DICTIONARY);
+  return fallback.exactMatches[0] || fallback.suggestions[0] || null;
+}
+
+/**
+ * 在真实 Electron 宿主中调用 dictionary_speak 触发 macOS /usr/bin/say 或 Windows TTS 朗读
+ */
+export async function speakWordOnHost(
+  word: string,
+  dialect: "US" | "UK" = "US",
+  hostOverride?: any
+): Promise<boolean> {
+  const clean = (word || "").trim();
+  if (!clean) return false;
+  const { callHostTransport, isRealElectronHost } = await import("../shared/native-ipc.js");
+  if (!hostOverride && !isRealElectronHost()) {
+    return true;
+  }
+  const res = await callHostTransport("dictionary_speak", { word: clean, dialect }, hostOverride);
+  return res.ok;
+}

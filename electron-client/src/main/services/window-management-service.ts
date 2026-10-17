@@ -488,7 +488,7 @@ export class WindowManagementService {
       this.currentWindowBounds.set(targetWindowId, { ...savedBounds })
 
       if (this.options.sidecarManager) {
-        await this.options.sidecarManager.manageWindow('restore').catch(() => null)
+        await this.options.sidecarManager.manageWindow('restore', savedBounds).catch(() => null)
       }
 
       if (this.options.hudService) {
@@ -516,7 +516,7 @@ export class WindowManagementService {
     let targetRect = this.computeTargetBounds(normalized, currentBounds, workArea)
 
     if (this.options.sidecarManager) {
-      const res = await this.options.sidecarManager.manageWindow(normalized)
+      const res = await this.options.sidecarManager.manageWindow(normalized, targetRect)
       if (res && res.success && res.rect) {
         targetRect = res.rect
       }

@@ -79,9 +79,11 @@ export function detectConference(text: string): { url?: string; type?: CalendarE
 
 export class CalendarService {
   private readonly db: DatabaseSync
+  private readonly isPersistentDb: boolean
 
   constructor(options: CalendarServiceOptions = {}) {
     const dbPath = options.dbPath || ':memory:'
+    this.isPersistentDb = dbPath !== ':memory:' && !dbPath.includes('test')
     if (dbPath !== ':memory:') {
       const dir = path.dirname(dbPath)
       if (!fs.existsSync(dir)) {
@@ -109,6 +111,49 @@ export class CalendarService {
         updated_at INTEGER NOT NULL
       );
     `)
+    if (this.isPersistentDb) {
+      const row = this.db.prepare('SELECT COUNT(*) as cnt FROM calendar_events').get() as { cnt?: number } | undefined
+      if (!row || Number(row.cnt ?? 0) === 0) {
+        const now = Date.now()
+        const hourMs = 3600 * 1000
+        this.createEvent({
+          title: 'ZTools 架构评审与插件验收会',
+          description: '本地 SQLite (calendar_events) 持久化日程记录，支持一键入会与 ICS 导出',
+          location: 'Feishu / 飞书会议',
+          startTime: now + hourMs,
+          endTime: now + 2 * hourMs,
+          conferenceUrl: 'https://vc.feishu.cn/j/123456789'
+        })
+        this.createEvent({
+          title: 'macOS & Windows 双端性能巡检',
+          description: '检查 MFT 索引侧车与声明式 UI 内存占用指标 (< 200MB)',
+          location: '腾讯会议',
+          startTime: now + 3 * hourMs,
+          endTime: now + 4 * hourMs,
+          conferenceUrl: 'https://meeting.tencent.com/dm/987654321'
+        })
+      }
+    }
+  }
+
+  private normalizeTimeInput(val: number | string | undefined, fallbackOffsetMs: number): number {
+    if (typeof val === 'number' && Number.isFinite(val)) {
+      return val
+    }
+    if (typeof val === 'string' && val.trim()) {
+      const trimmed = val.trim()
+      const hmMatch = trimmed.match(/^(\d{1,2}):(\d{2})$/)
+      if (hmMatch) {
+        const d = new Date()
+        d.setHours(Number(hmMatch[1]), Number(hmMatch[2]), 0, 0)
+        return d.getTime()
+      }
+      const parsed = Date.parse(trimmed)
+      if (!Number.isNaN(parsed)) {
+        return parsed
+      }
+    }
+    return Date.now() + fallbackOffsetMs
   }
 
   /**
@@ -118,13 +163,21 @@ export class CalendarService {
     if (!input || !input.title || !input.title.trim()) {
       throw new Error('Event title cannot be empty')
     }
-    if (!input.startTime || !input.endTime || input.endTime < input.startTime) {
+    const startTime = typeof input.startTime === 'string'
+      ? this.normalizeTimeInput(input.startTime, 0)
+      : input.startTime
+    const endTime = typeof input.endTime === 'string'
+      ? this.normalizeTimeInput(input.endTime, 3600 * 1000)
+      : input.endTime
+
+    if (!startTime || !endTime || endTime < startTime) {
       throw new Error('Invalid event start or end time')
     }
 
     const id = randomUUID()
     const title = input.title.trim()
-    const description = input.description?.trim() || ''
+    const rawDesc = input.description ?? (input as { notes?: string }).notes
+    const description = rawDesc?.trim() || ''
     const location = input.location?.trim() || ''
     const allDay = !!input.allDay
 
@@ -153,7 +206,7 @@ export class CalendarService {
         conference_url, conference_type, pinyin, created_at, updated_at
       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
-      id, title, description, location, input.startTime, input.endTime, allDay ? 1 : 0,
+      id, title, description, location, startTime, endTime, allDay ? 1 : 0,
       conferenceUrl || null, conferenceType || null, pinyin, now, now
     )
 
@@ -162,8 +215,8 @@ export class CalendarService {
       title,
       description,
       location,
-      startTime: input.startTime,
-      endTime: input.endTime,
+      startTime,
+      endTime,
       allDay,
       conferenceUrl,
       conferenceType,

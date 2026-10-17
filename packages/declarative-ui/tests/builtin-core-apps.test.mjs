@@ -605,7 +605,7 @@ describe("Raycast Compat: Official Built-in Core Applications Suite", () => {
       assert.equal(desc.props.isShowingDetail, true);
 
       const sec = desc.children[0];
-      const item = sec.children[0];
+      const item = sec.children.find((c) => c.key === "snip-1") || sec.children[0];
 
       assert.ok(item.props.detail);
       assert.equal(item.props.detail.type, "List.Item.Detail");

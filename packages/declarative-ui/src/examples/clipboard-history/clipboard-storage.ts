@@ -2,6 +2,12 @@ import { LocalStorage } from "../../api/storage.js";
 import { getDeclarativeBridge } from "../../api/bridge.js";
 import { Clipboard } from "../../api/clipboard.js";
 import {
+  callHostTransport,
+  isRealElectronHost,
+  readRealClipboardText,
+  writeRealClipboardText
+} from "../shared/native-ipc.js";
+import {
   ClipboardItem,
   ClipboardFilterOptions,
   ClipboardContentType,
@@ -11,6 +17,7 @@ import {
 
 const STORAGE_KEY = "ztools:clipboard:history";
 const PREFS_STORAGE_KEY = "ztools:clipboard:preferences";
+const SAMPLE_IDS = new Set(["clip-1", "clip-2", "clip-3", "clip-4", "clip-5"]);
 
 /**
  * 计算字符串的香农信息熵 (Shannon Entropy)
@@ -352,56 +359,132 @@ export class PasteSequenceManager {
 
 export const pasteSequenceManager = new PasteSequenceManager();
 
+function mapRawClipboardRecord(r: any, idx = 0): ClipboardItem {
+  const content = String(r?.content ?? r?.text ?? "");
+  const formatType = String(r?.format_type ?? r?.type ?? "text");
+  const detectedType =
+    formatType === "image"
+      ? "image"
+      : formatType === "files"
+      ? "files"
+      : detectClipboardContentType(content, formatType);
+  return {
+    id: String(r?.id || `clip-host-${idx}-${Date.now()}`),
+    type: detectedType,
+    content,
+    preview: String(r?.text_preview || r?.preview || content.replace(/\s+/g, " ").slice(0, 100)),
+    copiedAt: Number(r?.created_at ?? r?.copiedAt) || Date.now(),
+    pinned: Boolean(r?.is_pinned ?? r?.pinned),
+    charCount: Number(r?.char_count ?? r?.charCount ?? content.length),
+    wordCount: Number(r?.word_count ?? r?.wordCount) || undefined,
+    lineCount: Number(r?.line_count ?? r?.lineCount ?? content.split(/\r?\n/).length),
+    sourceAppName: r?.source_app_name ?? r?.sourceAppName ?? undefined,
+    sourceAppPath: r?.source_app_path ?? r?.sourceAppPath ?? undefined,
+    filePaths: Array.isArray(r?.filePaths) ? r.filePaths : undefined
+  };
+}
+
 /**
  * 获取真实或本地剪贴板历史
  */
-export async function getClipboardHistory(): Promise<ClipboardItem[]> {
+export async function getClipboardHistory(hostOverride?: any): Promise<ClipboardItem[]> {
+  const realHost = isRealElectronHost(hostOverride);
+
   // 1. 尝试通过 window.ztools 原生 IPC 接口读取
   if (typeof window !== "undefined" && (window as any).ztools?.clipboard_history_query) {
     try {
       const records = await (window as any).ztools.clipboard_history_query({ limit: 100 });
       if (Array.isArray(records) && records.length > 0) {
-        return records.map((r: any) => ({
-          id: r.id,
-          type: r.format_type === "image" ? "image" : detectClipboardContentType(r.content, r.format_type),
-          content: r.content,
-          preview: r.text_preview || r.content.slice(0, 100),
-          copiedAt: r.created_at || Date.now(),
-          pinned: Boolean(r.is_pinned),
-          charCount: r.char_count ?? r.content.length,
-          sourceAppName: r.source_app_name ?? undefined,
-          sourceAppPath: r.source_app_path ?? undefined
-        }));
+        return records.map((r: any, i: number) => mapRawClipboardRecord(r, i));
       }
     } catch {
       // 优雅降级
     }
   }
 
-  // 2. 尝试通过 DeclarativeBridge 读取
+  // 2. 尝试通过 Preload Transport (clipboard_history_query) 读取
+  if (hostOverride || realHost) {
+    try {
+      const ipcRes = await callHostTransport<any>(
+        "clipboard_history_query",
+        { limit: 100 },
+        hostOverride
+      );
+      if (ipcRes.ok && ipcRes.data) {
+        const list = Array.isArray(ipcRes.data)
+          ? ipcRes.data
+          : Array.isArray(ipcRes.data?.items)
+          ? ipcRes.data.items
+          : Array.isArray(ipcRes.data?.records)
+          ? ipcRes.data.records
+          : [];
+        if (list.length > 0) {
+          return list.map((r: any, i: number) => mapRawClipboardRecord(r, i));
+        }
+      }
+    } catch {
+      // 优雅降级
+    }
+  }
+
+  // 3. 尝试通过 DeclarativeBridge 读取
   const bridge = getDeclarativeBridge();
   if (bridge?.clipboardHistory?.query) {
     try {
       const records = await bridge.clipboardHistory.query({ limit: 100 });
       if (Array.isArray(records) && records.length > 0) {
-        return records.map((r: any) => ({
-          id: r.id,
-          type: r.format_type === "image" ? "image" : detectClipboardContentType(r.content, r.format_type),
-          content: r.content,
-          preview: r.text_preview || r.content.slice(0, 100),
-          copiedAt: r.created_at || Date.now(),
-          pinned: Boolean(r.is_pinned ?? r.pinned),
-          charCount: r.char_count ?? r.charCount ?? r.content.length,
-          sourceAppName: r.source_app_name ?? r.sourceAppName,
-          sourceAppPath: r.source_app_path ?? r.sourceAppPath
-        }));
+        return records.map((r: any, i: number) => mapRawClipboardRecord(r, i));
       }
     } catch {
       // 优雅降级
     }
   }
 
-  // 3. 兜底 LocalStorage 读取
+  // 4. 在真实 Electron 宿主中，若历史数据库当前为空，主动读取当前操作系统剪贴板真实内容并拒絕假数据
+  if (realHost) {
+    let realStored: ClipboardItem[] = [];
+    try {
+      const raw = await LocalStorage.getItem(STORAGE_KEY);
+      if (raw) {
+        const parsed = JSON.parse(raw);
+        if (Array.isArray(parsed)) {
+          realStored = parsed.filter((item: any) => item && !SAMPLE_IDS.has(String(item.id)));
+        }
+      }
+    } catch {
+      // ignore
+    }
+
+    try {
+      const liveText = await readRealClipboardText(hostOverride);
+      const trimmed = (liveText || "").trim();
+      if (trimmed) {
+        const alreadyExists = realStored.some((item) => item.content === liveText);
+        if (!alreadyExists) {
+          const liveItem: ClipboardItem = {
+            id: `clip-live-${Date.now()}`,
+            type: detectClipboardContentType(liveText),
+            content: liveText,
+            preview: trimmed.replace(/\s+/g, " ").slice(0, 100),
+            copiedAt: Date.now(),
+            pinned: false,
+            charCount: liveText.length,
+            lineCount: liveText.split(/\r?\n/).length,
+            sourceAppName: "System Clipboard"
+          };
+          realStored = [liveItem, ...realStored];
+          await LocalStorage.setItem(STORAGE_KEY, JSON.stringify(realStored));
+          void callHostTransport("clipboard_history_add", { content: liveText }, hostOverride);
+        }
+      }
+    } catch {
+      // ignore
+    }
+
+    return realStored;
+  }
+
+  // 5. 离线/单元测试环境兜底 LocalStorage 读取
   try {
     const raw = await LocalStorage.getItem(STORAGE_KEY);
     if (!raw) {
@@ -412,6 +495,43 @@ export async function getClipboardHistory(): Promise<ClipboardItem[]> {
   } catch {
     return SAMPLE_CLIPBOARD_ITEMS;
   }
+}
+
+/**
+ * 主动读取当前系统剪贴板并写入历史记录
+ */
+export async function syncCurrentSystemClipboard(
+  currentItems: ClipboardItem[] = [],
+  hostOverride?: any
+): Promise<{ added: boolean; item?: ClipboardItem; items: ClipboardItem[] }> {
+  const liveText = await readRealClipboardText(hostOverride);
+  if (!liveText || !liveText.trim()) {
+    return { added: false, items: currentItems };
+  }
+  const existing = currentItems.find((i) => i.content === liveText);
+  if (existing) {
+    const updatedItem = { ...existing, copiedAt: Date.now() };
+    const next = [updatedItem, ...currentItems.filter((i) => i.id !== existing.id)];
+    await saveClipboardHistory(next);
+    return { added: false, item: updatedItem, items: next };
+  }
+  const newItem: ClipboardItem = {
+    id: `clip-${Date.now()}`,
+    type: detectClipboardContentType(liveText),
+    content: liveText,
+    preview: liveText.trim().replace(/\s+/g, " ").slice(0, 100),
+    copiedAt: Date.now(),
+    pinned: false,
+    charCount: liveText.length,
+    lineCount: liveText.split(/\r?\n/).length,
+    sourceAppName: "System Clipboard"
+  };
+  if (hostOverride || isRealElectronHost()) {
+    void callHostTransport("clipboard_history_add", { content: liveText }, hostOverride);
+  }
+  const next = [newItem, ...currentItems];
+  await saveClipboardHistory(next);
+  return { added: true, item: newItem, items: next };
 }
 
 /**
@@ -429,6 +549,12 @@ export async function toggleClipboardItemPin(id: string): Promise<boolean> {
   if (typeof window !== "undefined" && (window as any).ztools?.clipboard_history_toggle_pin) {
     try {
       return await (window as any).ztools.clipboard_history_toggle_pin({ id });
+    } catch {}
+  }
+  if (isRealElectronHost()) {
+    try {
+      const res = await callHostTransport<any>("clipboard_history_toggle_pin", { id });
+      if (res.ok) return Boolean(res.data ?? true);
     } catch {}
   }
   // 2. Bridge
@@ -451,6 +577,12 @@ export async function deleteClipboardItem(id: string): Promise<boolean> {
       return await (window as any).ztools.clipboard_history_delete({ id });
     } catch {}
   }
+  if (isRealElectronHost()) {
+    try {
+      const res = await callHostTransport<any>("clipboard_history_delete", { id });
+      if (res.ok) return true;
+    } catch {}
+  }
   // 2. Bridge
   const bridge = getDeclarativeBridge();
   if (bridge?.clipboardHistory?.delete) {
@@ -469,6 +601,12 @@ export async function clearUnpinnedClipboardHistory(): Promise<number> {
   if (typeof window !== "undefined" && (window as any).ztools?.clipboard_history_clear_unpinned) {
     try {
       return await (window as any).ztools.clipboard_history_clear_unpinned();
+    } catch {}
+  }
+  if (isRealElectronHost()) {
+    try {
+      const res = await callHostTransport<any>("clipboard_history_clear_unpinned", {});
+      if (res.ok) return Number(res.data ?? 0);
     } catch {}
   }
   // 2. Bridge

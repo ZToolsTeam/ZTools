@@ -42,6 +42,9 @@ export default function DiskAnalyzerCommand() {
 
   const [drives, setDrives] = useState<DiskDriveItem[]>([])
   const [files, setFiles] = useState<DiskFileEntry[]>([])
+  const [topDirectories, setTopDirectories] = useState<
+    Array<{ name: string; path: string; drive: string; sizeBytes: number; fileCount: number }>
+  >([])
   const [totalCapacity, setTotalCapacity] = useState(0)
   const [totalUsed, setTotalUsed] = useState(0)
   const [totalAvailable, setTotalAvailable] = useState(0)
@@ -60,6 +63,7 @@ export default function DiskAnalyzerCommand() {
       const snap = await fetchDiskAnalysisSnapshot()
       setDrives(snap.drives)
       setFiles(snap.files)
+      setTopDirectories(Array.isArray(snap.topDirectories) ? snap.topDirectories : [])
       setTotalCapacity(snap.totalCapacityBytes)
       setTotalUsed(snap.totalUsedBytes)
       setTotalAvailable(snap.totalAvailableBytes)
@@ -639,7 +643,65 @@ ${extRows}
                   })
                 })
               )
-            })
+            }),
+            ...(topDirectories.length > 0
+              ? [
+                  List.Section({
+                    title: `📂 本机真实大体积热点目录排行 (${
+                      topDirectories.filter(
+                        dir =>
+                          (selectedDrive === 'ALL' ||
+                            dir.drive.toUpperCase() === selectedDrive.toUpperCase()) &&
+                          (!q ||
+                            dir.name.toLowerCase().includes(q) ||
+                            dir.path.toLowerCase().includes(q))
+                      ).length
+                    })`,
+                    subtitle: '基于真实挂载分区与用户目录实时扫描聚合的大体积子目录',
+                    children: topDirectories
+                      .filter(
+                        dir =>
+                          (selectedDrive === 'ALL' ||
+                            dir.drive.toUpperCase() === selectedDrive.toUpperCase()) &&
+                          (!q ||
+                            dir.name.toLowerCase().includes(q) ||
+                            dir.path.toLowerCase().includes(q))
+                      )
+                      .slice(0, 20)
+                      .map((dir, idx) =>
+                        List.Item({
+                          id: `topdir-${idx}-${dir.path}`,
+                          title: dir.name,
+                          subtitle: dir.path,
+                          icon: { source: Icon.Folder, tintColor: Color.Orange },
+                          accessories: [
+                            { tag: { value: `${dir.drive} · ${dir.fileCount} 项`, color: Color.Blue } },
+                            { text: formatBytes(dir.sizeBytes) }
+                          ],
+                          detail: List.Item.Detail({
+                            markdown: `# 📂 ${dir.name}\n\n**目录完整路径**: \`${dir.path}\`\n\n---\n\n- **累计占用空间**: \`${formatBytes(dir.sizeBytes)}\`\n- **包含文件总数**: \`${dir.fileCount} 个文件\`\n- **所在物理分区**: \`${dir.drive}\``
+                          }),
+                          actions: ActionPanel({
+                            title: dir.name,
+                            children: [
+                              Action({
+                                title: '在资源管理器中打开此目录',
+                                icon: Icon.Folder,
+                                onAction: () => {
+                                  openDiskItemLocation(dir.path)
+                                }
+                              }),
+                              Action.CopyToClipboard({
+                                title: '复制目录路径',
+                                content: dir.path
+                              })
+                            ]
+                          })
+                        })
+                      )
+                  })
+                ]
+              : [])
           ]
         : []),
       ...(tab === 'all' || tab === 'files'

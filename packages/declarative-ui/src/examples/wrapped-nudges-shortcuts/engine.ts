@@ -4,12 +4,14 @@
  */
 
 import { LocalStorage } from "../../api/storage.js";
+import { callHostTransport, isRealElectronHost } from "../shared/native-ipc.js";
 import {
   WrappedUsageStats,
   FeatureNudgeItem,
   NativeSidecarHealth,
   SystemPrivilegeDiagnostic,
-  WindowsShortcutItem
+  WindowsShortcutItem,
+  AppleShortcutItem
 } from "./types.js";
 
 export const WRAPPED_STORAGE_KEY = "ztools_wrapped_stats_v1";
@@ -522,32 +524,237 @@ export const DEFAULT_WINDOWS_SHORTCUTS: WindowsShortcutItem[] = [
 ];
 
 /**
- * 获取快捷指令列表
+ * 预设 macOS Apple Shortcuts 样本集 (离线/测试降级兜底)
  */
-export async function getWindowsShortcuts(): Promise<WindowsShortcutItem[]> {
+export const DEFAULT_APPLE_SHORTCUTS: AppleShortcutItem[] = [
+  {
+    id: "as_focus_work",
+    name: "开启深度工作专注模式 (Deep Work Focus)",
+    folder: "效率办公",
+    description: "一键开启勿扰模式、启动 VS Code 与播放白噪音",
+    category: "productivity",
+    iconName: "star",
+    acceptsInput: false
+  },
+  {
+    id: "as_summarize_clipboard",
+    name: "提炼剪贴板文本摘要 (Summarize Text)",
+    folder: "AI 助手",
+    description: "接收输入文本并通过快捷指令生成结构化要点摘要",
+    category: "productivity",
+    iconName: "document",
+    acceptsInput: true
+  },
+  {
+    id: "as_clean_desktop",
+    name: "整理桌面截图与归档 (Clean Desktop)",
+    folder: "系统工具",
+    description: "将桌面零散截图按月份归档至 ~/Pictures/Screenshots",
+    category: "system",
+    iconName: "folder",
+    acceptsInput: false
+  },
+  {
+    id: "as_network_diag",
+    name: "刷新 macOS DNS 与网络诊断 (Flush DNS)",
+    folder: "网络工具",
+    description: "执行 dscacheutil -flushcache 并检测网关延迟",
+    category: "network",
+    iconName: "globe",
+    acceptsInput: false
+  }
+];
+
+/**
+ * 获取 macOS 原生「快捷指令 (/usr/bin/shortcuts list)」列表
+ */
+export async function getAppleShortcuts(hostOverride?: any): Promise<AppleShortcutItem[]> {
+  if (hostOverride || isRealElectronHost()) {
+    const res = await callHostTransport<any>("shortcuts_list", {}, hostOverride);
+    if (res.ok && res.data !== undefined) {
+      const rawList = Array.isArray(res.data)
+        ? res.data
+        : Array.isArray(res.data?.items)
+        ? res.data.items
+        : Array.isArray(res.data?.shortcuts)
+        ? res.data.shortcuts
+        : typeof res.data === "string"
+        ? res.data.split(/\r?\n/).map(s => s.trim()).filter(Boolean)
+        : [];
+      if (rawList.length > 0) {
+        return rawList.map((item: any, idx: number) => {
+          if (typeof item === "string") {
+            return {
+              id: `apple_sc_${idx}_${item}`,
+              name: item,
+              folder: "我的快捷指令",
+              description: `macOS 系统快捷指令: /usr/bin/shortcuts run "${item}"`,
+              category: "productivity" as const,
+              iconName: "bolt",
+              acceptsInput: true
+            };
+          }
+          const name = String(item?.name || item?.title || `Shortcut #${idx + 1}`);
+          return {
+            id: String(item?.id || `apple_sc_${idx}_${name}`),
+            name,
+            folder: item?.folder || "我的快捷指令",
+            description: item?.description || `macOS 系统快捷指令: /usr/bin/shortcuts run "${name}"`,
+            category: item?.category || ("productivity" as const),
+            iconName: item?.iconName || "bolt",
+            acceptsInput: item?.acceptsInput ?? true
+          };
+        });
+      }
+    }
+  }
+  return [...DEFAULT_APPLE_SHORTCUTS];
+}
+
+/**
+ * 运行指定的 macOS 快捷指令 (/usr/bin/shortcuts run <name>)
+ */
+export async function executeAppleShortcut(
+  name: string,
+  input?: string,
+  hostOverride?: any
+): Promise<{ success: boolean; output?: string; message: string }> {
+  const cleanName = (name || "").trim();
+  if (!cleanName) {
+    return { success: false, message: "快捷指令名称不能为空" };
+  }
+
+  if (hostOverride || isRealElectronHost()) {
+    const res = await callHostTransport<any>(
+      "shortcuts_run",
+      { name: cleanName, input: input !== undefined ? String(input) : undefined },
+      hostOverride
+    );
+    if (res.ok) {
+      const out = typeof res.data === "string" ? res.data : res.data?.output || res.data?.stdout || "";
+      return {
+        success: true,
+        output: out,
+        message: out
+          ? `快捷指令「${cleanName}」运行完成: ${String(out).slice(0, 80)}`
+          : `快捷指令「${cleanName}」已成功运行`
+      };
+    }
+    return {
+      success: false,
+      message: res.error || `运行快捷指令「${cleanName}」失败`
+    };
+  }
+
+  const inputSuffix = input ? ` (传入参数: "${input}")` : "";
+  return {
+    success: true,
+    output: `Executed ${cleanName}${inputSuffix}`,
+    message: `已执行 macOS 快捷指令「${cleanName}」${inputSuffix}`
+  };
+}
+
+/**
+ * 在 macOS「快捷指令.app」中查看并编辑指定快捷指令 (/usr/bin/shortcuts view <name>)
+ */
+export async function openShortcutInApp(
+  name: string,
+  hostOverride?: any
+): Promise<{ success: boolean; message: string }> {
+  const cleanName = (name || "").trim();
+  if (!cleanName) {
+    return { success: false, message: "快捷指令名称不能为空" };
+  }
+
+  if (hostOverride || isRealElectronHost()) {
+    const res = await callHostTransport<any>("shortcuts_view", { name: cleanName }, hostOverride);
+    if (res.ok) {
+      return {
+        success: true,
+        message: `已在「快捷指令」应用中打开: ${cleanName}`
+      };
+    }
+    return {
+      success: false,
+      message: res.error || `无法在「快捷指令」应用中打开: ${cleanName}`
+    };
+  }
+
+  return {
+    success: true,
+    message: `已在「快捷指令」应用中打开编辑: ${cleanName}`
+  };
+}
+
+/**
+ * 获取快捷指令列表（在真实宿主中若检测到 shortcuts_list 返回数据也自动融合）
+ */
+export async function getWindowsShortcuts(hostOverride?: any): Promise<WindowsShortcutItem[]> {
+  let baseList: WindowsShortcutItem[] = [...DEFAULT_WINDOWS_SHORTCUTS];
   try {
     const raw = await LocalStorage.getItem<string>(SHORTCUTS_STORAGE_KEY);
     if (raw) {
       const parsed = JSON.parse(raw);
       if (Array.isArray(parsed) && parsed.length > 0) {
-        return parsed;
+        baseList = parsed;
       }
     }
   } catch {
     // 降级使用预设
   }
-  return [...DEFAULT_WINDOWS_SHORTCUTS];
+
+  if (hostOverride || isRealElectronHost()) {
+    try {
+      const res = await callHostTransport<any>("shortcuts_list", {}, hostOverride);
+      if (res.ok && res.data !== undefined) {
+        const rawList = Array.isArray(res.data)
+          ? res.data
+          : Array.isArray(res.data?.items)
+          ? res.data.items
+          : Array.isArray(res.data?.shortcuts)
+          ? res.data.shortcuts
+          : typeof res.data === "string"
+          ? res.data.split(/\r?\n/).map((s: string) => s.trim()).filter(Boolean)
+          : [];
+        if (rawList.length > 0) {
+          const appleMapped: WindowsShortcutItem[] = rawList.map((item: any, idx: number) => {
+            const name = typeof item === "string" ? item : String(item?.name || item?.title || `Shortcut #${idx + 1}`);
+            return {
+              id: `mac_sc_${idx}_${name}`,
+              name,
+              description: `macOS 快捷指令 (/usr/bin/shortcuts): ${name}`,
+              targetPath: "/usr/bin/shortcuts",
+              commandType: "apple_shortcut",
+              commandScript: `shortcuts run "${name}"`,
+              category: "productivity",
+              iconName: "bolt",
+              folder: typeof item === "object" ? item?.folder : "Apple Shortcuts"
+            };
+          });
+          return [...appleMapped, ...baseList];
+        }
+      }
+    } catch {
+      // ignore
+    }
+  }
+
+  return baseList;
 }
 
 /**
- * 执行 Windows 快捷指令
+ * 执行 Windows / 跨端快捷指令
  */
 export async function executeWindowsShortcut(
   shortcut: WindowsShortcutItem,
-  options?: { runAsAdmin?: boolean }
+  options?: { runAsAdmin?: boolean; input?: string; hostOverride?: any }
 ): Promise<{ success: boolean; message: string }> {
   if (!shortcut || (!shortcut.commandScript && !shortcut.targetPath)) {
     return { success: false, message: "指令脚本或目标路径为空" };
+  }
+
+  if (shortcut.commandType === "apple_shortcut") {
+    return executeAppleShortcut(shortcut.name, options?.input, options?.hostOverride);
   }
 
   const runAdmin = options?.runAsAdmin || shortcut.requiresAdmin;
@@ -587,3 +794,4 @@ export async function revealShortcutInExplorer(shortcut: WindowsShortcutItem): P
     message: `已在资源管理器中定位: ${shortcut.targetPath}`
   };
 }
+

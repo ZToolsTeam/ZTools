@@ -20,6 +20,14 @@ import {
   OrganizeSummaryItem,
   SafePathValidationResult
 } from "./types.js";
+import {
+  getRealSystemPath,
+  readRealDirectory,
+  openRealPath,
+  showRealItemInFolder,
+  trashRealItem,
+  isRealElectronHost
+} from "../shared/native-ipc.js";
 
 export const CATEGORY_LABELS: Readonly<Record<DownloadFileCategory, string>> = Object.freeze({
   installer: "安装包与程序",
@@ -44,6 +52,7 @@ const EXT_CATEGORY_MAP: Readonly<Record<string, DownloadFileCategory>> = Object.
   ".msi": "installer",
   ".dmg": "installer",
   ".pkg": "installer",
+  ".mpkg": "installer",
   ".deb": "installer",
   ".apk": "installer",
   ".zip": "archive",
@@ -52,6 +61,8 @@ const EXT_CATEGORY_MAP: Readonly<Record<string, DownloadFileCategory>> = Object.
   ".tar": "archive",
   ".gz": "archive",
   ".tgz": "archive",
+  ".tbz2": "archive",
+  ".xz": "archive",
   ".pdf": "document",
   ".doc": "document",
   ".docx": "document",
@@ -118,8 +129,11 @@ export function validateSafeDownloadPath(
       errorCode: "PATH_TRAVERSAL"
     };
   }
-  const normFile = raw.replace(/\//g, "\\");
-  const normBase = (baseFolder || "").trim().replace(/\//g, "\\").replace(/\\+$/, "");
+  const isPosix = raw.startsWith("/") && (baseFolder || "").trim().startsWith("/");
+  const normFile = isPosix ? raw.replace(/\\/g, "/") : raw.replace(/\//g, "\\");
+  const normBase = isPosix
+    ? (baseFolder || "").trim().replace(/\\/g, "/").replace(/\/+$/, "")
+    : (baseFolder || "").trim().replace(/\//g, "\\").replace(/\\+$/, "");
   if (normBase && !normFile.toLowerCase().startsWith(normBase.toLowerCase())) {
     return {
       valid: false,
@@ -248,8 +262,71 @@ export class DownloadsManagerService {
   constructor(adapter?: DownloadsStorageAdapter) {
     this.adapter = adapter;
     this.baseFolder = adapter?.baseDownloadsFolder || "C:\\Users\\User\\Downloads";
-    const source = adapter?.initialFiles ?? INITIAL_DOWNLOAD_FILES;
+    const source =
+      adapter?.initialFiles ?? (isRealElectronHost() ? [] : INITIAL_DOWNLOAD_FILES);
     this.files = source.map((f) => ({ ...f }));
+  }
+
+  /**
+   * 从真实宿主系统同步 ~/Downloads 目录文件列表
+   */
+  public async syncRealDownloads(hostOverride?: any): Promise<DownloadFileItem[]> {
+    try {
+      if (this.adapter?.readDirectory) {
+        const customItems = await this.adapter.readDirectory(this.baseFolder);
+        if (Array.isArray(customItems) && customItems.length > 0) {
+          this.files = customItems.map((f) => ({ ...f }));
+          return this.getDownloads();
+        }
+      }
+
+      if (hostOverride || isRealElectronHost()) {
+        const realDownloadsDir = await getRealSystemPath("downloads", hostOverride);
+        if (realDownloadsDir) {
+          this.baseFolder = realDownloadsDir;
+        }
+        const entries = await readRealDirectory(this.baseFolder, hostOverride);
+        if (Array.isArray(entries) && (entries.length > 0 || isRealElectronHost(hostOverride))) {
+          const sep = this.baseFolder.startsWith("/") ? "/" : "\\";
+          const cleanBase = this.baseFolder.replace(/[\\/]+$/, "");
+          const mapped: DownloadFileItem[] = entries.map((entry, index) => {
+            const filename = entry.name;
+            const fullPath = entry.path || `${cleanBase}${sep}${filename}`;
+            const dotIdx = filename.lastIndexOf(".");
+            const ext = dotIdx !== -1 ? filename.slice(dotIdx).toLowerCase() : "";
+            const category = detectDownloadCategory(filename);
+            const sizeBytes = Number(entry.size) > 0 ? Number(entry.size) : 0;
+            const modifiedAt = Number(entry.mtimeMs) > 0 ? Number(entry.mtimeMs) : NOW_TS - index * 60_000;
+            const birthRaw = Number((entry as any).birthtimeMs);
+            const createdAt = birthRaw > 0 ? birthRaw : modifiedAt;
+
+            return {
+              id: `real-dl-${index}-${filename.replace(/[^a-zA-Z0-9_-]/g, "")}`,
+              filename,
+              file: filename,
+              path: fullPath,
+              extension: ext,
+              category,
+              categoryLabel: CATEGORY_LABELS[category],
+              sizeBytes,
+              size: sizeBytes,
+              formattedSize: formatFileSize(sizeBytes),
+              isDirectory: Boolean(entry.isDirectory),
+              createdAt,
+              modifiedAt,
+              addedAt: modifiedAt,
+              birthAt: createdAt,
+              formattedDate: new Date(modifiedAt).toLocaleString(),
+              pinned: false
+            };
+          });
+          this.files = mapped;
+        }
+      }
+    } catch {
+      // 忽略异常回退本地列表
+    }
+    return this.getDownloads();
   }
 
   public getDownloads(
@@ -302,7 +379,7 @@ export class DownloadsManagerService {
     return sorted[0] ? { ...sorted[0] } : undefined;
   }
 
-  public async openDownload(idOrPath: string): Promise<DownloadActionResult> {
+  public async openDownload(idOrPath: string, hostOverride?: any): Promise<DownloadActionResult> {
     const target = this.files.find((f) => f.id === idOrPath || f.path === idOrPath);
     if (!target) {
       return {
@@ -321,7 +398,11 @@ export class DownloadsManagerService {
         errorCode: check.errorCode
       };
     }
-    await this.adapter?.openFile?.(target.path);
+    if (this.adapter?.openFile) {
+      await this.adapter.openFile(target.path);
+    } else if (hostOverride || isRealElectronHost()) {
+      await openRealPath(target.path, hostOverride);
+    }
     return {
       success: true,
       message: `已打开文件: ${target.filename}`,
@@ -329,7 +410,45 @@ export class DownloadsManagerService {
     };
   }
 
-  public async openLatestDownload(): Promise<DownloadActionResult> {
+  /**
+   * 在 Finder / 资源管理器中显示下载文件 (Show in Finder / Explorer)
+   */
+  public async showInFinder(idOrPath: string, hostOverride?: any): Promise<DownloadActionResult> {
+    const target = this.files.find((f) => f.id === idOrPath || f.path === idOrPath);
+    if (!target) {
+      return {
+        success: false,
+        message: "未找到指定的下载文件",
+        error: "File not found",
+        errorCode: "NOT_FOUND"
+      };
+    }
+    const check = validateSafeDownloadPath(target.path, this.baseFolder);
+    if (!check.valid) {
+      return {
+        success: false,
+        message: check.reason || "路径不安全",
+        error: check.reason,
+        errorCode: check.errorCode
+      };
+    }
+    if (this.adapter?.showInExplorer) {
+      await this.adapter.showInExplorer(target.path);
+    } else if (hostOverride || isRealElectronHost()) {
+      await showRealItemInFolder(target.path, hostOverride);
+    }
+    return {
+      success: true,
+      message: `已在 Finder / 资源管理器中显示: ${target.filename}`,
+      file: { ...target }
+    };
+  }
+
+  public async revealDownload(idOrPath: string, hostOverride?: any): Promise<DownloadActionResult> {
+    return this.showInFinder(idOrPath, hostOverride);
+  }
+
+  public async openLatestDownload(hostOverride?: any): Promise<DownloadActionResult> {
     const latest = this.getLatestDownload();
     if (!latest) {
       return {
@@ -339,7 +458,7 @@ export class DownloadsManagerService {
         errorCode: "EMPTY_DOWNLOADS"
       };
     }
-    return this.openDownload(latest.id);
+    return this.openDownload(latest.id, hostOverride);
   }
 
   public async copyLatestDownload(): Promise<DownloadActionResult> {
@@ -360,7 +479,7 @@ export class DownloadsManagerService {
     };
   }
 
-  public async deleteDownload(idOrPath: string): Promise<DownloadActionResult> {
+  public async deleteDownload(idOrPath: string, hostOverride?: any): Promise<DownloadActionResult> {
     const idx = this.files.findIndex((f) => f.id === idOrPath || f.path === idOrPath);
     if (idx === -1) {
       return {
@@ -379,16 +498,20 @@ export class DownloadsManagerService {
         errorCode: "FILE_PINNED"
       };
     }
-    await this.adapter?.deleteFile?.(target.path);
+    if (this.adapter?.deleteFile) {
+      await this.adapter.deleteFile(target.path);
+    } else if (hostOverride || isRealElectronHost()) {
+      await trashRealItem(target.path, hostOverride);
+    }
     this.files.splice(idx, 1);
     return {
       success: true,
-      message: `已将 "${target.filename}" 移至回收站`,
+      message: `已将 "${target.filename}" 移至回收站 / 废纸篓`,
       file: { ...target }
     };
   }
 
-  public async deleteLatestDownload(): Promise<DownloadActionResult> {
+  public async deleteLatestDownload(hostOverride?: any): Promise<DownloadActionResult> {
     const latest = this.getLatestDownload();
     if (!latest) {
       return {
@@ -398,7 +521,7 @@ export class DownloadsManagerService {
         errorCode: "EMPTY_DOWNLOADS"
       };
     }
-    return this.deleteDownload(latest.id);
+    return this.deleteDownload(latest.id, hostOverride);
   }
 
   public togglePin(id: string): DownloadFileItem | undefined {
@@ -444,13 +567,15 @@ export class DownloadsManagerService {
     }
 
     if (!dryRun) {
+      const sep = this.baseFolder.startsWith("/") ? "/" : "\\";
+      const cleanBase = this.baseFolder.replace(/[\\/]+$/, "");
       this.files = this.files.map((f) => {
         if (f.isDirectory) return f;
         const sub = CATEGORY_SUBFOLDERS[f.category];
         return {
           ...f,
           archivedTo: sub,
-          path: `${this.baseFolder}\\${sub}\\${f.filename}`
+          path: `${cleanBase}${sep}${sub}${sep}${f.filename}`
         };
       });
     }
@@ -472,7 +597,8 @@ export class DownloadsManagerService {
    */
   public async cleanExpiredDownloads(
     olderThanDays = 30,
-    dryRun = false
+    dryRun = false,
+    hostOverride?: any
   ): Promise<CleanExpiredResult> {
     if (typeof olderThanDays !== "number" || !Number.isFinite(olderThanDays) || olderThanDays <= 0) {
       return {
@@ -496,6 +622,13 @@ export class DownloadsManagerService {
     const freedBytes = toDelete.reduce((acc, f) => acc + f.sizeBytes, 0);
 
     if (!dryRun) {
+      for (const item of toDelete) {
+        if (this.adapter?.deleteFile) {
+          await this.adapter.deleteFile(item.path);
+        } else if (hostOverride || isRealElectronHost()) {
+          await trashRealItem(item.path, hostOverride);
+        }
+      }
       this.files = remaining;
     }
 

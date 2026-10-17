@@ -33,8 +33,12 @@ function normalizeMethodParams(method: string, params: Record<string, unknown>):
   const next = { ...params }
   if (method === 'system_get_disk_usage') {
     const rawDrive = String(next.drive || next.path || 'C:\\').trim()
-    const match = rawDrive.match(/^([A-Za-z]):/)
-    next.drive = match ? `${match[1].toUpperCase()}:\\` : rawDrive.replace(/\//g, '\\')
+    if (rawDrive.startsWith('/')) {
+      next.drive = rawDrive
+    } else {
+      const match = rawDrive.match(/^([A-Za-z]):/)
+      next.drive = match ? `${match[1].toUpperCase()}:\\` : rawDrive.replace(/\//g, '\\')
+    }
     delete next.path
   }
   return next
@@ -198,7 +202,7 @@ export interface RealDiskDriveInfo {
 }
 
 /**
- * 探测本机全部真实挂载磁盘分区 (C:\ ~ Z:\)
+ * 探测本机全部真实挂载磁盘分区 (C:\ ~ Z:\ 或 macOS/POSIX 挂载点 '/')
  */
 export async function probeRealDiskDrives(
   candidateLetters: string[] = ['C', 'D', 'E', 'F', 'G'],
@@ -207,7 +211,9 @@ export async function probeRealDiskDrives(
   const drives: RealDiskDriveInfo[] = []
   const results = await Promise.all(
     candidateLetters.map(async (letter) => {
-      const drivePath = `${letter.toUpperCase()}:\\`
+      const raw = String(letter || '').trim()
+      const isPosix = raw.startsWith('/')
+      const drivePath = isPosix ? raw : `${raw.replace(/:\\?$/, '').toUpperCase()}:\\`
       const res = await callHostTransport<{
         total: number
         used: number
@@ -223,7 +229,7 @@ export async function probeRealDiskDrives(
             ? res.data.free
             : Math.max(0, res.data.total - res.data.used)
         return {
-          drive: `${letter.toUpperCase()}:`,
+          drive: isPosix ? raw : `${raw.replace(/:\\?$/, '').toUpperCase()}:`,
           totalBytes: res.data.total,
           usedBytes: res.data.used,
           availableBytes,
@@ -237,11 +243,37 @@ export async function probeRealDiskDrives(
   for (const item of results) {
     if (item) drives.push(item)
   }
+
+  if (drives.length === 0 && !candidateLetters.includes('/')) {
+    const posixRes = await callHostTransport<{
+      total: number
+      used: number
+      available: number
+      free?: number
+      percent: number
+    }>('system_get_disk_usage', { drive: '/' }, hostOverride)
+    if (posixRes.ok && posixRes.data && typeof posixRes.data.total === 'number' && posixRes.data.total > 0) {
+      const availableBytes =
+        typeof posixRes.data.available === 'number'
+          ? posixRes.data.available
+          : typeof posixRes.data.free === 'number'
+          ? posixRes.data.free
+          : Math.max(0, posixRes.data.total - posixRes.data.used)
+      drives.push({
+        drive: '/',
+        totalBytes: posixRes.data.total,
+        usedBytes: posixRes.data.used,
+        availableBytes,
+        usagePercent: posixRes.data.percent
+      })
+    }
+  }
+
   return drives
 }
 
 /**
- * 获取本机真实系统特殊路径（支持 home 派生标准子目录兜底）
+ * 获取本机真实系统特殊路径（支持 home 派生标准子目录兜底，自动兼容 Windows 与 macOS/POSIX）
  */
 export async function getRealSystemPath(
   name: 'home' | 'appData' | 'userData' | 'desktop' | 'documents' | 'downloads' | 'music' | 'pictures' | 'videos' | 'temp' | 'cache',
@@ -260,18 +292,32 @@ export async function getRealSystemPath(
   if (name !== 'home') {
     const home = await getRealSystemPath('home', hostOverride)
     if (home) {
-      const subMap: Record<string, string> = {
-        desktop: `${home}\\Desktop`,
-        documents: `${home}\\Documents`,
-        downloads: `${home}\\Downloads`,
-        music: `${home}\\Music`,
-        pictures: `${home}\\Pictures`,
-        videos: `${home}\\Videos`,
-        appData: `${home}\\AppData\\Roaming`,
-        userData: `${home}\\AppData\\Roaming\\ZTools`,
-        temp: `${home}\\AppData\\Local\\Temp`,
-        cache: `${home}\\AppData\\Local`
-      }
+      const isPosix = home.startsWith('/')
+      const subMap: Record<string, string> = isPosix
+        ? {
+            desktop: `${home}/Desktop`,
+            documents: `${home}/Documents`,
+            downloads: `${home}/Downloads`,
+            music: `${home}/Music`,
+            pictures: `${home}/Pictures`,
+            videos: `${home}/Videos`,
+            appData: `${home}/Library/Application Support`,
+            userData: `${home}/Library/Application Support/ZTools`,
+            temp: '/tmp',
+            cache: `${home}/Library/Caches`
+          }
+        : {
+            desktop: `${home}\\Desktop`,
+            documents: `${home}\\Documents`,
+            downloads: `${home}\\Downloads`,
+            music: `${home}\\Music`,
+            pictures: `${home}\\Pictures`,
+            videos: `${home}\\Videos`,
+            appData: `${home}\\AppData\\Roaming`,
+            userData: `${home}\\AppData\\Roaming\\ZTools`,
+            temp: `${home}\\AppData\\Local\\Temp`,
+            cache: `${home}\\AppData\\Local`
+          }
       if (subMap[name]) return subMap[name]
     }
   }
@@ -724,7 +770,23 @@ export async function getRealEnvPaths(hostOverride?: any): Promise<RealEnvPaths>
     getRealSystemPath('music', hostOverride)
   ])
   const home = homeRaw || 'C:\\Users\\Default'
+  const isPosix = home.startsWith('/')
   const tempRes = hostOverride ? await getRealSystemPath('temp', hostOverride) : ''
+  if (isPosix) {
+    return {
+      home,
+      userProfile: home,
+      appData: appData || `${home}/Library/Application Support`,
+      localAppData: `${home}/Library/Application Support`,
+      temp: tempRes || '/tmp',
+      downloads: downloads || `${home}/Downloads`,
+      documents: documents || `${home}/Documents`,
+      desktop: desktop || `${home}/Desktop`,
+      pictures: pictures || `${home}/Pictures`,
+      videos: videos || `${home}/Videos`,
+      music: music || `${home}/Music`
+    }
+  }
   return {
     home,
     userProfile: home,
@@ -899,6 +961,22 @@ export async function invokePluginService<T = any>(
     data: res.data,
     error: res.error
   }
+}
+
+export async function readRealClipboardText(hostOverride?: any): Promise<string> {
+  const res = await callHostTransport<any>('clipboard_read_text', {}, hostOverride)
+  if (res.ok && res.data !== undefined && res.data !== null) {
+    if (typeof res.data === 'string') return res.data
+    if (typeof res.data?.text === 'string') return res.data.text
+  }
+  try {
+    if (typeof navigator !== 'undefined' && navigator.clipboard?.readText) {
+      return await navigator.clipboard.readText()
+    }
+  } catch {
+    // ignore
+  }
+  return ''
 }
 
 export async function writeRealClipboardText(text: string, hostOverride?: any): Promise<boolean> {

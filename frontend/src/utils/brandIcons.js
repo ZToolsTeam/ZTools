@@ -142,7 +142,14 @@ export const OFFICIAL_PLUGIN_GLYPHS = Object.freeze({
   pdf: 'pdf',
   'multi-download': 'download',
   'video-downloader': 'video',
-  ocr: 'ocr'
+  ocr: 'ocr',
+  'apple-shortcuts': 'spark',
+  navigation: 'window',
+  homebrew: 'package',
+  'script-commands': 'terminal',
+  'raycast-focus': 'gauge',
+  calendar: 'note',
+  'web-searches': 'link'
 })
 
 /** 侧边栏 / 市场分类 → 图形 */

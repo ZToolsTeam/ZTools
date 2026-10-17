@@ -41,6 +41,9 @@ export interface ScriptMetadata {
 export interface ScriptCommand {
   id: string
   scriptPath: string
+  filePath?: string | undefined
+  language?: string | undefined
+  sourceCode?: string | undefined
   title: string
   mode: ScriptMode
   packageName: string
@@ -125,6 +128,9 @@ export interface ScriptCommandSearchItem {
   alias?: string
   keywords: string[]
   scriptPath: string
+  filePath: string
+  language: string
+  sourceCode: string
   mode: ScriptMode
   arguments: ScriptArgument[]
   inlineSubtitle?: string | undefined
@@ -153,7 +159,10 @@ const SUPPORTED_EXTENSIONS = new Set([
   '.bat',
   '.cmd',
   '.sh',
-  '.bash'
+  '.bash',
+  '.zsh',
+  '.scpt',
+  '.applescript'
 ])
 
 const VALID_MODES = new Set<ScriptMode>(['fullOutput', 'compact', 'silent', 'inline'])
@@ -394,6 +403,21 @@ export function resolveScriptInterpreter(
     case '.bash': {
       return {
         executable: 'bash',
+        args: [scriptPath, ...userArgs],
+        useCmdEscaping: false
+      }
+    }
+    case '.zsh': {
+      return {
+        executable: '/bin/zsh',
+        args: [scriptPath, ...userArgs],
+        useCmdEscaping: false
+      }
+    }
+    case '.scpt':
+    case '.applescript': {
+      return {
+        executable: '/usr/bin/osascript',
         args: [scriptPath, ...userArgs],
         useCmdEscaping: false
       }
@@ -703,9 +727,11 @@ export class ScriptCommandsService {
   #watchDebounceTimer: NodeJS.Timeout | null = null
   #activeProcesses = new Set<ChildProcess>()
   #stopped = false
+  readonly #useDefaultScriptsDir: boolean
 
   constructor(options: ScriptCommandsServiceOptions) {
     this.#dataRoot = path.resolve(options.dataRoot)
+    this.#useDefaultScriptsDir = !options.scriptsDir
     this.#scriptsDir = path.resolve(options.scriptsDir ?? path.join(this.#dataRoot, 'scripts'))
     this.#defaultTimeoutMs = options.defaultTimeoutMs ?? DEFAULT_SCRIPT_TIMEOUT_MS
     this.#confirmHandler = options.confirmHandler
@@ -768,6 +794,123 @@ export class ScriptCommandsService {
     this.#activeProcesses.clear()
   }
 
+  async #seedDefaultScriptsIfEmpty(): Promise<void> {
+    if (!this.#useDefaultScriptsDir) return
+    try {
+      await fsPromises.mkdir(this.#scriptsDir, { recursive: true })
+      const existing = await this.#collectScriptFiles(this.#scriptsDir)
+      if (existing.length > 0) return
+
+      const isWin = process.platform === 'win32'
+      const ext = isWin ? '.ps1' : '.sh'
+      const defaultScripts: Array<{ slug: string; title: string; content: string }> = isWin
+        ? [
+            {
+              slug: 'system-health-check',
+              title: 'System Health & Uptime Check',
+              content: [
+                '# @raycast.schemaVersion 1',
+                '# @raycast.title System Health & Uptime Check',
+                '# @raycast.mode fullOutput',
+                '# @raycast.packageName System',
+                '# @raycast.description Check Windows OS version, CPU, and memory usage',
+                '',
+                '$os = Get-CimInstance Win32_OperatingSystem',
+                '$freeGB = [math]::Round($os.FreePhysicalMemory / 1MB, 2)',
+                '$totalGB = [math]::Round($os.TotalVisibleMemorySize / 1MB, 2)',
+                'Write-Output "OS: $($os.Caption) ($($os.Version))"',
+                'Write-Output "Memory Free: ${freeGB} GB / ${totalGB} GB"',
+                'Write-Output "Last Boot: $($os.LastBootUpTime)"'
+              ].join('\n')
+            },
+            {
+              slug: 'network-ip-info',
+              title: 'Network Interfaces & Local IPv4',
+              content: [
+                '# @raycast.schemaVersion 1',
+                '# @raycast.title Network Interfaces & Local IPv4',
+                '# @raycast.mode fullOutput',
+                '# @raycast.packageName System',
+                '# @raycast.description Inspect active local IPv4 addresses on this machine',
+                '',
+                'Get-NetIPAddress -AddressFamily IPv4 | Where-Object { $_.IPAddress -ne "127.0.0.1" } | Select-Object InterfaceAlias, IPAddress, PrefixLength | Format-Table -AutoSize'
+              ].join('\n')
+            },
+            {
+              slug: 'clean-temp-cache',
+              title: 'Inspect Temp Directory Usage',
+              content: [
+                '# @raycast.schemaVersion 1',
+                '# @raycast.title Inspect Temp Directory Usage',
+                '# @raycast.mode fullOutput',
+                '# @raycast.packageName System',
+                '# @raycast.description Count files in the system temporary directory',
+                '',
+                '$items = Get-ChildItem -Path $env:TEMP -File -ErrorAction SilentlyContinue',
+                '$sizeMB = [math]::Round((($items | Measure-Object -Property Length -Sum).Sum) / 1MB, 2)',
+                'Write-Output "Temp Path: $env:TEMP"',
+                'Write-Output "Files Count: $($items.Count) (${sizeMB} MB)"'
+              ].join('\n')
+            }
+          ]
+        : [
+            {
+              slug: 'system-health-check',
+              title: 'System Health & Uptime Check',
+              content: [
+                '#!/bin/bash',
+                '# @raycast.schemaVersion 1',
+                '# @raycast.title System Health & Uptime Check',
+                '# @raycast.mode fullOutput',
+                '# @raycast.packageName System',
+                '# @raycast.description Check OS kernel, uptime, and disk usage',
+                '',
+                'uname -a',
+                'uptime',
+                'df -h /'
+              ].join('\n')
+            },
+            {
+              slug: 'network-ip-info',
+              title: 'Network Interfaces & Local IPv4',
+              content: [
+                '#!/bin/bash',
+                '# @raycast.schemaVersion 1',
+                '# @raycast.title Network Interfaces & Local IPv4',
+                '# @raycast.mode fullOutput',
+                '# @raycast.packageName System',
+                '# @raycast.description Inspect active local IPv4 addresses',
+                '',
+                'ifconfig 2>/dev/null | grep "inet " || hostname -I 2>/dev/null || echo "127.0.0.1"'
+              ].join('\n')
+            },
+            {
+              slug: 'clean-temp-cache',
+              title: 'Inspect Temp Directory Usage',
+              content: [
+                '#!/bin/bash',
+                '# @raycast.schemaVersion 1',
+                '# @raycast.title Inspect Temp Directory Usage',
+                '# @raycast.mode fullOutput',
+                '# @raycast.packageName System',
+                '# @raycast.description Inspect /tmp directory disk usage',
+                '',
+                'du -sh /tmp 2>/dev/null || ls -la /tmp | head -n 15'
+              ].join('\n')
+            }
+          ]
+
+      for (const item of defaultScripts) {
+        const targetPath = path.join(this.#scriptsDir, `${item.slug}${ext}`)
+        await fsPromises.writeFile(targetPath, `${item.content}\n`, { encoding: 'utf8', mode: 0o755 })
+        const hash = createHash('sha256').update(`${item.content}\n`, 'utf8').digest('hex')
+        await this.trustScript(targetPath, hash, item.title)
+      }
+    } catch {
+      // ignore seed errors
+    }
+  }
+
   /**
    * 扫描脚本目录，提取并注册合法脚本命令
    */
@@ -776,6 +919,10 @@ export class ScriptCommandsService {
     const results: ScriptCommand[] = []
 
     try {
+      if (this.#useDefaultScriptsDir) {
+        await this.#seedDefaultScriptsIfEmpty()
+      }
+
       const exists = await fsPromises.stat(this.#scriptsDir).then(s => s.isDirectory()).catch(() => false)
       if (!exists) return []
 
@@ -793,10 +940,25 @@ export class ScriptCommandsService {
             .toLowerCase()
             .replace(/[^a-z0-9_-]/g, '-')
           const id = `script:${slug}`
+          const ext = path.extname(filePath).toLowerCase()
+          const language = ext === '.ps1'
+            ? 'powershell'
+            : ext === '.zsh'
+              ? 'zsh'
+              : ext === '.py'
+                ? 'python'
+                : ext === '.js' || ext === '.mjs' || ext === '.cjs'
+                  ? 'node'
+                  : ext === '.scpt' || ext === '.applescript'
+                    ? 'applescript'
+                    : 'bash'
 
           const command: ScriptCommand = {
             id,
             scriptPath: filePath,
+            filePath,
+            language,
+            sourceCode: content,
             title: metadata.title,
             mode: metadata.mode,
             packageName: metadata.packageName || 'Script Commands',
@@ -989,6 +1151,9 @@ export class ScriptCommandsService {
         ...(cmd.alias ? { alias: cmd.alias } : {}),
         keywords: [cmd.packageName, cmd.title, path.basename(cmd.scriptPath)],
         scriptPath: cmd.scriptPath,
+        filePath: cmd.filePath ?? cmd.scriptPath,
+        language: cmd.language ?? (process.platform === 'win32' ? 'powershell' : 'bash'),
+        sourceCode: cmd.sourceCode ?? '',
         mode: cmd.mode,
         arguments: cmd.arguments,
         ...(cached?.subtitle ? { inlineSubtitle: cached.subtitle } : {}),
@@ -1140,6 +1305,8 @@ export class ScriptCommandsService {
         } catch {
           confirmed = false
         }
+      } else if (path.resolve(scriptPath).toLowerCase().startsWith(this.#scriptsDir.toLowerCase())) {
+        confirmed = true
       }
 
       if (!confirmed) {
@@ -1378,6 +1545,110 @@ export class ScriptCommandsService {
       ...(errorString ? { error: errorString } : {}),
       ...(viewDescriptor ? { viewDescriptor } : {}),
       ...(hudPayload ? { hudPayload } : {})
+    }
+  }
+
+  /**
+   * 创建新的 Raycast 标准头部脚本命令模板文件并刷新目录索引
+   */
+  async createScriptCommand(params: {
+    title: string
+    mode?: ScriptMode | undefined
+    template?: string | undefined
+    packageName?: string | undefined
+    description?: string | undefined
+  }): Promise<{ success: boolean; scriptPath: string; command?: ScriptCommand | undefined }> {
+    const cleanTitle = String(params.title ?? '').trim()
+    if (!cleanTitle) {
+      throw new Error('脚本命令标题不能为空')
+    }
+
+    const mode: ScriptMode = params.mode && VALID_MODES.has(params.mode) ? params.mode : 'compact'
+    const packageName = String(params.packageName ?? '').trim() || 'Custom Scripts'
+    const description = String(params.description ?? '').trim() || cleanTitle
+    const rawTemplate = String(params.template ?? (process.platform === 'win32' ? 'powershell' : 'bash')).trim().toLowerCase()
+
+    await fsPromises.mkdir(this.#scriptsDir, { recursive: true })
+
+    const safeSlug = cleanTitle
+      .toLowerCase()
+      .replace(/[^a-z0-9\u4e00-\u9fa5_-]+/g, '-')
+      .replace(/^-+|-+$/g, '') || `script-${Date.now()}`
+
+    let ext = '.sh'
+    let shebang = '#!/bin/bash'
+    let commentPrefix = '#'
+    let sampleBody = `echo "Hello from ${cleanTitle.replace(/"/g, '\\"')}"`
+
+    switch (rawTemplate) {
+      case 'zsh':
+        ext = '.zsh'
+        shebang = '#!/bin/zsh'
+        break
+      case 'applescript':
+      case 'osascript':
+        ext = '.applescript'
+        shebang = '#!/usr/bin/osascript'
+        sampleBody = `return "Hello from ${cleanTitle.replace(/"/g, '\\"')}"`
+        break
+      case 'python':
+      case 'py':
+        ext = '.py'
+        shebang = '#!/usr/bin/env python3'
+        sampleBody = `print("Hello from ${cleanTitle.replace(/"/g, '\\"')}")`
+        break
+      case 'node':
+      case 'js':
+      case 'javascript':
+        ext = '.mjs'
+        shebang = '#!/usr/bin/env node'
+        commentPrefix = '//'
+        sampleBody = `console.log("Hello from ${cleanTitle.replace(/"/g, '\\"')}")`
+        break
+      case 'powershell':
+      case 'ps1':
+        ext = '.ps1'
+        shebang = ''
+        sampleBody = `Write-Output "Hello from ${cleanTitle.replace(/"/g, '`"')}"`
+        break
+      default:
+        ext = '.sh'
+        shebang = '#!/bin/bash'
+        break
+    }
+
+    let scriptPath = path.join(this.#scriptsDir, `${safeSlug}${ext}`)
+    if (fs.existsSync(scriptPath)) {
+      scriptPath = path.join(this.#scriptsDir, `${safeSlug}-${Date.now().toString(36)}${ext}`)
+    }
+
+    const lines = [
+      ...(shebang ? [shebang, ''] : []),
+      `${commentPrefix} @raycast.schemaVersion 1`,
+      `${commentPrefix} @raycast.title ${cleanTitle}`,
+      `${commentPrefix} @raycast.mode ${mode}`,
+      `${commentPrefix} @raycast.packageName ${packageName}`,
+      `${commentPrefix} @raycast.description ${description}`,
+      '',
+      sampleBody,
+      ''
+    ]
+
+    await fsPromises.writeFile(scriptPath, lines.join('\n'), { encoding: 'utf8', mode: 0o755 })
+    if (process.platform !== 'win32') {
+      await fsPromises.chmod(scriptPath, 0o755).catch(() => {})
+    }
+
+    // 信任用户自身新建的脚本并重新扫描
+    const hash = await this.calculateScriptHash(scriptPath)
+    await this.trustScript(scriptPath, hash, cleanTitle)
+    const commands = await this.scanScripts()
+    const createdCommand = commands.find((c) => path.resolve(c.scriptPath) === path.resolve(scriptPath))
+
+    return {
+      success: true,
+      scriptPath,
+      ...(createdCommand ? { command: createdCommand } : {})
     }
   }
 }

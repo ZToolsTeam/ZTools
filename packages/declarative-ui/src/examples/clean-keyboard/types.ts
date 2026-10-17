@@ -15,6 +15,7 @@ export type UnlockReason =
   | "timer_expired"
   | "watchdog_timeout"
   | "emergency_hotkey"
+  | "hotkey"
   | "system_reset";
 
 export type ShortcutModifier = "ctrl" | "alt" | "shift" | "cmd" | "opt";
@@ -89,4 +90,5 @@ export interface LockKeyboardOptions {
   readonly presetTitle?: string | undefined;
   readonly icon?: string | undefined;
   readonly watchdogMs?: number | undefined;
+  readonly hostOverride?: any;
 }

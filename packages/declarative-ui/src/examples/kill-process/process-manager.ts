@@ -19,6 +19,7 @@ export type ProcessSortBy = "memory" | "cpu" | "name" | "pid";
 export type KillMode = "graceful" | "force" | "tree";
 
 export const CRITICAL_PROCESSES = new Set([
+  // Windows Critical Processes
   "csrss.exe",
   "explorer.exe",
   "svchost.exe",
@@ -32,23 +33,54 @@ export const CRITICAL_PROCESSES = new Set([
   "system idle process",
   "registry",
   "fontdrvhost.exe",
-  "sihost.exe"
+  "sihost.exe",
+  // macOS Critical Daemons & System Processes
+  "kernel_task",
+  "launchd",
+  "windowserver",
+  "loginwindow",
+  "dock",
+  "finder",
+  "systemuiserver",
+  "coreaudiod",
+  "bluetoothd",
+  "mds",
+  "opendirectoryd",
+  "sysmond"
 ]);
 
 /**
- * 判断是否为系统高危关键进程 (保护防误杀)
+ * 判断是否为系统高危关键进程 (保护防误杀，含 Windows PID 0/4 与 macOS launchd PID 1)
  */
 export function isSystemCriticalProcess(nameOrPid: string | number): boolean {
   if (typeof nameOrPid === "number") {
-    return nameOrPid === 0 || nameOrPid === 4;
+    return nameOrPid === 0 || nameOrPid === 1 || nameOrPid === 4;
   }
   return CRITICAL_PROCESSES.has(nameOrPid.trim().toLowerCase());
 }
 
 /**
- * 构建进程终止命令行
+ * 构建进程终止命令行 (支持 Windows taskkill 与 macOS/POSIX kill/pkill)
  */
-export function getKillCommandLine(pid: number, mode: KillMode): string {
+export function getKillCommandLine(pid: number, mode: KillMode, isPosix?: boolean): string {
+  const usePosix =
+    typeof isPosix === "boolean"
+      ? isPosix
+      : typeof process !== "undefined" && process.platform === "darwin";
+
+  if (usePosix) {
+    switch (mode) {
+      case "graceful":
+        return `kill -15 ${pid}`;
+      case "force":
+        return `kill -9 ${pid}`;
+      case "tree":
+        return `pkill -9 -P ${pid}`;
+      default:
+        return `kill -9 ${pid}`;
+    }
+  }
+
   switch (mode) {
     case "graceful":
       return `taskkill /PID ${pid}`;
@@ -70,7 +102,7 @@ function mapRawToProcessInfo(raw: any): ProcessInfo {
 
   let memoryMB = Number(raw?.memoryMB ?? NaN);
   if (!Number.isFinite(memoryMB)) {
-    const bytes = Number(raw?.memoryWorkingSet ?? raw?.memoryBytes ?? 0);
+    const bytes = Number(raw?.memoryWorkingSet ?? raw?.workingSetBytes ?? raw?.memoryUsage ?? raw?.memoryBytes ?? 0);
     memoryMB = Number.isFinite(bytes) && bytes >= 0 ? Math.round((bytes / (1024 * 1024)) * 10) / 10 : 0;
   }
 
@@ -109,18 +141,55 @@ function mapRawToProcessInfo(raw: any): ProcessInfo {
  * 从真实宿主拉取系统进程列表 (支持 ProcessMonitorPlugin 与 process_list 兜底)
  */
 export async function fetchRealProcesses(hostOverride?: any): Promise<ProcessInfo[]> {
-  try {
-    const host = hostOverride ?? (globalThis as any).window?.ztools ?? (globalThis as any).ztools;
-    if (host && typeof host?.dllplugin?.call === "function") {
+  const realHost = isRealElectronHost(hostOverride);
+  const host = hostOverride ?? (globalThis as any).window?.ztools ?? (globalThis as any).ztools;
+
+  // 1. 尝试直接调用 host.dllplugin.call (独立 try/catch 隔离，防止未加载 DLL 抛错中断后续 IPC)
+  if (host && typeof host?.dllplugin?.call === "function" && hostOverride) {
+    try {
       const raw = await host.dllplugin.call("ProcessMonitorPlugin", "GetProcessList", "{}");
       const parsed = typeof raw === "string" ? JSON.parse(raw) : raw;
-      const list = Array.isArray(parsed) ? parsed : Array.isArray(parsed?.processes) ? parsed.processes : [];
+      const list = Array.isArray(parsed)
+        ? parsed
+        : Array.isArray(parsed?.processes)
+        ? parsed.processes
+        : [];
       if (list.length > 0) {
         return list.map(mapRawToProcessInfo);
       }
+    } catch {
+      // DLL 未加载或调用失败，继续尝试后续通道
+    }
+  }
+
+  // 2. 尝试通过 Preload Transport 调用 process_list 与 dllplugin_call
+  if (!hostOverride || realHost || typeof hostOverride?.transport?.call === "function" || typeof hostOverride?.process_list === "function" || typeof hostOverride?.dllplugin_call === "function") {
+    try {
+      const fallbackRes = await callHostTransport<any>(
+        "process_list",
+        {},
+        hostOverride
+      );
+      if (fallbackRes.ok && fallbackRes.data) {
+        const d = fallbackRes.data;
+        const list = Array.isArray(d)
+          ? d
+          : Array.isArray(d?.processes)
+          ? d.processes
+          : Array.isArray(d?.data)
+          ? d.data
+          : Array.isArray(d?.data?.processes)
+          ? d.data.processes
+          : [];
+        if (list.length > 0) {
+          return list.map(mapRawToProcessInfo);
+        }
+      }
+    } catch {
+      // 忽略异常继续尝试
     }
 
-    if (!hostOverride || isRealElectronHost(hostOverride)) {
+    try {
       const res = await callHostTransport<any>(
         "dllplugin_call",
         {
@@ -133,26 +202,22 @@ export async function fetchRealProcesses(hostOverride?: any): Promise<ProcessInf
       if (res.ok && res.data !== undefined) {
         const payload = res.data?.result !== undefined ? res.data.result : res.data;
         const parsed = typeof payload === "string" ? JSON.parse(payload) : payload;
-        const list = Array.isArray(parsed) ? parsed : Array.isArray(parsed?.processes) ? parsed.processes : [];
-        if (list.length > 0) {
-          return list.map(mapRawToProcessInfo);
-        }
-      }
-
-      const fallbackRes = await callHostTransport<any>("process_list", {}, hostOverride);
-      if (fallbackRes.ok && fallbackRes.data) {
-        const list = Array.isArray(fallbackRes.data)
-          ? fallbackRes.data
-          : Array.isArray(fallbackRes.data?.processes)
-          ? fallbackRes.data.processes
+        const list = Array.isArray(parsed)
+          ? parsed
+          : Array.isArray(parsed?.processes)
+          ? parsed.processes
           : [];
         if (list.length > 0) {
           return list.map(mapRawToProcessInfo);
         }
       }
+    } catch {
+      // 忽略异常
     }
-  } catch {
-    // 忽略异常回退至内置快照
+  }
+
+  if (realHost) {
+    return [];
   }
   return [...SAMPLE_PROCESSES];
 }
@@ -161,7 +226,7 @@ export async function fetchRealProcesses(hostOverride?: any): Promise<ProcessInf
  * 终结进程服务 (含高危防误杀拦截、宿主真实进程终结与状态返回)
  */
 export async function terminateProcess(
-  proc: ProcessInfo | { pid: number; name: string },
+  proc: ProcessInfo | { pid: number; name: string; path?: string },
   mode: KillMode = "force",
   allowCriticalKill = false,
   hostOverride?: any
@@ -178,7 +243,9 @@ export async function terminateProcess(
     };
   }
 
-  const cmd = getKillCommandLine(proc.pid, mode);
+  const isPosixProc = typeof (proc as any).path === "string" && (proc as any).path.startsWith("/") ? true : undefined;
+  const cmd = getKillCommandLine(proc.pid, mode, isPosixProc);
+  const realHost = isRealElectronHost(hostOverride);
 
   // 1. 优先检查自定义 executeCommand 钩子
   if (typeof (globalThis as any).window?.ztools?.executeCommand === "function") {
@@ -195,6 +262,8 @@ export async function terminateProcess(
   } else {
     // 2. 检查注入的 hostOverride 或真实 Electron 宿主通道
     const host = hostOverride ?? (globalThis as any).window?.ztools ?? (globalThis as any).ztools;
+    let handledByDll = false;
+
     if (host && typeof host?.dllplugin?.call === "function" && Number.isFinite(proc.pid) && proc.pid > 0) {
       try {
         const raw = await host.dllplugin.call(
@@ -204,57 +273,55 @@ export async function terminateProcess(
         );
         const parsed = typeof raw === "string" ? JSON.parse(raw) : raw;
         if (parsed && (parsed.success === false || parsed.error)) {
+          if (!realHost) {
+            return {
+              success: false,
+              command: cmd,
+              error: "EXECUTION_FAILED",
+              message: parsed.error || `执行 ${cmd} 失败`
+            };
+          }
+        } else {
+          handledByDll = true;
+        }
+      } catch (err: any) {
+        if (!realHost) {
           return {
             success: false,
             command: cmd,
             error: "EXECUTION_FAILED",
-            message: parsed.error || `执行 ${cmd} 失败`
+            message: err?.message || `执行 ${cmd} 失败`
           };
         }
-      } catch (err: any) {
-        return {
-          success: false,
-          command: cmd,
-          error: "EXECUTION_FAILED",
-          message: err?.message || `执行 ${cmd} 失败`
-        };
       }
-    } else if ((hostOverride || isRealElectronHost()) && Number.isFinite(proc.pid) && proc.pid > 0) {
-      const res = await callHostTransport<any>(
-        "dllplugin_call",
+    }
+
+    if (!handledByDll && (hostOverride || realHost) && Number.isFinite(proc.pid) && proc.pid > 0) {
+      const killRes = await callHostTransport<any>(
+        "process_kill",
         {
-          plugin: "ProcessMonitorPlugin",
-          func: "TerminateProcessByPID",
-          params: { pid: proc.pid, name: proc.name, mode }
+          pid: proc.pid,
+          mode,
+          force: mode !== "graceful"
         },
         hostOverride
       );
-      if (res.ok && res.data !== undefined) {
-        const payload = res.data?.result !== undefined ? res.data.result : res.data;
-        const parsed = typeof payload === "string" ? JSON.parse(payload) : payload;
-        if (parsed && (parsed.success === false || parsed.error)) {
-          return {
-            success: false,
-            command: cmd,
-            error: "EXECUTION_FAILED",
-            message: parsed.error || `执行 ${cmd} 失败`
-          };
-        }
-      } else {
-        const fallbackRes = await callHostTransport<any>(
-          "process_kill",
+      if (!killRes.ok) {
+        const dllRes = await callHostTransport<any>(
+          "dllplugin_call",
           {
-            pid: proc.pid,
-            force: mode !== "graceful"
+            plugin: "ProcessMonitorPlugin",
+            func: "TerminateProcessByPID",
+            params: { pid: proc.pid, name: proc.name, mode }
           },
           hostOverride
         );
-        if (!fallbackRes.ok) {
+        if (!dllRes.ok) {
           return {
             success: false,
             command: cmd,
             error: "EXECUTION_FAILED",
-            message: fallbackRes.error || res.error || `执行 ${cmd} 失败`
+            message: killRes.error || dllRes.error || `执行 ${cmd} 失败`
           };
         }
       }

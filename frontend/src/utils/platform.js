@@ -3,6 +3,10 @@
  */
 
 export function isMacOS() {
+  if (typeof globalThis !== 'undefined' && globalThis.__ZTOOLS_PLATFORM_OVERRIDE__) {
+    const ov = String(globalThis.__ZTOOLS_PLATFORM_OVERRIDE__).toLowerCase()
+    return ov === 'darwin' || ov === 'macos' || ov === 'mac'
+  }
   if (typeof navigator !== 'undefined') {
     if (navigator.userAgentData?.platform) {
       return navigator.userAgentData.platform.toLowerCase().includes('mac')
@@ -17,6 +21,10 @@ export function isMacOS() {
 }
 
 export function isWindows() {
+  if (typeof globalThis !== 'undefined' && globalThis.__ZTOOLS_PLATFORM_OVERRIDE__) {
+    const ov = String(globalThis.__ZTOOLS_PLATFORM_OVERRIDE__).toLowerCase()
+    return ov === 'win32' || ov === 'windows' || ov === 'win'
+  }
   if (typeof navigator !== 'undefined') {
     if (navigator.userAgentData?.platform) {
       return navigator.userAgentData.platform.toLowerCase().includes('win')
@@ -42,30 +50,29 @@ export const WINDOWS_EXCLUSIVE_PLUGIN_IDS = new Set([
   'flow-guard',
   'network-adapter',
   'network-rescue',
-  'hardware-info',
-  // 实现完全依赖 Windows（shutdown.exe / PowerShell / 任务栏 / winget）
-  'system',
+  // 实现完全依赖 Windows（运行对话框 / Windows 快捷方式 / winget）
   'windows-run',
-  'windows-taskbar',
   'windows-shortcuts',
   'winget',
-  // 依赖 Windows 原生组件（DLLPlugins）；其他系统上调用失败后只会返回模拟数据
-  'disk-analyzer',
-  'process-monitor',
+  // 依赖 Windows 专属原生组件（DLLPlugins）
   'software-manager',
   'batch-audio',
-  'batch-rename',
   'batch-video',
   'multi-download',
   'video-downloader',
-  'pdf',
-  'color-picker'
+  'pdf'
 ])
 
 /**
- * 在所有系统上都暂不可用、不展示的内置插件。
- * 原因是宿主没有给它们提供所需能力，或它们本身不是插件；它们目前只能显示示例数据或假装执行成功。
- * 真正接上宿主能力后，再从这里移出。
+ * macOS-exclusive plugins that must be hidden on Windows.
+ */
+export const MACOS_EXCLUSIVE_PLUGIN_IDS = new Set([
+  'homebrew',
+  'apple-shortcuts'
+])
+
+/**
+ * 在所有系统上都暂不可用、不展示的内置页面或依赖外部 Store 配置的扩展。
  */
 export const UNAVAILABLE_PLUGIN_IDS = new Set([
   // 不是插件：客户端自身的设置、账户、更新、推广页面
@@ -75,24 +82,11 @@ export const UNAVAILABLE_PLUGIN_IDS = new Set([
   'raycast-wrapped',
   'trial-nudges',
   'organizations',
-  // 宿主未提供所需能力，只能展示示例数据或假成功
-  'kill-process',
-  'wifi-password-reveal',
-  'applications',
-  'audio-device',
-  'clean-keyboard',
-  'downloads-manager',
-  'screenshots',
+  // 独立 Store 扩展（通过插件市场按需安装配置）
   'github',
   'obsidian',
-  // 结果是编造的：随机网速、静态汇率、只回显原文的翻译、不可扫描的二维码、20 个词的词典
   'speedtest',
-  'currency-exchange',
-  'translator',
-  'qr-code',
-  'dictionary',
-  // 条目以明文写入本地存储，不能作为密码保险箱提供
-  'password-vault'
+  'currency-exchange'
 ])
 
 /**
@@ -111,6 +105,11 @@ export function isPluginSupportedOnCurrentPlatform(plugin) {
 
   // On macOS, Tier 4 Windows-exclusive plugins are never supported
   if (isMacOS() && WINDOWS_EXCLUSIVE_PLUGIN_IDS.has(normalizedId)) {
+    return false
+  }
+
+  // On Windows, macOS-exclusive plugins (Homebrew, Apple Shortcuts) are hidden
+  if (isWindows() && MACOS_EXCLUSIVE_PLUGIN_IDS.has(normalizedId)) {
     return false
   }
 

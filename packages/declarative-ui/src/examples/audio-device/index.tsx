@@ -21,12 +21,13 @@ import {
   Toast,
   useNavigation
 } from "../../index.js";
-import { useState, useMemo } from "../../runtime/hooks.js";
+import { useState, useMemo, useEffect } from "../../runtime/hooks.js";
 import { AudioDevice, IOType } from "./types.js";
 import {
   defaultAudioDeviceManager,
   buildAudioPlatformCommand
 } from "./audio-service.js";
+import { isRealElectronHost } from "../shared/native-ipc.js";
 
 export * from "./types.js";
 export * from "./audio-service.js";
@@ -189,7 +190,27 @@ export default function AudioDeviceCommand() {
   const [searchText, setSearchText] = useState("");
   const [ioFilter, setIoFilter] = useState<IOType | "all" | "favourites">("all");
   const [version, setVersion] = useState(0);
+  const [isLoading, setIsLoading] = useState(() => isRealElectronHost());
   const refresh = () => setVersion((v) => v + 1);
+
+  useEffect(() => {
+    let active = true;
+    setIsLoading(true);
+    void defaultAudioDeviceManager
+      .syncDevicesFromHost()
+      .then(() => {
+        if (active) {
+          setIsLoading(false);
+          refresh();
+        }
+      })
+      .catch(() => {
+        if (active) setIsLoading(false);
+      });
+    return () => {
+      active = false;
+    };
+  }, []);
 
   const devices = useMemo(
     () =>
@@ -276,6 +297,21 @@ export default function AudioDeviceCommand() {
               refresh();
             }}
           />
+          {([25, 50, 75, 100] as const).map((presetVol) => (
+            <Action
+              key={`vol-${presetVol}`}
+              title={`快速设置音量为 ${presetVol}%`}
+              icon={Icon.SpeakerHigh}
+              onAction={async () => {
+                const res = defaultAudioDeviceManager.setDeviceVolume(dev.id, presetVol);
+                await showToast(
+                  res.success ? Toast.Style.Success : Toast.Style.Failure,
+                  res.success ? `${dev.name} 音量已设为 ${presetVol}%` : res.error || "设置失败"
+                );
+                refresh();
+              }}
+            />
+          ))}
           <Action
             title={dev.isFavourite ? "取消常用收藏" : "设为常用收藏"}
             icon={dev.isFavourite ? Icon.StarDisabled : Icon.Star}
@@ -283,6 +319,16 @@ export default function AudioDeviceCommand() {
             onAction={async () => {
               defaultAudioDeviceManager.toggleFavourite(dev.id);
               refresh();
+            }}
+          />
+          <Action
+            title="重新扫描音频设备 (Refresh Devices)"
+            icon={Icon.Repeat}
+            shortcut={{ modifiers: ["ctrl"], key: "r" }}
+            onAction={async () => {
+              const list = await defaultAudioDeviceManager.syncDevicesFromHost();
+              refresh();
+              await showToast(Toast.Style.Success, `已刷新音频设备 (${list.length} 个)`);
             }}
           />
           <Action.Push
@@ -297,9 +343,23 @@ export default function AudioDeviceCommand() {
 
   return (
     <List
+      isLoading={isLoading}
       navigationTitle="音频设备一键切换 (Set Audio Device)"
       searchBarPlaceholder="搜索耳机、显示器音响、扬声器或麦克风..."
       onSearchTextChange={setSearchText}
+      actions={
+        <ActionPanel>
+          <Action
+            title="重新扫描音频设备 (Refresh Devices)"
+            icon={Icon.Repeat}
+            onAction={async () => {
+              const list = await defaultAudioDeviceManager.syncDevicesFromHost();
+              refresh();
+              await showToast(Toast.Style.Success, `已刷新音频设备 (${list.length} 个)`);
+            }}
+          />
+        </ActionPanel>
+      }
       searchBarAccessory={
         <List.Dropdown
           tooltip="按输入/输出类型筛选"
@@ -313,6 +373,18 @@ export default function AudioDeviceCommand() {
         </List.Dropdown>
       }
     >
+      {outputDevices.length > 0 && (
+        <List.Section title="🔊 音频输出设备 (Output / 耳机与扬声器)" subtitle={`${outputDevices.length} 个设备`}>
+          {outputDevices.map(renderDeviceItem)}
+        </List.Section>
+      )}
+
+      {inputDevices.length > 0 && (
+        <List.Section title="🎙️ 音频输入设备 (Input / 麦克风)" subtitle={`${inputDevices.length} 个设备`}>
+          {inputDevices.map(renderDeviceItem)}
+        </List.Section>
+      )}
+
       {ioFilter === "all" && !searchText && (
         <List.Section title="⚡ 一键场景组合切换 (Audio Combos)">
           {combos.map((combo) => (
@@ -340,18 +412,6 @@ export default function AudioDeviceCommand() {
               }
             />
           ))}
-        </List.Section>
-      )}
-
-      {outputDevices.length > 0 && (
-        <List.Section title="🔊 音频输出设备 (Output / 耳机与扬声器)" subtitle={`${outputDevices.length} 个设备`}>
-          {outputDevices.map(renderDeviceItem)}
-        </List.Section>
-      )}
-
-      {inputDevices.length > 0 && (
-        <List.Section title="🎙️ 音频输入设备 (Input / 麦克风)" subtitle={`${inputDevices.length} 个设备`}>
-          {inputDevices.map(renderDeviceItem)}
         </List.Section>
       )}
     </List>

@@ -70,15 +70,15 @@ export default function SystemCommand() {
   return (
     <List
       isShowingDetail={isShowingDetail}
-      searchBarPlaceholder="搜索 Windows 系统运维指令 (如 锁屏, 重启, 退出所有应用, 清空回收站, 音量混音器)..."
+      searchBarPlaceholder="搜索 macOS / Windows 系统控制指令 (如 深色模式, 隐藏文件, 咖啡因防休眠, 锁屏, 清空废纸篓)..."
       onSearchTextChange={setSearchText}
       searchBarAccessory={
         <List.Dropdown tooltip="按类别筛选" value={category} onChange={setCategory}>
           <List.Dropdown.Item title="全部动作 (All Actions)" value="all" icon={Icon.List} />
-          <List.Dropdown.Item title="电源与会话 (Power & Session)" value="power" icon={Icon.Power} />
-          <List.Dropdown.Item title="进程与桌面 (Apps & Windows)" value="apps" icon={Icon.AppWindow} />
-          <List.Dropdown.Item title="音频与硬件 (Audio & Hardware)" value="audio" icon={Icon.Play} />
-          <List.Dropdown.Item title="系统维护 (Maintenance)" value="maintenance" icon={Icon.Gear} />
+          <List.Dropdown.Item title="电源与防休眠 (Power & Session)" value="power" icon={Icon.Power} />
+          <List.Dropdown.Item title="桌面与外观治理 (Apps & Desktop)" value="apps" icon={Icon.AppWindow} />
+          <List.Dropdown.Item title="音频与蓝牙控制 (Audio & Hardware)" value="audio" icon={Icon.Play} />
+          <List.Dropdown.Item title="系统维护与废纸篓 (Maintenance)" value="maintenance" icon={Icon.Gear} />
         </List.Dropdown>
       }
     >

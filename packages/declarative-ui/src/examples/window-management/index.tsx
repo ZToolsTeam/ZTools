@@ -97,16 +97,19 @@ ${action.description}
 ### 当前边距偏好配置
 - **内边距 (innerGap)**: \`${innerGap} px\`
 - **外边距 (outerGap)**: \`${outerGap} px\`
-- **吸附模式**: \`Win32 rcWork 栅格计算与任务栏避让\`
+- **吸附模式**: \`macOS Menu Bar / Dock WorkArea 自动避让 & Win32 rcWork 栅格计算\`
 
 ---
 
-### 原生下沉执行说明 (Win32 & UIAccess)
-该动作直接通过 \`ztools-uiaccess\` 原生特权进程执行：
-- 基于 Win32 \`GetForegroundWindow\` 捕获活动窗口句柄
-- 基于 \`MonitorFromWindow\` 与 \`GetMonitorInfoW\` 读取 \`rcWork\`（主动避让系统任务栏）
-- 自动处理最大化窗口还原（\`ShowWindow(SW_RESTORE)\`）与极速重定位（\`SetWindowPos\`）
-- 携带 \`SWP_NOACTIVATE | SWP_NOZORDER | SWP_FRAMECHANGED\` 杜绝窗口闪烁，耗时严格控制在 **< 1ms** 内
+### 原生下沉执行说明 (macOS AXUIElement & Win32 UIAccess)
+该动作直接通过双端原生特权管道执行：
+- **macOS 端 (\`Accessibility / AXUIElement\`)**:
+  - 基于 \`System Events\` / \`AXUIElement\` 定位当前前台活动应用主窗口并读写 \`position\` 与 \`size\`
+  - 基于 \`visibleFrame\` / \`workArea\` 实现 **Menu Bar / Dock WorkArea 自动避让**，确保分屏绝不遮挡顶部菜单栏与底部程序坞
+- **Windows 端 (\`Win32 & ztools-uiaccess\`)**:
+  - 基于 Win32 \`GetForegroundWindow\` 捕获活动窗口句柄，通过 \`MonitorFromWindow\` 与 \`GetMonitorInfoW\` 读取 \`rcWork\`（主动避让系统任务栏）
+  - 自动处理最大化窗口还原（\`ShowWindow(SW_RESTORE)\`）与极速重定位（\`SetWindowPos\`）
+  - 携带 \`SWP_NOACTIVATE | SWP_NOZORDER | SWP_FRAMECHANGED\` 杜绝窗口闪烁，耗时严格控制在 **< 1ms** 内
   `;
 }
 
@@ -222,6 +225,14 @@ export function WindowActionDetailView({
           <Detail.Metadata.Separator />
           <Detail.Metadata.TagList title="底层管道">
             <Detail.Metadata.TagList.Item
+              text="Accessibility (AXUIElement)"
+              color={Color.Purple}
+            />
+            <Detail.Metadata.TagList.Item
+              text="Menu Bar / Dock WorkArea 自动避让"
+              color={Color.Orange}
+            />
+            <Detail.Metadata.TagList.Item
               text="UIAccess UIPI Bypass"
               color={Color.Green}
             />
@@ -307,6 +318,14 @@ export default function WindowManagementCommand() {
               )}
               <List.Item.Detail.Metadata.Separator />
               <List.Item.Detail.Metadata.TagList title="执行引擎">
+                <List.Item.Detail.Metadata.TagList.Item
+                  text="Accessibility (AXUIElement)"
+                  color={Color.Purple}
+                />
+                <List.Item.Detail.Metadata.TagList.Item
+                  text="Menu Bar / Dock WorkArea 自动避让"
+                  color={Color.Orange}
+                />
                 <List.Item.Detail.Metadata.TagList.Item
                   text="UIAccess rcWork"
                   color={Color.Green}

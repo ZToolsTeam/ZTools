@@ -56,9 +56,15 @@ export class WindowsTaskbarManager {
   }
 
   /**
-   * 纯 Win32 原生调用：显示/隐藏任务栏窗口 (Shell_TrayWnd & Shell_SecondaryTrayWnd)
+   * 纯 Win32 / macOS Dock 原生调用：显示/隐藏任务栏或切换 Dock 自动隐藏
    */
-  private async executeNativeShowWindow(visible: boolean): Promise<boolean> {
+  private async executeNativeShowWindow(visible: boolean, hostOverride?: any): Promise<boolean> {
+    const { callHostTransport, isRealElectronHost } = await import("../shared/native-ipc.js");
+    if (hostOverride || isRealElectronHost()) {
+      const ipcRes = await callHostTransport("taskbar_toggle", { visible }, hostOverride);
+      if (ipcRes.ok) return true;
+    }
+
     // 1. 尝试对接 Host ztools IPC
     try {
       const ztools = (globalThis as any).ztools;
@@ -113,9 +119,15 @@ export class WindowsTaskbarManager {
   }
 
   /**
-   * 纯 Win32 原生调用：切换任务栏自动隐藏 (SHAppBarMessage ABM_SETSTATE)
+   * 纯 Win32 / macOS Dock 原生调用：切换任务栏或程序坞自动隐藏
    */
-  private async executeNativeAutoHide(autoHide: boolean): Promise<boolean> {
+  private async executeNativeAutoHide(autoHide: boolean, hostOverride?: any): Promise<boolean> {
+    const { callHostTransport, isRealElectronHost } = await import("../shared/native-ipc.js");
+    if (hostOverride || isRealElectronHost()) {
+      const ipcRes = await callHostTransport("taskbar_toggle", { autoHide }, hostOverride);
+      if (ipcRes.ok) return true;
+    }
+
     try {
       const ztools = (globalThis as any).ztools;
       if (ztools?.taskbar?.setAutoHide) {
@@ -176,12 +188,12 @@ export class WindowsTaskbarManager {
   }
 
   /**
-   * 一键切换任务栏显隐 (Toggle Taskbar Visibility)
+   * 一键切换任务栏显隐 / macOS Dock 自动隐藏 (Toggle Taskbar & Dock Visibility)
    */
-  public async toggleTaskbarVisibility(): Promise<TaskbarActionResult> {
+  public async toggleTaskbarVisibility(hostOverride?: any): Promise<TaskbarActionResult> {
     const current = await this.getTaskbarState();
     const nextVisible = !current.visible;
-    await this.executeNativeShowWindow(nextVisible);
+    await this.executeNativeShowWindow(nextVisible, hostOverride);
     const updated = await this.saveState({ visible: nextVisible });
 
     return {
@@ -192,8 +204,8 @@ export class WindowsTaskbarManager {
     };
   }
 
-  public async showTaskbar(): Promise<TaskbarActionResult> {
-    await this.executeNativeShowWindow(true);
+  public async showTaskbar(hostOverride?: any): Promise<TaskbarActionResult> {
+    await this.executeNativeShowWindow(true, hostOverride);
     const updated = await this.saveState({ visible: true });
     return {
       success: true,
@@ -203,8 +215,8 @@ export class WindowsTaskbarManager {
     };
   }
 
-  public async hideTaskbar(): Promise<TaskbarActionResult> {
-    await this.executeNativeShowWindow(false);
+  public async hideTaskbar(hostOverride?: any): Promise<TaskbarActionResult> {
+    await this.executeNativeShowWindow(false, hostOverride);
     const updated = await this.saveState({ visible: false });
     return {
       success: true,
@@ -215,20 +227,20 @@ export class WindowsTaskbarManager {
   }
 
   /**
-   * 切换任务栏自动隐藏 (Toggle Taskbar Auto-Hide)
+   * 切换任务栏 / macOS Dock 自动隐藏 (Toggle Taskbar / Dock Auto-Hide)
    */
-  public async toggleTaskbarAutoHide(): Promise<TaskbarActionResult> {
+  public async toggleTaskbarAutoHide(hostOverride?: any): Promise<TaskbarActionResult> {
     const current = await this.getTaskbarState();
     const nextAutoHide = !current.autoHide;
-    await this.executeNativeAutoHide(nextAutoHide);
+    await this.executeNativeAutoHide(nextAutoHide, hostOverride);
     const updated = await this.saveState({ autoHide: nextAutoHide });
 
     return {
       success: true,
       autoHide: nextAutoHide,
       message: nextAutoHide
-        ? "已启用任务栏自动隐藏 (Auto-Hide Enabled)"
-        : "已关闭任务栏自动隐藏 (Auto-Hide Disabled)",
+        ? "已启用任务栏/Dock自动隐藏 (Auto-Hide Enabled)"
+        : "已关闭任务栏/Dock自动隐藏 (Auto-Hide Disabled)",
       state: updated
     };
   }
@@ -268,21 +280,55 @@ export class WindowsTaskbarManager {
   }
 
   /**
-   * 检视与配置任务栏停靠位置
+   * 检视与配置任务栏/macOS Dock 停靠位置 (Bottom / Left / Right)
    */
-  public async setTaskbarPosition(position: TaskbarPosition): Promise<TaskbarActionResult> {
+  public async setTaskbarPosition(position: TaskbarPosition, hostOverride?: any): Promise<TaskbarActionResult> {
+    const { callHostTransport, isRealElectronHost } = await import("../shared/native-ipc.js");
+    if (hostOverride || isRealElectronHost()) {
+      await callHostTransport("taskbar_set_dock_position", { position }, hostOverride);
+    }
     const updated = await this.saveState({ position });
     return {
       success: true,
-      message: `任务栏停靠位置设定为: ${position.toUpperCase()}`,
+      message: `停靠位置设定为: ${position.toUpperCase()}`,
       state: updated
     };
   }
 
   /**
-   * 重启 Windows 资源管理器进程 (刷新任务栏状态机)
+   * 设置 macOS Dock 屏幕停靠位置 (Bottom / Left / Right)
    */
-  public async restartExplorer(): Promise<TaskbarActionResult> {
+  public async setDockPosition(
+    position: "bottom" | "left" | "right",
+    hostOverride?: any
+  ): Promise<TaskbarActionResult> {
+    return this.setTaskbarPosition(position, hostOverride);
+  }
+
+  /**
+   * 重启 macOS 程序坞 (killall Dock)
+   */
+  public async restartDock(hostOverride?: any): Promise<TaskbarActionResult> {
+    const { callHostTransport, isRealElectronHost } = await import("../shared/native-ipc.js");
+    if (hostOverride || isRealElectronHost()) {
+      await callHostTransport("taskbar_restart_dock", {}, hostOverride);
+    }
+    const state = await this.getTaskbarState();
+    return {
+      success: true,
+      message: "macOS 程序坞 (Dock) 已重启刷新",
+      state
+    };
+  }
+
+  /**
+   * 重启 Windows 资源管理器进程 / macOS Dock 进程 (刷新状态机)
+   */
+  public async restartExplorer(hostOverride?: any): Promise<TaskbarActionResult> {
+    const { callHostTransport, isRealElectronHost } = await import("../shared/native-ipc.js");
+    if (hostOverride || isRealElectronHost()) {
+      await callHostTransport("taskbar_restart_dock", {}, hostOverride);
+    }
     try {
       if (typeof process !== "undefined" && process.platform === "win32") {
         const childProcess = await import("node:child_process").catch(() => null);
@@ -304,7 +350,7 @@ export class WindowsTaskbarManager {
     const state = await this.getTaskbarState();
     return {
       success: true,
-      message: "Windows 资源管理器已重新加载",
+      message: "系统桌面壳层 (Explorer / Dock) 已重新加载",
       state
     };
   }

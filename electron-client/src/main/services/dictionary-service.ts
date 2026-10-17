@@ -14,6 +14,11 @@
  * - 查词历史与生词收藏夹。
  */
 
+import { execFile } from 'node:child_process'
+import { promisify } from 'node:util'
+
+const execFileAsync = promisify(execFile)
+
 export interface DictionaryDefinition {
   readonly pos: string // 词性 (n., v., adj., adv., etc.)
   readonly meaningZh: string
@@ -398,5 +403,54 @@ export class DictionaryService {
 
   public getFavorites(): readonly string[] {
     return Array.from(this.favoriteWords)
+  }
+
+  /**
+   * 单词语音朗读（macOS 调用 /usr/bin/say，Windows 调用 System.Speech）
+   */
+  public async speakWord(word: string): Promise<{ success: boolean; word: string; error?: string }> {
+    const cleanWord = String(word ?? '')
+      .replace(/[\u0000-\u001f\u007f]/g, '')
+      .trim()
+      .slice(0, 120)
+
+    if (!cleanWord) {
+      throw new Error('朗读词汇不能为空')
+    }
+
+    if (process.platform === 'darwin') {
+      try {
+        await execFileAsync('/usr/bin/say', [cleanWord], { timeout: 10_000 })
+        return { success: true, word: cleanWord }
+      } catch (err) {
+        return {
+          success: false,
+          word: cleanWord,
+          error: err instanceof Error ? err.message : String(err)
+        }
+      }
+    }
+
+    if (process.platform === 'win32') {
+      try {
+        await execFileAsync('powershell.exe', [
+          '-NoProfile',
+          '-NonInteractive',
+          '-Command',
+          'param([string]$w) Add-Type -AssemblyName System.Speech; (New-Object System.Speech.Synthesis.SpeechSynthesizer).Speak($w)',
+          '-w',
+          cleanWord
+        ], { windowsHide: true, timeout: 10_000 })
+        return { success: true, word: cleanWord }
+      } catch (err) {
+        return {
+          success: false,
+          word: cleanWord,
+          error: err instanceof Error ? err.message : String(err)
+        }
+      }
+    }
+
+    return { success: true, word: cleanWord }
   }
 }

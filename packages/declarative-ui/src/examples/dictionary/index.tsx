@@ -17,6 +17,8 @@ import { DictWordEntry, DictFilterTab } from "./types.js";
 import {
   BUILTIN_DICTIONARY,
   lookupWord,
+  lookupWordFromHost,
+  speakWordOnHost,
   getOnlineDictionaryUrls
 } from "./data.js";
 import {
@@ -27,6 +29,7 @@ import {
   recordRecentSearch,
   clearRecentSearches
 } from "./storage.js";
+import { isRealElectronHost } from "../shared/native-ipc.js";
 
 export * from "./types.js";
 export * from "./data.js";
@@ -177,6 +180,7 @@ export default function DictionaryCommand() {
   const [bookmarks, setBookmarks] = useState<string[]>([]);
   const [recents, setRecents] = useState<string[]>([]);
   const [selectedWord, setSelectedWord] = useState<string>("");
+  const [hostEntry, setHostEntry] = useState<DictWordEntry | null>(null);
   const { push } = useNavigation();
 
   // 加载生词本与查词历史
@@ -195,6 +199,25 @@ export default function DictionaryCommand() {
     return () => { mounted = false; };
   }, []);
 
+  // 真实宿主下异步调用 dictionary_lookup IPC
+  useEffect(() => {
+    let mounted = true;
+    const q = searchText.trim();
+    if (!q || !isRealElectronHost()) {
+      setHostEntry(null);
+      return;
+    }
+    (async () => {
+      try {
+        const entry = await lookupWordFromHost(q);
+        if (mounted) setHostEntry(entry);
+      } catch {
+        if (mounted) setHostEntry(null);
+      }
+    })();
+    return () => { mounted = false; };
+  }, [searchText]);
+
   // 记录搜索历史并执行查词
   const { results, guesses, isSearching } = useMemo(() => {
     const q = searchText.trim().toLowerCase();
@@ -203,12 +226,15 @@ export default function DictionaryCommand() {
     }
     const searchRes = lookupWord(q, BUILTIN_DICTIONARY);
     const combined = [...searchRes.exactMatches, ...searchRes.suggestions];
+    if (hostEntry && !combined.some(e => e.word.toLowerCase() === hostEntry.word.toLowerCase())) {
+      combined.unshift(hostEntry);
+    }
     return {
       results: combined,
       guesses: searchRes.guesses,
       isSearching: true
     };
-  }, [searchText]);
+  }, [searchText, hostEntry]);
 
   // 根据 Tab 进行视图过滤
   const displayedEntries = useMemo(() => {
@@ -241,6 +267,7 @@ export default function DictionaryCommand() {
 
   const handlePronounce = async (entry: DictWordEntry, dialect: "US" | "UK" = "US") => {
     const phonetic = dialect === "US" ? entry.phoneticUs : entry.phoneticUk;
+    await speakWordOnHost(entry.word, dialect);
     await showToast(
       Toast.Style.Success,
       `发音朗读 (${dialect})`,

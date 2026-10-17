@@ -172,10 +172,19 @@ export default function ColorPickerCommand() {
       await showToast(
         Toast.Style.Success,
         `取色成功: ${picked.hex}`,
-        picked.source === "native" ? "已穿透 Win32/UIAccess 拾取" : "高精度放大镜模拟取色"
+        picked.source === "native" ? "已通过原生屏幕拾色器 (Win32/UIAccess 或 macOS NSColorSampler) 拾取" : "高精度放大镜模拟取色"
       );
     } catch (err: any) {
-      await showToast(Toast.Style.Failure, "屏幕拾色失败", err?.message);
+      const msg = String(err?.message || "未知异常");
+      if (msg.includes("SCREEN_RECORDING") || msg.includes("TCC") || msg.includes("屏幕录制")) {
+        await showToast(
+          Toast.Style.Failure,
+          "需要 macOS 屏幕录制权限 (TCC)",
+          "请前往「系统设置 -> 隐私与安全性 -> 录屏与系统录音」授予 ZTools 权限"
+        );
+      } else {
+        await showToast(Toast.Style.Failure, "屏幕拾色失败", msg);
+      }
     }
   };
 

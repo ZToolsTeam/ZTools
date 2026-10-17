@@ -604,10 +604,24 @@ function tryRestoreInitialSnapshot() {
   }
 }
 
+function getItemKey(it) {
+  if (!it) return "";
+  return String(it.id ?? it.props?.id ?? it.key ?? it.props?.title ?? "");
+}
+
 function selectItem(item) {
+  const prevKey = getItemKey(selectedItem.value);
+  const nextKey = getItemKey(item);
   selectedItem.value = item;
   emit("select", item);
-  emit("action-panel-change", item.props?.actions || props.descriptor.props?.actions);
+  emit("action-panel-change", item?.props?.actions || props.descriptor.props?.actions);
+  if (nextKey && nextKey !== prevKey && typeof props.descriptor.props?.onSelectionChange === "function") {
+    try {
+      props.descriptor.props.onSelectionChange(item?.id ?? item?.props?.id ?? nextKey);
+    } catch (err) {
+      console.warn("[ListRenderer] onSelectionChange error:", err);
+    }
+  }
 }
 
 function handleContextMenu(item) {
@@ -654,7 +668,10 @@ watch(
 );
 
 watch(flatItems, (items) => {
-  if (items.length === 0) return;
+  if (items.length === 0) {
+    selectedItem.value = null;
+    return;
+  }
 
   const snap = props.initialSnapshot;
   if (!selectionRestored && snap?.selectedId) {
@@ -672,9 +689,23 @@ watch(flatItems, (items) => {
     }
   }
 
-  if (!selectedItem.value || !items.includes(selectedItem.value)) {
-    selectItem(items[0]);
+  if (selectedItem.value) {
+    if (items.includes(selectedItem.value)) {
+      return;
+    }
+    const currentKey = getItemKey(selectedItem.value);
+    if (currentKey) {
+      const matchedByKey = items.find((it) => getItemKey(it) === currentKey);
+      if (matchedByKey) {
+        selectedItem.value = matchedByKey;
+        emit("select", matchedByKey);
+        emit("action-panel-change", matchedByKey?.props?.actions || props.descriptor.props?.actions);
+        return;
+      }
+    }
   }
+
+  selectItem(items[0]);
 }, { immediate: true });
 
 onMounted(() => {

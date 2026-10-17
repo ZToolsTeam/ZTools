@@ -14,7 +14,9 @@
  * - 置顶标记、搜索过滤与废纸篓安全移除。
  */
 
+import { execFileSync } from 'node:child_process'
 import fs from 'node:fs'
+import os from 'node:os'
 import path from 'node:path'
 import { shell } from 'electron'
 
@@ -42,7 +44,8 @@ export interface ScreenshotsServiceOptions {
   maxScanLimit?: number
 }
 
-const IMAGE_EXTENSIONS = new Set(['.png', '.jpg', '.jpeg', '.bmp', '.webp'])
+const IMAGE_EXTENSIONS = new Set(['.png', '.jpg', '.jpeg', '.bmp', '.webp', '.heic', '.tiff'])
+const MACOS_DESKTOP_SCREENSHOT_NAME_RE = /^(screen\s*shot|screenshot|截屏|屏幕截图|cleanshot|ishot|xnip|snipaste)/i
 
 export class ScreenshotsService {
   private customSearchDirs: string[] = []
@@ -62,7 +65,39 @@ export class ScreenshotsService {
    */
   public getDefaultLocations(): readonly string[] {
     const locations: string[] = []
-    const home = process.env.USERPROFILE || process.env.HOME || ''
+    const home = process.env.USERPROFILE || process.env.HOME || os.homedir() || ''
+
+    if (process.platform === 'darwin') {
+      try {
+        const customLoc = execFileSync('/usr/bin/defaults', [
+          'read',
+          'com.apple.screencapture',
+          'location'
+        ], { encoding: 'utf8', timeout: 1500, stdio: ['ignore', 'pipe', 'ignore'] }).trim()
+        if (customLoc) {
+          const resolved = customLoc.startsWith('~') && home
+            ? path.join(home, customLoc.slice(1))
+            : customLoc
+          if (fs.existsSync(resolved) && !locations.includes(resolved)) {
+            locations.push(resolved)
+          }
+        }
+      } catch {
+        // 未自定义 com.apple.screencapture location 时使用默认目录
+      }
+
+      if (home) {
+        const desktopDir = path.join(home, 'Desktop')
+        if (fs.existsSync(desktopDir) && !locations.includes(desktopDir)) {
+          locations.push(desktopDir)
+        }
+        const macScreenshots = path.join(home, 'Pictures', 'Screenshots')
+        if (fs.existsSync(macScreenshots) && !locations.includes(macScreenshots)) {
+          locations.push(macScreenshots)
+        }
+      }
+      return locations
+    }
 
     if (home) {
       // 1. Windows 标准截图目录 Win + PrtScn
@@ -102,44 +137,81 @@ export class ScreenshotsService {
       return this.cache
     }
 
-    const dirsToScan = this.customSearchDirs.length > 0
+    const usingCustomDirs = this.customSearchDirs.length > 0
+    const dirsToScan = usingCustomDirs
       ? this.customSearchDirs
       : this.getDefaultLocations()
+
+    const home = process.env.USERPROFILE || process.env.HOME || os.homedir() || ''
+    const macDesktopDir = process.platform === 'darwin' && home ? path.resolve(home, 'Desktop') : ''
 
     const records: ScreenshotRecord[] = []
     const seenPaths = new Set<string>()
 
+    const addFileRecord = (fullPath: string, filename: string) => {
+      if (seenPaths.has(fullPath)) return
+      seenPaths.add(fullPath)
+      try {
+        const stat = fs.statSync(fullPath)
+        if (!stat.isFile()) return
+        records.push({
+          id: `screenshot-${Buffer.from(fullPath).toString('base64url').slice(0, 16)}`,
+          filename,
+          path: fullPath,
+          size: stat.size,
+          createdAt: stat.birthtimeMs || stat.mtimeMs,
+          modifiedAt: stat.mtimeMs,
+          pinned: this.pinnedPaths.has(fullPath)
+        })
+      } catch {
+        // 忽略单个文件状态读取异常
+      }
+    }
+
     for (const dir of dirsToScan) {
       try {
         if (!fs.existsSync(dir)) continue
+        const isMacDesktop = !usingCustomDirs && macDesktopDir && path.resolve(dir) === macDesktopDir
         const entries = fs.readdirSync(dir, { withFileTypes: true })
         for (const entry of entries) {
           if (entry.isFile()) {
             const ext = path.extname(entry.name).toLowerCase()
             if (IMAGE_EXTENSIONS.has(ext)) {
-              const fullPath = path.join(dir, entry.name)
-              if (seenPaths.has(fullPath)) continue
-              seenPaths.add(fullPath)
-
-              try {
-                const stat = fs.statSync(fullPath)
-                records.push({
-                  id: `screenshot-${Buffer.from(fullPath).toString('base64url').slice(0, 16)}`,
-                  filename: entry.name,
-                  path: fullPath,
-                  size: stat.size,
-                  createdAt: stat.birthtimeMs || stat.mtimeMs,
-                  modifiedAt: stat.mtimeMs,
-                  pinned: this.pinnedPaths.has(fullPath)
-                })
-              } catch {
-                // 忽略单个文件状态读取异常
+              if (isMacDesktop && !MACOS_DESKTOP_SCREENSHOT_NAME_RE.test(entry.name)) {
+                continue
               }
+              const fullPath = path.join(dir, entry.name)
+              addFileRecord(fullPath, entry.name)
             }
           }
         }
       } catch {
         // 忽略无法访问的目录
+      }
+    }
+
+    // macOS Spotlight 元数据 kMDItemIsScreenCapture == 1 补充探测
+    if (process.platform === 'darwin' && !usingCustomDirs) {
+      try {
+        const stdout = execFileSync('/usr/bin/mdfind', ['kMDItemIsScreenCapture == 1'], {
+          encoding: 'utf8',
+          timeout: 2000,
+          maxBuffer: 2 * 1024 * 1024,
+          stdio: ['ignore', 'pipe', 'ignore']
+        })
+        const lines = String(stdout ?? '')
+          .split(/\r?\n/)
+          .map((l) => l.trim())
+          .filter(Boolean)
+          .slice(0, 150)
+        for (const filePath of lines) {
+          const ext = path.extname(filePath).toLowerCase()
+          if (IMAGE_EXTENSIONS.has(ext)) {
+            addFileRecord(filePath, path.basename(filePath))
+          }
+        }
+      } catch {
+        // 忽略 mdfind 不可用或超时
       }
     }
 

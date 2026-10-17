@@ -39,10 +39,11 @@ export function ProcessDetailView({
   onKilled?: (pid: number) => void;
 }) {
   const { pop } = useNavigation();
-  const isCritical = process.isSystemCritical || isSystemCriticalProcess(process.name);
-  const gracefulCmd = getKillCommandLine(process.pid, "graceful");
-  const forceCmd = getKillCommandLine(process.pid, "force");
-  const treeCmd = getKillCommandLine(process.pid, "tree");
+  const isCritical = process.isSystemCritical || isSystemCriticalProcess(process.name) || isSystemCriticalProcess(process.pid);
+  const isPosixPath = process.path?.startsWith("/") ? true : undefined;
+  const gracefulCmd = getKillCommandLine(process.pid, "graceful", isPosixPath);
+  const forceCmd = getKillCommandLine(process.pid, "force", isPosixPath);
+  const treeCmd = getKillCommandLine(process.pid, "tree", isPosixPath);
 
   const markdown = `
 # 进程详情: ${process.name} (PID: ${process.pid})
@@ -51,7 +52,7 @@ export function ProcessDetailView({
 
 ${
   isCritical
-    ? `> ⚠️ **系统关键高危进程**: 该进程属于 Windows 核心子系统。若强行终结可能导致系统假死、桌面崩溃重启或蓝屏宕机 (BSOD)！\n`
+    ? `> ⚠️ **系统关键高危进程**: 该进程属于系统核心守护子系统 (Windows Kernel / macOS launchd & WindowServer)。若强行终结可能导致系统假死、桌面崩溃重启或内核宕机！\n`
     : ""
 }
 
@@ -78,7 +79,7 @@ ${gracefulCmd}
 # 强制终结指令 (Kill -9)
 ${forceCmd}
 
-# 级联终结进程树指令 (/T)
+# 级联终结进程树指令 (/T / pkill -P)
 ${treeCmd}
 \`\`\`
   `;
@@ -179,7 +180,10 @@ ${treeCmd}
  * 系统级进程管理急救箱主命令
  */
 export default function KillProcessCommand() {
-  const [processes, setProcesses] = useState<ProcessInfo[]>(SAMPLE_PROCESSES);
+  const [processes, setProcesses] = useState<ProcessInfo[]>(() =>
+    isRealElectronHost() ? [] : SAMPLE_PROCESSES
+  );
+  const [isLoading, setIsLoading] = useState<boolean>(() => isRealElectronHost());
   const [sortBy, setSortBy] = useState<ProcessSortBy>("memory");
   const [searchText, setSearchText] = useState("");
   const [autoRefresh, setAutoRefresh] = useState<boolean>(true);
@@ -203,10 +207,12 @@ export default function KillProcessCommand() {
       inFlight = true;
       try {
         const list = await fetchRealProcesses();
-        if (active && list.length > 0) {
+        if (active && (list.length > 0 || isRealElectronHost())) {
           setProcesses(list);
+          setIsLoading(false);
         }
       } finally {
+        if (active) setIsLoading(false);
         inFlight = false;
       }
     };
@@ -278,6 +284,7 @@ export default function KillProcessCommand() {
 
   return (
     <List
+      isLoading={isLoading}
       navigationTitle="进程管理急救箱"
       searchBarPlaceholder="搜索进程名、PID、拼音 (如 guge / weiruan / ziyuan) 或可执行路径..."
       searchText={searchText}

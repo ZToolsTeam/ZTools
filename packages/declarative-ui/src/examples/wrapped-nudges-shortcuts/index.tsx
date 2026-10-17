@@ -2,20 +2,23 @@ import React from "../../index.js";
 import {
   List,
   Detail,
+  Form,
   ActionPanel,
   Action,
   Icon,
   Color,
   showToast,
   Toast,
-  Clipboard
+  Clipboard,
+  useNavigation
 } from "../../index.js";
 import { useState, useEffect, useMemo } from "../../runtime/hooks.js";
 import {
   WrappedUsageStats,
   FeatureNudgeItem,
   SystemPrivilegeDiagnostic,
-  WindowsShortcutItem
+  WindowsShortcutItem,
+  AppleShortcutItem
 } from "./types.js";
 import {
   calculateWrappedStats,
@@ -24,7 +27,10 @@ import {
   restartSidecar,
   getWindowsShortcuts,
   executeWindowsShortcut,
-  revealShortcutInExplorer
+  revealShortcutInExplorer,
+  getAppleShortcuts,
+  executeAppleShortcut,
+  openShortcutInApp
 } from "./engine.js";
 
 export * from "./types.js";
@@ -445,3 +451,194 @@ export function WindowsShortcutsCommand() {
     </List>
   );
 }
+
+/**
+ * 带参数运行 macOS 快捷指令表单 (<RunShortcutWithInputForm>)
+ */
+export function RunShortcutWithInputForm({
+  shortcutName,
+  onCompleted
+}: {
+  shortcutName: string;
+  onCompleted?: (output?: string) => void;
+}) {
+  const { pop } = useNavigation();
+  const [inputValue, setInputValue] = useState("");
+
+  return (
+    <Form
+      navigationTitle={`带参数运行: ${shortcutName}`}
+      actions={
+        <ActionPanel>
+          <Action.SubmitForm
+            title="运行快捷指令 (Run Shortcut)"
+            icon={Icon.Play}
+            onSubmit={async (values: Record<string, any>) => {
+              const finalInput = values?.input !== undefined ? String(values.input) : inputValue;
+              await showToast(Toast.Style.Animated, `正在运行快捷指令: ${shortcutName}...`);
+              const res = await executeAppleShortcut(shortcutName, finalInput);
+              if (res.success) {
+                if (res.output) {
+                  await Clipboard.copy(res.output);
+                }
+                await showToast(Toast.Style.Success, res.message);
+                onCompleted?.(res.output);
+                pop();
+              } else {
+                await showToast(Toast.Style.Failure, res.message);
+              }
+            }}
+          />
+        </ActionPanel>
+      }
+    >
+      <Form.TextArea
+        id="input"
+        title="输入文本参数 (Shortcut Input)"
+        placeholder="输入传递给 /usr/bin/shortcuts run 的文本、URL 或 JSON 内容..."
+        value={inputValue}
+        onChange={setInputValue}
+      />
+    </Form>
+  );
+}
+
+/**
+ * P1-6: macOS 原生「快捷指令 (Apple Shortcuts)」直连主视图
+ */
+export function AppleShortcutsCommand() {
+  const [shortcuts, setShortcuts] = useState<AppleShortcutItem[]>([]);
+  const [searchText, setSearchText] = useState("");
+  const [isLoading, setIsLoading] = useState(true);
+  const [lastOutputMap, setLastOutputMap] = useState<Record<string, string>>({});
+
+  useEffect(() => {
+    let isMounted = true;
+    (async () => {
+      try {
+        const list = await getAppleShortcuts();
+        if (isMounted) {
+          setShortcuts(list);
+          setIsLoading(false);
+        }
+      } catch {
+        if (isMounted) setIsLoading(false);
+      }
+    })();
+    return () => {
+      isMounted = false;
+    };
+  }, []);
+
+  const filtered = useMemo(() => {
+    const q = searchText.trim().toLowerCase();
+    if (!q) return shortcuts;
+    return shortcuts.filter(
+      (item) =>
+        item.name.toLowerCase().includes(q) ||
+        item.description.toLowerCase().includes(q) ||
+        (item.folder && item.folder.toLowerCase().includes(q))
+    );
+  }, [shortcuts, searchText]);
+
+  const handleRun = async (item: AppleShortcutItem) => {
+    await showToast(Toast.Style.Animated, `正在运行快捷指令: ${item.name}...`);
+    const res = await executeAppleShortcut(item.name);
+    if (res.success) {
+      if (res.output) {
+        setLastOutputMap((prev) => ({ ...prev, [item.id]: res.output! }));
+        await Clipboard.copy(res.output);
+      }
+      await showToast(Toast.Style.Success, res.message);
+    } else {
+      await showToast(Toast.Style.Failure, res.message);
+    }
+  };
+
+  const handleOpenInApp = async (item: AppleShortcutItem) => {
+    const res = await openShortcutInApp(item.name);
+    await showToast(res.success ? Toast.Style.Success : Toast.Style.Failure, res.message);
+  };
+
+  return (
+    <List
+      isLoading={isLoading}
+      isShowingDetail={true}
+      searchBarPlaceholder="搜索 macOS 快捷指令 (Search Apple Shortcuts)..."
+      onSearchTextChange={setSearchText}
+    >
+      <List.Section title={`macOS 快捷指令 (${filtered.length})`}>
+        {filtered.map((item) => {
+          const lastOut = lastOutputMap[item.id];
+          return (
+            <List.Item
+              key={item.id}
+              id={item.id}
+              title={item.name}
+              subtitle={item.folder || "Shortcuts"}
+              icon={Icon.Bolt}
+              accessories={[
+                ...(item.folder ? [{ text: item.folder }] : []),
+                { text: "Apple Shortcuts" }
+              ]}
+              detail={
+                <List.Item.Detail
+                  markdown={`# ⚡ ${item.name}\n\n${item.description}\n\n- **所属文件夹**: \`${item.folder || "默认"}\`\n- **底层 CLI**: \`/usr/bin/shortcuts run "${item.name}"\`\n${lastOut ? `\n### 最近执行输出\n\`\`\`text\n${lastOut}\n\`\`\`\n` : ""}`}
+                  metadata={
+                    <List.Item.Detail.Metadata>
+                      <List.Item.Detail.Metadata.Label title="快捷指令名称" text={item.name} icon={Icon.Bolt} />
+                      <List.Item.Detail.Metadata.Label title="文件夹" text={item.folder || "默认"} icon={Icon.Folder} />
+                      <List.Item.Detail.Metadata.Label title="执行引擎" text="/usr/bin/shortcuts" icon={Icon.Terminal} />
+                      <List.Item.Detail.Metadata.Separator />
+                      <List.Item.Detail.Metadata.TagList title="支持能力">
+                        <List.Item.Detail.Metadata.TagList.Item text="macOS Native CLI" color={Color.Green} />
+                        {item.acceptsInput && (
+                          <List.Item.Detail.Metadata.TagList.Item text="支持参数输入" color={Color.Blue} />
+                        )}
+                      </List.Item.Detail.Metadata.TagList>
+                    </List.Item.Detail.Metadata>
+                  }
+                />
+              }
+              actions={
+                <ActionPanel title={item.name}>
+                  <Action
+                    title="运行快捷指令 (Run Shortcut)"
+                    icon={Icon.Play}
+                    onAction={() => handleRun(item)}
+                  />
+                  <Action.Push
+                    title="带参数运行快捷指令 (Run with Input...)"
+                    icon={Icon.Terminal}
+                    shortcut={{ modifiers: ["cmd"], key: "return" }}
+                    target={
+                      <RunShortcutWithInputForm
+                        shortcutName={item.name}
+                        onCompleted={(out) => {
+                          if (out) setLastOutputMap((prev) => ({ ...prev, [item.id]: out }));
+                        }}
+                      />
+                    }
+                  />
+                  <Action
+                    title="在「快捷指令」应用中打开编辑 (Open in Shortcuts App)"
+                    icon={Icon.AppWindow}
+                    shortcut={{ modifiers: ["cmd"], key: "o" }}
+                    onAction={() => handleOpenInApp(item)}
+                  />
+                  <Action.CopyToClipboard
+                    title="复制快捷指令名称 (Copy Name)"
+                    content={item.name}
+                    icon={Icon.CopyClipboard}
+                    shortcut={{ modifiers: ["cmd"], key: "c" }}
+                  />
+                </ActionPanel>
+              }
+            />
+          );
+        })}
+      </List.Section>
+    </List>
+  );
+}
+

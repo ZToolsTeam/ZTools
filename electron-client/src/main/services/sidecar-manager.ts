@@ -3,6 +3,13 @@ import readline from 'node:readline'
 import path from 'node:path'
 import fs from 'node:fs'
 import crypto from 'node:crypto'
+import { scanDirectoryForSearch, scanLocalRecentFiles, searchFilesOnMacos } from '../platform/macos/file-indexer.js'
+import {
+  pasteToActiveWindowOnMac,
+  setFrontmostWindowBounds,
+  type MacosWindowBounds
+} from '../platform/macos/window-controller.js'
+import { expandSnippetMacros } from './snippets-service.js'
 
 export type SidecarState = 'stopped' | 'starting' | 'running' | 'restarting' | 'degraded'
 
@@ -54,14 +61,29 @@ export interface FileRecord {
   pinyin: string
 }
 
+export interface SubdirStatRecord {
+  name: string
+  path: string
+  fileCount: number
+  sizeBytes: number
+  file_count?: number | undefined
+  total_bytes?: number | undefined
+  mtime?: number | undefined
+}
+
 export interface SearchFilesResult {
+  query?: string | undefined
+  limit?: number | undefined
   files: FileRecord[]
   count: number
   total_matches: number
+  total_bytes?: number | undefined
+  subdirs?: SubdirStatRecord[] | undefined
   elapsed_us: number
   elapsed_ms: number
   total_indexed: number
-  degraded?: boolean
+  degraded?: boolean | undefined
+  source?: string | undefined
 }
 
 export interface IndexPathResult {
@@ -412,6 +434,7 @@ export class SidecarManager {
 
   // In-memory fallback dataset for degraded indexer mode
   private fallbackFiles: FileRecord[] = []
+  private pastedHistory: string[] = []
 
   constructor() {
     this.uiaccessProcess = new ManagedSidecarProcess({
@@ -426,6 +449,14 @@ export class SidecarManager {
       binaryName: 'ztools-indexer',
       heartbeatIntervalMs: 15000
     })
+  }
+
+  public getPastedHistory(): readonly string[] {
+    return [...this.pastedHistory]
+  }
+
+  public setFallbackFiles(files: readonly FileRecord[]): void {
+    this.fallbackFiles = [...files]
   }
 
   public async startAll(): Promise<void> {
@@ -518,16 +549,40 @@ export class SidecarManager {
     return false
   }
 
-  public async manageWindow(action: string): Promise<{ success: boolean; action: string; rect?: any; error?: string }> {
+  public async manageWindow(
+    action: string,
+    bounds?: MacosWindowBounds
+  ): Promise<{ success: boolean; action: string; rect?: any; error?: string; errorCode?: string }> {
     if (this.uiaccessProcess.state === 'running') {
       try {
-        return await this.uiaccessProcess.sendRequest('manage_window', { action })
+        return await this.uiaccessProcess.sendRequest('manage_window', {
+          action,
+          ...(bounds ? { bounds } : {})
+        })
       } catch (err: any) {
         console.warn('[SidecarManager] manage_window RPC failed:', err)
         return { success: false, action, error: err.message || String(err) }
       }
     }
-    return { success: false, action, error: 'UIAccess sidecar is not running' }
+
+    if (process.platform === 'darwin') {
+      const targetBounds = bounds ?? { x: 100, y: 80, width: 1200, height: 800 }
+      const macRes = await setFrontmostWindowBounds(targetBounds, action)
+      return {
+        success: macRes.success,
+        action,
+        ...(macRes.rect ? { rect: macRes.rect } : bounds ? { rect: bounds } : {}),
+        ...(macRes.error ? { error: macRes.error } : {}),
+        ...(macRes.errorCode ? { errorCode: macRes.errorCode } : {})
+      }
+    }
+
+    return {
+      success: false,
+      action,
+      ...(bounds ? { rect: bounds } : {}),
+      error: 'UIAccess sidecar is not running'
+    }
   }
 
   public async setSnippets(snippets: any[]): Promise<any> {
@@ -538,7 +593,7 @@ export class SidecarManager {
         console.warn('[SidecarManager] set_snippets RPC failed:', err)
       }
     }
-    return { success: false, count: 0 }
+    return { success: false, count: Array.isArray(snippets) ? snippets.length : 0 }
   }
 
   public async pasteToActive(targetHwnd = 0): Promise<{ success: boolean }> {
@@ -549,7 +604,107 @@ export class SidecarManager {
         console.warn('[SidecarManager] paste_to_active RPC failed:', err)
       }
     }
+    if (process.platform === 'darwin') {
+      const lastText = this.pastedHistory[this.pastedHistory.length - 1] ?? ''
+      const res = await pasteToActiveWindowOnMac(lastText, 0)
+      return { success: res.success }
+    }
     return { success: false }
+  }
+
+  public async pasteToActiveWindow(
+    text: string,
+    targetHwnd = 0
+  ): Promise<{ success: boolean; pasted: string; error?: string; errorCode?: string }> {
+    const safeText = String(text ?? '')
+    this.pastedHistory.push(safeText)
+    if (this.pastedHistory.length > 200) {
+      this.pastedHistory.shift()
+    }
+
+    if (this.uiaccessProcess.state === 'running') {
+      try {
+        const rpcRes = await this.uiaccessProcess.sendRequest<{ success: boolean }>('paste_to_active', {
+          text: safeText,
+          target_hwnd: targetHwnd
+        })
+        return { success: Boolean(rpcRes?.success), pasted: safeText }
+      } catch (err: any) {
+        console.warn('[SidecarManager] pasteToActiveWindow RPC failed:', err)
+      }
+    }
+
+    if (process.platform === 'darwin') {
+      const macRes = await pasteToActiveWindowOnMac(safeText, 0)
+      return {
+        success: macRes.success || macRes.clipboardWritten,
+        pasted: safeText,
+        ...(macRes.error ? { error: macRes.error } : {}),
+        ...(macRes.errorCode ? { errorCode: macRes.errorCode } : {})
+      }
+    }
+
+    return {
+      success: true,
+      pasted: safeText
+    }
+  }
+
+  public async expandSnippet(
+    keyword: string,
+    content: string,
+    clipboard = ''
+  ): Promise<{
+    success: boolean
+    expanded: string
+    backspaces: number
+    cursorOffset: number
+    error?: string
+    errorCode?: string
+  }> {
+    const { expanded, cursorOffset } = expandSnippetMacros(String(content ?? ''), {
+      clipboard,
+      now: new Date()
+    })
+    const backspaces = String(keyword ?? '').length
+
+    this.pastedHistory.push(expanded)
+    if (this.pastedHistory.length > 200) {
+      this.pastedHistory.shift()
+    }
+
+    if (this.uiaccessProcess.state === 'running') {
+      try {
+        await this.uiaccessProcess.sendRequest('expand_snippet', {
+          keyword,
+          content: expanded,
+          backspaces,
+          cursor_offset: cursorOffset
+        })
+        return { success: true, expanded, backspaces, cursorOffset }
+      } catch (err: any) {
+        console.warn('[SidecarManager] expandSnippet RPC failed:', err)
+      }
+    }
+
+    if (process.platform === 'darwin') {
+      const macRes = await pasteToActiveWindowOnMac(expanded, cursorOffset)
+      return {
+        success: macRes.success || macRes.clipboardWritten,
+        expanded,
+        backspaces,
+        cursorOffset,
+        ...(macRes.error ? { error: macRes.error } : {}),
+        ...(macRes.errorCode ? { errorCode: macRes.errorCode } : {})
+      }
+    }
+
+    return {
+      success: true,
+      expanded,
+      backspaces,
+      cursorOffset
+    }
   }
 
   public async trimProcessMemory(pid = 0): Promise<{ success: boolean; pid: number; trimmed: boolean }> {
@@ -565,226 +720,93 @@ export class SidecarManager {
 
   // --- Indexer Methods with Graceful Degradation ---
 
+  public registerFallbackFile(file: FileRecord): void {
+    this.fallbackFiles.push(file)
+  }
+
   public async searchFiles(query: string, limit = 50): Promise<SearchFilesResult> {
     const trimmed = String(query || '').trim()
+    const safeLimit = Math.max(1, Math.min(500, Number(limit) || 50))
     if (trimmed.toLowerCase().startsWith('dir:')) {
       const targetDir = trimmed.slice(4).trim()
       if (targetDir) {
-        return await this.scanDirectoryTreeReal(targetDir, limit)
+        return await scanDirectoryForSearch(targetDir, safeLimit, this.fallbackFiles)
       }
     }
 
-    if (this.indexerProcess.state === 'running') {
+    // 1. 若外部单测注入了 fallbackFiles，优先匹配 fallbackFiles
+    if (this.fallbackFiles.length > 0) {
+      const t0 = performance.now()
+      const qLower = trimmed.toLowerCase()
+      const matches: FileRecord[] = []
+
+      for (const f of this.fallbackFiles) {
+        if (
+          !qLower ||
+          f.name.toLowerCase().includes(qLower) ||
+          f.acronym.toLowerCase().includes(qLower) ||
+          f.path.toLowerCase().includes(qLower)
+        ) {
+          matches.push(f)
+          if (matches.length >= safeLimit) break
+        }
+      }
+      const elapsedMs = performance.now() - t0
+      const totalBytes = matches.reduce((acc, f) => acc + (f.size || 0), 0)
+
+      return {
+        query: trimmed,
+        limit: safeLimit,
+        files: matches,
+        count: matches.length,
+        total_matches: matches.length,
+        total_bytes: totalBytes,
+        elapsed_us: Math.round(elapsedMs * 1000),
+        elapsed_ms: elapsedMs,
+        total_indexed: this.fallbackFiles.length,
+        degraded: true,
+        source: 'macos-fs'
+      }
+    }
+
+    // 2. 若 Rust Indexer 侧车运行中且有非空关键词，优先调用硬件级索引
+    if (trimmed && this.indexerProcess.state === 'running') {
       try {
-        return await this.indexerProcess.sendRequest<SearchFilesResult>('search_files', { query, limit })
+        const rpcRes = await this.indexerProcess.sendRequest<SearchFilesResult>('search_files', {
+          query: trimmed,
+          limit: safeLimit
+        })
+        if (rpcRes && Array.isArray(rpcRes.files) && rpcRes.files.length > 0) {
+          return rpcRes
+        }
       } catch (err) {
         console.warn('[SidecarManager] searchFiles RPC failed, falling back:', err)
       }
     }
 
-    // Degraded fallback: in-memory JavaScript search
-    const t0 = performance.now()
-    const qLower = query.toLowerCase()
-    const matches: FileRecord[] = []
-
-    for (const f of this.fallbackFiles) {
-      if (f.name.toLowerCase().includes(qLower) || f.acronym.includes(qLower)) {
-        matches.push(f)
-        if (matches.length >= limit) break
-      }
+    // 3. macOS 走 Spotlight mdfind + 本地用户目录回退
+    if (process.platform === 'darwin') {
+      return await searchFilesOnMacos(trimmed, safeLimit, this.fallbackFiles)
     }
+
+    // 4. 空查询或 Windows 侧车未返回结果时，扫描本机真实用户目录（Downloads/Desktop/Documents/cwd）
+    const t0 = performance.now()
+    const local = await scanLocalRecentFiles(trimmed, safeLimit)
     const elapsedMs = performance.now() - t0
 
     return {
-      files: matches,
-      count: matches.length,
-      total_matches: matches.length,
+      query: trimmed,
+      limit: safeLimit,
+      files: local.files,
+      count: local.files.length,
+      total_matches: local.files.length,
+      total_bytes: local.totalBytes,
+      subdirs: local.subdirs,
       elapsed_us: Math.round(elapsedMs * 1000),
       elapsed_ms: elapsedMs,
-      total_indexed: this.fallbackFiles.length,
-      degraded: true
-    }
-  }
-
-  private async scanDirectoryTreeReal(
-    rootDir: string,
-    limit: number,
-    maxEntries = 2000
-  ): Promise<SearchFilesResult & { total_bytes?: number; subdirs?: Array<{ name: string; path: string; fileCount: number; sizeBytes: number }> }> {
-    const t0 = performance.now()
-    const resolvedRoot = path.resolve(rootDir)
-    if (!fs.existsSync(resolvedRoot)) {
-      return {
-        files: [],
-        count: 0,
-        total_matches: 0,
-        total_bytes: 0,
-        subdirs: [],
-        elapsed_us: 0,
-        elapsed_ms: 0,
-        total_indexed: 0
-      }
-    }
-
-    const visitedReal = new Set<string>()
-    const subdirStats = new Map<string, { name: string; path: string; fileCount: number; sizeBytes: number; topFiles: FileRecord[] }>()
-    const allTopFiles: FileRecord[] = []
-    let totalFiles = 0
-    let totalBytes = 0
-    let visitedCount = 0
-
-    const queue: Array<{ dirPath: string; topSubdir: string; isSymlink?: boolean }> = [
-      { dirPath: resolvedRoot, topSubdir: '', isSymlink: true }
-    ]
-
-    while (queue.length > 0 && visitedCount < maxEntries) {
-      const current = queue.shift()!
-      let realCurrent = current.dirPath
-      if (current.isSymlink) {
-        try {
-          realCurrent = await fs.promises.realpath(current.dirPath)
-        } catch {
-          // keep original path if realpath fails
-        }
-      }
-      const realKey = realCurrent.toLowerCase()
-      if (visitedReal.has(realKey)) continue
-      visitedReal.add(realKey)
-
-      let entries: fs.Dirent[] = []
-      try {
-        entries = await fs.promises.readdir(current.dirPath, { withFileTypes: true })
-      } catch {
-        continue
-      }
-
-      for (const ent of entries) {
-        visitedCount++
-        if (visitedCount > maxEntries) break
-        const fullPath = path.join(current.dirPath, ent.name)
-        const topSub = current.topSubdir || ent.name
-
-        const isSym = ent.isSymbolicLink()
-        let isDir = ent.isDirectory()
-        let isFile = ent.isFile()
-        let statObj: fs.Stats | null = null
-
-        if (isSym || isFile) {
-          try {
-            statObj = await fs.promises.stat(fullPath)
-            isDir = statObj.isDirectory()
-            isFile = statObj.isFile()
-          } catch {
-            continue
-          }
-        }
-
-        if (isDir) {
-          const lowerName = ent.name.toLowerCase()
-          if (
-            lowerName === '$recycle.bin' ||
-            lowerName === 'system volume information' ||
-            lowerName === 'node_modules' ||
-            lowerName === '.git'
-          ) {
-            continue
-          }
-          if (!current.topSubdir && !subdirStats.has(topSub)) {
-            subdirStats.set(topSub, {
-              name: topSub,
-              path: fullPath,
-              fileCount: 0,
-              sizeBytes: 0,
-              topFiles: []
-            })
-          }
-          queue.push({ dirPath: fullPath, topSubdir: topSub, isSymlink: isSym })
-        } else if (isFile && statObj) {
-          const sz = Number(statObj.size || 0)
-          const mtimeMs = Math.round(Number(statObj.mtimeMs || Date.now()))
-          totalFiles++
-          totalBytes += sz
-
-          const rec: FileRecord = {
-            name: ent.name,
-            path: fullPath,
-            is_dir: false,
-            size: sz,
-            mtime: mtimeMs,
-            acronym: ent.name.slice(0, 6).toLowerCase(),
-            pinyin: ent.name.toLowerCase()
-          }
-
-          let subEntry = subdirStats.get(topSub)
-          if (!subEntry) {
-            subEntry = {
-              name: topSub,
-              path: path.join(resolvedRoot, topSub),
-              fileCount: 0,
-              sizeBytes: 0,
-              topFiles: []
-            }
-            subdirStats.set(topSub, subEntry)
-          }
-          subEntry.fileCount++
-          subEntry.sizeBytes += sz
-          if (subEntry.topFiles.length < 40) {
-            subEntry.topFiles.push(rec)
-          } else {
-            let minIdx = 0
-            for (let i = 1; i < subEntry.topFiles.length; i++) {
-              if (subEntry.topFiles[i]!.size < subEntry.topFiles[minIdx]!.size) {
-                minIdx = i
-              }
-            }
-            if (sz > subEntry.topFiles[minIdx]!.size) {
-              subEntry.topFiles[minIdx] = rec
-            }
-          }
-
-          if (allTopFiles.length < limit * 2) {
-            allTopFiles.push(rec)
-          } else if (sz > allTopFiles[allTopFiles.length - 1]!.size) {
-            allTopFiles[allTopFiles.length - 1] = rec
-            allTopFiles.sort((a, b) => b.size - a.size)
-          }
-        }
-      }
-    }
-
-    const mergedMap = new Map<string, FileRecord>()
-    const sortedSubdirs = Array.from(subdirStats.values()).sort((a, b) => b.sizeBytes - a.sizeBytes)
-    for (const sub of sortedSubdirs) {
-      sub.topFiles.sort((a, b) => b.size - a.size)
-      for (const f of sub.topFiles.slice(0, 18)) {
-        if (mergedMap.size < limit) {
-          mergedMap.set(f.path, f)
-        }
-      }
-    }
-    allTopFiles.sort((a, b) => b.size - a.size)
-    for (const f of allTopFiles) {
-      if (mergedMap.size >= limit) break
-      mergedMap.set(f.path, f)
-    }
-
-    const finalFiles = Array.from(mergedMap.values()).sort((a, b) => b.size - a.size).slice(0, limit)
-    const elapsedMs = performance.now() - t0
-
-    return {
-      files: finalFiles,
-      count: finalFiles.length,
-      total_matches: totalFiles,
-      total_bytes: totalBytes,
-      subdirs: sortedSubdirs.map(({ name, path: p, fileCount, sizeBytes }) => ({
-        name,
-        path: p,
-        fileCount,
-        sizeBytes
-      })),
-      elapsed_us: Math.round(elapsedMs * 1000),
-      elapsed_ms: elapsedMs,
-      total_indexed: totalBytes
+      total_indexed: local.files.length,
+      degraded: this.indexerProcess.state !== 'running',
+      source: 'local-fs'
     }
   }
 

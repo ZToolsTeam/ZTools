@@ -119,9 +119,34 @@ export default function WindowsTaskbarCommand() {
     }
   };
 
+  const handleSetDockPosition = async (position: "bottom" | "left" | "right") => {
+    try {
+      const res = await defaultWindowsTaskbarManager.setDockPosition(position);
+      setState(res.state);
+      await showToast(
+        Toast.Style.Success,
+        `Dock / 任务栏停靠位置已切换为 ${position.toUpperCase()}`,
+        res.message
+      );
+    } catch (err: any) {
+      await showToast(Toast.Style.Failure, "切换停靠位置失败", err.message || String(err));
+    }
+  };
+
+  const handleRestartDock = async () => {
+    try {
+      await showToast(Toast.Style.Animated, "正在重启 macOS Dock 程序坞...");
+      const res = await defaultWindowsTaskbarManager.restartDock();
+      setState(res.state);
+      await showToast(Toast.Style.Success, res.message);
+    } catch (err: any) {
+      await showToast(Toast.Style.Failure, "重启 Dock 失败", err.message || String(err));
+    }
+  };
+
   const handleRestartExplorer = async () => {
     try {
-      await showToast(Toast.Style.Animated, "正在重启 Windows 资源管理器...");
+      await showToast(Toast.Style.Animated, "正在重启系统桌面壳层 (Explorer / Dock)...");
       const res = await defaultWindowsTaskbarManager.restartExplorer();
       setState(res.state);
       await showToast(Toast.Style.Success, res.message);
@@ -131,22 +156,22 @@ export default function WindowsTaskbarCommand() {
   };
 
   return (
-    <List searchBarPlaceholder="治理系统任务栏显隐、自动隐藏与居中/靠左布局...">
-      {/* 1. Win32 原生动作 */}
+    <List searchBarPlaceholder="治理系统任务栏与 macOS 程序坞 (Dock) 显隐、自动隐藏、停靠位置...">
+      {/* 1. 跨平台核心显隐与自动隐藏治理 */}
       <List.Section title="Win32 原生治理动作 (Core Actions)">
         <List.Item
           key="item-toggle-visibility"
-          title="切换任务栏显隐 (Toggle Taskbar Visibility)"
-          subtitle={`当前状态: ${state.visible ? "显示中 (Visible)" : "已隐藏 (Hidden)"} — Win32 ShowWindow 原生毫秒切换`}
+          title="切换任务栏显隐 / 程序坞显隐 (Toggle Taskbar & Dock)"
+          subtitle={`当前状态: ${state.visible ? "显示中 (Visible)" : "已隐藏 (Hidden)"} — Win32 ShowWindow / macOS Dock Autohide`}
           accessories={[
             {
               text: state.visible ? "VISIBLE" : "HIDDEN"
             }
           ]}
           actions={
-            <ActionPanel title="任务栏显隐">
+            <ActionPanel title="任务栏与 Dock 显隐">
               <Action
-                title="立即切换任务栏显隐"
+                title="立即切换任务栏/Dock 显隐"
                 icon={Icon.Eye}
                 onAction={handleToggleVisibility}
               />
@@ -166,15 +191,15 @@ export default function WindowsTaskbarCommand() {
 
         <List.Item
           key="item-toggle-autohide"
-          title="切换任务栏自动隐藏 (Toggle Taskbar Auto-Hide)"
-          subtitle={`当前状态: ${state.autoHide ? "已启用自动隐藏 (Auto-Hide)" : "常驻显示 (Always Visible)"} — SHAppBarMessage`}
+          title="切换任务栏 / Dock 自动隐藏 (Toggle Auto-Hide)"
+          subtitle={`当前状态: ${state.autoHide ? "已启用自动隐藏 (Auto-Hide)" : "常驻显示 (Always Visible)"} — SHAppBarMessage / Dock Preferences`}
           accessories={[
             {
               text: state.autoHide ? "AUTO-HIDE ON" : "ALWAYS ON"
             }
           ]}
           actions={
-            <ActionPanel title="任务栏自动隐藏">
+            <ActionPanel title="自动隐藏控制">
               <Action
                 title="切换自动隐藏状态"
                 icon={Icon.ArrowDown}
@@ -217,8 +242,66 @@ export default function WindowsTaskbarCommand() {
         />
       </List.Section>
 
-      {/* 2. 任务栏位置与对齐方式检视 */}
-      <List.Section title="任务栏位置与对齐治理 (Position & Alignment)">
+      {/* 2. macOS Dock 与任务栏位置及对齐治理 */}
+      <List.Section title="macOS Dock 与任务栏位置治理 (Dock Position & Alignment)">
+        <List.Item
+          key="item-dock-bottom"
+          title="停靠于屏幕底部 (Set Dock Position: Bottom)"
+          subtitle="将 macOS 程序坞 / 任务栏停靠在屏幕底边"
+          accessories={[{ text: state.position === "bottom" ? "ACTIVE" : "BOTTOM" }]}
+          actions={
+            <ActionPanel title="停靠位置">
+              <Action
+                title="停靠在底部 (Bottom)"
+                icon={Icon.ArrowDown}
+                onAction={() => handleSetDockPosition("bottom")}
+              />
+              <Action
+                title="停靠在左侧 (Left)"
+                icon={Icon.SidebarLeft}
+                onAction={() => handleSetDockPosition("left")}
+              />
+              <Action
+                title="停靠在右侧 (Right)"
+                icon={Icon.SidebarRight}
+                onAction={() => handleSetDockPosition("right")}
+              />
+            </ActionPanel>
+          }
+        />
+
+        <List.Item
+          key="item-dock-left"
+          title="停靠于屏幕左侧 (Set Dock Position: Left)"
+          subtitle="将 macOS 程序坞停靠在屏幕左边缘，释放纵向代码阅读视野"
+          accessories={[{ text: state.position === "left" ? "ACTIVE" : "LEFT" }]}
+          actions={
+            <ActionPanel title="停靠位置">
+              <Action
+                title="停靠在左侧 (Left)"
+                icon={Icon.SidebarLeft}
+                onAction={() => handleSetDockPosition("left")}
+              />
+            </ActionPanel>
+          }
+        />
+
+        <List.Item
+          key="item-dock-right"
+          title="停靠于屏幕右侧 (Set Dock Position: Right)"
+          subtitle="将 macOS 程序坞停靠在屏幕右边缘"
+          accessories={[{ text: state.position === "right" ? "ACTIVE" : "RIGHT" }]}
+          actions={
+            <ActionPanel title="停靠位置">
+              <Action
+                title="停靠在右侧 (Right)"
+                icon={Icon.SidebarRight}
+                onAction={() => handleSetDockPosition("right")}
+              />
+            </ActionPanel>
+          }
+        />
+
         <List.Item
           key="item-alignment"
           title={`任务栏图标对齐方式: ${state.alignment === "center" ? "居中 (Center)" : "靠左 (Left)"}`}
@@ -238,32 +321,6 @@ export default function WindowsTaskbarCommand() {
             </ActionPanel>
           }
         />
-
-        <List.Item
-          key="item-position"
-          title={`任务栏停靠边缘: ${state.position.toUpperCase()}`}
-          subtitle={`停靠屏幕底部 • 尺寸规格: ${state.size.toUpperCase()} • 多显示器协同: ${state.multiMonitorEnabled ? "已开启" : "未开启"}`}
-          accessories={[
-            {
-              text: state.position.toUpperCase()
-            }
-          ]}
-          actions={
-            <ActionPanel title="任务栏位置">
-              <Action
-                title="检视任务栏属性"
-                icon={Icon.Gear}
-                onAction={async () => {
-                  await showToast(
-                    Toast.Style.Success,
-                    `任务栏属性: 停靠 ${state.position}, 规格 ${state.size}`,
-                    `副屏数量: ${state.secondaryTrayCount}`
-                  );
-                }}
-              />
-            </ActionPanel>
-          }
-        />
       </List.Section>
 
       {/* 3. 运维与急救 */}
@@ -279,6 +336,22 @@ export default function WindowsTaskbarCommand() {
                 title="重启资源管理器进程"
                 icon={Icon.RotateAntiClockwise}
                 onAction={handleRestartExplorer}
+              />
+            </ActionPanel>
+          }
+        />
+
+        <List.Item
+          key="item-restart-dock"
+          title="重启 macOS 程序坞 (Restart macOS Dock)"
+          subtitle="执行 killall Dock 重置程序坞渲染与图标缓存"
+          accessories={[{ text: "DOCK RELOAD" }]}
+          actions={
+            <ActionPanel title="程序坞急救">
+              <Action
+                title="重启 macOS Dock"
+                icon={Icon.RotateClockwise}
+                onAction={handleRestartDock}
               />
             </ActionPanel>
           }

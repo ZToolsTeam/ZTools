@@ -28,6 +28,7 @@ import {
   Clipboard
 } from "../../index.js";
 import { useState, useMemo, useEffect } from "../../runtime/hooks.js";
+import { isRealElectronHost } from "../shared/native-ipc.js";
 import {
   ScreenshotItem,
   ScreenshotCategory
@@ -122,7 +123,9 @@ ${item.ocrText}
 }
 
 export default function ScreenshotsCommand() {
-  const [items, setItems] = useState<ScreenshotItem[]>([...INITIAL_SCREENSHOTS]);
+  const [items, setItems] = useState<ScreenshotItem[]>(() =>
+    isRealElectronHost() ? [] : [...INITIAL_SCREENSHOTS]
+  );
   const [searchText, setSearchText] = useState("");
   const [category, setCategory] = useState<ScreenshotCategory>("all");
   const [refreshCount, setRefreshCount] = useState(0);
@@ -141,6 +144,15 @@ export default function ScreenshotsCommand() {
     defaultScreenshotsManager.loadScreenshots(force).then((list) => {
       setItems(list);
     });
+  };
+
+  const handleCaptureScreenNow = async () => {
+    const res = await defaultScreenshotsManager.captureScreenNow();
+    reloadScreenshots(true);
+    await showToast(
+      res.success ? Toast.Style.Success : Toast.Style.Failure,
+      res.message
+    );
   };
 
   const filtered = useMemo(() => {
@@ -282,6 +294,14 @@ export default function ScreenshotsCommand() {
         onAction={() => handleOpenWithDefault(item)}
       />
 
+      {/* 立即截取当前屏幕 */}
+      <Action
+        title="立即截取当前屏幕 (Capture Screen Now)"
+        icon={Icon.Camera}
+        shortcut={{ modifiers: ["ctrl", "shift"], key: "s" }}
+        onAction={handleCaptureScreenNow}
+      />
+
       {/* 置顶切换 */}
       <Action
         title={item.pinned ? "取消置顶 (Unpin Screenshot)" : "置顶此截图 (Pin Screenshot)"}
@@ -313,6 +333,20 @@ export default function ScreenshotsCommand() {
       isShowingDetail={true}
       searchBarPlaceholder="搜索系统截图文件名、OCR 提取文字或分辨率 (如 2560x1440, error)..."
       onSearchTextChange={setSearchText}
+      actions={
+        <ActionPanel title="屏幕截图全局操作">
+          <Action
+            title="立即截取当前屏幕 (Capture Screen Now)"
+            icon={Icon.Camera}
+            onAction={handleCaptureScreenNow}
+          />
+          <Action
+            title="重新扫描截图目录 (Refresh Screenshots)"
+            icon={Icon.Repeat}
+            onAction={() => reloadScreenshots(true)}
+          />
+        </ActionPanel>
+      }
       searchBarAccessory={
         <List.Dropdown
           tooltip="按分类筛选截图"

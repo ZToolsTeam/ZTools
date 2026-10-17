@@ -62,7 +62,14 @@ import {
   BatchAudioCommand,
   PdfCommand,
   MultiDownloadCommand,
-  VideoDownloaderCommand
+  VideoDownloaderCommand,
+  AppleShortcutsCommand,
+  NavigationCommand,
+  HomebrewCommand,
+  ScriptCommandsCommand,
+  RaycastFocusCommand,
+  CalendarCommand,
+  WebSearchesCommand
 } from '@ztools/declarative-ui'
 
 /**
@@ -125,6 +132,15 @@ export const OFFICIAL_PLUGIN_IDS = Object.freeze({
   RAYCAST_WRAPPED: 'raycast-wrapped',
   TRIAL_NUDGES: 'trial-nudges',
   WINDOWS_SHORTCUTS: 'windows-shortcuts',
+  APPLE_SHORTCUTS: 'apple-shortcuts',
+
+  // 新增 macOS 与跨端第一方标杆内置套件 (Navigation, Homebrew, Script Commands, Focus, Calendar, Web Searches)
+  NAVIGATION: 'navigation',
+  HOMEBREW: 'homebrew',
+  SCRIPT_COMMANDS: 'script-commands',
+  RAYCAST_FOCUS: 'raycast-focus',
+  CALENDAR: 'calendar',
+  WEB_SEARCHES: 'web-searches',
 
   // 官方 Store 扩展转发 (Store Extensions in plugins/official/*)
   GITHUB: 'github',
@@ -1082,6 +1098,133 @@ export const OFFICIAL_PLUGINS_MAP = Object.freeze({
     isDeclarative: true,
     enabled: true,
     command: VideoDownloaderCommand
+  }),
+
+  // ==================== 新增 macOS 与跨端第一方内置套件 (macOS & Cross-Platform Built-ins) ====================
+  [OFFICIAL_PLUGIN_IDS.APPLE_SHORTCUTS]: Object.freeze({
+    id: 'apple-shortcuts',
+    pluginId: 'apple-shortcuts',
+    name: 'macOS 快捷指令 (Apple Shortcuts)',
+    title: 'macOS 快捷指令 (Apple Shortcuts)',
+    description: '直连 /usr/bin/shortcuts CLI，检索、带参运行与编辑 macOS 原生快捷指令工作流',
+    category: '系统工具',
+    keyword: 'apple shortcuts macos 快捷指令 自动化 工作流 siri shortcuts apple-shortcuts',
+    faIcon: 'fa-bolt',
+    version: '2.0.0',
+    author: 'ZTools Official',
+    badge: '内置核心',
+    isBuiltin: true,
+    isDeclarative: true,
+    enabled: true,
+    command: AppleShortcutsCommand
+  }),
+
+  [OFFICIAL_PLUGIN_IDS.NAVIGATION]: Object.freeze({
+    id: 'navigation',
+    pluginId: 'navigation',
+    name: '窗口切换与菜单栏搜索 (Navigation)',
+    title: '窗口切换与菜单栏搜索 (Navigation)',
+    description: '全键盘枚举切换活动窗口 (Switch Windows) 与搜索当前前台应用顶部菜单栏命令 (Search Menu Items)',
+    category: '系统工具',
+    keyword: 'navigation switch windows menu bar 窗口切换 菜单栏 搜索 聚焦 激活窗口 navigation',
+    faIcon: 'fa-compass',
+    version: '2.0.0',
+    author: 'ZTools Official',
+    badge: '内置核心',
+    isBuiltin: true,
+    isDeclarative: true,
+    enabled: true,
+    command: NavigationCommand
+  }),
+
+  [OFFICIAL_PLUGIN_IDS.HOMEBREW]: Object.freeze({
+    id: 'homebrew',
+    pluginId: 'homebrew',
+    name: 'Homebrew 包管理器 (Brew)',
+    title: 'Homebrew 包管理器 (Brew)',
+    description: 'macOS Formulae & Casks 软件包检索、一键安装、升级、卸载与缓存清理',
+    category: '开发工具',
+    keyword: 'homebrew brew cask formula macos 包管理器 安装 升级 卸载 软件源 homebrew',
+    faIcon: 'fa-beer',
+    version: '2.0.0',
+    author: 'ZTools Official',
+    badge: '内置核心',
+    isBuiltin: true,
+    isDeclarative: true,
+    enabled: true,
+    command: HomebrewCommand
+  }),
+
+  [OFFICIAL_PLUGIN_IDS.SCRIPT_COMMANDS]: Object.freeze({
+    id: 'script-commands',
+    pluginId: 'script-commands',
+    name: '自定义脚本命令 (Script Commands)',
+    title: '自定义脚本命令 (Script Commands)',
+    description: '兼容 @raycast.* 注释规范，支持 Bash/Zsh/AppleScript/Python/Node/PowerShell 脚本模板创建与秒级执行',
+    category: '开发工具',
+    keyword: 'script commands bash zsh applescript python 自定义脚本 命令行 自动化 script-commands',
+    faIcon: 'fa-terminal',
+    version: '2.0.0',
+    author: 'ZTools Official',
+    badge: '内置核心',
+    isBuiltin: true,
+    isDeclarative: true,
+    enabled: true,
+    command: ScriptCommandsCommand
+  }),
+
+  [OFFICIAL_PLUGIN_IDS.RAYCAST_FOCUS]: Object.freeze({
+    id: 'raycast-focus',
+    pluginId: 'raycast-focus',
+    name: '心流专注与防分心时钟 (Focus)',
+    title: '心流专注与防分心时钟 (Focus)',
+    description: '极客番茄钟、自定义专注分类、干扰应用与分心网站屏蔽及连续专注统计',
+    category: '办公效率',
+    keyword: 'focus pomodoro timer 专注 番茄钟 心流 屏蔽 分心 倒计时 raycast-focus',
+    faIcon: 'fa-bullseye',
+    version: '2.0.0',
+    author: 'ZTools Official',
+    badge: '内置核心',
+    isBuiltin: true,
+    isDeclarative: true,
+    enabled: true,
+    command: RaycastFocusCommand
+  }),
+
+  [OFFICIAL_PLUGIN_IDS.CALENDAR]: Object.freeze({
+    id: 'calendar',
+    pluginId: 'calendar',
+    name: '日程表与视频会议直达 (Calendar)',
+    title: '日程表与视频会议直达 (Calendar)',
+    description: '今日与近期日程速览 (My Schedule)、Zoom/飞书/Meet 会议链接一键入会、新建日程与 ICS 导出',
+    category: '办公效率',
+    keyword: 'calendar schedule meeting 日程 日历 会议 飞书 zoom 提醒 ics calendar',
+    faIcon: 'fa-calendar',
+    version: '2.0.0',
+    author: 'ZTools Official',
+    badge: '内置核心',
+    isBuiltin: true,
+    isDeclarative: true,
+    enabled: true,
+    command: CalendarCommand
+  }),
+
+  [OFFICIAL_PLUGIN_IDS.WEB_SEARCHES]: Object.freeze({
+    id: 'web-searches',
+    pluginId: 'web-searches',
+    name: '全网多源搜索与浏览器标签中枢',
+    title: '全网多源搜索与浏览器标签中枢',
+    description: 'Google/GitHub/知乎/B站/MDN 多引擎秒搜、Safari/Chrome/Arc 当前活动标签页嗅探与通讯录速查',
+    category: '网络工具',
+    keyword: 'web searches browser contacts 网页搜索 搜索引擎 浏览器标签 通讯录 联系人 web-searches',
+    faIcon: 'fa-globe',
+    version: '2.0.0',
+    author: 'ZTools Official',
+    badge: '内置核心',
+    isBuiltin: true,
+    isDeclarative: true,
+    enabled: true,
+    command: WebSearchesCommand
   })
 })
 
@@ -1097,8 +1240,7 @@ export const OFFICIAL_PLUGINS_LIST = Object.freeze(Object.values(OFFICIAL_PLUGIN
  */
 export function isOfficialPlugin(pluginId) {
   if (!pluginId || typeof pluginId !== 'string') return false
-  let normalized = pluginId.trim().toLowerCase()
-  if (normalized === 'apple-shortcuts') normalized = 'windows-shortcuts'
+  const normalized = pluginId.trim().toLowerCase()
   return Boolean(
     OFFICIAL_PLUGINS_MAP[normalized] ||
     OFFICIAL_PLUGINS_MAP[pluginId.trim()]
@@ -1112,8 +1254,7 @@ export function isOfficialPlugin(pluginId) {
  */
 export function getOfficialPlugin(pluginId) {
   if (!pluginId || typeof pluginId !== 'string') return undefined
-  let normalized = pluginId.trim().toLowerCase()
-  if (normalized === 'apple-shortcuts') normalized = 'windows-shortcuts'
+  const normalized = pluginId.trim().toLowerCase()
   return OFFICIAL_PLUGINS_MAP[normalized] || OFFICIAL_PLUGINS_MAP[pluginId.trim()]
 }
 
@@ -1124,4 +1265,5 @@ export function getOfficialPlugin(pluginId) {
 export function getOfficialPluginsList() {
   return [...OFFICIAL_PLUGINS_LIST]
 }
+
 

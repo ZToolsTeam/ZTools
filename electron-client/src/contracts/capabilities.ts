@@ -323,7 +323,29 @@ export const methodCapabilities = {
   dictionary_suggestions: ['main', 'plugin'],
   dictionary_toggle_favorite: ['main', 'plugin'],
   dictionary_get_favorites: ['main', 'plugin'],
-  dictionary_get_history: ['main', 'plugin']
+  dictionary_get_history: ['main', 'plugin'],
+  // M1.6 macOS & Cross-Platform Parity Methods
+  filesearch_quick_look: ['main', 'plugin'],
+  system_execute_action: ['main', 'plugin'],
+  shortcuts_list: ['main', 'plugin'],
+  shortcuts_run: ['main', 'plugin'],
+  shortcuts_view: ['main', 'plugin'],
+  navigation_search_menu_items: ['main', 'plugin'],
+  navigation_click_menu_item: ['main', 'plugin'],
+  audio_get_devices: ['main', 'plugin'],
+  audio_set_default_device: ['main', 'plugin'],
+  audio_set_volume: ['main', 'plugin'],
+  audio_toggle_mute: ['main', 'plugin'],
+  wifi_get_profiles: ['main', 'plugin'],
+  wifi_get_password: ['main', 'plugin'],
+  dictionary_speak: ['main', 'plugin'],
+  brew_exec: ['main', 'plugin'],
+  taskbar_set_dock_position: ['main', 'plugin'],
+  taskbar_restart_dock: ['main', 'plugin'],
+  script_commands_list: ['main', 'plugin'],
+  script_commands_execute: ['main', 'plugin'],
+  script_commands_create: ['main', 'plugin'],
+  script_commands_reload: ['main', 'plugin']
 } as const satisfies Record<string, readonly CallerType[]>
 
 export type AllowedMethod = keyof typeof methodCapabilities

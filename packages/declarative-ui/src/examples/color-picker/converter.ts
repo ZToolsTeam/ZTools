@@ -1,5 +1,6 @@
 import { LocalStorage } from "../../api/storage.js";
 import { getDeclarativeBridge } from "../../api/bridge.js";
+import { callHostTransport, isRealElectronHost } from "../shared/native-ipc.js";
 
 export interface RGB {
   r: number;
@@ -550,13 +551,19 @@ export function generateColorSwatchSvg(hex: string, width = 360, height = 120): 
 
 /**
  * 屏幕拾色器核心 (Screen Eyedropper)
- * 优先调用 Win32 / UIAccess 屏幕选色，测试/无特权环境下自动降级为高保真模拟取色
+ * 优先调用 Win32 / UIAccess 或 macOS NSColorSampler / CGDisplayCreateImageForRect 屏幕选色，
+ * 当检测到 macOS TCC 屏幕录制权限缺失时主动抛出清晰权限引导，测试/无特权环境下自动降级为高保真模拟取色
  */
-export async function pickScreenColor(): Promise<PickedColorResult> {
+export async function pickScreenColor(hostOverride?: any): Promise<PickedColorResult> {
   const bridge = getDeclarativeBridge();
   if (bridge && typeof (bridge as any).pickScreenColor === "function") {
     try {
       const res = await (bridge as any).pickScreenColor();
+      if (res && (res.permissionDenied || String(res.error || "").includes("SCREEN_RECORDING") || String(res.error || "").includes("TCC"))) {
+        throw new Error(
+          "SCREEN_RECORDING_PERMISSION_DENIED: 缺少 macOS 屏幕录制权限 (TCC Screen Recording)，请前往「系统设置 -> 隐私与安全性 -> 录屏与系统录音」授予 ZTools 权限"
+        );
+      }
       if (res && res.hex) {
         const parsed = parseColor(res.hex);
         return {
@@ -570,8 +577,66 @@ export async function pickScreenColor(): Promise<PickedColorResult> {
           pickedAt: Date.now()
         };
       }
-    } catch {
-      // fallback
+    } catch (err: any) {
+      if (String(err?.message || "").includes("SCREEN_RECORDING") || String(err?.message || "").includes("TCC") || String(err?.message || "").includes("屏幕录制")) {
+        throw err;
+      }
+    }
+  }
+
+  if (hostOverride || isRealElectronHost()) {
+    const pickRes = await callHostTransport<any>("screen_pick_color", {}, hostOverride);
+    const errText = String(pickRes.error || pickRes.data?.error || "");
+    if (
+      pickRes.data?.permissionDenied ||
+      errText.includes("SCREEN_RECORDING") ||
+      errText.includes("TCC") ||
+      errText.includes("Screen Recording") ||
+      errText.includes("屏幕录制")
+    ) {
+      throw new Error(
+        "SCREEN_RECORDING_PERMISSION_DENIED: 缺少 macOS 屏幕录制权限 (TCC Screen Recording)，请前往「系统设置 -> 隐私与安全性 -> 录屏与系统录音」授予 ZTools 权限"
+      );
+    }
+    if (pickRes.ok && pickRes.data?.hex) {
+      const parsed = parseColor(pickRes.data.hex);
+      return {
+        hex: parsed.hex,
+        rgb: parsed.rgb,
+        hsl: parsed.hsl,
+        hsv: parsed.hsv,
+        x: pickRes.data.x ?? 960,
+        y: pickRes.data.y ?? 540,
+        source: "native",
+        pickedAt: Date.now()
+      };
+    }
+
+    const capRes = await callHostTransport<any>("screen_capture", { mode: "color" }, hostOverride);
+    const capErr = String(capRes.error || capRes.data?.error || "");
+    if (
+      capRes.data?.permissionDenied ||
+      capErr.includes("SCREEN_RECORDING") ||
+      capErr.includes("TCC") ||
+      capErr.includes("Screen Recording") ||
+      capErr.includes("屏幕录制")
+    ) {
+      throw new Error(
+        "SCREEN_RECORDING_PERMISSION_DENIED: 缺少 macOS 屏幕录制权限 (TCC Screen Recording)，请前往「系统设置 -> 隐私与安全性 -> 录屏与系统录音」授予 ZTools 权限"
+      );
+    }
+    if (capRes.ok && capRes.data?.hex) {
+      const parsed = parseColor(capRes.data.hex);
+      return {
+        hex: parsed.hex,
+        rgb: parsed.rgb,
+        hsl: parsed.hsl,
+        hsv: parsed.hsv,
+        x: capRes.data.x ?? 960,
+        y: capRes.data.y ?? 540,
+        source: "native",
+        pickedAt: Date.now()
+      };
     }
   }
 

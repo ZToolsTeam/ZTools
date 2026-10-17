@@ -150,7 +150,7 @@ import { useRoute, useRouter } from 'vue-router'
 import { getActivePinia } from 'pinia'
 import { useUIStore } from '@/stores/ui'
 import { getOfficialPlugin } from '@/utils/officialPlugins'
-import { isPluginSupportedOnCurrentPlatform } from '@/utils/platform'
+import { isPluginSupportedOnCurrentPlatform, isMacOS, isWindows } from '@/utils/platform'
 import { isModalOpen } from '@/utils/keymap'
 import { loadInstalledDeclarativePlugin } from '@/utils/declarativePluginLoader'
 import DeclarativeView from '@/declarative/DeclarativeView.vue'
@@ -178,13 +178,8 @@ const dynamicPlugin = ref(null)
 const loadingDynamic = ref(false)
 const loadError = ref('')
 const isAlwaysOnTop = ref(false)
-const isMacPlatform = ref(
-  typeof navigator !== 'undefined' &&
-    (navigator.userAgent.includes('Mac') || navigator.platform?.includes('Mac'))
-)
-const isWindowsPlatform = ref(
-  typeof navigator !== 'undefined' && navigator.userAgent.includes('Windows')
-)
+const isMacPlatform = computed(() => isMacOS())
+const isWindowsPlatform = computed(() => isWindows())
 
 const effectiveIsPopout = computed(() => {
   return Boolean(

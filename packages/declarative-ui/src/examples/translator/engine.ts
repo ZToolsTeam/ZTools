@@ -4,6 +4,7 @@
  */
 
 import { LocalStorage } from "../../api/storage.js";
+import { callHostTransport, isRealElectronHost } from "../shared/native-ipc.js";
 import { detectLanguage, getLanguageByCode } from "./languages.js";
 
 export interface ReverseTranslationItem {
@@ -115,12 +116,13 @@ const DICT_TRANSLATIONS: Record<string, Record<string, { translated: string; pho
 };
 
 /**
- * 执行多语言极速翻译
+ * 执行多语言极速翻译（在真实 Electron 宿主中优先走 translator_translate IPC）
  */
 export async function translateText(
   text: string,
   sourceLang: string = "auto",
-  targetLang: string = "en"
+  targetLang: string = "en",
+  hostOverride?: any
 ): Promise<TranslationResult> {
   const trimmed = text.trim();
   if (!trimmed) {
@@ -143,7 +145,39 @@ export async function translateText(
     effectiveTarget = effectiveSource === "zh-Hans" ? "en" : "zh-Hans";
   }
 
-  // 3. 查表匹配（忽略大小写）
+  // 3. 在真实 Electron 宿主或提供 hostOverride 时优先调用主进程 translator_translate IPC
+  if (hostOverride || isRealElectronHost()) {
+    const ipcRes = await callHostTransport<any>(
+      "translator_translate",
+      {
+        text: trimmed,
+        sourceLanguage: sourceLang,
+        targetLanguage: effectiveTarget
+      },
+      hostOverride
+    );
+    if (ipcRes.ok && ipcRes.data) {
+      const payload = ipcRes.data;
+      const translatedStr = String(
+        payload.translatedText ?? payload.translation ?? payload.text ?? ""
+      ).trim();
+      if (translatedStr) {
+        return {
+          sourceText: text,
+          translatedText: translatedStr,
+          sourceLanguage: String(payload.sourceLanguage || effectiveSource),
+          targetLanguage: String(payload.targetLanguage || effectiveTarget),
+          detectedLanguage: payload.detectedLanguage || detected,
+          phonetic: payload.phonetic,
+          reverseTranslations: Array.isArray(payload.reverseTranslations)
+            ? payload.reverseTranslations
+            : undefined
+        };
+      }
+    }
+  }
+
+  // 4. 查表匹配（忽略大小写）
   const lower = trimmed.toLowerCase();
   const dictMatch = DICT_TRANSLATIONS[lower] || DICT_TRANSLATIONS[trimmed];
 
@@ -160,8 +194,7 @@ export async function translateText(
     };
   }
 
-  // 4. 通用离线本地翻译回退
-  // 若目标语言是中文且原文为英文
+  // 5. 通用离线本地翻译回退
   let translatedText = "";
   let phonetic: string | undefined;
   let reverse: ReverseTranslationItem[] | undefined;

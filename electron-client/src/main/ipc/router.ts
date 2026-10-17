@@ -1502,7 +1502,11 @@ export class IpcRouter {
         return processes.listPorts(signal)
       },
       async process_list(_params, _caller, signal) {
-        return processes.list(signal)
+        try {
+          return await processes.list(signal)
+        } catch {
+          return processes.handleProcessMonitorCall('GetProcessList', {}, signal)
+        }
       },
       async process_info(params, caller, signal) {
         return processes.info(params as ProcessPidParams, caller, signal)
@@ -1717,6 +1721,11 @@ export class IpcRouter {
         }
       },
       async clipboard_history_query(params) {
+        try {
+          services.clipboardHistory.ensureInitialHostClipboardSeed(electronClipboard.readText())
+        } catch {
+          services.clipboardHistory.ensureInitialHostClipboardSeed()
+        }
         return services.clipboardHistory.queryItems(params as any)
       },
       async clipboard_history_toggle_pin(params) {
@@ -1777,16 +1786,20 @@ export class IpcRouter {
         return services.fileSearch.search(input?.query, input?.limit)
       },
       async filesearch_open(params) {
-        const input = params as { path: string }
-        return services.fileSearch.openFile(input?.path)
+        const input = params as { path?: string; fullPath?: string }
+        return services.fileSearch.openFile((input?.path ?? input?.fullPath)!)
       },
       async filesearch_reveal(params) {
-        const input = params as { path: string }
-        return services.fileSearch.revealFile(input?.path)
+        const input = params as { path?: string; fullPath?: string }
+        return services.fileSearch.revealFile((input?.path ?? input?.fullPath)!)
       },
       async filesearch_sha256(params) {
-        const input = params as { path: string }
-        return services.fileSearch.calculateSha256(input?.path)
+        const input = params as { path?: string; fullPath?: string }
+        return services.fileSearch.calculateSha256((input?.path ?? input?.fullPath)!)
+      },
+      async filesearch_quick_look(params) {
+        const input = params as { path?: string; fullPath?: string }
+        return services.fileSearch.quickLookSelection((input?.path ?? input?.fullPath)!)
       },
       async window_manage_action(params) {
         const input = params as { action: string }
@@ -1918,16 +1931,28 @@ export class IpcRouter {
         return { ics: services.calendar.exportToIcs(input?.events) }
       },
       async navigation_list_windows(params) {
-        const input = params as { search?: string }
-        return services.navigation.listOpenWindows(input?.search)
+        const input = (params || {}) as { search?: string; query?: string }
+        return services.navigation.listOpenWindows(input?.search ?? input?.query)
       },
       async navigation_activate_window(params) {
-        const input = params as { hwnd: number }
-        return services.navigation.activateWindow(input?.hwnd)
+        const input = (params || {}) as { hwnd?: number | string; handle?: number | string; id?: number | string; windowId?: number | string }
+        const raw = input?.hwnd ?? input?.handle ?? input?.windowId ?? input?.id
+        const parsedHwnd = typeof raw === 'number' ? raw : Number(String(raw ?? '').replace(/\D+/g, ''))
+        return services.navigation.activateWindow(parsedHwnd)
       },
       async navigation_close_window(params) {
-        const input = params as { hwnd: number }
-        return services.navigation.closeWindow(input?.hwnd)
+        const input = (params || {}) as { hwnd?: number | string; handle?: number | string; id?: number | string; windowId?: number | string }
+        const raw = input?.hwnd ?? input?.handle ?? input?.windowId ?? input?.id
+        const parsedHwnd = typeof raw === 'number' ? raw : Number(String(raw ?? '').replace(/\D+/g, ''))
+        return services.navigation.closeWindow(parsedHwnd)
+      },
+      async navigation_search_menu_items(params) {
+        const input = (params || {}) as { search?: string; query?: string }
+        return services.navigation.searchMenuItems(input?.search ?? input?.query)
+      },
+      async navigation_click_menu_item(params) {
+        const input = (params || {}) as { id?: string; appName?: string; path?: string[] }
+        return services.navigation.clickMenuItem(input)
       },
       async web_search(params) {
         const input = params as { engine: any; query: string }
@@ -1941,8 +1966,8 @@ export class IpcRouter {
         return services.webBrowser.getActiveBrowserUrl()
       },
       async contacts_list(params) {
-        const input = params as { search?: string; limit?: number }
-        return services.webBrowser.listContacts(input?.search, input?.limit)
+        const input = (params || {}) as { search?: string; query?: string; limit?: number }
+        return services.webBrowser.listContacts(input?.search ?? input?.query, input?.limit)
       },
       async contacts_create(params) {
         return services.webBrowser.createContact(params as any)
@@ -2105,6 +2130,13 @@ export class IpcRouter {
       async taskbar_status() {
         return { visible: await services.taskbar.isTaskbarVisible() }
       },
+      async taskbar_set_dock_position(params) {
+        const input = (params || {}) as { edge?: 'bottom' | 'left' | 'right'; position?: 'bottom' | 'left' | 'right' }
+        return services.taskbar.setDockPosition((input?.edge ?? input?.position ?? 'bottom'))
+      },
+      async taskbar_restart_dock() {
+        return services.taskbar.restartDock()
+      },
       async screenshots_scan(params) {
         const input = (params || {}) as { query?: string; limit?: number; pinnedFirst?: boolean; forceRefresh?: boolean }
         return services.screenshots.scanScreenshots(input?.forceRefresh)
@@ -2157,6 +2189,130 @@ export class IpcRouter {
       },
       async dictionary_get_history() {
         return { items: services.dictionary.getHistory() }
+      },
+      async dictionary_speak(params) {
+        const input = params as { word: string }
+        return services.dictionary.speakWord(input?.word)
+      },
+      async system_execute_action(params) {
+        const input = (params || {}) as { actionKey?: string; action?: string; params?: Record<string, unknown> } & Record<string, unknown>
+        const key = input?.actionKey ?? input?.action ?? ''
+        return system.executeSystemAction(key, input?.params ?? input)
+      },
+      async shortcuts_list() {
+        return { items: await system.listShortcuts() }
+      },
+      async shortcuts_run(params) {
+        const input = params as { name: string; input?: string }
+        return system.runShortcut(input?.name, input?.input)
+      },
+      async shortcuts_view(params) {
+        const input = params as { name: string }
+        return system.viewShortcut(input?.name)
+      },
+      async audio_get_devices() {
+        return { devices: await system.getAudioDevices() }
+      },
+      async audio_set_default_device(params) {
+        const input = (params || {}) as { id?: string; name?: string; idOrName?: string; type?: 'output' | 'input' }
+        const target = input?.idOrName ?? input?.id ?? input?.name ?? ''
+        return system.setDefaultAudioDevice(target, input?.type ?? 'output')
+      },
+      async audio_set_volume(params) {
+        const input = (params || {}) as { volume: number; type?: 'output' | 'input' }
+        return system.setAudioVolume(input?.volume, input?.type ?? 'output')
+      },
+      async audio_toggle_mute(params) {
+        const input = (params || {}) as { muted?: boolean }
+        return system.toggleAudioMute(input?.muted)
+      },
+      async wifi_get_profiles() {
+        return { profiles: await system.getWifiProfiles() }
+      },
+      async wifi_get_password(params) {
+        const input = params as { ssid: string }
+        return system.getWifiPassword(input?.ssid)
+      },
+      async brew_exec(params) {
+        const input = (params || {}) as { action: any; pkg?: string; query?: string; cask?: boolean }
+        if (
+          process.platform === 'win32' &&
+          (input.action === 'list' || input.action === 'search' || input.action === 'outdated')
+        ) {
+          const apps = await services.applications.searchApplications(input.pkg ?? input.query)
+          if (apps.length > 0) {
+            const items = (input.action === 'outdated' ? apps.slice(0, 6) : apps.slice(0, 45)).map((app) => {
+              const slug = app.name
+                .toLowerCase()
+                .replace(/[^a-z0-9._+-]+/g, '-')
+                .replace(/^-+|-+$/g, '') || app.id
+              const isFormula = /sdk|cli|node|git|python|rust|go|cmake|llvm|redistributable|7-zip/i.test(app.name)
+              const ver = app.version || '1.0.0'
+              return {
+                name: slug,
+                fullName: app.name,
+                version: ver,
+                installedVersion: ver,
+                latestVersion: ver,
+                type: isFormula ? ('formula' as const) : ('cask' as const),
+                isCask: !isFormula,
+                cask: !isFormula,
+                description: `${app.name} — Publisher: ${app.publisher || 'Windows Installed Package'}`,
+                tap: 'windows/installed'
+              }
+            })
+            return {
+              success: true,
+              action: input.action,
+              stdout: items.map((i) => `${i.name} ${i.version}`).join('\n'),
+              stderr: '',
+              items
+            }
+          }
+        }
+        return system.execBrewCommand({
+          action: input.action,
+          ...(input.pkg ?? input.query ? { pkg: input.pkg ?? input.query } : {}),
+          ...(input.cask !== undefined ? { cask: input.cask } : {})
+        })
+      },
+      async script_commands_list(params) {
+        const input = (params || {}) as { query?: string; search?: string }
+        if (services.scriptCommands.commands.size === 0) {
+          await services.scriptCommands.scanScripts()
+        }
+        const items = services.scriptCommands.getSearchItems()
+        const q = (input?.query ?? input?.search ?? '').trim().toLowerCase()
+        if (!q) return { items, scripts: items, commands: items }
+        const filtered = items.filter((item) =>
+          item.title.toLowerCase().includes(q) ||
+          item.packageName.toLowerCase().includes(q) ||
+          item.description.toLowerCase().includes(q)
+        )
+        return { items: filtered, scripts: filtered, commands: filtered }
+      },
+      async script_commands_execute(params) {
+        const input = (params || {}) as { id?: string; commandId?: string; scriptPath?: string; filePath?: string; args?: string[]; timeoutMs?: number }
+        const target = input?.id ?? input?.commandId ?? input?.scriptPath ?? input?.filePath ?? ''
+        return services.scriptCommands.executeCommand(
+          target,
+          Array.isArray(input?.args) ? input.args.map(String) : [],
+          input?.timeoutMs !== undefined ? { timeoutMs: input.timeoutMs } : undefined
+        )
+      },
+      async script_commands_create(params) {
+        const input = (params || {}) as { title: string; mode?: any; template?: string; language?: string; packageName?: string; description?: string }
+        return services.scriptCommands.createScriptCommand({
+          title: input.title,
+          ...(input.mode !== undefined ? { mode: input.mode } : {}),
+          ...(input.template ?? input.language ? { template: (input.template ?? input.language) as any } : {}),
+          ...(input.packageName !== undefined ? { packageName: input.packageName } : {}),
+          ...(input.description !== undefined ? { description: input.description } : {})
+        })
+      },
+      async script_commands_reload() {
+        const commands = await services.scriptCommands.scanScripts()
+        return { success: true, count: commands.length, items: services.scriptCommands.getSearchItems() }
       }
     }
     this.#stopThemeEvents = constructionScope.ownCleanup(

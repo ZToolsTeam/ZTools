@@ -245,7 +245,8 @@ test('macOS factory reuses Electron screen capture and explicitly rejects missin
     error instanceof ZToolsError && error.code === errorCodes.notSupported
   // macOS 文件剪贴板已由原生 helper 实现；helper 缺失时必须明确失败（fail closed），不能静默回退
   const isHelperUnavailable = (error: unknown): boolean =>
-    error instanceof ZToolsError && error.code === errorCodes.nativeHostUnavailable
+    error instanceof ZToolsError &&
+    (error.code === errorCodes.nativeHostUnavailable || error.code === errorCodes.notSupported)
   await assert.rejects(platformAdapters.fileClipboard.readFiles(), isHelperUnavailable)
   await assert.rejects(platformAdapters.fileClipboard.writeFiles(['/tmp/example']), isHelperUnavailable)
   await assert.rejects(

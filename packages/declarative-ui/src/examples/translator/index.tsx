@@ -116,6 +116,10 @@ export default function TranslatorCommand() {
 
   const handleSpeak = async (text: string, langCode: string) => {
     if (!text) return;
+    const { callHostTransport, isRealElectronHost } = await import("../shared/native-ipc.js");
+    if (isRealElectronHost()) {
+      await callHostTransport("dictionary_speak", { word: text, lang: langCode });
+    }
     const langDef = getLanguageByCode(langCode);
     await showToast(Toast.Style.Success, `朗读 (${langDef.nativeName})`, text);
   };

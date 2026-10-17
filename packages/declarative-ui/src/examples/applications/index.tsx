@@ -12,6 +12,7 @@ import {
   useNavigation
 } from "../../index.js";
 import { useState, useMemo, useEffect } from "../../runtime/hooks.js";
+import { isRealElectronHost } from "../shared/native-ipc.js";
 import { ApplicationRecord, ApplicationCategory, ApplicationActionResult } from "./types.js";
 import {
   ApplicationsManager,
@@ -56,6 +57,13 @@ export function AppDetailView({
 }) {
   const [currentApp, setCurrentApp] = useState<ApplicationRecord>(app);
 
+  const leftoversSection =
+    currentApp.leftoverPaths && currentApp.leftoverPaths.length > 0
+      ? `\n### 🧹 macOS 关联残留与缓存路径 (App Leftovers)\n${currentApp.leftoverPaths
+          .map((p) => `- \`${p}\``)
+          .join("\n")}\n`
+      : "";
+
   const markdown = `
 # ${currentApp.name}
 
@@ -67,21 +75,21 @@ export function AppDetailView({
 - **可执行文件路径**: \`${currentApp.path}\`
 - **安装根目录**: \`${currentApp.installLocation || "系统默认或内置目录"}\`
 - **磁盘占用估计**: \`${formatSizeKb(currentApp.estimatedSizeKb)}\`
-- **包标识符 (Package / App ID)**: \`${currentApp.bundleId || currentApp.id}\`
+- **包标识符 (Package / Bundle ID)**: \`${currentApp.bundleId || currentApp.id}\`
 
 ### ⚡ 进程与运行状态
 - **当前运行状态**: ${currentApp.isRunning ? `🟢 **正在运行** (PID: \`${currentApp.pid}\`)` : "⚪ **已停止**"}
 - **游戏模式标记**: ${currentApp.isGame ? "🎮 已作为游戏管理 (Treat as Game)" : "普通桌面程序"}
 - **空闲自动退出**: ${currentApp.autoQuitEnabled ? "⏱️ 已启用" : "未开启"}
-- **类型模式**: ${currentApp.isUwp ? "UWP 现代化应用 (AppContainer 沙箱)" : "Win32 经典应用程序"}
+- **类型模式**: ${currentApp.isUwp ? "UWP 现代化应用 (AppContainer 沙箱)" : currentApp.path.endsWith(".app") ? "macOS Application Bundle (.app)" : "Win32 经典应用程序"}
 
 ### 🛠️ 卸载与治理信息
 ${
   currentApp.isSystemComponent && !currentApp.uninstallString
-    ? "> ⚠️ 该应用程序属于 Windows 操作系统受保护核心组件，不可随意卸载。"
-    : `- **卸载指令**: \`${currentApp.uninstallString || (currentApp.isUwp ? "Windows Store / Remove-AppxPackage" : "未知")}\``
+    ? "> ⚠️ 该应用程序属于操作系统受保护核心组件 (Windows System / macOS /System/Applications)，不可随意卸载。"
+    : `- **卸载指令**: \`${currentApp.uninstallString || (currentApp.isUwp ? "Windows Store / Remove-AppxPackage" : currentApp.path.endsWith(".app") ? "Move .app & ~/Library Leftovers to Trash" : "未知")}\``
 }
-`;
+${leftoversSection}`;
 
   const handleOpen = async (runAsAdmin = false) => {
     const res = await manager.openApplication(currentApp, { runAsAdmin });
@@ -264,8 +272,10 @@ export default function ApplicationsCommand({
 } = {}) {
   const [searchText, setSearchText] = useState("");
   const [category, setCategory] = useState<ApplicationCategory>("all");
-  const [apps, setApps] = useState<ApplicationRecord[]>(INITIAL_APPLICATIONS);
-  const [isLoading, setIsLoading] = useState(false);
+  const [apps, setApps] = useState<ApplicationRecord[]>(() =>
+    isRealElectronHost() ? [] : INITIAL_APPLICATIONS
+  );
+  const [isLoading, setIsLoading] = useState(() => isRealElectronHost());
   const { push } = useNavigation();
 
   useEffect(() => {

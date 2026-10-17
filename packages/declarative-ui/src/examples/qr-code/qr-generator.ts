@@ -58,7 +58,7 @@ export function detectQrContentType(content: string): { type: QrContentType; lab
   if (/^https?:\/\//i.test(trimmed)) {
     return { type: "url", label: "Web URL 链接", icon: Icon.Globe };
   }
-  if (/^WIFI:S:[^;]+;/i.test(trimmed)) {
+  if (/^WIFI:/i.test(trimmed) && /(?:^|;|:)S:[^;]+/i.test(trimmed)) {
     return { type: "wifi", label: "Wi-Fi 凭据配置", icon: Icon.Shield };
   }
   if (/^mailto:/i.test(trimmed) || /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(trimmed)) {
@@ -71,6 +71,114 @@ export function detectQrContentType(content: string): { type: QrContentType; lab
     return { type: "sms", label: "短信指令", icon: Icon.Text };
   }
   return { type: "text", label: "纯文本内容", icon: Icon.Document };
+}
+
+/**
+ * GF(256) 伽罗瓦域指数与对数查表（本原多项式 x^8 + x^4 + x^3 + x^2 + 1 = 0x11D）
+ */
+const GF256_EXP = new Uint8Array(512);
+const GF256_LOG = new Uint8Array(256);
+(() => {
+  let x = 1;
+  for (let i = 0; i < 255; i++) {
+    GF256_EXP[i] = x;
+    GF256_LOG[x] = i;
+    x <<= 1;
+    if (x & 0x100) {
+      x ^= 0x11d;
+    }
+  }
+  for (let i = 255; i < 512; i++) {
+    GF256_EXP[i] = GF256_EXP[i - 255];
+  }
+})();
+
+function gfMul(a: number, b: number): number {
+  if (a === 0 || b === 0) return 0;
+  return GF256_EXP[GF256_LOG[a] + GF256_LOG[b]];
+}
+
+/**
+ * 计算 ISO/IEC 18004 标准 Reed-Solomon GF(256) 纠错码字
+ */
+export function computeReedSolomonEcc(data: Uint8Array, eccCount: number): Uint8Array {
+  let gen = new Uint8Array([1]);
+  for (let i = 0; i < eccCount; i++) {
+    const nextGen = new Uint8Array(gen.length + 1);
+    const root = GF256_EXP[i];
+    for (let j = 0; j < gen.length; j++) {
+      nextGen[j] ^= gen[j];
+      nextGen[j + 1] ^= gfMul(gen[j], root);
+    }
+    gen = nextGen;
+  }
+
+  const remainder = new Uint8Array(eccCount);
+  for (let i = 0; i < data.length; i++) {
+    const factor = data[i] ^ remainder[0];
+    remainder.copyWithin(0, 1);
+    remainder[eccCount - 1] = 0;
+    if (factor !== 0) {
+      for (let j = 0; j < eccCount; j++) {
+        remainder[j] ^= gfMul(gen[j + 1], factor);
+      }
+    }
+  }
+  return remainder;
+}
+
+/**
+ * 计算 15-bit BCH(15, 5) Format Information 校验位 (ISO/IEC 18004)
+ */
+function computeFormatInfoBits(level: QrErrorCorrectionLevel, maskPattern = 0): number {
+  const ecIndicatorMap: Record<QrErrorCorrectionLevel, number> = {
+    L: 0b01,
+    M: 0b00,
+    Q: 0b11,
+    H: 0b10
+  };
+  const ecBits = ecIndicatorMap[level] ?? 0b00;
+  const formatData = ((ecBits & 0b11) << 3) | (maskPattern & 0b111);
+  let rem = formatData << 10;
+  const generator = 0b10100110111;
+  for (let bit = 14; bit >= 10; bit--) {
+    if ((rem >>> bit) & 1) {
+      rem ^= generator << (bit - 10);
+    }
+  }
+  return ((formatData << 10) | rem) ^ 0b101010000010010;
+}
+
+function utf8ToBase64(str: string): string {
+  try {
+    if (typeof Buffer !== "undefined" && typeof Buffer.from === "function") {
+      return Buffer.from(str, "utf8").toString("base64");
+    }
+  } catch {
+    // fallback to Web API
+  }
+  const bytes = new TextEncoder().encode(str);
+  let binary = "";
+  for (let i = 0; i < bytes.length; i++) {
+    binary += String.fromCharCode(bytes[i]);
+  }
+  return typeof btoa === "function" ? btoa(binary) : "";
+}
+
+function base64ToUtf8(b64: string): string {
+  try {
+    if (typeof Buffer !== "undefined" && typeof Buffer.from === "function") {
+      return Buffer.from(b64, "base64").toString("utf8");
+    }
+  } catch {
+    // fallback to Web API
+  }
+  const binary = typeof atob === "function" ? atob(b64) : "";
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i++) {
+    bytes[i] = binary.charCodeAt(i);
+  }
+  return new TextDecoder().decode(bytes);
 }
 
 /**
@@ -111,7 +219,7 @@ export function generateQrSvg(
 
   // 基础校验与降级
   const safeText = text || " ";
-  const matrix = createQrMatrix(safeText, level);
+  const matrix = buildQrMatrix(safeText, level);
   const moduleCount = matrix.length;
   const cellSize = size / (moduleCount + margin * 2);
 
@@ -127,7 +235,7 @@ export function generateQrSvg(
   }
 
   // 编码元数据以便解码层秒级无损识别
-  const encodedPayload = Buffer.from(safeText, "utf8").toString("base64");
+  const encodedPayload = utf8ToBase64(safeText);
   const comment = `<!-- ztools-qr-payload:${level}:${encodedPayload} -->`;
 
   const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${size} ${size}" width="${size}" height="${size}" data-qr-level="${level}"><rect width="100%" height="100%" fill="${bg}"/>${rects}${comment}</svg>`;
@@ -146,12 +254,12 @@ export function generateQrSvg(
 }
 
 /**
- * 生成二维码布尔矩阵 (基于标准 Reed-Solomon 与位置探测图案的轻量高效算法)
+ * 生成二维码布尔矩阵 (基于标准 ISO/IEC 18004 Finder、Timing、Alignment、Format Info 与 GF(256) Reed-Solomon 编码)
  */
-function createQrMatrix(text: string, level: QrErrorCorrectionLevel): boolean[][] {
-  const len = text.length;
-  let version = 1;
-  if (len > 14) version = 2;
+export function buildQrMatrix(text: string, level: QrErrorCorrectionLevel = "M"): boolean[][] {
+  const utf8Bytes = new TextEncoder().encode(text || " ");
+  const len = utf8Bytes.length;
+  let version = 2;
   if (len > 26) version = 3;
   if (len > 42) version = 4;
   if (len > 60) version = 5;
@@ -167,7 +275,7 @@ function createQrMatrix(text: string, level: QrErrorCorrectionLevel): boolean[][
     Array(moduleCount).fill(false)
   );
 
-  // 1. 放置三个角的位置探测图形 (Finder Patterns: 7x7)
+  // 1. 放置三个角的位置探测图形 (Finder Patterns: 7x7 + 1px 白边分隔符)
   function placeFinder(row: number, col: number) {
     for (let r = -1; r <= 7; r++) {
       for (let c = -1; c <= 7; c++) {
@@ -193,7 +301,7 @@ function createQrMatrix(text: string, level: QrErrorCorrectionLevel): boolean[][
   placeFinder(0, moduleCount - 7);
   placeFinder(moduleCount - 7, 0);
 
-  // 2. 放置定时图案 (Timing Patterns)
+  // 2. 放置定时图案 (Timing Patterns: 第 6 行与第 6 列)
   for (let i = 8; i < moduleCount - 8; i++) {
     isFunctionPattern[6][i] = true;
     isFunctionPattern[i][6] = true;
@@ -201,48 +309,102 @@ function createQrMatrix(text: string, level: QrErrorCorrectionLevel): boolean[][
     matrix[i][6] = i % 2 === 0;
   }
 
-  // 3. 对齐图案 (Alignment Pattern for Version >= 2)
-  if (version >= 2) {
-    const center = moduleCount - 7;
-    for (let r = -2; r <= 2; r++) {
-      for (let c = -2; c <= 2; c++) {
-        const ar = center + r;
-        const ac = center + c;
-        if (ar >= 0 && ar < moduleCount && ac >= 0 && ac < moduleCount && !isFunctionPattern[ar][ac]) {
-          isFunctionPattern[ar][ac] = true;
-          matrix[ar][ac] = Math.max(Math.abs(r), Math.abs(c)) !== 1;
-        }
+  // 3. 放置右下角 (size - 9, size - 9) 5x5 对齐图案 (Alignment Pattern: 外圈 1、内圈 0、中心 1)
+  const alignTop = moduleCount - 9;
+  const alignLeft = moduleCount - 9;
+  for (let r = 0; r < 5; r++) {
+    for (let c = 0; c < 5; c++) {
+      const ar = alignTop + r;
+      const ac = alignLeft + c;
+      if (ar >= 0 && ar < moduleCount && ac >= 0 && ac < moduleCount) {
+        isFunctionPattern[ar][ac] = true;
+        const isOuterBorder = r === 0 || r === 4 || c === 0 || c === 4;
+        const isCenter = r === 2 && c === 2;
+        matrix[ar][ac] = isOuterBorder || isCenter;
       }
     }
   }
 
-  // 4. 数据编码与交织字节流
-  const bytes = new TextEncoder().encode(text);
-  const totalBits: number[] = [];
+  // 4. 放置 Format Information 校验位与 Dark Module
+  const formatBits = computeFormatInfoBits(level, 0);
+  for (let i = 0; i <= 5; i++) {
+    isFunctionPattern[8][i] = true;
+    matrix[8][i] = Boolean((formatBits >>> i) & 1);
+  }
+  isFunctionPattern[8][7] = true;
+  matrix[8][7] = Boolean((formatBits >>> 6) & 1);
+  isFunctionPattern[8][8] = true;
+  matrix[8][8] = Boolean((formatBits >>> 7) & 1);
+  isFunctionPattern[7][8] = true;
+  matrix[7][8] = Boolean((formatBits >>> 8) & 1);
+  for (let i = 9; i < 15; i++) {
+    const r = 14 - i;
+    isFunctionPattern[r][8] = true;
+    matrix[r][8] = Boolean((formatBits >>> i) & 1);
+  }
+  for (let i = 0; i < 8; i++) {
+    const c = moduleCount - 1 - i;
+    isFunctionPattern[8][c] = true;
+    matrix[8][c] = Boolean((formatBits >>> i) & 1);
+  }
+  for (let i = 8; i < 15; i++) {
+    const r = moduleCount - 15 + i;
+    isFunctionPattern[r][8] = true;
+    matrix[r][8] = Boolean((formatBits >>> i) & 1);
+  }
+  // Dark Module
+  isFunctionPattern[moduleCount - 8][8] = true;
+  matrix[moduleCount - 8][8] = true;
 
-  for (let i = 0; i < bytes.length; i++) {
-    const b = bytes[i];
+  // 5. 数据编码 (Byte Mode 0100 + 长度 + UTF-8 字节流 + Reed-Solomon 纠错字节)
+  const eccCountMap: Record<QrErrorCorrectionLevel, number> = {
+    L: 10,
+    M: 16,
+    Q: 22,
+    H: 28
+  };
+  const eccCount = eccCountMap[level] ?? 16;
+  const payloadBytes = new Uint8Array(utf8Bytes.length + 2);
+  payloadBytes[0] = (0b0100 << 4) | ((utf8Bytes.length >>> 4) & 0x0f);
+  payloadBytes[1] = ((utf8Bytes.length & 0x0f) << 4) | ((utf8Bytes[0] ?? 0) >>> 4);
+  for (let i = 0; i < utf8Bytes.length; i++) {
+    const nextByte = i + 1 < utf8Bytes.length ? utf8Bytes[i + 1] : 0;
+    payloadBytes[i + 1] = ((utf8Bytes[i] & 0x0f) << 4) | ((nextByte >>> 4) & 0x0f);
+  }
+  const eccBytes = computeReedSolomonEcc(payloadBytes, eccCount);
+
+  const interleavedBytes = new Uint8Array(payloadBytes.length + eccBytes.length);
+  interleavedBytes.set(payloadBytes, 0);
+  interleavedBytes.set(eccBytes, payloadBytes.length);
+
+  const totalBits: number[] = [];
+  for (let i = 0; i < interleavedBytes.length; i++) {
+    const b = interleavedBytes[i];
     for (let shift = 7; shift >= 0; shift--) {
       totalBits.push((b >> shift) & 1);
     }
   }
 
-  // 填充伪随机交织纠错位，铺满矩阵
+  // ISO/IEC 18004 标准交替填充字节 0xEC (11101100), 0x11 (00010001)
+  const padBytes = [0xec, 0x11];
+  let padIdx = 0;
   let bitPos = 0;
   for (let col = moduleCount - 1; col > 0; col -= 2) {
-    if (col === 6) col--; // 避开 timing pattern 列
+    if (col === 6) col--; // 避开第 6 列 timing pattern
     for (let r = 0; r < moduleCount; r++) {
-      const row = (col % 4 === 0) ? r : moduleCount - 1 - r;
+      const upward = ((moduleCount - 1 - (col > 6 ? col : col + 1)) & 2) === 0;
+      const row = upward ? moduleCount - 1 - r : r;
       for (let c = 0; c < 2; c++) {
         const currCol = col - c;
         if (!isFunctionPattern[row][currCol]) {
-          const bit =
-            bitPos < totalBits.length
-              ? totalBits[bitPos]
-              : ((row + currCol + bitPos) % 3 === 0 ? 1 : 0);
-          bitPos++;
-
-          // 掩模应用 (Mask pattern: (row + col) % 2 === 0)
+          while (bitPos >= totalBits.length) {
+            const pb = padBytes[padIdx % 2];
+            padIdx++;
+            for (let shift = 7; shift >= 0; shift--) {
+              totalBits.push((pb >> shift) & 1);
+            }
+          }
+          const bit = totalBits[bitPos++];
           const mask = (row + currCol) % 2 === 0;
           matrix[row][currCol] = Boolean(bit ^ (mask ? 1 : 0));
         }
@@ -252,6 +414,8 @@ function createQrMatrix(text: string, level: QrErrorCorrectionLevel): boolean[][
 
   return matrix;
 }
+
+export const createQrMatrix = buildQrMatrix;
 
 /**
  * 扫码与解码 (Scan / Decode) 算法
@@ -274,7 +438,7 @@ export function decodeQrCode(input: string): QrDecodeResult {
         candidate = decodeURIComponent(encoded);
       } catch {
         try {
-          candidate = Buffer.from(encoded, "base64").toString("utf8");
+          candidate = base64ToUtf8(encoded);
         } catch {
           // ignore
         }
@@ -288,7 +452,7 @@ export function decodeQrCode(input: string): QrDecodeResult {
     try {
       const level = payloadMatch[1] as QrErrorCorrectionLevel;
       const b64 = payloadMatch[2];
-      const text = Buffer.from(b64, "base64").toString("utf8");
+      const text = base64ToUtf8(b64);
       const detected = detectQrContentType(text);
       return {
         success: true,
@@ -321,7 +485,7 @@ export function decodeQrCode(input: string): QrDecodeResult {
   // 4. 尝试直接检测标准 Base64 文本
   if (/^[A-Za-z0-9+/=]{12,}$/.test(candidate) && candidate.length % 4 === 0) {
     try {
-      const decoded = Buffer.from(candidate, "base64").toString("utf8");
+      const decoded = base64ToUtf8(candidate);
       if (decoded && /^[\x20-\x7E\s\u4e00-\u9fa5]+$/.test(decoded)) {
         const detected = detectQrContentType(decoded);
         return {

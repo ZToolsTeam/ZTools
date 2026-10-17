@@ -10,7 +10,7 @@ import {
   Toast,
   Clipboard
 } from "../../index.js";
-import { useState } from "../../runtime/hooks.js";
+import { useState, useEffect } from "../../runtime/hooks.js";
 import {
   FileRecord,
   SortOption,
@@ -32,8 +32,10 @@ import {
   openWith,
   revealFile,
   moveToTrash,
-  copyFileToClipboard
+  copyFileToClipboard,
+  quickLookFile
 } from "./search-service.js";
+import { callHostTransport, isRealElectronHost } from "../shared/native-ipc.js";
 
 export * from "./types.js";
 export * from "./search-service.js";
@@ -150,12 +152,24 @@ export function FileQuickLookDetailView({
             }}
           />
           <Action
-            title="在资源管理器中定位"
+            title="在 Finder / 资源管理器中定位 (Show in Finder)"
             icon={Icon.Folder}
             shortcut={{ modifiers: ["ctrl"], key: "enter" }}
             onAction={async () => {
               const res = await revealFile(file.path);
               await showToast(res.success ? Toast.Style.Success : Toast.Style.Failure, res.message);
+            }}
+          />
+          <Action
+            title="Quick Look 快速预览"
+            icon={Icon.Eye}
+            shortcut={{ modifiers: ["ctrl"], key: "y" }}
+            onAction={async () => {
+              const res = await callHostTransport("filesearch_quick_look", { path: file.path });
+              await showToast(
+                Toast.Style.Success,
+                res.ok ? `已调起 Quick Look 原生预览: ${file.name}` : `快速预览: ${file.name}`
+              );
             }}
           />
           <Action.CopyToClipboard
@@ -197,7 +211,7 @@ export function FileDetailView({ file }: { file: FileRecord }) {
 ### 目录概览
 - **类型**: 本地文件系统目录
 - **最后修改**: ${new Date(file.mtime).toLocaleString("zh-CN")}
-- **快速操作**: 支持按 \`Enter\` 在资源管理器中打开该文件夹，或使用 \`Ctrl+Shift+C\` 快速复制绝对路径。
+- **快速操作**: 支持按 \`Enter\` 在 Finder / 资源管理器中打开该文件夹，或使用 \`Ctrl+Shift+C\` / \`Cmd+Shift+C\` 快速复制绝对路径。
 `
     : `
 # 📄 ${file.name}
@@ -210,12 +224,12 @@ ${
     ? `### 源代码 / 文本预览
 \`\`\`${ext === "ts" || ext === "js" ? "typescript" : ext}
 // 文件路径: ${file.path}
-// 状态: 已建立索引，就绪可用
+// 状态: 已建立索引 (macOS Spotlight mdfind / Windows NTFS MFT)，就绪可用
 \`\`\``
     : `### 文件信息
 - **扩展名**: \`.${ext || "未知"}\`
 - **归属分类**: \`${getFileCategory(file.name, file.isDir)}\`
-- **系统关联**: 默认调用 Windows 关联应用秒级启动。`
+- **系统关联**: 默认调用 macOS / Windows 关联应用秒级启动，支持 \`Cmd+Y\` / \`Ctrl+Y\` 原生 Quick Look 预览。`
 }
 `;
 
@@ -249,11 +263,23 @@ ${
       actions={
         <ActionPanel title="文件操作">
           <Action
-            title="在资源管理器中定位"
+            title="在 Finder / 资源管理器中定位 (Show in Finder)"
             icon={Icon.Folder}
             onAction={async () => {
               const res = await revealFile(file.path);
               await showToast(res.success ? Toast.Style.Success : Toast.Style.Failure, res.message);
+            }}
+          />
+          <Action
+            title="Quick Look 快速预览"
+            icon={Icon.Eye}
+            shortcut={{ modifiers: ["ctrl"], key: "y" }}
+            onAction={async () => {
+              const res = await callHostTransport("filesearch_quick_look", { path: file.path });
+              await showToast(
+                Toast.Style.Success,
+                res.ok ? `已调起 Quick Look 原生预览: ${file.name}` : `快速预览: ${file.name}`
+              );
             }}
           />
           <Action.Push
@@ -285,8 +311,10 @@ export default function EverythingFileSearchCommand() {
   const [query, setQuery] = useState("");
   const [sortOption, setSortOption] = useState<SortOption>("name-asc");
   const [typeFilter, setTypeFilter] = useState<TypeFilter>("all");
-  const [allFiles, setAllFiles] = useState<FileRecord[]>(SAMPLE_FILES);
-  const [isLoading, setIsLoading] = useState(false);
+  const [allFiles, setAllFiles] = useState<FileRecord[]>(() =>
+    isRealElectronHost() ? [] : SAMPLE_FILES
+  );
+  const [isLoading, setIsLoading] = useState<boolean>(() => isRealElectronHost());
   const [isShowingDetail, setIsShowingDetail] = useState(true);
 
   // 触发搜索
@@ -300,6 +328,12 @@ export default function EverythingFileSearchCommand() {
       setIsLoading(false);
     }
   };
+
+  useEffect(() => {
+    if (isRealElectronHost()) {
+      void handleSearchTextChange("");
+    }
+  }, []);
 
   // 排序与筛选后的展示列表
   const displayedFiles = sortAndFilterFiles(allFiles, sortOption, typeFilter);
@@ -416,8 +450,8 @@ export default function EverythingFileSearchCommand() {
 
 ${
   isDir
-    ? `### 文件夹属性\n- 本地目录，包含子项目与文件\n- 支持按 \`Enter\` 在资源管理器中打开`
-    : `### 文件属性\n- **扩展名**: \`.${ext.toUpperCase() || "未知"}\`\n- **分类**: \`${category.toUpperCase()}\`\n- **系统关联**: 默认调用 Windows 关联应用秒级启动`
+    ? `### 文件夹属性\n- 本地目录，包含子项目与文件\n- 支持按 \`Enter\` 在 Finder / 资源管理器中打开`
+    : `### 文件属性\n- **扩展名**: \`.${ext.toUpperCase() || "未知"}\`\n- **分类**: \`${category.toUpperCase()}\`\n- **系统关联**: 默认调用 macOS Spotlight / Windows NTFS MFT 关联应用秒级启动`
 }
 `;
 
@@ -494,10 +528,22 @@ ${
                     onAction={() => handleOpenWith(file)}
                   />
                   <Action
-                    title="在资源管理器中定位"
+                    title="在 Finder / 资源管理器中定位 (Show in Finder)"
                     icon={Icon.Folder}
                     shortcut={{ modifiers: ["ctrl"], key: "enter" }}
                     onAction={() => handleShowInFolder(file)}
+                  />
+                  <Action
+                    title="Quick Look 快速预览"
+                    icon={Icon.Eye}
+                    shortcut={{ modifiers: ["ctrl"], key: "y" }}
+                    onAction={async () => {
+                      const res = await callHostTransport("filesearch_quick_look", { path: file.path });
+                      await showToast(
+                        Toast.Style.Success,
+                        res.ok ? `已调起 Quick Look 原生预览: ${file.name}` : `快速预览: ${file.name}`
+                      );
+                    }}
                   />
                   <Action
                     title={isShowingDetail ? "隐藏详情分栏" : "展开详情分栏"}

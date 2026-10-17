@@ -1,4 +1,4 @@
-import { currentInstance, EffectCallback } from "./context.js";
+import { currentInstance, isEvaluatingChildElement, EffectCallback } from "./context.js";
 
 function areDepsEqual(prevDeps?: any[], nextDeps?: any[]): boolean {
   if (!prevDeps || !nextDeps) return false;
@@ -57,6 +57,9 @@ export function useState<T>(
  * 声明式微副作用 Hook: useEffect
  */
 export function useEffect(effect: EffectCallback, deps?: any[]): void {
+  if (isEvaluatingChildElement) {
+    return;
+  }
   const instance = currentInstance;
   if (!instance) {
     try {

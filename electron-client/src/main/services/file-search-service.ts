@@ -1,5 +1,6 @@
 import fs from 'node:fs'
 import path from 'node:path'
+import { spawn } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import { shell } from 'electron'
 import type { SidecarManager, SearchFilesResult } from './sidecar-manager.js'
@@ -25,26 +26,17 @@ export interface FileSearchServiceOptions {
 
 /**
  * 文件秒搜服务 (File Search Service)
- * 深度联动预编译 Rust 侧车 ztools-indexer.exe，支持全盘文件毫秒检索、打开、定位与 SHA-256 哈希计算
+ * 深度联动预编译 Rust 侧车 ztools-indexer.exe 与 macOS Spotlight (mdfind)，支持全盘文件毫秒检索、打开、定位、Quick Look 与 SHA-256 哈希计算
  */
 export class FileSearchService {
   constructor(private readonly options: FileSearchServiceOptions) {}
 
   /**
-   * 检索文件 (调用 Rust 侧车或内存回退)
+   * 检索文件 (调用 Rust 侧车、macOS Spotlight 或内存回退)
    */
   public async search(query: string, limit = 50): Promise<SearchFilesResult> {
-    if (!query || typeof query !== 'string' || !query.trim()) {
-      return {
-        files: [],
-        count: 0,
-        total_matches: 0,
-        elapsed_us: 0,
-        elapsed_ms: 0,
-        total_indexed: 0
-      }
-    }
-    return this.options.sidecarManager.searchFiles(query.trim(), limit)
+    const cleanQuery = typeof query === 'string' ? query.trim() : ''
+    return this.options.sidecarManager.searchFiles(cleanQuery, limit)
   }
 
   /**
@@ -71,7 +63,7 @@ export class FileSearchService {
   }
 
   /**
-   * 在文件管理器 (资源管理器) 中定位并选中文件
+   * 在文件管理器 (Explorer / Finder) 中定位并选中文件
    */
   public revealFile(targetPath: string): FileActionResult {
     if (!targetPath || typeof targetPath !== 'string') {
@@ -88,6 +80,34 @@ export class FileSearchService {
     } catch (err: any) {
       return { success: false, path: resolved, error: err.message || String(err) }
     }
+  }
+
+  /**
+   * 唤起系统级快速预览 (macOS Quick Look: /usr/bin/qlmanage -p <path>)
+   */
+  public async quickLookSelection(filePath: string): Promise<FileActionResult> {
+    if (!filePath || typeof filePath !== 'string' || !filePath.trim()) {
+      return { success: false, path: '', error: '无效的文件路径' }
+    }
+    const normalized = path.resolve(filePath.trim())
+    if (!fs.existsSync(normalized)) {
+      return { success: false, path: normalized, error: '文件不存在' }
+    }
+
+    if (process.platform === 'darwin') {
+      try {
+        const child = spawn('/usr/bin/qlmanage', ['-p', normalized], {
+          detached: true,
+          stdio: 'ignore'
+        })
+        child.unref()
+        return { success: true, path: normalized }
+      } catch (err: any) {
+        return { success: false, path: normalized, error: err.message || String(err) }
+      }
+    }
+
+    return this.openFile(normalized)
   }
 
   /**

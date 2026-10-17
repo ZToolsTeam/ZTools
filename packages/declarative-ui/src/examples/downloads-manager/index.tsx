@@ -18,7 +18,7 @@ import {
   showToast,
   Toast
 } from "../../index.js";
-import { useState, useMemo } from "../../runtime/hooks.js";
+import { useState, useMemo, useEffect } from "../../runtime/hooks.js";
 import { DownloadFileItem, DownloadFilterCategory } from "./types.js";
 import {
   defaultDownloadsManager,
@@ -83,6 +83,17 @@ ${file.summary ? `### 摘要说明\n> ${file.summary}\n` : ""}
             }}
           />
           <Action
+            title="在 Finder / 资源管理器中显示 (Show in Finder)"
+            icon={Icon.Folder}
+            onAction={async () => {
+              const res = await defaultDownloadsManager.showInFinder(file.id);
+              await showToast(
+                res.success ? Toast.Style.Success : Toast.Style.Failure,
+                res.message
+              );
+            }}
+          />
+          <Action
             title="复制文件路径到剪贴板"
             icon={Icon.CopyClipboard}
             onAction={async () => {
@@ -113,6 +124,16 @@ export default function DownloadsManagerCommand() {
   const [isShowingDetail, setIsShowingDetail] = useState(true);
   const [version, setVersion] = useState(0);
   const refresh = () => setVersion((v) => v + 1);
+
+  useEffect(() => {
+    let active = true;
+    void defaultDownloadsManager.syncRealDownloads().then(() => {
+      if (active) refresh();
+    });
+    return () => {
+      active = false;
+    };
+  }, []);
 
   const files = useMemo(
     () =>
@@ -204,6 +225,18 @@ export default function DownloadsManagerCommand() {
                   onAction={async () => {
                     const res = await defaultDownloadsManager.openDownload(item.id);
                     await showToast(Toast.Style.Success, res.message);
+                  }}
+                />
+                <Action
+                  title="在 Finder / 资源管理器中显示 (Show in Finder)"
+                  icon={Icon.Folder}
+                  shortcut={{ modifiers: ["ctrl", "shift"], key: "o" }}
+                  onAction={async () => {
+                    const res = await defaultDownloadsManager.showInFinder(item.id);
+                    await showToast(
+                      res.success ? Toast.Style.Success : Toast.Style.Failure,
+                      res.message
+                    );
                   }}
                 />
                 <Action

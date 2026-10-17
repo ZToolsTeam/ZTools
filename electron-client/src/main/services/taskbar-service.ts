@@ -38,6 +38,22 @@ export class DefaultTaskbarWin32Adapter implements TaskbarWin32Adapter {
   private lastKnownVisible = true
 
   async setTaskbarVisible(visible: boolean): Promise<boolean> {
+    if (process.platform === 'darwin') {
+      const autohide = !visible
+      try {
+        await execFileAsync('/usr/bin/osascript', [
+          '-e',
+          `tell application "System Events" to tell dock preferences to set autohide to ${autohide ? 'true' : 'false'}`
+        ], { timeout: 4000 })
+        this.lastKnownVisible = visible
+        return true
+      } catch (err) {
+        console.warn('[TaskbarService] Failed to set macOS Dock autohide:', err)
+        this.lastKnownVisible = visible
+        return false
+      }
+    }
+
     if (process.platform !== 'win32') {
       this.lastKnownVisible = visible
       return true
@@ -71,6 +87,19 @@ export class DefaultTaskbarWin32Adapter implements TaskbarWin32Adapter {
   }
 
   async getTaskbarVisible(): Promise<boolean> {
+    if (process.platform === 'darwin') {
+      try {
+        const { stdout } = await execFileAsync('/usr/bin/osascript', [
+          '-e',
+          'tell application "System Events" to tell dock preferences to get autohide'
+        ], { encoding: 'utf8', timeout: 3000 })
+        const autohide = String(stdout ?? '').trim().toLowerCase() === 'true'
+        this.lastKnownVisible = !autohide
+        return this.lastKnownVisible
+      } catch {
+        return this.lastKnownVisible
+      }
+    }
     return this.lastKnownVisible
   }
 }
@@ -96,7 +125,7 @@ export class TaskbarService {
   public async showTaskbar(): Promise<TaskbarActionResult> {
     const success = await this.adapter.setTaskbarVisible(true)
     this.isVisible = true
-    const message = '任务栏已显示'
+    const message = process.platform === 'darwin' ? 'Dock 常驻显示已开启' : '任务栏已显示'
 
     if (this.hudService) {
       try {
@@ -112,7 +141,7 @@ export class TaskbarService {
   public async hideTaskbar(): Promise<TaskbarActionResult> {
     const success = await this.adapter.setTaskbarVisible(false)
     this.isVisible = false
-    const message = '任务栏已隐藏'
+    const message = process.platform === 'darwin' ? 'Dock 自动隐藏已开启' : '任务栏已隐藏'
 
     if (this.hudService) {
       try {
@@ -126,7 +155,7 @@ export class TaskbarService {
   }
 
   /**
-   * 纯 Win32 原生动作 toggleTaskbar (对齐 Raycast toggle-taskbar)
+   * 切换 Windows 任务栏显隐或 macOS Dock 自动隐藏状态
    */
   public async toggleTaskbar(): Promise<TaskbarActionResult> {
     const current = await this.adapter.getTaskbarVisible()
@@ -135,6 +164,73 @@ export class TaskbarService {
     } else {
       return this.showTaskbar()
     }
+  }
+
+  /**
+   * 设置 macOS Dock 屏幕停靠方位 (bottom / left / right)
+   */
+  public async setDockPosition(
+    edge: 'bottom' | 'left' | 'right'
+  ): Promise<{ success: boolean; edge: 'bottom' | 'left' | 'right'; message: string }> {
+    const normalized = String(edge ?? '').trim().toLowerCase()
+    if (normalized !== 'bottom' && normalized !== 'left' && normalized !== 'right') {
+      throw new Error(`无效的 Dock 停靠位置: ${String(edge)}`)
+    }
+
+    if (process.platform === 'darwin') {
+      try {
+        await execFileAsync('/usr/bin/osascript', [
+          '-e',
+          `tell application "System Events" to tell dock preferences to set screen edge to ${normalized}`
+        ], { timeout: 4000 })
+      } catch (err) {
+        return {
+          success: false,
+          edge: normalized,
+          message: err instanceof Error ? err.message : String(err)
+        }
+      }
+    }
+
+    const labelMap: Record<'bottom' | 'left' | 'right', string> = {
+      bottom: '底部',
+      left: '左侧',
+      right: '右侧'
+    }
+    const message = `Dock 停靠位置已切换至${labelMap[normalized]}`
+    if (this.hudService) {
+      try {
+        void this.hudService.showHUD(message, { icon: '✓', durationMs: 1000 })
+      } catch {
+        // ignore
+      }
+    }
+    return { success: true, edge: normalized, message }
+  }
+
+  /**
+   * 重启 macOS Dock 进程
+   */
+  public async restartDock(): Promise<{ success: boolean; message: string }> {
+    if (process.platform === 'darwin') {
+      try {
+        await execFileAsync('/usr/bin/killall', ['Dock'], { timeout: 4000 })
+      } catch (err) {
+        return {
+          success: false,
+          message: err instanceof Error ? err.message : String(err)
+        }
+      }
+    }
+    const message = 'Dock 已重启'
+    if (this.hudService) {
+      try {
+        void this.hudService.showHUD(message, { icon: '✓', durationMs: 1000 })
+      } catch {
+        // ignore
+      }
+    }
+    return { success: true, message }
   }
 }
 

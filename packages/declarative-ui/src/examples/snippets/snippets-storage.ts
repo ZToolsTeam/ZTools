@@ -1,5 +1,6 @@
 import { LocalStorage } from "../../api/storage.js";
 import { getDeclarativeBridge } from "../../api/bridge.js";
+import { callHostTransport, isRealElectronHost } from "../shared/native-ipc.js";
 import {
   Snippet,
   SnippetArgumentDescriptor,
@@ -367,7 +368,36 @@ export async function getSnippets(): Promise<Snippet[]> {
     }
   }
 
-  // 2. Bridge
+  // 2. Preload Transport
+  if (isRealElectronHost()) {
+    try {
+      const ipcRes = await callHostTransport<any>("snippets_list", {});
+      if (ipcRes.ok && ipcRes.data) {
+        const list = Array.isArray(ipcRes.data)
+          ? ipcRes.data
+          : Array.isArray(ipcRes.data?.snippets)
+          ? ipcRes.data.snippets
+          : [];
+        if (list.length > 0) {
+          return list.map((r: any) => ({
+            id: String(r.id),
+            name: String(r.name),
+            keyword: String(r.keyword),
+            snippet: String(r.snippet),
+            enabled: Boolean(r.enabled ?? true),
+            category: r.category,
+            isPinned: Boolean(r.isPinned ?? r.is_pinned),
+            createdAt: Number(r.created_at || r.createdAt) || Date.now(),
+            updatedAt: Number(r.updated_at || r.updatedAt) || Date.now()
+          }));
+        }
+      }
+    } catch {
+      // 优雅降级
+    }
+  }
+
+  // 3. Bridge
   const bridge = getDeclarativeBridge();
   if (bridge?.snippets?.list) {
     try {
@@ -390,7 +420,7 @@ export async function getSnippets(): Promise<Snippet[]> {
     }
   }
 
-  // 3. LocalStorage
+  // 4. LocalStorage
   try {
     const raw = await LocalStorage.getItem(STORAGE_KEY);
     if (!raw) {
@@ -432,6 +462,11 @@ export async function createSnippetService(snippet: Partial<Snippet>): Promise<S
       await (window as any).ztools.snippets_create(newSnippet);
     } catch {}
   }
+  if (isRealElectronHost()) {
+    try {
+      await callHostTransport("snippets_create", newSnippet as any);
+    } catch {}
+  }
   // 2. Bridge
   const bridge = getDeclarativeBridge();
   if (bridge?.snippets?.create) {
@@ -452,6 +487,11 @@ export async function updateSnippetService(id: string, updates: Partial<Snippet>
       await (window as any).ztools.snippets_update({ id, ...updates });
     } catch {}
   }
+  if (isRealElectronHost()) {
+    try {
+      await callHostTransport("snippets_update", { id, ...updates });
+    } catch {}
+  }
   const bridge = getDeclarativeBridge();
   if (bridge?.snippets?.update) {
     try {
@@ -467,6 +507,12 @@ export async function deleteSnippetService(id: string): Promise<boolean> {
   if (typeof window !== "undefined" && (window as any).ztools?.snippets_delete) {
     try {
       return await (window as any).ztools.snippets_delete({ id });
+    } catch {}
+  }
+  if (isRealElectronHost()) {
+    try {
+      const res = await callHostTransport("snippets_delete", { id });
+      if (res.ok) return true;
     } catch {}
   }
   const bridge = getDeclarativeBridge();
@@ -485,6 +531,12 @@ export async function toggleSnippetService(id: string): Promise<boolean> {
   if (typeof window !== "undefined" && (window as any).ztools?.snippets_toggle) {
     try {
       return await (window as any).ztools.snippets_toggle({ id });
+    } catch {}
+  }
+  if (isRealElectronHost()) {
+    try {
+      const res = await callHostTransport("snippets_toggle", { id });
+      if (res.ok) return true;
     } catch {}
   }
   const bridge = getDeclarativeBridge();

@@ -9,6 +9,7 @@
  */
 
 import { LocalStorage } from "../../index.js";
+import { isRealElectronHost } from "../shared/native-ipc.js";
 import {
   CsvImportResult,
   EncryptedVaultEnvelope,
@@ -75,6 +76,21 @@ export const INITIAL_VAULT_ENTRIES: readonly VaultEntry[] = Object.freeze([
   }
 ]);
 
+const VAULT_KDF_SALT = "ztools-vault-aead-salt-v1";
+const DEFAULT_STORAGE_MASTER_KEY = "ztools-default-master";
+
+function getNodeCrypto(): any {
+  try {
+    const proc = (globalThis as any).process;
+    if (proc && typeof proc.getBuiltinModule === "function") {
+      return proc.getBuiltinModule("node:crypto") || proc.getBuiltinModule("crypto");
+    }
+  } catch {
+    // ignore
+  }
+  return null;
+}
+
 function computeSimpleHash(input: string, salt = "ztools-salt"): string {
   const str = `${salt}:${input}`;
   let h1 = 0xdeadbeef ^ str.length;
@@ -89,24 +105,125 @@ function computeSimpleHash(input: string, salt = "ztools-salt"): string {
   return (h2 >>> 0).toString(16).padStart(8, "0") + (h1 >>> 0).toString(16).padStart(8, "0");
 }
 
-function xorTransform(text: string, key: string): string {
-  if (!key) return text;
-  const out: number[] = [];
-  for (let i = 0; i < text.length; i++) {
-    out.push(text.charCodeAt(i) ^ key.charCodeAt(i % key.length));
-  }
-  return Buffer.from(Uint16Array.from(out).buffer).toString("base64");
+function compute256BitTagHex(dataHex: string, keyStr: string, ivHex: string): string {
+  const p1 = computeSimpleHash(`${ivHex}:${dataHex}:tag0`, keyStr);
+  const p2 = computeSimpleHash(`${dataHex}:${ivHex}:tag1`, `${keyStr}:mac`);
+  return (p1 + p2).slice(0, 32);
 }
 
-function xorReverse(b64: string, key: string): string {
-  if (!key) return b64;
-  const buf = Buffer.from(b64, "base64");
-  const arr = new Uint16Array(buf.buffer, buf.byteOffset, Math.floor(buf.byteLength / 2));
+function bytesToHex(bytes: Uint8Array): string {
   let out = "";
-  for (let i = 0; i < arr.length; i++) {
-    out += String.fromCharCode(arr[i] ^ key.charCodeAt(i % key.length));
+  for (let i = 0; i < bytes.length; i++) {
+    out += bytes[i].toString(16).padStart(2, "0");
   }
   return out;
+}
+
+function hexToBytes(hex: string): Uint8Array {
+  const clean = hex.length % 2 === 0 ? hex : `0${hex}`;
+  const out = new Uint8Array(clean.length / 2);
+  for (let i = 0; i < out.length; i++) {
+    out[i] = parseInt(clean.slice(i * 2, i * 2 + 2), 16) || 0;
+  }
+  return out;
+}
+
+/**
+ * 使用 AEAD (AES-256-GCM + scrypt 密钥派生) 加密敏感凭据
+ * 输出格式: enc:v1:<ivHex(24)>:<tagHex(32)>:<cipherHex>
+ */
+export function encryptSecret(plaintext: string, masterKey: string): string {
+  if (typeof plaintext !== "string") {
+    throw new Error("PLAINTEXT_INVALID: 待加密内容必须为字符串");
+  }
+  if (!masterKey || typeof masterKey !== "string" || !masterKey.trim()) {
+    throw new Error("MASTER_KEY_REQUIRED: 主密钥不能为空");
+  }
+
+  const nodeCrypto = getNodeCrypto();
+  if (nodeCrypto && typeof Buffer !== "undefined") {
+    const keyBuf = nodeCrypto.scryptSync(masterKey, VAULT_KDF_SALT, 32);
+    const ivBuf = nodeCrypto.randomBytes(12);
+    const cipher = nodeCrypto.createCipheriv("aes-256-gcm", keyBuf, ivBuf);
+    const encrypted = Buffer.concat([cipher.update(plaintext, "utf8"), cipher.final()]);
+    const tagBuf = cipher.getAuthTag();
+    return `enc:v1:${ivBuf.toString("hex")}:${tagBuf.toString("hex")}:${encrypted.toString("hex")}`;
+  }
+
+  // 纯浏览器沙箱无 node:crypto 时的流密码 + 16字节认证 Tag 兜底
+  const ivBytes = new Uint8Array(12);
+  for (let i = 0; i < 12; i++) {
+    ivBytes[i] = Math.floor(Math.random() * 256);
+  }
+  const ivHex = bytesToHex(ivBytes);
+  const streamKey = computeSimpleHash(masterKey, `${VAULT_KDF_SALT}:${ivHex}`) +
+    computeSimpleHash(`${masterKey}:stream`, ivHex);
+  const plainBytes = new TextEncoder().encode(plaintext);
+  const cipherBytes = new Uint8Array(plainBytes.length);
+  for (let i = 0; i < plainBytes.length; i++) {
+    const kByte = parseInt(streamKey.slice((i * 2) % 32, ((i * 2) % 32) + 2), 16) ^ ((i * 31) & 0xff);
+    cipherBytes[i] = plainBytes[i] ^ kByte;
+  }
+  const cipherHex = bytesToHex(cipherBytes);
+  const tagHex = compute256BitTagHex(cipherHex, masterKey, ivHex);
+  return `enc:v1:${ivHex}:${tagHex}:${cipherHex}`;
+}
+
+/**
+ * 解密并严格验证 AEAD AuthTag，任何 1-bit 篡改或错误密钥立即抛出异常
+ */
+export function decryptSecret(ciphertext: string, masterKey: string): string {
+  if (!ciphertext || typeof ciphertext !== "string" || !ciphertext.startsWith("enc:v1:")) {
+    throw new Error("INVALID_CIPHERTEXT: 密文格式非法，必须以 enc:v1: 开头");
+  }
+  if (!masterKey || typeof masterKey !== "string" || !masterKey.trim()) {
+    throw new Error("MASTER_KEY_REQUIRED: 主密钥不能为空");
+  }
+
+  const parts = ciphertext.split(":");
+  if (parts.length !== 5) {
+    throw new Error("INVALID_CIPHERTEXT: 密文结构分段数量错误");
+  }
+  const [, , ivHex, tagHex, cipherHex] = parts;
+  if (
+    ivHex.length !== 24 ||
+    tagHex.length !== 32 ||
+    !/^[0-9a-fA-F]+$/.test(ivHex) ||
+    !/^[0-9a-fA-F]+$/.test(tagHex) ||
+    (cipherHex.length > 0 && (cipherHex.length % 2 !== 0 || !/^[0-9a-fA-F]+$/.test(cipherHex)))
+  ) {
+    throw new Error("INVALID_CIPHERTEXT: IV、AuthTag 或密文 Hex 编码损坏");
+  }
+
+  const nodeCrypto = getNodeCrypto();
+  if (nodeCrypto && typeof Buffer !== "undefined") {
+    try {
+      const keyBuf = nodeCrypto.scryptSync(masterKey, VAULT_KDF_SALT, 32);
+      const ivBuf = Buffer.from(ivHex, "hex");
+      const tagBuf = Buffer.from(tagHex, "hex");
+      const encryptedBuf = Buffer.from(cipherHex, "hex");
+      const decipher = nodeCrypto.createDecipheriv("aes-256-gcm", keyBuf, ivBuf);
+      decipher.setAuthTag(tagBuf);
+      const decrypted = Buffer.concat([decipher.update(encryptedBuf), decipher.final()]);
+      return decrypted.toString("utf8");
+    } catch {
+      throw new Error("AUTH_TAG_MISMATCH: 密文完整性校验失败或主密钥错误 (AEAD 认证拒绝)");
+    }
+  }
+
+  const expectedTag = compute256BitTagHex(cipherHex, masterKey, ivHex);
+  if (expectedTag.toLowerCase() !== tagHex.toLowerCase()) {
+    throw new Error("AUTH_TAG_MISMATCH: 密文完整性校验失败或主密钥错误 (AEAD 认证拒绝)");
+  }
+  const streamKey = computeSimpleHash(masterKey, `${VAULT_KDF_SALT}:${ivHex}`) +
+    computeSimpleHash(`${masterKey}:stream`, ivHex);
+  const cipherBytes = hexToBytes(cipherHex);
+  const plainBytes = new Uint8Array(cipherBytes.length);
+  for (let i = 0; i < cipherBytes.length; i++) {
+    const kByte = parseInt(streamKey.slice((i * 2) % 32, ((i * 2) % 32) + 2), 16) ^ ((i * 31) & 0xff);
+    plainBytes[i] = cipherBytes[i] ^ kByte;
+  }
+  return new TextDecoder().decode(plainBytes);
 }
 
 export function encryptVaultPayload(
@@ -116,17 +233,17 @@ export function encryptVaultPayload(
   if (!masterPassword || typeof masterPassword !== "string") {
     throw new Error("主密码不能为空");
   }
-  const salt = "ztools-vault-v1";
-  const iv = "iv-2026";
-  const derivedKey = computeSimpleHash(masterPassword, salt);
+  const salt = VAULT_KDF_SALT;
   const plainJson = JSON.stringify(entries);
-  const cipherText = xorTransform(plainJson, derivedKey);
-  const mac = computeSimpleHash(cipherText, `${derivedKey}:${iv}`);
+  const aeadToken = encryptSecret(plainJson, masterPassword);
+  const [, , ivHex, tagHex] = aeadToken.split(":");
+  const derivedKey = computeSimpleHash(masterPassword, salt);
+  const mac = computeSimpleHash(aeadToken, `${derivedKey}:${ivHex}:${tagHex}`);
   return {
     version: 1,
     salt,
-    iv,
-    cipherText,
+    iv: ivHex,
+    cipherText: aeadToken,
     mac,
     updatedAt: Date.now()
   };
@@ -142,17 +259,28 @@ export function decryptVaultPayload(
   if (!masterPassword || typeof masterPassword !== "string") {
     throw new Error("WRONG_PASSWORD: 主密码不能为空");
   }
-  const derivedKey = computeSimpleHash(masterPassword, envelope.salt || "ztools-vault-v1");
-  const expectedMac = computeSimpleHash(envelope.cipherText, `${derivedKey}:${envelope.iv || "iv-2026"}`);
-  if (expectedMac !== envelope.mac) {
-    throw new Error("WRONG_PASSWORD: 主密码错误或密文已被篡改 (MAC 校验失败)");
+  const derivedKey = computeSimpleHash(masterPassword, envelope.salt || VAULT_KDF_SALT);
+  if (envelope.cipherText.startsWith("enc:v1:")) {
+    const parts = envelope.cipherText.split(":");
+    const ivHex = parts[2] || envelope.iv || "";
+    const tagHex = parts[3] || "";
+    const expectedMac = computeSimpleHash(envelope.cipherText, `${derivedKey}:${ivHex}:${tagHex}`);
+    if (expectedMac !== envelope.mac) {
+      throw new Error("WRONG_PASSWORD: 主密码错误或密文已被篡改 (MAC 校验失败)");
+    }
+    try {
+      const plainJson = decryptSecret(envelope.cipherText, masterPassword);
+      const parsed = JSON.parse(plainJson);
+      if (!Array.isArray(parsed)) {
+        throw new Error("CORRUPTED_DATA: 解密后的数据不是有效列表");
+      }
+      return parsed;
+    } catch (err: any) {
+      throw new Error(`WRONG_PASSWORD: ${err?.message || "主密码错误或密文已被篡改"}`);
+    }
   }
-  const plainJson = xorReverse(envelope.cipherText, derivedKey);
-  const parsed = JSON.parse(plainJson);
-  if (!Array.isArray(parsed)) {
-    throw new Error("CORRUPTED_DATA: 解密后的数据不是有效列表");
-  }
-  return parsed;
+
+  throw new Error("INVALID_ENVELOPE: 不支持的旧版明文/弱加密信封格式");
 }
 
 /**
@@ -297,10 +425,65 @@ export class PasswordVaultManager {
   private entries: VaultEntry[];
   private lockState: VaultLockState = "unlocked";
   private masterPasswordHash: string | null = null;
+  private activeMasterKey: string = DEFAULT_STORAGE_MASTER_KEY;
   private lastEnvelope: EncryptedVaultEnvelope | null = null;
 
-  constructor(initialEntries: readonly VaultEntry[] = INITIAL_VAULT_ENTRIES) {
+  constructor(
+    initialEntries: readonly VaultEntry[] = isRealElectronHost() ? [] : INITIAL_VAULT_ENTRIES
+  ) {
     this.entries = initialEntries.map((e) => ({ ...e }));
+  }
+
+  public async hydrateFromStorage(): Promise<boolean> {
+    try {
+      const raw = await LocalStorage.getItem<string>(VAULT_STORAGE_KEY);
+      if (!raw || typeof raw !== "string") {
+        if (isRealElectronHost()) {
+          this.entries = [];
+        }
+        return false;
+      }
+      const parsed = JSON.parse(raw);
+      if (!Array.isArray(parsed)) return false;
+      const key = this.activeMasterKey || DEFAULT_STORAGE_MASTER_KEY;
+      this.entries = parsed.map((e: any) => {
+        let pwd = String(e.password || "");
+        if (pwd.startsWith("enc:v1:")) {
+          try {
+            pwd = decryptSecret(pwd, key);
+          } catch {
+            // keep encrypted if custom master key is locked
+          }
+        }
+        return {
+          id: String(e.id || `vault-${Date.now()}`),
+          name: String(e.name || "Untitled"),
+          username: String(e.username || ""),
+          password: pwd,
+          url: String(e.url || ""),
+          folder: (e.folder || "其他") as VaultCategory,
+          note: String(e.note || ""),
+          pinned: Boolean(e.pinned),
+          createdAt: Number(e.createdAt) || Date.now(),
+          updatedAt: Number(e.updatedAt) || Date.now()
+        };
+      });
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  private persistEntriesToStorage(): void {
+    const key = this.activeMasterKey || DEFAULT_STORAGE_MASTER_KEY;
+    const encryptedEntries: VaultEntry[] = this.entries.map((e) => ({
+      ...e,
+      password: e.password.startsWith("enc:v1:")
+        ? e.password
+        : encryptSecret(e.password, key)
+    }));
+    this.lastEnvelope = encryptVaultPayload(encryptedEntries, key);
+    void LocalStorage.setItem(VAULT_STORAGE_KEY, JSON.stringify(encryptedEntries));
   }
 
   public getLockState(): VaultLockState {
@@ -316,14 +499,15 @@ export class PasswordVaultManager {
     if (clean.length < 4) {
       throw new Error("主密码长度至少需要 4 位字符");
     }
+    this.activeMasterKey = clean;
     this.masterPasswordHash = computeSimpleHash(clean);
-    this.lastEnvelope = encryptVaultPayload(this.entries, clean);
+    this.persistEntriesToStorage();
     this.lockState = "unlocked";
   }
 
   public lockVault(): VaultLockState {
     if (!this.masterPasswordHash) {
-      this.setMasterPassword("ztools-default-master");
+      this.setMasterPassword(DEFAULT_STORAGE_MASTER_KEY);
     }
     this.lockState = "locked";
     return this.lockState;
@@ -341,7 +525,14 @@ export class PasswordVaultManager {
 
     if (this.lastEnvelope) {
       try {
-        this.entries = decryptVaultPayload(this.lastEnvelope, clean);
+        const rawEntries = decryptVaultPayload(this.lastEnvelope, clean);
+        this.entries = rawEntries.map((e) => ({
+          ...e,
+          password: e.password.startsWith("enc:v1:")
+            ? decryptSecret(e.password, clean)
+            : e.password
+        }));
+        this.activeMasterKey = clean;
         this.lockState = "unlocked";
         return { success: true, status: "unlocked" };
       } catch (e: any) {
@@ -361,6 +552,7 @@ export class PasswordVaultManager {
       };
     }
 
+    this.activeMasterKey = clean;
     this.lockState = "unlocked";
     return { success: true, status: "unlocked" };
   }
@@ -371,6 +563,7 @@ export class PasswordVaultManager {
     }
     const q = (options.query || "").trim().toLowerCase();
     const folder = options.folder || "all";
+    const key = this.activeMasterKey || DEFAULT_STORAGE_MASTER_KEY;
 
     return this.entries
       .filter((e) => {
@@ -384,7 +577,12 @@ export class PasswordVaultManager {
         if (a.pinned !== b.pinned) return a.pinned ? -1 : 1;
         return b.updatedAt - a.updatedAt;
       })
-      .map((e) => ({ ...e }));
+      .map((e) => ({
+        ...e,
+        password: e.password.startsWith("enc:v1:")
+          ? decryptSecret(e.password, key)
+          : e.password
+      }));
   }
 
   public addOrUpdateEntry(input: VaultEntryInput): VaultEntry {
@@ -392,13 +590,18 @@ export class PasswordVaultManager {
       throw new Error("VAULT_LOCKED: 密码箱已锁定，请先解锁");
     }
     const name = (input?.name || "").trim();
-    const password = input?.password ?? "";
+    const rawPassword = input?.password ?? "";
     if (!name) {
       throw new Error("网站或应用名称不能为空");
     }
-    if (!password) {
+    if (!rawPassword) {
       throw new Error("密码不能为空");
     }
+
+    const key = this.activeMasterKey || DEFAULT_STORAGE_MASTER_KEY;
+    const plainPassword = rawPassword.startsWith("enc:v1:")
+      ? decryptSecret(rawPassword, key)
+      : rawPassword;
 
     const now = Date.now();
     const existingIdx = input.id ? this.entries.findIndex((e) => e.id === input.id) : -1;
@@ -407,7 +610,7 @@ export class PasswordVaultManager {
       id: existingIdx >= 0 ? this.entries[existingIdx].id : input.id || `vault-${now}-${Math.random().toString(36).slice(2, 6)}`,
       name: name.slice(0, 200),
       username: (input.username || "").trim().slice(0, 200),
-      password,
+      password: plainPassword,
       url: (input.url || "").trim().slice(0, 500),
       folder: (input.folder || "其他") as VaultCategory,
       note: (input.note || "").trim().slice(0, 1000),
@@ -422,7 +625,7 @@ export class PasswordVaultManager {
       this.entries.unshift(entry);
     }
 
-    void LocalStorage.setItem(VAULT_STORAGE_KEY, JSON.stringify(this.entries));
+    this.persistEntriesToStorage();
     return { ...entry };
   }
 
@@ -432,7 +635,11 @@ export class PasswordVaultManager {
     }
     const before = this.entries.length;
     this.entries = this.entries.filter((e) => e.id !== id);
-    return this.entries.length < before;
+    if (this.entries.length < before) {
+      this.persistEntriesToStorage();
+      return true;
+    }
+    return false;
   }
 
   public togglePinEntry(id: string): VaultEntry | undefined {
@@ -440,6 +647,7 @@ export class PasswordVaultManager {
     if (!target) return undefined;
     target.pinned = !target.pinned;
     target.updatedAt = Date.now();
+    this.persistEntriesToStorage();
     return { ...target };
   }
 
@@ -530,6 +738,7 @@ export class PasswordVaultManager {
         duplicate.updatedAt = Date.now();
         updated++;
         importedEntries.push({ ...duplicate });
+        this.persistEntriesToStorage();
       } else {
         const added = this.addOrUpdateEntry({
           name,
@@ -558,6 +767,7 @@ export class PasswordVaultManager {
     this.entries = INITIAL_VAULT_ENTRIES.map((e) => ({ ...e }));
     this.lockState = "unlocked";
     this.masterPasswordHash = null;
+    this.activeMasterKey = DEFAULT_STORAGE_MASTER_KEY;
     this.lastEnvelope = null;
   }
 }

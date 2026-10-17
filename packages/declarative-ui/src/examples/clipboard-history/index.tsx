@@ -2,6 +2,7 @@ import React from "../../index.js";
 import {
   List,
   Detail,
+  Form,
   ActionPanel,
   Action,
   Icon,
@@ -13,6 +14,11 @@ import {
 } from "../../index.js";
 import { useState, useEffect } from "../../runtime/hooks.js";
 import {
+  isRealElectronHost,
+  showRealItemInFolder,
+  writeRealClipboardText
+} from "../shared/native-ipc.js";
+import {
   ClipboardItem,
   ClipboardContentType,
   ClipboardPreferences
@@ -21,6 +27,8 @@ import {
   SAMPLE_CLIPBOARD_ITEMS,
   getClipboardHistory,
   saveClipboardHistory,
+  syncCurrentSystemClipboard,
+  detectClipboardContentType,
   filterClipboardItems,
   formatCopiedTime,
   parseColorDetails,
@@ -213,15 +221,81 @@ export function ClipboardDetailView({
 }
 
 /**
+ * 新建或编辑剪贴板条目表单
+ */
+export function ClipboardItemForm({
+  initialItem,
+  onSaved
+}: {
+  initialItem?: ClipboardItem;
+  onSaved?: (item: ClipboardItem) => void;
+}) {
+  const { pop } = useNavigation();
+
+  return (
+    <Form
+      navigationTitle={initialItem ? "编辑剪贴板内容" : "新建剪贴板内容"}
+      actions={
+        <ActionPanel>
+          <Action.SubmitForm
+            title={initialItem ? "保存并写入剪贴板" : "创建并写入剪贴板"}
+            icon={Icon.Checkmark}
+            onSubmit={async (values: Record<string, any>) => {
+              const content = String(values.content || "");
+              if (!content.trim()) {
+                await showToast(Toast.Style.Failure, "内容不能为空");
+                return;
+              }
+              const nextItem: ClipboardItem = {
+                id: initialItem?.id || `clip-${Date.now()}`,
+                type: detectClipboardContentType(content),
+                content,
+                preview: content.trim().replace(/\s+/g, " ").slice(0, 100),
+                copiedAt: Date.now(),
+                pinned: Boolean(values.pinned ?? initialItem?.pinned),
+                charCount: content.length,
+                lineCount: content.split(/\r?\n/).length,
+                sourceAppName: initialItem?.sourceAppName || "ZTools Editor"
+              };
+              await Clipboard.copy(content);
+              if (isRealElectronHost()) {
+                await writeRealClipboardText(content);
+              }
+              onSaved?.(nextItem);
+              await showToast(Toast.Style.Success, "已保存并同步至系统剪贴板");
+              pop();
+            }}
+          />
+        </ActionPanel>
+      }
+    >
+      <Form.TextArea
+        id="content"
+        title="剪贴板文本内容"
+        placeholder="输入或编辑要写入剪贴板的文本、代码、JSON 或链接..."
+        defaultValue={initialItem?.content || ""}
+      />
+      <Form.Checkbox
+        id="pinned"
+        label="置顶保护该条目 (Pin Item)"
+        defaultValue={Boolean(initialItem?.pinned)}
+      />
+    </Form>
+  );
+}
+
+/**
  * 官方内置核心能力: 剪贴板历史管理器
  * 遵循 Raycast 极客全键盘声明式标准规范（双栏详情预览、10+ Action、流水粘贴状态机与偏好设置）
  */
 export default function ClipboardHistoryCommand() {
-  const [items, setItems] = useState<ClipboardItem[]>(SAMPLE_CLIPBOARD_ITEMS);
+  const [items, setItems] = useState<ClipboardItem[]>(() =>
+    isRealElectronHost() ? [] : SAMPLE_CLIPBOARD_ITEMS
+  );
   const [filterType, setFilterType] = useState<string>("all");
   const [searchText, setSearchText] = useState<string>("");
   const [isShowingDetail, setIsShowingDetail] = useState<boolean>(true);
-  const [isLoading, setIsLoading] = useState<boolean>(false);
+  const [isLoading, setIsLoading] = useState<boolean>(() => isRealElectronHost());
   const [preferences, setPreferences] = useState<ClipboardPreferences>({
     historyDuration: "P1W",
     primaryAction: "paste",
@@ -271,6 +345,25 @@ export default function ClipboardHistoryCommand() {
     await showToast(Toast.Style.Success, "已清空未置顶历史", `保留了 ${updated.length} 条置顶条目`);
   };
 
+  const handleSyncSystemClipboard = async () => {
+    const res = await syncCurrentSystemClipboard(items);
+    setItems(res.items);
+    await showToast(
+      Toast.Style.Success,
+      res.added ? "已同步当前系统剪贴板" : "系统剪贴板已是最新记录",
+      res.item?.preview || "当前系统剪贴板为空"
+    );
+  };
+
+  const handleSaveEditedItem = async (saved: ClipboardItem) => {
+    const exists = items.some((i) => i.id === saved.id);
+    const next = exists
+      ? items.map((i) => (i.id === saved.id ? saved : i))
+      : [saved, ...items];
+    setItems(next);
+    await saveClipboardHistory(next);
+  };
+
   const handlePasteSequential = async () => {
     const res = await pasteSequentialClipboard(filteredItems, {
       addNewLine: true,
@@ -310,6 +403,21 @@ export default function ClipboardHistoryCommand() {
       isShowingDetail={isShowingDetail}
       searchBarPlaceholder="搜索剪贴板历史 (支持拼音缩写、内容、代码、色彩、文件名)..."
       onSearchTextChange={setSearchText}
+      actions={
+        <ActionPanel title="剪贴板全局操作">
+          <Action
+            title="读取并同步当前系统剪贴板"
+            icon={Icon.Repeat}
+            onAction={handleSyncSystemClipboard}
+          />
+          <Action.Push
+            title="新建剪贴板记录..."
+            icon={Icon.Plus}
+            shortcut={{ modifiers: ["ctrl"], key: "n" }}
+            target={<ClipboardItemForm onSaved={handleSaveEditedItem} />}
+          />
+        </ActionPanel>
+      }
       searchBarAccessory={
         <List.Dropdown
           tooltip="按类型筛选"
@@ -448,6 +556,9 @@ export default function ClipboardHistoryCommand() {
                       icon={Icon.Folder}
                       shortcut={{ modifiers: ["ctrl"], key: "o" }}
                       onAction={async () => {
+                        if (isRealElectronHost()) {
+                          await showRealItemInFolder(item.filePaths![0]);
+                        }
                         await showToast(Toast.Style.Success, "定位文件", item.filePaths![0]);
                       }}
                     />
@@ -480,6 +591,26 @@ export default function ClipboardHistoryCommand() {
                       />
                     </>
                   ) : null}
+
+                  {/* 编辑与新建剪贴板内容 */}
+                  <Action.Push
+                    title="编辑该剪贴板内容..."
+                    icon={Icon.Pencil}
+                    shortcut={{ modifiers: ["ctrl"], key: "e" }}
+                    target={<ClipboardItemForm initialItem={item} onSaved={handleSaveEditedItem} />}
+                  />
+                  <Action.Push
+                    title="新建剪贴板记录..."
+                    icon={Icon.Plus}
+                    shortcut={{ modifiers: ["ctrl"], key: "n" }}
+                    target={<ClipboardItemForm onSaved={handleSaveEditedItem} />}
+                  />
+                  <Action
+                    title="读取并同步当前系统剪贴板"
+                    icon={Icon.Repeat}
+                    shortcut={{ modifiers: ["ctrl"], key: "r" }}
+                    onAction={handleSyncSystemClipboard}
+                  />
 
                   {/* Action 11: 置顶/取消置顶 */}
                   <Action

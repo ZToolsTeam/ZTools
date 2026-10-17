@@ -95,8 +95,14 @@ export { default as OrganizationsCommand } from "./organizations/index.js";
 export * from "./organizations/types.js";
 export * from "./organizations/organizations-storage.js";
 
-// 21. M1.5 极客数据大盘与自动化: Wrapped, Trial Nudges & Shortcuts (Windows 快捷指令)
-export { default as RaycastWrappedCommand, TrialNudgesCommand, WindowsShortcutsCommand } from "./wrapped-nudges-shortcuts/index.js";
+// 21. M1.5 极客数据大盘与自动化: Wrapped, Trial Nudges & Shortcuts (Windows & macOS 快捷指令)
+export {
+  default as RaycastWrappedCommand,
+  TrialNudgesCommand,
+  WindowsShortcutsCommand,
+  AppleShortcutsCommand,
+  RunShortcutWithInputForm
+} from "./wrapped-nudges-shortcuts/index.js";
 export * from "./wrapped-nudges-shortcuts/types.js";
 export * from "./wrapped-nudges-shortcuts/engine.js";
 
@@ -459,4 +465,26 @@ export {
   formatBytes as formatVideoDownloaderBytes
 } from "./video-downloader/logic.js";
 
+// 50. 窗口切换与顶部菜单栏搜索中枢 (Navigation - Switch Windows & Search Menu Items)
+export { default as NavigationCommand } from "./navigation/index.js";
+export * from "./navigation/index.js";
 
+// 51. macOS Homebrew 极客包管理器 (Homebrew - Formulae & Casks)
+export { default as HomebrewCommand } from "./homebrew/index.js";
+export * from "./homebrew/index.js";
+
+// 52. 自定义脚本命令工作台 (Script Commands - @raycast.* Metadata & Multi-runtime Runner)
+export { default as ScriptCommandsCommand } from "./script-commands/index.js";
+export * from "./script-commands/index.js";
+
+// 53. 心流专注时钟与屏蔽套件 (Raycast Focus - Pomodoro & Distraction Blocker)
+export { default as RaycastFocusCommand } from "./raycast-focus/index.js";
+export * from "./raycast-focus/index.js";
+
+// 54. 日程表与视频会议直达中枢 (Calendar - My Schedule, Join Meeting & ICS Export)
+export { default as CalendarCommand } from "./calendar/index.js";
+export * from "./calendar/index.js";
+
+// 55. 全网多引擎搜索、活动浏览器标签页与通讯录中枢 (Web Searches, Browser Tab & Contacts)
+export { default as WebSearchesCommand } from "./web-searches/index.js";
+export * from "./web-searches/index.js";

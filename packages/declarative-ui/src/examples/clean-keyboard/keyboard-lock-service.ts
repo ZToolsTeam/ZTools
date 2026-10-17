@@ -20,6 +20,7 @@ import {
   ShortcutModifier,
   UnlockReason
 } from "./types.js";
+import { callHostTransport, isRealElectronHost } from "../shared/native-ipc.js";
 
 export const CLEAN_KEYBOARD_STATS_KEY = "ztools.clean-keyboard.stats.v1";
 export const CLEAN_KEYBOARD_SHORTCUT_KEY = "ztools.clean-keyboard.shortcut.v1";
@@ -123,10 +124,43 @@ export class KeyboardLockManager {
   private state: KeyboardLockState;
   private mutexBusy = false;
   private watchdogTimer: ReturnType<typeof setTimeout> | null = null;
+  private domListenerAttached = false;
+  private lastHostOverride: any = undefined;
   private history: CleaningSessionRecord[] = [];
   private totalCleanedSeconds = 0;
   private totalBlockedKeystrokes = 0;
   private lastCleanedAt: number | null = null;
+
+  private readonly domKeyInterceptor = (e: any): void => {
+    if (this.state.status !== "locked") return;
+
+    const eventType = e?.type || "keydown";
+    const key = String(e?.key || "");
+    const lowerKey = key.toLowerCase();
+    const isEmergencyCombo =
+      lowerKey === this.state.emergencyShortcut.key.toLowerCase() &&
+      Boolean(e?.ctrlKey || e?.metaKey);
+
+    if (typeof e?.preventDefault === "function") {
+      e.preventDefault();
+    }
+    if (typeof e?.stopImmediatePropagation === "function") {
+      e.stopImmediatePropagation();
+    }
+
+    if (eventType === "keydown") {
+      if (isEmergencyCombo) {
+        void this.unlockKeyboard("emergency_hotkey");
+        return;
+      }
+      const mods: ShortcutModifier[] = [];
+      if (e?.ctrlKey) mods.push("ctrl");
+      if (e?.metaKey) mods.push("cmd");
+      if (e?.altKey) mods.push("alt");
+      if (e?.shiftKey) mods.push("shift");
+      void this.interceptKeystroke(key || "Unknown", mods);
+    }
+  };
 
   constructor() {
     this.state = {
@@ -142,6 +176,35 @@ export class KeyboardLockManager {
       emergencyShortcut: { ...DEFAULT_EMERGENCY_SHORTCUT },
       lastModifiedAt: Date.now()
     };
+  }
+
+  private attachDomInterceptor(hostOverride?: any): void {
+    this.lastHostOverride = hostOverride;
+    const win = (globalThis as any).window;
+    if (!this.domListenerAttached && win && typeof win.addEventListener === "function") {
+      win.addEventListener("keydown", this.domKeyInterceptor, { capture: true });
+      win.addEventListener("keyup", this.domKeyInterceptor, { capture: true });
+      win.addEventListener("keypress", this.domKeyInterceptor, { capture: true });
+      this.domListenerAttached = true;
+    }
+    if (hostOverride || isRealElectronHost()) {
+      void callHostTransport("window_set_always_on_top", { flag: true }, hostOverride);
+    }
+  }
+
+  private detachDomInterceptor(hostOverride?: any): void {
+    const targetHost = hostOverride ?? this.lastHostOverride;
+    const win = (globalThis as any).window;
+    if (this.domListenerAttached && win && typeof win.removeEventListener === "function") {
+      win.removeEventListener("keydown", this.domKeyInterceptor, { capture: true });
+      win.removeEventListener("keyup", this.domKeyInterceptor, { capture: true });
+      win.removeEventListener("keypress", this.domKeyInterceptor, { capture: true });
+      this.domListenerAttached = false;
+    }
+    if (targetHost || isRealElectronHost()) {
+      void callHostTransport("window_set_always_on_top", { flag: false }, targetHost);
+    }
+    this.lastHostOverride = undefined;
   }
 
   public getState(): KeyboardLockState {
@@ -253,6 +316,9 @@ export class KeyboardLockManager {
         lastModifiedAt: now
       };
 
+      // 挂载捕获级 DOM 按键拦截器与窗口置顶
+      this.attachDomInterceptor(options.hostOverride);
+
       // 启动看门狗自动超时解锁防止永久死锁
       const watchdogDelayMs =
         options.watchdogMs ??
@@ -274,7 +340,7 @@ export class KeyboardLockManager {
       return {
         success: true,
         status: "locked",
-        message: `键盘已锁定 (${formatCleanDuration(normalizedSeconds)})，按 ${this.state.emergencyShortcut.display} 可随时解锁`,
+        message: `键盘已锁定 (${formatCleanDuration(normalizedSeconds)})，按 ${this.state.emergencyShortcut.display} (或 Cmd + U) 可随时解锁`,
         state: this.getState()
       };
     } finally {
@@ -286,7 +352,8 @@ export class KeyboardLockManager {
    * 解除键盘锁定
    */
   public async unlockKeyboard(
-    reason: UnlockReason = "manual"
+    reason: UnlockReason = "manual",
+    hostOverride?: any
   ): Promise<KeyboardLockActionResult> {
     if (this.mutexBusy) {
       return {
@@ -313,6 +380,7 @@ export class KeyboardLockManager {
     this.mutexBusy = true;
     try {
       this.clearWatchdog();
+      this.detachDomInterceptor(hostOverride);
       const now = Date.now();
       const startedAt = this.state.lockedAt ?? now;
       const plannedSeconds = this.state.durationSeconds;
@@ -376,7 +444,7 @@ export class KeyboardLockManager {
 
   /**
    * 模拟或处理锁定期间的按键输入：
-   * - 如果匹配紧急解锁组合键，自动触发解锁
+   * - 如果匹配紧急解锁组合键 (支持 Ctrl+U 与 macOS Cmd+U)，自动触发解锁
    * - 否则拦截该按键并递增误触计数
    */
   public async interceptKeystroke(
@@ -390,11 +458,16 @@ export class KeyboardLockManager {
     const cleanKey = (key || "").trim().toLowerCase();
     const targetShortcut = this.state.emergencyShortcut;
     const modSet = new Set((modifiers || []).map((m) => m.toLowerCase() as ShortcutModifier));
-    const isEmergencyMatch =
+    const exactMatch =
       cleanKey === targetShortcut.key.toLowerCase() &&
       targetShortcut.modifiers.every((m) => modSet.has(m));
+    const crossPlatformDefaultMatch =
+      cleanKey === targetShortcut.key.toLowerCase() &&
+      targetShortcut.modifiers.length === 1 &&
+      targetShortcut.modifiers[0] === "ctrl" &&
+      (modSet.has("ctrl") || modSet.has("cmd"));
 
-    if (isEmergencyMatch) {
+    if (exactMatch || crossPlatformDefaultMatch) {
       await this.unlockKeyboard("emergency_hotkey");
       return { blocked: true, unlocked: true, state: this.getState() };
     }
@@ -487,6 +560,7 @@ export class KeyboardLockManager {
 
   public async resetAll(): Promise<void> {
     this.clearWatchdog();
+    this.detachDomInterceptor();
     this.mutexBusy = false;
     this.history = [];
     this.totalCleanedSeconds = 0;

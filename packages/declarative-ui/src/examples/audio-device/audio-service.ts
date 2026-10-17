@@ -19,6 +19,7 @@ import {
   IOType,
   TransportType
 } from "./types.js";
+import { callHostTransport, isRealElectronHost } from "../shared/native-ipc.js";
 
 export const INITIAL_AUDIO_DEVICES: readonly AudioDevice[] = Object.freeze([
   {
@@ -146,8 +147,8 @@ export const DEFAULT_AUDIO_COMBOS: readonly AudioComboPreset[] = Object.freeze([
   {
     id: "combo-meeting",
     name: "🎧 线上会议模式 (腾讯会议/飞书)",
-    description: "输出切至 AirPods Pro 耳机，输入切至桌面电容麦并解除静音",
-    outputDeviceId: "out-bluetooth-airpods",
+    description: "输出切至蓝牙/会议耳机，输入切至桌面麦克风并解除静音",
+    outputDeviceId: "out-bluetooth-headset",
     inputDeviceId: "in-usb-shure-mv7",
     outputVolume: 65,
     inputVolume: 90,
@@ -270,13 +271,99 @@ export class AudioDeviceManager {
   private platform: AudioPlatform;
 
   constructor(
-    initialDevices: readonly AudioDevice[] = INITIAL_AUDIO_DEVICES,
+    initialDevices?: readonly AudioDevice[],
     initialCombos: readonly AudioComboPreset[] = DEFAULT_AUDIO_COMBOS,
-    platform: AudioPlatform = "Windows"
+    platform: AudioPlatform = typeof process !== "undefined" && process.platform === "darwin" ? "macOS" : "Windows"
   ) {
-    this.devices = initialDevices.map((d) => ({ ...d }));
+    const sourceDevices = initialDevices ?? (isRealElectronHost() ? [] : INITIAL_AUDIO_DEVICES);
+    this.devices = sourceDevices.map((d) => ({ ...d }));
     this.combos = initialCombos.map((c) => ({ ...c }));
     this.platform = platform;
+  }
+
+  private mapRawHostDevice(raw: any, idx: number): AudioDevice {
+    const type: IOType =
+      raw?.type === "input" || raw?.isInput === true || raw?.dataFlow === "capture"
+        ? "input"
+        : "output";
+    const id = String(raw?.id || raw?.uid || `${type}-dev-${idx}`);
+    const uid = String(raw?.uid || raw?.id || id);
+    const name = String(raw?.name || raw?.deviceName || `Audio Device ${idx + 1}`);
+    const volRaw = Number(raw?.volume ?? 70);
+    const volume = Number.isFinite(volRaw) ? Math.max(0, Math.min(100, Math.round(volRaw))) : 70;
+
+    return {
+      id,
+      uid,
+      name,
+      type,
+      isInput: type === "input",
+      isOutput: type === "output",
+      isDefault: Boolean(raw?.isDefault ?? raw?.default),
+      isCommunicationDefault: Boolean(raw?.isCommunicationDefault ?? raw?.isDefault),
+      volume,
+      isMuted: Boolean(raw?.isMuted ?? raw?.muted),
+      transportType: raw?.transportType || TransportType.BuiltIn,
+      sampleRate: Number(raw?.sampleRate) > 0 ? Number(raw.sampleRate) : 48000,
+      channels: Number(raw?.channels) > 0 ? Number(raw.channels) : type === "output" ? 2 : 1,
+      isFavourite: Boolean(raw?.isFavourite),
+      isHidden: Boolean(raw?.isHidden)
+    };
+  }
+
+  /**
+   * 从真实宿主同步音频输入/输出设备列表 (支持 macOS SwitchAudioSource / system_profiler 与 Windows AudioDevicePlugin)
+   */
+  public async syncDevicesFromHost(hostOverride?: any): Promise<AudioDevice[]> {
+    if (!hostOverride && !isRealElectronHost()) {
+      return this.getAllDevices();
+    }
+
+    try {
+      const ipcRes = await callHostTransport<any>("audio_get_devices", {}, hostOverride);
+      if (ipcRes.ok && ipcRes.data) {
+        const list = Array.isArray(ipcRes.data)
+          ? ipcRes.data
+          : Array.isArray(ipcRes.data?.devices)
+          ? ipcRes.data.devices
+          : [];
+        if (list.length > 0) {
+          this.devices = list.map((raw: any, idx: number) => this.mapRawHostDevice(raw, idx));
+          return this.getAllDevices();
+        }
+      }
+    } catch {
+      // 独立隔离 audio_get_devices 异常，继续尝试 dllplugin_call
+    }
+
+    try {
+      const dllRes = await callHostTransport<any>(
+        "dllplugin_call",
+        {
+          plugin: "AudioDevicePlugin",
+          func: "GetAudioDevices",
+          params: {}
+        },
+        hostOverride
+      );
+      if (dllRes.ok && dllRes.data) {
+        const payload = dllRes.data?.result !== undefined ? dllRes.data.result : dllRes.data;
+        const parsed = typeof payload === "string" ? JSON.parse(payload) : payload;
+        const list = Array.isArray(parsed)
+          ? parsed
+          : Array.isArray(parsed?.devices)
+          ? parsed.devices
+          : [];
+        if (list.length > 0) {
+          this.devices = list.map((raw: any, idx: number) => this.mapRawHostDevice(raw, idx));
+          return this.getAllDevices();
+        }
+      }
+    } catch {
+      // 忽略异常回退本地状态
+    }
+
+    return this.getAllDevices();
   }
 
   public getAllDevices(): AudioDevice[] {
@@ -328,7 +415,7 @@ export class AudioDeviceManager {
       .map((d) => ({ ...d }));
   }
 
-  public setDefaultDevice(deviceId: string): AudioActionResult {
+  public setDefaultDevice(deviceId: string, hostOverride?: any): AudioActionResult {
     const cleanId = (deviceId || "").trim();
     const target = this.devices.find((d) => d.id === cleanId || d.uid === cleanId);
     if (!target) {
@@ -346,6 +433,19 @@ export class AudioDeviceManager {
       }
     }
 
+    if (hostOverride || isRealElectronHost()) {
+      void callHostTransport(
+        "audio_set_default_device",
+        {
+          id: target.id,
+          uid: target.uid,
+          name: target.name,
+          type: target.type
+        },
+        hostOverride
+      );
+    }
+
     const command = buildAudioPlatformCommand("switch", target, this.platform);
     return {
       success: true,
@@ -355,7 +455,7 @@ export class AudioDeviceManager {
     };
   }
 
-  public setDeviceVolume(deviceId: string, volume: number): AudioActionResult {
+  public setDeviceVolume(deviceId: string, volume: number, hostOverride?: any): AudioActionResult {
     const cleanId = (deviceId || "").trim();
     const target = this.devices.find((d) => d.id === cleanId || d.uid === cleanId);
     if (!target) {
@@ -382,6 +482,20 @@ export class AudioDeviceManager {
       target.isMuted = false;
     }
 
+    if (hostOverride || isRealElectronHost()) {
+      void callHostTransport(
+        "audio_set_volume",
+        {
+          id: target.id,
+          uid: target.uid,
+          name: target.name,
+          type: target.type,
+          volume: clamped
+        },
+        hostOverride
+      );
+    }
+
     const command = buildAudioPlatformCommand("volume", target, this.platform, clamped);
     return {
       success: true,
@@ -391,7 +505,7 @@ export class AudioDeviceManager {
     };
   }
 
-  public stepDeviceVolume(deviceId: string, delta: number): AudioActionResult {
+  public stepDeviceVolume(deviceId: string, delta: number, hostOverride?: any): AudioActionResult {
     const target = this.devices.find((d) => d.id === deviceId || d.uid === deviceId);
     if (!target) {
       return {
@@ -401,14 +515,14 @@ export class AudioDeviceManager {
       };
     }
     const nextVol = clampVolume(target.volume + (Number.isFinite(delta) ? delta : 0));
-    const res = this.setDeviceVolume(target.id, nextVol);
+    const res = this.setDeviceVolume(target.id, nextVol, hostOverride);
     return {
       ...res,
       action: "step-volume"
     };
   }
 
-  public toggleDeviceMute(deviceId: string, forceState?: boolean): AudioActionResult {
+  public toggleDeviceMute(deviceId: string, forceState?: boolean, hostOverride?: any): AudioActionResult {
     const target = this.devices.find((d) => d.id === deviceId || d.uid === deviceId);
     if (!target) {
       return {
@@ -419,6 +533,21 @@ export class AudioDeviceManager {
     }
 
     target.isMuted = forceState !== undefined ? Boolean(forceState) : !target.isMuted;
+
+    if (hostOverride || isRealElectronHost()) {
+      void callHostTransport(
+        "audio_toggle_mute",
+        {
+          id: target.id,
+          uid: target.uid,
+          name: target.name,
+          type: target.type,
+          muted: target.isMuted
+        },
+        hostOverride
+      );
+    }
+
     const command = buildAudioPlatformCommand("mute", target, this.platform, target.isMuted);
     return {
       success: true,
@@ -445,7 +574,7 @@ export class AudioDeviceManager {
     };
   }
 
-  public applyComboPreset(comboId: string): AudioActionResult {
+  public applyComboPreset(comboId: string, hostOverride?: any): AudioActionResult {
     const combo = this.combos.find((c) => c.id === comboId);
     if (!combo) {
       return {
@@ -455,7 +584,7 @@ export class AudioDeviceManager {
       };
     }
 
-    const outRes = this.setDefaultDevice(combo.outputDeviceId);
+    const outRes = this.setDefaultDevice(combo.outputDeviceId, hostOverride);
     if (!outRes.success) {
       return {
         success: false,
@@ -464,10 +593,10 @@ export class AudioDeviceManager {
       };
     }
     if (combo.outputVolume !== undefined) {
-      this.setDeviceVolume(combo.outputDeviceId, combo.outputVolume);
+      this.setDeviceVolume(combo.outputDeviceId, combo.outputVolume, hostOverride);
     }
 
-    const inRes = this.setDefaultDevice(combo.inputDeviceId);
+    const inRes = this.setDefaultDevice(combo.inputDeviceId, hostOverride);
     if (!inRes.success) {
       return {
         success: false,
@@ -476,10 +605,10 @@ export class AudioDeviceManager {
       };
     }
     if (combo.inputVolume !== undefined) {
-      this.setDeviceVolume(combo.inputDeviceId, combo.inputVolume);
+      this.setDeviceVolume(combo.inputDeviceId, combo.inputVolume, hostOverride);
     }
     if (combo.muteInput !== undefined) {
-      this.toggleDeviceMute(combo.inputDeviceId, combo.muteInput);
+      this.toggleDeviceMute(combo.inputDeviceId, combo.muteInput, hostOverride);
     }
 
     return {
@@ -499,46 +628,61 @@ export class AudioDeviceManager {
 export const defaultAudioDeviceManager = new AudioDeviceManager();
 
 // Raycast 原版 `audio-device.ts` 兼容导出函数
-export async function getAllDevices(): Promise<AudioDevice[]> {
+export async function getAllDevices(hostOverride?: any): Promise<AudioDevice[]> {
+  if (hostOverride || isRealElectronHost()) {
+    return defaultAudioDeviceManager.syncDevicesFromHost(hostOverride);
+  }
   return defaultAudioDeviceManager.getAllDevices();
 }
 
-export async function getInputDevices(): Promise<AudioDevice[]> {
+export async function getInputDevices(hostOverride?: any): Promise<AudioDevice[]> {
+  if (hostOverride || isRealElectronHost()) {
+    await defaultAudioDeviceManager.syncDevicesFromHost(hostOverride);
+  }
   return defaultAudioDeviceManager.getInputDevices();
 }
 
-export async function getOutputDevices(): Promise<AudioDevice[]> {
+export async function getOutputDevices(hostOverride?: any): Promise<AudioDevice[]> {
+  if (hostOverride || isRealElectronHost()) {
+    await defaultAudioDeviceManager.syncDevicesFromHost(hostOverride);
+  }
   return defaultAudioDeviceManager.getOutputDevices();
 }
 
-export async function getDefaultOutputDevice(): Promise<AudioDevice | undefined> {
+export async function getDefaultOutputDevice(hostOverride?: any): Promise<AudioDevice | undefined> {
+  if (hostOverride || isRealElectronHost()) {
+    await defaultAudioDeviceManager.syncDevicesFromHost(hostOverride);
+  }
   return defaultAudioDeviceManager.getDefaultOutputDevice();
 }
 
-export async function getDefaultInputDevice(): Promise<AudioDevice | undefined> {
+export async function getDefaultInputDevice(hostOverride?: any): Promise<AudioDevice | undefined> {
+  if (hostOverride || isRealElectronHost()) {
+    await defaultAudioDeviceManager.syncDevicesFromHost(hostOverride);
+  }
   return defaultAudioDeviceManager.getDefaultInputDevice();
 }
 
-export async function setDefaultOutputDevice(deviceId: string): Promise<AudioActionResult> {
-  return defaultAudioDeviceManager.setDefaultDevice(deviceId);
+export async function setDefaultOutputDevice(deviceId: string, hostOverride?: any): Promise<AudioActionResult> {
+  return defaultAudioDeviceManager.setDefaultDevice(deviceId, hostOverride);
 }
 
-export async function setDefaultInputDevice(deviceId: string): Promise<AudioActionResult> {
-  return defaultAudioDeviceManager.setDefaultDevice(deviceId);
+export async function setDefaultInputDevice(deviceId: string, hostOverride?: any): Promise<AudioActionResult> {
+  return defaultAudioDeviceManager.setDefaultDevice(deviceId, hostOverride);
 }
 
-export async function setOutputDeviceVolume(deviceId: string, volume: number): Promise<AudioActionResult> {
-  return defaultAudioDeviceManager.setDeviceVolume(deviceId, volume);
+export async function setOutputDeviceVolume(deviceId: string, volume: number, hostOverride?: any): Promise<AudioActionResult> {
+  return defaultAudioDeviceManager.setDeviceVolume(deviceId, volume, hostOverride);
 }
 
-export async function toggleOutputDeviceMute(deviceId: string): Promise<AudioActionResult> {
-  return defaultAudioDeviceManager.toggleDeviceMute(deviceId);
+export async function toggleOutputDeviceMute(deviceId: string, hostOverride?: any): Promise<AudioActionResult> {
+  return defaultAudioDeviceManager.toggleDeviceMute(deviceId, undefined, hostOverride);
 }
 
-export async function setInputDeviceVolume(deviceId: string, volume: number): Promise<AudioActionResult> {
-  return defaultAudioDeviceManager.setDeviceVolume(deviceId, volume);
+export async function setInputDeviceVolume(deviceId: string, volume: number, hostOverride?: any): Promise<AudioActionResult> {
+  return defaultAudioDeviceManager.setDeviceVolume(deviceId, volume, hostOverride);
 }
 
-export async function toggleInputDeviceMute(deviceId: string): Promise<AudioActionResult> {
-  return defaultAudioDeviceManager.toggleDeviceMute(deviceId);
+export async function toggleInputDeviceMute(deviceId: string, hostOverride?: any): Promise<AudioActionResult> {
+  return defaultAudioDeviceManager.toggleDeviceMute(deviceId, undefined, hostOverride);
 }

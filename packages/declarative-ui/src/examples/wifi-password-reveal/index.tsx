@@ -19,10 +19,13 @@ import {
   showToast,
   Toast
 } from "../../index.js";
-import { useState, useMemo } from "../../runtime/hooks.js";
+import { useState, useMemo, useEffect } from "../../runtime/hooks.js";
+import { isRealElectronHost } from "../shared/native-ipc.js";
 import { WifiProfileInfo, WifiSecurityFilter } from "./types.js";
 import {
   SAMPLE_WIFI_PROFILES,
+  fetchSavedWifiProfiles,
+  revealWifiPasswordFromHost,
   filterAndSortWifiProfiles,
   generateWifiQrString,
   generateWifiQrSvgDataUrl
@@ -35,23 +38,45 @@ export * from "./wifi-service.js";
  * Wi-Fi 详情与扫码连网视图 (对应原版 DetailPassword 组件)
  */
 export function WifiDetailView({ profile }: { profile: WifiProfileInfo }) {
-  const qrString = useMemo(
-    () => generateWifiQrString(profile.ssid, profile.password, profile.authType),
-    [profile.ssid, profile.password, profile.authType]
-  );
-  const qrSvgUrl = useMemo(() => generateWifiQrSvgDataUrl(profile), [profile]);
+  const [resolvedPassword, setResolvedPassword] = useState(profile.password);
 
-  const displayPassword = profile.isOpenNetwork
+  useEffect(() => {
+    let active = true;
+    setResolvedPassword(profile.password);
+    if (!profile.password && !profile.isOpenNetwork && !profile.isEnterprise && isRealElectronHost()) {
+      void revealWifiPasswordFromHost(profile.ssid).then((pwd) => {
+        if (active && pwd) {
+          setResolvedPassword(pwd);
+        }
+      });
+    }
+    return () => {
+      active = false;
+    };
+  }, [profile.ssid, profile.password, profile.isOpenNetwork, profile.isEnterprise]);
+
+  const effectiveProfile = useMemo(
+    () => ({ ...profile, password: resolvedPassword }),
+    [profile, resolvedPassword]
+  );
+
+  const qrString = useMemo(
+    () => generateWifiQrString(effectiveProfile.ssid, effectiveProfile.password, effectiveProfile.authType),
+    [effectiveProfile.ssid, effectiveProfile.password, effectiveProfile.authType]
+  );
+  const qrSvgUrl = useMemo(() => generateWifiQrSvgDataUrl(effectiveProfile), [effectiveProfile]);
+
+  const displayPassword = effectiveProfile.isOpenNetwork
     ? "(开放网络 — 无需密码)"
-    : profile.isEnterprise
+    : effectiveProfile.isEnterprise
       ? "(802.1X 企业证书认证 — 无预共享明文密码)"
-      : profile.password || "(未读取到密码)";
+      : effectiveProfile.password || "(未读取到密码)";
 
   const markdown = `
-# 📶 ${profile.ssid}
+# 📶 ${effectiveProfile.ssid}
 
-${profile.isConnected ? "> 🟢 **当前已连接此无线网络**\n" : ""}
-${profile.notes ? `> 💡 ${profile.notes}\n` : ""}
+${effectiveProfile.isConnected ? "> 🟢 **当前已连接此无线网络**\n" : ""}
+${effectiveProfile.notes ? `> 💡 ${effectiveProfile.notes}\n` : ""}
 
 ---
 
@@ -70,18 +95,18 @@ ${qrString}
 
   return (
     <Detail
-      navigationTitle={`Wi-Fi 详情: ${profile.ssid}`}
+      navigationTitle={`Wi-Fi 详情: ${effectiveProfile.ssid}`}
       markdown={markdown}
       metadata={
         <Detail.Metadata>
-          <Detail.Metadata.Label title="网络名称 (SSID)" text={profile.ssid} icon={Icon.Wifi} />
+          <Detail.Metadata.Label title="网络名称 (SSID)" text={effectiveProfile.ssid} icon={Icon.Wifi} />
           <Detail.Metadata.TagList title="安全认证">
             <Detail.Metadata.TagList.Item
-              text={profile.authType}
+              text={effectiveProfile.authType}
               color={
-                profile.isOpenNetwork
+                effectiveProfile.isOpenNetwork
                   ? Color.Yellow
-                  : profile.authType.includes("WPA3")
+                  : effectiveProfile.authType.includes("WPA3")
                     ? Color.Green
                     : Color.Blue
               }
@@ -89,36 +114,45 @@ ${qrString}
           </Detail.Metadata.TagList>
           <Detail.Metadata.Label
             title="加密算法 (Cipher)"
-            text={profile.cipher || "CCMP (AES)"}
+            text={effectiveProfile.cipher || "CCMP (AES)"}
             icon={Icon.Lock}
           />
           <Detail.Metadata.Label
             title="无线频段 (Band)"
-            text={profile.band || "Dual-Band"}
+            text={effectiveProfile.band || "Dual-Band"}
             icon={Icon.Signal3}
           />
           <Detail.Metadata.Separator />
           <Detail.Metadata.Label
             title="信号强度"
-            text={`${profile.signalPercent ?? 85}%`}
+            text={`${effectiveProfile.signalPercent ?? 85}%`}
             icon={Icon.BarChart}
           />
           <Detail.Metadata.Label
             title="最近连接"
-            text={profile.lastConnected || "已保存"}
+            text={effectiveProfile.lastConnected || "已保存"}
             icon={Icon.Clock}
           />
         </Detail.Metadata>
       }
       actions={
         <ActionPanel>
-          {!profile.isOpenNetwork && !profile.isEnterprise && profile.password && (
+          {!effectiveProfile.isOpenNetwork && !effectiveProfile.isEnterprise && (
             <Action
               title="复制 Wi-Fi 密码"
               icon={Icon.CopyClipboard}
               onAction={async () => {
-                await Clipboard.copy(profile.password);
-                await showToast(Toast.Style.Success, `已复制 "${profile.ssid}" 的密码`);
+                let pwd = effectiveProfile.password;
+                if (!pwd && isRealElectronHost()) {
+                  pwd = await revealWifiPasswordFromHost(effectiveProfile.ssid);
+                  if (pwd) setResolvedPassword(pwd);
+                }
+                if (pwd) {
+                  await Clipboard.copy(pwd);
+                  await showToast(Toast.Style.Success, `已复制 "${effectiveProfile.ssid}" 的密码`);
+                } else {
+                  await showToast(Toast.Style.Failure, `未能读取 "${effectiveProfile.ssid}" 的明文密码`);
+                }
               }}
             />
           )}
@@ -136,8 +170,8 @@ ${qrString}
             icon={Icon.Text}
             shortcut={{ modifiers: ["ctrl", "shift"], key: "c" }}
             onAction={async () => {
-              await Clipboard.copy(profile.ssid);
-              await showToast(Toast.Style.Success, `已复制 SSID: ${profile.ssid}`);
+              await Clipboard.copy(effectiveProfile.ssid);
+              await showToast(Toast.Style.Success, `已复制 SSID: ${effectiveProfile.ssid}`);
             }}
           />
         </ActionPanel>
@@ -150,18 +184,33 @@ ${qrString}
  * Wi-Fi 密码查看器主命令组件
  */
 export default function WifiPasswordRevealCommand() {
+  const [allProfiles, setAllProfiles] = useState<readonly WifiProfileInfo[]>(() =>
+    isRealElectronHost() ? [] : SAMPLE_WIFI_PROFILES
+  );
   const [searchText, setSearchText] = useState("");
   const [securityFilter, setSecurityFilter] = useState<WifiSecurityFilter>("all");
   const [revealInList, setRevealInList] = useState(true);
 
+  useEffect(() => {
+    let active = true;
+    void fetchSavedWifiProfiles().then((loaded) => {
+      if (active && (loaded.length > 0 || isRealElectronHost())) {
+        setAllProfiles(loaded);
+      }
+    });
+    return () => {
+      active = false;
+    };
+  }, []);
+
   const profiles = useMemo(
     () =>
-      filterAndSortWifiProfiles(SAMPLE_WIFI_PROFILES, {
+      filterAndSortWifiProfiles(allProfiles, {
         query: searchText,
         securityFilter,
         sortBy: "connected"
       }),
-    [searchText, securityFilter]
+    [allProfiles, searchText, securityFilter]
   );
 
   return (
@@ -191,7 +240,9 @@ export default function WifiPasswordRevealCommand() {
               : "•".repeat(Math.min(12, item.password.length))
             : item.isOpenNetwork
               ? "无密码 (开放)"
-              : "证书认证";
+              : item.isEnterprise
+                ? "证书认证"
+                : "回车查看或按 Ctrl+C 提取密码";
 
           return (
             <List.Item
@@ -221,14 +272,27 @@ export default function WifiPasswordRevealCommand() {
                     icon={Icon.Eye}
                     target={<WifiDetailView profile={item} />}
                   />
-                  {!item.isOpenNetwork && !item.isEnterprise && item.password && (
+                  {!item.isOpenNetwork && !item.isEnterprise && (
                     <Action
                       title="直接复制 Wi-Fi 密码"
                       icon={Icon.CopyClipboard}
                       shortcut={{ modifiers: ["ctrl"], key: "c" }}
                       onAction={async () => {
-                        await Clipboard.copy(item.password);
-                        await showToast(Toast.Style.Success, `已复制 "${item.ssid}" 的密码`);
+                        let pwd = item.password;
+                        if (!pwd && isRealElectronHost()) {
+                          pwd = await revealWifiPasswordFromHost(item.ssid);
+                          if (pwd) {
+                            setAllProfiles((prev) =>
+                              prev.map((p) => (p.id === item.id ? { ...p, password: pwd } : p))
+                            );
+                          }
+                        }
+                        if (pwd) {
+                          await Clipboard.copy(pwd);
+                          await showToast(Toast.Style.Success, `已复制 "${item.ssid}" 的密码`);
+                        } else {
+                          await showToast(Toast.Style.Failure, `未能提取 "${item.ssid}" 的明文密码`);
+                        }
                       }}
                     />
                   )}
@@ -243,7 +307,11 @@ export default function WifiPasswordRevealCommand() {
                     icon={Icon.QrCode}
                     shortcut={{ modifiers: ["ctrl"], key: "q" }}
                     onAction={async () => {
-                      const qr = generateWifiQrString(item.ssid, item.password, item.authType);
+                      let pwd = item.password;
+                      if (!pwd && !item.isOpenNetwork && !item.isEnterprise && isRealElectronHost()) {
+                        pwd = await revealWifiPasswordFromHost(item.ssid);
+                      }
+                      const qr = generateWifiQrString(item.ssid, pwd, item.authType);
                       await Clipboard.copy(qr);
                       await showToast(Toast.Style.Success, "已复制 WIFI: 连网协议串");
                     }}

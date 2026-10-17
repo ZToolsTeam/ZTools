@@ -196,6 +196,13 @@ export interface DiskAnalysisSnapshot {
   files: DiskFileEntry[]
   extStats: DiskExtStat[]
   groupStats: DiskGroupStat[]
+  topDirectories?: Array<{
+    name: string
+    path: string
+    drive: string
+    sizeBytes: number
+    fileCount: number
+  }>
   totalCapacityBytes: number
   totalUsedBytes: number
   totalAvailableBytes: number
@@ -573,21 +580,42 @@ export async function fetchDiskAnalysisSnapshot(hostOverride?: any): Promise<Dis
     (!hostOverride && isRealElectronHost()) ||
     typeof hostOverride?.system_search_files === 'function'
 
-  if (supportsDeepScan) {
-    // 在真实 Electron 宿主或支持 dir: 深度扫描的环境中，直接并发调用 dir: 深度目录树扫描（< 100ms 毫秒级返回）
-    const realTargetDirs = [
-      ...scanDirs,
-      ...(!hostOverride
-        ? [
-            'D:\\Local\\Roaming\\Tencent\\xwechat',
-            'E:\\csdwork3\\git\\ZTools\\electron-client\\out',
-            'E:\\csdwork3\\git\\ZTools\\frontend\\dist'
-          ]
-        : [])
-    ].filter(Boolean)
+  const topDirectories: Array<{
+    name: string
+    path: string
+    drive: string
+    sizeBytes: number
+    fileCount: number
+  }> = []
+  const seenDirs = new Set<string>()
 
-    const dirScans = await Promise.all(realTargetDirs.map(d => scanRealDirectoryTree(d, 100, hostOverride)))
+  if (supportsDeepScan) {
+    // 在真实 Electron 宿主或支持 dir: 深度扫描的环境中，直接并发调用 dir: 深度目录树扫描（基于本机真实挂载盘符与系统用户目录，严禁硬编码路径）
+    const driveRoots = !hostOverride
+      ? rawDrives.map(d => (d.drive.startsWith('/') ? d.drive : `${d.drive}\\`))
+      : []
+    const realTargetDirs = Array.from(new Set([...scanDirs, ...driveRoots])).filter(Boolean)
+
+    const dirScans = await Promise.all(
+      realTargetDirs.map(d => scanRealDirectoryTree(d, 100, hostOverride))
+    )
     for (const res of dirScans) {
+      if (Array.isArray(res.subdirs)) {
+        for (const sub of res.subdirs) {
+          if (!sub.path || sub.totalBytes <= 0) continue
+          const normSub = sub.path.replace(/\//g, '\\').toLowerCase()
+          if (seenDirs.has(normSub)) continue
+          seenDirs.add(normSub)
+          const cleanSub = sub.path.replace(/\//g, '\\')
+          topDirectories.push({
+            name: sub.name || cleanSub.split('\\').pop() || cleanSub,
+            path: cleanSub,
+            drive: extractDrivePrefix(cleanSub),
+            sizeBytes: sub.totalBytes,
+            fileCount: sub.fileCount || 0
+          })
+        }
+      }
       for (const f of res.files) {
         if (!f.isDir && f.size > 0) {
           addFileEntry(f.path, f.size, f.mtime)
@@ -608,6 +636,7 @@ export async function fetchDiskAnalysisSnapshot(hostOverride?: any): Promise<Dis
   }
 
   files.sort((a, b) => b.sizeBytes - a.sizeBytes)
+  topDirectories.sort((a, b) => b.sizeBytes - a.sizeBytes)
   const extStats = computeExtStats(files)
   const groupStats = computeGroupStats(files)
 
@@ -620,6 +649,7 @@ export async function fetchDiskAnalysisSnapshot(hostOverride?: any): Promise<Dis
     files,
     extStats,
     groupStats,
+    topDirectories,
     totalCapacityBytes,
     totalUsedBytes,
     totalAvailableBytes

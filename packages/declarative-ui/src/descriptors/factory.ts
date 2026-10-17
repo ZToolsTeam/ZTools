@@ -1,4 +1,25 @@
 import { VIEW_DESCRIPTOR_SYMBOL, ViewDescriptor } from "./types.js";
+import {
+  currentInstance,
+  setCurrentInstance,
+  setEvaluatingChildElement
+} from "../runtime/context.js";
+
+const descriptorComponentFactories = new WeakMap<object, () => any>();
+
+/**
+ * 获取由函数式组件生成的 ViewDescriptor 关联的组件渲染工厂函数，
+ * 以便在 Action.Push 或 navigation.push(<ChildComponent />) 时挂载独立响应式实例
+ */
+export function getComponentFactory(descriptor: unknown): (() => any) | undefined {
+  if (typeof descriptor === "function") {
+    return descriptor as () => any;
+  }
+  if (descriptor && typeof descriptor === "object") {
+    return descriptorComponentFactories.get(descriptor);
+  }
+  return undefined;
+}
 
 /**
  * 校验一个对象是否为有效的 ViewDescriptor
@@ -116,7 +137,23 @@ export function createElement(type: any, props?: any, ...children: any[]): any {
     if (children.length > 0) {
       combinedProps.children = children.length === 1 ? children[0] : children;
     }
-    return type(combinedProps, ...children);
+    // 当父组件已经执行完顶层 Hooks 进入 JSX return 树求值阶段（hookIndex > 0）时，
+    // 暂停 currentInstance 并标记 isEvaluatingChildElement，防止 .map() 内的子组件污染父组件的 Hooks 数组
+    const shouldIsolateChild = currentInstance !== null && currentInstance.hookIndex > 0;
+    const prevInstance = shouldIsolateChild ? setCurrentInstance(null) : currentInstance;
+    const prevChildFlag = shouldIsolateChild ? setEvaluatingChildElement(true) : false;
+    try {
+      const rendered = type(combinedProps, ...children);
+      if (rendered && typeof rendered === "object") {
+        descriptorComponentFactories.set(rendered, () => type(combinedProps, ...children));
+      }
+      return rendered;
+    } finally {
+      if (shouldIsolateChild) {
+        setCurrentInstance(prevInstance);
+        setEvaluatingChildElement(prevChildFlag);
+      }
+    }
   }
   return createDescriptor(String(type), props, ...children);
 }
@@ -127,3 +164,4 @@ export function createElement(type: any, props?: any, ...children: any[]): any {
 export function Fragment(props?: { children?: any }): any {
   return normalizeChildren(props?.children);
 }
+

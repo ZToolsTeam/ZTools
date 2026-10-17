@@ -199,6 +199,7 @@ const {
   stack,
   currentDescriptor,
   toasts,
+  showToast,
   push,
   pop,
   clear,
@@ -376,7 +377,7 @@ async function executeAction(action) {
   emit("action-executed", { type, props });
 
   // 远程会话模式：如果存在 sessionId 或处于 remote 模式，派发 nativeCallback 回传给扩展宿主
-  if (props.sessionId || props.remote) {
+  if (props?.sessionId || props?.remote) {
     const callbackId = props?.callbackId || action.id || (typeof props?.onAction === "string" ? props.onAction : null);
     emit("native-callback", {
       sessionId: props.sessionId,
@@ -395,23 +396,60 @@ async function executeAction(action) {
     }
   }
 
+  const electronMethods = typeof window !== "undefined" ? window.__ztoolsElectron?.methods : null;
+
   try {
     if (type === "Action.CopyToClipboard") {
-      if (typeof navigator !== "undefined" && navigator.clipboard) {
-        await navigator.clipboard.writeText(String(props?.content ?? ""));
+      const content = String(props?.content ?? "");
+      if (electronMethods?.clipboard_copy_text) {
+        await electronMethods.clipboard_copy_text({ text: content });
+      } else if (typeof navigator !== "undefined" && navigator.clipboard) {
+        await navigator.clipboard.writeText(content);
       }
-      props?.onCopy?.();
+      props?.onCopy?.(content);
+      showToast?.({ title: "已复制到剪贴板", message: content.slice(0, 64), style: "SUCCESS" });
+    } else if (type === "Action.Paste") {
+      const content = String(props?.content ?? "");
+      if (electronMethods?.clipboard_hide_and_paste_text) {
+        await electronMethods.clipboard_hide_and_paste_text({ text: content });
+      } else if (electronMethods?.clipboard_copy_text) {
+        await electronMethods.clipboard_copy_text({ text: content });
+      } else if (typeof navigator !== "undefined" && navigator.clipboard) {
+        await navigator.clipboard.writeText(content);
+      }
+      props?.onPaste?.(content);
+      showToast?.({ title: "已粘贴到活动窗口", message: content.slice(0, 64), style: "SUCCESS" });
     } else if (type === "Action.OpenInBrowser") {
-      if (props?.url && typeof window !== "undefined") {
-        window.open(props.url, "_blank");
+      if (props?.url) {
+        if (electronMethods?.shell_open_external) {
+          await electronMethods.shell_open_external({ url: String(props.url) });
+        } else if (typeof window !== "undefined") {
+          window.open(props.url, "_blank");
+        }
+        props?.onOpen?.(props.url);
       }
+    } else if (type === "Action.ShowInFinder") {
+      const targetPath = props?.path || props?.target;
+      if (targetPath && electronMethods?.shell_show_item_in_folder) {
+        await electronMethods.shell_show_item_in_folder({ fullPath: String(targetPath) });
+      }
+      props?.onShow?.(targetPath);
+      if (targetPath) {
+        showToast?.({ title: "已在文件管理器中定位", message: String(targetPath), style: "SUCCESS" });
+      }
+    } else if (type === "Action.Open" || type === "Action.OpenWith") {
+      const targetPath = props?.target || props?.path;
+      if (targetPath && electronMethods?.shell_open_path) {
+        await electronMethods.shell_open_path({ fullPath: String(targetPath) });
+      }
+      props?.onOpen?.(targetPath);
     } else if (type === "Action.Push") {
       if (props?.target) {
         push(props.target);
       }
     } else if (type === "Action.SubmitForm") {
       const values = formRendererRef.value ? formRendererRef.value.getValues() : {};
-      if (props.sessionId && typeof window !== "undefined" && window.ztools?.call) {
+      if (props?.sessionId && typeof window !== "undefined" && window.ztools?.call) {
         const callbackId = props?.callbackId || "submit";
         window.ztools.call("extension_callback", {
           sessionId: props.sessionId,
@@ -430,11 +468,23 @@ async function executeAction(action) {
   }
 }
 
+function findFirstLeafAction(node) {
+  if (!node) return null;
+  if (node.type && (node.type === "Action" || node.type.startsWith("Action."))) {
+    return node;
+  }
+  for (const child of node.children || []) {
+    const found = findFirstLeafAction(child);
+    if (found) return found;
+  }
+  return null;
+}
+
 function triggerPrimaryAction(item) {
   if (item && item.props?.actions) {
-    const actions = (item.props.actions.children || []);
-    if (actions[0]) {
-      executeAction(actions[0]);
+    const firstAct = findFirstLeafAction(item.props.actions);
+    if (firstAct) {
+      executeAction(firstAct);
       return;
     }
   }

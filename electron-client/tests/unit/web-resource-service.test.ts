@@ -377,7 +377,11 @@ test('[破坏性] 内置资源损坏（缺入口或含符号链接）时保留�
     assert.equal(missingEntry.root, activeRoot)
 
     await fs.writeFile(path.join(fixture.root, 'bundled', 'index.html'), '<html>new</html>')
-    await fs.symlink(os.tmpdir(), path.join(fixture.root, 'bundled', 'escape'))
+    await fs.symlink(
+      os.tmpdir(),
+      path.join(fixture.root, 'bundled', 'escape'),
+      process.platform === 'win32' ? 'junction' : 'dir'
+    )
     const withSymlink = await restart(fixture)
     assert.equal(withSymlink.root, activeRoot)
     assert.deepEqual(await listVersionDirs(fixture.root), [path.basename(activeRoot)])

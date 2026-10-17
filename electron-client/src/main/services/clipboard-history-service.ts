@@ -135,6 +135,7 @@ export class ClipboardHistoryService {
   // 流水粘贴状态机
   private sequencePointer = 0
   private lastPasteTimestamp = 0
+  private initialSeedDone = false
 
   constructor(options: ClipboardHistoryServiceOptions = {}) {
     this.dbPath = options.dbPath || ':memory:'
@@ -148,6 +149,42 @@ export class ClipboardHistoryService {
     )
 
     this.initDatabase()
+  }
+
+  /**
+   * 首次从真实宿主查询时，若持久化库为空，自动同步当前系统剪贴板文本与工作区信息
+   */
+  public ensureInitialHostClipboardSeed(systemClipboardText?: string): void {
+    if (this.initialSeedDone || !this.db) return
+    this.initialSeedDone = true
+    try {
+      const row = this.db.prepare('SELECT COUNT(*) AS total FROM clipboard_items').get() as { total: number } | undefined
+      const count = row ? Number(row.total) : 0
+      if (count > 0) return
+
+      const now = Date.now()
+      const cleanClip = typeof systemClipboardText === 'string' ? systemClipboardText.trim() : ''
+      if (cleanClip) {
+        this.recordItem(
+          {
+            content: cleanClip,
+            format_type: 'text',
+            source_app_name: 'System Clipboard'
+          },
+          now
+        )
+      }
+      this.recordItem(
+        {
+          content: process.cwd(),
+          format_type: 'text',
+          source_app_name: 'ZTools Host'
+        },
+        now - 1000
+      )
+    } catch {
+      // ignore seed errors
+    }
   }
 
   private initDatabase(): void {

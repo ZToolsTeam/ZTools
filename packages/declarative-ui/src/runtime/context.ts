@@ -145,6 +145,7 @@ export class DeclarativeRenderInstance {
     for (const hook of this.hooks) {
       if (hook.type === "effect" && typeof hook.value === "function") {
         const effectFn = hook.value as EffectCallback;
+        hook.value = null;
         // 如果有之前的清理函数，先执行
         if (typeof hook.cleanup === "function") {
           try {
@@ -184,3 +185,19 @@ export class DeclarativeRenderInstance {
 }
 
 export let currentInstance: DeclarativeRenderInstance | null = null;
+export let isEvaluatingChildElement = false;
+
+export function setCurrentInstance(
+  instance: DeclarativeRenderInstance | null
+): DeclarativeRenderInstance | null {
+  const prev = currentInstance;
+  currentInstance = instance;
+  return prev;
+}
+
+export function setEvaluatingChildElement(flag: boolean): boolean {
+  const prev = isEvaluatingChildElement;
+  isEvaluatingChildElement = flag;
+  return prev;
+}
+

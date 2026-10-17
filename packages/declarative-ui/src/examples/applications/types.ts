@@ -30,6 +30,7 @@ export interface ApplicationRecord {
   readonly pid?: number;
   readonly isGame?: boolean;
   readonly autoQuitEnabled?: boolean;
+  readonly leftoverPaths?: string[];
 }
 
 export interface ApplicationActionResult {

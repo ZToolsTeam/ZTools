@@ -5,11 +5,12 @@
 日志格式遵循业界通用的 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 规范，版本号遵循 [语义化版本 (Semantic Versioning)](https://semver.org/lang/zh-CN/) 标准，每次代码同步与版本发布均在顶部持续追加最新记录。
 
 <!-- changelog-auto-append-start -->
-<!-- last-synced-commit: 532ce57 -->
+<!-- last-synced-commit: 7d662cb -->
 
 ## [v1.1.8.0] - 2026-10-17 - 核心效率流 (Phase 1~3) 落地、双模态交互打磨与跨平台三包齐发
 
 ### ✨ 新增特性 (Features)
+- **macos**：实现macOS端36款内置核心插件全量对齐与端到端破坏性测试闭环 (`90d7a68`)
 - 实现双端零门槛一键启动引导、内置与社区插件全量呈现及macOS云端DMG构建流水线 (`d2e7289`)
 - **内联计算器、单位换算与色板顶层直出 (E4)**：在悬浮条 (`LauncherBar`) 与主界面搜索框 (`SearchBar`) 双端支持算式（如 `128 * 35`）、单位/汇率换算与色值（`#FF5733` / `rgb()` / `hsl()`）即输即得置顶展示，支持 `Enter` 一键复制结果与 `Ctrl+K` 动作面板扩展操作。
 - **窗口分屏上一位置还原 (`Restore`) 与双界面焦点隔离 (E5)**：新增窗口分屏前后状态记忆与来回切换还原能力；在 `WindowManagementService` 中维护 `lastExternalForegroundHwnd`，自动过滤 ZTools 内部窗口句柄，解决从大主界面点击分屏时的焦点误判问题。
