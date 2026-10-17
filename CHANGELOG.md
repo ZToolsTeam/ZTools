@@ -5,9 +5,9 @@
 日志格式遵循业界通用的 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 规范，版本号遵循 [语义化版本 (Semantic Versioning)](https://semver.org/lang/zh-CN/) 标准，每次代码同步与版本发布均在顶部持续追加最新记录。
 
 <!-- changelog-auto-append-start -->
-<!-- last-synced-commit: bbefa1b -->
+<!-- last-synced-commit: b4772b5 -->
 
-## [Unreleased / 2026-10-17] - 核心效率流 (Phase 1~3) 落地、双模态交互打磨与跨平台增强
+## [v1.1.8] - 2026-10-17 - 核心效率流 (Phase 1~3) 落地、双模态交互打磨与跨平台三包齐发
 
 ### ✨ 新增特性 (Features)
 - 实现双端零门槛一键启动引导、内置与社区插件全量呈现及macOS云端DMG构建流水线 (`d2e7289`)
@@ -23,6 +23,8 @@
 - **平台能力过滤与数据纯净性**：插件市场自动按当前操作系统过滤展示可用插件，隐藏空分类；移除便签、翻译、快捷直达中的示例占位数据；修复 macOS 下 `/var` 系统软链接导致的文件授权测试卡死问题。
 
 ### 📝 文档与工程基建 (Chores & Docs)
+- 升级版本号至v1.1.8并修复macOS云端工作流Node缓存配置 (`b4772b5`)
+- 自动追加最新更新日志到CHANGELOG.md (`98a8bf4`)
 - 将Windows与macOS双端三包齐发规范写入AGENTS.md与README并联动发包脚本 (`bbefa1b`)
 - 同步更新CHANGELOG发布记录 (`30cb42d`)
 - 自动注入gh workflow权限Token并更新CHANGELOG (`a1f5a64`)
