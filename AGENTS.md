@@ -295,22 +295,28 @@ npm run release:mac:download # 遥控云端编译 Mac DMG 并自动拉回本地 
     - 本地打包并一键发布 Windows + macOS 全套安装包：`npm run release:binaries`（即 `node scripts/package-release-binaries.mjs --upload`），脚本在完成本地 Windows `.exe` + `-portable.zip` 构建上传后，**会自动调用 `scripts/build-macos-remote.mjs` 触发 GitHub Actions (`build-macos-dmg.yml`) 云端 `macos-latest` 节点编译 `.dmg` 并自动挂载到同一个 `v<version>` Release 下**；
     - 单独触发云端 Mac DMG 编译并挂载 Release：`npm run release:mac`（若需同时下载回本地 Windows `dist/macos/` 目录则执行 `npm run release:mac:download`）；
     - 底层打包器 `electron-client/scripts/package-installer.mjs`、`package-macos-universal.mjs`、`package-macos-dmg.mjs` 与校验器 `verify-artifacts.mjs` 均已强制绑定产物完整性与 SHA-256 校验契约。
+  * **版本号自增与四段式数字版本号强制防呆铁律（严禁漏升版本号或未触发构建包）**：
+    - **发版必先核对远端 Release 版本号**：凡是用户要求“发包”、“发布新版本”或在完成重要功能修复后要求“提交代码并发布到 Git 上”时，AI **必须先通过 `gh release list -R codingmuse/ZTools` 检查当前 `electron-client/package.json` 的版本号是否已经在 GitHub Releases 发布过**。若该版本号已存在，**必须先递增升级版本号并触发双端构建发包**，严禁只同步源码而漏掉版本号升级与安装包构建！
+    - **强制四段式数字版本号（`X.Y.Z.W`）**：Windows 底层服务 `electron-client/native/ZToolsService/CMakeLists.txt` 强制校验四段式数字版本号（正则 `^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$`）。**所有版本号必须严格写成四段式（例如 `1.1.8.0`、`1.1.8.1`，严禁写成三段式 `1.1.8`）**，`scripts/package-release-binaries.mjs` 在启动时亦强制执行该格式预检。
+    - **五处版本号同步更新契约**：每次升级版本号时，必须同步更新以下 5 处：`package.json`、`electron-client/package.json`（含 `package-lock.json`）、`frontend/package.json`（含 `package-lock.json`）、`CHANGELOG.md` 顶部正式版标题、`README.md` 更新日志摘要（或直接加 `--bump` 参数由脚本自动自增）。
+    - **严禁先后颠倒（必须“先升版本推 GitHub 源码 → 再触发双端三包构建上传 → 最后验包”）**：由于云端 macOS DMG 构建（GitHub Actions）是从 GitHub `codingmuse/ZTools` 的 `main` 分支拉取源码并读取 `electron-client/package.json` 版本号，因此**必须先把升级好版本号的源码通过 `npm run release:oss` 推送到 GitHub `main` 分支，然后再执行 `npm run release:binaries -- --rebuild-app`**，确保本地 Windows 双包与云端 Mac DMG 挂载到同一个新版本 `v<version>` Release 下。
 - **设计宗旨（彻底消除用户心智负担）**：
   * 用户**无需记忆任何脚本名称、参数选项、Git 命令行语法或本地文件系统的物理镜像路径**；
-  * 用户在日常对话中只要使用任意模糊自然语言表达发版、发包、打包执行文件或 GitHub / Gitee 同步意图，AI **必须主动领会、安全校验并自动闭环完成全流程（源码默认同时推送 GitHub 与 Gitee；发包默认同时发布 Windows EXE/ZIP 与 macOS DMG）**，严禁反问用户或要求用户输入强命令。
+  * 用户在日常对话中只要使用任意模糊自然语言表达发版、发包、打包执行文件或 GitHub / Gitee 同步意图，AI **必须主动领会、安全校验并自动闭环完成全流程（源码默认同时推送 GitHub 与 Gitee；发包默认先升四段式版本号、推源码、再同时发布 Windows EXE/ZIP 与 macOS DMG）**，严禁反问用户或要求用户输入强命令。
 - **自然语言意图识别矩阵（模糊识别，全自动承接）**：
   * **默认/全量源码发版意图（同时推 GitHub + Gitee）**：“发布到 GitHub”、“推到 GitHub”、“发布到 Gitee”、“推到 Gitee”、“公布到 GitHub/Gitee”、“把最新代码发到开源仓库”、“发布开源版”、“全量同步开源双仓”、“提交开源”、“把这两个项目推上去”；
   * **仅宿主源码发版意图（同时推 GitHub + Gitee）**：“把核心宿主同步到 GitHub/Gitee/开源”、“推一下开源宿主”、“更新开源客户端源码”；
   * **仅插件源码发版意图**：“同步一下开源插件大仓”、“把插件库推上去”、“发布插件生态”；
-  * **发包 / 打包上传执行文件（Windows + macOS 双端三包齐发）意图**：“发包”、“打包商业版执行文件”、“打包安装包和免安装包”、“把最新安装包上传到 GitHub Release”、“发个新版本二进制包” → 自动执行 `node scripts/package-release-binaries.mjs --upload`（同时完成 Windows EXE/ZIP 上传并自动触发云端 macOS Universal DMG 构建与挂载）。
-- **AI 接收意图后的标准全自动执行 SOP（五步流水线）**：
+  * **发包 / 打包上传执行文件（Windows + macOS 双端三包齐发）意图**：“发包”、“打包商业版执行文件”、“打包安装包和免安装包”、“把最新安装包上传到 GitHub Release”、“发个新版本二进制包” → **先递增四段式版本号并同步源码至 GitHub/Gitee，再自动执行 `node scripts/package-release-binaries.mjs --rebuild-app --upload`**（同时完成 Windows EXE/ZIP 上传并自动触发云端 macOS Universal DMG 构建与挂载）。
+- **AI 接收意图后的标准全自动执行 SOP（六步闭环流水线）**：
   1. **状态自审与门禁检测**：快速检查当前工作区，确认无高风险破坏或未完成代码，关键测试或构建处于稳定状态；
-  2. **物理隔离安全复核**：严格审查待发布文件范围，确保 `DLLPlugins/`、`backend/`、`installer/`、`bin/` 等商业源码资产与 `.env.local` 等敏感配置绝对未越界；
-  3. **调用统一同步/打包执行器**：
-     - 源码同步（自动双推 GitHub + Gitee）：执行 `node scripts/sync-release.mjs [all|oss|extensions] [--msg "中文提交说明"]`；
-     - 双端二进制三包构建与上传（Windows + macOS）：执行 `node scripts/package-release-binaries.mjs [--upload]`，同时产出并上传 Windows `.exe` 安装包 + `-portable.zip` 免安装包，并自动联动 `scripts/build-macos-remote.mjs` 触发云端 macOS `.dmg` 安装包构建与上传；
-  4. **提交状态、SHA 与三包完整性核对**：确认 GitHub 与 Gitee 双远端 git push 或 GitHub Release 上传及云端 Mac 构建触发均返回成功，核对最新 commit 短哈希及 `.exe` + `-portable.zip` + `.dmg` 校验信息；
-  5. **闭环反馈汇报**：向用户汇报同步或打包上传完成概况，附带对应的 GitHub 与 Gitee 仓库/Release 地址及 macOS 云端构建链接（GitHub: [codingmuse/ZTools](https://github.com/codingmuse/ZTools) / Gitee: [hoposky/ZTools](https://gitee.com/hoposky/ZTools) / [ZTools-extensions](https://github.com/codingmuse/ZTools-extensions)），让用户彻底省心。
+  2. **版本号核对与四段式自增（发包必做）**：检查 `electron-client/package.json` 版本号是否已在 GitHub Releases 存在；若已存在则自动递增为新的四段式版本号（`X.Y.Z.W`），同步更新 `package.json`、`electron-client/package.json`、`frontend/package.json`、`CHANGELOG.md` 与 `README.md`；
+  3. **物理隔离安全复核**：严格审查待发布文件范围，确保 `DLLPlugins/`、`backend/`、`installer/`、`bin/` 等商业源码资产与 `.env.local` 等敏感配置绝对未越界；
+  4. **调用统一同步/打包执行器**：
+     - 先执行源码同步（自动双推 GitHub + Gitee）：`node scripts/sync-release.mjs [all|oss|extensions] [--msg "中文提交说明"]`；
+     - 再执行双端二进制三包构建与上传（Windows + macOS）：`node scripts/package-release-binaries.mjs --rebuild-app --upload`，同时产出并上传 Windows `.exe` 安装包 + `-portable.zip` 免安装包，并自动联动 `scripts/build-macos-remote.mjs` 触发云端 macOS `.dmg` 安装包构建与上传；
+  5. **提交状态、SHA 与远端 Release 六文件真机核对**：确认 GitHub 与 Gitee 双远端 git push 成功；发包时**必须等待云端 Mac 构建完毕并执行 `gh release view v<version> -R codingmuse/ZTools`**，确认 `.exe`、`.exe.sha256`、`-portable.zip`、`-portable.zip.sha256`、`-darwin-universal.dmg`、`-darwin-universal.dmg.sha256` 共 **6 个文件全部在远端 Release 页面挂载就绪**；
+  6. **闭环反馈汇报**：向用户汇报新版本号、同步或打包上传完成概况，附带对应的 GitHub 与 Gitee 仓库/Release 地址及 macOS 云端构建链接（GitHub: [codingmuse/ZTools](https://github.com/codingmuse/ZTools) / Gitee: [hoposky/ZTools](https://gitee.com/hoposky/ZTools) / [ZTools-extensions](https://github.com/codingmuse/ZTools-extensions)），让用户彻底省心。
 
 ### 客户端启动与 Windows 桌面穿透规范（零容忍最高高压线，违者必究）
 

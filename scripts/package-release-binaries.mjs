@@ -43,6 +43,44 @@ export const ELECTRON_CLIENT_DIR = path.join(ROOT_DIR, 'electron-client')
 export const INSTALLER_DIR = path.join(ROOT_DIR, 'installer')
 export const DEFAULT_GITHUB_REPO = 'codingmuse/ZTools'
 
+export function assertFourPartVersion(version) {
+  const str = String(version ?? '').trim()
+  if (!/^(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)$/.test(str)) {
+    throw new Error(
+      `FOUR_PART_VERSION_REQUIRED: 版本号必须为四段式纯数字格式（例如 1.1.8.0），当前值: "${str}"（ZToolsService CMake 强制要求四段式版本号）`
+    )
+  }
+  return str
+}
+
+export function incrementFourPartVersion(version) {
+  const valid = assertFourPartVersion(version)
+  const parts = valid.split('.').map(Number)
+  parts[3] += 1
+  return parts.join('.')
+}
+
+export function syncAllPackageVersions(newVersion, rootDir = ROOT_DIR) {
+  const valid = assertFourPartVersion(newVersion)
+  const targets = [
+    path.join(rootDir, 'package.json'),
+    path.join(rootDir, 'electron-client', 'package.json'),
+    path.join(rootDir, 'electron-client', 'package-lock.json'),
+    path.join(rootDir, 'frontend', 'package.json'),
+    path.join(rootDir, 'frontend', 'package-lock.json')
+  ]
+  for (const filePath of targets) {
+    if (!fs.existsSync(filePath)) continue
+    const data = JSON.parse(fs.readFileSync(filePath, 'utf8'))
+    data.version = valid
+    if (data.packages && data.packages['']) {
+      data.packages[''].version = valid
+    }
+    fs.writeFileSync(filePath, JSON.stringify(data, null, 2) + '\n', 'utf8')
+  }
+  return valid
+}
+
 export function parseReleaseCliArgs(argv = process.argv.slice(2)) {
   const options = {
     rebuildApp: false,
@@ -50,6 +88,8 @@ export function parseReleaseCliArgs(argv = process.argv.slice(2)) {
     skipMac: false,
     upload: false,
     dryRun: false,
+    bump: false,
+    newVersion: '',
     tag: '',
     repo: DEFAULT_GITHUB_REPO,
     notes: ''
@@ -67,6 +107,13 @@ export function parseReleaseCliArgs(argv = process.argv.slice(2)) {
       options.upload = true
     } else if (arg === '--dry-run') {
       options.dryRun = true
+    } else if (arg === '--bump') {
+      options.bump = true
+      options.rebuildApp = true
+    } else if (arg === '--new-version') {
+      const val = argv[++i]
+      options.newVersion = assertFourPartVersion(val)
+      options.rebuildApp = true
     } else if (arg === '--tag') {
       const val = argv[++i]
       if (!val || val.startsWith('-')) {
@@ -340,9 +387,25 @@ export function uploadDualArtifactsToGitHub({
 
 export function runReleasePackagingPipeline(rawArgs = process.argv.slice(2)) {
   const options = parseReleaseCliArgs(rawArgs)
-  const clientPkg = JSON.parse(
+  let clientPkg = JSON.parse(
     fs.readFileSync(path.join(ELECTRON_CLIENT_DIR, 'package.json'), 'utf8')
   )
+  assertFourPartVersion(clientPkg.version)
+
+  if (options.newVersion || options.bump) {
+    const targetVer = options.newVersion || incrementFourPartVersion(clientPkg.version)
+    if (!options.dryRun) {
+      syncAllPackageVersions(targetVer, ROOT_DIR)
+      clientPkg = JSON.parse(
+        fs.readFileSync(path.join(ELECTRON_CLIENT_DIR, 'package.json'), 'utf8')
+      )
+      console.log(`🔼 [版本自增] 已将全工作区版本号同步升级为: ${clientPkg.version}`)
+    } else {
+      console.log(`[Dry-Run] 将把全工作区版本号从 ${clientPkg.version} 升级为 ${targetVer}`)
+      clientPkg.version = targetVer
+    }
+  }
+
   const buildQualifier = process.env.ZTOOLS_BUILD_QUALIFIER ?? ''
   const artifactVersion = buildQualifier
     ? `${clientPkg.version}-${buildQualifier}`

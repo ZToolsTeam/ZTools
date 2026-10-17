@@ -5,7 +5,7 @@
 日志格式遵循业界通用的 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 规范，版本号遵循 [语义化版本 (Semantic Versioning)](https://semver.org/lang/zh-CN/) 标准，每次代码同步与版本发布均在顶部持续追加最新记录。
 
 <!-- changelog-auto-append-start -->
-<!-- last-synced-commit: 520c82e -->
+<!-- last-synced-commit: 532ce57 -->
 
 ## [v1.1.8.0] - 2026-10-17 - 核心效率流 (Phase 1~3) 落地、双模态交互打磨与跨平台三包齐发
 
@@ -26,6 +26,7 @@
 - **平台能力过滤与数据纯净性**：插件市场自动按当前操作系统过滤展示可用插件，隐藏空分类；移除便签、翻译、快捷直达中的示例占位数据；修复 macOS 下 `/var` 系统软链接导致的文件授权测试卡死问题。
 
 ### 📝 文档与工程基建 (Chores & Docs)
+- 将发包前强制核对自增四段式版本号及远端Release验包写入AGENTS.md与脚本 (`532ce57`)
 - 同步CHANGELOG自动追加记录 (`d3d37bd`)
 - 完善Release双平台文案自动更新与CHANGELOG (`ceaa6aa`)
 - 升级版本号至v1.1.8并修复macOS云端工作流Node缓存配置 (`b4772b5`)
