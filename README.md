@@ -88,11 +88,23 @@ ZTools 采用**“核心宿主大仓 + 插件生态大仓”**的双仓解耦模
 
 ---
 
+## 📦 安装包下载与双平台构建 (Windows & macOS Releases)
+
+每次正式版本发布均在 [GitHub Releases](https://github.com/codingmuse/ZTools/releases) 同步提供 **Windows** 与 **macOS** 双平台安装包（附带 `.sha256` 完整性校验）：
+
+| 平台 | 产物格式 | 文件名示例 | 适用场景 |
+| :--- | :--- | :--- | :--- |
+| **Windows 10 / 11 (x64)** | **EXE 离线安装包** | `ZTools-<version>-win32-x64.exe` | 推荐普通用户，内置 Direct2D 极速安装向导与平滑升级 |
+| **Windows 10 / 11 (x64)** | **ZIP 免安装便携包** | `ZTools-<version>-win32-x64-portable.zip` | 推荐极客用户，解压即用，配置与数据本地自包含 |
+| **macOS 13.0+ (Universal)** | **DMG 通用磁盘镜像** | `ZTools-<version>-darwin-universal.dmg` | 原生同时支持 **Apple Silicon (M1–M4)** 与 **Intel** 芯片 |
+
+---
+
 ## ⚡ 快速开始（30 秒跑起本地环境）
 
 环境要求：
 - [Node.js](https://nodejs.org/) >= 20.0.0 (推荐 22+)
-- Windows 10/11 或 macOS
+- Windows 10/11 或 macOS 13+
 
 ### 1. 克隆代码
 
@@ -101,17 +113,17 @@ git clone https://github.com/codingmuse/ZTools.git
 cd ZTools
 ```
 
-### 2. 安装依赖并启动
+### 2. 安装依赖并启动（Windows / macOS 通用）
 
 ```bash
-# 安装根依赖
+# 自动安装全工作区依赖并构建声明式 UI 核心包
 npm install
 
-# 一键启动开发环境（前端与 Electron 宿主热更新）
+# 一键启动开发环境（自动适配 Windows 与 macOS）
 npm run dev
 ```
 
-### 3. 运行轻量门禁测试
+### 3. 运行测试与双端发包命令
 
 ```bash
 # 运行 TypeScript 边界与单元契约测试
@@ -119,6 +131,12 @@ npm run test:quick
 
 # 运行全链路混沌抗毁性集成测试
 npm test
+
+# 一键打包并同时发布 Windows (EXE + ZIP) 与云端编译 macOS Universal DMG 至 GitHub Releases
+npm run release:binaries
+
+# 单独触发 GitHub Actions 云端 Mac 真机编译 DMG（加 :download 可自动拉回本地 dist/macos/）
+npm run release:mac
 ```
 
 ---

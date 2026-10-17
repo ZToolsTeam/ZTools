@@ -5,7 +5,7 @@
 日志格式遵循业界通用的 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 规范，版本号遵循 [语义化版本 (Semantic Versioning)](https://semver.org/lang/zh-CN/) 标准，每次代码同步与版本发布均在顶部持续追加最新记录。
 
 <!-- changelog-auto-append-start -->
-<!-- last-synced-commit: a1f5a64 -->
+<!-- last-synced-commit: bbefa1b -->
 
 ## [Unreleased / 2026-10-17] - 核心效率流 (Phase 1~3) 落地、双模态交互打磨与跨平台增强
 
@@ -23,6 +23,8 @@
 - **平台能力过滤与数据纯净性**：插件市场自动按当前操作系统过滤展示可用插件，隐藏空分类；移除便签、翻译、快捷直达中的示例占位数据；修复 macOS 下 `/var` 系统软链接导致的文件授权测试卡死问题。
 
 ### 📝 文档与工程基建 (Chores & Docs)
+- 将Windows与macOS双端三包齐发规范写入AGENTS.md与README并联动发包脚本 (`bbefa1b`)
+- 同步更新CHANGELOG发布记录 (`30cb42d`)
 - 自动注入gh workflow权限Token并更新CHANGELOG (`a1f5a64`)
 - **标准更新日志体系与自动追加流水线**：落地核心效率流 (E4~E8)、新增标准 CHANGELOG.md 与自动追加机制并同步全部子模块（遵循 Keep a Changelog + Conventional Commits 规范，每次发布自动脱敏归档并同步至 GitHub）。
 

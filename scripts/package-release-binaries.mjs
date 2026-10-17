@@ -2,12 +2,13 @@
 
 /**
  * package-release-binaries.mjs
- * ZTools 发行版双格式执行文件一键打包与 GitHub Releases 自动化发布脚本
+ * ZTools 发行版 Windows + macOS 双平台三包一键打包与 GitHub Releases 自动化发布脚本
  *
- * 核心铁律（Dual-Binary Release Rule）：
- *   每次打包或上传 GitHub Releases 时，必须同时产出并校验以下两类产物（缺一不可）：
- *   1. EXE 离线安装包：ZTools-<version>-win32-x64.exe (+ .sha256)
- *   2. ZIP 免安装便携包：ZTools-<version>-win32-x64-portable.zip (+ .sha256)
+ * 核心铁律（Cross-Platform Tri-Binary Release Rule）：
+ *   每次打包或上传 GitHub Releases 时，必须同时发布 Windows 与 macOS 双端全量安装包（缺一不可）：
+ *   1. Windows EXE 离线安装包：ZTools-<version>-win32-x64.exe (+ .sha256)
+ *   2. Windows ZIP 免安装便携包：ZTools-<version>-win32-x64-portable.zip (+ .sha256)
+ *   3. macOS Universal DMG 通用安装包：ZTools-<version>-darwin-universal.dmg (+ .sha256，通过 GitHub Actions 云端 Mac 节点自动编译并挂载至同一 Release)
  *
  * 用法：
  *   node scripts/package-release-binaries.mjs [选项]
@@ -15,7 +16,8 @@
  * 选项：
  *   --rebuild-app         重新完整编译并打包 Electron ZTools-win32-x64 应用目录（默认复用已有应用目录并注入最新安装器）
  *   --skip-delphi         跳过 Delphi 安装器/卸载器重编译（直接使用现有的 ZToolsSetup.exe / ZToolsUninstall.exe）
- *   --upload, --publish   打包校验完成后，自动通过 GitHub CLI (gh) 将 EXE 安装包 + ZIP 免安装包同步上传至 GitHub Releases
+ *   --skip-mac            仅上传 Windows 双包，跳过自动触发云端 macOS Universal DMG 构建
+ *   --upload, --publish   打包校验完成后，自动上传 Windows 双包至 GitHub Releases 并联动触发云端 macOS DMG 编译挂载
  *   --tag <tag>           指定 GitHub Release 标签（默认: v<version>）
  *   --repo <owner/repo>   指定目标 GitHub 仓库（默认: codingmuse/ZTools）
  *   --notes <text>        指定 GitHub Release 发布说明
@@ -33,6 +35,7 @@ import {
   getWindowsPortableZipFileName,
   WINDOWS_TARGET
 } from '../electron-client/scripts/windows-package-contract.mjs'
+import { triggerRemoteMacBuild } from './build-macos-remote.mjs'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 export const ROOT_DIR = path.resolve(__dirname, '..')
@@ -44,6 +47,7 @@ export function parseReleaseCliArgs(argv = process.argv.slice(2)) {
   const options = {
     rebuildApp: false,
     skipDelphi: false,
+    skipMac: false,
     upload: false,
     dryRun: false,
     tag: '',
@@ -57,6 +61,8 @@ export function parseReleaseCliArgs(argv = process.argv.slice(2)) {
       options.rebuildApp = true
     } else if (arg === '--skip-delphi') {
       options.skipDelphi = true
+    } else if (arg === '--skip-mac') {
+      options.skipMac = true
     } else if (arg === '--upload' || arg === '--publish') {
       options.upload = true
     } else if (arg === '--dry-run') {
@@ -232,16 +238,20 @@ export function buildGitHubReleaseUploadPlan({
 
   const exeMb = (verified.installerSize / 1048576).toFixed(2)
   const zipMb = (verified.portableZipSize / 1048576).toFixed(2)
+  const macDmgName = `ZTools-${artifacts.version}-darwin-universal.dmg`
   const releaseNotes =
     notes.trim() ||
     [
-      `## ZTools ${releaseTag} 发行版下载`,
+      `## ZTools ${releaseTag} 发行版下载（Windows & macOS 双端发布）`,
       '',
-      '### 📦 安装包与免安装包（Windows x64）',
+      '### 🪟 Windows 安装包与免安装包（Windows 10/11 x64）',
       `- **EXE 离线安装包**：\`${artifacts.installerName}\` (${exeMb} MB) — 推荐普通用户下载，内置极简 Direct2D GPU 安装向导、支持一键平滑升级与智能换盘`,
       `  - SHA-256: \`${verified.installerSha256}\``,
       `- **ZIP 免安装便携包**：\`${artifacts.portableZipName}\` (${zipMb} MB) — 推荐极客用户下载，解压即用`,
-      `  - SHA-256: \`${verified.portableZipSha256}\``
+      `  - SHA-256: \`${verified.portableZipSha256}\``,
+      '',
+      '### 🍎 macOS 通用安装包（Apple Silicon M1–M4 & Intel Universal）',
+      `- **DMG 通用磁盘镜像**：\`${macDmgName}\` — 原生双架构 Universal 应用包（含 \`${macDmgName}.sha256\` 校验文件），拖入 \`Applications\` 即可使用`
     ].join('\n')
 
   return {
@@ -330,9 +340,10 @@ export function runReleasePackagingPipeline(rawArgs = process.argv.slice(2)) {
   })
 
   console.log('========================================================')
-  console.log(`📦 ZTools 商业发行版双包构建流水线 (v${artifactVersion})`)
-  console.log('   产物 1 (EXE 安装包): ' + artifacts.installerName)
-  console.log('   产物 2 (ZIP 免安装): ' + artifacts.portableZipName)
+  console.log(`📦 ZTools 商业发行版 Windows + macOS 三包构建流水线 (v${artifactVersion})`)
+  console.log('   产物 1 (Windows EXE 安装包): ' + artifacts.installerName)
+  console.log('   产物 2 (Windows ZIP 免安装): ' + artifacts.portableZipName)
+  console.log(`   产物 3 (macOS Universal DMG): ZTools-${artifactVersion}-darwin-universal.dmg`)
   console.log('========================================================')
 
   // 步骤 1：编译 Delphi FMX 安装器与卸载器
@@ -372,7 +383,7 @@ export function runReleasePackagingPipeline(rawArgs = process.argv.slice(2)) {
     console.log('\n[3/4] [Dry-Run] 将调用 package-installer.mjs --force 同时生成 EXE 与 ZIP。')
   }
 
-  // 步骤 4：严格校验双包完整性与可选上传 GitHub Releases
+  // 步骤 4：严格校验双包完整性与可选上传 GitHub Releases + 自动联动云端 macOS DMG 构建
   console.log('\n[4/4] 正在校验双格式产物完整性与 SHA-256 签名摘要...')
   const verification = verifyDualReleaseArtifacts(artifacts)
   console.log(`✔ EXE 离线安装包: ${artifacts.installerPath}`)
@@ -380,6 +391,7 @@ export function runReleasePackagingPipeline(rawArgs = process.argv.slice(2)) {
   console.log(`✔ ZIP 免安装便携包: ${artifacts.portableZipPath}`)
   console.log(`  大小: ${(verification.portableZipSize / 1048576).toFixed(2)} MB | SHA-256: ${verification.portableZipSha256}`)
 
+  let macBuildPlan = null
   if (options.upload) {
     uploadDualArtifactsToGitHub({
       artifacts,
@@ -388,11 +400,19 @@ export function runReleasePackagingPipeline(rawArgs = process.argv.slice(2)) {
       notes: options.notes,
       dryRun: options.dryRun
     })
+
+    if (!options.skipMac) {
+      console.log('\n🍎 [5/5] 正在自动联动触发 GitHub Actions 云端 macOS Universal DMG 构建与挂载...')
+      const macArgs = ['--repo', options.repo]
+      if (options.dryRun) macArgs.push('--dry-run')
+      macBuildPlan = triggerRemoteMacBuild(macArgs)
+    }
   }
 
   return {
     artifacts,
-    verification
+    verification,
+    macBuildPlan
   }
 }
 

@@ -273,9 +273,11 @@ npm run release              # 一键同步核心宿主与插件大仓到 GitHub
 npm run release:oss          # 仅同步核心宿主仓库 (GitHub: codingmuse/ZTools + Gitee: hoposky/ZTools)
 npm run release:extensions   # 仅同步插件生态大仓 (codingmuse/ZTools-extensions)
 
-# 发行版执行文件双包构建与上传 GitHub Releases (同时产出 EXE 安装包 + ZIP 免安装包)
-npm run package:release      # 一键编译最新 Delphi 安装器并同时打包 EXE 离线安装包 + ZIP 免安装便携包
-npm run release:binaries     # 同时打包 EXE 安装包 + ZIP 免安装包并自动上传至 GitHub Releases
+# 发行版执行文件双端三包构建与上传 GitHub Releases (同时产出 Windows EXE/ZIP + macOS Universal DMG)
+npm run package:release      # 一键编译最新 Delphi 安装器并同时打包 Windows EXE 离线安装包 + ZIP 免安装便携包
+npm run release:binaries     # 同时打包上传 Windows 双包 (EXE + ZIP) 并自动触发云端编译挂载 macOS Universal DMG 至同一 GitHub Release
+npm run release:mac          # 单独遥控 GitHub Actions 云端 Mac 真机编译并发布 ZTools-<version>-darwin-universal.dmg
+npm run release:mac:download # 遥控云端编译 Mac DMG 并自动拉回本地 dist/macos/ 目录
 ```
 
 ### AI 自动化开源发版与零命令交互契约 (Zero-Command AI Release Pipeline)
@@ -284,30 +286,31 @@ npm run release:binaries     # 同时打包 EXE 安装包 + ZIP 免安装包并�
   * **GitHub 与 Gitee 双平台默认同时推送铁律**：**以后无论用户说“推送到 GitHub”还是说“推送到 Gitee”（或发布/同步/上传到 GitHub / Gitee），一律默认同时推送至 GitHub（`https://github.com/codingmuse/ZTools.git`）和 Gitee（`https://gitee.com/hoposky/ZTools.git`）双远端！**
   * **凭据安全隔离**：GitHub 与 Gitee 访问令牌（`GITHUB_TOKEN`、`GITEE_TOKEN`）统一保存在本地 `.env.local`（已被 `.gitignore` 严格忽略且位于开源抽取白名单之外，严禁写入受跟踪文件），由 `scripts/sync-release.mjs` 自动读取并配置远端完成双推；
   * **默认唯一语义映射**：只要用户提到**“发布到 GitHub”、“推到 GitHub”、“发布到 Gitee”、“推到 Gitee”、“公布到 GitHub/Gitee”、“同步到 GitHub/Gitee”、“上传 GitHub/Gitee”**（无论用户是否显式说出“开源”二字），涉及源码同步时 **100% 唯一指的就是通过开源发布流水线（`scripts/sync-release.mjs`）将脱敏抽取后的开源版本同时推送到 GitHub 与 Gitee 公开仓库**！严禁反问“是推商业版还是开源版”，严禁只推单边平台，也严禁在母仓直接执行裸 `git push`。
-- **执行文件（Release 二进制产物）双包齐发强制铁律（EXE 安装包 + ZIP 免安装包）**：
-  * **双格式产物缺一不可**：凡是打包商业版/发行版执行文件，或将构建好的执行文件上传至 GitHub Releases（`codingmuse/ZTools`）时，**必须同时打包并同时上传以下两种标准格式产物（及其 `.sha256` 校验文件），严禁只打单包或只传单一格式**：
-    1. **EXE 离线安装包**：`ZTools-<version>-win32-x64.exe`（及 `ZTools-<version>-win32-x64.exe.sha256`）—— 内置极简 Direct2D GPU 安装向导、支持一键平滑升级与空间不足智能换盘；
-    2. **ZIP 免安装便携包**：`ZTools-<version>-win32-x64-portable.zip`（及 `ZTools-<version>-win32-x64-portable.zip.sha256`）—— 解压即用免安装版。
-  * **统一标准复用脚本**：
-    - 仅本地打包双产物：`npm run package:release`（即 `node scripts/package-release-binaries.mjs`）；
-    - 打包双产物并一键上传至 GitHub Releases：`npm run release:binaries`（即 `node scripts/package-release-binaries.mjs --upload`）；
-    - 底层打包器 `electron-client/scripts/package-installer.mjs` 与校验器 `electron-client/scripts/verify-artifacts.mjs` 均已强制绑定双产物契约，任一产物缺失或 SHA-256 不一致即阻断发布。
+- **执行文件（Release 二进制产物）Windows + macOS 双平台三包齐发强制铁律（EXE 安装包 + ZIP 免安装包 + macOS Universal DMG）**：
+  * **双端三格式产物缺一不可**：凡是发包、打包商业版/发行版执行文件，或将构建好的安装包上传至 GitHub Releases（`codingmuse/ZTools`）时，**必须同时发布 Windows 与 macOS 双端全量安装包（及其 `.sha256` 校验文件），严禁只发 Windows 单平台或只打单包**：
+    1. **Windows EXE 离线安装包**：`ZTools-<version>-win32-x64.exe`（及 `.sha256`）—— 内置极简 Direct2D GPU 安装向导、支持一键平滑升级与空间不足智能换盘；
+    2. **Windows ZIP 免安装便携包**：`ZTools-<version>-win32-x64-portable.zip`（及 `.sha256`）—— 解压即用免安装版；
+    3. **macOS Universal DMG 通用安装包**：`ZTools-<version>-darwin-universal.dmg`（及 `.sha256`）—— 同时支持 Apple Silicon (M1/M2/M3/M4) 与 Intel 双架构，内置 Ad-hoc 深度签名与 3 个 macOS 原生辅助进程。
+  * **Windows 机器一键联动云端 Mac 编译机制**：
+    - 本地打包并一键发布 Windows + macOS 全套安装包：`npm run release:binaries`（即 `node scripts/package-release-binaries.mjs --upload`），脚本在完成本地 Windows `.exe` + `-portable.zip` 构建上传后，**会自动调用 `scripts/build-macos-remote.mjs` 触发 GitHub Actions (`build-macos-dmg.yml`) 云端 `macos-latest` 节点编译 `.dmg` 并自动挂载到同一个 `v<version>` Release 下**；
+    - 单独触发云端 Mac DMG 编译并挂载 Release：`npm run release:mac`（若需同时下载回本地 Windows `dist/macos/` 目录则执行 `npm run release:mac:download`）；
+    - 底层打包器 `electron-client/scripts/package-installer.mjs`、`package-macos-universal.mjs`、`package-macos-dmg.mjs` 与校验器 `verify-artifacts.mjs` 均已强制绑定产物完整性与 SHA-256 校验契约。
 - **设计宗旨（彻底消除用户心智负担）**：
   * 用户**无需记忆任何脚本名称、参数选项、Git 命令行语法或本地文件系统的物理镜像路径**；
-  * 用户在日常对话中只要使用任意模糊自然语言表达发版、打包执行文件或 GitHub / Gitee 同步意图，AI **必须主动领会、安全校验并自动闭环完成全流程（默认同时推送 GitHub 与 Gitee）**，严禁反问用户或要求用户输入强命令。
+  * 用户在日常对话中只要使用任意模糊自然语言表达发版、发包、打包执行文件或 GitHub / Gitee 同步意图，AI **必须主动领会、安全校验并自动闭环完成全流程（源码默认同时推送 GitHub 与 Gitee；发包默认同时发布 Windows EXE/ZIP 与 macOS DMG）**，严禁反问用户或要求用户输入强命令。
 - **自然语言意图识别矩阵（模糊识别，全自动承接）**：
   * **默认/全量源码发版意图（同时推 GitHub + Gitee）**：“发布到 GitHub”、“推到 GitHub”、“发布到 Gitee”、“推到 Gitee”、“公布到 GitHub/Gitee”、“把最新代码发到开源仓库”、“发布开源版”、“全量同步开源双仓”、“提交开源”、“把这两个项目推上去”；
   * **仅宿主源码发版意图（同时推 GitHub + Gitee）**：“把核心宿主同步到 GitHub/Gitee/开源”、“推一下开源宿主”、“更新开源客户端源码”；
   * **仅插件源码发版意图**：“同步一下开源插件大仓”、“把插件库推上去”、“发布插件生态”；
-  * **打包/上传执行文件（Release 产物）意图**：“打包商业版执行文件”、“打包安装包和免安装包”、“把最新安装包上传到 GitHub Release”、“发个新版本二进制包” → 自动执行 `node scripts/package-release-binaries.mjs`（若需上传则带 `--upload`）。
+  * **发包 / 打包上传执行文件（Windows + macOS 双端三包齐发）意图**：“发包”、“打包商业版执行文件”、“打包安装包和免安装包”、“把最新安装包上传到 GitHub Release”、“发个新版本二进制包” → 自动执行 `node scripts/package-release-binaries.mjs --upload`（同时完成 Windows EXE/ZIP 上传并自动触发云端 macOS Universal DMG 构建与挂载）。
 - **AI 接收意图后的标准全自动执行 SOP（五步流水线）**：
   1. **状态自审与门禁检测**：快速检查当前工作区，确认无高风险破坏或未完成代码，关键测试或构建处于稳定状态；
   2. **物理隔离安全复核**：严格审查待发布文件范围，确保 `DLLPlugins/`、`backend/`、`installer/`、`bin/` 等商业源码资产与 `.env.local` 等敏感配置绝对未越界；
   3. **调用统一同步/打包执行器**：
      - 源码同步（自动双推 GitHub + Gitee）：执行 `node scripts/sync-release.mjs [all|oss|extensions] [--msg "中文提交说明"]`；
-     - 二进制双包构建与上传：执行 `node scripts/package-release-binaries.mjs [--upload]`，同时产出并校验 `.exe` 安装包与 `-portable.zip` 免安装包；
-  4. **提交状态、SHA 与双包完整性核对**：确认 GitHub 与 Gitee 双远端 git push 或 GitHub Release 上传均返回成功，核对最新 commit 短哈希及 `.exe` + `-portable.zip` 双包 SHA-256；
-  5. **闭环反馈汇报**：向用户汇报同步或打包上传完成概况，附带对应的 GitHub 与 Gitee 仓库/Release 地址（GitHub: [codingmuse/ZTools](https://github.com/codingmuse/ZTools) / Gitee: [hoposky/ZTools](https://gitee.com/hoposky/ZTools) / [ZTools-extensions](https://github.com/codingmuse/ZTools-extensions)），让用户彻底省心。
+     - 双端二进制三包构建与上传（Windows + macOS）：执行 `node scripts/package-release-binaries.mjs [--upload]`，同时产出并上传 Windows `.exe` 安装包 + `-portable.zip` 免安装包，并自动联动 `scripts/build-macos-remote.mjs` 触发云端 macOS `.dmg` 安装包构建与上传；
+  4. **提交状态、SHA 与三包完整性核对**：确认 GitHub 与 Gitee 双远端 git push 或 GitHub Release 上传及云端 Mac 构建触发均返回成功，核对最新 commit 短哈希及 `.exe` + `-portable.zip` + `.dmg` 校验信息；
+  5. **闭环反馈汇报**：向用户汇报同步或打包上传完成概况，附带对应的 GitHub 与 Gitee 仓库/Release 地址及 macOS 云端构建链接（GitHub: [codingmuse/ZTools](https://github.com/codingmuse/ZTools) / Gitee: [hoposky/ZTools](https://gitee.com/hoposky/ZTools) / [ZTools-extensions](https://github.com/codingmuse/ZTools-extensions)），让用户彻底省心。
 
 ### 客户端启动与 Windows 桌面穿透规范（零容忍最高高压线，违者必究）
 
