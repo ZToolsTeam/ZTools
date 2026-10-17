@@ -6,13 +6,15 @@ import { reactive } from 'vue'
 import Sidebar from '../Sidebar.vue'
 import { useNavStore } from '@/stores/nav'
 import { useCategoriesStore } from '@/stores/categories'
+import { usePluginsStore } from '@/stores/plugins'
 import { ROUTES } from '@/router/routes'
 
 // 模拟路由响应式状态
 const mockRoute = reactive({ name: 'my', path: '/', params: {} })
 const mockPush = vi.fn()
 
-vi.mock('vue-router', () => ({
+vi.mock('vue-router', async (importOriginal) => ({
+  ...(await importOriginal()),
   useRoute: () => mockRoute,
   useRouter: () => ({ push: mockPush })
 }))
@@ -45,15 +47,42 @@ describe('Sidebar.vue 侧边栏高亮与导航测试', () => {
     categoriesStore.loaded = true
     categoriesStore.loading = false
     categoriesStore.error = null
+
+    pluginsStore = usePluginsStore()
+    pluginsStore.refreshCategoryCounts = vi.fn()
   })
 
-  it('初始状态下“我的插件”为激活高亮状态', () => {
+  let pluginsStore
+
+  const categoryNames = (wrapper) => wrapper.findAll('.sidebar-item').map((i) => i.text().trim())
+
+  it('当前系统上没有插件的分类不显示；统计结果出来前全部显示', async () => {
+    const wrapper = mount(Sidebar, { global: { plugins: [pinia] } })
+    expect(pluginsStore.refreshCategoryCounts).toHaveBeenCalled()
+    expect(categoryNames(wrapper)).toEqual(expect.arrayContaining(['系统工具', '办公效率']))
+
+    pluginsStore.categoryCounts = { 办公效率: 6 }
+    await wrapper.vm.$nextTick()
+    expect(categoryNames(wrapper)).toContain('办公效率')
+    expect(categoryNames(wrapper)).not.toContain('系统工具')
+  })
+
+  it('[边界] 正在查看的分类即使为空也保留，避免侧栏没有选中项', async () => {
+    mockRoute.name = 'list'
+    mockRoute.path = '/list/系统工具'
+    mockRoute.params = { category: '系统工具' }
+    pluginsStore.categoryCounts = { 办公效率: 6 }
+    const wrapper = mount(Sidebar, { global: { plugins: [pinia] } })
+    expect(categoryNames(wrapper)).toContain('系统工具')
+  })
+
+  it('初始状态下“主页”为激活高亮状态', () => {
     const wrapper = mount(Sidebar, {
       global: { plugins: [pinia] }
     })
 
     const items = wrapper.findAll('.sidebar-item')
-    const myItem = items.find((i) => i.text().includes('我的插件'))
+    const myItem = items.find((i) => i.text().includes('主页'))
     expect(myItem.classes()).toContain('active')
   })
 
@@ -125,7 +154,7 @@ describe('Sidebar.vue 侧边栏高亮与导航测试', () => {
     expect(sysCat.classes()).toContain('active')
 
     // 其他项均不处于 active
-    const myItem = items.find((i) => i.text().includes('我的插件'))
+    const myItem = items.find((i) => i.text().includes('主页'))
     const settingsItem = items.find((i) => i.text().includes('设置'))
     expect(myItem.classes()).not.toContain('active')
     expect(settingsItem.classes()).not.toContain('active')
@@ -144,5 +173,28 @@ describe('Sidebar.vue 侧边栏高亮与导航测试', () => {
     expect(nav.currentPage).toBe('about')
     const aboutItem = wrapper.findAll('.sidebar-item').find((i) => i.text().includes('关于'))
     expect(aboutItem.classes()).toContain('active')
+  })
+
+  it('「插件市场」对应无分类的列表页，分类区不再重复列出「全部」', async () => {
+    const categoriesStore = useCategoriesStore()
+    categoriesStore.items = [{ name: '全部' }, { name: '系统工具' }]
+    const wrapper = mount(Sidebar, { global: { plugins: [pinia] } })
+    const items = wrapper.findAll('.sidebar-item')
+    expect(items.filter((i) => i.text().trim() === '全部')).toHaveLength(0)
+
+    const market = items.find((i) => i.text().includes('插件市场'))
+    await market.trigger('click')
+    expect(mockPush).toHaveBeenCalledWith({ ...ROUTES.LIST, params: { category: '' } })
+    expect(market.classes()).toContain('active')
+
+    // 进入具体分类后「插件市场」不再高亮，二者互斥
+    await items.find((i) => i.text().includes('系统工具')).trigger('click')
+    expect(market.classes()).not.toContain('active')
+  })
+
+  it('「设置」项显示快捷键键帽', () => {
+    const wrapper = mount(Sidebar, { global: { plugins: [pinia] } })
+    const settingsItem = wrapper.findAll('.sidebar-item').find((i) => i.text().includes('设置'))
+    expect(settingsItem.find('.sidebar-kbd').exists()).toBe(true)
   })
 })

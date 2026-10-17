@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24">
+  <!-- 小尺寸（≤ 32px）版本：满版底板、去掉光晕，保证 16px 下方块清晰 -->
+  <rect x="0" y="0" width="24" height="24" rx="5.4" fill="#18181B"/>
+  <g transform="translate(0.6 0.6) scale(0.95)">
+    <rect x="2" y="5.5" width="6" height="6" rx="1.7" fill="#F2F2F0"/>
+    <rect x="9" y="5.5" width="6" height="6" rx="1.7" fill="#F2F2F0"/>
+    <rect x="9" y="12.5" width="6" height="6" rx="1.7" fill="#F2F2F0"/>
+    <rect x="16" y="12.5" width="6" height="6" rx="1.7" fill="#FF6B3D"/>
+  </g>
+</svg>

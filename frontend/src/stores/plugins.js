@@ -69,6 +69,32 @@ function parseConfigList(rawValue) {
   return []
 }
 
+/**
+ * 解析并校验本地保存的最近使用时间：只保留仍在 recents 中、且为合理时间戳的条目。
+ * 外部数据（配置文件）不可信：非对象、非数字、未来时间、原型链键名一律丢弃。
+ * @param {unknown} raw - 配置中读出的字符串或对象
+ * @param {string[]} recents
+ * @param {number} [now]
+ */
+export function sanitizeRecentUsedAt(raw, recents, now = Date.now()) {
+  let value = raw
+  if (typeof value === 'string') {
+    try {
+      value = JSON.parse(value)
+    } catch {
+      return {}
+    }
+  }
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return {}
+  const result = {}
+  for (const id of Array.isArray(recents) ? recents : []) {
+    if (!Object.hasOwn(value, id)) continue
+    const time = value[id]
+    if (Number.isFinite(time) && time > 0 && time <= now + 60_000) result[id] = time
+  }
+  return result
+}
+
 export const usePluginsStore = defineStore('plugins', {
   state: () => ({
     items: [],
@@ -80,6 +106,8 @@ export const usePluginsStore = defineStore('plugins', {
     sourceFilter: 'all', // 'all' | 'official' (官方自营) | 'community' (社区精选)
     favorites: new Set(),
     recents: [],
+    // 最近使用时间：{ [pluginId]: 毫秒时间戳 }，与 recents 一起只存本地
+    recentUsedAt: {},
     installedSet: new Set(),
     installedPlugins: [], // 已安装插件的完整信息列表
     downloadingSet: new Set(), // 正在下载的插件ID
@@ -101,6 +129,8 @@ export const usePluginsStore = defineStore('plugins', {
     syncStatus: 'idle', // 'idle' | 'syncing' | 'success' | 'error'
     lastSyncTime: null, // 最后同步时间戳
     syncError: null, // 同步错误信息
+    // 各分类下当前系统可用的插件数；null 表示还没算出来（此时不隐藏任何分类）
+    categoryCounts: null,
     // 初始化状态（防重入）
     _initPromise: null,
     // 插件列表内存缓存
@@ -221,10 +251,17 @@ export const usePluginsStore = defineStore('plugins', {
             'user_settings.json'
           )
 
+          const recAtStr = await window.ztools.config.get(
+            'plugins.recents_at',
+            '{}',
+            'user_settings.json'
+          )
+
           const parsedFavorites = parseConfigList(favStr)
           const parsedRecents = parseConfigList(recStr)
           this.favorites = new Set(normalizeIdList(parsedFavorites))
           this.recents = normalizeIdList(parsedRecents)
+          this.recentUsedAt = sanitizeRecentUsedAt(recAtStr, this.recents)
 
           // 云端同步不阻塞首屏；完成后刷新收藏详情
           this.syncFromCloud()
@@ -245,6 +282,7 @@ export const usePluginsStore = defineStore('plugins', {
         console.error('[plugins] 初始化失败:', err)
         this.favorites = new Set()
         this.recents = []
+        this.recentUsedAt = {}
       }
     },
 
@@ -496,11 +534,44 @@ export const usePluginsStore = defineStore('plugins', {
       }
 
       const result = await manager.query(queryParams)
+      this._updateCategoryCounts(manager._catalog)
 
       // 识别官方下架状态并全链路同步（M1-8）
       this._applyRevocations(result.list)
 
       return result
+    },
+
+    /** 按分类统计目录里的插件数（目录已按当前系统过滤，已下架的不计） */
+    _updateCategoryCounts(catalog) {
+      if (!Array.isArray(catalog)) return
+      const counts = {}
+      for (const item of catalog) {
+        if (!item || this.isRevoked?.(item.pluginId || item.id)) continue
+        const names = Array.isArray(item.category) ? item.category : [item.category]
+        for (const name of new Set(names.filter((n) => typeof n === 'string' && n))) {
+          counts[name] = (counts[name] || 0) + 1
+        }
+      }
+      this.categoryCounts = counts
+    },
+
+    /** 侧栏等不经过市场列表的地方，主动拉一次目录来统计分类 */
+    async refreshCategoryCounts() {
+      try {
+        const { catalog } = await this._getCatalogManager().ensureCatalog()
+        this._updateCategoryCounts(catalog)
+      } catch (error) {
+        console.warn('[PluginsStore] 统计分类插件数失败，保留全部分类:', error)
+      }
+      return this.categoryCounts
+    },
+
+    /** 某个分类是否要显示：统计结果出来前一律显示；正在查看的分类始终显示 */
+    isCategoryVisible(name, activeName = '') {
+      if (name === '全部' || name === activeName) return true
+      if (!this.categoryCounts) return true
+      return (this.categoryCounts[name] || 0) > 0
     },
 
     /** 清除所有列表缓存并重置管理器（主动刷新时调用） */
@@ -544,6 +615,12 @@ export const usePluginsStore = defineStore('plugins', {
         normalizedId,
         ...this.recents.filter((x) => x !== normalizedId)
       ].slice(0, 20)
+      // 只保留仍在最近列表中的时间，避免无限增长
+      const usedAt = { [normalizedId]: Date.now() }
+      for (const id of this.recents) {
+        if (id !== normalizedId && Object.hasOwn(this.recentUsedAt, id)) usedAt[id] = this.recentUsedAt[id]
+      }
+      this.recentUsedAt = usedAt
       try {
         const recData = JSON.stringify(this.recents)
 
@@ -552,6 +629,12 @@ export const usePluginsStore = defineStore('plugins', {
           await window.ztools.config.set(
             'plugins.recents',
             recData,
+            false,
+            'user_settings.json'
+          )
+          await window.ztools.config.set(
+            'plugins.recents_at',
+            JSON.stringify(this.recentUsedAt),
             false,
             'user_settings.json'
           )
@@ -703,7 +786,8 @@ export const usePluginsStore = defineStore('plugins', {
         }
         // 对比本地 icon.url 记录的 URL 和市场最新 URL
         // 不一致说明后台更换了图标，通知 Delphi 异步更新本地 icon.png 和 icon.ico
-        if (remoteIcon && (p.localIconUrl || '') !== remoteIcon) {
+        // 内置插件没有本地 icon 文件，请求刷新只会在主进程得到 PLUGIN_NOT_FOUND
+        if (!p.builtin && remoteIcon && (p.localIconUrl || '') !== remoteIcon) {
           if (window.ztools?.plugin?.refreshIcon) {
             window.ztools.plugin.refreshIcon(p.pluginId, remoteIcon).catch(() => {})
           }
@@ -812,6 +896,8 @@ export const usePluginsStore = defineStore('plugins', {
             const badge = official.official_badge || official.officialBadge || '官方自营'
             combined.push({
               ...official,
+              // 内置官方声明式插件：没有本地安装目录，不参与本地图标刷新等文件级操作
+              builtin: true,
               is_official: true,
               isOfficial: true,
               official_badge: badge,
@@ -820,8 +906,9 @@ export const usePluginsStore = defineStore('plugins', {
           }
         }
 
-        // 保存完整插件信息，按最近使用时间排序
-        this.installedPlugins = combined.sort((a, b) => {
+        // 保存完整插件信息，按最近使用时间排序；当前平台不支持的插件（如 macOS 上的 Windows 专用插件）
+        // 不进入展示与检索列表，installedSet 保持原样以免影响卸载 / 更新等安装状态判断
+        this.installedPlugins = combined.filter(isPluginSupportedOnCurrentPlatform).sort((a, b) => {
           const timeA = a.lastUsedTime || 0
           const timeB = b.lastUsedTime || 0
           return timeB - timeA
@@ -835,7 +922,9 @@ export const usePluginsStore = defineStore('plugins', {
         const officialList = getOfficialPluginsList()
         const officialIds = officialList.map((p) => String(p.pluginId))
         this.installedSet = new Set(officialIds)
-        this.installedPlugins = [...officialList]
+        this.installedPlugins = officialList
+          .filter(isPluginSupportedOnCurrentPlatform)
+          .map((plugin) => ({ ...plugin, builtin: true }))
         return officialList
       }
     },
@@ -941,6 +1030,11 @@ export const usePluginsStore = defineStore('plugins', {
         if (this.isRevoked(normalizedId)) {
           const reason = this.getRevokedReason(normalizedId) || '该插件已被官方下架禁用'
           throw new Error(`无法启动：该插件已被官方下架禁用（原因：${reason}）`)
+        }
+
+        // 当前系统上不能真正工作的插件不允许启动，避免展示示例数据或假成功
+        if (!isPluginSupportedOnCurrentPlatform(normalizedId)) {
+          throw new Error('无法启动：该插件在当前系统上暂不可用')
         }
 
         const lowerId = normalizedId.toLowerCase()

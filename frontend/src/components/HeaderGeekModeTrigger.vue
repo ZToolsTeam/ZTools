@@ -4,29 +4,24 @@
     @mouseenter="handleMouseEnter"
     @mouseleave="handleMouseLeave"
   >
-    <!-- 极客模式切换胶囊按钮 -->
+    <!-- 切到悬浮条：图标按钮 + 快捷键，与设计稿一致 -->
     <button
       ref="triggerBtnRef"
-      class="flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-medium transition-all duration-200 cursor-pointer border shadow-sm group select-none"
-      :class="[
-        isDark
-          ? 'bg-gradient-to-r from-sky-500/10 to-indigo-500/10 hover:from-sky-500/20 hover:to-indigo-500/20 border-sky-400/25 text-sky-300 hover:text-white hover:border-sky-400/50'
-          : 'bg-gradient-to-r from-sky-50 to-indigo-50 hover:from-sky-100 hover:to-indigo-100 border-sky-200 text-sky-700 hover:text-sky-900 hover:border-sky-300'
-      ]"
-      title="切换为极客悬浮条模式 (Alt+Space)"
+      type="button"
+      class="launcher-trigger"
+      :title="`切到悬浮条 ${wakeLabel}`"
+      aria-label="切到悬浮条"
       @click="triggerGeekMode"
     >
-      <span class="text-amber-400 group-hover:scale-110 transition-transform">⚡</span>
-      <span>极客条模式</span>
-      <kbd
-        class="hidden sm:inline-flex px-1 py-0.2 rounded text-[10px] font-mono transition-opacity"
-        :class="[isDark ? 'bg-white/10 text-slate-300' : 'bg-white text-slate-600 border border-slate-200']"
-      >
-        Alt+Space
-      </kbd>
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+        <rect x="3" y="9" width="18" height="6" rx="2" />
+        <path d="M7 12h6" />
+      </svg>
+      <span class="launcher-trigger-text">悬浮条</span>
+      <ShortcutKeys :combo="DEFAULT_GLOBAL_WAKE_HOTKEY" />
     </button>
 
-    <!-- 悬停引导浮层 (Hover Popover Guide) -->
+    <!-- 悬停引导浮层 -->
     <transition name="popover-fade">
       <div
         v-if="showGuidePopover"
@@ -34,59 +29,37 @@
         @mouseenter="handleMouseEnter"
         @mouseleave="handleMouseLeave"
       >
-        <!-- 隐形透明交互安全桥 (Hit-test safe bridge)，消除缝隙导致事件中断 -->
+        <!-- 透明过桥区，避免鼠标移向浮层时经过缝隙导致关闭 -->
         <div class="absolute -top-2.5 left-0 right-0 h-3 bg-transparent pointer-events-auto"></div>
 
-        <!-- 卡片主体容器 -->
-        <div
-          class="rounded-xl p-3.5 shadow-2xl border backdrop-blur-xl"
-          :class="[
-            isDark
-              ? 'bg-slate-900/95 border-white/15 text-slate-200 shadow-black/70'
-              : 'bg-white/95 border-slate-200 text-slate-700 shadow-slate-900/15'
-          ]"
-        >
-        <!-- 卡片头部 -->
-        <div class="flex items-center justify-between pb-2 border-b" :class="[isDark ? 'border-white/10' : 'border-slate-100']">
-          <div class="flex items-center gap-1.5 font-semibold" :class="[isDark ? 'text-white' : 'text-slate-900']">
-            <span class="text-amber-400">⚡</span>
-            <span>极客悬浮工具条</span>
+        <div class="guide-card">
+          <div class="guide-head">
+            <BrandMark :size="16" />
+            <span>悬浮搜索条</span>
           </div>
-          <span class="px-1.5 py-0.5 rounded text-[10px] bg-sky-500/10 text-sky-400 font-mono">极简悬浮模式</span>
-        </div>
 
-        <!-- 示意微动图效果 -->
-        <div class="my-2.5 p-2 rounded-lg border flex flex-col items-center justify-center gap-1.5"
-             :class="[isDark ? 'bg-black/30 border-white/10' : 'bg-slate-50 border-slate-200']">
-          <!-- 微型浮动条预览 -->
-          <div class="w-full h-6 rounded-md border flex items-center px-2 gap-1.5 shadow-inner"
-               :class="[isDark ? 'bg-slate-800 border-sky-400/30 text-sky-300' : 'bg-white border-sky-300 text-sky-600']">
-            <svg class="w-3 h-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-              <circle cx="11" cy="11" r="8" />
-              <line x1="21" y1="21" x2="16.65" y2="16.65" />
-            </svg>
-            <span class="font-mono text-[10px]">搜索工具...</span>
-            <span class="w-1 h-3 bg-sky-400 animate-pulse ml-auto"></span>
+          <!-- 微型悬浮条预览 -->
+          <div class="guide-preview">
+            <div class="guide-bar">
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+                <circle cx="11" cy="11" r="7" />
+                <path d="m20 20-3.5-3.5" />
+              </svg>
+              <span>搜索插件、命令与文件</span>
+              <span class="guide-caret"></span>
+            </div>
+            <span class="guide-hint">屏幕居中 · 全键盘操作 · 用完即走</span>
           </div>
-          <span class="text-[10px] text-slate-400">居中悬浮 · 全键盘盲打 · 秒开即走</span>
-        </div>
 
-        <!-- 文案说明 -->
-        <p class="leading-relaxed mb-3" :class="[isDark ? 'text-slate-300' : 'text-slate-600']">
-          收起大界面，切换为屏幕居中的极简快捷条。在桌面任何地方按下 <kbd class="px-1 py-0.5 rounded font-mono font-bold bg-sky-500/15 text-sky-400">Alt+Space</kbd> 随时唤醒！
-        </p>
+          <p class="guide-text">
+            收起工作台，换成屏幕中央的悬浮搜索条。在任何地方按
+            <ShortcutKeys :combo="DEFAULT_GLOBAL_WAKE_HOTKEY" /> 都能唤起。
+          </p>
 
-        <!-- 底部操作按钮 -->
-        <div class="flex items-center justify-between pt-1">
-          <span class="text-[11px] text-slate-400">随时可按 Ctrl+M 展开回大窗口</span>
-          <button
-            class="px-2.5 py-1 rounded-md bg-sky-500 hover:bg-sky-600 text-white font-medium text-xs transition-colors cursor-pointer shadow-sm flex items-center gap-1"
-            @click="triggerGeekMode"
-          >
-            <span>立即试用</span>
-            <span>➔</span>
-          </button>
-        </div>
+          <div class="guide-foot">
+            <span>按 <ShortcutKeys combo="Ctrl+M" /> 回到工作台</span>
+            <button type="button" class="guide-btn" @click="triggerGeekMode">立即试用</button>
+          </div>
         </div>
       </div>
     </transition>
@@ -94,12 +67,14 @@
 </template>
 
 <script setup>
-import { ref, computed, onBeforeUnmount } from 'vue'
-import { useThemeStore } from '@/stores/theme'
+import { ref, onBeforeUnmount } from 'vue'
+import ShortcutKeys from '@/components/base/ShortcutKeys.vue'
+import BrandMark from './BrandMark.vue'
 import { switchWindowMode, WINDOW_MODES } from '@/utils/windowMode'
+import { shortcutLabel } from '@/utils/platform'
+import { DEFAULT_GLOBAL_WAKE_HOTKEY } from '@/utils/globalWakeHotkey'
 
-const themeStore = useThemeStore()
-const isDark = computed(() => themeStore.isDark)
+const wakeLabel = shortcutLabel(DEFAULT_GLOBAL_WAKE_HOTKEY)
 
 const triggerBtnRef = ref(null)
 const showGuidePopover = ref(false)
@@ -163,6 +138,132 @@ onBeforeUnmount(() => {
 </script>
 
 <style scoped>
+.launcher-trigger {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 32px;
+  padding: 0 6px 0 8px;
+  border: 1px solid transparent;
+  border-radius: var(--rc-radius-md);
+  background: transparent;
+  color: var(--rc-text-muted);
+  font-size: 12px;
+  cursor: pointer;
+  transition: background-color 0.15s ease, color 0.15s ease;
+}
+
+.launcher-trigger:hover {
+  background: var(--rc-surface-hover);
+  color: var(--rc-text-primary);
+}
+
+.launcher-trigger:focus-visible {
+  outline: none;
+  box-shadow: var(--rc-focus-ring);
+}
+
+.guide-card {
+  padding: 14px;
+  border-radius: var(--rc-radius-lg);
+  border: 1px solid var(--rc-border-highlight);
+  background: var(--rc-surface);
+  color: var(--rc-text-secondary);
+  box-shadow: var(--rc-shadow-lg);
+}
+
+.guide-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding-bottom: 10px;
+  border-bottom: 1px solid var(--rc-border);
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--rc-text-primary);
+}
+
+.guide-preview {
+  margin: 10px 0;
+  padding: 10px;
+  border-radius: var(--rc-radius-md);
+  background: var(--rc-canvas);
+  border: 1px solid var(--rc-border);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+}
+
+.guide-bar {
+  width: 100%;
+  height: 26px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 8px;
+  border-radius: 7px;
+  background: var(--rc-surface);
+  border: 1px solid var(--rc-border-highlight);
+  box-shadow: var(--rc-focus-ring);
+  color: var(--rc-text-muted);
+  font-size: 11px;
+}
+
+.guide-caret {
+  width: 1.5px;
+  height: 12px;
+  margin-left: auto;
+  background: var(--rc-accent);
+  animation: guide-blink 1s steps(2, start) infinite;
+}
+
+.guide-hint {
+  font-size: 11px;
+  color: var(--rc-text-faint);
+}
+
+.guide-text {
+  margin-bottom: 12px;
+  line-height: 1.6;
+}
+
+.guide-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 11px;
+  color: var(--rc-text-faint);
+}
+
+.guide-btn {
+  height: 26px;
+  padding: 0 10px;
+  border: none;
+  border-radius: 6px;
+  background: var(--rc-accent);
+  color: var(--rc-accent-contrast);
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+}
+
+.guide-btn:hover {
+  background: var(--rc-accent-hover);
+}
+
+@keyframes guide-blink {
+  to {
+    visibility: hidden;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .guide-caret {
+    animation: none;
+  }
+}
+
 .popover-fade-enter-active,
 .popover-fade-leave-active {
   transition: opacity 0.15s ease, transform 0.15s ease;

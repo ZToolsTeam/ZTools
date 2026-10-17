@@ -1,5 +1,90 @@
-import { ref, computed, shallowRef, onUnmounted, toRaw } from "vue";
+import { ref, computed, shallowRef, onUnmounted, toRaw, h } from "vue";
 import { setDeclarativeBridge, renderDeclarativeRoot } from "@ztools/declarative-ui";
+import { Modal } from "ant-design-vue";
+
+
+/** 当前打开着的确认框，按打开顺序；最上面的才处理按键。插件页面卸载时一并关闭 */
+const openConfirms = [];
+
+/** 关闭所有插件确认框，按取消处理 */
+export function closeAllConfirms() {
+  for (const cancel of [...openConfirms].reverse()) cancel();
+}
+
+/** 按钮文字包一层 span：Ant Design 会在两个汉字的按钮文字中间插空格（「取 消」） */
+function buttonText(text) {
+  return h("span", text);
+}
+
+/**
+ * 插件 confirmAlert 的宿主实现：用站内 Modal 确认框，返回用户是否点了主操作。
+ * - 危险操作默认聚焦「取消」，误按回车不会执行；Esc、点遮罩都按取消处理；只结算一次
+ * - 确认框打开期间先拦下键盘事件：Esc 只关确认框，其余按键也不再触发页面快捷键（如 Esc 返回、⌘K）
+ */
+export function showInAppConfirm(options = {}) {
+  const title = typeof options.title === "string" && options.title.trim() ? options.title : "确认操作";
+  const primary = options.primaryAction || {};
+  const dismiss = options.dismissAction || {};
+  const destructive = primary.style === "destructive";
+  return new Promise((resolve) => {
+    let settled = false;
+    let instance = null;
+    const onKeydown = (event) => {
+      // 叠了多个确认框时只由最上面的处理（先注册的监听先执行，不是最上面就放行）
+      if (openConfirms[openConfirms.length - 1] !== cancel) return;
+      event.stopImmediatePropagation();
+      if (event.key === "Escape") {
+        event.preventDefault();
+        cancel();
+      }
+    };
+    const cleanup = () => {
+      const index = openConfirms.indexOf(cancel);
+      if (index !== -1) openConfirms.splice(index, 1);
+      if (typeof window !== "undefined") window.removeEventListener("keydown", onKeydown, true);
+    };
+    const settle = (ok) => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      try {
+        if (ok) primary.onAction?.();
+        else dismiss.onAction?.();
+      } catch (error) {
+        console.warn("[declarative] 确认框回调执行失败:", error);
+      }
+      resolve(ok);
+    };
+    function cancel() {
+      try {
+        instance?.destroy?.();
+      } catch {
+        // 已经关闭
+      }
+      settle(false);
+    }
+    try {
+      instance = Modal.confirm({
+        title,
+        content: typeof options.message === "string" ? options.message : undefined,
+        okText: buttonText(primary.title || "确定"),
+        cancelText: buttonText(dismiss.title || "取消"),
+        okButtonProps: destructive ? { danger: true } : undefined,
+        autoFocusButton: destructive ? "cancel" : "ok",
+        maskClosable: true,
+        keyboard: false,
+        onOk: () => settle(true),
+        onCancel: () => settle(false),
+        afterClose: () => settle(false)
+      });
+      openConfirms.push(cancel);
+      if (typeof window !== "undefined") window.addEventListener("keydown", onKeydown, true);
+    } catch (error) {
+      console.warn("[declarative] 无法弹出确认框，按取消处理:", error);
+      settle(false);
+    }
+  });
+}
 
 export function useDeclarativeStack(initialRoot) {
   // 导航栈数组，每一项存储当前层级的 { descriptor, component, root }
@@ -51,6 +136,7 @@ export function useDeclarativeStack(initialRoot) {
   }
 
   function clear() {
+    closeAllConfirms();
     while (stack.value.length > 0) {
       const item = stack.value.pop();
       const rawItem = toRaw(item);
@@ -144,20 +230,8 @@ export function useDeclarativeStack(initialRoot) {
       }
       return "";
     },
-    confirmAlert: async (options) => {
-      if (typeof window !== "undefined" && typeof window.confirm === "function") {
-        const text = options.message ? `${options.title}\n\n${options.message}` : options.title;
-        const ok = window.confirm(text);
-        if (ok) {
-          options.primaryAction?.onAction?.();
-        } else {
-          options.dismissAction?.onAction?.();
-        }
-        return ok;
-      }
-      options.primaryAction?.onAction?.();
-      return true;
-    }
+    // 站内确认框（跟随主题），不用系统原生 window.confirm
+    confirmAlert: (options) => showInAppConfirm(options)
   });
 
   if (initialRoot) {

@@ -195,15 +195,14 @@ const onIconError = () => { iconFailed.value = true }
               v-if="isOfficial"
               class="flex-shrink-0 rounded font-medium flex items-center gap-1"
               style="
-                padding: 1px 6px;
-                font-size: 10px;
-                background: linear-gradient(135deg, rgba(234, 179, 8, 0.18), rgba(202, 138, 4, 0.18));
-                color: #eab308;
-                border: 1px solid rgba(234, 179, 8, 0.35);
+                padding: 0 5px;
+                font-size: 11px;
+                line-height: 18px;
+                background: var(--rc-kbd-bg);
+                color: var(--rc-text-muted);
               "
               title="官方自营认证 · 官方技术支持"
             >
-              <i class="fa fa-certificate text-[9px]"></i>
               {{ officialBadge }}
             </span>
             <span
@@ -212,12 +211,12 @@ const onIconError = () => { iconFailed.value = true }
               style="
                 padding: 2px 6px;
                 font-size: 10px;
-                background-color: rgba(239, 68, 68, 0.15);
-                color: #ef4444;
+                background-color: var(--rc-error-subtle);
+                color: var(--rc-error);
               "
               :title="revokedReason"
             >
-              [已下架]
+              已下架
             </span>
             <span
               v-else-if="hasUpdate"
@@ -259,7 +258,7 @@ const onIconError = () => { iconFailed.value = true }
           </a>
           <span
             v-else-if="isOfficial"
-            class="flex items-center justify-center rounded-full text-amber-500 opacity-80 cursor-help"
+            class="flex items-center justify-center rounded-full text-[var(--rc-warning)] opacity-80 cursor-help"
             style="width: 32px; height: 32px"
             title="官方自营认证 · 官方技术支持"
           >
@@ -301,7 +300,7 @@ const onIconError = () => { iconFailed.value = true }
           <template v-if="isRevoked">
             <button
               v-if="isInstalled"
-              class="flex items-center justify-center rounded px-2.5 py-1 text-xs text-red-500 border border-red-500 hover:bg-red-50 transition-colors"
+              class="flex items-center justify-center rounded px-2.5 py-1 text-xs text-[var(--rc-error)] border border-[var(--rc-error)] hover:bg-[var(--rc-error-subtle)] transition-colors"
               title="该插件已被官方下架，建议立即安全卸载"
               @click.stop="handleUninstall"
             >
@@ -310,7 +309,7 @@ const onIconError = () => { iconFailed.value = true }
             <button
               v-else
               class="flex items-center justify-center rounded-full transition-colors"
-              style="width: 36px; height: 36px; color: #ef4444; opacity: 0.6; cursor: not-allowed;"
+              style="width: 36px; height: 36px; color: var(--rc-error); opacity: 0.6; cursor: not-allowed;"
               disabled
               :title="revokedReason"
             >
@@ -333,7 +332,7 @@ const onIconError = () => { iconFailed.value = true }
             @click.stop="handleActionClick"
           >
             <i v-if="downloading" class="fa fa-spinner fa-spin"></i>
-            <i v-else-if="installFailed" class="fa fa-refresh" style="color: var(--color-error, #ff4d4f)"></i>
+            <i v-else-if="installFailed" class="fa fa-refresh" style="color: var(--rc-error)"></i>
             <i v-else-if="!isInstalled" class="fa fa-download"></i>
             <i v-else class="fa fa-play"></i>
           </button>

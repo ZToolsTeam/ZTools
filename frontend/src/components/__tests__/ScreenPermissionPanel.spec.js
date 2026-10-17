@@ -34,7 +34,7 @@ describe('ScreenPermissionPanel', () => {
     const sdk = {
       isElectron: () => true,
       sys: {
-        getCapability: vi.fn().mockResolvedValue({
+        getCapability: overrides.getCapability || vi.fn().mockResolvedValue({
           contractVersion: 1,
           capability: 'screen.capture',
           implementation: 'supported',
@@ -160,6 +160,37 @@ describe('ScreenPermissionPanel', () => {
     await flushPromises()
 
     expect(f.wrapper.text()).toContain('获取已授权插件失败')
+    f.wrapper.unmount()
+  })
+
+  it('[回归] macOS 系统拒绝屏幕录制时正常显示提示，模板不访问 ref 的 .value 导致整块面板渲染崩溃', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const f = fixture({
+      getCapability: vi.fn().mockResolvedValue({
+        contractVersion: 2,
+        capability: 'screen.capture',
+        implementation: 'supported',
+        authorization: 'not-requested',
+        osPermission: 'denied',
+        revision: 1,
+        target: { platform: 'macos', runtime: 'electron', arch: 'arm64' }
+      })
+    })
+    await flushPromises()
+    expect(f.wrapper.get('[data-testid="screen-permission-status"]').text()).toContain('系统已拒绝')
+    expect(f.wrapper.find('.bg-\\[var\\(--rc-warning-subtle\\)\\]').exists()).toBe(true)
+    expect(warn.mock.calls.some(args => String(args[0]).includes('Unhandled error during execution of render'))).toBe(false)
+    f.wrapper.unmount()
+    warn.mockRestore()
+  })
+
+  it('[破坏性] 主进程返回畸形权限快照时回退为错误文案与「尚未读取」，不撕裂面板', async () => {
+    const f = fixture({
+      getCapability: vi.fn().mockResolvedValue({ capability: 'screen.capture', osPermission: 'denied', revision: -1 })
+    })
+    await flushPromises()
+    expect(f.wrapper.get('[data-testid="screen-permission-status"]').text()).toContain('尚未读取')
+    expect(f.wrapper.text()).toContain('无法读取当前权限状态')
     f.wrapper.unmount()
   })
 })

@@ -34,18 +34,7 @@ export async function confirmAlert(options: ConfirmAlertOptions): Promise<boolea
     return await bridge.confirmAlert(normalized);
   }
 
-  if (typeof (globalThis as any).window !== "undefined" && typeof (globalThis as any).window.confirm === "function") {
-    const text = options.message ? `${options.title}\n\n${options.message}` : options.title;
-    const ok = (globalThis as any).window.confirm(text);
-    if (ok) {
-      options.primaryAction?.onAction?.();
-    } else {
-      options.dismissAction?.onAction?.();
-    }
-    return ok;
-  }
-
-  // 默认测试 fallback
-  options.primaryAction?.onAction?.();
-  return true;
+  // 没有宿主就无法让用户确认：按取消处理。不弹系统原生对话框，也不擅自替用户确认（多为删除、清空等危险操作）
+  options.dismissAction?.onAction?.();
+  return false;
 }

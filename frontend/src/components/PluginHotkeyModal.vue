@@ -708,7 +708,7 @@ defineExpose({ show, hide, updateMap, configuredCount })
 .recording-text {
   font-size: 12px;
   font-weight: 500;
-  color: var(--rc-accent);
+  color: var(--rc-accent-text);
   display: flex;
   align-items: center;
   gap: 6px;

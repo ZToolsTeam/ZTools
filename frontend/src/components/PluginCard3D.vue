@@ -13,7 +13,6 @@ const props = defineProps({
   updateInfo: { type: Object, default: null },
   showFavorite: { type: Boolean, default: false },
   isFavorite: { type: Boolean, default: false },
-  gradientType: { type: String, default: 'blue' }
 })
 
 const emit = defineEmits([
@@ -102,24 +101,23 @@ const handleToggleFavorite = (e) => {
   emit('toggle-favorite', pluginId)
 }
 
-const gradientClass = computed(() => `card-icon-${props.gradientType}`)
 
 // 图标优先级：远程 icon URL > 本地 localIconPath > FA 图标（公共逻辑）
 import { usePluginIcon } from '@/composables/usePluginIcon'
-import { RcSquircle, RcButton } from '@/components/raycast'
-const { pluginIcon, displayIconUrl, iconFailed, showImgOverlay, onIconLoad, onIconError } = usePluginIcon(() => props.plugin)
+import { RcSquircle, RcButton } from '@/components/base'
+const { pluginIcon, pluginGlyph, displayIconUrl, iconFailed, showImgOverlay, onIconLoad, onIconError } = usePluginIcon(() => props.plugin)
 </script>
 
 <template>
   <div class="plugin-card-3d-container">
     <div class="card-compact cursor-pointer" @click="onCardBodyClick">
       <div class="flex items-center" style="gap: var(--spacing-md)">
-        <!-- 左侧图标：Raycast Squircle 统一暗微透容器，防止粗暴满铺溢出 -->
+        <!-- 左侧图标：官方插件用品牌线性图形，第三方插件放进中性底块 -->
         <RcSquircle
+          :glyph="pluginGlyph"
           :src="displayIconUrl && !iconFailed ? displayIconUrl : ''"
           :icon="pluginIcon"
-          :size="38"
-          rounded="rounded-[10px]"
+          :size="36"
         />
 
         <!-- 中间信息 -->
@@ -132,13 +130,12 @@ const { pluginIcon, displayIconUrl, iconFailed, showImgOverlay, onIconLoad, onIc
             <!-- 官方自营金标 -->
             <span
               v-if="isOfficial"
-              class="card-badge-official text-[10px] font-medium text-amber-500 bg-amber-500/10 border border-amber-500/30 rounded px-1.5 py-0.5 flex items-center gap-1"
+              class="card-badge-official"
               title="官方自营认证 · 官方技术支持"
             >
-              <i class="fa fa-certificate text-[9px]"></i>
               {{ officialBadge }}
             </span>
-            <span v-if="isRevoked" class="card-badge-revoked text-red-500 font-bold" :title="revokedReason">[已下架]</span>
+            <span v-if="isRevoked" class="card-badge-revoked" :title="revokedReason">已下架</span>
             <span v-else-if="hasUpdate" class="card-badge-update">更新</span>
             <span v-else-if="isIncompatible" class="card-badge-incompat" :title="incompatReason">需升级</span>
           </div>
@@ -161,14 +158,6 @@ const { pluginIcon, displayIconUrl, iconFailed, showImgOverlay, onIconLoad, onIc
           >
             <i class="fa fa-github"></i>
           </a>
-          <span
-            v-else-if="isOfficial"
-            class="card-icon-btn opacity-80 cursor-help"
-            style="color: #eab308;"
-            title="官方自营认证 · 官方技术支持"
-          >
-            <i class="fa fa-shield"></i>
-          </span>
 
           <button
             v-if="showFavorite"
@@ -208,7 +197,7 @@ const { pluginIcon, displayIconUrl, iconFailed, showImgOverlay, onIconLoad, onIc
               variant="ghost"
               :disabled="true"
               icon="fa-ban"
-              style="opacity: 0.6; color: var(--color-error, #ff4d4f)"
+              style="opacity: 0.6; color: var(--rc-error)"
               :title="revokedReason"
             >
               已下架
@@ -236,7 +225,6 @@ const { pluginIcon, displayIconUrl, iconFailed, showImgOverlay, onIconLoad, onIc
             v-else-if="isInstalled"
             size="xs"
             variant="ghost"
-            icon="fa-play"
             @click.stop="handleActionClick"
           >
             打开
@@ -261,26 +249,23 @@ const { pluginIcon, displayIconUrl, iconFailed, showImgOverlay, onIconLoad, onIc
   min-width: 0;
 }
 
-/* 紧凑卡片 - Raycast Bento 风格 */
+/* 紧凑卡片 */
 .card-compact {
   background: var(--rc-surface);
   border: 1px solid var(--rc-border);
   border-radius: var(--rc-radius-lg, 12px);
   padding: 12px 14px;
-  transition: all 0.15s cubic-bezier(0.16, 1, 0.3, 1);
+  transition: border-color 0.15s ease, background-color 0.15s ease;
 }
 
 .card-compact:hover {
-  background: var(--rc-surface-subtle);
   border-color: var(--rc-border-highlight);
-  transform: translateY(-1px);
-  box-shadow: var(--rc-shadow-md);
 }
 
 /* 标题 */
 .card-title {
-  font-size: 13px;
-  font-weight: 600;
+  font-size: 14px;
+  font-weight: 500;
   color: var(--rc-text-primary);
   white-space: nowrap;
   overflow: hidden;
@@ -294,9 +279,19 @@ const { pluginIcon, displayIconUrl, iconFailed, showImgOverlay, onIconLoad, onIc
   border-radius: 4px;
   font-size: 10px;
   font-weight: 600;
-  background: rgba(239, 68, 68, 0.15);
-  color: #ef4444;
-  border: 1px solid rgba(239, 68, 68, 0.3);
+  background: var(--rc-error-subtle);
+  color: var(--rc-error);
+}
+
+/* 官方标签：中性小字，不用金色抢视线 */
+.card-badge-official {
+  flex-shrink: 0;
+  padding: 0 5px;
+  border-radius: 4px;
+  font-size: 11px;
+  line-height: 18px;
+  color: var(--rc-text-muted);
+  background: var(--rc-kbd-bg);
 }
 
 /* 更新标签 */
@@ -327,7 +322,7 @@ const { pluginIcon, displayIconUrl, iconFailed, showImgOverlay, onIconLoad, onIc
 /* 描述 */
 .card-desc {
   font-size: 12px;
-  color: var(--rc-text-secondary);
+  color: var(--rc-text-muted);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -366,7 +361,7 @@ const { pluginIcon, displayIconUrl, iconFailed, showImgOverlay, onIconLoad, onIc
 }
 
 .card-icon-btn.update {
-  color: var(--rc-accent);
+  color: var(--rc-accent-text);
 }
 
 </style>

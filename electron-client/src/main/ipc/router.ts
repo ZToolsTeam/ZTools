@@ -260,6 +260,14 @@ const credentialV1Methods = new Set([
 ])
 
 /** Only DLL-call failures log request-derived identifiers; credential payloads are never inspected. */
+/**
+ * 平台能力边界：处理函数以 NOT_SUPPORTED 明确声明当前平台不提供该能力（例如 macOS 尚未开放更新安装链）。
+ * 这类失败是可预期的，路由层只记 info，不打印堆栈；其余失败（包括普通 Error）照常按故障记录。
+ */
+export function isIpcCapabilityBoundary(error: unknown): boolean {
+  return error instanceof ZToolsError && error.code === errorCodes.notSupported
+}
+
 export function getIpcFailureLogIdentifierFields(
   request: ZToolsRequest | undefined
 ): { readonly dllId?: string; readonly functionName?: string } {
@@ -2318,7 +2326,12 @@ export class IpcRouter {
       )
       return { messageId: request.messageId, success: true, data }
     } catch (error) {
-      console.error('[IPC ROUTER ERROR DETAILS]', request?.method, error)
+      // 平台能力边界（如 macOS 尚未开放的更新安装链）是明确声明的 NOT_SUPPORTED，不是宿主故障：
+      // 不打印堆栈与 warn，只记一条 info；返回给调用方的错误与诊断记录保持不变
+      const capabilityBoundary = isIpcCapabilityBoundary(error)
+      if (!capabilityBoundary) {
+        console.error('[IPC ROUTER ERROR DETAILS]', request?.method, error)
+      }
       const publicError = toPublicError(error)
       caller ??= this.registry.get(event.sender.id)
       if (request && caller) {
@@ -2341,7 +2354,13 @@ export class IpcRouter {
       // Preserve the wire error for compatibility without logging a host failure.
       const missingDatabaseKey = publicError.code === errorCodes.databaseKeyNotFound &&
         (request?.method === 'db_get' || request?.method === 'db_get_secure')
-      if (!missingDatabaseKey) {
+      if (capabilityBoundary) {
+        console.info('IPC capability not supported on this platform', {
+          method: request?.method ?? 'invalid',
+          callerType: caller?.type ?? 'unregistered',
+          errorMessage: publicError.message
+        })
+      } else if (!missingDatabaseKey) {
         console.warn('IPC request failed', {
           senderWebContentsId: event.sender.id,
           messageId: request?.messageId,

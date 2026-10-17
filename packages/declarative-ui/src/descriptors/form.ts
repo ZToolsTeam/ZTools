@@ -24,6 +24,7 @@ export interface FormComponent {
   Checkbox: (props: FormCheckboxProps) => ViewDescriptor<FormCheckboxProps>;
   Dropdown: FormDropdownComponent;
   Description: (props: FormDescriptionProps) => ViewDescriptor<FormDescriptionProps>;
+  Separator: (props?: Record<string, any>) => ViewDescriptor<Record<string, any>>;
 }
 
 const DropdownComponent: any = function FormDropdown(
@@ -80,3 +81,10 @@ Form.Description = function FormDescription(
 ): ViewDescriptor<FormDescriptionProps> {
   return createDescriptor("Form.Description", props);
 };
+
+Form.Separator = function FormSeparator(
+  props?: Record<string, any>
+): ViewDescriptor<Record<string, any>> {
+  return createDescriptor("Form.Separator", props);
+};
+

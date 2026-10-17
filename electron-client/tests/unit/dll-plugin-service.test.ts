@@ -16,6 +16,11 @@ import type { RuntimeCapabilityLease } from '../../src/main/services/runtime-cap
 import type { PluginManifest, PluginManifestRuntimeMetadata } from '../../src/main/services/plugin-install-service.js'
 import { NativeMediaPathPolicy } from '../../src/main/services/native-media-policy.js'
 
+// 这些用例依赖 Windows 路径语义（C:\\ / E:\\）或 Windows 宿主能力（DLL、进程启动、更新安装链、本地 .exe 软件），
+// 在其他平台上功能代码按设计会拒绝执行，因此只在 Windows 宿主运行；Windows CI 上照常覆盖。
+const windowsOnly = { skip: process.platform === 'win32' ? false : '依赖 Windows 路径或宿主能力，仅在 Windows 上运行' }
+
+
 const standardManifest: PluginManifest = {
   id: 'clipboard-manager',
   name: 'Clipboard Manager',
@@ -569,7 +574,7 @@ test('screen-capture callback DLL task retains its lease through a late terminal
   await f.dllPlugins.stop()
 })
 
-test('ordinary and administrator DLL calls use separate trusted transports', async () => {
+test('ordinary and administrator DLL calls use separate trusted transports', windowsOnly, async () => {
   const { dllPlugins, native, service } = createHarness()
   assert.deepEqual(await dllPlugins.call({
     plugin: 'ClipboardManagerPlugin',
@@ -603,7 +608,7 @@ test('ordinary and administrator DLL calls use separate trusted transports', asy
   dllPlugins.stop()
 })
 
-test('ordinary DLL calls carry both the Main-owned identity and IPC cancellation signal', async () => {
+test('ordinary DLL calls carry both the Main-owned identity and IPC cancellation signal', windowsOnly, async () => {
   const { dllPlugins, native } = createHarness()
   const controller = new AbortController()
   await dllPlugins.call({ plugin: 'ClipboardManagerPlugin', func: 'Echo', params: {} }, clipboardCaller, controller.signal)
@@ -614,7 +619,7 @@ test('ordinary DLL calls carry both the Main-owned identity and IPC cancellation
   await dllPlugins.stop()
 })
 
-test('unload drains and clears active tasks before taking the maintenance lock', async () => {
+test('unload drains and clears active tasks before taking the maintenance lock', windowsOnly, async () => {
   const { dllPlugins, native } = createHarness()
   await dllPlugins.callAsync({ plugin: 'ClipboardManagerPlugin', func: 'Watch', params: {} }, clipboardCaller)
   native.queryStatus = 'completed'
@@ -628,7 +633,7 @@ test('unload drains and clears active tasks before taking the maintenance lock',
   await dllPlugins.stop()
 })
 
-test('an async task with a lost start response remains reserved and sends pending cancellation after a Host event', async () => {
+test('an async task with a lost start response remains reserved and sends pending cancellation after a Host event', windowsOnly, async () => {
   const { dllPlugins, native } = createHarness()
   native.asyncStartError = new Error('start response lost')
   const started = await dllPlugins.callAsync({
@@ -664,7 +669,7 @@ test('an async task with a lost start response remains reserved and sends pendin
   await dllPlugins.stop()
 })
 
-test('unload refuses to forget a task whose stopped state remains unknown', async () => {
+test('unload refuses to forget a task whose stopped state remains unknown', windowsOnly, async () => {
   const { dllPlugins, native } = createHarness(undefined, {
     taskQuiesceTimeoutMs: 80,
     taskQuiescePollIntervalMs: 10
@@ -687,7 +692,7 @@ test('unload refuses to forget a task whose stopped state remains unknown', asyn
   await dllPlugins.stop()
 })
 
-test('unload has a deadline and keeps the maintenance lock until a late host response settles', async () => {
+test('unload has a deadline and keeps the maintenance lock until a late host response settles', windowsOnly, async () => {
   const { dllPlugins, native } = createHarness(undefined, { taskQuiesceTimeoutMs: 70 })
   let releaseUnload!: () => void
   native.unloadGate = new Promise<void>((resolve) => { releaseUnload = resolve })
@@ -705,7 +710,7 @@ test('unload has a deadline and keeps the maintenance lock until a late host res
   await dllPlugins.stop()
 })
 
-test('plugin callers cannot address another plugin DLL', async () => {
+test('plugin callers cannot address another plugin DLL', windowsOnly, async () => {
   const { dllPlugins, native, service } = createHarness()
   await assert.rejects(
     dllPlugins.call({
@@ -720,7 +725,7 @@ test('plugin callers cannot address another plugin DLL', async () => {
   dllPlugins.stop()
 })
 
-test('DLL lookup errors do not echo caller input or manifest identifiers', async () => {
+test('DLL lookup errors do not echo caller input or manifest identifiers', windowsOnly, async () => {
   const manifests = new FakeManifestSource()
   const native = new FakeNativeHost()
   const service = new FakeServiceClient()
@@ -782,7 +787,7 @@ test('missing DLL declaration errors do not echo manifest identifiers', async ()
   dllPlugins.stop()
 })
 
-test('administrator DLL tasks use Service and wait for terminal status after cancellation', async () => {
+test('administrator DLL tasks use Service and wait for terminal status after cancellation', windowsOnly, async () => {
   const { dllPlugins, native, service } = createHarness()
   const started = await dllPlugins.callAsync({
     plugin: 'ContextMenuPlugin',
@@ -809,7 +814,7 @@ test('administrator DLL tasks use Service and wait for terminal status after can
   await dllPlugins.stop()
 })
 
-test('service diagnostics details are not exposed through administrator DLL errors', async () => {
+test('service diagnostics details are not exposed through administrator DLL errors', windowsOnly, async () => {
   const { dllPlugins, service } = createHarness()
   service.diagnostics.state = 'closed'
   service.diagnostics.lastErrorMessage = 'socket failed at /Users/alice/private/secret-install-path'
@@ -828,7 +833,7 @@ test('service diagnostics details are not exposed through administrator DLL erro
   dllPlugins.stop()
 })
 
-test('callback task ids are translated and events stay scoped to the owning plugin', async () => {
+test('callback task ids are translated and events stay scoped to the owning plugin', windowsOnly, async () => {
   const { dllPlugins, native, events } = createHarness()
   assert.deepEqual(await dllPlugins.callWithCallback({
     plugin: 'ClipboardManagerPlugin',
@@ -896,7 +901,7 @@ test('callback task ids are translated and events stay scoped to the owning plug
   dllPlugins.stop()
 })
 
-test('callback progress does not complete tasks and accepted cancellation waits for terminal confirmation', async () => {
+test('callback progress does not complete tasks and accepted cancellation waits for terminal confirmation', windowsOnly, async () => {
   const { dllPlugins, native } = createHarness()
   const externalTaskId = 'callback_lifecycle_1'
   native.queryProgress = 0
@@ -1013,7 +1018,7 @@ test('callback progress does not complete tasks and accepted cancellation waits 
   await dllPlugins.stop()
 })
 
-test('native callback events arriving before the task id response are replayed through the external id mapping', async () => {
+test('native callback events arriving before the task id response are replayed through the external id mapping', windowsOnly, async () => {
   const { dllPlugins, native, events } = createHarness()
   const externalTaskId = 'callback_early_1'
   native.callbackStartHook = (taskId) => {
@@ -1054,7 +1059,7 @@ test('native callback events arriving before the task id response are replayed t
   await dllPlugins.stop()
 })
 
-test('callback start ack timeout keeps the external/native mapping until late acknowledgement', async () => {
+test('callback start ack timeout keeps the external/native mapping until late acknowledgement', windowsOnly, async () => {
   const { dllPlugins, native } = createHarness(undefined, { taskStartAckTimeoutMs: 20 })
   let releaseStart!: () => void
   native.callbackStartGate = new Promise<void>((resolve) => { releaseStart = resolve })
@@ -1109,7 +1114,7 @@ test('callback start ack timeout keeps the external/native mapping until late ac
   await dllPlugins.stop()
 })
 
-test('late definitive no-start releases only its own callback mapping and notifies the SDK', async () => {
+test('late definitive no-start releases only its own callback mapping and notifies the SDK', windowsOnly, async () => {
   const { dllPlugins, native, events } = createHarness(undefined, { taskStartAckTimeoutMs: 15 })
   let releaseStart!: () => void
   native.callbackStartGate = new Promise<void>((resolve) => { releaseStart = resolve })
@@ -1147,7 +1152,7 @@ test('late definitive no-start releases only its own callback mapping and notifi
   await dllPlugins.stop()
 })
 
-test('definitive no-start before the acknowledgement deadline returns a typed failure without retaining a task', async () => {
+test('definitive no-start before the acknowledgement deadline returns a typed failure without retaining a task', windowsOnly, async () => {
   const { dllPlugins, native } = createHarness()
   native.callbackStartError = Object.assign(new Error('host rejected start'), { code: 'INVALID_REQUEST' })
 
@@ -1168,7 +1173,7 @@ test('definitive no-start before the acknowledgement deadline returns a typed fa
   await dllPlugins.stop()
 })
 
-test('owner close records cancellation intent for an ack-unknown callback and cancels it once when ack arrives', async () => {
+test('owner close records cancellation intent for an ack-unknown callback and cancels it once when ack arrives', windowsOnly, async () => {
   const registry = new FakeWindowRegistry()
   const { dllPlugins, native } = createHarness(registry, {
     taskStartAckTimeoutMs: 15,
@@ -1197,7 +1202,7 @@ test('owner close records cancellation intent for an ack-unknown callback and ca
   await dllPlugins.stop()
 })
 
-test('bounded service stop retains an unresolved start mapping and listener until Host exit confirms it', async () => {
+test('bounded service stop retains an unresolved start mapping and listener until Host exit confirms it', windowsOnly, async () => {
   const { dllPlugins, native, events } = createHarness(undefined, {
     taskStartAckTimeoutMs: 10,
     taskQuiesceTimeoutMs: 80,
@@ -1233,7 +1238,7 @@ test('bounded service stop retains an unresolved start mapping and listener unti
   releaseStart()
 })
 
-test('destroying one plugin window cancels only its tasks and stop drains the remaining task', async () => {
+test('destroying one plugin window cancels only its tasks and stop drains the remaining task', windowsOnly, async () => {
   const registry = new FakeWindowRegistry()
   const { dllPlugins, native } = createHarness(registry)
   const secondCaller: CallerIdentity = {
@@ -1275,7 +1280,7 @@ test('destroying one plugin window cancels only its tasks and stop drains the re
   assert.equal(native.calls.filter((call) => call.method === 'clearDllTask').length, 2)
 })
 
-test('window removal during callback startup still cancels and clears after native id arrives', async () => {
+test('window removal during callback startup still cancels and clears after native id arrives', windowsOnly, async () => {
   const registry = new FakeWindowRegistry()
   const { dllPlugins, native } = createHarness(registry)
   let signalEntered!: () => void
@@ -1307,7 +1312,7 @@ test('window removal during callback startup still cancels and clears after nati
   await dllPlugins.stop()
 })
 
-test('window close retries a busy terminal clear when the native callback call later returns', async () => {
+test('window close retries a busy terminal clear when the native callback call later returns', windowsOnly, async () => {
   const registry = new FakeWindowRegistry()
   const { dllPlugins, native } = createHarness(registry)
   await dllPlugins.callWithCallback({
@@ -1348,7 +1353,7 @@ test('window close retries a busy terminal clear when the native callback call l
   await dllPlugins.stop()
 })
 
-test('window removal while resolving the manifest prevents a detached caller from starting a native task', async () => {
+test('window removal while resolving the manifest prevents a detached caller from starting a native task', windowsOnly, async () => {
   const registry = new FakeWindowRegistry()
   const manifests = new FakeManifestSource()
   const native = new FakeNativeHost()
@@ -1378,7 +1383,7 @@ test('window removal while resolving the manifest prevents a detached caller fro
   await dllPlugins.stop()
 })
 
-test('task owner permission checks still reject a different plugin', async () => {
+test('task owner permission checks still reject a different plugin', windowsOnly, async () => {
   const { dllPlugins, native } = createHarness()
   await dllPlugins.callWithCallback({
     plugin: 'ClipboardManagerPlugin',
@@ -1406,7 +1411,7 @@ test('task owner permission checks still reject a different plugin', async () =>
   await dllPlugins.stop()
 })
 
-test('same-plugin windows can reuse an external task id without sharing status, events, or close cleanup', async () => {
+test('same-plugin windows can reuse an external task id without sharing status, events, or close cleanup', windowsOnly, async () => {
   const registry = new FakeWindowRegistry()
   const { dllPlugins, native, events } = createHarness(registry)
   const secondCaller: CallerIdentity = {
@@ -1491,7 +1496,7 @@ test('same-plugin windows can reuse an external task id without sharing status, 
   ])
 })
 
-test('same-plugin windows cannot query or cancel each other tasks and clear remains non-enumerable', async () => {
+test('same-plugin windows cannot query or cancel each other tasks and clear remains non-enumerable', windowsOnly, async () => {
   const { dllPlugins, native } = createHarness()
   const secondCaller: CallerIdentity = {
     ...clipboardCaller,
@@ -1547,7 +1552,7 @@ test('same-plugin windows cannot query or cancel each other tasks and clear rema
   await dllPlugins.stop()
 })
 
-test('a new plugin generation on the same WebContents id is independent of the removed owner cleanup', async () => {
+test('a new plugin generation on the same WebContents id is independent of the removed owner cleanup', windowsOnly, async () => {
   const registry = new FakeWindowRegistry()
   const { dllPlugins, native } = createHarness(registry, {
     taskQuiesceTimeoutMs: 300,
@@ -1596,7 +1601,7 @@ test('a new plugin generation on the same WebContents id is independent of the r
   await dllPlugins.stop()
 })
 
-test('a failed native callback start releases its external task id reservation', async () => {
+test('a failed native callback start releases its external task id reservation', windowsOnly, async () => {
   const { dllPlugins, native } = createHarness()
   native.callbackStartError = new Error('native start failed')
   const params = {
@@ -1627,7 +1632,7 @@ test('a failed native callback start releases its external task id reservation',
   await dllPlugins.stop()
 })
 
-test('query terminal status can be enriched by the matching late result without changing status', async () => {
+test('query terminal status can be enriched by the matching late result without changing status', windowsOnly, async () => {
   const { dllPlugins, native, events } = createHarness()
   await dllPlugins.callWithCallback({
     plugin: 'ClipboardManagerPlugin',
@@ -1697,7 +1702,7 @@ test('query terminal status can be enriched by the matching late result without 
   await dllPlugins.stop()
 })
 
-test('error and cancellation query results retain terminal rows without changing the first terminal status', async () => {
+test('error and cancellation query results retain terminal rows without changing the first terminal status', windowsOnly, async () => {
   const { dllPlugins, native, events } = createHarness()
   await dllPlugins.callWithCallback({
     plugin: 'ClipboardManagerPlugin',
@@ -1833,7 +1838,7 @@ test('error and cancellation query results retain terminal rows without changing
   await dllPlugins.stop()
 })
 
-test('legacy untyped callback result remains compatible while explicit unknown type stays running', async () => {
+test('legacy untyped callback result remains compatible while explicit unknown type stays running', windowsOnly, async () => {
   const { dllPlugins, native } = createHarness()
   await dllPlugins.callWithCallback({
     plugin: 'ClipboardManagerPlugin',
@@ -1884,7 +1889,7 @@ test('legacy untyped callback result remains compatible while explicit unknown t
   await dllPlugins.stop()
 })
 
-test('failed cancel and clear drain yields to native events and retains unconfirmed mappings', async () => {
+test('failed cancel and clear drain yields to native events and retains unconfirmed mappings', windowsOnly, async () => {
   const { dllPlugins, native, events } = createHarness(undefined, {
     taskQuiesceTimeoutMs: 240,
     taskQuiescePollIntervalMs: 20
@@ -1923,7 +1928,7 @@ test('failed cancel and clear drain yields to native events and retains unconfir
   await new Promise<void>((resolve) => setTimeout(resolve, 60))
 })
 
-test('native rejection created at the stop deadline remains handled and retains its mapping', async (context) => {
+test('native rejection created at the stop deadline remains handled and retains its mapping', windowsOnly, async (context) => {
   const { dllPlugins, native } = createHarness(undefined, { taskQuiesceTimeoutMs: 20 })
   await dllPlugins.callWithCallback({
     plugin: 'ClipboardManagerPlugin', func: 'Watch', params: { taskId: 'expired_clear_rejection' }
@@ -1949,7 +1954,7 @@ test('native rejection created at the stop deadline remains handled and retains 
   }
 })
 
-test('media calls across all native transports pass canonical caller-authorized paths', async () => {
+test('media calls across all native transports pass canonical caller-authorized paths', windowsOnly, async () => {
   const manifests = new FakeManifestSource()
   const mediaManifest: PluginManifest = {
     ...standardManifest,
@@ -2048,7 +2053,7 @@ test('media calls across all native transports pass canonical caller-authorized 
   await dllPlugins.stop()
 })
 
-test('watermark presets are caller-scoped DB data and callback save never reaches DLL CWD', async () => {
+test('watermark presets are caller-scoped DB data and callback save never reaches DLL CWD', windowsOnly, async () => {
   const manifests = new FakeManifestSource()
   const mediaManifest: PluginManifest = {
     ...standardManifest,
@@ -2182,7 +2187,7 @@ test('watermark presets are caller-scoped DB data and callback save never reache
   await dllPlugins.stop()
 })
 
-test('closing a caller during path authorization prevents all native call modes from dispatching', async () => {
+test('closing a caller during path authorization prevents all native call modes from dispatching', windowsOnly, async () => {
   for (const mode of ['call', 'async', 'callback'] as const) {
     const manifests = new FakeManifestSource()
     const mediaManifest: PluginManifest = {
@@ -2245,7 +2250,7 @@ test('closing a caller during path authorization prevents all native call modes 
   }
 })
 
-test('native identity is Main-owned, stable for an instance, and renewed after owner removal', async () => {
+test('native identity is Main-owned, stable for an instance, and renewed after owner removal', windowsOnly, async () => {
   const registry = new FakeWindowRegistry()
   const { dllPlugins, native } = createHarness(registry)
   const params = { plugin: 'ClipboardManagerPlugin', func: 'Echo', params: { ownerToken: '7', generation: '8' } }
@@ -2273,7 +2278,7 @@ test('native identity is Main-owned, stable for an instance, and renewed after o
   assert.deepEqual(native.releasedOwners, [contexts[0], renewed])
 })
 
-test('query cancel and clear retain the original task native owner context', async () => {
+test('query cancel and clear retain the original task native owner context', windowsOnly, async () => {
   const { dllPlugins, native } = createHarness()
   const started = await dllPlugins.callAsync({ plugin: 'ClipboardManagerPlugin', func: 'Watch', params: {} }, clipboardCaller)
   const taskId = String(started.taskId)
@@ -2330,7 +2335,7 @@ test('Mac rejects legacy and administrator native manifests without native fallb
   }
 })
 
-test('ordinary late ACK is retained and ordinary no-start remains queryable without native clear', async () => {
+test('ordinary late ACK is retained and ordinary no-start remains queryable without native clear', windowsOnly, async () => {
   const { dllPlugins, native, events } = createHarness(undefined, { taskStartAckTimeoutMs: 10 })
   let release!: () => void
   native.asyncStartGate = new Promise<void>(resolve => { release = resolve })
@@ -2352,7 +2357,7 @@ test('ordinary late ACK is retained and ordinary no-start remains queryable with
   release(); await dllPlugins.stop()
 })
 
-test('ordinary immediate no-start returns typed failure and no native task cleanup', async () => {
+test('ordinary immediate no-start returns typed failure and no native task cleanup', windowsOnly, async () => {
   const { dllPlugins, native } = createHarness()
   native.asyncDefinitiveStartError = Object.assign(new Error('before worker'), { code: 'INVALID_REQUEST' })
   const result = await dllPlugins.callAsync({ plugin: 'ClipboardManagerPlugin', func: 'Watch', params: {} }, clipboardCaller)
@@ -2362,7 +2367,7 @@ test('ordinary immediate no-start returns typed failure and no native task clean
   assert.equal(native.calls.filter(call => call.method === 'clearDllTask' || call.method === 'cancelDllTask').length, 0)
 })
 
-test('ordinary event before ACK keeps its completed state after contradictory no-start', async () => {
+test('ordinary event before ACK keeps its completed state after contradictory no-start', windowsOnly, async () => {
   const { dllPlugins, native } = createHarness(undefined, { taskStartAckTimeoutMs: 10 })
   native.asyncStartError = new Error('lost acknowledgement')
   native.asyncStartHook = taskId => native.emit({ type: 'async-return', pluginId: standardManifest.id,
@@ -2375,7 +2380,7 @@ test('ordinary event before ACK keeps its completed state after contradictory no
   await dllPlugins.clearCallbackTask({ taskId: String(result.taskId) }, clipboardCaller); await dllPlugins.stop()
 })
 
-test('ordinary owner close before late ACK cancels once then clears only after terminal evidence', async () => {
+test('ordinary owner close before late ACK cancels once then clears only after terminal evidence', windowsOnly, async () => {
   const registry = new FakeWindowRegistry()
   const { dllPlugins, native } = createHarness(registry, { taskStartAckTimeoutMs: 10,
     taskQuiesceTimeoutMs: 35, taskQuiescePollIntervalMs: 5 })
@@ -2392,7 +2397,7 @@ test('ordinary owner close before late ACK cancels once then clears only after t
   await dllPlugins.stop()
 })
 
-test('ordinary Host exit closes unknown start without claiming unexecuted work or issuing native clear', async () => {
+test('ordinary Host exit closes unknown start without claiming unexecuted work or issuing native clear', windowsOnly, async () => {
   const { dllPlugins, native } = createHarness(undefined, { taskStartAckTimeoutMs: 10 })
   native.asyncStartError = new Error('lost acknowledgement')
   const started = await dllPlugins.callAsync({ plugin: 'ClipboardManagerPlugin', func: 'Watch', params: {} }, clipboardCaller)

@@ -3,281 +3,210 @@
     class="launcher-window-root flex flex-col h-screen w-screen overflow-hidden p-3 select-none"
     @keydown="handleKeyDown"
   >
-    <!-- 极客悬浮窗卡片主体 (Mica / Acrylic 亚克力毛玻璃质感) -->
-    <div
-      class="flex-1 flex flex-col rounded-2xl overflow-hidden border shadow-2xl transition-all duration-200"
-      :class="[
-        isDark
-          ? 'bg-slate-900/90 border-white/15 shadow-black/80 text-slate-100 backdrop-blur-2xl'
-          : 'bg-white/95 border-slate-200/90 shadow-slate-900/25 text-slate-800 backdrop-blur-2xl'
-      ]"
-    >
-      <!-- 声明式运行时形态 (当激活官方标杆扩展时直接秒开) -->
+    <!-- 悬浮搜索条主体：克制的中性面板，橙色只用于标志、选中标记与匹配高亮 -->
+    <div class="launcher-panel">
+      <!-- 声明式运行时形态（激活官方扩展或第三方 V2 声明式扩展时直接在悬浮条内打开） -->
       <template v-if="activeDeclarativePlugin && activeDeclarativePlugin.command">
         <div class="flex-1 flex flex-col overflow-hidden p-2">
           <DeclarativeView
+            ref="declarativeViewRef"
+            :key="`${activeDeclarativePlugin.pluginId}:${activeDeclarativePlugin.featureCode || ''}`"
             :rootComponent="activeDeclarativePlugin.command"
             @exit="exitDeclarative"
           />
         </div>
       </template>
 
-      <!-- 常规悬浮搜索与候选条目流 -->
+      <!-- 动态加载中或加载异常兜底态 -->
+      <template v-else-if="loadingDeclarative || declarativeLoadError">
+        <div class="launcher-empty flex-1">
+          <template v-if="loadingDeclarative">
+            <p class="launcher-empty-title">正在加载声明式扩展...</p>
+            <p class="launcher-empty-desc">按 Esc 可随时取消并返回搜索</p>
+          </template>
+          <template v-else>
+            <p class="launcher-empty-title">无法打开该扩展</p>
+            <p class="launcher-empty-desc">{{ declarativeLoadError }}</p>
+            <button type="button" class="launcher-primary-btn" @click="exitDeclarative">
+              返回搜索
+              <ShortcutKeys combo="Escape" tone="onAccent" />
+            </button>
+          </template>
+        </div>
+      </template>
+
       <template v-else>
-        <!-- 1. 顶部大号极简搜索栏 -->
-        <div
-          class="flex items-center px-4 py-3.5 border-b gap-3"
-          :class="[isDark ? 'border-white/10 bg-white/[0.02]' : 'border-slate-100 bg-slate-50/60']"
-        >
-        <!-- 搜索图标 -->
-        <svg
-          class="w-5 h-5 flex-shrink-0"
-          :class="[isDark ? 'text-sky-400' : 'text-sky-600']"
-          viewBox="0 0 24 24"
-          fill="none"
-          stroke="currentColor"
-          stroke-width="2.2"
-          stroke-linecap="round"
-          stroke-linejoin="round"
-        >
-          <circle cx="11" cy="11" r="8" />
-          <line x1="21" y1="21" x2="16.65" y2="16.65" />
-        </svg>
-
-        <!-- 搜索输入框 -->
-        <input
-          ref="inputRef"
-          v-model="query"
-          type="text"
-          placeholder="搜索插件、工具与命令... (↑↓ 选择，Enter 启动)"
-          class="flex-1 bg-transparent text-base font-normal outline-none placeholder:text-slate-400 transition-all"
-          :class="[isDark ? 'text-white' : 'text-slate-900']"
-          autocomplete="off"
-          spellcheck="false"
-          @input="onQueryChange"
-        />
-
-        <!-- 清空按钮 -->
-        <button
-          v-if="query"
-          class="p-1 rounded-full text-slate-400 hover:text-slate-200 hover:bg-white/10 transition-colors"
-          title="清空 (Esc)"
-          @click="clearQuery"
-        >
-          <svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-            <line x1="18" y1="6" x2="6" y2="18" />
-            <line x1="6" y1="6" x2="18" y2="18" />
-          </svg>
-        </button>
-
-        <!-- 安全感回流通道：一键展开完整工作台 -->
-        <button
-          class="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-all border shadow-sm cursor-pointer ml-1"
-          :class="[
-            isDark
-              ? 'bg-white/10 hover:bg-white/20 text-slate-200 border-white/10'
-              : 'bg-slate-100 hover:bg-slate-200 text-slate-700 border-slate-200'
-          ]"
-          title="展开为完整应用中心大窗口 (Ctrl+M)"
-          @click="expandToDashboard"
-        >
-          <svg class="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-            <polyline points="15 3 21 3 21 9" />
-            <polyline points="9 21 3 21 3 15" />
-            <line x1="21" y1="3" x2="14" y2="10" />
-            <line x1="3" y1="21" x2="10" y2="14" />
-          </svg>
-          <span>展开工作台</span>
-          <kbd class="px-1 py-0.2 rounded text-[10px] font-mono opacity-70 bg-black/20">Ctrl+M</kbd>
-        </button>
-
-        <!-- 关闭/隐藏工具条 -->
-        <button
-          class="p-1.5 rounded-lg text-slate-400 hover:text-red-400 hover:bg-white/10 transition-colors cursor-pointer"
-          title="关闭工具条 (Esc)"
-          @click="hideLauncher"
-        >
-          <svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-            <line x1="18" y1="6" x2="6" y2="18" />
-            <line x1="6" y1="6" x2="18" y2="18" />
-          </svg>
-        </button>
-      </div>
-
-      <!-- 2. 中间候选列表与智能匹配 -->
-      <div
-        ref="listContainerRef"
-        class="flex-1 overflow-y-auto custom-scrollbar p-2 space-y-1 focus:outline-none"
-        tabindex="-1"
-      >
-        <template v-if="filteredItems.length > 0">
-          <div
-            v-for="(item, index) in filteredItems"
-            :key="item.key || item.pluginId || index"
-            :ref="el => registerItemEl(index, el)"
-            class="flex items-center justify-between px-3.5 py-2.5 rounded-xl cursor-pointer transition-all duration-100"
-            :class="[
-              activeIndex === index
-                ? isDark
-                  ? 'bg-sky-500/20 text-white font-medium border border-sky-400/30 shadow-sm'
-                  : 'bg-sky-50 text-sky-950 font-medium border border-sky-200 shadow-sm'
-                : isDark
-                  ? 'text-slate-300 hover:bg-white/5 border border-transparent'
-                  : 'text-slate-700 hover:bg-slate-100/70 border border-transparent'
-            ]"
-            @mouseenter="activeIndex = index"
-            @click="executeItem(item)"
+        <!-- 1. 搜索栏 -->
+        <div class="launcher-head">
+          <BrandMark :size="22" />
+          <label for="launcherQuery" class="sr-only">搜索</label>
+          <input
+            id="launcherQuery"
+            ref="inputRef"
+            v-model="query"
+            type="text"
+            placeholder="搜索插件、命令与文件"
+            class="launcher-input"
+            autocomplete="off"
+            spellcheck="false"
+            @input="onQueryChange"
+          />
+          <button
+            v-if="query"
+            type="button"
+            class="launcher-icon-btn"
+            title="清空"
+            aria-label="清空"
+            @click="clearQuery"
           >
-            <!-- 左侧图标与文本 (专业精美图标系统，拒绝粗糙单字) -->
-            <div class="flex items-center gap-3 min-w-0 flex-1">
-              <!-- 渐变色 Squircle 图标容器 -->
-              <div
-                class="w-8 h-8 rounded-lg flex items-center justify-center text-white text-sm flex-shrink-0 shadow-sm"
-                :style="{ background: item.iconGradient || 'linear-gradient(135deg, #0ea5e9, #38bdf8)' }"
-              >
-                <!-- 若有图片 URL -->
-                <img
-                  v-if="item.icon && (item.icon.startsWith('http') || item.icon.startsWith('data:') || item.icon.startsWith('ztools:'))"
-                  :src="item.icon"
-                  class="w-5 h-5 object-contain rounded"
-                  alt=""
-                />
-                <!-- 否则使用专业的 FontAwesome 矢量图标 -->
-                <i v-else :class="['fa', item.faIcon || 'fa-cube']"></i>
-              </div>
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true">
+              <path d="M6 6l12 12M18 6 6 18" />
+            </svg>
+          </button>
+          <button
+            type="button"
+            class="launcher-workbench-btn"
+            :title="`展开为工作台 ${workbenchHint}`"
+            @click="expandToDashboard()"
+          >
+            工作台
+            <ShortcutKeys combo="Ctrl+M" />
+          </button>
+        </div>
+        <div class="launcher-hairline" aria-hidden="true"></div>
 
-              <!-- 标题与副标题 -->
-              <div class="flex items-baseline gap-2 min-w-0">
-                <span class="truncate text-sm font-medium">{{ item.name || item.title }}</span>
-                <span
-                  v-if="item.description || item.subtitle"
-                  class="text-xs truncate max-w-[340px]"
-                  :class="[isDark ? 'text-slate-400' : 'text-slate-500']"
-                >
+        <!-- 2. 候选结果 -->
+        <div
+          ref="listContainerRef"
+          class="launcher-list custom-scrollbar"
+          tabindex="-1"
+        >
+          <template v-if="filteredItems.length > 0">
+            <div
+              v-for="(item, index) in filteredItems"
+              :key="item.key || item.pluginId || index"
+              :ref="el => registerItemEl(index, el)"
+              class="launcher-row"
+              :class="{ 'is-active': activeIndex === index }"
+              @mouseenter="activeIndex = index"
+              @click="executeItem(item)"
+            >
+              <span class="launcher-marker" aria-hidden="true"></span>
+              <RcSquircle
+                :glyph="resolveItemGlyph(item)"
+                :src="isImageIcon(item.icon) ? item.icon : ''"
+                :icon="item.faIcon || 'fa-cube'"
+                :size="28"
+              />
+              <div class="launcher-row-text">
+                <!-- 片段写在同一行，避免模板换行产生多余空格 -->
+                <span class="launcher-row-title"><template v-for="(part, partIndex) in highlightParts(item.name || item.title)" :key="partIndex"><mark v-if="part.hit">{{ part.text }}</mark><template v-else>{{ part.text }}</template></template></span>
+                <span v-if="item.description || item.subtitle" class="launcher-row-desc">
                   {{ item.description || item.subtitle }}
                 </span>
               </div>
-            </div>
-
-            <!-- 右侧标签与按键操作提示 -->
-            <div class="flex items-center gap-2.5 flex-shrink-0 text-xs">
-              <span
-                v-if="item.badge"
-                class="px-2 py-0.5 rounded-md text-[11px] font-medium"
-                :class="[
-                  isDark
-                    ? 'bg-white/10 text-slate-300 border border-white/10'
-                    : 'bg-slate-200/70 text-slate-700 border border-slate-200'
-                ]"
-              >
-                {{ item.badge }}
+              <span v-if="activeIndex === index" class="launcher-row-tag is-active">
+                {{ item.actionLabel || '打开' }} <ShortcutKeys combo="Enter" />
               </span>
-              <span
-                v-if="activeIndex === index"
-                class="flex items-center gap-1 font-mono text-[11px] opacity-80"
-                :class="[isDark ? 'text-sky-300' : 'text-sky-700']"
-              >
-                <span>{{ item.actionLabel || '启动' }}</span>
-                <kbd class="px-1.5 py-0.5 rounded text-[10px] bg-sky-500/20 font-bold">↵</kbd>
-              </span>
+              <span v-else-if="item.badge" class="launcher-row-tag">{{ item.badge }}</span>
             </div>
-          </div>
-        </template>
+          </template>
 
-        <!-- 搜索无结果时的空状态引导 -->
-        <div
-          v-else
-          class="flex flex-col items-center justify-center py-10 text-center px-4"
-          :class="[isDark ? 'text-slate-400' : 'text-slate-500']"
-        >
-          <svg class="w-9 h-9 mb-2 opacity-50 text-slate-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
-            <circle cx="11" cy="11" r="8" />
-            <line x1="21" y1="21" x2="16.65" y2="16.65" />
-            <line x1="8" y1="11" x2="14" y2="11" />
-          </svg>
-          <p class="text-sm font-medium mb-1">未在已安装应用中找到 “{{ query }}”</p>
-          <p class="text-xs text-slate-400 mb-3">按 Enter 可直接前往插件市场搜索并下载此工具</p>
-          <button
-            class="px-3.5 py-1.5 rounded-lg text-xs font-medium bg-sky-500 hover:bg-sky-600 text-white transition-colors flex items-center gap-1.5 cursor-pointer shadow-sm"
-            @click="searchInMarket"
-          >
-            <span>在插件中心搜索 “{{ query }}”</span>
-            <kbd class="px-1.5 bg-white/20 rounded font-mono text-[10px]">↵</kbd>
-          </button>
-        </div>
-      </div>
-
-      <!-- 3. 底部极客状态栏 -->
-      <div
-        class="px-4 py-2.5 border-t flex items-center justify-between text-xs"
-        :class="[isDark ? 'border-white/10 bg-black/40 text-slate-400' : 'border-slate-100 bg-slate-50 text-slate-500']"
-      >
-        <div class="flex items-center gap-4">
-          <div class="flex items-center gap-1.5">
-            <kbd class="px-1.5 py-0.5 rounded font-mono text-[10px] bg-white/10">↑↓</kbd>
-            <span>选择</span>
-          </div>
-          <div class="flex items-center gap-1.5">
-            <kbd class="px-1.5 py-0.5 rounded font-mono text-[10px] bg-white/10">↵</kbd>
-            <span>启动</span>
-          </div>
-          <div class="flex items-center gap-1.5">
-            <kbd class="px-1.5 py-0.5 rounded font-mono text-[10px] bg-white/10">Ctrl+M</kbd>
-            <span>展开大窗口</span>
+          <!-- 无结果：引导去插件市场 -->
+          <div v-else class="launcher-empty">
+            <p class="launcher-empty-title">已安装的插件里没有「{{ query }}」</p>
+            <p class="launcher-empty-desc">按 Enter 去插件市场搜索并安装</p>
+            <button type="button" class="launcher-primary-btn" @click="searchInMarket">
+              在插件市场搜索
+              <ShortcutKeys combo="Enter" tone="onAccent" />
+            </button>
           </div>
         </div>
 
-        <div class="flex items-center gap-3">
-          <button
-            class="flex items-center gap-1 px-2 py-0.5 rounded hover:bg-white/10 transition-colors cursor-pointer"
-            @click="toggleActionPanel"
-          >
-            <span>动作面板</span>
-            <kbd class="px-1 py-0.5 rounded font-mono text-[10px] bg-white/10">Ctrl+K</kbd>
-          </button>
-          <div class="flex items-center gap-1">
-            <kbd class="px-1.5 py-0.5 rounded font-mono text-[10px] bg-white/10">Esc</kbd>
-            <span>退出</span>
+        <!-- 3. 底栏 -->
+        <div class="launcher-foot">
+          <span v-if="noViewStatus" :class="noViewStatus.isError ? 'text-[var(--rc-error)]' : 'text-[var(--rc-accent-text)]'">
+            {{ noViewStatus.text }}
+          </span>
+          <span v-else>{{ filteredItems.length }} 个结果</span>
+          <div class="flex items-center gap-4">
+            <span class="launcher-foot-hint is-primary">打开 <ShortcutKeys combo="Enter" /></span>
+            <button type="button" class="launcher-foot-hint" @click="toggleActionPanel">
+              动作 <ShortcutKeys combo="Ctrl+K" />
+            </button>
+            <span class="launcher-foot-hint">关闭 <ShortcutKeys combo="Escape" /></span>
           </div>
         </div>
-      </div>
       </template>
     </div>
 
-    <!-- 动作面板弹窗 (ActionPanelModal) -->
+    <!-- 动作面板 -->
     <ActionPanelModal
       v-if="actionPanelVisible"
       :visible="actionPanelVisible"
       :actions="activeItemActions"
       @close="actionPanelVisible = false"
+      @trigger="runLauncherAction"
     />
   </div>
 </template>
 
 <script setup>
 import { ref, computed, onMounted, onBeforeUnmount, nextTick, watch } from 'vue'
+import ShortcutKeys from '@/components/base/ShortcutKeys.vue'
 import { useRouter } from 'vue-router'
 import { usePluginsStore } from '@/stores/plugins'
-import { useThemeStore } from '@/stores/theme'
 import { switchWindowMode, WINDOW_MODES, windowModeState } from '@/utils/windowMode'
-import { getOfficialPlugin, isOfficialPlugin } from '@/utils/officialPlugins'
+import { getOfficialPlugin } from '@/utils/officialPlugins'
+import {
+  loadInstalledDeclarativePlugin,
+  executeDeclarativeNoViewCommand
+} from '@/utils/declarativePluginLoader'
 import { routeUtils } from '@/router/routes'
-import { useCommandSearch } from '@/composables/useCommandSearch'
+import {
+  useCommandSearch,
+  isDeclarativePluginItem,
+  normalizePluginFeatures,
+  copyInlineAnswerToClipboard
+} from '@/composables/useCommandSearch'
+import { getHighlightPartsWithPinyin } from '@/utils/pinyinSearch'
 import { useKeymap, KEYMAP_SCOPES, dispatchKeyEvent } from '@/utils/keymap'
 import ActionPanelModal from '@/declarative/components/ActionPanelModal.vue'
 import DeclarativeView from '@/declarative/DeclarativeView.vue'
+import BrandMark from '@/components/BrandMark.vue'
+import { RcSquircle } from '@/components/base'
+import { shortcutLabel, isMacOS } from '@/utils/platform'
+import { resolveItemGlyph } from '@/utils/brandIcons'
+import { win as nativeWin } from '@/api/apiserver'
 
 const router = useRouter()
 const pluginsStore = usePluginsStore()
-const themeStore = useThemeStore()
-const isDark = computed(() => themeStore.isDark)
+// 悬停提示是纯文本，按平台格式化（键帽展示统一走 ShortcutKeys）
+const workbenchHint = shortcutLabel('Ctrl+M')
+
+function isImageIcon(icon) {
+  return typeof icon === 'string' && /^(https?:|data:image\/|ztools:)/.test(icon)
+}
+
+/** 把标题中与查询（支持字面、中文全拼、首字母与多音字命中）匹配的片段拆出来高亮 */
+function highlightParts(text) {
+  return getHighlightPartsWithPinyin(text, query.value)
+}
 
 const inputRef = ref(null)
 const listContainerRef = ref(null)
+const declarativeViewRef = ref(null)
 const activeIndex = ref(0)
 const actionPanelVisible = ref(false)
 const activeDeclarativePlugin = ref(null)
+const loadingDeclarative = ref(false)
+const declarativeLoadError = ref('')
+const noViewStatus = ref(null)
 const itemElements = new Map()
+
+let declarativeLoadToken = 0
+let executingNoViewKey = ''
+let noViewStatusTimer = null
 
 const {
   query,
@@ -293,10 +222,118 @@ function registerItemEl(index, el) {
   else itemElements.delete(index)
 }
 
+function showNoViewFeedback(text, isError = false) {
+  if (noViewStatusTimer) {
+    clearTimeout(noViewStatusTimer)
+    noViewStatusTimer = null
+  }
+  noViewStatus.value = { text: String(text || ''), isError: Boolean(isError) }
+  noViewStatusTimer = setTimeout(() => {
+    noViewStatus.value = null
+    noViewStatusTimer = null
+  }, 2600)
+}
+
+function findInstalledPluginMeta(pluginId) {
+  const pid = String(pluginId || '').trim().toLowerCase()
+  if (!pid) return null
+  return (pluginsStore.installedPlugins || []).find(
+    (p) => String(p?.pluginId || p?.id || '').trim().toLowerCase() === pid
+  ) || null
+}
+
+function isDeclarativeTarget(pluginId, item = null) {
+  if (item && item.isDeclarative === true) return true
+  const pid = String(pluginId || '').trim()
+  if (!pid) return false
+  if (getOfficialPlugin(pid)) return true
+  const installed = findInstalledPluginMeta(pid)
+  return isDeclarativePluginItem(installed)
+}
+
 // 当前聚焦项的 ActionPanel 动作
+// 动作面板只负责选择，执行交给动作自己的 onAction；单个动作出错不影响悬浮条
+const runLauncherAction = (action) => {
+  try {
+    action?.props?.onAction?.()
+  } catch (error) {
+    console.warn('[LauncherBar] 执行动作失败:', error)
+  }
+}
+
 const activeItemActions = computed(() => {
   const item = filteredItems.value[activeIndex.value]
   if (!item) return []
+
+  if (item.type === 'inline-calculator' || item.type === 'inline-color') {
+    const calcActions = [
+      {
+        type: 'Action',
+        props: {
+          title: `复制结果 (${item.answer})`,
+          shortcut: { modifiers: [], key: 'Enter' },
+          onAction: () => {
+            actionPanelVisible.value = false
+            executeItem(item)
+          }
+        }
+      },
+      {
+        type: 'Action',
+        props: {
+          title: `复制完整等式 (${item.expression} = ${item.answer})`,
+          shortcut: { modifiers: ['Ctrl', 'Shift'], key: 'C' },
+          onAction: async () => {
+            actionPanelVisible.value = false
+            const eq = `${item.expression} = ${item.answer}`
+            await copyInlineAnswerToClipboard(eq)
+            showNoViewFeedback(`✓ 已复制等式: ${eq}`, false)
+          }
+        }
+      }
+    ]
+
+    if (item.type === 'inline-color' && item.colorResult) {
+      calcActions.push(
+        {
+          type: 'Action',
+          props: {
+            title: `复制 RGB (${item.colorResult.rgb})`,
+            onAction: async () => {
+              actionPanelVisible.value = false
+              await copyInlineAnswerToClipboard(item.colorResult.rgb)
+              showNoViewFeedback(`✓ 已复制 RGB: ${item.colorResult.rgb}`, false)
+            }
+          }
+        },
+        {
+          type: 'Action',
+          props: {
+            title: `复制 HSL (${item.colorResult.hsl})`,
+            onAction: async () => {
+              actionPanelVisible.value = false
+              await copyInlineAnswerToClipboard(item.colorResult.hsl)
+              showNoViewFeedback(`✓ 已复制 HSL: ${item.colorResult.hsl}`, false)
+            }
+          }
+        }
+      )
+    }
+
+    calcActions.push({
+      type: 'Action',
+      props: {
+        title: '打开完整计算器与历史视图',
+        shortcut: { modifiers: ['Ctrl'], key: 'O' },
+        onAction: () => {
+          actionPanelVisible.value = false
+          launchPlugin('calculator', { isDeclarative: true })
+        }
+      }
+    })
+
+    return calcActions
+  }
 
   if (item.type === 'file') {
     return [
@@ -313,7 +350,7 @@ const activeItemActions = computed(() => {
       {
         type: 'Action',
         props: {
-          title: '在资源管理器中定位',
+          title: isMacOS() ? '在访达中显示' : '在资源管理器中定位',
           shortcut: { modifiers: ['Ctrl'], key: 'Enter' },
           onAction: () => {
             actionPanelVisible.value = false
@@ -370,6 +407,49 @@ const activeItemActions = computed(() => {
     }
   ]
 
+  // 聚合插件声明的 features 子命令到 Ctrl+K 动作面板
+  const features = Array.isArray(item.features)
+    ? item.features
+    : item.pluginId
+      ? normalizePluginFeatures(findInstalledPluginMeta(item.pluginId))
+      : []
+
+  for (const feat of features) {
+    if (item.featureCode && item.featureCode === feat.code) continue
+    actions.push({
+      type: 'Action',
+      props: {
+        title: `${feat.mode === 'no-view' ? '执行' : '打开'}：${feat.explain}`,
+        onAction: () => {
+          actionPanelVisible.value = false
+          executeItem({
+            key: `${item.pluginId}:${feat.code}`,
+            type: 'plugin-feature',
+            pluginId: item.pluginId,
+            featureCode: feat.code,
+            name: feat.explain,
+            mode: feat.mode,
+            isDeclarative: isDeclarativeTarget(item.pluginId, item)
+          })
+        }
+      }
+    })
+  }
+
+  if (item.pluginId && isDeclarativeTarget(item.pluginId, item) && item.mode !== 'no-view') {
+    actions.push({
+      type: 'Action',
+      props: {
+        title: '在独立常驻窗口中打开',
+        shortcut: { modifiers: ['Ctrl', 'Shift'], key: 'O' },
+        onAction: () => {
+          actionPanelVisible.value = false
+          popoutDeclarativePlugin(item.pluginId, item.featureCode || '')
+        }
+      }
+    })
+  }
+
   if (item.pluginId) {
     actions.push({
       type: 'Action',
@@ -378,8 +458,7 @@ const activeItemActions = computed(() => {
         shortcut: { modifiers: ['Ctrl'], key: 'O' },
         onAction: () => {
           actionPanelVisible.value = false
-          expandToDashboard()
-          router.push(`/details/${item.pluginId}`)
+          expandToDashboard(`/details/${item.pluginId}`)
         }
       }
     })
@@ -403,7 +482,7 @@ const activeItemActions = computed(() => {
 function scrollToActiveItem() {
   nextTick(() => {
     const el = itemElements.get(activeIndex.value)
-    if (el) {
+    if (el && typeof el.scrollIntoView === 'function') {
       el.scrollIntoView({ block: 'nearest', behavior: 'smooth' })
     }
   })
@@ -421,6 +500,9 @@ function clearQuery() {
 }
 
 function exitDeclarative() {
+  declarativeLoadToken++
+  loadingDeclarative.value = false
+  declarativeLoadError.value = ''
   activeDeclarativePlugin.value = null
   nextTick(() => {
     inputRef.value?.focus()
@@ -430,7 +512,7 @@ function exitDeclarative() {
 // 统一注册极客工具条按键 (PAGE 作用域)
 useKeymap(KEYMAP_SCOPES.PAGE, {
   'ArrowDown': () => {
-    if (activeDeclarativePlugin.value) return false
+    if (activeDeclarativePlugin.value || loadingDeclarative.value || declarativeLoadError.value) return false
     if (filteredItems.value.length > 0) {
       activeIndex.value = (activeIndex.value + 1) % filteredItems.value.length
       scrollToActiveItem()
@@ -439,7 +521,7 @@ useKeymap(KEYMAP_SCOPES.PAGE, {
     return false
   },
   'ArrowUp': () => {
-    if (activeDeclarativePlugin.value) return false
+    if (activeDeclarativePlugin.value || loadingDeclarative.value || declarativeLoadError.value) return false
     if (filteredItems.value.length > 0) {
       activeIndex.value = (activeIndex.value - 1 + filteredItems.value.length) % filteredItems.value.length
       scrollToActiveItem()
@@ -448,7 +530,7 @@ useKeymap(KEYMAP_SCOPES.PAGE, {
     return false
   },
   'Enter': () => {
-    if (activeDeclarativePlugin.value) return false
+    if (activeDeclarativePlugin.value || loadingDeclarative.value || declarativeLoadError.value) return false
     if (filteredItems.value.length > 0) {
       executeItem(filteredItems.value[activeIndex.value])
       return true
@@ -459,7 +541,7 @@ useKeymap(KEYMAP_SCOPES.PAGE, {
     return false
   },
   'Ctrl+Enter': () => {
-    if (activeDeclarativePlugin.value) return false
+    if (activeDeclarativePlugin.value || loadingDeclarative.value || declarativeLoadError.value) return false
     const cur = filteredItems.value[activeIndex.value]
     if (cur && cur.type === 'file') {
       showInFolder(cur.path)
@@ -471,7 +553,7 @@ useKeymap(KEYMAP_SCOPES.PAGE, {
     return false
   },
   'Ctrl+K': () => {
-    if (activeDeclarativePlugin.value) return false
+    if (activeDeclarativePlugin.value || loadingDeclarative.value || declarativeLoadError.value) return false
     toggleActionPanel()
     return true
   },
@@ -479,7 +561,27 @@ useKeymap(KEYMAP_SCOPES.PAGE, {
     expandToDashboard()
     return true
   },
+  'Ctrl+Shift+O': () => {
+    if (activeDeclarativePlugin.value) {
+      popoutDeclarativePlugin(
+        activeDeclarativePlugin.value.pluginId,
+        activeDeclarativePlugin.value.featureCode || '',
+        collectDeclarativeQuery(activeDeclarativePlugin.value)
+      )
+      return true
+    }
+    const cur = filteredItems.value[activeIndex.value]
+    if (cur && cur.pluginId && isDeclarativeTarget(cur.pluginId, cur) && cur.mode !== 'no-view') {
+      popoutDeclarativePlugin(cur.pluginId, cur.featureCode || '')
+      return true
+    }
+    return false
+  },
   'Escape': () => {
+    if (loadingDeclarative.value || declarativeLoadError.value) {
+      exitDeclarative()
+      return true
+    }
     if (activeDeclarativePlugin.value) return false
     if (actionPanelVisible.value) {
       actionPanelVisible.value = false
@@ -518,27 +620,92 @@ async function showInFolder(filePath) {
 
 function executeItem(item) {
   if (!item) return
-  recordUsage(item.key || item.pluginId)
+  if (!item.omitFromFrecencyTracking) {
+    recordUsage(item.key || item.pluginId)
+  }
+  if (item.type === 'inline-calculator' || item.type === 'inline-color') {
+    Promise.resolve(item.action?.()).then(() => {
+      showNoViewFeedback(`✓ 已复制结果: ${item.answer}`, false)
+    })
+    return
+  }
   if (item.type === 'file') {
     openFile(item.path)
   } else if (typeof item.action === 'function') {
     item.action()
+  } else if (item.mode === 'no-view' && item.pluginId) {
+    runNoViewCommand(item)
   } else if (item.pluginId) {
-    launchPlugin(item.pluginId)
+    launchPlugin(item.pluginId, {
+      featureCode: item.featureCode || '',
+      isDeclarative: isDeclarativeTarget(item.pluginId, item)
+    })
   }
 }
 
-async function launchPlugin(pluginId) {
-  const official = getOfficialPlugin(pluginId)
+async function runNoViewCommand(item) {
+  const lockKey = `${item.pluginId}:${item.featureCode || ''}`
+  if (executingNoViewKey === lockKey) return
+  executingNoViewKey = lockKey
+
+  try {
+    await pluginsStore.markRecent?.(item.pluginId)
+    const res = await executeDeclarativeNoViewCommand(item.pluginId, {
+      featureCode: item.featureCode || '',
+      query: query.value
+    })
+    showNoViewFeedback(`✓ ${res.message || `${item.name || item.title} 已执行`}`, false)
+  } catch (err) {
+    showNoViewFeedback(err?.message || '执行极速动作失败', true)
+  } finally {
+    if (executingNoViewKey === lockKey) {
+      executingNoViewKey = ''
+    }
+  }
+}
+
+async function launchPlugin(pluginId, options = {}) {
+  const pid = String(pluginId || '').trim()
+  if (!pid) return
+
+  const featureCode = typeof options.featureCode === 'string' ? options.featureCode.trim() : ''
+  const official = getOfficialPlugin(pid)
   if (official) {
     // 官方标杆应用：直接在 Launcher 内秒开以声明式模式运行
-    activeDeclarativePlugin.value = official
+    declarativeLoadToken++
+    loadingDeclarative.value = false
+    declarativeLoadError.value = ''
+    activeDeclarativePlugin.value = featureCode ? { ...official, featureCode } : official
+    pluginsStore.markRecent?.(pid)?.catch?.(() => {})
+    return
+  }
+
+  // 第三方已安装 V2 声明式插件：直接在悬浮条内通过安全沙箱加载并原位渲染
+  if (options.isDeclarative || isDeclarativeTarget(pid)) {
+    const token = ++declarativeLoadToken
+    activeDeclarativePlugin.value = null
+    declarativeLoadError.value = ''
+    loadingDeclarative.value = true
+
+    try {
+      const loaded = await loadInstalledDeclarativePlugin(pid, { featureCode })
+      if (token !== declarativeLoadToken) return
+      activeDeclarativePlugin.value = loaded
+      pluginsStore.markRecent?.(pid)?.catch?.(() => {})
+    } catch (err) {
+      if (token !== declarativeLoadToken) return
+      declarativeLoadError.value = err?.message || String(err) || '加载声明式扩展失败'
+    } finally {
+      if (token === declarativeLoadToken) {
+        loadingDeclarative.value = false
+      }
+    }
     return
   }
 
   hideLauncher()
   try {
-    await pluginsStore.openPlugin(pluginId)
+    await pluginsStore.openPlugin(pid)
   } catch (err) {
     console.error('[Launcher] 启动插件失败:', err)
   }
@@ -546,31 +713,77 @@ async function launchPlugin(pluginId) {
 
 function searchInMarket() {
   const q = query.value.trim()
-  expandToDashboard()
-  router.push({ name: 'list', query: { q } })
+  expandToDashboard({ name: 'list', query: { q } })
 }
 
 function toggleActionPanel() {
   actionPanelVisible.value = !actionPanelVisible.value
 }
 
-function expandToDashboard() {
+function collectDeclarativeQuery(pluginObj) {
+  const snap = declarativeViewRef.value?.getViewStateSnapshot?.() || {}
+  const qObj = {}
+  if (snap.searchText) qObj.q = String(snap.searchText)
+  if (snap.segmentedValue) qObj.seg = String(snap.segmentedValue)
+  if (snap.dropdownValue) qObj.drop = String(snap.dropdownValue)
+  if (snap.selectedId) qObj.sel = String(snap.selectedId)
+  if (pluginObj?.featureCode) qObj.feature = String(pluginObj.featureCode)
+  return qObj
+}
+
+async function popoutDeclarativePlugin(pluginId, featureCode = '', snapshotQuery = null) {
+  const pid = String(pluginId || '').trim()
+  if (!pid) return
+
+  const qObj = snapshotQuery
+    ? { ...snapshotQuery }
+    : featureCode
+      ? { feature: String(featureCode) }
+      : {}
+
+  const searchParams = new URLSearchParams(qObj).toString()
+  const hashRoute = `#/popout/${encodeURIComponent(pid)}${searchParams ? `?${searchParams}` : ''}`
+  const popoutUrl = `ztools://web/index.html${hashRoute}`
+
+  hideLauncher()
+  try {
+    if (typeof nativeWin?.open === 'function') {
+      const res = await nativeWin.open(popoutUrl)
+      if (res && res.success !== false) {
+        return
+      }
+    }
+  } catch {
+    // 若不支持多窗，回退到工作台打开
+  }
+
+  expandToDashboard(routeUtils.toPopout(pid, qObj))
+}
+
+// 悬浮条与工作台是两个窗口：目标页面要交给主窗口去跳转，不能在悬浮条自己的路由里 push
+function expandToDashboard(target) {
+  declarativeLoadToken++
+  loadingDeclarative.value = false
+  declarativeLoadError.value = ''
   const currentDeclarative = activeDeclarativePlugin.value
+  const snapQuery = currentDeclarative ? collectDeclarativeQuery(currentDeclarative) : {}
   activeDeclarativePlugin.value = null
+  const location = target || (currentDeclarative ? routeUtils.toDeclarative(currentDeclarative.pluginId, snapQuery) : null)
+  const route = location ? router.resolve(location).fullPath : undefined
   if (window.__ztoolsLauncher?.expandToDashboard) {
-    window.__ztoolsLauncher.expandToDashboard().catch(() => {})
+    const request = route ? window.__ztoolsLauncher.expandToDashboard(route) : window.__ztoolsLauncher.expandToDashboard()
+    Promise.resolve(request).catch(() => {})
   } else {
     switchWindowMode(WINDOW_MODES.DASHBOARD)
-    if (router.currentRoute.value.path === '/launcher') {
-      router.push('/')
-    }
-  }
-  if (currentDeclarative) {
-    router.push(routeUtils.toDeclarative(currentDeclarative.pluginId))
+    if (route) router.push(route)
+    else if (router.currentRoute.value.path === '/launcher') router.push('/')
   }
 }
 
 function hideLauncher() {
+  declarativeLoadToken++
+  loadingDeclarative.value = false
+  declarativeLoadError.value = ''
   activeDeclarativePlugin.value = null
   if (window.__ztoolsLauncher?.hide) {
     window.__ztoolsLauncher.hide().catch(() => {})
@@ -580,11 +793,8 @@ function hideLauncher() {
 }
 
 onMounted(async () => {
-  window.__ztoolsOpenLauncherDeclarative = (pluginId) => {
-    const official = getOfficialPlugin(pluginId)
-    if (official) {
-      activeDeclarativePlugin.value = official
-    }
+  window.__ztoolsOpenLauncherDeclarative = (pluginId, options = {}) => {
+    launchPlugin(pluginId, { ...options, isDeclarative: true })
   }
 
   if (windowModeState.launcherInitialQuery) {
@@ -597,6 +807,11 @@ onMounted(async () => {
 })
 
 onBeforeUnmount(() => {
+  declarativeLoadToken++
+  if (noViewStatusTimer) {
+    clearTimeout(noViewStatusTimer)
+    noViewStatusTimer = null
+  }
   if (typeof window !== 'undefined') {
     delete window.__ztoolsOpenLauncherDeclarative
   }
@@ -619,11 +834,248 @@ watch(
   box-sizing: border-box;
 }
 
-.custom-scrollbar::-webkit-scrollbar {
-  width: 5px;
+.launcher-panel {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  border-radius: 14px;
+  border: 1px solid var(--rc-border-highlight);
+  background: var(--rc-surface);
+  color: var(--rc-text-secondary);
+  box-shadow: var(--rc-shadow-lg);
 }
-.custom-scrollbar::-webkit-scrollbar-thumb {
-  background: rgba(255, 255, 255, 0.15);
-  border-radius: 4px;
+
+.launcher-head {
+  height: 60px;
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 0 14px 0 20px;
+}
+
+.launcher-input {
+  flex: 1;
+  min-width: 0;
+  height: 40px;
+  border: none;
+  outline: none;
+  background: transparent;
+  font: inherit;
+  font-size: 18px;
+  letter-spacing: -0.01em;
+  color: var(--rc-text-primary);
+  caret-color: var(--rc-accent);
+}
+
+.launcher-input::placeholder {
+  color: var(--rc-text-faint);
+}
+
+.launcher-icon-btn {
+  width: 26px;
+  height: 26px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--rc-text-faint);
+  cursor: pointer;
+}
+
+.launcher-icon-btn:hover {
+  background: var(--rc-surface-hover);
+  color: var(--rc-text-primary);
+}
+
+.launcher-workbench-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 28px;
+  padding: 0 4px 0 8px;
+  border: none;
+  border-radius: 7px;
+  background: transparent;
+  font: inherit;
+  font-size: 12px;
+  color: var(--rc-text-muted);
+  cursor: pointer;
+}
+
+.launcher-workbench-btn:hover {
+  background: var(--rc-surface-hover);
+  color: var(--rc-text-primary);
+}
+
+/* 余烬发丝线：从左侧淡入淡出，暗示「从这里点亮」 */
+.launcher-hairline {
+  height: 1px;
+  flex-shrink: 0;
+  background: linear-gradient(90deg, rgba(255, 107, 61, 0), rgba(255, 107, 61, 0.42) 14%, rgba(255, 107, 61, 0) 55%);
+}
+
+.launcher-list {
+  flex: 1;
+  overflow-y: auto;
+  padding: 6px 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  outline: none;
+}
+
+.launcher-row {
+  height: 46px;
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 0 14px 0 8px;
+  border-radius: 10px;
+  cursor: pointer;
+}
+
+.launcher-row.is-active {
+  background: var(--rc-surface-active);
+}
+
+.launcher-marker {
+  width: 6px;
+  height: 6px;
+  border-radius: 1.7px;
+  flex-shrink: 0;
+  background: transparent;
+}
+
+.launcher-row.is-active .launcher-marker {
+  background: var(--rc-accent);
+  box-shadow: var(--rc-marker-glow);
+}
+
+.launcher-row-text {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+}
+
+.launcher-row-title {
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--rc-text-primary);
+  white-space: nowrap;
+}
+
+.launcher-row-title mark {
+  background: transparent;
+  color: var(--rc-accent-text);
+}
+
+.launcher-row-desc {
+  font-size: 13px;
+  color: var(--rc-text-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.launcher-row-tag {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--rc-text-faint);
+}
+
+.launcher-row-tag.is-active {
+  color: var(--rc-text-secondary);
+}
+
+.launcher-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 40px 16px;
+  text-align: center;
+}
+
+.launcher-empty-title {
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--rc-text-primary);
+}
+
+.launcher-empty-desc {
+  margin: 4px 0 14px;
+  font-size: 12px;
+  color: var(--rc-text-muted);
+}
+
+.launcher-primary-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  height: 30px;
+  padding: 0 6px 0 12px;
+  border: none;
+  border-radius: 8px;
+  background: var(--rc-accent);
+  color: var(--rc-accent-contrast);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+}
+
+.launcher-primary-btn:hover {
+  background: var(--rc-accent-hover);
+}
+
+.launcher-foot {
+  height: 42px;
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 14px 0 20px;
+  border-top: 1px solid var(--rc-border);
+  font-size: 12px;
+  color: var(--rc-text-muted);
+}
+
+.launcher-foot-hint {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  border: none;
+  padding: 0;
+  background: transparent;
+  font: inherit;
+  color: var(--rc-text-muted);
+}
+
+button.launcher-foot-hint {
+  cursor: pointer;
+}
+
+button.launcher-foot-hint:hover,
+.launcher-foot-hint.is-primary {
+  color: var(--rc-text-secondary);
+}
+
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
 }
 </style>

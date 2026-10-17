@@ -27,7 +27,8 @@ test('unknown file failures keep a stable code without exposing native error det
 })
 
 async function createContext(now: () => number = Date.now): Promise<TestContext> {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'ztools-files-'))
+  // macOS 的临时目录在 /var 下，而 /var 是指向 /private/var 的系统链接；服务返回规范化后的真实路径，测试也按真实路径断言
+  const root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'ztools-files-')))
   let removed: ((webContentsId: number) => void) | undefined
   const callers = new Map<number, CallerIdentity>([
     [mainCaller.webContentsId, mainCaller],
@@ -449,7 +450,8 @@ test('closed owners cannot regain grants through an asynchronous grant request',
   } finally { await dispose(context) }
 })
 
-test('concurrent open grants for one owner retain every selected file', async () => {
+// 该用例靠文件系统钩子放行并发步骤，钩子没命中会一直等；单独限时，失败时报错而不是卡住整套测试
+test('concurrent open grants for one owner retain every selected file', { timeout: 15_000 }, async () => {
   const context = await createContext()
   const directory = path.join(context.root, 'multi-select')
   const selected = ['first.wav', 'second.wav', 'third.wav', 'fourth.wav']

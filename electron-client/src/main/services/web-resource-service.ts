@@ -1,7 +1,7 @@
 import { createWriteStream } from 'node:fs'
 import fs from 'node:fs/promises'
 import path from 'node:path'
-import { randomUUID } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
 import { pipeline } from 'node:stream/promises'
 import yauzl, { type Entry } from 'yauzl'
 import { errorCodes, ZToolsError } from '../../contracts/errors.js'
@@ -24,7 +24,16 @@ interface ActivePointer {
   operationId: string
   version: string
   directory: string
+  /** 仅内置拷贝（operationId === 'bundled'）记录：拷贝时内置资源的内容指纹，用于发现同版本号的新构建 */
+  bundledFingerprint?: string
 }
+
+interface BundledInfo {
+  version: string
+  fingerprint: string
+}
+
+const BUNDLED_OPERATION_ID = 'bundled'
 
 interface WebTransaction {
   schemaVersion: typeof TRANSACTION_SCHEMA_VERSION
@@ -228,11 +237,54 @@ async function readJson(target: string): Promise<unknown | undefined> {
 }
 
 function isPointer(value: unknown): value is ActivePointer {
+  const fingerprint = typeof value === 'object' && value !== null
+    ? (value as Record<string, unknown>).bundledFingerprint
+    : undefined
   return typeof value === 'object' && value !== null &&
     (value as Record<string, unknown>).schemaVersion === POINTER_SCHEMA_VERSION &&
     typeof (value as Record<string, unknown>).operationId === 'string' &&
     typeof (value as Record<string, unknown>).version === 'string' &&
-    typeof (value as Record<string, unknown>).directory === 'string'
+    typeof (value as Record<string, unknown>).directory === 'string' &&
+    (fingerprint === undefined || typeof fingerprint === 'string')
+}
+
+/**
+ * 内置资源指纹：version.json + index.html。index.html 引用的产物文件名带内容哈希，
+ * 任意一次前端重新构建都会改变指纹，即使 version.json 的版本号没变。
+ */
+async function readBundledFingerprint(root: string): Promise<string> {
+  const hash = createHash('sha256')
+  hash.update(await fs.readFile(path.join(root, 'version.json')))
+  hash.update('\0')
+  hash.update(await fs.readFile(path.join(root, 'index.html')))
+  return hash.digest('hex')
+}
+
+/** 数字段逐段比较（1.1.7.1 < 1.1.8）；预发布 / 构建后缀不参与比较 */
+export function compareWebVersions(left: string, right: string): number {
+  const parts = (value: string) => (value.split(/[-+]/)[0] ?? '').split('.').map((part) => Number.parseInt(part, 10) || 0)
+  const a = parts(left)
+  const b = parts(right)
+  for (let index = 0; index < Math.max(a.length, b.length); index += 1) {
+    const diff = (a[index] ?? 0) - (b[index] ?? 0)
+    if (diff !== 0) return diff > 0 ? 1 : -1
+  }
+  return 0
+}
+
+/**
+ * 启动时是否应以内置资源替换当前激活资源：
+ * - 当前是内置拷贝：指纹不同即刷新（覆盖安装同版本号的新构建、开发态重新构建）；
+ * - 当前是热更新资源：仅当内置版本严格更高（安装包已越过热更新版本）才切回内置。
+ */
+export function shouldRefreshFromBundled(
+  active: Pick<ActivePointer, 'operationId' | 'version' | 'bundledFingerprint'>,
+  bundled: BundledInfo
+): boolean {
+  if (active.operationId === BUNDLED_OPERATION_ID) {
+    return active.bundledFingerprint !== bundled.fingerprint
+  }
+  return compareWebVersions(bundled.version, active.version) > 0
 }
 
 function isTransaction(value: unknown): value is WebTransaction {
@@ -308,21 +360,73 @@ export class WebResourceService {
 
     let active = await this.#readActivePointer()
     if (!active) {
-      const bundledVersion = await validateWebRoot(this.#bundledRoot)
-      const directory = `bundled-${bundledVersion}-${randomUUID()}`
-      const target = path.join(this.#versionsRoot, directory)
-      await copyBundledTree(this.#bundledRoot, target)
-      await validateWebRoot(target, bundledVersion)
-      active = {
-        schemaVersion: POINTER_SCHEMA_VERSION,
-        operationId: 'bundled',
-        version: bundledVersion,
-        directory
-      }
-      await atomicWriteJson(this.#pointerPath, active)
+      // 首次启动或指针损坏：内置资源必须可用，否则启动失败（保持原有行为）
+      active = await this.#installBundled(await this.#inspectBundled())
+    } else {
+      active = await this.#refreshFromBundledIfNeeded(active)
     }
     this.#active = active
     this.#initialized = true
+  }
+
+  async #inspectBundled(): Promise<BundledInfo> {
+    const version = await validateWebRoot(this.#bundledRoot)
+    return { version, fingerprint: await readBundledFingerprint(this.#bundledRoot) }
+  }
+
+  async #installBundled(bundled: BundledInfo): Promise<ActivePointer> {
+    const directory = `bundled-${bundled.version}-${randomUUID()}`
+    const target = path.join(this.#versionsRoot, directory)
+    try {
+      await copyBundledTree(this.#bundledRoot, target)
+      await validateWebRoot(target, bundled.version)
+    } catch (error) {
+      await fs.rm(target, { recursive: true, force: true }).catch(() => undefined)
+      throw error
+    }
+    const pointer: ActivePointer = {
+      schemaVersion: POINTER_SCHEMA_VERSION,
+      operationId: BUNDLED_OPERATION_ID,
+      version: bundled.version,
+      directory,
+      bundledFingerprint: bundled.fingerprint
+    }
+    await atomicWriteJson(this.#pointerPath, pointer)
+    return pointer
+  }
+
+  /**
+   * 已有激活资源时的刷新：任何失败都保留原资源继续启动，只记录日志。
+   * 事务恢复已在此之前完成（事务日志全部处理并删除），不存在待确认的热更新，可安全切换。
+   */
+  async #refreshFromBundledIfNeeded(active: ActivePointer): Promise<ActivePointer> {
+    let bundled: BundledInfo
+    try {
+      bundled = await this.#inspectBundled()
+    } catch (error) {
+      console.warn('Bundled web resources unavailable; keeping active resources', { error })
+      return active
+    }
+    if (!shouldRefreshFromBundled(active, bundled)) return active
+    let next: ActivePointer
+    try {
+      next = await this.#installBundled(bundled)
+    } catch (error) {
+      console.warn('Refreshing bundled web resources failed; keeping active resources', { error })
+      return active
+    }
+    console.info('Web resources refreshed from bundled build', {
+      previousVersion: active.version,
+      previousOperationId: active.operationId,
+      version: next.version
+    })
+    const previousRoot = path.join(this.#versionsRoot, active.directory)
+    if (isSafeDirectoryName(active.directory) && isDirectChild(this.#versionsRoot, previousRoot) && active.directory !== next.directory) {
+      await fs.rm(previousRoot, { recursive: true, force: true }).catch((error: unknown) => {
+        console.warn('Removing superseded web resources failed', { directory: active.directory, error })
+      })
+    }
+    return next
   }
 
   async applyArchive(

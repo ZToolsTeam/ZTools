@@ -22,7 +22,7 @@
     <!-- 默认圆点 fallback -->
     <span
       v-else
-      class="w-2 h-2 rounded-full bg-slate-400"
+      class="w-2 h-2 rounded-full bg-[var(--rc-text-faint)]"
     />
   </span>
 </template>

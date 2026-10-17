@@ -10,6 +10,16 @@
  */
 
 const DEFAULT_TTL_MS = 5 * 60 * 1000 // 5 分钟短缓存
+// 远程清单请求的最长等待时间；超时按失败处理，走本地快照 / 内置清单，市场不会一直空着
+export const REMOTE_FETCH_TIMEOUT_MS = 8000
+
+function withTimeout(promise, ms) {
+  let timer
+  const timeout = new Promise((_, reject) => {
+    timer = setTimeout(() => reject(new Error(`远程插件清单请求超时（${ms}ms）`)), ms)
+  })
+  return Promise.race([promise, timeout]).finally(() => clearTimeout(timer))
+}
 
 /**
  * 规范化插件 ID
@@ -150,6 +160,7 @@ export class StoreCatalogManager {
     this.getOfficialList = options.getOfficialList || (() => [])
     this.isPlatformSupported = options.isPlatformSupported || (() => true)
     this.ttlMs = options.ttlMs || DEFAULT_TTL_MS
+    this.remoteTimeoutMs = options.remoteTimeoutMs || REMOTE_FETCH_TIMEOUT_MS
 
     this._catalog = [] // 内存中全量有效插件条目
     this._lastSyncTime = 0
@@ -190,9 +201,12 @@ export class StoreCatalogManager {
     if (this.apiBaseUrl) {
       try {
         const catalogUrl = `${this.apiBaseUrl.replace(/\/+$/, '')}/api/plugins/catalog`
-        const res = this.fetchRemote
-          ? await this.fetchRemote(catalogUrl)
-          : (typeof fetch === 'function' ? await (await fetch(catalogUrl)).json() : null)
+        const res = await withTimeout(
+          this.fetchRemote
+            ? this.fetchRemote(catalogUrl)
+            : (typeof fetch === 'function' ? fetch(catalogUrl).then((r) => r.json()) : Promise.resolve(null)),
+          this.remoteTimeoutMs
+        )
         if (res && Array.isArray(res.list)) {
           rawList = res.list
         } else if (Array.isArray(res)) {
@@ -209,7 +223,7 @@ export class StoreCatalogManager {
     } else if (this.hasCustomFetchRemote) {
       // 兼容显式传入 fetchRemote 的调用方与单元测试
       try {
-        const res = await this.fetchRemote()
+        const res = await withTimeout(this.fetchRemote(), this.remoteTimeoutMs)
         if (res && Array.isArray(res.list)) {
           rawList = res.list
         } else if (Array.isArray(res)) {
@@ -228,7 +242,7 @@ export class StoreCatalogManager {
       source = 'decentralized_static'
       if (this.getStaticCatalog) {
         try {
-          const staticRes = await this.getStaticCatalog()
+          const staticRes = await withTimeout(Promise.resolve().then(() => this.getStaticCatalog()), this.remoteTimeoutMs)
           if (Array.isArray(staticRes)) {
             rawList = staticRes
           } else if (staticRes && Array.isArray(staticRes.list)) {
@@ -265,7 +279,7 @@ export class StoreCatalogManager {
     // 4. 本地快照亦无时，降级至开源静态 Catalog 或 内置标杆清单
     if ((!rawList || rawList.length === 0) && this.getStaticCatalog) {
       try {
-        const staticRes = await this.getStaticCatalog()
+        const staticRes = await withTimeout(Promise.resolve().then(() => this.getStaticCatalog()), this.remoteTimeoutMs)
         if (Array.isArray(staticRes) && staticRes.length > 0) {
           rawList = staticRes
           source = 'decentralized_static'
@@ -366,6 +380,17 @@ export class StoreCatalogManager {
         sourceType: sourceType,
         homepage_url: homepageUrl,
         homepageUrl: homepageUrl
+      }
+
+      // 与内置插件同 ID 时，实际打开的是内置插件（openPlugin 优先走内置）。
+      // 名称、描述和平台限制以内置为准，避免显示另一个插件的介绍，或被远程条目的平台声明误隐藏
+      if (builtinMatch) {
+        normalizedItem.name = builtinMatch.name || normalizedItem.name
+        normalizedItem.title = builtinMatch.title || builtinMatch.name || normalizedItem.title
+        normalizedItem.description = builtinMatch.description || normalizedItem.description
+        if (builtinMatch.category) normalizedItem.category = builtinMatch.category
+        if (Array.isArray(builtinMatch.platforms)) normalizedItem.platforms = builtinMatch.platforms
+        else delete normalizedItem.platforms
       }
 
       // 提取下架标记

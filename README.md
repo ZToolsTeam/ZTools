@@ -9,6 +9,7 @@
   <a href="https://github.com/codingmuse/ZTools/actions"><img src="https://img.shields.io/badge/CI-Passing-brightgreen.svg" alt="CI Status"></a>
   <a href="https://nodejs.org"><img src="https://img.shields.io/badge/Node.js-%3E%3D22-green.svg" alt="Node Version"></a>
   <a href="https://www.electronjs.org"><img src="https://img.shields.io/badge/Electron-43.4.1-blue.svg" alt="Electron Version"></a>
+  <a href="CHANGELOG.md"><img src="https://img.shields.io/badge/Changelog-%E6%9B%B4%E6%96%B0%E6%97%A5%E5%BF%97-orange.svg" alt="Changelog"></a>
 </p>
 
 ---
@@ -143,6 +144,18 @@ ZTools 采用现代声明式交互与开源插件生态范式，规避多语言�
 - **Stage 4（Linux 极客桌面与团队协同）**：Wayland (`XDG GlobalShortcuts Portal` / `wlr-layer-shell`) 与 X11 双栈适配、KWin/Mutter/Hyprland/Sway 多后端窗口分屏、`AT-SPI2` 取词与 Fcitx5 中文输入法兼容、AppImage/Flatpak/AUR 全渠道分发及 ZTools for Teams 协同。
 
 👉 查看完整的架构图、38 款内置套件清单与三大平台技术细节：**[ROADMAP.md](ROADMAP.md)**
+
+---
+
+## 📋 更新日志 (Changelog)
+
+遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 规范，每次功能迭代与问题修复均持续追加记录：
+
+- **2026-10-17（核心效率流 Phase 1~3 落地与双模态打磨）**：新增内联计算器/单位换算/色板顶层直出 (`E4`)、窗口分屏 `Restore` 上一位置还原与主界面焦点隔离 (`E5`)、3500+ 常用汉字全拼/首字母/多音字检索与命中高亮 (`E6`)、`Snippets` `{argument}` 动态参数填空表单与跨窗回填 (`E7`)、`Script Commands` 四模式与 ANSI 着色渲染 (`E8`)，以及 macOS DMG 打包与站内确认对话框。
+- **v1.1.7.1（2026-10-16）**：升级声明式 UI 2.0 (`@ztools/declarative-ui`)、客户端「积木 Z × 余烬橙」品牌视觉重设计（亮/暗双主题）、新增微软官方 Winget 自动化分发流水线 (`npm run release:winget`)、修复内置 Web 资源按内容指纹刷新。
+- **v1.0.0（2026-10-14）**：ZTools 双仓开源架构首发，集成预编译 Rust 侧车（NTFS MFT 毫秒级索引 & UIAccess 穿透）、Local-First SQLite WAL 底座、去中心化 E2EE 云同步与 BYOK / 本地离线 AI 网关。
+
+👉 查看全部历史版本与详细变更记录：**[CHANGELOG.md](CHANGELOG.md)**
 
 ---
 

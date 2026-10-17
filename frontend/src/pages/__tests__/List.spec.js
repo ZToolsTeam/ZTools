@@ -67,6 +67,8 @@ describe('List page', () => {
   let uiStore
 
   beforeEach(async () => {
+    // 兜底断开真实网络，防止任何遗漏的路径在测试中访问 CDN
+    vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new Error('测试环境断网')))
     window.localStorage.clear()
     setActivePinia(createPinia())
     pluginsStore = usePluginsStore()
@@ -84,6 +86,9 @@ describe('List page', () => {
       downloadingSet: new Set(),
       updateMap: {}
     })
+    // List 只依赖 store.loadWithCache（目录拉取 / 本地筛选分页由 StoreCatalogManager 负责，另有测试覆盖），
+    // 这里把边界接到 apiMocks.getMarketPlugins 上，断言 List 传出的查询参数与竞态处理
+    pluginsStore.loadWithCache = vi.fn((params) => apiMocks.getMarketPlugins(params))
     pluginsStore.fetchInstalledPlugins = vi.fn().mockResolvedValue([])
     pluginsStore.shouldCheckUpdate = vi.fn().mockReturnValue(false)
 
@@ -107,6 +112,7 @@ describe('List page', () => {
   })
 
   afterEach(() => {
+    vi.unstubAllGlobals()
     if (wrapper) {
       wrapper.unmount()
       wrapper = null
@@ -141,6 +147,7 @@ describe('List page', () => {
       category: 'tools',
       page: 1,
       per_page: 20,
+      sourceType: 'all',
       keyword: 'old'
     })
 
@@ -156,6 +163,7 @@ describe('List page', () => {
       category: 'tools',
       page: 1,
       per_page: 20,
+      sourceType: 'all',
       keyword: 'new'
     })
 
@@ -337,6 +345,7 @@ describe('List page', () => {
       category: '',
       page: 1,
       per_page: 20,
+      sourceType: 'all',
       keyword: '匹配'
     })
     expect(wrapper.vm.previewGroups).toEqual([])
@@ -356,6 +365,7 @@ describe('List page', () => {
       category: '',
       page: 1,
       per_page: 10,
+      sourceType: 'all',
       keyword: '匹配'
     })
   })
@@ -423,7 +433,36 @@ describe('List page', () => {
       category: '系统工具',
       page: 1,
       per_page: 50,
+      sourceType: 'all',
       keyword: ''
     })
   })
+
+  it('页头显示「插件市场」，页面内分类筛选与侧栏同一导航，并随分类 / 搜索切换标题', async () => {
+    apiMocks.getCategories.mockResolvedValue([
+      { id: 1, name: '系统工具', pluginsCount: 1 },
+      { id: 2, name: '办公效率', pluginsCount: 1 }
+    ])
+    await router.push({ name: 'list' })
+    wrapper = mount(List, {
+      global: { plugins: [router], stubs: { PluginCard3D: true, SkeletonCard: true, APagination: true, AButton: true } }
+    })
+    await flushPromises()
+
+    expect(wrapper.find('.market-title').text()).toBe('插件市场')
+    const chips = wrapper.findAll('.market-chip')
+    expect(chips.map((c) => c.text())).toEqual(['全部', '系统工具', '办公效率'])
+    expect(chips[0].classes()).toContain('is-on')
+
+    await chips[1].trigger('click')
+    await flushPromises()
+    expect(router.currentRoute.value.params.category).toBe('系统工具')
+    expect(wrapper.find('.market-title').text()).toBe('系统工具')
+    expect(wrapper.findAll('.market-chip')[1].attributes('aria-pressed')).toBe('true')
+
+    await router.push({ name: 'list', query: { q: 'json' } })
+    await flushPromises()
+    expect(wrapper.find('.market-title').text()).toBe('搜索「json」')
+  })
 })
+

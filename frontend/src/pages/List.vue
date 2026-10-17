@@ -20,8 +20,7 @@ import {
 import { useToast } from '@/composables/useToast'
 import { useVersionCompat } from '@/composables/useVersionCompat'
 import { useUIStore } from '@/stores/ui'
-import { routeUtils } from '@/router/routes'
-import { getPluginGradient } from '@/composables/usePluginIcon'
+import { routeUtils, ROUTES } from '@/router/routes'
 import { isPluginSupportedOnCurrentPlatform } from '@/utils/platform'
 import { isOfficialPlugin } from '@/utils/officialPlugins'
 import { useKeymap, KEYMAP_SCOPES } from '@/utils/keymap'
@@ -75,15 +74,16 @@ const loadingLocalPlugins = ref(false)
 const error = ref('')
 let loadRequestId = 0
 
-// 根据插件名称确定性分配渐变色
-const getGradientType = (plugin) => {
-  const name = typeof plugin === 'string' ? plugin : (plugin?.name || '')
-  return getPluginGradient(name)
-}
-
 // 是否为"全部"分类视图（需要分组展示）
 const isAllCategory = computed(() => !category.value || category.value === '')
 const searchKeyword = computed(() => String(route.query.q || '').trim())
+
+// 页面内分类筛选：与侧栏 selectCategory 行为一致（切换分类时清空搜索词）
+function selectMarketCategory(name) {
+  const next = name === '全部' ? '' : name
+  nav.setCategory(next)
+  router.push({ ...ROUTES.LIST, params: { category: next } })
+}
 const selectedSourceType = computed(() => pluginsStore.sourceFilter || 'all')
 const isCategoryOverview = computed(
   () => isAllCategory.value && searchKeyword.value === '' && selectedSourceType.value === 'all'
@@ -104,6 +104,10 @@ const CATEGORY_ICON_MAP = {
 }
 
 const categoriesReady = computed(() => categoriesStore.loaded || categoriesStore.error)
+// 当前系统上一个插件都没有的分类不显示（正在查看的分类保留，免得页面没有选中项）
+const visibleMarketCategories = computed(() =>
+  (categoriesStore.sidebarCategories || []).filter((c) => pluginsStore.isCategoryVisible(c.name, category.value))
+)
 const isInitialLoading = computed(
   () => loading.value || categoriesStore.loading || (!categoriesStore.loaded && !categoriesStore.error)
 )
@@ -588,42 +592,63 @@ onBeforeUnmount(() => {
       color: var(--color-text);
     "
   >
-    <div class="flex items-center justify-between pb-1 flex-wrap gap-2">
-      <div class="flex items-center gap-3">
-        <h2 class="text-base font-bold text-[var(--rc-text-primary)] m-0">
-          {{ category || '全部插件' }}
-        </h2>
-        <!-- 来源分类筛选：全部 / 官方自营 / 社区精选 -->
-        <div class="flex items-center bg-[var(--color-surface)] border border-[var(--color-border)] rounded-lg p-0.5 text-xs">
-          <button
-            type="button"
-            class="px-2.5 py-0.5 rounded-md transition-colors cursor-pointer border-0 font-medium"
-            :class="selectedSourceType === 'all' ? 'bg-[var(--color-primary)] text-white shadow-xs' : 'bg-transparent text-[var(--rc-text-secondary)] hover:text-[var(--rc-text-primary)]'"
-            @click="switchSourceType('all')"
-          >
-            全部
-          </button>
-          <button
-            type="button"
-            class="px-2.5 py-0.5 rounded-md transition-colors cursor-pointer border-0 font-medium flex items-center gap-1"
-            :class="selectedSourceType === 'official' ? 'bg-amber-500 text-white shadow-xs' : 'bg-transparent text-[var(--rc-text-secondary)] hover:text-amber-500'"
-            @click="switchSourceType('official')"
-          >
-            <i class="fa fa-certificate text-[10px]"></i>
-            官方自营
-          </button>
-          <button
-            type="button"
-            class="px-2.5 py-0.5 rounded-md transition-colors cursor-pointer border-0 font-medium"
-            :class="selectedSourceType === 'community' ? 'bg-[var(--color-primary)] text-white shadow-xs' : 'bg-transparent text-[var(--rc-text-secondary)] hover:text-[var(--rc-text-primary)]'"
-            @click="switchSourceType('community')"
-          >
-            社区精选
-          </button>
-        </div>
+    <!-- 页头：插件市场 / 当前分类 / 搜索词 -->
+    <header class="market-head">
+      <div class="market-head-text">
+        <h1 class="market-title">{{ category || (searchKeyword ? `搜索「${searchKeyword}」` : '插件市场') }}</h1>
+        <p class="market-subtitle">每个插件都经过官方审核，源码公开，免费安装。</p>
       </div>
-      <div class="text-xs text-[var(--rc-text-secondary)] font-mono">
-        共 {{ total }} 个
+      <button type="button" class="market-submit" title="插件投稿即向开源插件大仓提交 PR，官方审核后上架" @click="openExtensionsRepo">
+        提交插件
+      </button>
+    </header>
+
+    <!-- 页面内筛选：分类（与侧栏同一导航）+ 来源 -->
+    <div class="market-filters">
+      <div class="market-chips" role="group" aria-label="分类">
+        <button
+          v-for="c in visibleMarketCategories"
+          :key="c.name"
+          type="button"
+          class="market-chip"
+          :class="{ 'is-on': c.name === '全部' ? !category : category === c.name }"
+          :aria-pressed="c.name === '全部' ? !category : category === c.name"
+          @click="selectMarketCategory(c.name)"
+        >
+          <span class="market-chip-marker" aria-hidden="true"></span>{{ c.name }}
+        </button>
+      </div>
+      <div class="market-filters-side">
+        <div class="market-seg" role="group" aria-label="来源">
+            <button
+              type="button"
+              class="market-seg-btn"
+              :class="{ 'is-on': selectedSourceType === 'all' }"
+              :aria-pressed="selectedSourceType === 'all'"
+              @click="switchSourceType('all')"
+            >
+              全部
+            </button>
+            <button
+              type="button"
+              class="market-seg-btn"
+              :class="{ 'is-on': selectedSourceType === 'official' }"
+              :aria-pressed="selectedSourceType === 'official'"
+              @click="switchSourceType('official')"
+            >
+              官方自营
+            </button>
+            <button
+              type="button"
+              class="market-seg-btn"
+              :class="{ 'is-on': selectedSourceType === 'community' }"
+              :aria-pressed="selectedSourceType === 'community'"
+              @click="switchSourceType('community')"
+            >
+              社区精选
+            </button>
+        </div>
+        <span class="market-total">共 {{ total }} 个</span>
       </div>
     </div>
     <!-- 加载骨架屏：等分类和插件列表都就绪后再渲染 -->
@@ -685,7 +710,6 @@ onBeforeUnmount(() => {
             v-for="p in group.plugins"
             :key="getPluginId(p)"
             :plugin="p"
-            :gradient-type="getGradientType(p)"
             :showFavorite="true"
             :isFavorite="pluginsStore.isFavorite(getPluginId(p))"
             :isInstalled="installedSet.has(getPluginId(p))"
@@ -728,12 +752,12 @@ onBeforeUnmount(() => {
       <!-- 杀手级开发者号召卡片 -->
       <div
         v-if="route.query.q"
-        class="flex flex-col items-center max-w-md p-4 rounded-xl border border-[var(--rc-border-subtle,rgba(255,255,255,0.1))] bg-[var(--rc-bg-secondary,rgba(255,255,255,0.03))] shadow-sm"
+        class="flex flex-col items-center max-w-md p-4 rounded-xl border border-[var(--rc-border)] bg-[var(--rc-bg-secondary,rgba(255,255,255,0.03))] shadow-sm"
       >
-        <div class="text-sm font-medium mb-1 text-[var(--rc-text-primary,#fff)]">
+        <div class="text-sm font-medium mb-1 text-[var(--rc-text-primary)]">
           🚀 想要「{{ route.query.q }}」功能？
         </div>
-        <div class="text-xs text-[var(--rc-text-muted,#94a3b8)] mb-3 text-center leading-relaxed">
+        <div class="text-xs text-[var(--rc-text-muted)] mb-3 text-center leading-relaxed">
           ZTools 全面拥抱开源生态！基于统一声明式 UI 标准，5 分钟为你需要的工具写一个插件，投稿即 PR，官方审核后全网一键分发。
         </div>
         <div class="flex items-center gap-2">
@@ -766,7 +790,6 @@ onBeforeUnmount(() => {
       >
         <PluginCard3D
           :plugin="p"
-          :gradient-type="getGradientType(p)"
           :showFavorite="true"
           :isFavorite="pluginsStore.isFavorite(getPluginId(p))"
           :isInstalled="installedSet.has(getPluginId(p))"
@@ -804,26 +827,205 @@ onBeforeUnmount(() => {
       />
     </div>
 
-    <!-- 底部开发者与开源生态号召横幅 -->
-    <div
-      class="mt-8 mb-4 py-3 px-4 rounded-xl border border-dashed border-[var(--rc-border-subtle,rgba(255,255,255,0.1))] bg-[var(--rc-bg-secondary,rgba(255,255,255,0.02))] flex items-center justify-between text-xs text-[var(--rc-text-muted,#94a3b8)] hover:border-[var(--rc-accent,#38bdf8)] transition-all cursor-pointer"
-      @click="openExtensionsRepo"
-    >
-      <div class="flex items-center gap-2">
-        <span class="text-sm">💡</span>
-        <span>没找到你心仪的工具？ZTools 拥抱开放生态，34 款核心扩展全量开源，开放投稿即 PR，5 分钟打造专属插件！</span>
-      </div>
-      <span class="text-[var(--rc-accent,#38bdf8)] font-medium flex items-center gap-1 hover:underline">
-        访问 ZTools-extensions 大仓 <i class="fa fa-arrow-right text-[10px]"></i>
+    <!-- 底部：开源插件大仓直达 -->
+    <button type="button" class="market-repo-banner" @click="openExtensionsRepo">
+      <span class="market-repo-text">
+        <span class="market-repo-title">没找到想要的工具？</span>
+        <span class="market-repo-desc">插件源码全部开源，投稿即提交 PR，5 分钟就能写一个自己的插件</span>
       </span>
-    </div>
+      <span class="market-repo-link">访问 ZTools-extensions →</span>
+    </button>
   </div>
 </template>
 
 <style scoped>
+.market-head {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+
+.market-title {
+  margin: 0;
+  font-size: 22px;
+  font-weight: 600;
+  letter-spacing: -0.02em;
+  color: var(--rc-text-primary);
+}
+
+.market-subtitle {
+  margin: 6px 0 0;
+  font-size: 13px;
+  color: var(--rc-text-muted);
+}
+
+.market-submit {
+  height: 32px;
+  padding: 0 12px;
+  border-radius: var(--rc-radius-md);
+  border: 1px solid var(--rc-border-highlight);
+  background: var(--rc-surface);
+  color: var(--rc-text-primary);
+  font: inherit;
+  font-size: 13px;
+  cursor: pointer;
+  transition: background-color 0.15s ease;
+}
+
+.market-submit:hover {
+  background: var(--rc-surface-hover);
+}
+
+.market-filters {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-top: 6px;
+  padding-bottom: 6px;
+  border-bottom: 1px solid var(--rc-border);
+}
+
+.market-chips {
+  display: flex;
+  gap: 2px;
+  flex-wrap: wrap;
+}
+
+.market-chip {
+  height: 32px;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 12px 0 8px;
+  border: none;
+  border-radius: var(--rc-radius-md);
+  background: transparent;
+  color: var(--rc-text-secondary);
+  font: inherit;
+  font-size: 13px;
+  cursor: pointer;
+  transition: background-color 0.15s ease, color 0.15s ease;
+}
+
+.market-chip:hover {
+  background: var(--rc-surface-hover);
+  color: var(--rc-text-primary);
+}
+
+.market-chip.is-on {
+  background: var(--rc-surface-active);
+  color: var(--rc-text-primary);
+  font-weight: 600;
+}
+
+.market-chip-marker {
+  width: 6px;
+  height: 6px;
+  border-radius: 1.7px;
+  background: transparent;
+}
+
+.market-chip.is-on .market-chip-marker {
+  background: var(--rc-accent);
+  box-shadow: var(--rc-marker-glow);
+}
+
+.market-filters-side {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.market-seg {
+  display: flex;
+  padding: 2px;
+  border-radius: var(--rc-radius-md);
+  background: var(--rc-kbd-bg);
+}
+
+.market-seg-btn {
+  height: 24px;
+  padding: 0 10px;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--rc-text-muted);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.market-seg-btn:hover {
+  color: var(--rc-text-primary);
+}
+
+.market-seg-btn.is-on {
+  background: var(--rc-surface);
+  color: var(--rc-text-primary);
+  box-shadow: var(--rc-shadow-sm);
+}
+
+.market-total {
+  font-size: 12px;
+  color: var(--rc-text-muted);
+  white-space: nowrap;
+}
+
+.market-repo-banner {
+  width: 100%;
+  margin: 28px 0 12px;
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 14px 18px;
+  border-radius: var(--rc-radius-lg);
+  border: 1px solid var(--rc-border-highlight);
+  background: var(--rc-surface);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition: border-color 0.15s ease;
+}
+
+.market-repo-banner:hover {
+  border-color: var(--rc-accent);
+}
+
+.market-repo-text {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.market-repo-title {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--rc-text-primary);
+}
+
+.market-repo-desc {
+  font-size: 12px;
+  color: var(--rc-text-muted);
+}
+
+.market-repo-link {
+  flex-shrink: 0;
+  font-size: 13px;
+  color: var(--rc-accent-text);
+}
+
 .is-list-card-focused {
-  outline: 2px solid var(--rc-accent, #38bdf8);
-  outline-offset: 2px;
   border-radius: var(--rc-radius-lg, 12px);
+  box-shadow: var(--rc-focus-ring);
+}
+
+.is-list-card-focused :deep(.card-compact) {
+  border-color: transparent;
 }
 </style>

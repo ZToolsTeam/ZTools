@@ -12,6 +12,7 @@ import { execSync } from 'node:child_process'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import fs from 'node:fs'
+import { syncChangelogFromGit } from './update-changelog.mjs'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const rootDir = path.resolve(__dirname, '..')
@@ -85,7 +86,7 @@ function pushToRemotes(repoDir, name, githubUrl, giteeUrl) {
   }
 }
 
-function syncRepo({ name, repoDir, prepareScript, commitPrefix, githubUrl, giteeUrl }) {
+function syncRepo({ name, repoDir, prepareScript, commitPrefix, githubUrl, giteeUrl, isOss = false }) {
   console.log(`\n========================================================`)
   console.log(`🚀 开始同步: ${name}`)
   console.log(`   目标目录: ${repoDir}`)
@@ -99,6 +100,20 @@ function syncRepo({ name, repoDir, prepareScript, commitPrefix, githubUrl, gitee
     console.log(`[仅推送模式] 跳过从当前项目抽取代码，直接推送现成 ${repoDir} 仓库至 GitHub & Gitee...`)
     pushToRemotes(repoDir, name, githubUrl, giteeUrl)
     return
+  }
+
+  // 0. 自动同步追加 CHANGELOG.md
+  if (isOss) {
+    try {
+      const clResult = syncChangelogFromGit({ rootDir })
+      if (clResult.addedCount > 0) {
+        console.log(`📋 [更新日志] 已自动追加 ${clResult.addedCount} 条最新提交至 CHANGELOG.md`)
+      } else {
+        console.log(`📋 [更新日志] CHANGELOG.md 已包含最新公开变更记录`)
+      }
+    } catch (err) {
+      console.warn(`⚠ [更新日志] 自动同步 CHANGELOG.md 跳过: ${err.message}`)
+    }
   }
 
   // 1. 执行脱敏抽取
@@ -162,7 +177,8 @@ const TASKS = {
     prepareScript: path.join(rootDir, 'scripts', 'prepare-opensource-release.mjs'),
     commitPrefix: 'chore(release)',
     githubUrl: 'https://github.com/codingmuse/ZTools',
-    giteeUrl: 'https://gitee.com/hoposky/ZTools.git'
+    giteeUrl: 'https://gitee.com/hoposky/ZTools.git',
+    isOss: true
   },
   extensions: {
     name: 'ZTools 插件生态大仓 (MIT)',

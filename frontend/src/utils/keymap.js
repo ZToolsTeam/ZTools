@@ -85,8 +85,21 @@ export function isInputElement(target) {
  * @param {KeyboardEvent} event 
  * @returns {boolean} 是否被某个作用域的处理器拦截并处理
  */
+/** 页面上是否有打开着的 Ant Design 对话框（关闭后 wrap 仍留在 DOM 里，只是 display: none） */
+export function isModalOpen() {
+  if (typeof document === 'undefined' || typeof document.querySelectorAll !== 'function') return false
+  for (const wrap of document.querySelectorAll('.ant-modal-wrap')) {
+    if (wrap.style?.display === 'none') continue
+    if (typeof getComputedStyle === 'function' && getComputedStyle(wrap).display === 'none') continue
+    return true
+  }
+  return false
+}
+
 export function dispatchKeyEvent(event) {
   if (!event) return false
+  // 有对话框打开时按键归对话框（Esc 关对话框、回车点按钮），页面快捷键一律不响应
+  if (isModalOpen()) return false
 
   const combo = normalizeEventKeyCombo(event)
   const inInput = isInputElement(event.target)

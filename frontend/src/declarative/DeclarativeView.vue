@@ -7,25 +7,25 @@
     <!-- 顶部通用导航头 (显示 navigationTitle 与 返回按钮) -->
     <div
       v-if="hasHeader"
-      class="px-4 py-2.5 border-b border-white/10 flex items-center justify-between bg-white/[0.03]"
+      class="px-4 py-2.5 border-b border-[var(--rc-border)] flex items-center justify-between bg-[var(--rc-surface-subtle)]"
     >
       <div class="flex items-center gap-2">
         <button
           v-if="canGoBack"
-          class="p-1 rounded-lg text-slate-400 hover:text-white hover:bg-white/10 transition-colors flex items-center gap-1 text-xs"
+          class="p-1 rounded-lg text-[var(--rc-text-muted)] hover:text-[var(--rc-text-primary)] hover:bg-[var(--rc-surface-hover)] transition-colors flex items-center gap-1 text-xs"
           title="后退 (Esc)"
           @click="handleBack"
         >
           <DeclarativeIcon icon="arrow-left" :size="14" />
           <span>返回</span>
         </button>
-        <span class="font-medium text-sm text-slate-200">
+        <span class="font-medium text-sm text-[var(--rc-text-primary)]">
           {{ navigationTitle }}
         </span>
       </div>
 
-      <div class="text-xs text-slate-500 flex items-center gap-1.5">
-        <span class="inline-block w-2 h-2 rounded-full bg-emerald-400"></span>
+      <div class="text-xs text-[var(--rc-text-muted)] flex items-center gap-1.5">
+        <span class="inline-block w-2 h-2 rounded-full bg-[var(--rc-success)]"></span>
         <span>声明式运行时</span>
       </div>
     </div>
@@ -62,59 +62,59 @@
       <!-- 空状态 -->
       <div
         v-else
-        class="flex flex-col items-center justify-center h-full text-slate-400 text-sm gap-2"
+        class="flex flex-col items-center justify-center h-full text-[var(--rc-text-muted)] text-sm gap-2"
       >
-        <DeclarativeIcon icon="document" :size="32" class="text-slate-500" />
+        <DeclarativeIcon icon="document" :size="32" class="text-[var(--rc-text-muted)]" />
         <span>未识别的声明式视图或视图已卸载</span>
       </div>
     </div>
 
     <!-- 底部 Fluent 风格快捷栏 -->
-    <div class="px-4 py-2 border-t border-white/10 flex items-center justify-between bg-black/30 text-xs text-slate-400">
+    <div class="px-4 py-2 border-t border-[var(--rc-border)] flex items-center justify-between bg-[var(--rc-surface-subtle)] text-xs text-[var(--rc-text-muted)]">
       <!-- 左侧：主要 Action 提示与分栏切换 -->
       <div class="flex items-center gap-4">
         <div
           v-if="primaryAction"
-          class="flex items-center gap-1.5 cursor-pointer hover:text-white transition-colors"
+          class="flex items-center gap-1.5 cursor-pointer hover:text-[var(--rc-text-primary)] transition-colors"
           title="执行首要动作 (Enter)"
           @click="executeAction(primaryAction)"
         >
-          <span class="text-slate-200 font-medium">{{ primaryAction.props?.title }}</span>
-          <kbd class="px-1.5 py-0.5 bg-white/10 text-slate-300 rounded font-mono text-[10px]">Enter</kbd>
+          <span class="text-[var(--rc-text-primary)] font-medium">{{ primaryAction.props?.title }}</span>
+          <ShortcutKeys combo="Enter" />
         </div>
         <div
           v-if="toggleDetailAction"
-          class="flex items-center gap-1.5 cursor-pointer hover:text-white transition-colors"
+          class="flex items-center gap-1.5 cursor-pointer hover:text-[var(--rc-text-primary)] transition-colors"
           :title="toggleDetailAction.props?.title"
           @click="executeAction(toggleDetailAction)"
         >
-          <span class="text-slate-300">{{ toggleDetailAction.props?.title }}</span>
-          <kbd class="px-1.5 py-0.5 bg-white/10 text-slate-300 rounded font-mono text-[10px]">Ctrl+D</kbd>
+          <span class="text-[var(--rc-text-secondary)]">{{ toggleDetailAction.props?.title }}</span>
+          <ShortcutKeys combo="Ctrl+D" />
         </div>
         <div
           v-if="canGoBack"
-          class="flex items-center gap-1 text-slate-400 cursor-pointer hover:text-white transition-colors"
+          class="flex items-center gap-1 text-[var(--rc-text-muted)] cursor-pointer hover:text-[var(--rc-text-primary)] transition-colors"
           title="后退上一级 (Esc)"
           @click="handleBack"
         >
           <span>后退</span>
-          <kbd class="px-1.5 py-0.5 bg-white/10 text-slate-300 rounded font-mono text-[10px]">Esc</kbd>
+          <ShortcutKeys combo="Escape" />
         </div>
         <div
           v-else-if="!isPopout"
-          class="flex items-center gap-1 text-slate-400 cursor-pointer hover:text-white transition-colors"
+          class="flex items-center gap-1 text-[var(--rc-text-muted)] cursor-pointer hover:text-[var(--rc-text-primary)] transition-colors"
           title="返回工作台 (Esc)"
           @click="emit('exit')"
         >
           <span>返回工作台</span>
-          <kbd class="px-1.5 py-0.5 bg-white/10 text-slate-300 rounded font-mono text-[10px]">Esc</kbd>
+          <ShortcutKeys combo="Escape" />
         </div>
         <div
           v-else
-          class="flex items-center gap-1.5 text-emerald-400/90 font-mono text-[11px]"
+          class="flex items-center gap-1.5 text-[var(--rc-success)] font-mono text-[11px]"
           title="独立常驻模式下按 Esc 仅清空搜索框，防止误触关闭盯盘窗口"
         >
-          <span class="inline-block w-1.5 h-1.5 rounded-full bg-emerald-400"></span>
+          <span class="inline-block w-1.5 h-1.5 rounded-full bg-[var(--rc-success)]"></span>
           <span>独立常驻防误关 (Esc 仅清过滤)</span>
         </div>
       </div>
@@ -122,11 +122,11 @@
       <!-- 右侧：ActionPanel 呼出按钮 -->
       <div class="flex items-center gap-2">
         <button
-          class="flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-white/5 hover:bg-white/10 text-slate-300 border border-white/10 transition-colors cursor-pointer"
+          class="flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-[var(--rc-surface-hover)] hover:bg-[var(--rc-surface-hover)] text-[var(--rc-text-secondary)] border border-[var(--rc-border)] transition-colors cursor-pointer"
           @click="toggleActionPanel"
         >
           <span>动作面板</span>
-          <kbd class="px-1 py-0.5 bg-white/10 text-slate-400 rounded font-mono text-[10px]">Ctrl+K</kbd>
+          <ShortcutKeys combo="Ctrl+K" />
         </button>
       </div>
     </div>
@@ -136,6 +136,7 @@
       :visible="actionPanelVisible"
       :actions="activeActions"
       :target-title="currentSelectedItem?.props?.title || ''"
+      placement="corner"
       @close="actionPanelVisible = false"
       @trigger="executeAction"
     />
@@ -147,6 +148,8 @@
 
 <script setup>
 import { ref, computed, watch, provide, onUnmounted } from "vue";
+import ShortcutKeys from '@/components/base/ShortcutKeys.vue'
+
 import "./style/declarative-fluent.css";
 import DeclarativeIcon from "./components/DeclarativeIcon.vue";
 import ListRenderer from "./components/ListRenderer.vue";
@@ -447,6 +450,7 @@ function handleFormSubmit(values) {
 }
 
 import { getActivePinia } from "pinia";
+
 let uiStore = null;
 try {
   if (getActivePinia()) {

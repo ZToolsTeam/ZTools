@@ -7,6 +7,11 @@ import test from 'node:test'
 import { SuperPanelDataService } from '../../src/main/super-panel/data-service.js'
 import type { MacApplicationBundle } from '../../src/main/platform/macos/local-application.js'
 
+// 这些用例依赖 Windows 路径语义（C:\\ / E:\\）或 Windows 宿主能力（DLL、进程启动、更新安装链、本地 .exe 软件），
+// 在其他平台上功能代码按设计会拒绝执行，因此只在 Windows 宿主运行；Windows CI 上照常覆盖。
+const windowsOnly = { skip: process.platform === 'win32' ? false : '依赖 Windows 路径或宿主能力，仅在 Windows 上运行' }
+
+
 function expectedWindowsLocalAppId(executable: string): string {
   const source = `${executable.trim().replaceAll('/', '\\').toLowerCase()}|`
   let hash = 0x811c9dc5
@@ -57,7 +62,7 @@ async function readLocalApps(root: string): Promise<{ apps: unknown[] }> {
   return JSON.parse(source.replace(/^\uFEFF/, '')) as { apps: unknown[] }
 }
 
-test('persists Delphi-compatible panel pins and local app usage', async (context) => {
+test('persists Delphi-compatible panel pins and local app usage', windowsOnly, async (context) => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'ztools-super-panel-'))
   context.after(() => fs.rm(root, { recursive: true, force: true }))
   let configuration = JSON.stringify({
@@ -303,7 +308,7 @@ test('does not count a Mac app when LaunchServices reports an open error', async
 
 })
 
-test('orders plugin recents by last-used time and local apps by legacy usage order', async (context) => {
+test('orders plugin recents by last-used time and local apps by legacy usage order', windowsOnly, async (context) => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'ztools-super-panel-order-'))
   context.after(() => fs.rm(root, { recursive: true, force: true }))
   await fs.writeFile(path.join(root, 'plugin_state.json'), JSON.stringify({
@@ -394,7 +399,7 @@ test('orders plugin recents by last-used time and local apps by legacy usage ord
   )
 })
 
-test('launches legacy local app arguments without shell expansion', async (context) => {
+test('launches legacy local app arguments without shell expansion', windowsOnly, async (context) => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'ztools-super-panel-args-'))
   context.after(() => fs.rm(root, { recursive: true, force: true }))
   const workingDir = path.dirname(process.execPath)
@@ -459,7 +464,7 @@ test('launches legacy local app arguments without shell expansion', async (conte
   assert.equal(launches.length, 1)
 })
 
-test('uses a native data URL for local app icons without exposing file paths', async (context) => {
+test('uses a native data URL for local app icons without exposing file paths', windowsOnly, async (context) => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'ztools-super-panel-icon-'))
   context.after(() => fs.rm(root, { recursive: true, force: true }))
   await fs.writeFile(path.join(root, 'local_apps.json'), JSON.stringify({

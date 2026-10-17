@@ -548,6 +548,26 @@ describe('MyPage Component', () => {
       expect(pluginsStore.uninstallPlugin).toHaveBeenCalledWith('plugin-1')
     })
 
+    it('[破坏性] 卸载确认框打开时，回车和 Delete 不会再打开或卸载列表里的插件', async () => {
+      await mountPage({ installedPlugins: basePlugins })
+      wrapper.vm.selectedPlugin = basePlugins[0]
+      Modal.confirm.mockClear()
+      const wrap = document.createElement('div')
+      wrap.className = 'ant-modal-wrap'
+      document.body.appendChild(wrap)
+      try {
+        const enter = { key: 'Enter', ctrlKey: false, preventDefault: vi.fn() }
+        wrapper.vm.handleKeyDown(enter)
+        wrapper.vm.handleKeyDown({ key: 'Delete', ctrlKey: false, preventDefault: vi.fn() })
+        await flushPromises()
+        expect(enter.preventDefault).not.toHaveBeenCalled()
+        expect(pluginsStore.openPlugin).not.toHaveBeenCalled()
+        expect(Modal.confirm).not.toHaveBeenCalled()
+      } finally {
+        wrap.remove()
+      }
+    })
+
     it('shows and hides the plugin context menu', async () => {
       await mountPage({ installedPlugins: basePlugins })
       const event = {
@@ -626,4 +646,120 @@ describe('MyPage Component', () => {
       )
     })
   })
+
+  describe('工作台紧凑布局（常用磁贴 / 最近使用）', () => {
+    const many = Array.from({ length: 15 }, (_, i) => ({ pluginId: `p-${i}`, name: `插件 ${i}`, category: '系统工具' }))
+
+    it('默认只显示两行磁贴（列数 × 2），其余收进「查看全部」', async () => {
+      await mountPage({ installedPlugins: many })
+      const tiles = wrapper.findAll('.plugin-tile')
+      // jsdom 无布局，列数回退为默认 5 列
+      expect(tiles).toHaveLength(10)
+      expect(wrapper.text()).toContain('查看全部')
+    })
+
+    it('最近使用按打开记录排序，跳过已卸载项并最多 5 条，点击直接打开', async () => {
+      await mountPage({ installedPlugins: many })
+      pluginsStore.$patch({ recents: ['p-3', 'ghost-uninstalled', 'p-1', 'p-4', 'p-5', 'p-6', 'p-7'] })
+      await flushPromises()
+      const rows = wrapper.findAll('.recent-row')
+      expect(rows.map((r) => r.find('.recent-name').text())).toEqual(['插件 3', '插件 1', '插件 4', '插件 5', '插件 6'])
+      await rows[0].trigger('click')
+      expect(pluginsStore.openPlugin).toHaveBeenCalledWith('p-3')
+    })
+
+    it('没有最近记录时不渲染「最近使用」，推荐为空时不渲染空状态占位', async () => {
+      await mountPage({ installedPlugins: basePlugins, recommendedItems: [] })
+      expect(wrapper.find('.recent-list').exists()).toBe(false)
+      expect(wrapper.text()).not.toContain('热门推荐')
+      expect(wrapper.find('.market-banner').exists()).toBe(true)
+    })
+
+    it('点击已安装磁贴即打开；收藏中未安装的磁贴进入详情页', async () => {
+      await mountPage({
+        installedPlugins: basePlugins,
+        favoritePluginsList: [{ pluginId: 'remote-only', name: '远程插件' }],
+        favorites: ['remote-only']
+      })
+      await wrapper.findAll('.plugin-tile')[1].trigger('click')
+      expect(pluginsStore.openPlugin).toHaveBeenCalledWith('plugin-2')
+
+      // 切到「收藏」标签
+      wrapper.findComponent({ name: 'RcSegmented' }).vm.$emit('update:modelValue', 'favorites')
+      wrapper.findComponent({ name: 'RcSegmented' }).vm.$emit('change', 'favorites')
+      await flushPromises()
+      const tile = wrapper.findAll('.plugin-tile').find((t) => t.text().includes('远程插件'))
+      expect(tile).toBeTruthy()
+      expect(tile.text()).toContain('未安装')
+      const pushSpy = vi.spyOn(router, 'push').mockResolvedValue(undefined)
+      await tile.trigger('click')
+      await flushPromises()
+      expect(pushSpy).toHaveBeenCalledWith(expect.objectContaining({ name: 'details', params: { pluginId: 'remote-only' } }))
+      expect(pluginsStore.openPlugin).toHaveBeenCalledTimes(1)
+    })
+
+    it('[破坏性] 已下架插件的磁贴点击不会启动，并提示下架原因', async () => {
+      await mountPage({ installedPlugins: basePlugins })
+      pluginsStore.$patch({ revokedMap: { 'plugin-1': { revoked: true, reason: '安全原因下架' } } })
+      await flushPromises()
+      const tile = wrapper.findAll('.plugin-tile')[0]
+      expect(tile.text()).toContain('已下架')
+      await tile.trigger('click')
+      expect(pluginsStore.openPlugin).not.toHaveBeenCalled()
+      expect(toastSpies.toastError).toHaveBeenCalledWith(expect.stringContaining('安全原因下架'))
+    })
+
+    it('右键磁贴弹出操作菜单，并提供「查看详情」', async () => {
+      await mountPage({ installedPlugins: basePlugins })
+      await wrapper.findAll('.plugin-tile')[0].trigger('contextmenu', { clientX: 40, clientY: 60 })
+      await flushPromises()
+      expect(wrapper.find('.context-menu').exists()).toBe(true)
+      expect(wrapper.find('.context-menu').text()).toContain('查看详情')
+    })
+
+    it('[回归] 只有真正可更新且兼容的插件才标记「可更新」', async () => {
+      await mountPage({ installedPlugins: basePlugins })
+      pluginsStore.$patch({
+        updateMap: {
+          'plugin-1': { hasUpdate: false },
+          'plugin-2': { hasUpdate: true, incompatible: false },
+          'plugin-3': { hasUpdate: true, incompatible: true, incompatReason: '宿主版本过低' }
+        }
+      })
+      await flushPromises()
+      const labels = wrapper.findAll('.plugin-tile').map((t) => t.text().includes('可更新'))
+      expect(labels).toEqual([false, true, false])
+    })
+
+    it('磁贴显示插件启动快捷键（来自触发器列表），双击修饰键以文字显示', async () => {
+      window.ztools.trigger = {
+        list: vi.fn().mockResolvedValue([
+          { id: 't1', type: 'hotkey', pluginId: 'plugin-1', config: { key: 'Alt+V' }, action: { mode: 'window', target: 'plugin-1' } },
+          { id: 't2', type: 'hotkey', pluginId: 'plugin-2', config: { key: 'DoubleCtrl' }, action: { mode: 'window', target: 'plugin-2' } }
+        ])
+      }
+      await mountPage({ installedPlugins: basePlugins })
+      const tiles = wrapper.findAll('.plugin-tile')
+      expect(tiles[0].find('.shortcut-keys').exists()).toBe(true)
+      expect(tiles[0].findAll('.shortcut-keys kbd').length).toBe(2)
+      expect(tiles[1].text()).toContain('双击 Ctrl')
+      expect(tiles[2].find('.shortcut-keys').exists()).toBe(false)
+    })
+
+    it('[破坏性] 读取触发器失败时磁贴照常显示，只是没有快捷键', async () => {
+      window.ztools.trigger = { list: vi.fn().mockRejectedValue(new Error('IPC 断开')) }
+      await mountPage({ installedPlugins: basePlugins })
+      expect(wrapper.findAll('.plugin-tile')).toHaveLength(3)
+      expect(wrapper.find('.plugin-tile .shortcut-keys').exists()).toBe(false)
+    })
+
+    it('最近使用显示相对时间，没有记录时间的条目留空', async () => {
+      await mountPage({ installedPlugins: basePlugins })
+      pluginsStore.$patch({ recents: ['plugin-2', 'plugin-1'], recentUsedAt: { 'plugin-2': Date.now() - 5 * 60_000 } })
+      await flushPromises()
+      const times = wrapper.findAll('.recent-row .recent-time').map((n) => n.text())
+      expect(times).toEqual(['5 分钟前', ''])
+    })
+  })
 })
+

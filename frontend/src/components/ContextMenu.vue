@@ -192,50 +192,42 @@ onUnmounted(() => {
   position: fixed;
   z-index: 9999;
   min-width: 180px;
-  background: #ffffff;
-  border: 1px solid #e5e7eb;
-  border-radius: 8px;
-  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
-  padding: 4px 0;
+  background: var(--rc-surface);
+  border: 1px solid var(--rc-border-highlight);
+  border-radius: 10px;
+  box-shadow: var(--rc-shadow-lg);
+  padding: 4px;
   user-select: none;
-  font-size: 14px;
-}
-
-.dark .context-menu {
-  background: #1f2937;
-  border-color: #374151;
-  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.5);
+  font-size: 13px;
 }
 
 .menu-item {
   display: flex;
   align-items: center;
-  gap: 12px;
-  padding: 8px 16px;
+  gap: 10px;
+  height: 32px;
+  padding: 0 10px;
+  border-radius: 6px;
   cursor: pointer;
   transition: background-color 0.15s ease;
-  color: #374151;
-}
-
-.dark .menu-item {
-  color: #e5e7eb;
+  color: var(--rc-text-primary);
 }
 
 .menu-item:hover:not(.disabled) {
-  background-color: #f3f4f6;
-}
-
-.dark .menu-item:hover:not(.disabled) {
-  background-color: #374151;
-}
-
-.menu-item:active:not(.disabled) {
-  transform: scale(0.98);
+  background-color: var(--rc-surface-active);
 }
 
 .menu-item.disabled {
-  opacity: 0.5;
+  opacity: 0.45;
   cursor: not-allowed;
+}
+
+.menu-item.danger {
+  color: var(--rc-error);
+}
+
+.menu-item.danger:hover:not(.disabled) {
+  background-color: var(--rc-error-subtle);
 }
 
 .menu-icon {
@@ -250,12 +242,8 @@ onUnmounted(() => {
 
 .menu-separator {
   height: 1px;
-  background-color: #e5e7eb;
-  margin: 4px 8px;
-}
-
-.dark .menu-separator {
-  background-color: #4b5563;
+  background-color: var(--rc-border);
+  margin: 4px 6px;
 }
 
 /* 动画效果 */

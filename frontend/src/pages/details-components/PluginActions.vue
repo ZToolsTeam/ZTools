@@ -59,7 +59,7 @@ defineEmits([
       <a-button
         type="default"
         disabled
-        style="opacity: 0.6; color: var(--color-error, #ff4d4f); border-color: var(--color-error, #ff4d4f);"
+        style="opacity: 0.6; color: var(--rc-error); border-color: var(--rc-error);"
       >
         <i class="fa fa-ban mr-2"></i> 已下架
       </a-button>
@@ -69,10 +69,6 @@ defineEmits([
     <a-button
       v-else-if="isInstalled && !hasUpdate"
       type="primary"
-      style="
-        background-color: var(--zt-success);
-        border-color: var(--zt-success);
-      "
       @click="$emit('open')"
     >
       <i class="fa fa-play mr-2"></i> 打开
@@ -82,10 +78,6 @@ defineEmits([
     <a-button
       v-else-if="isInstalled && hasUpdate"
       type="primary"
-      style="
-        background-color: var(--zt-warning);
-        border-color: var(--zt-warning);
-      "
       :loading="downloading"
       @click="$emit('update')"
     >
@@ -131,12 +123,8 @@ defineEmits([
       }}
     </a-button>
     <a-button
-      :type="isFavorite ? 'primary' : 'default'"
-      :style="
-        isFavorite
-          ? 'background-color: var(--zt-warning); border-color: var(--zt-warning);'
-          : ''
-      "
+      type="default"
+      :class="{ 'is-favorite': isFavorite }"
       @click="$emit('toggle-favorite')"
     >
       <i class="fa" :class="isFavorite ? 'fa-star' : 'fa-star-o'"></i>
@@ -164,7 +152,7 @@ defineEmits([
           </a-menu-item>
           <a-menu-divider />
           <a-menu-item key="uninstall" @click="$emit('uninstall')">
-            <span class="text-red-500">
+            <span class="text-[var(--rc-error)]">
               <i class="fa fa-trash-o mr-2"></i>
               卸载
             </span>
@@ -176,9 +164,14 @@ defineEmits([
 </template>
 
 <style scoped>
+/* 已收藏：星标点亮为余烬橙，按钮本身保持中性 */
+.is-favorite :deep(.fa) {
+  color: var(--rc-accent);
+}
+
 :global(.plugin-actions-menu) {
   border: 1px solid var(--color-border);
-  box-shadow: 0 8px 24px rgba(15, 23, 42, 0.14);
+  box-shadow: var(--rc-shadow-lg);
   margin-top: 4px;
 }
 

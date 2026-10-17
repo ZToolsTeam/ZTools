@@ -63,6 +63,8 @@ export default defineConfig({
   plugins: [
     vue(),
     Components({
+      // 前端为纯 JS 工程（无 tsconfig），类型声明文件没有用处，且每次构建都会留下未跟踪的 components.d.ts
+      dts: false,
       resolvers: [
         AntDesignVueResolver({
           importStyle: false // Ant Design Vue 4.x uses CSS-in-JS

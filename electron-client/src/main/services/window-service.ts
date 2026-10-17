@@ -19,7 +19,10 @@ import type { WindowRegistry } from '../windows/window-registry.js'
 import { clampBoundsToWorkArea } from '../windows/display-bounds.js'
 import {
   getTitleBarOverlayOptions,
+  getTrafficLightPosition,
+  getWindowBackgroundColor,
   isWindows11OrLater,
+  POPOUT_TITLE_BAR_HEIGHT,
   secureWebPreferences
 } from '../windows/main-window.js'
 
@@ -350,10 +353,11 @@ export class WindowService {
       minWidth: Math.min(820, workArea.width),
       minHeight: Math.min(540, workArea.height),
       show: false,
-      backgroundColor: isDark ? '#0f172a' : '#f8fafc',
+      backgroundColor: getWindowBackgroundColor(isDark),
       autoHideMenuBar: true,
       titleBarStyle: isMac ? 'hiddenInset' : 'hidden',
-      ...(isWin ? { titleBarOverlay: getTitleBarOverlayOptions(isDark) } : {}),
+      ...(isMac ? { trafficLightPosition: getTrafficLightPosition(POPOUT_TITLE_BAR_HEIGHT) } : {}),
+      ...(isWin ? { titleBarOverlay: getTitleBarOverlayOptions(isDark, POPOUT_TITLE_BAR_HEIGHT) } : {}),
       ...(hasMica ? { backgroundMaterial: 'mica' } : {}),
       ...(isMac ? { vibrancy: 'sidebar' } : {}),
       webPreferences: secureWebPreferences()

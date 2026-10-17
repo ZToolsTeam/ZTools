@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { setActivePinia, createPinia } from 'pinia'
-import { usePluginsStore } from '../plugins'
+import { usePluginsStore, sanitizeRecentUsedAt } from '../plugins'
 
 // mock API
 const apiMocks = vi.hoisted(() => ({
@@ -52,11 +52,14 @@ describe('usePluginsStore', () => {
     apiMocks.getSyncData.mockResolvedValue({ updated_at: null, favorites: [] })
     apiMocks.getMarketPlugins.mockResolvedValue({ list: [], total: 0, page: 1, pageSize: 12 })
     setupZtools()
+    // 单测不访问外网：CDN 不可达时真实 fetch 会挂起直到超时，导致用例随网络状况时好时坏
+    vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new Error('测试环境断网')))
   })
 
   afterEach(() => {
     vi.useRealTimers()
     vi.clearAllMocks()
+    vi.unstubAllGlobals()
   })
 
   // ── 下载状态管理 ──────────────────────────────────────────────
@@ -257,6 +260,18 @@ describe('usePluginsStore', () => {
 
   // ── listCache ─────────────────────────────────────────────────
   describe('列表缓存', () => {
+    // 目录管理器会先尝试 V2 接口与 CDN 静态索引；测试里断开真实网络，
+    // 保证确定性地回退到 getMarketPlugins，避免结果随网络环境漂移
+    beforeEach(() => {
+      vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new Error('测试环境断网')))
+      vi.spyOn(console, 'warn').mockImplementation(() => {})
+    })
+
+    afterEach(() => {
+      vi.unstubAllGlobals()
+      vi.restoreAllMocks()
+    })
+
     it('loadWithCache 命中缓存时不重复请求', async () => {
       const store = usePluginsStore()
       const params = { category: 'tools', page: 1, per_page: 12 }
@@ -381,4 +396,77 @@ describe('usePluginsStore', () => {
       expect(store.installedSet.has('p-new')).toBe(true)
     })
   })
+
+  // ── 图标刷新 ────────────────────────────────────────────────────
+  describe('_applyIconPatch', () => {
+    afterEach(() => {
+      delete window.ztools
+    })
+
+    it('[回归] 内置官方插件没有本地图标文件，不向主进程请求刷新（避免 PLUGIN_NOT_FOUND 刷屏）', () => {
+      const refreshIcon = vi.fn().mockResolvedValue({ success: true })
+      window.ztools = { plugin: { refreshIcon } }
+      const store = usePluginsStore()
+      store.installedPlugins = [
+        { pluginId: 'json-format', builtin: true, icon: '' },
+        { pluginId: 'local-plugin', icon: '', localIconUrl: 'https://cdn.example.com/old.png' },
+        { pluginId: 'up-to-date', icon: '', localIconUrl: 'https://cdn.example.com/same.png' }
+      ]
+      store._applyIconPatch({
+        'json-format': 'https://cdn.example.com/json.png',
+        'local-plugin': 'https://cdn.example.com/new.png',
+        'up-to-date': 'https://cdn.example.com/same.png'
+      })
+      expect(refreshIcon).toHaveBeenCalledTimes(1)
+      expect(refreshIcon).toHaveBeenCalledWith('local-plugin', 'https://cdn.example.com/new.png')
+      // 界面仍然使用市场的远程图标
+      expect(store.installedPlugins[0].icon).toBe('https://cdn.example.com/json.png')
+    })
+
+    it('[破坏性] 主进程刷新失败不会抛到调用方', async () => {
+      const refreshIcon = vi.fn().mockRejectedValue(new Error('PLUGIN_NOT_FOUND'))
+      window.ztools = { plugin: { refreshIcon } }
+      const store = usePluginsStore()
+      store.installedPlugins = [{ pluginId: 'local-plugin', icon: '', localIconUrl: '' }]
+      expect(() => store._applyIconPatch({ 'local-plugin': 'https://cdn.example.com/a.png' })).not.toThrow()
+      await Promise.resolve()
+      expect(refreshIcon).toHaveBeenCalledTimes(1)
+    })
+  })
+
+  // ── 最近使用时间 ───────────────────────────────────────────────
+  describe('最近使用时间', () => {
+    afterEach(() => {
+      delete window.ztools
+    })
+
+    it('sanitizeRecentUsedAt 只保留 recents 中的合理时间戳', () => {
+      const now = 1_800_000_000_000
+      const raw = JSON.stringify({ a: now - 1000, b: 'x', c: now + 3_600_000, d: -5, gone: now - 10 })
+      expect(sanitizeRecentUsedAt(raw, ['a', 'b', 'c', 'd'], now)).toEqual({ a: now - 1000 })
+    })
+
+    it('[破坏性] 损坏的配置、数组与原型链键名一律安全回退', () => {
+      expect(sanitizeRecentUsedAt('{not json', ['a'])).toEqual({})
+      expect(sanitizeRecentUsedAt('[1,2]', ['0'])).toEqual({})
+      expect(sanitizeRecentUsedAt(null, ['a'])).toEqual({})
+      expect(sanitizeRecentUsedAt('{}', ['__proto__', 'constructor', 'toString'])).toEqual({})
+      expect(sanitizeRecentUsedAt({ a: 1 }, 'not-array')).toEqual({})
+    })
+
+    it('markRecent 记录时间并与 recents 一起持久化，超出列表的旧时间被清理', async () => {
+      const set = vi.fn().mockResolvedValue(true)
+      window.ztools = { config: { set } }
+      const store = usePluginsStore()
+      store.recents = ['old']
+      store.recentUsedAt = { old: 1, stale: 2 }
+      await store.markRecent('json-format')
+      expect(store.recents).toEqual(['json-format', 'old'])
+      expect(Object.keys(store.recentUsedAt).sort()).toEqual(['json-format', 'old'])
+      expect(store.recentUsedAt['json-format']).toBeGreaterThan(1)
+      const saved = set.mock.calls.find(([key]) => key === 'plugins.recents_at')
+      expect(JSON.parse(saved[1])).toEqual(store.recentUsedAt)
+    })
+  })
 })
+

@@ -10,7 +10,7 @@ import LauncherBar from '@/components/LauncherBar.vue'
 
 import { useEventsStore } from './stores/events'
 import { usePluginsStore } from './stores/plugins'
-import { useAppUpdate } from '@/composables/useAppUpdate'
+import { useAppUpdate, isUpdateUnsupported } from '@/composables/useAppUpdate'
 import { reportOnline } from '@/api/statistics'
 import { isOnline } from '@/config/runtime-mode'
 import { DEPRECATED_PLUGIN_FEATURE_HOTKEY_ITEMS } from '@/utils/pluginFeatureHotkeys'
@@ -30,6 +30,11 @@ const isLauncherWindow = computed(() => {
     window.location.hash.includes('launcher')
   )
 })
+
+// 悬浮条窗口是透明无边框窗口：根节点必须透明，否则圆角面板外会露出方形底色
+if (isLauncherWindow.value && typeof document !== 'undefined') {
+  document.documentElement.classList.add('is-launcher-window')
+}
 
 const events = useEventsStore()
 const pluginsStore = usePluginsStore()
@@ -227,6 +232,10 @@ onMounted(async () => {
       }
     })
     .catch((error) => {
+      if (isUpdateUnsupported(error)) {
+        console.info('[update] 当前平台暂不支持应用内更新，已跳过启动检查')
+        return
+      }
       console.error('启动时检查更新失败:', error)
     })
 

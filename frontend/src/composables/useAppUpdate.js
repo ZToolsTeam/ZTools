@@ -4,6 +4,15 @@ import { compareAppVersions } from '@/utils/version'
 // 防止 web 静默更新重复触发
 let _webUpdateInProgress = false
 
+/**
+ * 当前平台是否不支持应用内更新（主进程以 NOT_SUPPORTED 明确声明，例如 macOS 更新安装链尚未验收）。
+ * 这是能力边界而不是故障：启动检查应静默跳过，手动检查应提示用户去官网下载。
+ * @param {unknown} error
+ */
+export function isUpdateUnsupported(error) {
+  return Boolean(error) && typeof error === 'object' && error.code === 'NOT_SUPPORTED'
+}
+
 export function useAppUpdate() {
   const updateStore = useUpdateStore()
 
@@ -20,7 +29,8 @@ export function useAppUpdate() {
       // 前端在 main.js 的 update_handler 中统一处理展示
       return result
     } catch (error) {
-      updateStore.setError(error.message)
+      // 平台不支持不是错误，不写入更新错误状态
+      if (!isUpdateUnsupported(error)) updateStore.setError(error.message)
       throw error
     }
   }

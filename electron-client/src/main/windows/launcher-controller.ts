@@ -15,6 +15,8 @@ export interface LauncherControllerOptions {
   registry: WindowRegistry
   showMainWindow(): void
   hideMainWindow(): void
+  /** 让主窗口跳到指定页面（hash 路由，如 /details/foo） */
+  navigateMainWindow?(route: string): void
   sidecars?: {
     trimProcessMemory(pid?: number): Promise<{ success: boolean; pid: number; trimmed: boolean }>
   }
@@ -40,6 +42,56 @@ export function handleLauncherBeforeInputEvent(
   return false
 }
 
+// 悬浮条展开到工作台时可附带目标页面；路由来自渲染进程，按不可信输入校验
+const MAX_DASHBOARD_ROUTE_LENGTH = 512
+const DASHBOARD_ROUTE_PATTERN = /^\/(?!\/)[A-Za-z0-9\-._~%!$&'()*+,;=:@/?]*$/
+
+export function normalizeDashboardRoute(value: unknown): string | null {
+  if (typeof value !== 'string' || value.length > MAX_DASHBOARD_ROUTE_LENGTH) return null
+  if (!DASHBOARD_ROUTE_PATTERN.test(value)) return null
+  return value
+}
+
+export interface LauncherCallTarget {
+  hide(): void
+  show(): void
+  toggle(): void
+  showMainWindow(): void
+  navigateMainWindow?(route: string): void
+}
+
+export function handleLauncherCall(
+  target: LauncherCallTarget,
+  action: unknown,
+  payload?: unknown
+): { success: boolean; error?: string } {
+  if (action === 'expand_to_dashboard') {
+    let route: string | null = null
+    if (payload !== undefined && payload !== null) {
+      const rawRoute = typeof payload === 'object' ? (payload as { route?: unknown }).route : undefined
+      route = normalizeDashboardRoute(rawRoute)
+      if (!route) return { success: false, error: '非法的目标页面' }
+    }
+    target.hide()
+    target.showMainWindow()
+    if (route) target.navigateMainWindow?.(route)
+    return { success: true }
+  }
+  if (action === 'hide') {
+    target.hide()
+    return { success: true }
+  }
+  if (action === 'show') {
+    target.show()
+    return { success: true }
+  }
+  if (action === 'toggle') {
+    target.toggle()
+    return { success: true }
+  }
+  return { success: false, error: '未知动作' }
+}
+
 export class LauncherController {
   #window: BrowserWindow | null = null
   #frameSyncManager: FrameSyncManager | null = null
@@ -50,26 +102,13 @@ export class LauncherController {
 
   register(): void {
     if (this.#registered) return
-    ipcMain.handle(LAUNCHER_CALL_CHANNEL, async (_event, action: unknown) => {
-      if (action === 'expand_to_dashboard') {
-        this.hide()
-        this.options.showMainWindow()
-        return { success: true }
-      }
-      if (action === 'hide') {
-        this.hide()
-        return { success: true }
-      }
-      if (action === 'show') {
-        this.show()
-        return { success: true }
-      }
-      if (action === 'toggle') {
-        this.toggle()
-        return { success: true }
-      }
-      return { success: false, error: '未知动作' }
-    })
+    ipcMain.handle(LAUNCHER_CALL_CHANNEL, async (_event, action: unknown, payload?: unknown) => handleLauncherCall({
+      hide: () => this.hide(),
+      show: () => this.show(),
+      toggle: () => this.toggle(),
+      showMainWindow: () => this.options.showMainWindow(),
+      navigateMainWindow: (route) => this.options.navigateMainWindow?.(route)
+    }, action, payload))
     this.#registered = true
   }
 

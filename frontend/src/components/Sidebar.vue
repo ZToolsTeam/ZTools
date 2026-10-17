@@ -4,11 +4,15 @@ import { useRoute, useRouter } from 'vue-router'
 
 import { useNavStore } from '@/stores/nav'
 import { useCategoriesStore } from '@/stores/categories'
+import { usePluginsStore } from '@/stores/plugins'
 import { useFeedbackUnreadStore } from '@/stores/feedbackUnread'
 import { useUserStore } from '@/stores/user'
 import { useUIStore } from '@/stores/ui'
 import { ROUTES } from '@/router/routes'
 import { isOnline } from '@/config/runtime-mode'
+import { BrandGlyph } from '@/components/base'
+import ShortcutKeys from '@/components/base/ShortcutKeys.vue'
+import { CATEGORY_GLYPHS } from '@/utils/brandIcons'
 
 defineProps({ activeCategory: String })
 
@@ -16,11 +20,20 @@ const route = useRoute()
 const router = useRouter()
 const nav = useNavStore()
 const categoriesStore = useCategoriesStore()
+const pluginsStore = usePluginsStore()
 const feedbackUnreadStore = useFeedbackUnreadStore()
 const userStore = useUserStore()
 const uiStore = useUIStore()
 
 const isCollapsed = computed(() => uiStore.isSidebarCollapsed)
+// 「全部」由上方的「插件市场」承担，分类区只列具体分类
+// 去掉「全部」（上面已有「插件市场」）；当前系统上没有插件的分类不显示
+const categoryItems = computed(() =>
+  (categoriesStore.sidebarCategories || []).filter(
+    (c) => c.name !== '全部' && pluginsStore.isCategoryVisible(c.name, isCategoryActive(c.name) ? c.name : '')
+  )
+)
+const settingsKey = 'Ctrl+,'
 
 // 响应式路由与即时操作融合的高亮判断：点击瞬间即时高亮反馈，彻底消除假死与卡顿感
 const isMyActive = computed(() => {
@@ -70,6 +83,7 @@ watch(
 // 组件挂载时获取分类（带缓存，不会重复请求）
 onMounted(() => {
   categoriesStore.fetchCategories()
+  pluginsStore.refreshCategoryCounts()
   if (userStore.isLoggedIn) {
     feedbackUnreadStore.refresh()
   }
@@ -120,50 +134,26 @@ const goAbout = () => {
   >
     <nav
       class="sidebar-content h-full flex flex-col overflow-y-auto custom-scrollbar"
-      style="width: 184px; padding: 12px 10px"
+      style="width: 208px; padding: 14px 10px"
     >
-      <!-- 工作空间分栏 (WORKSPACE) -->
-      <div class="mb-3">
-        <div
-          class="font-semibold tracking-wider uppercase select-none"
-          style="
-            font-size: 10px;
-            padding: 0 8px;
-            margin-bottom: 4px;
-            color: var(--rc-text-muted);
-            letter-spacing: 0.06em;
-          "
-        >
-          工作空间
+      <!-- 主导航：主页 / 插件市场（与设计稿一致） -->
+      <div class="mb-3 flex flex-col" style="gap: 2px">
+        <div class="sidebar-item" :class="{ active: isMyActive }" @click="goMyPage">
+          <BrandGlyph kind="home" :size="16" />
+          <span>主页</span>
         </div>
-        <div class="flex flex-col" style="gap: 2px">
-          <div
-            class="sidebar-item"
-            :class="{ active: isMyActive }"
-            @click="goMyPage"
-          >
-            <svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-              <path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" />
-              <polyline points="9 22 9 12 15 12 15 22" />
-            </svg>
-            <span>我的插件</span>
-          </div>
+        <div class="sidebar-item" :class="{ active: isCategoryActive('全部') }" @click="selectCategory('全部')">
+          <BrandGlyph kind="store" :size="16" />
+          <span>插件市场</span>
         </div>
       </div>
 
       <!-- 分类导航 (CATEGORIES) -->
       <div class="mb-3">
         <div
-          class="font-semibold tracking-wider uppercase select-none"
-          style="
-            font-size: 10px;
-            padding: 0 8px;
-            margin-bottom: 4px;
-            color: var(--rc-text-muted);
-            letter-spacing: 0.06em;
-          "
+          class="sidebar-section-title"
         >
-          探索分类
+          分类
         </div>
         <div class="flex flex-col" style="gap: 2px">
           <!-- 加载中骨架 -->
@@ -180,7 +170,7 @@ const goAbout = () => {
           </template>
           <template v-else-if="categoriesStore.error">
             <div class="sidebar-item" @click="retryCategories">
-              <svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
                 <polyline points="1 4 1 10 7 10" />
                 <path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10" />
               </svg>
@@ -192,33 +182,11 @@ const goAbout = () => {
             <div
               class="sidebar-item"
               :class="{ active: isCategoryActive(c.name) }"
-              v-for="c in categoriesStore.sidebarCategories"
+              v-for="c in categoryItems"
               :key="c.name"
               @click="selectCategory(c.name)"
             >
-              <svg v-if="c.name === '全部'" class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                <rect x="3" y="3" width="7" height="7" />
-                <rect x="14" y="3" width="7" height="7" />
-                <rect x="14" y="14" width="7" height="7" />
-                <rect x="3" y="14" width="7" height="7" />
-              </svg>
-              <svg v-else-if="c.name === '系统工具'" class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                <path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z" />
-              </svg>
-              <svg v-else-if="c.name === '办公效率'" class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                <rect x="2" y="7" width="20" height="14" rx="2" ry="2" />
-                <path d="M16 21V5a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v16" />
-              </svg>
-              <svg v-else-if="c.name === '媒体处理'" class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                <polygon points="23 7 16 12 23 17 23 7" />
-                <rect x="1" y="5" width="15" height="14" rx="2" ry="2" />
-              </svg>
-              <svg v-else-if="c.name === '安全工具'" class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" />
-              </svg>
-              <svg v-else class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z" />
-              </svg>
+              <BrandGlyph :kind="CATEGORY_GLYPHS[c.name] || 'folder'" :size="16" />
               <span class="truncate">{{ c.name }}</span>
             </div>
           </template>
@@ -236,18 +204,18 @@ const goAbout = () => {
       >
         <div
           v-if="isOnline"
-          class="sidebar-item"
+          class="sidebar-item is-quiet"
           :class="{ active: isWishWallActive }"
           @click="goWishWall"
         >
-          <svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
             <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
           </svg>
           <span class="flex items-center gap-1.5 flex-1 min-w-0">
             <span class="truncate">反馈建议</span>
             <span
               v-if="feedbackUnreadStore.hasUnreadReplies"
-              class="w-1.5 h-1.5 rounded-full bg-red-500 animate-pulse ml-auto"
+              class="unread-dot ml-auto"
             ></span>
           </span>
         </div>
@@ -256,18 +224,19 @@ const goAbout = () => {
           :class="{ active: isSettingsActive }"
           @click="goAdvancedSettings"
         >
-          <svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
             <circle cx="12" cy="12" r="3" />
             <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z" />
           </svg>
-          <span>设置</span>
+          <span class="flex-1">设置</span>
+          <ShortcutKeys :combo="settingsKey" class="sidebar-kbd" />
         </div>
         <div
-          class="sidebar-item"
+          class="sidebar-item is-quiet"
           :class="{ active: isAboutActive }"
           @click="goAbout"
         >
-          <svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
             <circle cx="12" cy="12" r="10" />
             <line x1="12" y1="16" x2="12" y2="12" />
             <line x1="12" y1="8" x2="12.01" y2="8" />
@@ -281,11 +250,9 @@ const goAbout = () => {
 
 <style scoped>
 .sidebar-root {
-  width: 184px;
-  background-color: var(--rc-surface-translucent, var(--rc-surface-subtle));
-  backdrop-filter: blur(24px) saturate(180%);
-  -webkit-backdrop-filter: blur(24px) saturate(180%);
-  border-right: 1px solid var(--rc-border-subtle, rgba(15, 23, 42, 0.05));
+  width: 208px;
+  background-color: var(--rc-side);
+  border-right: 1px solid var(--rc-border);
   color: var(--rc-text-primary);
   overflow: hidden;
   transition: width 0.22s cubic-bezier(0.4, 0, 0.2, 1), opacity 0.18s ease;
@@ -300,41 +267,31 @@ const goAbout = () => {
 }
 
 .sidebar-content {
-  width: 184px;
-  min-width: 184px;
+  width: 208px;
+  min-width: 208px;
 }
 
-.sidebar-item {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  height: 32px;
-  padding: 0 8px;
-  border-radius: var(--rc-radius-md, 8px);
-  font-size: 13px;
-  font-weight: 500;
-  color: var(--rc-text-secondary);
-  cursor: pointer;
-  transition: all 0.15s cubic-bezier(0.4, 0, 0.2, 1);
+.unread-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 1.7px;
+  background: var(--rc-accent);
+  box-shadow: var(--rc-marker-glow);
+}
+
+.sidebar-section-title {
+  padding: 6px 10px 6px 22px;
+  font-size: 12px;
+  color: var(--rc-text-faint);
   user-select: none;
 }
 
-.sidebar-item:hover {
-  background-color: var(--rc-surface-hover);
-  color: var(--rc-text-primary);
-}
 
-.sidebar-item:active {
-  transform: scale(0.98);
+.sidebar-item.is-quiet:not(.active) {
+  color: var(--rc-text-muted);
 }
-
-.sidebar-item.active {
-  background-color: var(--rc-accent-subtle, rgba(2, 132, 199, 0.1));
-  color: var(--rc-accent, #0284c7);
-  font-weight: 600;
-}
-
-.sidebar-item.active svg {
-  color: var(--rc-accent, #0284c7);
+.sidebar-kbd {
+  margin-left: auto;
+  opacity: 0.85;
 }
 </style>

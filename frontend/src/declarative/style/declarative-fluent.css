@@ -2,19 +2,20 @@
  * Fluent 2.0 / Mica 声明式渲染器沉浸式设计系统
  */
 :root {
-  --mica-bg: rgba(26, 27, 38, 0.78);
-  --mica-bg-solid: #1a1b26;
-  --mica-surface: rgba(255, 255, 255, 0.04);
-  --mica-surface-hover: rgba(255, 255, 255, 0.08);
-  --mica-surface-active: rgba(255, 255, 255, 0.12);
-  --mica-border: rgba(255, 255, 255, 0.09);
-  --mica-border-subtle: rgba(255, 255, 255, 0.05);
-  --mica-accent: #38bdf8;
-  --mica-accent-subtle: rgba(56, 189, 248, 0.15);
-  --mica-text-primary: #f1f5f9;
-  --mica-text-secondary: #94a3b8;
-  --mica-text-muted: #64748b;
-  --mica-badge-bg: rgba(255, 255, 255, 0.08);
+  /* 声明式渲染器标记全部桥接到 theme.css，随亮 / 暗主题切换 */
+  --mica-bg: var(--rc-surface);
+  --mica-bg-solid: var(--rc-surface);
+  --mica-surface: var(--rc-surface-subtle);
+  --mica-surface-hover: var(--rc-surface-hover);
+  --mica-surface-active: var(--rc-surface-active);
+  --mica-border: var(--rc-border);
+  --mica-border-subtle: var(--rc-border-subtle);
+  --mica-accent: var(--rc-accent);
+  --mica-accent-subtle: var(--rc-accent-subtle);
+  --mica-text-primary: var(--rc-text-primary);
+  --mica-text-secondary: var(--rc-text-secondary);
+  --mica-text-muted: var(--rc-text-muted);
+  --mica-badge-bg: var(--rc-kbd-bg);
 }
 
 .declarative-mica-shell {
@@ -22,19 +23,19 @@
   backdrop-filter: blur(28px) saturate(180%);
   -webkit-backdrop-filter: blur(28px) saturate(180%);
   border: 1px solid var(--mica-border);
-  box-shadow: 0 16px 48px -8px rgba(0, 0, 0, 0.5), 0 0 1px 1px rgba(255, 255, 255, 0.06) inset;
+  box-shadow: var(--rc-shadow-lg);
   color: var(--mica-text-primary);
-  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", sans-serif;
+  font-family: var(--rc-font-sans);
 }
 
+/* 选中项：中性选中底色，标记方块由组件自身绘制，不再用整条彩色左边框 */
 .declarative-item-active {
-  background: var(--mica-surface-hover);
-  border-left: 3px solid var(--mica-accent);
+  background: var(--mica-surface-active);
 }
 
 .declarative-focus-ring:focus-visible {
-  outline: 2px solid var(--mica-accent);
-  outline-offset: -1px;
+  outline: none;
+  box-shadow: var(--rc-focus-ring);
 }
 
 /* 自定义细腻滚动条 */
@@ -48,10 +49,10 @@
 }
 
 .declarative-scrollbar::-webkit-scrollbar-thumb {
-  background: rgba(255, 255, 255, 0.14);
+  background: var(--zt-scrollbar-thumb);
   border-radius: 9999px;
 }
 
 .declarative-scrollbar::-webkit-scrollbar-thumb:hover {
-  background: rgba(255, 255, 255, 0.25);
+  background: var(--zt-scrollbar-thumb-hover);
 }

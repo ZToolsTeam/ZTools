@@ -158,6 +158,12 @@ function update_handler(msgType, msgData) {
     }
   } else if (msgType === 'update.checkError') {
     console.error('[update] 检查更新失败:', msgData.error)
+  } else if (msgType === 'navigation.open') {
+    // 悬浮条请求工作台跳到指定页面；只接受站内已注册的 hash 路由
+    const route = msgData?.route
+    if (typeof route !== 'string' || !route.startsWith('/') || route.startsWith('//')) return
+    if (router.resolve(route).matched.length === 0) return
+    router.push(route).catch(() => {})
   } else if (msgType === 'update.complete') {
     // console.log('[update] 更新完成:', msgData)
     window.__updateComplete?.(msgData.type, msgData.success, msgData.message)

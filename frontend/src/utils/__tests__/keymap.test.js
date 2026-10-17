@@ -5,7 +5,8 @@ import {
   dispatchKeyEvent,
   normalizeEventKeyCombo,
   _resetKeymapForTesting,
-  isInputElement
+  isInputElement,
+  isModalOpen
 } from '../keymap.js'
 
 describe('keymap 统一快捷键分发器测试套件', () => {
@@ -176,5 +177,42 @@ describe('keymap 统一快捷键分发器测试套件', () => {
     expect(isInputElement({ tagName: 'INPUT' })).toBe(true)
     expect(isInputElement({ tagName: 'textarea' })).toBe(true)
     expect(isInputElement({ isContentEditable: true })).toBe(true)
+  })
+
+  describe('对话框打开时页面快捷键不响应', () => {
+    const addWrap = (style = '') => {
+      const wrap = document.createElement('div')
+      wrap.className = 'ant-modal-wrap'
+      if (style) wrap.setAttribute('style', style)
+      document.body.appendChild(wrap)
+      return wrap
+    }
+
+    it('有可见对话框时 dispatchKeyEvent 不分发，Esc 不会触发页面返回', () => {
+      const back = vi.fn(() => true)
+      registerKeyHandler(KEYMAP_SCOPES.PAGE, { Escape: back })
+      const wrap = addWrap()
+      try {
+        expect(isModalOpen()).toBe(true)
+        expect(dispatchKeyEvent(new KeyboardEvent('keydown', { key: 'Escape' }))).toBe(false)
+        expect(back).not.toHaveBeenCalled()
+      } finally {
+        wrap.remove()
+      }
+      expect(dispatchKeyEvent(new KeyboardEvent('keydown', { key: 'Escape' }))).toBe(true)
+      expect(back).toHaveBeenCalledTimes(1)
+    })
+
+    it('[边界] 已关闭（display: none）的对话框残留节点不影响快捷键', () => {
+      const back = vi.fn(() => true)
+      registerKeyHandler(KEYMAP_SCOPES.PAGE, { Escape: back })
+      const wrap = addWrap('display: none;')
+      try {
+        expect(isModalOpen()).toBe(false)
+        expect(dispatchKeyEvent(new KeyboardEvent('keydown', { key: 'Escape' }))).toBe(true)
+      } finally {
+        wrap.remove()
+      }
+    })
   })
 })

@@ -282,7 +282,7 @@ defineExpose({ open: () => emit('update:open', true) })
   font-weight: 600;
   font-family: var(--rc-font-mono, monospace);
   font-size: 13px;
-  color: var(--rc-accent);
+  color: var(--rc-accent-text);
 }
 .shortcut-arrow {
   color: var(--rc-text-muted);

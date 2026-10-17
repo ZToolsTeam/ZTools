@@ -4,10 +4,30 @@ import os from 'node:os'
 import path from 'node:path'
 import test from 'node:test'
 import {
+  assertMacApplicationIcon,
   createMacUniversalPackagerOptions,
+  macApplicationIconPath,
   main,
-  stageMacUniversal
+  stageMacUniversal,
+  verifyPackagedIcon
 } from './package-macos-universal.mjs'
+
+// 最小 ICNS 夹具：魔数 icns + 长度，足以通过格式检查
+const FIXTURE_ICNS = Buffer.concat([Buffer.from('icns', 'latin1'), Buffer.from([0, 0, 0, 8])])
+
+function seedIcon(sourceRoot, bytes = FIXTURE_ICNS) {
+  const iconPath = macApplicationIconPath(sourceRoot)
+  fs.mkdirSync(path.dirname(iconPath), { recursive: true })
+  fs.writeFileSync(iconPath, bytes)
+  return iconPath
+}
+
+// 模拟 @electron/packager：把 options.icon 复制为 Contents/Resources/electron.icns
+function packIcon(sourceRoot, appBundlePath) {
+  const target = path.join(appBundlePath, 'Contents', 'Resources', 'electron.icns')
+  fs.mkdirSync(path.dirname(target), { recursive: true })
+  fs.copyFileSync(macApplicationIconPath(sourceRoot), target)
+}
 
 async function fixtureNative({ outputRoot }) {
   fs.mkdirSync(outputRoot, { recursive: true })
@@ -158,6 +178,7 @@ test('configures the locked Universal target and skips a second lipo of classic-
 
 test('rejects a pre-existing staging directory before building or invoking Packager', async () => {
   const temporaryRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'ztools-macos-stage-test-'))
+  seedIcon(temporaryRoot)
   const outputRoot = path.join(temporaryRoot, 'artifacts', sourcePackage.version, 'darwin-universal')
   fs.mkdirSync(outputRoot, { recursive: true })
   let buildCalled = false
@@ -185,6 +206,7 @@ test('rejects a pre-existing staging directory before building or invoking Packa
 
 test('writes the versioned read-only runtime target marker only after the final architecture audit', async () => {
   const temporaryRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'ztools-macos-stage-test-'))
+  seedIcon(temporaryRoot)
   const expectedPackagePath = path.join(
     temporaryRoot,
     'artifacts',
@@ -221,6 +243,7 @@ test('writes the versioned read-only runtime target marker only after the final 
       packageApp: async () => {
         fs.mkdirSync(path.dirname(addonPath), { recursive: true })
         fs.writeFileSync(addonPath, 'fixture addon')
+        packIcon(temporaryRoot, appBundlePath)
         return [expectedPackagePath]
       },
       verifyBundle: ({ bundlePath }) => {
@@ -236,7 +259,8 @@ test('writes the versioned read-only runtime target marker only after the final 
 
     assert.equal(verificationCalled, true)
     assert.equal(fs.readFileSync(result.visionHelperPath, 'utf8'), 'fixture local Vision helper')
-    assert.equal(result.pathAccessHelperPath, path.join(resourcesPath, 'native', 'ZToolsPathAccessBroker'))
+    // 返回值是解析过符号链接的真实路径（macOS 的 /var → /private/var），与下一条清单断言保持一致
+    assert.equal(result.pathAccessHelperPath, path.join(fs.realpathSync(resourcesPath), 'native', 'ZToolsPathAccessBroker'))
     assert.equal(result.runtimeTargetManifestPath, path.join(fs.realpathSync(resourcesPath), 'ztools-runtime-target.json'))
     assert.deepEqual(JSON.parse(fs.readFileSync(result.runtimeTargetManifestPath, 'utf8')), {
       manifestVersion: 1,
@@ -259,6 +283,7 @@ test('writes the versioned read-only runtime target marker only after the final 
 
 test('passes universal options to the injected packager after reserving a fresh output root', async () => {
   const temporaryRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'ztools-macos-stage-test-'))
+  seedIcon(temporaryRoot)
   let receivedOptions
   try {
     await assert.rejects(stageMacUniversal({
@@ -287,6 +312,7 @@ test('passes universal options to the injected packager after reserving a fresh 
 test('staging refuses either required native helper missing from the Mach-O audit before writing its target marker', async () => {
   for (const missing of ['ZToolsMacClipboard', 'ZToolsPathAccessBroker', 'ZToolsMacVision']) {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ztools-macos-required-helper-'))
+    seedIcon(root)
     const packagePath = path.join(root, 'artifacts', sourcePackage.version, 'darwin-universal', 'ZTools-darwin-universal')
     const app = path.join(packagePath, 'ZTools.app'), resources = path.join(app, 'Contents', 'Resources')
     await assert.rejects(stageMacUniversal({ appBundleId: 'org.example.ztools', shortVersion: '1.1.7', buildVersion: '1171',
@@ -294,7 +320,7 @@ test('staging refuses either required native helper missing from the Mach-O audi
       buildPathAccessNative: fixturePathAccess, buildVisionNative: fixtureVision, build: async () => {}, stdout: () => {},
       packageApp: async () => {
         const addon = path.join(resources, 'app.asar.unpacked', 'node_modules', 'classic-level', 'prebuilds', 'darwin-x64+arm64', 'classic-level.node')
-        fs.mkdirSync(path.dirname(addon), { recursive: true }); fs.writeFileSync(addon, 'fixture addon'); return [packagePath]
+        fs.mkdirSync(path.dirname(addon), { recursive: true }); fs.writeFileSync(addon, 'fixture addon'); packIcon(root, app); return [packagePath]
       }, verifyBundle: () => ({ machoFiles: ['Contents/MacOS/ZTools', ...['ZToolsMacClipboard', 'ZToolsPathAccessBroker', 'ZToolsMacVision']
         .filter(name => name !== missing).map(name => `Contents/Resources/native/${name}`)] })
     }), /REQUIRED_MAC_HELPER_MACHO_MISSING/)
@@ -305,6 +331,7 @@ test('staging refuses either required native helper missing from the Mach-O audi
 
 test('Universal staging rejects a PathAccessBroker result outside its fresh build root', async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ztools-macos-path-broker-location-'))
+  seedIcon(root)
   try {
     await assert.rejects(stageMacUniversal({
       appBundleId: 'org.example.ztools', shortVersion: '1.1.7', buildVersion: '1171',
@@ -325,3 +352,60 @@ test('Universal staging rejects a PathAccessBroker result outside its fresh buil
     fs.rmSync(root, { recursive: true, force: true })
   }
 })
+
+// ── 应用图标 ────────────────────────────────────────────────────────────
+
+test('打包参数指向仓库内的 ZTools.icns，不使用 Electron 默认图标', () => {
+  const options = createMacUniversalPackagerOptions({
+    sourceRoot: '/workspace/electron-client',
+    outputRoot: '/workspace/electron-client/artifacts/1.1.7.1/darwin-universal',
+    appBundleId: 'org.example.ztools', minimumOs: '13.0', shortVersion: '1.1.7', buildVersion: '1171'
+  })
+  assert.equal(options.icon, path.join('/workspace/electron-client', 'resources', 'app', 'ZTools.icns'))
+})
+
+test('仓库内提交的 ZTools.icns 是有效 ICNS 文件', () => {
+  const sourceRoot = path.resolve(path.dirname(new URL(import.meta.url).pathname), '..')
+  assert.doesNotThrow(() => assertMacApplicationIcon(fs, macApplicationIconPath(sourceRoot)))
+})
+
+test('[破坏性] 图标缺失或不是 ICNS 时在构建之前就失败', async () => {
+  for (const [label, prepare, pattern] of [
+    ['缺失', () => {}, /缺少 macOS 应用图标/],
+    ['PNG 冒充', (root) => seedIcon(root, Buffer.from('\x89PNG\r\n', 'latin1')), /不是 ICNS 格式/],
+    ['空文件', (root) => seedIcon(root, Buffer.alloc(0)), /不是有效的普通文件/]
+  ]) {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ztools-macos-icon-'))
+    let buildCalled = false
+    try {
+      prepare(root)
+      await assert.rejects(stageMacUniversal({
+        appBundleId: 'org.example.ztools', shortVersion: '1.1.7', buildVersion: '1171',
+        platform: 'darwin', sourceRoot: root, sourcePackage, minimumOs: '13.0',
+        buildNative: fixtureNative, buildPathAccessNative: fixturePathAccess, buildVisionNative: fixtureVision,
+        build: async () => { buildCalled = true }, packageApp: async () => []
+      }), pattern, label)
+      assert.equal(buildCalled, false, label)
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true })
+    }
+  }
+})
+
+test('[破坏性] 打包产物缺少图标或与源图标不一致时拒绝', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ztools-macos-icon-verify-'))
+  try {
+    const iconPath = seedIcon(root)
+    const app = path.join(root, 'ZTools.app')
+    assert.throws(() => verifyPackagedIcon(fs, app, iconPath), /MAC_APPLICATION_ICON_NOT_PACKAGED/)
+    const packaged = path.join(app, 'Contents', 'Resources', 'electron.icns')
+    fs.mkdirSync(path.dirname(packaged), { recursive: true })
+    fs.writeFileSync(packaged, Buffer.from('icns-electron-default', 'latin1'))
+    assert.throws(() => verifyPackagedIcon(fs, app, iconPath), /MAC_APPLICATION_ICON_MISMATCH/)
+    fs.copyFileSync(iconPath, packaged)
+    assert.doesNotThrow(() => verifyPackagedIcon(fs, app, iconPath))
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true })
+  }
+})
+

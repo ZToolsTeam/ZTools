@@ -1259,11 +1259,11 @@ onBeforeUnmount(() => {
 
 <template>
   <div
-    class="h-full flex flex-col bg-gray-50 dark:bg-slate-900 text-gray-800 dark:text-gray-200"
+    class="h-full flex flex-col bg-[var(--rc-kbd-bg)] dark:bg-[var(--rc-surface)] text-gray-800 dark:text-gray-200"
   >
     <!-- 顶部标题栏 -->
     <div
-      class="px-6 py-4 bg-white dark:bg-slate-800 border-b dark:border-slate-700 flex justify-between items-center shrink-0"
+      class="px-6 py-4 bg-white dark:bg-[var(--rc-surface)] border-b dark:border-slate-700 flex justify-between items-center shrink-0"
     >
       <div class="flex items-center gap-3">
         <h1 class="text-xl font-bold">ZTools API 诊断中心</h1>
@@ -1271,14 +1271,14 @@ onBeforeUnmount(() => {
           class="px-2 py-0.5 text-xs rounded-full"
           :class="
             isNative
-              ? 'bg-green-100 text-green-700'
-              : 'bg-gray-200 text-gray-600'
+              ? 'bg-[var(--rc-success-subtle)] text-green-700'
+              : 'bg-gray-200 text-[var(--rc-text-secondary)]'
           "
         >
           {{ isNative ? 'Native Mode' : 'Browser Mode' }}
         </span>
       </div>
-      <div class="text-sm text-gray-500">v3.0 (Full API Coverage)</div>
+      <div class="text-sm text-[var(--rc-text-muted)]">v3.0 (Full API Coverage)</div>
     </div>
 
     <!-- 主体内容区 (双栏布局) -->
@@ -1302,7 +1302,7 @@ onBeforeUnmount(() => {
                   <a-button @click="getCpuMem">CPU/内存</a-button>
                 </div>
                 <pre
-                  class="bg-gray-100 dark:bg-black p-2 rounded text-xs overflow-auto max-h-40"
+                  class="bg-[var(--rc-kbd-bg)] dark:bg-black p-2 rounded text-xs overflow-auto max-h-40"
                   >{{ sysInfoResult }}</pre
                 >
               </a-card>
@@ -1325,7 +1325,7 @@ onBeforeUnmount(() => {
                   >
                 </div>
                 <div
-                  class="text-xs bg-gray-100 dark:bg-black p-2 rounded break-all"
+                  class="text-xs bg-[var(--rc-kbd-bg)] dark:bg-black p-2 rounded break-all"
                 >
                   {{ sysPathResult }}
                 </div>
@@ -1395,7 +1395,7 @@ onBeforeUnmount(() => {
                   <a-button danger @click="fsDeleteFile">删除</a-button>
                 </div>
                 <div
-                  class="mt-2 p-2 bg-gray-100 dark:bg-black rounded text-xs break-all max-h-40 overflow-auto"
+                  class="mt-2 p-2 bg-[var(--rc-kbd-bg)] dark:bg-black rounded text-xs break-all max-h-40 overflow-auto"
                 >
                   {{ fsContent }}
                 </div>
@@ -1455,7 +1455,7 @@ onBeforeUnmount(() => {
                   >
                 </div>
                 <pre
-                  class="mt-2 bg-gray-100 dark:bg-black p-2 rounded text-xs max-h-40 overflow-auto"
+                  class="mt-2 bg-[var(--rc-kbd-bg)] dark:bg-black p-2 rounded text-xs max-h-40 overflow-auto"
                   >{{ dbResult }}</pre
                 >
               </a-card>
@@ -1755,7 +1755,7 @@ onBeforeUnmount(() => {
                 <a-button type="primary" @click="sendHttp" class="mb-2"
                   >发送HTTP请求</a-button
                 >
-                <div class="text-xs bg-gray-100 dark:bg-black p-2 rounded mb-2">
+                <div class="text-xs bg-[var(--rc-kbd-bg)] dark:bg-black p-2 rounded mb-2">
                   {{ httpResult }}
                 </div>
 
@@ -1786,7 +1786,7 @@ onBeforeUnmount(() => {
                   <a-button @click="getDllList">获取DLL列表</a-button>
                 </div>
                 <pre
-                  class="mt-2 bg-gray-100 dark:bg-black p-2 rounded text-xs max-h-32 overflow-auto"
+                  class="mt-2 bg-[var(--rc-kbd-bg)] dark:bg-black p-2 rounded text-xs max-h-32 overflow-auto"
                   >{{ dllResult }}</pre
                 >
               </a-card>
@@ -1797,11 +1797,11 @@ onBeforeUnmount(() => {
 
       <!-- 右侧：实时日志与诊断中心 (40%) -->
       <div
-        class="w-[400px] flex flex-col bg-white dark:bg-slate-800 border-l dark:border-slate-700 shadow-xl z-10"
+        class="w-[400px] flex flex-col bg-white dark:bg-[var(--rc-surface)] border-l dark:border-slate-700 shadow-xl z-10"
       >
         <!-- 一键体检面板 -->
         <div
-          class="p-4 border-b dark:border-slate-700 bg-blue-50 dark:bg-slate-800/50"
+          class="p-4 border-b dark:border-slate-700 bg-[var(--rc-accent-subtle)] dark:bg-[var(--rc-surface)]"
         >
           <h3 class="text-sm font-bold mb-3 text-blue-800 dark:text-blue-300">
             自动化诊断中心
@@ -1820,13 +1820,13 @@ onBeforeUnmount(() => {
           <p
             v-if="batchPlatformStatus"
             data-test="batch-platform-status"
-            class="mb-2 text-xs text-gray-600 dark:text-gray-300"
+            class="mb-2 text-xs text-[var(--rc-text-secondary)] dark:text-[var(--rc-text-muted)]"
           >
             {{ batchPlatformStatus }}
           </p>
 
           <div class="space-y-2">
-            <div class="flex justify-between text-xs text-gray-500">
+            <div class="flex justify-between text-xs text-[var(--rc-text-muted)]">
               <span>进度</span>
               <span
                 >{{ Math.round((passCount / totalCount) * 100) || 0 }}%</span
@@ -1838,16 +1838,16 @@ onBeforeUnmount(() => {
               status="active"
             />
             <div class="flex justify-between text-xs mt-1">
-              <span data-test="batch-pass-count" class="text-green-600"
+              <span data-test="batch-pass-count" class="text-[var(--rc-success)]"
                 >成功: {{ passCount }}</span
               >
-              <span data-test="batch-fail-count" class="text-red-500"
+              <span data-test="batch-fail-count" class="text-[var(--rc-error)]"
                 >失败: {{ failCount }}</span
               >
             </div>
             <div class="flex justify-between text-xs">
-              <span class="text-gray-400">适用项: {{ totalCount }}</span>
-              <span data-test="batch-skip-count" class="text-amber-600"
+              <span class="text-[var(--rc-text-muted)]">适用项: {{ totalCount }}</span>
+              <span data-test="batch-skip-count" class="text-[var(--rc-warning)]"
                 >已跳过: {{ skipCount }}</span
               >
             </div>
@@ -1856,9 +1856,9 @@ onBeforeUnmount(() => {
 
         <!-- 日志列表 -->
         <div
-          class="flex items-center justify-between p-2 px-3 border-b dark:border-slate-700 bg-gray-50 dark:bg-slate-900"
+          class="flex items-center justify-between p-2 px-3 border-b dark:border-slate-700 bg-[var(--rc-kbd-bg)] dark:bg-[var(--rc-surface)]"
         >
-          <span class="text-xs font-bold text-gray-500">实时日志流</span>
+          <span class="text-xs font-bold text-[var(--rc-text-muted)]">实时日志流</span>
           <a-button type="text" size="small" @click="clearLog" class="text-xs"
             >清空</a-button
           >
@@ -1870,7 +1870,7 @@ onBeforeUnmount(() => {
         >
           <div
             v-if="logs.length === 0"
-            class="text-center text-gray-400 py-10 italic"
+            class="text-center text-[var(--rc-text-muted)] py-10 italic"
           >
             暂无日志...
           </div>
@@ -1879,22 +1879,22 @@ onBeforeUnmount(() => {
             :key="i"
             class="p-1.5 rounded border-l-2 flex gap-2 items-start animate-fade-in"
             :class="{
-              'border-blue-500 bg-blue-50 dark:bg-blue-900/20':
+              'border-blue-500 bg-[var(--rc-accent-subtle)] dark:bg-blue-900/20':
                 l.type === 'info',
-              'border-green-500 bg-green-50 dark:bg-green-900/20':
+              'border-[var(--rc-border)] bg-[var(--rc-success-subtle)] dark:bg-green-900/20':
                 l.type === 'success',
-              'border-red-500 bg-red-50 dark:bg-red-900/20': l.type === 'error',
-              'border-yellow-500 bg-yellow-50 dark:bg-yellow-900/20':
+              'border-[var(--rc-error)] bg-[var(--rc-error-subtle)] dark:bg-red-900/20': l.type === 'error',
+              'border-[var(--rc-border)] bg-yellow-50 dark:bg-yellow-900/20':
                 l.type === 'warn'
             }"
           >
-            <span class="text-gray-400 shrink-0 select-none"
+            <span class="text-[var(--rc-text-muted)] shrink-0 select-none"
               >[{{ l.time }}]</span
             >
             <div class="flex-1 break-all whitespace-pre-wrap">
               {{ l.content }}
             </div>
-            <span v-if="l.duration" class="text-gray-400 shrink-0">{{
+            <span v-if="l.duration" class="text-[var(--rc-text-muted)] shrink-0">{{
               l.duration
             }}</span>
           </div>

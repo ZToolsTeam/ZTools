@@ -1,7 +1,9 @@
 <script setup>
 import { ref, onMounted } from 'vue'
 import { formatVersionForDisplay } from '@/utils/versionDisplay'
-import { RcButton, RcCard } from '@/components/raycast'
+import { RcButton, RcCard } from '@/components/base'
+import BrandMark from '@/components/BrandMark.vue'
+import { isUpdateUnsupported } from '@/composables/useAppUpdate'
 
 const appVersion = ref('--')
 const webVersion = ref('--')
@@ -44,6 +46,10 @@ async function handleCheckUpdate() {
       }
     }
   } catch (e) {
+    if (isUpdateUnsupported(e)) {
+      window.__ztoolsToast?.('info', '当前平台暂不支持应用内更新，请前往官网 www.ztools.cn 下载新版本')
+      return
+    }
     console.error('检查更新失败:', e)
     window.__ztoolsToast?.('error', '检查更新失败')
   } finally {
@@ -63,8 +69,9 @@ function handleOpenLink(url) {
     <div class="w-full max-w-lg flex flex-col items-center text-center gap-6">
       <!-- App Brand & Identity -->
       <div class="flex flex-col items-center gap-3">
-        <div class="w-16 h-16 rounded-2xl bg-[var(--rc-accent)] flex items-center justify-center text-white font-bold text-2xl shadow-lg shadow-[var(--rc-accent)]/20">
-          Z
+        <!-- 与应用图标一致：墨黑底板 + 积木 Z（底板在两种主题下都保持深色） -->
+        <div class="about-app-icon">
+          <BrandMark :size="40" />
         </div>
         <div class="flex flex-col items-center">
           <h1 class="text-2xl font-bold tracking-tight text-[var(--rc-text-primary)] m-0">
@@ -111,13 +118,13 @@ function handleOpenLink(url) {
           </div>
           <div class="flex items-center justify-between py-3 px-4">
             <span class="text-[var(--rc-text-secondary)]">开源协议</span>
-            <span class="font-medium text-[var(--rc-text-primary)]">MIT License</span>
+            <span class="font-medium text-[var(--rc-text-primary)]">GPL-3.0</span>
           </div>
           <div class="flex items-center justify-between py-3 px-4">
             <span class="text-[var(--rc-text-secondary)]">官方仓库</span>
             <button
               type="button"
-              class="text-[var(--rc-accent)] hover:underline inline-flex items-center gap-1 cursor-pointer bg-transparent border-0 p-0 text-xs"
+              class="text-[var(--rc-accent-text)] hover:underline inline-flex items-center gap-1 cursor-pointer bg-transparent border-0 p-0 text-xs"
               @click="handleOpenLink('https://github.com/chaoshidai/ztools')"
             >
               GitHub / ZTools
@@ -141,6 +148,21 @@ function handleOpenLink(url) {
 </template>
 
 <style scoped>
+.about-app-icon {
+  width: 64px;
+  height: 64px;
+  border-radius: 18px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: linear-gradient(180deg, #232327, #141416);
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.08), var(--rc-shadow-md);
+  /* 底板固定深色，标志墨色与光晕按暗色规范渲染 */
+  --rc-mark-ink: #f2f2f0;
+  --rc-mark-glow-soft: 0.7;
+  --rc-mark-glow-core: 0.9;
+}
+
 .about-page-container {
   background: var(--rc-canvas);
   min-height: calc(100vh - 72px);

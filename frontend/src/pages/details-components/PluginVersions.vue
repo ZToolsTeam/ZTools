@@ -10,7 +10,7 @@ defineProps({
 <template>
   <div
     v-if="!changelogs || changelogs.length === 0"
-    class="text-center py-12 text-gray-400"
+    class="text-center py-12 text-[var(--rc-text-muted)]"
   >
     <i class="fa fa-history text-5xl mb-4"></i>
     <p>暂无版本记录</p>
@@ -22,7 +22,7 @@ defineProps({
   >
     <div v-for="log in changelogs" :key="log.id" class="relative">
       <div
-        class="absolute -left-[1.35rem] top-1 w-4 h-4 rounded-full bg-blue-600 border-4"
+        class="absolute -left-[1.35rem] top-1 w-4 h-4 rounded-full bg-[var(--rc-accent)] border-4"
         style="border-color: var(--zt-bg-elevated)"
       ></div>
       <div class="mb-1 flex items-center gap-3">

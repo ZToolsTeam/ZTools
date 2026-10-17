@@ -27,6 +27,11 @@ import { FrecencyRankingService } from '../electron-client/out/main/services/fre
 import { HudService, NoViewCommandDispatcher } from '../electron-client/out/main/services/hud-service.js';
 import { FrameSyncManager } from '../electron-client/out/main/services/frame-sync-manager.js';
 import { ClipboardHistoryService, isHighEntropyPassword, SENSITIVE_CLIPBOARD_FORMATS } from '../electron-client/out/main/services/clipboard-history-service.js';
+import { extractPinyinAndAcronym, findPinyinMatchRange, matchesQuery } from '../electron-client/out/main/services/pinyin-helper.js';
+import { WindowManagementService, hasWindowBoundsChanged } from '../electron-client/out/main/services/window-management-service.js';
+import { SnippetsService, parseSnippetArguments, hasSnippetArguments } from '../electron-client/out/main/services/snippets-service.js';
+import { ScriptCommandsService, parseAnsiOutput, stripAnsiCodes, extractUrlsFromOutput, parseRefreshTimeMs } from '../electron-client/out/main/services/script-commands-service.js';
+import { findPinyinMatchInText, getHighlightPartsWithPinyin, getPinyinFull } from '../frontend/src/utils/pinyinSearch.js';
 import { getFileQuickLook, calculateFileSha256 } from '../packages/declarative-ui/dist/examples/everything-file-search/search-service.js';
 import { detectClipboardContentType, parseColorDetails } from '../packages/declarative-ui/dist/examples/clipboard-history/clipboard-storage.js';
 
@@ -37,6 +42,7 @@ import {
   Form,
   ActionPanel,
   Action,
+  evaluateCalculatorQuery,
   Icon,
   Color,
   Toast,
@@ -48,12 +54,17 @@ import {
   filterClipboardItems,
   SAMPLE_CLIPBOARD_ITEMS,
   SnippetsCommand,
+  SnippetArgumentFormView,
   filterSnippets,
   expandSnippetTemplate,
   SAMPLE_SNIPPETS,
   WindowManagementCommand,
   WINDOW_ACTIONS,
   filterWindowActions,
+  saveWindowState,
+  getSavedWindowState,
+  recordExternalForegroundWindow,
+  getLastExternalForegroundWindow,
   SettingsCommand,
   SettingsFormView,
   filterSettingsSections,
@@ -72,6 +83,7 @@ import {
   WindowsShortcutsCommand,
   getWindowsShortcuts
 } from '../packages/declarative-ui/dist/index.js';
+
 
 import {
   scanPluginSecurity,
@@ -1512,5 +1524,383 @@ describe('【链路 11】Phase 1 核心体验与高频功能打磨端到端集�
     service.close();
   });
 });
+
+// ============================================================================
+// 链路 12: Phase 2 & Phase 3 核心效率流端到端集成与破坏性容灾测试 (E4 ~ E8)
+// 包含: E4 内联计算器、单位换算与色板直出及异常算式静默过滤
+//       E5 窗口分屏管理 Restore 上一位置还原与 ZTools 双界面焦点隔离
+//       E6 前后端统一中文全拼、多音字与首字母检索及命中汉字高亮切片
+//       E7 Snippets {argument} 动态参数解析、表单渲染与外部窗口回填
+//       E8 Script Commands 四模式分流、ANSI 着色解析、URL 提取与 inline 缓存
+// ============================================================================
+describe('【链路 12】Phase 2 & Phase 3 核心效率流端到端集成与破坏性容灾测试 (E4 ~ E8)', () => {
+  it('E4 内联计算器与色板直出 12.1: 算术/单位换算/色板求值与非法算式静默过滤', () => {
+    // 1. 算术表达式与单位换算
+    const calcRes = evaluateCalculatorQuery('125 * 8 + 24');
+    assert.equal(calcRes.type, 'math');
+    assert.equal(calcRes.formattedAnswer, '1,024');
+
+    const unitRes = evaluateCalculatorQuery('2048 mb to gb');
+    assert.equal(unitRes.type, 'unit');
+    assert.match(unitRes.formattedAnswer, /2\s*GB/i);
+
+    const tempRes = evaluateCalculatorQuery('100 c to f');
+    assert.equal(tempRes.type, 'unit');
+    assert.match(tempRes.formattedAnswer, /212/);
+
+    // 2. 色板直出解析
+    const colorEval = evaluateCalculatorQuery('#10B981');
+    assert.equal(colorEval.type, 'color');
+    assert.equal(colorEval.colorResult?.hex, '#10B981');
+    assert.equal(colorEval.colorResult?.rgb, 'rgb(16, 185, 129)');
+
+    // 3. 破坏性与异常边界：未闭合括号、除零、单数字、普通英文搜索词必须被过滤（type === 'none' 或含 error），绝不抢占搜索位
+    const unclosed = evaluateCalculatorQuery('1 + (2 * 3');
+    assert.ok(unclosed.type === 'none' || Boolean(unclosed.error) || !unclosed.formattedAnswer, '未闭合括号不得产出有效内联结果');
+
+    const divZero = evaluateCalculatorQuery('100 / 0');
+    assert.ok(divZero.type === 'none' || Boolean(divZero.error) || !divZero.formattedAnswer, '除以零不得产出有效内联结果');
+
+    const singleNum = evaluateCalculatorQuery('42');
+    assert.equal(singleNum.type, 'none', '单一数字不应触发内联计算');
+
+    const normalWord = evaluateCalculatorQuery('chrome');
+    assert.equal(normalWord.type, 'none', '普通搜索词不应触发内联计算');
+
+    const emptyRes = evaluateCalculatorQuery('');
+    assert.equal(emptyRes.type, 'none', '空输入必须返回 none');
+  });
+
+  it('E5 窗口分屏管理 12.2: Restore 上一位置来回还原与 ZTools 主界面焦点隔离', async () => {
+    const winService = new WindowManagementService();
+
+    // 1. 验证 ZTools 双界面架构焦点隔离：主界面句柄不能覆盖外部目标窗口句柄
+    winService.recordForegroundWindow('hwnd-vscode-9001', { x: 120, y: 90, width: 1280, height: 800 });
+    assert.equal(winService.getLastExternalForegroundWindow(), 'hwnd-vscode-9001');
+
+    // 当用户点击打开 ZTools 小白大主界面时，内部句柄必须被自动忽略
+    winService.recordForegroundWindow('ztools-main-window');
+    winService.recordForegroundWindow('ZTools-Launcher');
+    assert.equal(
+      winService.getLastExternalForegroundWindow(),
+      'hwnd-vscode-9001',
+      'ZTools 自身主界面或悬浮搜索框句柄绝不可覆盖外部待分屏目标窗口'
+    );
+
+    // 2. 异常边界：在从未执行过分屏的窗口上直接调用 restore，必须安全失败且不破坏窗口坐标
+    const earlyRestore = await winService.applyAction('restore');
+    assert.equal(earlyRestore.success, false, '无历史状态时执行 restore 必须返回 success: false');
+    assert.match(earlyRestore.error || '', /未找到该窗口的上一位置状态/);
+
+    // 3. 执行左半屏分屏 (left-half)，应自动捕获分屏前原始坐标 (120, 90, 1280, 800)
+    const leftResult = await winService.applyAction('left-half', { windowId: 'ztools-main-window' });
+    assert.equal(leftResult.success, true);
+    assert.equal(leftResult.targetWindowId, 'hwnd-vscode-9001', '从 ZTools 主界面触发时必须自动作用于最近外部目标窗口');
+    assert.equal(leftResult.rect.x, 0);
+    assert.equal(leftResult.rect.width, 960);
+    assert.deepEqual(winService.getSavedWindowState('hwnd-vscode-9001'), {
+      x: 120,
+      y: 90,
+      width: 1280,
+      height: 800
+    });
+
+    // 4. 执行 Restore 还原上一位置，应精准还原回 (120, 90, 1280, 800)，并将左半屏记入历史支持来回切换
+    const restoreResult1 = await winService.applyAction('restore');
+    assert.equal(restoreResult1.success, true);
+    assert.deepEqual(restoreResult1.rect, {
+      x: 120,
+      y: 90,
+      width: 1280,
+      height: 800
+    });
+
+    // 再次执行 Restore，切换回左半屏 (0, 0, 960, 1040)
+    const restoreResult2 = await winService.applyAction('restore');
+    assert.equal(restoreResult2.success, true);
+    assert.equal(restoreResult2.rect.x, 0);
+    assert.equal(restoreResult2.rect.width, 960);
+
+    // 5. 验证前端 window-actions.ts 的状态快照与内部句柄拦截
+    recordExternalForegroundWindow('hwnd-chrome-777');
+    recordExternalForegroundWindow('ztools-main');
+    assert.equal(getLastExternalForegroundWindow(), 'hwnd-chrome-777');
+    saveWindowState('hwnd-chrome-777', { x: 50, y: 60, width: 1000, height: 700 });
+    assert.deepEqual(getSavedWindowState('hwnd-chrome-777'), { x: 50, y: 60, width: 1000, height: 700 });
+    assert.equal(hasWindowBoundsChanged({ x: 50, y: 60, width: 1000, height: 700 }, { x: 50, y: 60, width: 1000, height: 700 }), false);
+    assert.equal(hasWindowBoundsChanged({ x: 50, y: 60, width: 1000, height: 700 }, { x: 0, y: 0, width: 960, height: 1040 }), true);
+  });
+
+  it('E6 本土化中文全拼、多音字与命中高亮 12.3: 前后端全拼/首字母/多音字匹配与汉字高亮切片', () => {
+    // 1. 全拼与首字母匹配（后端 pinyin-helper，含“系”多音字 xi/ji）
+    const pyInfo = extractPinyinAndAcronym('系统设置');
+    assert.ok(pyInfo.acronym.includes('xtsz'));
+    assert.ok(pyInfo.pinyin.includes('xitongshezhi'));
+
+    const backendFullRange = findPinyinMatchRange('系统设置', 'shezhi');
+    assert.deepEqual(backendFullRange, [2, 4], '全拼 shezhi 必须精准定位到“设置”二字区间 [2, 4]');
+
+    assert.equal(matchesQuery(['系统设置'], 'shezhi'), true, '全拼匹配必须返回 true');
+    assert.equal(matchesQuery(['批量重命名'], 'chongmingming'), true, '多音字全拼匹配必须返回 true');
+
+    // 2. 多音字全拼与首字母匹配（“重”: zhong/chong，“还”: hai/huan，“行”: hang/xing）
+    const polyMatch1 = findPinyinMatchInText('批量重命名', 'chongmingming');
+    assert.equal(polyMatch1.matched, true, '多音字“重”必须支持 chongmingming 全拼命中');
+    assert.deepEqual(polyMatch1.range, [2, 5]);
+
+    const polyMatch2 = findPinyinMatchInText('批量重命名', 'cmm');
+    assert.equal(polyMatch2.matched, true, '多音字“重”必须支持 cmm 首字母命中');
+    assert.deepEqual(polyMatch2.range, [2, 5]);
+
+    const polyMatch3 = findPinyinMatchInText('还原上一位置', 'huanyuan');
+    assert.equal(polyMatch3.matched, true, '多音字“还”必须支持 huanyuan 全拼命中');
+    assert.deepEqual(polyMatch3.range, [0, 2]);
+
+    // 3. 汉字高亮切片渲染验证 (getHighlightPartsWithPinyin)
+    const parts = getHighlightPartsWithPinyin('系统设置', 'shezhi');
+    assert.deepEqual(parts, [
+      { text: '系统', hit: false },
+      { text: '设置', hit: true }
+    ]);
+
+    // 4. 异常与边界输入测试：空串、特殊符号、不匹配词
+    assert.equal(findPinyinMatchInText('系统设置', '').matched, false);
+    assert.equal(findPinyinMatchInText('', 'shezhi').matched, false);
+    assert.equal(findPinyinMatchInText('系统设置', 'nonexistent').matched, false);
+    assert.deepEqual(getHighlightPartsWithPinyin('系统设置', 'nonexistent'), [
+      { text: '系统设置', hit: false }
+    ]);
+  });
+
+  it('E7 Snippets 动态参数表单与外部窗口回填 12.4: {argument} 解析、表单渲染与跨窗粘贴闭环', async () => {
+    const template = 'Deploy {argument name="service" default="api-gateway"} to {argument name="env" options="dev, staging, prod"} with key {argument name="secret" password="true"}';
+
+    // 1. 解析 {argument} 元数据
+    assert.equal(hasSnippetArguments(template), true);
+    const parsedArgs = parseSnippetArguments(template);
+    assert.equal(parsedArgs.length, 3);
+    assert.deepEqual(parsedArgs[0], {
+      name: 'service',
+      type: 'text',
+      defaultValue: 'api-gateway',
+      options: [],
+      required: true
+    });
+    assert.deepEqual(parsedArgs[1], {
+      name: 'env',
+      type: 'dropdown',
+      defaultValue: 'dev',
+      options: ['dev', 'staging', 'prod'],
+      required: true
+    });
+    assert.deepEqual(parsedArgs[2], {
+      name: 'secret',
+      type: 'password',
+      defaultValue: '',
+      options: [],
+      required: true
+    });
+
+    // 2. 验证声明式表单视图 SnippetArgumentFormView 渲染树
+    const snippetItem = {
+      id: 'snip-deploy-1',
+      name: 'Deploy Command',
+      keyword: ';deploy',
+      snippet: template,
+      content: template,
+      category: 'code',
+      createdAt: Date.now()
+    };
+    const root = renderDeclarativeRoot(() => SnippetArgumentFormView({ snippet: snippetItem }));
+    const formDescriptor = root.getLatest();
+    assert.equal(formDescriptor.type, 'Form');
+    const childTypes = formDescriptor.children.map((c) => c?.type).filter(Boolean);
+    assert.ok(childTypes.includes('Form.TextField'), '应包含普通文本输入框');
+    assert.ok(childTypes.includes('Form.Dropdown'), '应包含下拉选择框');
+    assert.ok(childTypes.includes('Form.PasswordField'), '应包含密码输入框');
+    root.unmount();
+
+    // 3. 验证 SnippetsService 拦截需要填参的 Snippet 并在补全参数后关联回目标外部窗口
+    const snippetsService = new SnippetsService({ dbPath: ':memory:' });
+    const created = snippetsService.createSnippet({
+      name: 'Deploy Command',
+      snippet: template,
+      keyword: ';deploy'
+    });
+
+    // 首次无参触发：应返回 requiresArguments: true、targetWindowMode: 'launcher' 并记录外部窗口句柄
+    const firstTrigger = snippetsService.matchAndExpand('run ;deploy', '', {
+      activeWindowId: 'hwnd-terminal-300'
+    });
+    assert.equal(firstTrigger.matched, true);
+    assert.equal(firstTrigger.requiresArguments, true);
+    assert.equal(firstTrigger.arguments?.length, 3);
+    assert.equal(firstTrigger.targetWindowId, 'hwnd-terminal-300');
+    assert.equal(firstTrigger.targetWindowMode, 'launcher');
+
+    // 即使期间焦点切到 ZTools 自身窗口，外部目标窗口句柄依然保持为 hwnd-terminal-300
+    snippetsService.recordExternalWindow('ztools-launcher-window');
+    assert.equal(snippetsService.getLastExternalWindow(), 'hwnd-terminal-300');
+
+    // 用户在表单中填写参数并提交：应完成动态替换并返回原外部窗口句柄 hwnd-terminal-300
+    const completed = snippetsService.completeArgumentExpansion(
+      created.id,
+      { service: 'auth-svc', env: 'prod', secret: 'sk-999' },
+      { targetWindowId: firstTrigger.targetWindowId }
+    );
+    assert.equal(completed.expanded, 'Deploy auth-svc to prod with key sk-999');
+    assert.equal(completed.targetWindowId, 'hwnd-terminal-300', '参数提交后必须精准回填至捕获的外部窗口句柄');
+
+    snippetsService.stop();
+  });
+
+  it('E8 Script Commands 四模式与 ANSI 着色渲染 12.5: ANSI 解析、URL 提取与 inline 缓存闭环', async () => {
+    // 1. ANSI 颜色控制码解析与剥离
+    const rawAnsi = '\x1b[1;32m✔ Deployment Ready\x1b[0m -> Visit https://ztools.dev/release-notes or http://localhost:8080/health!';
+    const spans = parseAnsiOutput(rawAnsi);
+    assert.ok(spans.length >= 2);
+    assert.equal(spans[0].text, '✔ Deployment Ready');
+    assert.equal(spans[0].bold, true);
+    assert.equal(spans[0].fgColor, '#22c55e');
+
+    const stripped = stripAnsiCodes(rawAnsi);
+    assert.equal(stripped, '✔ Deployment Ready -> Visit https://ztools.dev/release-notes or http://localhost:8080/health!');
+
+    // 2. 自动提取输出中的 URL 并剥离末尾标点
+    const urls = extractUrlsFromOutput(rawAnsi);
+    assert.deepEqual(urls, ['https://ztools.dev/release-notes', 'http://localhost:8080/health']);
+
+    // 3. 解析 refreshTime 元数据时间间隔
+    assert.equal(parseRefreshTimeMs('30s'), 30_000);
+    assert.equal(parseRefreshTimeMs('10m'), 600_000);
+    assert.equal(parseRefreshTimeMs('2h'), 7_200_000);
+    assert.equal(parseRefreshTimeMs('1d'), 86_400_000);
+    assert.equal(parseRefreshTimeMs('invalid'), null);
+
+    // 4. 真实执行 inline 与 fullOutput 脚本验证缓存与视图描述符
+    const tmpDir = await fs.mkdtemp(path.join(process.env.TEMP || '/tmp', 'ztools-e8-scripts-'));
+    try {
+      const inlineScriptPath = path.join(tmpDir, 'status-inline.js');
+      await fs.writeFile(
+        inlineScriptPath,
+        [
+          '#!/usr/bin/env node',
+          '// @raycast.schemaVersion 1',
+          '// @raycast.title Cluster Status',
+          '// @raycast.mode inline',
+          '// @raycast.refreshTime 5m',
+          'console.log("\\x1b[32m3 Nodes Healthy\\x1b[0m");'
+        ].join('\n'),
+        'utf8'
+      );
+
+      const fullScriptPath = path.join(tmpDir, 'deploy-full.js');
+      await fs.writeFile(
+        fullScriptPath,
+        [
+          '#!/usr/bin/env node',
+          '// @raycast.schemaVersion 1',
+          '// @raycast.title Run Deploy',
+          '// @raycast.mode fullOutput',
+          'console.log("\\x1b[1;36mDeployed to https://app.ztools.dev/status\\x1b[0m");'
+        ].join('\n'),
+        'utf8'
+      );
+
+      const scriptService = new ScriptCommandsService({
+        dataRoot: tmpDir,
+        scriptsDir: tmpDir,
+        confirmHandler: async () => true
+      });
+
+      await scriptService.scanScripts();
+      const inlineRes = await scriptService.executeCommand('script:status-inline');
+      assert.equal(inlineRes.success, true);
+      assert.equal(inlineRes.output, '3 Nodes Healthy', 'inline 输出必须剥离 ANSI 控制码作为干净文本');
+
+      const searchItems = scriptService.getSearchItems();
+      const inlineItem = searchItems.find((i) => i.id === 'script:status-inline');
+      assert.ok(inlineItem);
+      assert.equal(inlineItem.inlineSubtitle, '3 Nodes Healthy', 'inline 模式执行后必须刷新搜索项动态副标题');
+      assert.equal(inlineItem.refreshTimeMs, 300_000);
+      assert.equal(inlineItem.ansiSpans?.[0]?.fgColor, '#22c55e');
+
+      const fullRes = await scriptService.executeCommand('script:deploy-full');
+      assert.equal(fullRes.success, true);
+      assert.deepEqual(fullRes.extractedUrls, ['https://app.ztools.dev/status']);
+      assert.ok(fullRes.viewDescriptor);
+      assert.equal(fullRes.viewDescriptor.type, 'Detail');
+      assert.deepEqual(fullRes.viewDescriptor.props.extractedUrls, ['https://app.ztools.dev/status']);
+    } finally {
+      await fs.rm(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  it('更新日志自动化 12.6: Keep a Changelog 增量追加、商业模块脱敏拦截、幂等去重与畸形输入防御', async () => {
+    const {
+      shouldExcludeCommitFromPublicChangelog,
+      parseConventionalCommit,
+      appendCommitsToChangelogContent
+    } = await import('../scripts/update-changelog.mjs');
+
+    // 1. 商业私有模块与噪音过滤校验
+    assert.equal(shouldExcludeCommitFromPublicChangelog('feat(dll): 新增私有硬件驱动插件'), true);
+    assert.equal(shouldExcludeCommitFromPublicChangelog('feat(backend): 新增计费接口'), true);
+    assert.equal(shouldExcludeCommitFromPublicChangelog('chore(website): 更新官网截图'), true);
+    assert.equal(shouldExcludeCommitFromPublicChangelog('chore: 同步 frontend 子模块至最新版本'), true);
+    assert.equal(shouldExcludeCommitFromPublicChangelog('feat(core): 新增内联计算器与中文拼音高亮'), false);
+
+    // 2. 异常与畸形参数断言
+    assert.throws(() => parseConventionalCommit(null), /提交记录对象不能为空/);
+    assert.throws(
+      () => parseConventionalCommit({ sha: 'invalid_sha!', date: '2026-10-17', subject: 'feat: test' }),
+      /非法提交 SHA/
+    );
+    assert.throws(
+      () => parseConventionalCommit({ sha: 'a1b2c3d', date: '2026/10/17', subject: 'feat: test' }),
+      /非法提交日期格式/
+    );
+    assert.throws(
+      () => appendCommitsToChangelogContent('', []),
+      /CHANGELOG\.md 原始内容不能为空/
+    );
+
+    // 3. 增量追加与幂等去重闭环
+    const baseChangelog = [
+      '# 更新日志 (Changelog)',
+      '<!-- last-synced-commit: 1111111 -->',
+      '',
+      '## [v1.0.0] - 2026-10-14 - 初始版本',
+      '',
+      '### ✨ 新增特性 (Features)',
+      '- 初始架构发布 (`1111111`)'
+    ].join('\n');
+
+    const incomingCommits = [
+      { sha: '9999999', date: '2026-10-18', subject: 'feat(search): 支持多音字全拼检索与高亮' },
+      { sha: '8888888', date: '2026-10-18', subject: 'fix: 修复窗口分屏还原坐标偏移' },
+      { sha: '7777777', date: '2026-10-18', subject: 'feat(backend): 内部商业接口变更（应被自动过滤）' }
+    ];
+
+    const firstPass = appendCommitsToChangelogContent(baseChangelog, incomingCommits, {
+      newHeadSha: '9999999'
+    });
+    assert.equal(firstPass.addedCount, 2, '商业提交被过滤后应精确追加 2 条公开记录');
+    assert.ok(firstPass.content.includes('<!-- last-synced-commit: 9999999 -->'));
+    assert.ok(firstPass.content.includes('## [Unreleased / 2026-10-18]'));
+    assert.ok(firstPass.content.includes('- **search**：支持多音字全拼检索与高亮 (`9999999`)'));
+    assert.ok(firstPass.content.includes('- 修复窗口分屏还原坐标偏移 (`8888888`)'));
+    assert.equal(firstPass.content.includes('内部商业接口变更'), false, '严禁泄露私有商业模块提交信息');
+
+    // 重复执行必须 100% 幂等（0 新增）
+    const secondPass = appendCommitsToChangelogContent(firstPass.content, incomingCommits, {
+      newHeadSha: '9999999'
+    });
+    assert.equal(secondPass.addedCount, 0, '重复传入相同提交必须幂等跳过');
+    assert.equal(secondPass.content, firstPass.content);
+  });
+});
+
+
 
 

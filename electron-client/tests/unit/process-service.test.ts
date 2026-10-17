@@ -15,6 +15,11 @@ import { createPlatformProcessDiscoveryAdapter } from '../../src/main/platform/p
 import { MacosProcessDiscoveryAdapter } from '../../src/main/platform/macos/process-discovery.js'
 import type { WindowRegistry } from '../../src/main/windows/window-registry.js'
 
+// 这些用例依赖 Windows 路径语义（C:\\ / E:\\）或 Windows 宿主能力（DLL、进程启动、更新安装链、本地 .exe 软件），
+// 在其他平台上功能代码按设计会拒绝执行，因此只在 Windows 宿主运行；Windows CI 上照常覆盖。
+const windowsOnly = { skip: process.platform === 'win32' ? false : '依赖 Windows 路径或宿主能力，仅在 Windows 上运行' }
+
+
 const caller: CallerIdentity = { type: 'main', webContentsId: 1 }
 const otherCaller: CallerIdentity = { type: 'plugin', webContentsId: 2, pluginId: 'other' }
 const trustedPowerShellCaller: CallerIdentity = {
@@ -63,7 +68,7 @@ function signal(): AbortSignal {
   return new AbortController().signal
 }
 
-test('process start preserves argument boundaries and wait returns the owned exit code', async () => {
+test('process start preserves argument boundaries and wait returns the owned exit code', windowsOnly, async () => {
   const context = await createContext()
   try {
     const started = await context.service.start({
@@ -83,7 +88,7 @@ test('process start preserves argument boundaries and wait returns the owned exi
   }
 })
 
-test('process ownership blocks arbitrary PID control and timeout does not lose the child record', async () => {
+test('process ownership blocks arbitrary PID control and timeout does not lose the child record', windowsOnly, async () => {
   const context = await createContext()
   try {
     const started = await context.service.start({
@@ -108,7 +113,7 @@ test('process ownership blocks arbitrary PID control and timeout does not lose t
   }
 })
 
-test('renderer removal terminates and forgets its running children', async () => {
+test('renderer removal terminates and forgets its running children', windowsOnly, async () => {
   const context = await createContext()
   try {
     const started = await context.service.start({
@@ -161,7 +166,7 @@ test('only allowlisted plugins can launch the exact system PowerShell without a 
   }
 })
 
-test('an already-cancelled process start cannot create a child', async () => {
+test('an already-cancelled process start cannot create a child', windowsOnly, async () => {
   const context = await createContext()
   try {
     const controller = new AbortController()
@@ -180,7 +185,7 @@ test('an already-cancelled process start cannot create a child', async () => {
   }
 })
 
-test('process discovery is bounded and name termination stays within caller-owned children', async () => {
+test('process discovery is bounded and name termination stays within caller-owned children', windowsOnly, async () => {
   const context = await createContext()
   try {
     const listed = await context.service.list(signal())
@@ -290,7 +295,7 @@ test('process window lookup preserves the visible HWND contract and fixed query'
   assert.equal(called, false)
 })
 
-test('handleProcessMonitorCall provides rich snapshot, detail, services, and critical process shield', async () => {
+test('handleProcessMonitorCall provides rich snapshot, detail, services, and critical process shield', windowsOnly, async () => {
   const context = await createContext()
   try {
     const statusRes = await context.service.handleProcessMonitorCall('GetStatus', {}, signal())

@@ -15,6 +15,7 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { IpcRouter } from './ipc/router.js'
+import { IPC_EVENT_CHANNEL } from '../contracts/ipc.js'
 import { installZToolsProtocol, registerZToolsScheme } from './protocol/ztools-protocol.js'
 import { formatRuntimeDiagnostics, getRuntimeDiagnostics } from './services/runtime-diagnostics.js'
 import {
@@ -1028,6 +1029,15 @@ if (!app.requestSingleInstanceLock()) {
       icon: mainApplicationIcon,
       registry,
       showMainWindow,
+      navigateMainWindow: (route) => {
+        const target = mainWindow
+        if (!target || target.isDestroyed()) return
+        const deliver = (): void => {
+          if (!target.isDestroyed()) target.webContents.send(IPC_EVENT_CHANNEL, { msgType: 'navigation.open', msgData: { route } })
+        }
+        if (target.webContents.isLoading()) target.webContents.once('did-finish-load', deliver)
+        else deliver()
+      },
       hideMainWindow: () => {
         if (mainWindow && !mainWindow.isDestroyed() && mainWindow.isVisible()) {
           mainWindow.hide()

@@ -1,0 +1,321 @@
+/**
+ * ZTools 设计标记：积木 Z × 余烬橙（Ember）
+ * 亮色「雾白」与暗色「墨黑」双模；变量名沿用 --rc-* 以兼容现有组件。
+ * 规则：橙色只用于标志、选中标记、主按钮与搜索框聚焦光晕；大面积保持克制的中性色。
+ */
+
+:root {
+  /* ===== 1. 画布与表面层 ===== */
+  --rc-canvas: #f4f3f0;
+  --rc-canvas-acrylic: rgba(244, 243, 240, 0.86);
+  --rc-side: #efeeea;
+  --rc-head: #f7f6f3;
+  --rc-surface: #ffffff;
+  --rc-surface-subtle: #f8f7f4;
+  --rc-surface-translucent: rgba(247, 246, 243, 0.88);
+  --rc-surface-hover: rgba(24, 24, 27, 0.04);
+  --rc-surface-active: #ebe9e4;
+
+  /* ===== 2. 发丝边框 ===== */
+  --rc-border: #e7e5e0;
+  --rc-border-subtle: #eeece8;
+  --rc-border-highlight: #dbd8d2;
+
+  /* ===== 3. 文字灰阶 ===== */
+  --rc-text-primary: #18181b;
+  --rc-text-secondary: #3a3a40;
+  --rc-text-muted: #6b6b72;
+  --rc-text-faint: #77777e;
+  --rc-text-inverse: #f2f2f0;
+
+  /* ===== 4. 品牌色：余烬橙 ===== */
+  --rc-accent: #ff6b3d;
+  --rc-accent-hover: #f25a2b;
+  --rc-accent-text: #c2410c;
+  --rc-accent-subtle: rgba(255, 107, 61, 0.1);
+  --rc-accent-contrast: #1a0a04;
+  --rc-focus-ring: 0 0 0 1px rgba(255, 107, 61, 0.6), 0 0 14px rgba(255, 107, 61, 0.14);
+
+  /* 标志（积木 Z）：亮色淡光晕 */
+  --rc-mark-ink: #18181b;
+  --rc-mark-glow-soft: 0.28;
+  --rc-mark-glow-core: 0.35;
+  --rc-marker-glow: 0 0 6px rgba(255, 107, 61, 0.35);
+
+  /* ===== 5. 快捷键键帽 ===== */
+  --rc-kbd-bg: #f3f1ed;
+  --rc-kbd-border: rgba(24, 24, 27, 0.12);
+  --rc-kbd-text: #55555c;
+
+  /* ===== 6. 状态色（大地色系，避免高饱和） ===== */
+  --rc-success: #4b6a30;
+  --rc-success-subtle: rgba(75, 106, 48, 0.1);
+  --rc-warning: #8f5b00;
+  --rc-warning-subtle: rgba(143, 91, 0, 0.1);
+  --rc-error: #b42318;
+  --rc-error-subtle: rgba(180, 35, 24, 0.08);
+
+  /* ===== 7. 图标底块色（插件 / 分类图标统一线性风格 + 大地色底） ===== */
+  --rc-h-orange-bg: #ffe6da;
+  --rc-h-orange-fg: #c2410c;
+  --rc-h-amber-bg: #fbebc8;
+  --rc-h-amber-fg: #8f5b00;
+  --rc-h-ochre-bg: #f2e3d2;
+  --rc-h-ochre-fg: #8a4b22;
+  --rc-h-clay-bg: #f7ddd7;
+  --rc-h-clay-fg: #a23b30;
+  --rc-h-olive-bg: #e3ead8;
+  --rc-h-olive-fg: #4b6a30;
+  --rc-h-slate-bg: #dee6ef;
+  --rc-h-slate-fg: #38556f;
+  --rc-h-neutral-bg: #eceae5;
+  --rc-h-neutral-fg: #47474d;
+  --rc-h-line: rgba(0, 0, 0, 0.04);
+
+  /* ===== 8. 圆角 ===== */
+  --rc-radius-sm: 6px;
+  --rc-radius-md: 8px;
+  --rc-radius-lg: 12px;
+  --rc-radius-xl: 16px;
+  --rc-radius-full: 9999px;
+
+  /* ===== 9. 阴影（暖灰，避免冷蓝投影） ===== */
+  --rc-shadow-sm: 0 1px 2px 0 rgba(40, 30, 20, 0.05);
+  --rc-shadow-md: 0 4px 12px -2px rgba(40, 30, 20, 0.08), 0 2px 4px -2px rgba(40, 30, 20, 0.04);
+  --rc-shadow-lg: 0 24px 64px rgba(40, 30, 20, 0.16);
+  --rc-scrim: rgba(40, 30, 20, 0.14);
+
+  /* ===== 10. 字体 ===== */
+  --rc-font-sans: -apple-system, BlinkMacSystemFont, "PingFang SC", "Segoe UI Variable Text", "Segoe UI", "Microsoft YaHei UI", system-ui, sans-serif;
+  --rc-font-mono: "SF Mono", "Cascadia Mono", ui-monospace, Menlo, Consolas, monospace;
+  /* ===== 补齐：组件引用但此前未定义的旧标记（原定义在从未被引入、现已删除的 design-tokens.css 中） ===== */
+  --font-family-base: var(--rc-font-sans);
+  --font-size-body-xs: 11px;
+  --font-size-body-s: 12px;
+  --font-size-body-m: 13px;
+  --font-size-body-l: 14px;
+  --font-size-h4: 16px;
+  --font-weight-medium: 500;
+  --easing-ease-out: cubic-bezier(0.16, 1, 0.3, 1);
+  --color-gray-50: var(--rc-surface-subtle);
+  --color-gray-100: var(--rc-kbd-bg);
+  --color-gray-200: var(--rc-surface-active);
+  --color-gray-300: var(--rc-border-highlight);
+  --color-gray-400: var(--rc-text-faint);
+  --color-danger: var(--rc-error);
+  --zt-text-tertiary: var(--rc-text-faint);
+  --rc-bg-secondary: var(--rc-surface-subtle);
+  --gradient-blue-soft: var(--rc-accent-subtle);
+
+  /* ===== 11. 旧变量桥接（逐步淘汰） ===== */
+  --color-background: var(--rc-canvas);
+  --color-background-secondary: var(--rc-canvas);
+  --color-surface: var(--rc-surface);
+  --color-hover: var(--rc-surface-hover);
+  --color-text: var(--rc-text-primary);
+  --color-text-secondary: var(--rc-text-secondary);
+  --color-border: var(--rc-border);
+  --color-border-strong: var(--rc-border-highlight);
+  --color-primary: var(--rc-accent);
+  --gradient-blue: var(--rc-accent);
+  --shadow-blue: var(--rc-shadow-sm);
+
+  --zt-bg: var(--rc-canvas);
+  --zt-bg-secondary: var(--rc-canvas);
+  --zt-bg-elevated: var(--rc-surface);
+  --zt-bg-hover: var(--rc-surface-hover);
+  --zt-bg-active: var(--rc-surface-active);
+  --zt-text: var(--rc-text-primary);
+  --zt-text-secondary: var(--rc-text-secondary);
+  --zt-text-disabled: var(--rc-text-muted);
+  --zt-border: var(--rc-border);
+  --zt-primary: var(--rc-accent);
+  --zt-primary-hover: var(--rc-accent-hover);
+  /* 旧组件仍在引用、改版时被删掉的变量：未定义会让间距/圆角/阴影整体失效 */
+  --color-error: var(--rc-error);
+  --color-success: var(--rc-success);
+  --color-orange: var(--rc-accent);
+  --color-text-disabled: var(--rc-text-muted);
+  --shadow-sm: var(--rc-shadow-sm);
+  --shadow-lg: var(--rc-shadow-lg);
+  --shadow-xl: var(--rc-shadow-lg);
+
+  /* 与主题无关的旧尺度：间距、圆角、动效、字重 */
+  --spacing-xs: 4px;
+  --spacing-sm: 8px;
+  --spacing-md: 16px;
+  --spacing-lg: 24px;
+  --spacing-xl: 32px;
+  --radius-sm: var(--rc-radius-sm);
+  --radius-md: var(--rc-radius-md);
+  --radius-lg: var(--rc-radius-lg);
+  --radius-xl: var(--rc-radius-xl);
+  --duration-fast: 120ms;
+  --duration-standard: 200ms;
+  --easing-standard: cubic-bezier(0.2, 0, 0, 1);
+  --easing-smooth: cubic-bezier(0.4, 0, 0.2, 1);
+  --font-weight-semibold: 600;
+  --color-primary-rgb: 255, 107, 61;
+  --color-orange-rgb: 255, 107, 61;
+}
+
+/* ===== 暗色「墨黑」 ===== */
+.dark,
+[data-theme='dark'] {
+  color-scheme: dark;
+  --rc-canvas: #0b0b0c;
+  --rc-canvas-acrylic: rgba(11, 11, 12, 0.84);
+  --rc-side: #0e0e10;
+  --rc-head: #0e0e10;
+  --rc-surface: #141416;
+  --rc-surface-subtle: #1a1a1d;
+  --rc-surface-translucent: rgba(14, 14, 16, 0.86);
+  --rc-surface-hover: rgba(255, 255, 255, 0.05);
+  --rc-surface-active: #1f1f23;
+
+  --rc-border: #202024;
+  --rc-border-subtle: #19191c;
+  --rc-border-highlight: #2c2c31;
+
+  --rc-text-primary: #f2f2f0;
+  --rc-text-secondary: #c9c9ce;
+  --rc-text-muted: #8a8a92;
+  --rc-text-faint: #76767e;
+  --rc-text-inverse: #18181b;
+
+  --rc-accent: #ff6b3d;
+  --rc-accent-hover: #ff8a63;
+  --rc-accent-text: #ff8a63;
+  --rc-accent-subtle: rgba(255, 107, 61, 0.14);
+  --rc-accent-contrast: #1a0a04;
+  --rc-focus-ring: 0 0 0 1px rgba(255, 107, 61, 0.55), 0 0 18px rgba(255, 107, 61, 0.18);
+
+  /* 标志：暗色完整光晕 */
+  --rc-mark-ink: #f2f2f0;
+  --rc-mark-glow-soft: 0.7;
+  --rc-mark-glow-core: 0.9;
+  --rc-marker-glow: 0 0 10px rgba(255, 107, 61, 0.7);
+
+  --rc-kbd-bg: #222226;
+  --rc-kbd-border: rgba(255, 255, 255, 0.1);
+  --rc-kbd-text: #a0a0a8;
+
+  --rc-success: #a3c783;
+  --rc-success-subtle: rgba(163, 199, 131, 0.12);
+  --rc-warning: #f0b955;
+  --rc-warning-subtle: rgba(240, 185, 85, 0.12);
+  --rc-error: #f97066;
+  --rc-error-subtle: rgba(249, 112, 102, 0.12);
+
+  --rc-h-orange-bg: #3a1f15;
+  --rc-h-orange-fg: #ff9470;
+  --rc-h-amber-bg: #33270f;
+  --rc-h-amber-fg: #f0b955;
+  --rc-h-ochre-bg: #2f2219;
+  --rc-h-ochre-fg: #dda57f;
+  --rc-h-clay-bg: #361b18;
+  --rc-h-clay-fg: #ee8f82;
+  --rc-h-olive-bg: #1f2719;
+  --rc-h-olive-fg: #a3c783;
+  --rc-h-slate-bg: #1a222b;
+  --rc-h-slate-fg: #93b4d6;
+  --rc-h-neutral-bg: #26262a;
+  --rc-h-neutral-fg: #cfcfd4;
+  --rc-h-line: rgba(255, 255, 255, 0.05);
+
+  --rc-shadow-sm: 0 1px 2px 0 rgba(0, 0, 0, 0.3);
+  --rc-shadow-md: 0 4px 16px -2px rgba(0, 0, 0, 0.45), 0 2px 4px -2px rgba(0, 0, 0, 0.25);
+  --rc-shadow-lg: 0 24px 64px rgba(0, 0, 0, 0.55);
+  --rc-scrim: rgba(0, 0, 0, 0.5);
+
+  /* ===== 旧变量桥接（需在暗色作用域内重新求值） ===== */
+  --color-background: var(--rc-canvas);
+  --color-background-secondary: var(--rc-canvas);
+  --color-surface: var(--rc-surface);
+  --color-hover: var(--rc-surface-hover);
+  --color-text: var(--rc-text-primary);
+  --color-text-secondary: var(--rc-text-secondary);
+  --color-border: var(--rc-border);
+  --color-border-strong: var(--rc-border-highlight);
+  --color-primary: var(--rc-accent);
+  --gradient-blue: var(--rc-accent);
+  --shadow-blue: var(--rc-shadow-sm);
+
+  --zt-bg: var(--rc-canvas);
+  --zt-bg-secondary: var(--rc-canvas);
+  --zt-bg-elevated: var(--rc-surface);
+  --zt-bg-hover: var(--rc-surface-hover);
+  --zt-bg-active: var(--rc-surface-active);
+  --zt-text: var(--rc-text-primary);
+  --zt-text-secondary: var(--rc-text-secondary);
+  --zt-text-disabled: var(--rc-text-muted);
+  --zt-border: var(--rc-border);
+  --zt-primary: var(--rc-accent);
+  --zt-primary-hover: var(--rc-accent-hover);
+  /* 旧组件仍在引用、改版时被删掉的变量：未定义会让间距/圆角/阴影整体失效 */
+  --color-error: var(--rc-error);
+  --color-success: var(--rc-success);
+  --color-orange: var(--rc-accent);
+  --color-text-disabled: var(--rc-text-muted);
+  --shadow-sm: var(--rc-shadow-sm);
+  --shadow-lg: var(--rc-shadow-lg);
+  --shadow-xl: var(--rc-shadow-lg);
+}
+
+/* ===== 通用微类 ===== */
+.rc-hairline-border {
+  border: 1px solid var(--rc-border);
+}
+
+.rc-surface-card {
+  background: var(--rc-surface);
+  border: 1px solid var(--rc-border);
+  border-radius: var(--rc-radius-lg);
+  transition: all 0.15s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.rc-surface-card:hover {
+  background: var(--rc-surface-subtle);
+  border-color: var(--rc-border-highlight);
+  transform: translateY(-1px);
+}
+
+/* 键帽：系统字体渲染 ⌘ ⌥ ⇧ 更清晰；底边加深一档，形似实体按键 */
+.rc-kbd {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  box-sizing: border-box;
+  height: 20px;
+  min-width: 20px;
+  padding: 0 5px 1px;
+  font-family: var(--rc-font-sans);
+  font-size: 11px;
+  font-weight: 500;
+  line-height: 1;
+  letter-spacing: 0;
+  white-space: nowrap;
+  background: var(--rc-kbd-bg);
+  border: 1px solid var(--rc-kbd-border);
+  border-radius: 5px;
+  color: var(--rc-kbd-text);
+  box-shadow: inset 0 -1px 0 var(--rc-kbd-border);
+  user-select: none;
+}
+
+/* 单字符系统符号（⌘ ⌥ ⇧ ↵ …）字形偏小，单独放大 */
+.rc-kbd.is-symbol {
+  padding: 0 3px 1px;
+  font-size: 12.5px;
+}
+
+.rc-squircle-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 10px;
+  background: var(--rc-surface-subtle);
+  border: 1px solid var(--rc-border);
+  color: var(--rc-text-primary);
+  flex-shrink: 0;
+}

@@ -350,8 +350,8 @@ defineExpose({ show, dismiss })
   border-radius: 9px;
   font-size: 10px;
   font-weight: var(--font-weight-semibold);
-  background: var(--gradient-blue);
-  color: #fff;
+  background: var(--rc-accent);
+  color: var(--rc-accent-contrast);
   flex-shrink: 0;
   letter-spacing: 0.3px;
 }
@@ -430,7 +430,7 @@ defineExpose({ show, dismiss })
 }
 
 .update-error {
-  color: var(--color-danger, #d14343);
+  color: var(--rc-error);
   font-size: var(--font-size-body-s);
   line-height: 1.4;
 }
@@ -448,18 +448,16 @@ defineExpose({ show, dismiss })
   padding: 0 20px;
   border: none;
   border-radius: var(--radius-md);
-  background: var(--gradient-blue);
-  color: #fff;
+  background: var(--rc-accent);
+  color: var(--rc-accent-contrast);
   font-size: var(--font-size-body-s);
   font-weight: var(--font-weight-medium);
   cursor: pointer;
   transition: all var(--duration-fast) var(--easing-smooth);
-  box-shadow: var(--shadow-blue);
 }
 
 .update-btn-primary:hover {
-  transform: translateY(-1px);
-  box-shadow: 0 6px 20px 0 rgba(74, 140, 255, 0.3);
+  background: var(--rc-accent-hover);
 }
 
 .update-btn-primary:active {

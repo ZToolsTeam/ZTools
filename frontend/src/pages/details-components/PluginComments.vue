@@ -42,13 +42,13 @@ const formatDate = (dateStr) => {
 
 /**
  * 获取用户名颜色
- * 管理员: 蓝色, 当前用户: 绿色, 其他用户: 默认文本色
+ * 管理员: 强调色, 当前用户: 成功色, 其他用户: 默认文本色
  */
 const getNameColor = (comment) => {
   const adminId = comment.adminId ?? comment.admin_id
   const userId = comment.userId ?? comment.user_id
-  if (adminId) return '#1677ff'
-  if (userId && userStore.userInfo?.id && userId === userStore.userInfo.id) return '#52c41a'
+  if (adminId) return 'var(--rc-accent-text)'
+  if (userId && userStore.userInfo?.id && userId === userStore.userInfo.id) return 'var(--rc-success)'
   return 'var(--zt-text)'
 }
 </script>
@@ -101,7 +101,7 @@ const getNameColor = (comment) => {
           @blur="(e) => e.target.style.borderColor = 'var(--zt-border)'"
         />
         <div class="flex justify-between items-center mt-1">
-          <span class="text-xs" :style="{ color: (modelValue || '').length >= MAX_LENGTH ? '#ff4d4f' : 'var(--zt-text-secondary)' }">
+          <span class="text-xs" :style="{ color: (modelValue || '').length >= MAX_LENGTH ? 'var(--rc-error)' : 'var(--zt-text-secondary)' }">
             {{ (modelValue || '').length }} / {{ MAX_LENGTH }}
           </span>
           <a-button
@@ -158,12 +158,12 @@ const getNameColor = (comment) => {
               }}</span>
               <span
                 v-if="comment.isPinned"
-                class="bg-red-50 text-red-500 border border-red-100 text-[10px] px-1.5 py-0.5 rounded"
+                class="bg-[var(--rc-error-subtle)] text-[var(--rc-error)] border border-[var(--rc-border)] text-[10px] px-1.5 py-0.5 rounded"
                 >置顶</span
               >
               <span
                 v-if="!comment.isPublic"
-                class="bg-gray-50 text-gray-400 border border-gray-100 text-[10px] px-1.5 py-0.5 rounded"
+                class="bg-[var(--rc-kbd-bg)] text-[var(--rc-text-muted)] border border-[var(--rc-border)] text-[10px] px-1.5 py-0.5 rounded"
                 >审核中</span
               >
             </div>
@@ -179,7 +179,7 @@ const getNameColor = (comment) => {
           <div class="flex items-center gap-4 text-xs">
             <button
               @click="$emit('update:replyTo', comment)"
-              class="text-blue-600 hover:underline"
+              class="text-[var(--rc-accent-text)] hover:underline"
             >
               回复
             </button>
@@ -227,7 +227,7 @@ const getNameColor = (comment) => {
                       {{ truncateName(reply.admin?.name || reply.user?.nickname || reply.user?.name || '未知') }}
                       <span
                         v-if="reply.adminId || reply.admin_id"
-                        class="ml-1 text-[10px] bg-blue-50 text-blue-600 border border-blue-100 px-1 rounded"
+                        class="ml-1 text-[10px] bg-[var(--rc-accent-subtle)] text-[var(--rc-accent-text)] border border-[var(--rc-border)] px-1 rounded"
                         >管理员</span
                       >
                     </span>

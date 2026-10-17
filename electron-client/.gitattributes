@@ -9,5 +9,9 @@
 /src/main/native-host/** text eol=lf
 /src/main/service/** text eol=lf
 /resources/** text eol=lf
+# 图标等二进制资源不能按文本做换行归一化，否则 PNG / ICO 字节会被改坏
+/resources/**/*.png binary
+/resources/**/*.ico binary
+/resources/**/*.icns binary
 /tests/unit/native-host-protocol.test.ts text eol=lf
 /tests/unit/service-protocol.test.ts text eol=lf

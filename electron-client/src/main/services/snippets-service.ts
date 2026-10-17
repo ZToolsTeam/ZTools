@@ -20,15 +20,26 @@ export interface SnippetInput {
   enabled?: boolean
 }
 
+export interface SnippetArgumentDescriptor {
+  name: string
+  type: 'text' | 'password' | 'dropdown'
+  defaultValue: string
+  options: string[]
+  required: boolean
+}
+
 export interface MacroContext {
   clipboard?: string | undefined
   now?: Date | undefined
+  args?: Record<string, string> | undefined
+  previewPlaceholders?: boolean | undefined
 }
 
 export interface MacroExpandResult {
   expanded: string
   cursorOffset: number // 从末尾往前数的光标字符偏移量
   hasCursor: boolean
+  arguments: SnippetArgumentDescriptor[]
 }
 
 export interface SnippetMatchResult {
@@ -38,6 +49,10 @@ export interface SnippetMatchResult {
   backspaceCount?: number
   expanded?: string
   cursorOffset?: number
+  requiresArguments?: boolean
+  arguments?: SnippetArgumentDescriptor[]
+  targetWindowId?: string
+  targetWindowMode?: 'launcher' | 'main'
 }
 
 export interface SnippetImportResult {
@@ -54,11 +69,90 @@ export interface SnippetsServiceOptions {
 }
 
 /**
- * 宏展开解析器 (支持 {clipboard}, {date}, {time}, {datetime}, {year}, {month}, {day}, {uuid}, {cursor})
+ * 解析 Raycast 标准 {argument name="..." default="..." options="..." type="..."} 占位符定义
+ * 同名参数自动去重合并
+ */
+export function parseSnippetArguments(template: string): SnippetArgumentDescriptor[] {
+  if (!template || typeof template !== 'string') return []
+
+  const results: SnippetArgumentDescriptor[] = []
+  const seenNames = new Map<string, SnippetArgumentDescriptor>()
+  const pattern = /\{argument(?:\s+([^}]*))?\}/gi
+
+  let match: RegExpExecArray | null
+  let fallbackIndex = 1
+
+  while ((match = pattern.exec(template)) !== null) {
+    const attrStr = (match[1] || '').trim()
+    const attrs: Record<string, string> = {}
+
+    const attrRegex = /([a-zA-Z0-9_]+)\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'}]+))/g
+    let attrMatch: RegExpExecArray | null
+    while ((attrMatch = attrRegex.exec(attrStr)) !== null) {
+      const k = (attrMatch[1] || '').toLowerCase()
+      const v = attrMatch[2] ?? attrMatch[3] ?? attrMatch[4] ?? ''
+      attrs[k] = v
+    }
+
+    const name = (attrs.name || `Argument ${fallbackIndex++}`).trim()
+    const defaultValue = attrs.default ?? ''
+    const rawOptions = attrs.options
+      ? attrs.options
+          .split(',')
+          .map((s) => s.trim())
+          .filter(Boolean)
+      : []
+
+    let type: 'text' | 'password' | 'dropdown' = 'text'
+    if (rawOptions.length > 0 || attrs.type === 'dropdown') {
+      type = 'dropdown'
+    } else if (attrs.type === 'password' || /password|secret|token|key|密码|密钥/i.test(name)) {
+      type = 'password'
+    }
+
+    const required = attrs.optional !== 'true' && attrs.required !== 'false'
+
+    if (!seenNames.has(name)) {
+      const desc: SnippetArgumentDescriptor = {
+        name,
+        type,
+        defaultValue: defaultValue || (rawOptions[0] ?? ''),
+        options: rawOptions,
+        required
+      }
+      seenNames.set(name, desc)
+      results.push(desc)
+    } else {
+      const existing = seenNames.get(name)!
+      if (!existing.defaultValue && defaultValue) {
+        existing.defaultValue = defaultValue
+      }
+      if (existing.options.length === 0 && rawOptions.length > 0) {
+        existing.options = rawOptions
+        existing.type = 'dropdown'
+      }
+    }
+  }
+
+  return results
+}
+
+export function hasSnippetArguments(template: string): boolean {
+  return parseSnippetArguments(template).length > 0
+}
+
+/**
+ * 宏展开解析器 (支持 {clipboard}, {date}, {time}, {datetime}, {year}, {month}, {day}, {uuid}, {cursor}, {argument ...})
  */
 export function expandSnippetMacros(template: string, context: MacroContext = {}): MacroExpandResult {
   if (!template || typeof template !== 'string') {
-    return { expanded: '', cursorOffset: 0, hasCursor: false }
+    return { expanded: '', cursorOffset: 0, hasCursor: false, arguments: [] }
+  }
+
+  const parsedArgs = parseSnippetArguments(template)
+  const argDefaults = new Map<string, string>()
+  for (const a of parsedArgs) {
+    argDefaults.set(a.name, a.defaultValue)
   }
 
   const d = context.now || new Date()
@@ -74,6 +168,7 @@ export function expandSnippetMacros(template: string, context: MacroContext = {}
   const datetimeStr = `${dateStr} ${timeStr}`
   const clipboardText = context.clipboard ?? ''
 
+  let fallbackIdx = 1
   let text = template
     .replace(/\{clipboard\}/gi, clipboardText)
     .replace(/\{date\}/gi, dateStr)
@@ -82,6 +177,24 @@ export function expandSnippetMacros(template: string, context: MacroContext = {}
     .replace(/\{year\}/gi, year)
     .replace(/\{month\}/gi, month)
     .replace(/\{day\}/gi, day)
+    .replace(/\{argument(?:\s+([^}]*))?\}/gi, (_full, attrStr = '') => {
+      const attrs: Record<string, string> = {}
+      const attrRegex = /([a-zA-Z0-9_]+)\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'}]+))/g
+      let m: RegExpExecArray | null
+      while ((m = attrRegex.exec(String(attrStr))) !== null) {
+        const k = (m[1] || '').toLowerCase()
+        const v = m[2] ?? m[3] ?? m[4] ?? ''
+        attrs[k] = v
+      }
+      const name = (attrs.name || `Argument ${fallbackIdx++}`).trim()
+      const provided = context.args?.[name]
+      if (provided !== undefined && provided !== '') {
+        return String(provided)
+      }
+      const def = attrs.default ?? argDefaults.get(name) ?? ''
+      if (def !== '') return def
+      return context.previewPlaceholders ? `[${name}]` : ''
+    })
 
   // 处理 {uuid}
   while (/\{uuid\}/i.test(text)) {
@@ -98,14 +211,16 @@ export function expandSnippetMacros(template: string, context: MacroContext = {}
     return {
       expanded,
       cursorOffset,
-      hasCursor: true
+      hasCursor: true,
+      arguments: parsedArgs
     }
   }
 
   return {
     expanded: text,
     cursorOffset: 0,
-    hasCursor: false
+    hasCursor: false,
+    arguments: parsedArgs
   }
 }
 
@@ -116,6 +231,7 @@ export class SnippetsService {
   private db: DatabaseSync | null = null
   private dbPath: string
   private onSnippetsChanged?: ((snippets: SnippetRecord[]) => void) | undefined
+  private lastExternalWindowId = 'external-editor-window'
 
   constructor(options: SnippetsServiceOptions = {}) {
     this.dbPath = options.dbPath || ':memory:'
@@ -310,32 +426,109 @@ export class SnippetsService {
   }
 
   /**
-   * 触发词后缀匹配与宏展开 (用于键盘钩子或输入流监听)
+   * 记录触发短语前的外部活动窗口句柄（过滤 ZTools 自身窗口，确保参数表单填完后回贴到原外部编辑器）
    */
-  public matchAndExpand(typedText: string, clipboardContent?: string): SnippetMatchResult {
+  public recordExternalWindow(windowId: string): string {
+    const cleaned = String(windowId || '').trim()
+    if (
+      cleaned &&
+      cleaned.toLowerCase() !== 'ztools' &&
+      !cleaned.toLowerCase().startsWith('ztools-')
+    ) {
+      this.lastExternalWindowId = cleaned
+    }
+    return this.lastExternalWindowId
+  }
+
+  public getLastExternalWindow(): string {
+    return this.lastExternalWindowId
+  }
+
+  /**
+   * 触发词后缀匹配与宏展开 (用于键盘钩子或输入流监听)
+   * 若短语包含 {argument ...} 动态参数且未传入 args，则标记 requiresArguments: true 并指定由轻量 LauncherWindow 承载弹窗
+   */
+  public matchAndExpand(
+    typedText: string,
+    clipboardContent?: string,
+    options: { args?: Record<string, string>; activeWindowId?: string } = {}
+  ): SnippetMatchResult {
     if (!typedText || typeof typedText !== 'string') {
       return { matched: false }
+    }
+
+    if (options.activeWindowId) {
+      this.recordExternalWindow(options.activeWindowId)
     }
 
     const enabledSnippets = this.getEnabledSnippets()
     for (const snip of enabledSnippets) {
       if (typedText.endsWith(snip.keyword)) {
+        const parsedArgs = parseSnippetArguments(snip.snippet)
+        const hasUnfilledArgs =
+          parsedArgs.length > 0 &&
+          (!options.args ||
+            parsedArgs.some(
+              (a) => a.required && (options.args?.[a.name] === undefined || options.args?.[a.name] === '')
+            ))
+
         const { expanded, cursorOffset } = expandSnippetMacros(snip.snippet, {
           clipboard: clipboardContent,
-          now: new Date()
+          now: new Date(),
+          args: options.args,
+          previewPlaceholders: hasUnfilledArgs
         })
+
         return {
           matched: true,
           snippet: snip,
           keyword: snip.keyword,
           backspaceCount: snip.keyword.length,
           expanded,
-          cursorOffset
+          cursorOffset,
+          requiresArguments: hasUnfilledArgs,
+          arguments: parsedArgs,
+          targetWindowId: this.lastExternalWindowId,
+          targetWindowMode: 'launcher'
         }
       }
     }
 
     return { matched: false }
+  }
+
+  /**
+   * 完成动态参数表单填写并生成回填结果
+   */
+  public completeArgumentExpansion(
+    snippetIdOrTemplate: string,
+    args: Record<string, string>,
+    context: { clipboard?: string; now?: Date; targetWindowId?: string } = {}
+  ): MacroExpandResult & { targetWindowId: string } {
+    let template = snippetIdOrTemplate
+    if (this.db) {
+      const row = this.db
+        .prepare('SELECT snippet FROM snippets WHERE id = ? OR keyword = ?')
+        .get(snippetIdOrTemplate, snippetIdOrTemplate) as { snippet: string } | undefined
+      if (row && typeof row.snippet === 'string') {
+        template = row.snippet
+      }
+    }
+
+    if (context.targetWindowId) {
+      this.recordExternalWindow(context.targetWindowId)
+    }
+
+    const res = expandSnippetMacros(template, {
+      clipboard: context.clipboard,
+      now: context.now || new Date(),
+      args
+    })
+
+    return {
+      ...res,
+      targetWindowId: this.lastExternalWindowId
+    }
   }
 
   /**

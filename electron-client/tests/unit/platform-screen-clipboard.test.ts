@@ -225,7 +225,8 @@ test('macOS factory reuses Electron screen capture and explicitly rejects missin
           return 'granted'
         }
       }
-    } as unknown as Parameters<typeof createMacosScreenClipboardAdapters>[0])
+      // 指向不存在的资源目录：剪贴板 helper 必然缺失，断言与宿主上是否构建过 helper 无关
+    } as unknown as Parameters<typeof createMacosScreenClipboardAdapters>[0], true, '/nonexistent-ztools-resources')
   })
 
   assert.equal(platformAdapters.screen.getScreenCapturePermissionStatus?.(), 'granted')
@@ -242,8 +243,11 @@ test('macOS factory reuses Electron screen capture and explicitly rejects missin
 
   const isNotSupported = (error: unknown): boolean =>
     error instanceof ZToolsError && error.code === errorCodes.notSupported
-  await assert.rejects(platformAdapters.fileClipboard.readFiles(), isNotSupported)
-  await assert.rejects(platformAdapters.fileClipboard.writeFiles(['/tmp/example']), isNotSupported)
+  // macOS 文件剪贴板已由原生 helper 实现；helper 缺失时必须明确失败（fail closed），不能静默回退
+  const isHelperUnavailable = (error: unknown): boolean =>
+    error instanceof ZToolsError && error.code === errorCodes.nativeHostUnavailable
+  await assert.rejects(platformAdapters.fileClipboard.readFiles(), isHelperUnavailable)
+  await assert.rejects(platformAdapters.fileClipboard.writeFiles(['/tmp/example']), isHelperUnavailable)
   await assert.rejects(
     platformAdapters.screenCaptureFallback.capture(
       { x: 0, y: 0, width: 10, height: 10 },

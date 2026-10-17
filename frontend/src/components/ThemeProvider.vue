@@ -32,16 +32,24 @@ const themeConfig = computed(() => ({
     ? antdTheme.darkAlgorithm
     : antdTheme.defaultAlgorithm,
   token: {
-    // 自定义 Ant Design Token 与 Raycast 双模设计标记对齐
-    colorPrimary: isDarkMode.value ? '#38bdf8' : '#0284c7',
+    // 与 theme.css 的积木 Z × 余烬橙标记保持一致（Ant Design 需要具体色值，不能用 CSS 变量）
+    colorPrimary: '#ff6b3d',
+    colorLink: isDarkMode.value ? '#ff8a63' : '#c2410c',
+    colorTextLightSolid: '#1a0a04',
     borderRadius: 8,
     fontSize: 13,
     fontFamily:
-      '-apple-system, BlinkMacSystemFont, "Segoe UI Variable Text", "Segoe UI", system-ui, sans-serif',
-    colorSuccess: isDarkMode.value ? '#34d399' : '#10b981',
-    colorWarning: isDarkMode.value ? '#fbbf24' : '#f59e0b',
-    colorError: isDarkMode.value ? '#f87171' : '#ef4444',
-    colorInfo: isDarkMode.value ? '#38bdf8' : '#0284c7'
+      '-apple-system, BlinkMacSystemFont, "PingFang SC", "Segoe UI Variable Text", "Segoe UI", "Microsoft YaHei UI", system-ui, sans-serif',
+    colorBgBase: isDarkMode.value ? '#0b0b0c' : '#f4f3f0',
+    colorBgContainer: isDarkMode.value ? '#141416' : '#ffffff',
+    colorBgElevated: isDarkMode.value ? '#1a1a1d' : '#ffffff',
+    colorBorder: isDarkMode.value ? '#2c2c31' : '#dbd8d2',
+    colorBorderSecondary: isDarkMode.value ? '#202024' : '#e7e5e0',
+    colorTextBase: isDarkMode.value ? '#f2f2f0' : '#18181b',
+    colorSuccess: isDarkMode.value ? '#a3c783' : '#4b6a30',
+    colorWarning: isDarkMode.value ? '#f0b955' : '#8f5b00',
+    colorError: isDarkMode.value ? '#f97066' : '#b42318',
+    colorInfo: isDarkMode.value ? '#93b4d6' : '#38556f'
   }
 }))
 

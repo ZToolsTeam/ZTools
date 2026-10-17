@@ -87,7 +87,7 @@ const handleLogout = () => {
           <div class="relative">
             <img
               :src="avatar"
-              class="w-7 h-7 rounded-full object-cover border shadow-sm"
+              class="w-7 h-7 rounded-lg object-cover border"
               style="border-color: var(--zt-border)"
               alt="avatar"
             />
@@ -136,7 +136,7 @@ const handleLogout = () => {
             <MenuItem
               key="logout"
               @click="handleLogout"
-              class="!text-red-500 hover:!bg-red-50 dark:hover:!bg-red-900/20"
+              class="!text-[var(--rc-error)] hover:!bg-[var(--rc-error-subtle)] dark:hover:!bg-red-900/20"
             >
               <template #icon><i class="fa fa-sign-out mr-2"></i></template>
               退出登录
@@ -164,50 +164,42 @@ const handleLogout = () => {
 <style scoped>
 /* 登录按钮 - 3D 风格 */
 .login-btn-3d {
-  display: flex;
+  display: inline-flex;
   align-items: center;
   gap: 8px;
-  padding: 6px 16px 6px 6px;
-  border-radius: 20px;
+  height: 32px;
+  padding: 0 10px 0 4px;
+  border-radius: var(--rc-radius-md);
   border: none;
-  background: var(--color-gray-100);
-  color: var(--zt-text);
+  background: transparent;
+  color: var(--rc-text-secondary);
   font-size: 13px;
   font-weight: 500;
   cursor: pointer;
-  transition: all 0.3s cubic-bezier(0.34, 1.56, 0.64, 1);
+  transition: background-color 0.15s ease, color 0.15s ease;
 }
 
 .login-btn-3d:hover {
-  background: var(--color-gray-200);
-  transform: translateY(-1px);
-  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.08);
+  background: var(--rc-surface-hover);
+  color: var(--rc-text-primary);
 }
 
-.login-btn-3d:active {
-  transform: translateY(0);
-}
-
+/* 账户占位：与设计稿一致的方形描边小块，不用蓝色渐变圆 */
 .login-btn-icon {
   width: 26px;
   height: 26px;
-  border-radius: 50%;
-  background: linear-gradient(135deg, #4a8cff 0%, #2d71ff 100%);
+  border-radius: 8px;
+  border: 1px solid var(--rc-border-highlight);
+  background: var(--rc-surface);
   display: flex;
   align-items: center;
   justify-content: center;
-  color: white;
+  color: var(--rc-text-muted);
   font-size: 12px;
-  box-shadow: 0 2px 8px rgba(45, 113, 255, 0.3);
-  transition: all 0.3s ease;
-}
-
-.login-btn-3d:hover .login-btn-icon {
-  transform: scale(1.1);
 }
 
 .login-btn-text {
-  color: var(--zt-text);
+  color: inherit;
 }
 :deep(.ant-dropdown-menu) {
   padding: 4px !important;

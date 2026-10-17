@@ -1,14 +1,20 @@
 <script setup>
 import { ref, watch, onMounted, onUnmounted, computed, nextTick } from 'vue'
+import ShortcutKeys from '@/components/base/ShortcutKeys.vue'
 import { useRouter } from 'vue-router'
 import { useUIStore } from '@/stores/ui'
 import { usePluginsStore } from '@/stores/plugins'
 import { useCommandSearch } from '@/composables/useCommandSearch'
+import { getHighlightPartsWithPinyin } from '@/utils/pinyinSearch'
+import { useToast } from '@/composables/useToast'
 import { useKeymap, KEYMAP_SCOPES } from '@/utils/keymap'
 import { switchWindowMode, WINDOW_MODES } from '@/utils/windowMode'
 import { routeUtils } from '@/router/routes'
 import { isOfficialPlugin } from '@/utils/officialPlugins'
-import { RcSquircle } from '@/components/raycast'
+import { RcSquircle } from '@/components/base'
+import { resolveItemGlyph } from '@/utils/brandIcons'
+import { DEFAULT_GLOBAL_WAKE_HOTKEY } from '@/utils/globalWakeHotkey'
+
 
 const props = defineProps({
   modelValue: String,
@@ -20,6 +26,7 @@ const emit = defineEmits(['update:modelValue', 'search'])
 const router = useRouter()
 const uiStore = useUIStore()
 const pluginsStore = usePluginsStore()
+const { success: toastSuccess } = useToast()
 
 const localValue = ref(props.modelValue || '')
 const inputRef = ref(null)
@@ -111,10 +118,23 @@ const focusInput = () => {
   uiStore.focusSearch()
 }
 
+function highlightParts(text) {
+  return getHighlightPartsWithPinyin(text, localValue.value)
+}
+
 function executeCandidate(item) {
   if (!item) return
-  recordUsage(item.key || item.pluginId)
+  if (!item.omitFromFrecencyTracking) {
+    recordUsage(item.key || item.pluginId)
+  }
   isDropdownOpen.value = false
+
+  if (item.type === 'inline-calculator' || item.type === 'inline-color') {
+    Promise.resolve(item.action?.()).then(() => {
+      toastSuccess?.(`已复制结果: ${item.answer}`)
+    })
+    return
+  }
 
   if (item.pluginId && isOfficialPlugin(item.pluginId)) {
     router.push(routeUtils.toDeclarative(item.pluginId))
@@ -172,15 +192,15 @@ defineExpose({ focusInput })
     <a-input
       ref="inputRef"
       v-model:value="localValue"
-      :placeholder="placeholder || '搜索插件与命令...'"
+      :placeholder="placeholder || '搜索插件、命令与文件'"
       allow-clear
       @press-enter="handleEnter"
       @focus="onFocus"
       @blur="onBlur"
       class="rc-search-input"
       style="
-        height: 32px;
-        border-radius: var(--rc-radius-md, 8px);
+        height: 34px;
+        border-radius: 9px;
         font-size: 13px;
       "
     >
@@ -190,16 +210,16 @@ defineExpose({ focusInput })
           viewBox="0 0 24 24"
           fill="none"
           stroke="currentColor"
-          stroke-width="2"
+          stroke-width="1.9"
           stroke-linecap="round"
           stroke-linejoin="round"
         >
-          <circle cx="11" cy="11" r="8" />
-          <line x1="21" y1="21" x2="16.65" y2="16.65" />
+          <circle cx="11" cy="11" r="7" />
+          <path d="m20 20-3.5-3.5" />
         </svg>
       </template>
       <template #suffix>
-        <kbd class="rc-kbd select-none hidden sm:inline-flex">Ctrl F</kbd>
+        <ShortcutKeys class="hidden sm:inline-flex" combo="Ctrl+F" />
       </template>
     </a-input>
 
@@ -216,9 +236,9 @@ defineExpose({ focusInput })
         "
       >
         <div class="px-3 py-1.5 text-[11px] font-semibold border-b flex items-center justify-between"
-             style="border-color: var(--rc-border); background: var(--rc-surface-subtle); color: var(--rc-text-secondary);">
+             style="border-color: var(--rc-border); color: var(--rc-text-faint);">
           <span>命令与快捷启动</span>
-          <span class="text-[10px] font-mono">↑↓ 选择 · ↵ 执行</span>
+          <span class="text-[10px]">↑↓ 选择 · ↵ 执行</span>
         </div>
 
         <div class="overflow-y-auto p-1.5 space-y-1 custom-scrollbar" style="max-height: 260px;">
@@ -226,20 +246,21 @@ defineExpose({ focusInput })
             v-for="(item, idx) in candidateCommands"
             :key="item.key || item.pluginId || idx"
             class="flex items-center justify-between px-2.5 py-1.5 rounded-lg cursor-pointer transition-colors text-xs"
-            :style="activeIndex === idx ? 'background: var(--rc-surface-hover); color: var(--rc-text-primary);' : 'color: var(--rc-text-secondary);'"
+            :class="{ 'is-active': activeIndex === idx }"
+            :style="activeIndex === idx ? 'background: var(--rc-surface-active); color: var(--rc-text-primary);' : 'color: var(--rc-text-muted);'"
             @mousedown.prevent="executeCandidate(item)"
             @mouseenter="activeIndex = idx"
           >
             <div class="flex items-center gap-2.5 min-w-0 flex-1">
+              <span class="row-marker" aria-hidden="true"></span>
               <RcSquircle
+                :glyph="resolveItemGlyph(item)"
+                :src="typeof item.icon === 'string' && /^(https?:|data:image\/|ztools:)/.test(item.icon) ? item.icon : ''"
                 :icon="item.faIcon || 'fa-cube'"
                 :size="24"
-                rounded="rounded-md"
               />
               <div class="flex items-baseline gap-1.5 min-w-0">
-                <span class="font-medium text-[13px] truncate" style="color: var(--rc-text-primary)">
-                  {{ item.name || item.title }}
-                </span>
+                <span class="font-medium text-[13px] truncate" style="color: var(--rc-text-primary)"><template v-for="(part, partIdx) in highlightParts(item.name || item.title)" :key="partIdx"><mark v-if="part.hit" class="bg-transparent text-[var(--rc-accent-text)] font-semibold">{{ part.text }}</mark><template v-else>{{ part.text }}</template></template></span>
                 <span v-if="item.description" class="text-[11px] truncate opacity-70 max-w-[280px]">
                   {{ item.description }}
                 </span>
@@ -251,7 +272,7 @@ defineExpose({ focusInput })
                     style="background: var(--rc-surface-subtle); border: 1px solid var(--rc-border);">
                 {{ item.badge }}
               </span>
-              <span v-if="activeIndex === idx" class="font-mono text-[10px] text-sky-400">
+              <span v-if="activeIndex === idx" class="text-[11px]" style="color: var(--rc-text-secondary)">
                 {{ item.actionLabel || '启动' }} ↵
               </span>
             </div>
@@ -260,36 +281,23 @@ defineExpose({ focusInput })
       </div>
     </transition>
 
-    <!-- 搜索情境式智能提示 -->
+    <!-- 搜索情境提示：引导全局唤起悬浮条 -->
     <transition name="hint-fade">
       <div
         v-if="isFocused && localValue && !hintDismissed && !isDropdownOpen"
-        class="absolute left-0 right-0 top-full mt-1.5 px-3 py-1.5 rounded-lg border text-xs flex items-center justify-between z-30 shadow-lg select-none backdrop-blur-md"
-        style="
-          background: var(--rc-surface-translucent, rgba(22, 26, 33, 0.95));
-          border-color: var(--rc-border-highlight, rgba(56, 189, 248, 0.3));
-          color: var(--rc-text-primary);
-        "
+        class="search-hint absolute left-0 right-0 top-full mt-1.5 select-none"
       >
-        <div class="flex items-center gap-1.5 truncate mr-2">
-          <span class="text-amber-400">💡</span>
-          <span class="truncate">
-            桌面任意位置按 <kbd class="px-1 py-0.2 rounded font-mono text-[10px] bg-sky-500/20 text-sky-400 font-semibold">Alt + Space</kbd> 也可秒开搜索
-          </span>
-        </div>
-        <div class="flex items-center gap-2 flex-shrink-0">
-          <button
-            class="px-2 py-0.5 rounded bg-sky-500 hover:bg-sky-600 text-white font-medium text-[11px] transition-colors cursor-pointer"
-            @mousedown.prevent="tryGeekLauncher"
-          >
-            试一试 ➔
+        <span class="truncate">
+          在任何地方按 <ShortcutKeys :combo="DEFAULT_GLOBAL_WAKE_HOTKEY" /> 也能直接搜索
+        </span>
+        <div class="flex items-center gap-1 flex-shrink-0">
+          <button type="button" class="search-hint-btn" @mousedown.prevent="tryGeekLauncher">
+            试一试
           </button>
-          <button
-            class="text-slate-400 hover:text-slate-200 text-xs cursor-pointer p-0.5"
-            title="关闭提示"
-            @mousedown.prevent="dismissHint"
-          >
-            ✕
+          <button type="button" class="search-hint-close" title="关闭提示" aria-label="关闭提示" @mousedown.prevent="dismissHint">
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true">
+              <path d="M6 6l12 12M18 6 6 18" />
+            </svg>
           </button>
         </div>
       </div>
@@ -298,24 +306,94 @@ defineExpose({ focusInput })
 </template>
 
 <style scoped>
+/* a-input 的根元素就是 affix-wrapper，直接带上组件作用域 */
+.rc-search-input.ant-input-affix-wrapper {
+  background-color: var(--rc-surface) !important;
+  border-color: var(--rc-border-highlight) !important;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+
 .rc-search-input :deep(.ant-input) {
   font-size: 13px;
   background: transparent !important;
+  color: var(--rc-text-primary);
+  caret-color: var(--rc-accent);
 }
 
-.rc-search-input :deep(.ant-input-affix-wrapper) {
-  background-color: var(--rc-surface-subtle) !important;
-  border-color: var(--rc-border) !important;
-  transition: all 0.15s ease;
+.rc-search-input :deep(.ant-input::placeholder) {
+  color: var(--rc-text-faint);
 }
 
-.rc-search-input :deep(.ant-input-affix-wrapper:hover) {
+.rc-search-input.ant-input-affix-wrapper:hover {
   border-color: var(--rc-border-highlight) !important;
 }
 
-.rc-search-input :deep(.ant-input-affix-wrapper-focused) {
-  border-color: var(--rc-accent) !important;
-  box-shadow: 0 0 0 2px var(--rc-accent-subtle) !important;
+/* 聚焦：余烬橙光晕（全站除标志外唯一的光晕） */
+.rc-search-input.ant-input-affix-wrapper-focused {
+  border-color: transparent !important;
+  box-shadow: var(--rc-focus-ring) !important;
+}
+
+.row-marker {
+  width: 6px;
+  height: 6px;
+  border-radius: 1.7px;
+  flex-shrink: 0;
+  background: transparent;
+}
+
+.is-active .row-marker {
+  background: var(--rc-accent);
+  box-shadow: var(--rc-marker-glow);
+}
+
+.search-hint {
+  z-index: 30;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 6px 6px 6px 12px;
+  border-radius: var(--rc-radius-md);
+  border: 1px solid var(--rc-border-highlight);
+  background: var(--rc-surface);
+  box-shadow: var(--rc-shadow-md);
+  font-size: 12px;
+  color: var(--rc-text-secondary);
+}
+
+.search-hint-btn {
+  height: 24px;
+  padding: 0 10px;
+  border: none;
+  border-radius: 6px;
+  background: var(--rc-accent);
+  color: var(--rc-accent-contrast);
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+}
+
+.search-hint-btn:hover {
+  background: var(--rc-accent-hover);
+}
+
+.search-hint-close {
+  width: 24px;
+  height: 24px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--rc-text-faint);
+  cursor: pointer;
+}
+
+.search-hint-close:hover {
+  background: var(--rc-surface-hover);
+  color: var(--rc-text-primary);
 }
 
 .hint-fade-enter-active,

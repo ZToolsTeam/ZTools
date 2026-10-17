@@ -128,6 +128,30 @@ describe("Raycast System APIs", () => {
     setDeclarativeBridge(null);
   });
 
+  test("[破坏性] 没有宿主时 confirmAlert 按取消处理：不弹原生对话框，也不擅自确认", async () => {
+    setDeclarativeBridge(null);
+    let nativeCalled = false;
+    const hadWindow = "window" in globalThis;
+    const previousWindow = globalThis.window;
+    globalThis.window = { confirm: () => { nativeCalled = true; return true; } };
+    try {
+      let primary = 0;
+      let dismiss = 0;
+      const ok = await confirmAlert({
+        title: "清空全部？",
+        primaryAction: { title: "清空", style: "destructive", onAction: () => { primary += 1; } },
+        dismissAction: { onAction: () => { dismiss += 1; } }
+      });
+      assert.equal(ok, false);
+      assert.equal(primary, 0);
+      assert.equal(dismiss, 1);
+      assert.equal(nativeCalled, false);
+    } finally {
+      if (hadWindow) globalThis.window = previousWindow;
+      else delete globalThis.window;
+    }
+  });
+
   test("showHUD, open, confirmAlert should execute smoothly", async () => {
     let openedUrl = null;
     let alertConfirmed = false;

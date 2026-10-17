@@ -3,23 +3,7 @@
  * 图标优先级：plugin.icon（远程URL）> localIconPath（本地）> FA图标
  */
 import { computed, ref } from 'vue'
-
-// 渐变色类型列表
-const GRADIENT_TYPES = ['blue', 'green', 'orange', 'pink', 'purple', 'cyan']
-
-/**
- * 根据插件名称确定性地生成渐变色类型
- * 同一个名称永远返回同一个颜色，列表页和详情页保持一致
- */
-export function getPluginGradient(name) {
-  const str = (name || '').trim()
-  if (!str) return GRADIENT_TYPES[0]
-  let hash = 0
-  for (let i = 0; i < str.length; i++) {
-    hash = ((hash << 5) - hash + str.charCodeAt(i)) | 0
-  }
-  return GRADIENT_TYPES[Math.abs(hash) % GRADIENT_TYPES.length]
-}
+import { resolvePluginGlyph } from '@/utils/brandIcons'
 
 // FA 图标映射表（列表页和详情页统一使用）
 const FA_ICON_MAP = [
@@ -140,6 +124,11 @@ export function usePluginIcon(pluginGetter) {
     return plugin?.localIconPath || ''
   })
   const displayIconUrl = computed(() => remoteIconUrl.value || localIconPath.value)
+  // 官方插件统一使用品牌线性图形（设计规范：避免各插件自带图标风格不一）
+  const pluginGlyph = computed(() => {
+    const plugin = typeof pluginGetter === 'function' ? pluginGetter() : pluginGetter.value
+    return resolvePluginGlyph(plugin)
+  })
   const showImgOverlay = computed(() => !!displayIconUrl.value && iconLoaded.value && !iconFailed.value)
 
   const onIconLoad = () => { iconLoaded.value = true }
@@ -147,6 +136,7 @@ export function usePluginIcon(pluginGetter) {
 
   return {
     pluginIcon,
+    pluginGlyph,
     displayIconUrl,
     iconLoaded,
     iconFailed,

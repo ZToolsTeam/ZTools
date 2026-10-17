@@ -28,6 +28,8 @@ import { setWakePreference, windowModeState, WAKE_PREFERENCES } from '@/utils/wi
 import { openDevTools } from '@/utils/internalPlugins'
 import { vSwitchKeyboard } from '@/directives/switchKeyboard'
 import ScreenPermissionPanel from '@/components/ScreenPermissionPanel.vue'
+import ShortcutKeys from '@/components/base/ShortcutKeys.vue'
+import RcSegmented from '@/components/base/RcSegmented.vue'
 import ShortcutSettingsModal from '@/components/ShortcutSettingsModal.vue'
 import PluginHotkeyModal from '@/components/PluginHotkeyModal.vue'
 import PluginFeatureHotkeyModal from '@/components/PluginFeatureHotkeyModal.vue'
@@ -145,10 +147,15 @@ const longPressMarks = {
   500: '500ms'
 }
 
+const panelPositionOptions = [
+  { value: 'center', label: '屏幕中心' },
+  { value: 'cursor', label: '鼠标位置' }
+]
+
 const panelSizeOptions = [
-  { value: 'small', label: '小', desc: '400 x 300' },
-  { value: 'medium', label: '中', desc: '400 x 600' },
-  { value: 'large', label: '大', desc: '800 x 600' }
+  { value: 'small', label: '小', hint: '400×300' },
+  { value: 'medium', label: '中', hint: '400×600' },
+  { value: 'large', label: '大', hint: '800×600' }
 ]
 
 const defaultTabOptions = [
@@ -211,6 +218,28 @@ const loadSettings = async () => {
     console.error('Failed to load settings:', e)
     error('加载设置失败')
   }
+}
+
+const themeOptions = [
+  { value: 'light', label: '浅色' },
+  { value: 'dark', label: '深色' }
+]
+const wakeOptions = [
+  { value: 'launcher', label: '悬浮条' },
+  { value: 'dashboard', label: '工作台' }
+]
+const builtinShortcuts = [
+  { label: '聚焦搜索', combo: 'Ctrl+F' },
+  { label: '动作面板', combo: 'Ctrl+K' },
+  { label: '收起 / 展开侧栏', combo: 'Ctrl+B' },
+  { label: '切换到悬浮条', combo: 'Ctrl+M' },
+  { label: '打开设置', combo: 'Ctrl+,' },
+  { label: '返回主页', combo: 'Escape' }
+]
+const pickTheme = (value) => {
+  if (settings.theme === value) return
+  settings.theme = value
+  changeTheme()
 }
 
 const onWakePreferenceChange = (val) => {
@@ -284,6 +313,8 @@ const saveSettings = async () => {
       }
     } catch (e) {
       console.error('Failed to save super panel settings:', e)
+      error('超级面板设置保存失败：' + (e?.message || '未知错误'))
+      return
     }
     if (hotkeySyncFailure) {
       error(`设置已保存，但全局唤醒快捷键同步失败：${hotkeySyncFailure}`)
@@ -560,33 +591,51 @@ onBeforeUnmount(() => {
     <div class="settings-container">
       <!-- 页面标题 -->
       <div class="page-header">
-        <div class="header-icon">
-          <i class="fa fa-cog"></i>
-        </div>
-        <div class="header-text">
-          <h1 class="page-title">高级设置</h1>
-          <p class="page-subtitle">管理应用程序的核心行为与视觉偏好</p>
-        </div>
+        <h1 class="page-title">设置</h1>
+        <p class="page-subtitle">修改后立即生效并自动保存</p>
       </div>
 
       <!-- 设置卡片网格 -->
       <div class="settings-grid">
+        <!-- 外观设置卡片 -->
+        <div class="settings-card">
+          <div class="card-header">
+            <h2 class="card-title">外观</h2>
+          </div>
+
+          <div class="settings-list">
+            <div class="theme-switcher" role="radiogroup" aria-label="界面主题">
+              <button
+                v-for="option in themeOptions"
+                :key="option.value"
+                type="button"
+                role="radio"
+                class="theme-btn"
+                :class="{ active: settings.theme === option.value }"
+                :aria-checked="settings.theme === option.value"
+                @click="pickTheme(option.value)"
+              >
+                <div class="theme-preview" :class="`${option.value}-preview`" aria-hidden="true">
+                  <div class="preview-bar"><span class="preview-mark"></span></div>
+                  <div class="preview-line" style="width: 70%"></div>
+                  <div class="preview-line" style="width: 45%"></div>
+                </div>
+                <span class="theme-name"><span class="theme-marker" aria-hidden="true"></span>{{ option.label }}</span>
+              </button>
+            </div>
+          </div>
+        </div>
+
         <!-- 常规设置卡片 -->
         <div class="settings-card">
           <div class="card-header">
-            <div class="card-icon icon-blue">
-              <i class="fa fa-sliders"></i>
-            </div>
-            <h2 class="card-title">常规设置</h2>
+            <h2 class="card-title">通用</h2>
           </div>
 
           <div class="settings-list">
             <!-- 开机自动启动 -->
             <div class="setting-item">
               <div class="setting-info">
-                <div class="setting-icon">
-                  <i class="fa fa-power-off"></i>
-                </div>
                 <div class="setting-text">
                   <span class="setting-label">开机自动启动</span>
                   <span class="setting-desc" data-testid="autostart-status">{{ autostartDescription }}</span>
@@ -606,9 +655,6 @@ onBeforeUnmount(() => {
             <!-- 退出确认 -->
             <div class="setting-item">
               <div class="setting-info">
-                <div class="setting-icon">
-                  <i class="fa fa-window-close-o"></i>
-                </div>
                 <div class="setting-text">
                   <span class="setting-label">退出确认</span>
                   <span class="setting-desc">关闭主窗口时询问退出或最小化到托盘</span>
@@ -625,9 +671,6 @@ onBeforeUnmount(() => {
             <!-- 最小化到托盘 -->
             <div v-if="!settings.closeConfirm" class="setting-item animate-in">
               <div class="setting-info">
-                <div class="setting-icon">
-                  <i class="fa fa-compress"></i>
-                </div>
                 <div class="setting-text">
                   <span class="setting-label">最小化到托盘</span>
                   <span class="setting-desc">关闭窗口后在后台继续运行</span>
@@ -643,94 +686,16 @@ onBeforeUnmount(() => {
           </div>
         </div>
 
-        <!-- 外观设置卡片 -->
-        <div class="settings-card">
-          <div class="card-header">
-            <div class="card-icon icon-purple">
-              <i class="fa fa-paint-brush"></i>
-            </div>
-            <h2 class="card-title">外观设置</h2>
-          </div>
-
-          <div class="settings-list">
-            <div class="setting-item theme-setting">
-              <div class="setting-info">
-                <div class="setting-icon">
-                  <i class="fa fa-adjust"></i>
-                </div>
-                <div class="setting-text">
-                  <span class="setting-label">界面主题</span>
-                  <span class="setting-desc">切换应用整体视觉风格</span>
-                </div>
-              </div>
-            </div>
-
-            <div class="theme-switcher">
-              <button
-                class="theme-btn"
-                :class="{ active: settings.theme === 'light' }"
-                @click="
-                  () => {
-                    settings.theme = 'light'
-                    changeTheme()
-                  }
-                "
-              >
-                <div class="theme-preview light-preview">
-                  <div class="preview-header"></div>
-                  <div class="preview-content">
-                    <div class="preview-sidebar"></div>
-                    <div class="preview-main"></div>
-                  </div>
-                </div>
-                <span class="theme-name">
-                  <i class="fa fa-sun-o"></i>
-                  明亮模式
-                </span>
-              </button>
-
-              <button
-                class="theme-btn"
-                :class="{ active: settings.theme === 'dark' }"
-                @click="
-                  () => {
-                    settings.theme = 'dark'
-                    changeTheme()
-                  }
-                "
-              >
-                <div class="theme-preview dark-preview">
-                  <div class="preview-header"></div>
-                  <div class="preview-content">
-                    <div class="preview-sidebar"></div>
-                    <div class="preview-main"></div>
-                  </div>
-                </div>
-                <span class="theme-name">
-                  <i class="fa fa-moon-o"></i>
-                  暗黑模式
-                </span>
-              </button>
-            </div>
-          </div>
-        </div>
-
         <!-- 快捷键设置卡片 -->
         <div class="settings-card wide-card">
           <div class="card-header">
-            <div class="card-icon icon-green">
-              <i class="fa fa-keyboard-o"></i>
-            </div>
-            <h2 class="card-title">快捷交互</h2>
+            <h2 class="card-title">快捷键</h2>
           </div>
 
           <div class="settings-list">
             <!-- 全局唤醒快捷键 -->
             <div class="setting-item hotkey-item">
               <div class="setting-info">
-                <div class="setting-icon">
-                  <i class="fa fa-bolt"></i>
-                </div>
                 <div class="setting-text">
                   <span class="setting-label">全局唤醒快捷键</span>
                   <span class="setting-desc"
@@ -784,33 +749,25 @@ onBeforeUnmount(() => {
             <!-- 呼出形态偏好设置 -->
             <div class="setting-item">
               <div class="setting-info">
-                <div class="setting-icon">
-                  <i class="fa fa-sliders"></i>
-                </div>
                 <div class="setting-text">
                   <span class="setting-label">默认呼出形态</span>
                   <span class="setting-desc">按全局热键唤醒时的窗口展示模式</span>
                 </div>
               </div>
               <div class="setting-control">
-                <a-radio-group
-                  v-model:value="settings.wakePreference"
-                  size="small"
-                  button-style="solid"
-                  @change="e => onWakePreferenceChange(e.target.value)"
-                >
-                  <a-radio-button value="dashboard">应用工作台</a-radio-button>
-                  <a-radio-button value="launcher">极客悬浮条</a-radio-button>
-                </a-radio-group>
+                <RcSegmented
+                  variant="marker"
+                  aria-label="默认呼出形态"
+                  :model-value="settings.wakePreference"
+                  :options="wakeOptions"
+                  @change="onWakePreferenceChange"
+                />
               </div>
             </div>
 
             <!-- 启动快捷键（独立项） -->
             <div class="setting-item" style="cursor: pointer" @click="openPluginHotkeyModal">
               <div class="setting-info">
-                <div class="setting-icon">
-                  <i class="fa fa-keyboard-o"></i>
-                </div>
                 <div class="setting-text">
                   <span class="setting-label">启动快捷键</span>
                   <span class="setting-desc">为指定插件或本地应用设置全局独立启动热键</span>
@@ -828,9 +785,6 @@ onBeforeUnmount(() => {
               @click="openPluginFeatureHotkeyModal"
             >
               <div class="setting-info">
-                <div class="setting-icon">
-                  <i class="fa fa-crosshairs"></i>
-                </div>
                 <div class="setting-text">
                   <span class="setting-label">功能快捷键</span>
                   <span class="setting-desc">为插件内置功能（如截图、文字识别）设置全局热键</span>
@@ -845,9 +799,6 @@ onBeforeUnmount(() => {
             <!-- 超级面板 -->
             <div ref="superPanelSettingRef" class="setting-item">
               <div class="setting-info">
-                <div class="setting-icon">
-                  <i class="fa fa-th"></i>
-                </div>
                 <div class="setting-text">
                   <span class="setting-label">超级面板</span>
                   <span class="setting-desc">快速启动插件的便捷面板</span>
@@ -870,7 +821,6 @@ onBeforeUnmount(() => {
               <div class="sub-setting-group">
                 <div class="sub-setting-header">
                   <div class="sub-setting-info">
-                    <i class="fa fa-keyboard-o"></i>
                     <span>键盘热键</span>
                   </div>
                   <a-switch
@@ -942,7 +892,6 @@ onBeforeUnmount(() => {
               <div class="sub-setting-group">
                 <div class="sub-setting-header">
                   <div class="sub-setting-info">
-                    <i class="fa fa-mouse-pointer"></i>
                     <span>鼠标热键</span>
                   </div>
                   <a-switch
@@ -961,8 +910,7 @@ onBeforeUnmount(() => {
                     <span class="mouse-label">触发方式</span>
                     <a-select
                       v-model:value="settings.superPanel.mouseHotkey.button"
-                      style="width: 160px"
-                      size="small"
+                      style="width: 180px"
                       @change="saveSettings"
                     >
                       <a-select-option
@@ -1002,7 +950,6 @@ onBeforeUnmount(() => {
               <div class="sub-setting-group">
                 <div class="sub-setting-header">
                   <div class="sub-setting-info">
-                    <i class="fa fa-cogs"></i>
                     <span>其他设置</span>
                   </div>
                 </div>
@@ -1010,59 +957,44 @@ onBeforeUnmount(() => {
                 <div class="sub-setting-content">
                   <div class="mouse-setting-row">
                     <span class="mouse-label">面板位置</span>
-                    <a-radio-group
-                      v-model:value="settings.superPanel.panelPosition"
-                      size="small"
+                    <RcSegmented
+                      v-model="settings.superPanel.panelPosition"
+                      variant="marker"
+                      aria-label="面板位置"
+                      :options="panelPositionOptions"
                       @change="saveSettings"
-                    >
-                      <a-radio-button value="center">屏幕中心</a-radio-button>
-                      <a-radio-button value="cursor">鼠标位置</a-radio-button>
-                    </a-radio-group>
+                    />
                   </div>
 
-                  <div class="mouse-setting-row" style="margin-top: 12px">
+                  <div class="mouse-setting-row">
                     <span class="mouse-label">面板大小</span>
-                    <a-radio-group
-                      v-model:value="settings.superPanel.panelSize"
-                      size="small"
+                    <RcSegmented
+                      v-model="settings.superPanel.panelSize"
+                      variant="marker"
+                      aria-label="面板大小"
+                      :options="panelSizeOptions"
                       @change="saveSettings"
-                    >
-                      <a-radio-button
-                        v-for="option in panelSizeOptions"
-                        :key="option.value"
-                        :value="option.value"
-                      >
-                        {{ option.label }} {{ option.desc }}
-                      </a-radio-button>
-                    </a-radio-group>
+                    />
                   </div>
 
-                  <div class="mouse-setting-row" style="margin-top: 12px">
+                  <div class="mouse-setting-row">
                     <span class="mouse-label">默认选中 Tab</span>
-                    <a-select
-                      v-model:value="settings.superPanel.defaultTab"
-                      size="small"
-                      style="width: 120px"
+                    <RcSegmented
+                      v-model="settings.superPanel.defaultTab"
+                      variant="marker"
+                      aria-label="默认选中 Tab"
+                      :options="defaultTabOptions"
                       @change="saveSettings"
-                    >
-                      <a-select-option
-                        v-for="option in defaultTabOptions"
-                        :key="option.value"
-                        :value="option.value"
-                      >
-                        {{ option.label }}
-                      </a-select-option>
-                    </a-select>
+                    />
                   </div>
 
-                  <div class="mouse-setting-row" style="margin-top: 12px">
+                  <div class="mouse-setting-row">
                     <span class="mouse-label">最近使用数量</span>
                     <a-input-number
                       v-model:value="settings.superPanel.maxRecentCount"
                       :min="5"
                       :max="20"
-                      size="small"
-                      style="width: 80px"
+                      style="width: 88px"
                       @change="saveSettings"
                     />
                   </div>
@@ -1073,7 +1005,6 @@ onBeforeUnmount(() => {
               <div class="sub-setting-group">
                 <div class="sub-setting-header" style="cursor: pointer" @click="shortcutModalOpen = true">
                   <div class="sub-setting-info">
-                    <i class="fa fa-bolt"></i>
                     <span>快捷方式设置</span>
                   </div>
                   <span style="font-size: 12px; color: var(--zt-text-secondary)">
@@ -1087,24 +1018,31 @@ onBeforeUnmount(() => {
           </div>
         </div>
 
+        <!-- 常用快捷键（只读）：与 MainLayout 中 GLOBAL 作用域绑定保持一致 -->
+        <div class="settings-card">
+          <div class="card-header">
+            <h2 class="card-title">常用快捷键</h2>
+          </div>
+          <div class="settings-list">
+            <div v-for="item in builtinShortcuts" :key="item.combo" class="setting-item compact">
+              <span class="setting-label">{{ item.label }}</span>
+              <ShortcutKeys :combo="item.combo" />
+            </div>
+          </div>
+        </div>
+
         <!-- 隐私与权限卡片 -->
         <ScreenPermissionPanel class="wide-card" />
 
         <!-- 开发者工具卡片 -->
         <div class="settings-card wide-card">
           <div class="card-header">
-            <div class="card-icon icon-orange">
-              <i class="fa fa-terminal"></i>
-            </div>
             <h2 class="card-title">开发者工具</h2>
           </div>
 
           <div class="settings-list">
             <div class="setting-item dev-item">
               <div class="setting-info">
-                <div class="setting-icon">
-                  <i class="fa fa-code"></i>
-                </div>
                 <div class="setting-text">
                   <span class="setting-label">调试控制台</span>
                   <span class="setting-desc"
@@ -1121,9 +1059,6 @@ onBeforeUnmount(() => {
             <!-- 开源插件生态大仓 -->
             <div class="setting-item dev-item">
               <div class="setting-info">
-                <div class="setting-icon" style="background: rgba(255, 255, 255, 0.08); color: var(--color-text-primary);">
-                  <i class="fa fa-github"></i>
-                </div>
                 <div class="setting-text">
                   <span class="setting-label">开源插件生态大仓 (ZTools-extensions)</span>
                   <span class="setting-desc"
@@ -1140,9 +1075,6 @@ onBeforeUnmount(() => {
             <!-- 5分钟快速上手指南 -->
             <div class="setting-item dev-item">
               <div class="setting-info">
-                <div class="setting-icon" style="background: rgba(16, 185, 129, 0.15); color: #10b981;">
-                  <i class="fa fa-book"></i>
-                </div>
                 <div class="setting-text">
                   <span class="setting-label">开发者极速上手指南</span>
                   <span class="setting-desc"
@@ -1169,106 +1101,123 @@ onBeforeUnmount(() => {
 </template>
 
 <style scoped>
-/* 主题切换器 */
-.theme-setting {
-  margin-bottom: 8px;
-}
-
+/* 主题选择：两张预览卡，选中项用余烬橙方块标记（与设计稿一致） */
 .theme-switcher {
   display: grid;
-  grid-template-columns: repeat(2, 1fr);
-  gap: 12px;
-  padding: 0 14px;
+  grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+  gap: 10px;
+  padding-top: 4px;
 }
 
 .theme-btn {
   display: flex;
   flex-direction: column;
-  align-items: center;
   gap: 10px;
-  padding: 12px;
-  border-radius: var(--rc-radius-xl, 14px);
-  border: 2px solid var(--rc-border);
+  padding: 8px 8px 10px;
+  border-radius: 12px;
+  border: 1px solid var(--rc-border);
   background: var(--rc-surface);
+  color: var(--rc-text-secondary);
+  font: inherit;
+  text-align: left;
   cursor: pointer;
-  transition: all 0.3s ease;
+  transition: border-color 0.15s ease;
 }
 
 .theme-btn:hover {
-  border-color: var(--rc-accent);
-  transform: translateY(-2px);
+  border-color: var(--rc-border-highlight);
 }
 
 .theme-btn.active {
   border-color: var(--rc-accent);
-  background: var(--rc-accent-subtle);
+}
+
+.theme-btn:focus-visible {
+  outline: 2px solid var(--rc-accent);
+  outline-offset: 2px;
 }
 
 .theme-preview {
-  width: 100%;
-  height: 60px;
-  border-radius: var(--rc-radius-md, 8px);
-  overflow: hidden;
-  border: 1px solid var(--rc-border);
-}
-
-.light-preview {
-  background: #f8fafc;
-}
-
-.dark-preview {
-  background: #1a1f2e;
-}
-
-.preview-header {
-  height: 12px;
-  background: linear-gradient(135deg, #4a8cff 0%, #2d71ff 100%);
-}
-
-.preview-content {
+  height: 78px;
+  border-radius: 8px;
+  padding: 10px;
+  box-sizing: border-box;
   display: flex;
-  height: calc(100% - 12px);
-  padding: 4px;
-  gap: 4px;
-}
-
-.preview-sidebar {
-  width: 20%;
-  border-radius: 3px;
-}
-
-.light-preview .preview-sidebar {
-  background: #e2e8f0;
-}
-
-.dark-preview .preview-sidebar {
-  background: #313847;
-}
-
-.preview-main {
-  flex: 1;
-  border-radius: 3px;
-}
-
-.light-preview .preview-main {
-  background: #fff;
-}
-
-.dark-preview .preview-main {
-  background: #252b3b;
-}
-
-.theme-name {
-  font-size: 12px;
-  font-weight: 500;
-  color: var(--rc-text-secondary);
-  display: flex;
-  align-items: center;
+  flex-direction: column;
   gap: 6px;
 }
 
+/* 预览卡固定展示「雾白 / 墨黑」两套真实配色，不随当前主题变化 */
+.light-preview {
+  background: #f4f3f0;
+  box-shadow: inset 0 0 0 1px #e7e5e0;
+}
+
+.dark-preview {
+  background: #0b0b0c;
+  box-shadow: inset 0 0 0 1px #202024;
+}
+
+.preview-bar {
+  height: 14px;
+  border-radius: 4px;
+  display: flex;
+  align-items: center;
+  padding-left: 5px;
+}
+
+.light-preview .preview-bar {
+  background: #ffffff;
+}
+
+.dark-preview .preview-bar {
+  background: #1a1a1d;
+}
+
+.preview-mark {
+  width: 4px;
+  height: 4px;
+  border-radius: 1px;
+  background: #ff6b3d;
+}
+
+.preview-line {
+  height: 6px;
+  border-radius: 2px;
+}
+
+.light-preview .preview-line {
+  background: #dbd8d2;
+}
+
+.dark-preview .preview-line {
+  background: #2c2c31;
+}
+
+.theme-name {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 2px;
+  font-size: 13px;
+}
+
 .theme-btn.active .theme-name {
-  color: var(--rc-accent);
+  color: var(--rc-text-primary);
+  font-weight: 600;
+}
+
+.theme-marker {
+  width: 6px;
+  height: 6px;
+  border-radius: 1.7px;
+  flex-shrink: 0;
+  background: transparent;
+}
+
+.theme-btn.active .theme-marker {
+  background: var(--rc-accent);
+  box-shadow: 0 0 8px rgba(255, 107, 61, 0.55);
 }
 
 /* 快捷键录入 */
@@ -1299,11 +1248,11 @@ onBeforeUnmount(() => {
 }
 
 .hotkey-recorder {
-  min-width: 140px;
-  height: 36px;
-  padding: 0 14px;
-  border-radius: var(--rc-radius-lg, 10px);
-  border: 1.5px solid var(--rc-border);
+  min-width: 132px;
+  height: 32px;
+  padding: 0 12px;
+  border-radius: 8px;
+  border: 1px solid var(--rc-border-highlight);
   background: var(--rc-surface);
   display: flex;
   align-items: center;
@@ -1338,7 +1287,7 @@ onBeforeUnmount(() => {
 .recording-text {
   font-size: 12px;
   font-weight: 500;
-  color: var(--rc-accent);
+  color: var(--rc-accent-text);
   display: flex;
   align-items: center;
   gap: 6px;
@@ -1371,20 +1320,16 @@ onBeforeUnmount(() => {
 
 /* 子设置 (超级面板展开区) */
 .sub-settings {
-  margin-top: 8px;
-  margin-left: 32px;
-  padding: 16px;
-  background: var(--rc-surface-subtle);
-  border-radius: var(--rc-radius-xl, 14px);
+  margin: 0 0 16px;
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  gap: 8px;
 }
 
 .sub-setting-group {
-  padding: 10px 14px;
-  background: var(--rc-surface);
-  border-radius: var(--rc-radius-lg, 12px);
+  padding: 12px 14px;
+  background: var(--rc-surface-subtle);
+  border-radius: 10px;
   border: 1px solid var(--rc-border);
 }
 
@@ -1403,31 +1348,65 @@ onBeforeUnmount(() => {
   color: var(--rc-text-primary);
 }
 
-.sub-setting-info i {
-  color: var(--rc-text-secondary);
-  font-size: 12px;
-}
-
 .sub-setting-content {
-  margin-top: 12px;
-  padding: 12px 12px 0 24px;
+  margin-top: 10px;
   border-top: 1px solid var(--rc-border);
 }
 
+/* 子设置行：与主列表同构（左名称、右控件），行间细线分隔 */
 .mouse-setting-row {
+  min-height: 46px;
   display: flex;
   align-items: center;
   justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 8px 16px;
+  padding: 7px 0;
+  border-bottom: 1px solid var(--rc-border);
+}
+
+.sub-setting-content > :last-child {
+  border-bottom: none;
 }
 
 .mouse-label {
-  font-size: 12px;
+  font-size: 13px;
   color: var(--rc-text-secondary);
 }
 
 .slider-setting {
-  margin-top: 16px;
-  padding: 0 24px;
+  padding: 10px 0 4px;
+}
+
+/* 刻度文字居中于端点，两侧留出半个标签宽度，避免超出卡片 */
+.slider-setting :deep(.ant-slider) {
+  margin: 10px 22px 22px;
+}
+
+/* 下拉与数字输入统一为 32px 高、8px 圆角，与快捷键录入框一致 */
+.sub-settings :deep(.ant-select .ant-select-selector),
+.sub-settings :deep(.ant-input-number) {
+  height: 32px;
+  border-radius: 8px;
+  border-color: var(--rc-border-highlight);
+  background: transparent;
+  box-shadow: none;
+}
+
+.sub-settings :deep(.ant-select .ant-select-selector) {
+  align-items: center;
+  padding: 0 10px;
+}
+
+.sub-settings :deep(.ant-input-number .ant-input-number-input) {
+  height: 30px;
+}
+
+.sub-settings :deep(.ant-select:hover .ant-select-selector),
+.sub-settings :deep(.ant-input-number:hover),
+.sub-settings :deep(.ant-select-focused .ant-select-selector),
+.sub-settings :deep(.ant-input-number-focused) {
+  border-color: var(--rc-accent);
 }
 
 .slider-header {
@@ -1445,33 +1424,28 @@ onBeforeUnmount(() => {
 .slider-value {
   font-size: 12px;
   font-weight: 600;
-  color: var(--rc-accent);
+  color: var(--rc-accent-text);
 }
 
 /* 开发者工具按钮 */
 .open-btn {
-  padding: 8px 16px;
-  border-radius: var(--rc-radius-lg, 10px);
-  border: none;
-  background: linear-gradient(135deg, #ffaf41 0%, #ff9500 100%);
-  color: white;
-  font-size: 13px;
+  height: 30px;
+  padding: 0 12px;
+  border-radius: var(--rc-radius-md, 8px);
+  border: 1px solid var(--rc-border-highlight);
+  background: var(--rc-surface);
+  color: var(--rc-text-primary);
+  font-size: 12px;
   font-weight: 500;
   cursor: pointer;
   display: flex;
   align-items: center;
   gap: 6px;
-  transition: all 0.3s ease;
-  box-shadow: 0 4px 12px rgba(255, 175, 65, 0.25);
+  transition: background-color 0.15s ease;
 }
 
 .open-btn:hover {
-  transform: translateY(-2px);
-  box-shadow: 0 6px 16px rgba(255, 175, 65, 0.35);
-}
-
-.open-btn:active {
-  transform: translateY(0);
+  background: var(--rc-surface-hover);
 }
 
 /* 动画 */

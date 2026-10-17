@@ -107,7 +107,7 @@ const badges = ref([
     name: '内测达人',
     icon: 'fa-rocket',
     color: 'text-blue-500',
-    bg: 'bg-blue-50 dark:bg-blue-900/20'
+    bg: 'bg-[var(--rc-accent-subtle)] dark:bg-blue-900/20'
   },
   {
     id: 2,
@@ -156,11 +156,11 @@ const loadMyDemands = async () => {
 
 const getStatusColor = (status) => {
   const colors = {
-    pending: 'bg-yellow-50 text-yellow-600 dark:bg-yellow-900/20 dark:text-yellow-400',
-    approved: 'bg-blue-50 text-blue-600 dark:bg-blue-900/20 dark:text-blue-400',
+    pending: 'bg-yellow-50 text-[var(--rc-warning)] dark:bg-yellow-900/20 dark:text-[var(--rc-warning)]',
+    approved: 'bg-[var(--rc-accent-subtle)] text-[var(--rc-accent-text)] dark:bg-blue-900/20 dark:text-blue-400',
     developing: 'bg-purple-100 text-purple-600 dark:bg-purple-900/30 dark:text-purple-400',
-    completed: 'bg-green-100 text-green-600 dark:bg-green-900/30 dark:text-green-400',
-    rejected: 'bg-red-100 text-red-600 dark:bg-red-900/30 dark:text-red-400'
+    completed: 'bg-[var(--rc-success-subtle)] text-[var(--rc-success)] dark:bg-green-900/30 dark:text-[var(--rc-success)]',
+    rejected: 'bg-[var(--rc-error-subtle)] text-[var(--rc-error)] dark:bg-red-900/30 dark:text-[var(--rc-error)]'
   }
   return colors[status] || colors.pending
 }
@@ -234,7 +234,7 @@ onMounted(() => {
             <!-- 上传中遮罩 -->
             <div
               v-if="uploadingAvatar"
-              class="absolute inset-0 flex items-center justify-center bg-black/20"
+              class="absolute inset-0 flex items-center justify-center bg-[var(--rc-surface-subtle)]"
             >
               <div
                 class="w-6 h-6 border-2 border-white border-t-transparent rounded-full animate-spin"
@@ -242,13 +242,13 @@ onMounted(() => {
             </div>
             <!-- 悬浮提示 -->
             <div
-              class="absolute inset-0 bg-black/40 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity"
+              class="absolute inset-0 bg-[var(--rc-surface-subtle)] flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity"
             >
-              <i class="fa fa-camera text-white text-xl"></i>
+              <i class="fa fa-camera text-[var(--rc-text-primary)] text-xl"></i>
             </div>
           </div>
           <div
-            class="absolute -bottom-2 -right-2 bg-blue-500 text-white w-10 h-10 rounded-2xl flex items-center justify-center border-4 shadow-lg group-hover:bg-blue-600 transition-colors"
+            class="absolute -bottom-2 -right-2 bg-[var(--rc-accent)] text-[var(--rc-accent-contrast)] w-10 h-10 rounded-2xl flex items-center justify-center border-4 shadow-lg group-hover:bg-[var(--rc-accent)] transition-colors"
             style="border-color: var(--zt-bg-elevated)"
           >
             <i class="fa fa-camera text-sm"></i>
@@ -271,7 +271,7 @@ onMounted(() => {
                 {{ displayName }}
               </h1>
               <button
-                class="w-7 h-7 rounded-lg flex items-center justify-center bg-transparent border-0 cursor-pointer opacity-40 hover:opacity-100 hover:bg-black/5 dark:hover:bg-white/10 transition-all"
+                class="w-7 h-7 rounded-lg flex items-center justify-center bg-transparent border-0 cursor-pointer opacity-40 hover:opacity-100 hover:bg-black/5 dark:hover:bg-[var(--rc-surface-hover)] transition-all"
                 title="修改昵称"
                 @click="openNicknameModal"
               >
@@ -338,7 +338,7 @@ onMounted(() => {
                     : '未绑定'
                 }}
               </span>
-              <i class="fa fa-wechat text-green-500"></i>
+              <i class="fa fa-wechat text-[var(--rc-success)]"></i>
             </div>
           </div>
 
@@ -364,7 +364,7 @@ onMounted(() => {
           </div>
 
           <button
-            class="w-full py-3 text-xs font-medium text-red-500 hover:bg-red-50 dark:hover:bg-red-900/10 rounded-xl border border-red-100 dark:border-red-900/30 transition-colors mt-2 cursor-pointer bg-transparent"
+            class="w-full py-3 text-xs font-medium text-[var(--rc-error)] hover:bg-[var(--rc-error-subtle)] dark:hover:bg-red-900/10 rounded-xl border border-[var(--rc-border)] dark:border-red-900/30 transition-colors mt-2 cursor-pointer bg-transparent"
             @click="handleLogout"
           >
             退出登录
@@ -385,7 +385,7 @@ onMounted(() => {
             class="text-sm font-bold uppercase tracking-wider flex items-center gap-2"
             style="color: var(--zt-text-secondary)"
           >
-            <i class="fa fa-lightbulb-o text-yellow-500"></i>
+            <i class="fa fa-lightbulb-o text-[var(--rc-warning)]"></i>
             我的反馈
           </h3>
           <span
@@ -459,7 +459,7 @@ onMounted(() => {
 
         <div v-else class="flex flex-col items-center py-16 text-center">
           <div
-            class="w-16 h-16 rounded-full flex items-center justify-center mb-4 text-gray-200 dark:text-gray-700"
+            class="w-16 h-16 rounded-full flex items-center justify-center mb-4 text-gray-200 dark:text-[var(--rc-text-secondary)]"
             style="background-color: var(--zt-bg-hover)"
           >
             <i class="fa fa-sticky-note-o text-3xl"></i>

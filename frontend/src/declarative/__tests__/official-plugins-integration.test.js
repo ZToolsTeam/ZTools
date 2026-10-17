@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { mount } from '@vue/test-utils'
 import { createPinia, setActivePinia } from 'pinia'
 import { nextTick } from 'vue'
@@ -14,6 +14,8 @@ import {
 import { usePluginsStore } from '@/stores/plugins'
 import DeclarativePage from '@/pages/DeclarativePage.vue'
 import * as apiServer from '@/api/apiserver'
+import { resolvePluginGlyph } from '@/utils/brandIcons'
+import { _resetKeymapForTesting } from '@/utils/keymap'
 
 // 模拟 vue-router 与 @/router
 const { mockPush } = vi.hoisted(() => ({
@@ -24,8 +26,23 @@ vi.mock('vue-router', async (importOriginal) => {
   const actual = await importOriginal()
   return {
     ...actual,
-    useRoute: () => ({ params: { pluginId: 'json-format' } }),
-    useRouter: () => ({ push: mockPush, back: vi.fn() })
+    useRoute: () => ({ params: { pluginId: 'json-format' }, query: {} }),
+    useRouter: () => ({
+      push: mockPush,
+      back: vi.fn(),
+      currentRoute: { value: { name: 'launcher', path: '/launcher' } },
+      resolve: (loc) => {
+        if (typeof loc === 'string') return { fullPath: loc }
+        const base = loc?.params?.pluginId
+          ? `/${loc.name || 'declarative'}/${loc.params.pluginId}`
+          : `/${loc?.name || ''}`
+        const qs =
+          loc?.query && Object.keys(loc.query).length > 0
+            ? `?${new URLSearchParams(loc.query).toString()}`
+            : ''
+        return { fullPath: `${base}${qs}` }
+      }
+    })
   }
 })
 
@@ -51,8 +68,15 @@ vi.mock('@/api/apiserver', async () => {
 
 describe('官方标杆声明式应用注册表与端到端集成测试', () => {
   beforeEach(() => {
+    _resetKeymapForTesting()
     setActivePinia(createPinia())
     vi.clearAllMocks()
+    // 集成测试不访问外网：远端 catalog 不可达时走内置标杆应用兜底，这正是要验证的降级路径
+    vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new Error('测试环境断网')))
+  })
+
+  afterEach(() => {
+    vi.unstubAllGlobals()
   })
 
   describe('1. 注册表完整性与规范断言 (Registry Completeness)', () => {
@@ -83,7 +107,8 @@ describe('官方标杆声明式应用注册表与端到端集成测试', () => {
         expect(def.category).toBeTruthy()
         expect(def.keyword).toBeTruthy()
         expect(def.faIcon).toMatch(/^fa-/)
-        expect(def.iconGradient).toContain('linear-gradient')
+        // 图标统一使用品牌线性图形（不再使用彩色渐变）
+        expect(resolvePluginGlyph(id)).not.toBe('')
         expect(def.isBuiltin).toBe(true)
         expect(def.isDeclarative).toBe(true)
         expect(typeof def.command).toBe('function')
@@ -163,12 +188,16 @@ describe('官方标杆声明式应用注册表与端到端集成测试', () => {
       // 1. 分类筛选：'办公效率'
       const officeRes = await store.loadWithCache({ category: '办公效率' }, true)
       expect(officeRes.list.some((p) => p.pluginId === 'json-format')).toBe(true)
-      expect(officeRes.list.some((p) => p.pluginId === 'github')).toBe(true)
+      expect(officeRes.list.some((p) => p.pluginId === 'notes')).toBe(true)
+      // 只能展示示例数据的插件不进市场
+      expect(officeRes.list.some((p) => p.pluginId === 'github')).toBe(false)
+      expect(officeRes.list.some((p) => p.pluginId === 'clipboard-history')).toBe(false)
 
       // 2. 分类筛选：'系统工具'
       const sysRes = await store.loadWithCache({ category: '系统工具' }, true)
-      expect(sysRes.list.some((p) => p.pluginId === 'qr-code')).toBe(true)
-      expect(sysRes.list.some((p) => p.pluginId === 'kill-process')).toBe(true)
+      expect(sysRes.list.some((p) => p.pluginId === 'qr-code')).toBe(false)
+      expect(sysRes.list.some((p) => p.pluginId === 'kill-process')).toBe(false)
+      expect(sysRes.list.some((p) => p.pluginId === 'trial-nudges')).toBe(false)
 
       // 3. 关键词检索：'json'
       const searchRes = await store.loadWithCache({ keyword: 'json' }, true)
@@ -284,6 +313,28 @@ describe('官方标杆声明式应用注册表与端到端集成测试', () => {
       expect(getOfficialPlugin('unknown-non-exist')).toBeUndefined()
     })
 
+    it('[破坏性] 不可用的内置插件即使绕过列表直接打开也会被拒绝，且不跳转', async () => {
+      const store = usePluginsStore()
+      mockPush.mockClear()
+      for (const id of ['clipboard-history', ' KILL-PROCESS ', 'trial-nudges']) {
+        await expect(store.openPlugin(id)).rejects.toThrow('当前系统上暂不可用')
+      }
+      expect(mockPush).not.toHaveBeenCalled()
+    })
+
+    it('[破坏性] 直接访问不可用插件的路由时显示「当前系统暂不可用」，不渲染插件', async () => {
+      const wrapper = mount(DeclarativePage, {
+        props: { pluginId: 'window-management' },
+        global: { stubs: { DeclarativeView: true } }
+      })
+      await nextTick()
+      expect(wrapper.text()).toContain('当前系统暂不可用')
+      expect(wrapper.text()).toContain('窗口极速调度')
+      expect(wrapper.text()).not.toContain('未找到指定的声明式应用')
+      expect(wrapper.findComponent({ name: 'DeclarativeView' }).exists()).toBe(false)
+      wrapper.unmount()
+    })
+
     it('边界异常 2: openPlugin 空值入参拦截抛错', async () => {
       const store = usePluginsStore()
       await expect(store.openPlugin('')).rejects.toThrow('插件标识符不存在')
@@ -318,6 +369,250 @@ describe('官方标杆声明式应用注册表与端到端集成测试', () => {
       // 验证平滑降级：不抛出未捕获异常，且内置核心标杆应用依然正常就绪
       expect(fallbackRes.list.length).toBeGreaterThan(0)
       expect(fallbackRes.list.some((p) => p.pluginId === 'json-format')).toBe(true)
+    })
+  })
+
+  describe('5. 第三方 V2 声明式扩展在 LauncherBar 原位秒开、features/no-view 与跨窗口接力集成测试', () => {
+    it('5.1 [子命令命名导出与 no-view 执行] loadInstalledDeclarativePlugin 与 executeDeclarativeNoViewCommand 端到端闭环', async () => {
+      const {
+        loadInstalledDeclarativePlugin,
+        executeDeclarativeNoViewCommand
+      } = await import('@/utils/declarativePluginLoader')
+
+      const mockFiles = {
+        'plugin.json': JSON.stringify({
+          id: 'third-party-suite',
+          name: '极客工具箱',
+          version: '1.2.0',
+          description: '支持多命令与极速动作的第三方扩展',
+          author: 'Indie Dev',
+          entry: 'dist/index.js',
+          icon: 'icon.svg',
+          permissions: ['clipboard'],
+          features: [
+            { code: 'quick-clean', explain: '一键清理临时缓存', mode: 'no-view', alias: 'qc' },
+            { code: 'view-logs', explain: '查看运行日志', mode: 'view', alias: 'vl' }
+          ]
+        }),
+        'dist/index.js': `
+          import { createElement, List } from '@ztools/declarative-ui'
+          export function quickClean(ctx) {
+            if (ctx.query === 'TRIGGER_FAIL') {
+              throw new Error('磁盘只读无法清理')
+            }
+            return { message: '已清理 128MB 临时缓存' }
+          }
+          export function viewLogs() {
+            return createElement(List, { navigationTitle: '第三方日志视图' })
+          }
+          export default function MainView() {
+            return createElement(List, { navigationTitle: '第三方主视图' })
+          }
+        `
+      }
+
+      const readFile = async (_pid, relPath) => {
+        if (mockFiles[relPath]) return mockFiles[relPath]
+        throw new Error(`File not found: ${relPath}`)
+      }
+
+      // 1. 按 featureCode='view-logs' 加载驼峰命名导出 viewLogs
+      const loadedSub = await loadInstalledDeclarativePlugin('third-party-suite', {
+        featureCode: 'view-logs',
+        readFile
+      })
+      expect(loadedSub.pluginId).toBe('third-party-suite')
+      expect(loadedSub.featureCode).toBe('view-logs')
+      expect(loadedSub.title).toBe('查看运行日志')
+      expect(loadedSub.mode).toBe('view')
+      expect(loadedSub.alias).toBe('vl')
+      expect(typeof loadedSub.command).toBe('function')
+
+      // 2. 执行 mode='no-view' 子命令成功路径
+      const execOk = await executeDeclarativeNoViewCommand('third-party-suite', {
+        featureCode: 'quick-clean',
+        query: 'normal',
+        readFile
+      })
+      expect(execOk.success).toBe(true)
+      expect(execOk.message).toBe('已清理 128MB 临时缓存')
+
+      // 3. [Beyond Happy Path] 执行 no-view 子命令抛错时包装为结构化 NO_VIEW_EXECUTION_ERROR
+      await expect(
+        executeDeclarativeNoViewCommand('third-party-suite', {
+          featureCode: 'quick-clean',
+          query: 'TRIGGER_FAIL',
+          readFile
+        })
+      ).rejects.toMatchObject({
+        code: 'NO_VIEW_EXECUTION_ERROR'
+      })
+    })
+
+    it('5.2 [LauncherBar 原位秒开第三方 V2 插件 + Ctrl+K 子命令聚合 + Ctrl+M 跨窗接力 + 沙箱异常自愈]', async () => {
+      const LauncherBar = (await import('@/components/LauncherBar.vue')).default
+
+      // 模拟 fetch 读取本地已安装第三方 V2 插件资源
+      vi.stubGlobal(
+        'fetch',
+        vi.fn().mockImplementation(async (url) => {
+          const urlStr = String(url)
+          if (urlStr.includes('ztools://plugins/community-notes/plugin.json')) {
+            return {
+              ok: true,
+              status: 200,
+              text: async () =>
+                JSON.stringify({
+                  id: 'community-notes',
+                  name: '社区灵感笔记',
+                  version: '1.0.0',
+                  description: '第三方 V2 声明式笔记扩展',
+                  author: 'Community',
+                  entry: 'dist/index.js',
+                  icon: 'icon.svg',
+                  permissions: [],
+                  features: [
+                    { code: 'quick-stamp', explain: '复制当前时间戳', mode: 'no-view', alias: 'ts' },
+                    { code: 'archive-list', explain: '打开归档笔记', mode: 'view', alias: 'arc' }
+                  ]
+                })
+            }
+          }
+          if (urlStr.includes('ztools://plugins/community-notes/dist/index.js')) {
+            return {
+              ok: true,
+              status: 200,
+              text: async () => `
+                const { createElement, List } = require('@ztools/declarative-ui');
+                exports.quickStamp = function() {
+                  return '时间戳已复制到剪贴板';
+                };
+                exports.default = function CommunityNotesApp() {
+                  return createElement(
+                    List,
+                    { navigationTitle: '社区灵感笔记视图', searchBarPlaceholder: '搜索社区笔记...' },
+                    createElement(List.Item, { id: 'note-1', title: '第一条社区极客笔记' })
+                  );
+                };
+              `
+            }
+          }
+          if (urlStr.includes('ztools://plugins/broken-v2-plugin/plugin.json')) {
+            return {
+              ok: true,
+              status: 200,
+              text: async () =>
+                JSON.stringify({
+                  id: 'broken-v2-plugin',
+                  name: '损坏的扩展',
+                  entry: 'dist/index.js',
+                  permissions: []
+                })
+            }
+          }
+          if (urlStr.includes('ztools://plugins/broken-v2-plugin/dist/index.js')) {
+            return {
+              ok: true,
+              status: 200,
+              text: async () => `const cp = require('child_process');`
+            }
+          }
+          throw new Error('Network disabled in test')
+        })
+      )
+
+      const expandSpy = vi.fn().mockResolvedValue(undefined)
+      window.__ztoolsLauncher = {
+        expandToDashboard: expandSpy,
+        hide: vi.fn().mockResolvedValue(undefined)
+      }
+
+      const store = usePluginsStore()
+      vi.spyOn(store, 'init').mockResolvedValue(undefined)
+      store.installedPlugins = [
+        {
+          pluginId: 'community-notes',
+          name: '社区灵感笔记',
+          description: '第三方 V2 声明式笔记扩展',
+          entry: 'dist/index.js',
+          isDeclarative: true,
+          features: [
+            { code: 'quick-stamp', explain: '复制当前时间戳', mode: 'no-view', alias: 'ts' },
+            { code: 'archive-list', explain: '打开归档笔记', mode: 'view', alias: 'arc' }
+          ]
+        },
+        {
+          pluginId: 'broken-v2-plugin',
+          name: '损坏的扩展',
+          description: '试图越权调用 child_process',
+          entry: 'dist/index.js',
+          isDeclarative: true
+        }
+      ]
+
+      const wrapper = mount(LauncherBar)
+      await nextTick()
+
+      // 1. 搜索定位到「社区灵感笔记」
+      const input = wrapper.find('#launcherQuery')
+      await input.setValue('社区灵感笔记')
+      await input.trigger('input')
+      await nextTick()
+
+      expect(wrapper.text()).toContain('社区灵感笔记')
+
+      // 2. 打开 Ctrl+K 动作面板，验证聚合了插件声明的 features 子命令与独立常驻窗口选项
+      const actionBtn = wrapper.findAll('.launcher-foot-hint').find((b) => b.text().includes('动作'))
+      await actionBtn.trigger('click')
+      await nextTick()
+
+      const actionModal = wrapper.findComponent({ name: 'ActionPanelModal' })
+      expect(actionModal.exists()).toBe(true)
+      const actionTitles = actionModal.props('actions').map((a) => a.props?.title)
+      expect(actionTitles).toContain('执行：复制当前时间戳')
+      expect(actionTitles).toContain('打开：打开归档笔记')
+      expect(actionTitles).toContain('在独立常驻窗口中打开')
+
+      // 关闭动作面板
+      actionModal.vm.$emit('close')
+      await nextTick()
+
+      // 3. 点击「社区灵感笔记」行：验证第三方 V2 插件直接在 LauncherBar 内原位秒开 DeclarativeView
+      const firstRow = wrapper.find('.launcher-row')
+      await firstRow.trigger('click')
+      await new Promise((r) => setTimeout(r, 30))
+      await nextTick()
+
+      const declView = wrapper.findComponent({ name: 'DeclarativeView' })
+      expect(declView.exists()).toBe(true)
+      expect(wrapper.text()).toContain('第一条社区极客笔记')
+      expect(window.__ztoolsLauncher.hide).not.toHaveBeenCalled()
+
+      // 4. 在原位声明式视图触发 Ctrl+M 展开工作台，验证路由自动指向 /declarative/community-notes
+      await wrapper.trigger('keydown', { key: 'm', ctrlKey: true })
+      await nextTick()
+      expect(expandSpy).toHaveBeenCalledWith(expect.stringContaining('/declarative/community-notes'))
+
+      // 5. [Beyond Happy Path] 触发试图越权加载 child_process 的第三方插件：验证悬浮条原位拦截并显示错误态，按 Esc 自愈恢复
+      const inputAfterExpand = wrapper.find('#launcherQuery')
+      await inputAfterExpand.setValue('损坏的扩展')
+      await inputAfterExpand.trigger('input')
+      await nextTick()
+
+      await wrapper.find('.launcher-row').trigger('click')
+      await new Promise((r) => setTimeout(r, 30))
+      await nextTick()
+
+      expect(wrapper.text()).toContain('无法打开该扩展')
+      expect(wrapper.text()).toContain('安全沙箱拦截')
+
+      // 按 Escape 自愈返回搜索框
+      await wrapper.trigger('keydown', { key: 'Escape' })
+      await nextTick()
+      expect(wrapper.find('#launcherQuery').exists()).toBe(true)
+
+      wrapper.unmount()
+      delete window.__ztoolsLauncher
     })
   })
 })

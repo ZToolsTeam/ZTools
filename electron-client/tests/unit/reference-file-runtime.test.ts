@@ -10,6 +10,11 @@ import type { FileSystemService } from '../../src/main/services/file-system-serv
 import type { WindowRegistry } from '../../src/main/windows/window-registry.js'
 import { errorCodes, ZToolsError } from '../../src/contracts/errors.js'
 
+// 这些用例依赖 Windows 路径语义（C:\\ / E:\\）或 Windows 宿主能力（DLL、进程启动、更新安装链、本地 .exe 软件），
+// 在其他平台上功能代码按设计会拒绝执行，因此只在 Windows 宿主运行；Windows CI 上照常覆盖。
+const windowsOnly = { skip: process.platform === 'win32' ? false : '依赖 Windows 路径或宿主能力，仅在 Windows 上运行' }
+
+
 function fixture(failStop = false) {
   const log: string[] = [], listeners = new Set<(owner: number) => void>()
   const target = { id: 42, isDestroyed: () => false, mainFrame: { url: 'ztools://web/index.html' } }
@@ -64,7 +69,7 @@ test('reference startup cancellation is top-level and path options cannot shadow
   assert.equal(Reflect.has(invalid, 'signal'), true)
 })
 
-test('reference runtime composes native grants, producer handlers and endpoint through one owner lifecycle', async () => {
+test('reference runtime composes native grants, producer handlers and endpoint through one owner lifecycle', windowsOnly, async () => {
   const f = fixture(), runtime = await createReferenceFileRuntime(f.options, f.dependencies)
   const opened = await runtime.endpoint.call(f.event, { messageId: 'open', method: 'window_show_open_dialog', params: {} })
   assert.equal(opened.success, true)
@@ -261,7 +266,7 @@ test('runtime continues producer/cache/native cleanup and rejects when the ingre
   f.events.stop()
 })
 
-test('runtime closeIngress immediately aborts file-resource reads and disables the lane-2 clipboard monitor', async () => {
+test('runtime closeIngress immediately aborts file-resource reads and disables the lane-2 clipboard monitor', windowsOnly, async () => {
   const f = fixture(), runtime = await createReferenceFileRuntime(f.options, f.dependencies)
   let clipboardReads = 0, readStarted!: () => void, readAborted = false
   const entered = new Promise<void>(resolve => { readStarted = resolve })
@@ -316,7 +321,7 @@ test('reference runtime init cleanup preserves the public failure and releases n
 })
 
 
-test('reference runtime composes optional local OCR through the real reference endpoint and retained owner grant', async () => {
+test('reference runtime composes optional local OCR through the real reference endpoint and retained owner grant', windowsOnly, async () => {
   const f = fixture(), png = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jP9sAAAAASUVORK5CYII=', 'base64')
   let request: unknown
   f.options.localOcr = { run: async value => {

@@ -50,22 +50,22 @@ onBeforeUnmount(() => {
       <button class="px-3 py-1 border rounded" @click="setDark(false)">
         系统明亮
       </button>
-      <span class="text-sm text-gray-500">总计：{{ events.length }}</span>
+      <span class="text-sm text-[var(--rc-text-muted)]">总计：{{ events.length }}</span>
     </div>
     <div
-      class="bg-white dark:bg-slate-900 border dark:border-slate-700 rounded p-3 max-h-[70vh] overflow-auto text-sm"
+      class="bg-white dark:bg-[var(--rc-surface)] border dark:border-slate-700 rounded p-3 max-h-[70vh] overflow-auto text-sm"
     >
       <div
         class="border-b dark:border-slate-700 py-2 whitespace-pre-wrap break-words"
         v-for="(e, idx) in events"
         :key="idx"
       >
-        <div class="text-xs text-gray-500">
+        <div class="text-xs text-[var(--rc-text-muted)]">
           {{ new Date(e.timestamp).toLocaleString() }} · {{ e.type }}
         </div>
         <div>{{ format(e) }}</div>
       </div>
-      <div v-if="!events.length" class="text-center text-gray-400 py-10">
+      <div v-if="!events.length" class="text-center text-[var(--rc-text-muted)] py-10">
         暂无事件
       </div>
     </div>

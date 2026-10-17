@@ -58,6 +58,15 @@ export interface DeclarativeViewDescriptor<TProps = Record<string, unknown>> {
   readonly children: ReadonlyArray<DeclarativeViewDescriptor | unknown>
 }
 
+export interface AnsiSpan {
+  text: string
+  fgColor?: string | undefined
+  bgColor?: string | undefined
+  bold?: boolean | undefined
+  italic?: boolean | undefined
+  underline?: boolean | undefined
+}
+
 export interface ScriptExecutionResult {
   success: boolean
   commandId: string
@@ -73,6 +82,9 @@ export interface ScriptExecutionResult {
   error?: string
   viewDescriptor?: DeclarativeViewDescriptor
   hudPayload?: HudMessagePayload
+  ansiSpans?: AnsiSpan[]
+  extractedUrls?: string[]
+  inlineSubtitle?: string
 }
 
 export interface ScriptConfirmInfo {
@@ -115,6 +127,10 @@ export interface ScriptCommandSearchItem {
   scriptPath: string
   mode: ScriptMode
   arguments: ScriptArgument[]
+  inlineSubtitle?: string | undefined
+  ansiSpans?: AnsiSpan[] | undefined
+  lastRefreshedAt?: number | undefined
+  refreshTimeMs?: number | null | undefined
 }
 
 export interface TrustedScriptRecord {
@@ -387,8 +403,173 @@ export function resolveScriptInterpreter(
   }
 }
 
+const ANSI_FG_COLORS: Record<number, string> = {
+  30: '#1e293b',
+  31: '#ef4444',
+  32: '#22c55e',
+  33: '#eab308',
+  34: '#3b82f6',
+  35: '#a855f7',
+  36: '#06b6d4',
+  37: '#f1f5f9',
+  90: '#64748b',
+  91: '#f87171',
+  92: '#4ade80',
+  93: '#facc15',
+  94: '#60a5fa',
+  95: '#c084fc',
+  96: '#22d3ee',
+  97: '#ffffff'
+}
+
+const ANSI_BG_COLORS: Record<number, string> = {
+  40: '#0f172a',
+  41: '#7f1d1d',
+  42: '#14532d',
+  43: '#713f12',
+  44: '#1e3a8a',
+  45: '#581c87',
+  46: '#164e63',
+  47: '#e2e8f0'
+}
+
 /**
- * 构造声明式 Detail 视图描述符（符合 @ztools/declarative-ui 规约）
+ * 剥离字符串中的 ANSI Escape 颜色与控制码
+ */
+export function stripAnsiCodes(input: string): string {
+  if (!input || typeof input !== 'string') return ''
+  // eslint-disable-next-line no-control-regex
+  return input.replace(/\x1b\[[0-9;]*[a-zA-Z]/g, '')
+}
+
+/**
+ * 1:1 复刻 Raycast AnsiOutput (J6 组件)：将含 ANSI 转义码的文本解析为结构化着色 Span 数组
+ */
+export function parseAnsiOutput(input: string): AnsiSpan[] {
+  if (!input || typeof input !== 'string') return []
+
+  const spans: AnsiSpan[] = []
+  // eslint-disable-next-line no-control-regex
+  const regex = /\x1b\[([0-9;]*)m/g
+
+  let lastIndex = 0
+  let fgColor: string | undefined
+  let bgColor: string | undefined
+  let bold = false
+  let italic = false
+  let underline = false
+
+  let match: RegExpExecArray | null
+  while ((match = regex.exec(input)) !== null) {
+    if (match.index > lastIndex) {
+      const textChunk = input.slice(lastIndex, match.index)
+      if (textChunk) {
+        spans.push({
+          text: textChunk,
+          ...(fgColor ? { fgColor } : {}),
+          ...(bgColor ? { bgColor } : {}),
+          ...(bold ? { bold: true } : {}),
+          ...(italic ? { italic: true } : {}),
+          ...(underline ? { underline: true } : {})
+        })
+      }
+    }
+
+    const codeStr = match[1] || '0'
+    const codes = codeStr.split(';').map((c) => parseInt(c || '0', 10))
+    for (const code of codes) {
+      if (code === 0) {
+        fgColor = undefined
+        bgColor = undefined
+        bold = false
+        italic = false
+        underline = false
+      } else if (code === 1) {
+        bold = true
+      } else if (code === 3) {
+        italic = true
+      } else if (code === 4) {
+        underline = true
+      } else if (code === 22) {
+        bold = false
+      } else if (code === 23) {
+        italic = false
+      } else if (code === 24) {
+        underline = false
+      } else if (code === 39) {
+        fgColor = undefined
+      } else if (code === 49) {
+        bgColor = undefined
+      } else if (ANSI_FG_COLORS[code]) {
+        fgColor = ANSI_FG_COLORS[code]
+      } else if (ANSI_BG_COLORS[code]) {
+        bgColor = ANSI_BG_COLORS[code]
+      }
+    }
+
+    lastIndex = regex.lastIndex
+  }
+
+  if (lastIndex < input.length) {
+    const remaining = input.slice(lastIndex)
+    if (remaining) {
+      spans.push({
+        text: remaining,
+        ...(fgColor ? { fgColor } : {}),
+        ...(bgColor ? { bgColor } : {}),
+        ...(bold ? { bold: true } : {}),
+        ...(italic ? { italic: true } : {}),
+        ...(underline ? { underline: true } : {})
+      })
+    }
+  }
+
+  return spans
+}
+
+/**
+ * 1:1 复刻 Raycast ScriptOutputView (c5 组件)：自动提取脚本输出中的所有 HTTP/HTTPS 链接以生成快捷打开动作
+ */
+export function extractUrlsFromOutput(input: string): string[] {
+  if (!input || typeof input !== 'string') return []
+  const clean = stripAnsiCodes(input)
+  const matches = clean.match(/https?:\/\/[^\s"'<>)\]]+/gi) || []
+  const unique: string[] = []
+  for (const raw of matches) {
+    const trimmed = raw.replace(/[.,;:!?]+$/, '')
+    if (trimmed && !unique.includes(trimmed)) {
+      unique.push(trimmed)
+    }
+  }
+  return unique
+}
+
+/**
+ * 解析 @raycast.refreshTime (如 10s, 5m, 1h, 1d) 为毫秒数
+ */
+export function parseRefreshTimeMs(refreshTime?: string): number | null {
+  if (!refreshTime || typeof refreshTime !== 'string') return null
+  const m = /^(\d+)\s*(s|m|h|d)$/i.exec(refreshTime.trim())
+  if (!m) return null
+  const val = parseInt(m[1] || '0', 10)
+  if (!Number.isFinite(val) || val <= 0) return null
+  const unit = (m[2] || 'm').toLowerCase()
+  switch (unit) {
+    case 's':
+      return val * 1000
+    case 'm':
+      return val * 60_000
+    case 'h':
+      return val * 3_600_000
+    case 'd':
+      return val * 86_400_000
+    default:
+      return null
+  }
+}
+
+/**
+ * 构造声明式 Detail 视图描述符（符合 @ztools/declarative-ui 规约，集成 ANSI 输出与 URL 动作）
  */
 export function createDetailViewDescriptor(
   title: string,
@@ -399,6 +580,9 @@ export function createDetailViewDescriptor(
     exitCode: string | number
     scriptPath: string
     interpreter: string
+    extractedUrls?: string[]
+    ansiSpans?: AnsiSpan[]
+    plainOutput?: string
   }
 ): DeclarativeViewDescriptor {
   const metadataChildren: DeclarativeViewDescriptor[] = []
@@ -443,13 +627,53 @@ export function createDetailViewDescriptor(
     children: metadataChildren
   }
 
+  const actionChildren: DeclarativeViewDescriptor[] = []
+  if (meta?.plainOutput) {
+    actionChildren.push({
+      $$typeof: VIEW_DESCRIPTOR_SYMBOL,
+      type: 'Action.CopyToClipboard',
+      props: {
+        title: '复制脚本输出 (Copy Output)',
+        content: meta.plainOutput
+      },
+      children: []
+    })
+  }
+
+  if (meta?.extractedUrls && meta.extractedUrls.length > 0) {
+    for (const url of meta.extractedUrls) {
+      actionChildren.push({
+        $$typeof: VIEW_DESCRIPTOR_SYMBOL,
+        type: 'Action.OpenInBrowser',
+        props: {
+          title: `打开链接: ${url}`,
+          url
+        },
+        children: []
+      })
+    }
+  }
+
+  const actionPanel: DeclarativeViewDescriptor | undefined =
+    actionChildren.length > 0
+      ? {
+          $$typeof: VIEW_DESCRIPTOR_SYMBOL,
+          type: 'ActionPanel',
+          props: { title },
+          children: actionChildren
+        }
+      : undefined
+
   return {
     $$typeof: VIEW_DESCRIPTOR_SYMBOL,
     type: 'Detail',
     props: {
       navigationTitle: `${title} - 执行结果`,
       markdown,
-      metadata: detailMetadata
+      metadata: detailMetadata,
+      ...(actionPanel ? { actions: actionPanel } : {}),
+      ...(meta?.ansiSpans ? { ansiSpans: meta.ansiSpans } : {}),
+      ...(meta?.extractedUrls ? { extractedUrls: meta.extractedUrls } : {})
     },
     children: []
   }
@@ -466,6 +690,15 @@ export class ScriptCommandsService {
   readonly #logger: (level: 'INFO' | 'WARN' | 'ERROR', message: string, details?: unknown) => void
 
   readonly #commands = new Map<string, ScriptCommand>()
+  readonly #inlineCache = new Map<
+    string,
+    {
+      subtitle: string
+      ansiSpans: AnsiSpan[]
+      lastRefreshedAt: number
+      refreshTimeMs: number | null
+    }
+  >()
   #watcher: fs.FSWatcher | null = null
   #watchDebounceTimer: NodeJS.Timeout | null = null
   #activeProcesses = new Set<ChildProcess>()
@@ -741,21 +974,29 @@ export class ScriptCommandsService {
    * 转换为系统统一搜索条目格式
    */
   getSearchItems(): ScriptCommandSearchItem[] {
-    return Array.from(this.#commands.values()).map((cmd) => ({
-      id: cmd.id,
-      type: 'script_command',
-      name: cmd.title,
-      title: cmd.title,
-      description: cmd.description,
-      packageName: cmd.packageName,
-      iconUrl: cmd.icon,
-      icon: cmd.icon,
-      ...(cmd.alias ? { alias: cmd.alias } : {}),
-      keywords: [cmd.packageName, cmd.title, path.basename(cmd.scriptPath)],
-      scriptPath: cmd.scriptPath,
-      mode: cmd.mode,
-      arguments: cmd.arguments
-    }))
+    return Array.from(this.#commands.values()).map((cmd) => {
+      const cached = this.#inlineCache.get(cmd.id)
+      const refreshTimeMs = cached?.refreshTimeMs ?? parseRefreshTimeMs(cmd.metadata.refreshTime)
+      return {
+        id: cmd.id,
+        type: 'script_command',
+        name: cmd.title,
+        title: cmd.title,
+        description: cached?.subtitle || cmd.description,
+        packageName: cmd.packageName,
+        iconUrl: cmd.icon,
+        icon: cmd.icon,
+        ...(cmd.alias ? { alias: cmd.alias } : {}),
+        keywords: [cmd.packageName, cmd.title, path.basename(cmd.scriptPath)],
+        scriptPath: cmd.scriptPath,
+        mode: cmd.mode,
+        arguments: cmd.arguments,
+        ...(cached?.subtitle ? { inlineSubtitle: cached.subtitle } : {}),
+        ...(cached?.ansiSpans ? { ansiSpans: cached.ansiSpans } : {}),
+        ...(cached?.lastRefreshedAt ? { lastRefreshedAt: cached.lastRefreshedAt } : {}),
+        ...(refreshTimeMs ? { refreshTimeMs } : {})
+      }
+    })
   }
 
   /**
@@ -1036,13 +1277,18 @@ export class ScriptCommandsService {
 
     const isSuccess = !timedOut && execResult.exitCode === 0 && !execResult.error
 
-    // 提取最后一行输出用于 compact / silent / inline
-    const allLines = (stdout.trim() ? stdout : stderr)
+    // 提取原始输出、ANSI 染色片段与 URL 列表（对齐 Raycast AnsiOutput + URL 提取）
+    const rawPrimaryOutput = stdout.trim() ? stdout : stderr
+    const ansiSpans = parseAnsiOutput(rawPrimaryOutput)
+    const extractedUrls = extractUrlsFromOutput(rawPrimaryOutput)
+
+    const rawLines = rawPrimaryOutput
       .split(/\r?\n/)
       .map(l => l.trim())
       .filter(Boolean)
-    const lastLine = allLines.length > 0 ? allLines[allLines.length - 1] ?? '' : ''
-    const outputSummary = stdout.trim() || stderr.trim()
+    const rawLastLine = rawLines.length > 0 ? rawLines[rawLines.length - 1] ?? '' : ''
+    const lastLine = stripAnsiCodes(rawLastLine).trim()
+    const outputSummary = stripAnsiCodes(stdout.trim() || stderr.trim()).trim()
 
     let viewDescriptor: DeclarativeViewDescriptor | undefined
     let hudPayload: HudMessagePayload | undefined
@@ -1050,6 +1296,8 @@ export class ScriptCommandsService {
     // 8. 处理四种输出模式 (fullOutput, compact, silent, inline)
     if (command.mode === 'fullOutput') {
       const statusText = timedOut ? '超时 (已终止)' : isSuccess ? '成功' : '失败'
+      const cleanStdout = stripAnsiCodes(stdout).trim()
+      const cleanStderr = stripAnsiCodes(stderr).trim()
       const markdownContent = [
         `# ${command.title}`,
         '',
@@ -1057,9 +1305,9 @@ export class ScriptCommandsService {
         '',
         '### 标准输出',
         '```bash',
-        stdout.trim() || '(无标准输出)',
+        cleanStdout || '(无标准输出)',
         '```',
-        ...(stderr.trim() ? ['', '### 错误输出', '```bash', stderr.trim(), '```'] : [])
+        ...(cleanStderr ? ['', '### 错误输出', '```bash', cleanStderr, '```'] : [])
       ].join('\n')
 
       viewDescriptor = createDetailViewDescriptor(command.title, markdownContent, {
@@ -1067,7 +1315,10 @@ export class ScriptCommandsService {
         duration: `${durationMs}ms`,
         exitCode: execResult.exitCode ?? 'N/A',
         scriptPath,
-        interpreter: invocation.executable
+        interpreter: invocation.executable,
+        plainOutput: cleanStdout || cleanStderr,
+        ansiSpans,
+        extractedUrls
       })
     } else if (command.mode === 'compact') {
       const message = lastLine || (isSuccess ? '执行完成' : '执行失败')
@@ -1086,7 +1337,20 @@ export class ScriptCommandsService {
             icon: 'error'
           })
         }
+      } else if (lastLine && this.#hudService) {
+        hudPayload = await this.#hudService.showHUD(lastLine, {
+          icon: '✓'
+        })
       }
+    } else if (command.mode === 'inline') {
+      const refreshTimeMs = parseRefreshTimeMs(metadata.refreshTime)
+      const inlineSubtitle = lastLine || (isSuccess ? 'OK' : 'Error')
+      this.#inlineCache.set(commandId, {
+        subtitle: inlineSubtitle,
+        ansiSpans: parseAnsiOutput(rawLastLine),
+        lastRefreshedAt: Date.now(),
+        refreshTimeMs: refreshTimeMs ?? null
+      })
     }
 
     let errorString: string | undefined
@@ -1109,6 +1373,8 @@ export class ScriptCommandsService {
       output: lastLine || outputSummary,
       durationMs,
       timedOut,
+      ...(ansiSpans.length > 0 ? { ansiSpans } : {}),
+      ...(extractedUrls.length > 0 ? { extractedUrls } : {}),
       ...(errorString ? { error: errorString } : {}),
       ...(viewDescriptor ? { viewDescriptor } : {}),
       ...(hudPayload ? { hudPayload } : {})

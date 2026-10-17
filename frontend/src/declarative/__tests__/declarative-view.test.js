@@ -115,14 +115,14 @@ describe("DeclarativeView 统一宿主渲染器与纯键盘流", () => {
     await nextTick();
 
     // 初始状态动作面板不可见
-    expect(wrapper.find(".fixed.inset-0").exists()).toBe(false);
+    expect(wrapper.find(".action-panel-scrim").exists()).toBe(false);
 
     // 按下 Ctrl+K
     await wrapper.trigger("keydown", { key: "k", ctrlKey: true });
     await nextTick();
 
     // 动作面板弹层应当出现
-    expect(wrapper.find(".fixed.inset-0").exists()).toBe(true);
+    expect(wrapper.find(".action-panel-scrim").exists()).toBe(true);
     expect(wrapper.text()).toContain("复制链接");
     expect(wrapper.text()).toContain("浏览器打开");
 
@@ -131,7 +131,7 @@ describe("DeclarativeView 统一宿主渲染器与纯键盘流", () => {
     await nextTick();
 
     // 弹层应当消失
-    expect(wrapper.find(".fixed.inset-0").exists()).toBe(false);
+    expect(wrapper.find(".action-panel-scrim").exists()).toBe(false);
   });
 
   it("应当支持 Detail 视图并正确呈现 Markdown 与 Metadata 侧边栏", async () => {
@@ -299,31 +299,39 @@ describe("端到端移植应用集成渲染验证", () => {
     expect(wrapper.find("img").attributes("src")).toContain("data:image/svg+xml");
   });
 
-  it("集成验证 3: GoogleTranslateCommand 响应式状态更新链路与即时翻译视图联动", async () => {
+  it("集成验证 3: GoogleTranslateCommand 首屏为空，输入后显示联网译文；断网时如实报错", async () => {
     const { GoogleTranslateCommand } = await import("@ztools/declarative-ui");
-    const wrapper = mount(DeclarativeView, {
-      props: {
-        rootComponent: GoogleTranslateCommand
-      }
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ code: 0, data: { from: "en", trans_result: [{ dst: "苹果派很好吃" }] } })
     });
+    vi.stubGlobal("fetch", fetchMock);
+    try {
+      const wrapper = mount(DeclarativeView, { props: { rootComponent: GoogleTranslateCommand } });
+      await nextTick();
+      // 不再预填「Hello」和示例历史
+      expect(wrapper.text()).not.toContain("Hello");
+      expect(wrapper.text()).toContain("翻译历史 (0)");
 
-    await nextTick();
+      const input = wrapper.find("input[type='text']");
+      await input.setValue("apple pie is delicious");
+      await input.trigger("input");
+      await new Promise((r) => setTimeout(r, 350));
+      await nextTick();
+      expect(fetchMock).toHaveBeenCalled();
+      expect(wrapper.text()).toContain("苹果派很好吃");
 
-    // 验证初始标题与默认搜索词
-    expect(wrapper.text()).toContain("Google 即时翻译");
-    expect(wrapper.text()).toContain("Hello");
-
-    // 找到搜索输入框并输入新文本
-    const input = wrapper.find("input[type='text']");
-    expect(input.exists()).toBe(true);
-    await input.setValue("Vue");
-    await input.trigger("input");
-
-    // 等待微任务与防抖
-    await new Promise((r) => setTimeout(r, 350));
-    await nextTick();
-
-    // 验证即时翻译结果已更新为包含 Vue 的结果
-    expect(wrapper.text()).toContain("Vue");
+      // 断网：不出现伪造的「[译] 原文」，而是提示服务不可用
+      fetchMock.mockRejectedValue(new TypeError("Failed to fetch"));
+      await input.setValue("Good morning developers");
+      await input.trigger("input");
+      await new Promise((r) => setTimeout(r, 350));
+      await nextTick();
+      expect(wrapper.text()).toContain("翻译服务暂时不可用");
+      expect(wrapper.text()).not.toContain("[译]");
+      wrapper.unmount();
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 });

@@ -173,7 +173,7 @@ defineExpose({ show })
 }
 .conflict-icon {
   font-size: 48px;
-  color: #faad14;
+  color: var(--rc-warning);
   margin-bottom: 12px;
 }
 .conflict-desc {
@@ -195,7 +195,7 @@ defineExpose({ show })
   justify-content: center;
   gap: 12px;
   padding: 8px 16px;
-  background: var(--color-background-secondary, #f5f5f5);
+  background: var(--color-background-secondary);
   border-radius: 8px;
 }
 /* 插件冲突项：纵向布局 */
@@ -232,12 +232,12 @@ defineExpose({ show })
   font-weight: 500;
 }
 .conflict-type-tag.duplicate {
-  background: rgba(250, 173, 20, 0.15);
-  color: #d48806;
+  background: var(--rc-warning-subtle);
+  color: var(--rc-warning);
 }
 .conflict-type-tag.system_occupied {
-  background: rgba(255, 77, 79, 0.1);
-  color: #cf1322;
+  background: var(--rc-error-subtle);
+  color: var(--rc-error);
 }
 .conflict-with {
   color: var(--zt-text-secondary);
@@ -253,8 +253,8 @@ defineExpose({ show })
 .key-badge {
   display: inline-block;
   padding: 2px 8px;
-  background: var(--color-surface, #fff);
-  border: 1px solid var(--color-border, #d9d9d9);
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
   border-radius: 4px;
   font-size: 12px;
   font-weight: 500;

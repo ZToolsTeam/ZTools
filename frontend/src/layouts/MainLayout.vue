@@ -1,5 +1,6 @@
 <script setup>
 import { computed, watch, onMounted } from 'vue'
+import ShortcutKeys from '@/components/base/ShortcutKeys.vue'
 import { useRoute, useRouter } from 'vue-router'
 import { storeToRefs } from 'pinia'
 
@@ -12,6 +13,8 @@ import { useUIStore } from '@/stores/ui'
 import { useKeymap, KEYMAP_SCOPES } from '@/utils/keymap'
 import { switchWindowMode, WINDOW_MODES } from '@/utils/windowMode'
 import { isOnline } from '@/config/runtime-mode'
+import { ROUTES } from '@/router/routes'
+
 
 const route = useRoute()
 const router = useRouter()
@@ -75,6 +78,11 @@ useKeymap(KEYMAP_SCOPES.GLOBAL, {
     uiStore.toggleSidebar()
     return true
   },
+  'Ctrl+,': () => {
+    nav.setPage('advanced-settings')
+    if (route.name !== 'advanced-settings') router.push(ROUTES.ADVANCED_SETTINGS)
+    return true
+  },
   'Ctrl+M': () => {
     switchWindowMode(WINDOW_MODES.LAUNCHER).catch(() => {})
     return true
@@ -116,68 +124,41 @@ useKeymap(KEYMAP_SCOPES.GLOBAL, {
       </main>
     </div>
 
-    <!-- Raycast 风格全局底部状态与动作栏 (Action Bar) -->
-    <footer
-      v-if="!isDeclarativeView"
-      class="border-t flex items-center justify-between select-none px-4"
-      style="
-        height: 36px;
-        background: var(--rc-surface);
-        border-color: var(--rc-border);
-        font-size: 11px;
-        color: var(--rc-text-secondary);
-      "
-    >
-      <!-- 左侧快捷键动作提示 (动态联动声明式应用与当前页面) -->
-      <div class="flex items-center gap-3">
-        <div class="flex items-center gap-1.5 font-medium">
-          <kbd class="rc-kbd text-[10px] px-1.5">↵</kbd>
-          <span style="color: var(--rc-text-primary)">
-            {{ isDeclarativeView ? (declarativePrimaryAction?.title || '执行') : '打开' }}
-          </span>
-        </div>
-        <div
+    <!-- 底部动作栏：左侧当前可执行动作，右侧全局快捷键；按平台显示 ⌘ / Ctrl -->
+    <footer v-if="!isDeclarativeView" class="action-bar select-none">
+      <div class="flex items-center gap-4">
+        <span class="action-hint is-primary">
+          {{ isDeclarativeView ? (declarativePrimaryAction?.title || '执行') : '打开' }}
+          <ShortcutKeys combo="Enter" />
+        </span>
+        <button
           v-if="route.name !== 'my'"
-          class="flex items-center gap-1.5 cursor-pointer hover:opacity-85 transition-opacity"
+          type="button"
+          class="action-hint"
           @click="handleBackToHome"
         >
-          <kbd class="rc-kbd text-[10px] px-1.5">Esc</kbd>
-          <span style="color: var(--rc-text-secondary)">
-            {{ isDeclarativeView ? '返回工作台' : '返回主页' }}
-          </span>
-        </div>
+          {{ isDeclarativeView ? '返回工作台' : '返回主页' }}
+          <ShortcutKeys combo="Escape" />
+        </button>
       </div>
 
-      <!-- 右侧动作命令提示与状态 (按规范呈现“动作”、“Ctrl+F 搜索”与“侧栏切换”) -->
-      <div class="flex items-center gap-2">
+      <div class="flex items-center gap-1">
         <button
           type="button"
-          class="flex items-center gap-1.5 px-2.5 py-1 rounded-md transition-colors hover:bg-[var(--rc-surface-hover)] cursor-pointer"
-          style="border: 1px solid var(--rc-border-subtle, var(--rc-border)); background: var(--rc-surface-subtle); color: var(--rc-text-secondary);"
-          @click="uiStore.toggleSidebar"
+          class="action-btn"
           :title="uiStore.isSidebarCollapsed ? '展开分类侧栏' : '收起分类侧栏'"
+          @click="uiStore.toggleSidebar"
         >
-          <span class="text-xs font-medium">{{ uiStore.isSidebarCollapsed ? '展开侧栏' : '收起侧栏' }}</span>
-          <kbd class="rc-kbd text-[10px] ml-1">Ctrl B</kbd>
+          {{ uiStore.isSidebarCollapsed ? '展开侧栏' : '收起侧栏' }}
+          <ShortcutKeys combo="Ctrl+B" />
         </button>
-
-        <button
-          type="button"
-          class="flex items-center gap-1.5 px-2.5 py-1 rounded-md transition-colors hover:bg-[var(--rc-surface-hover)] cursor-pointer"
-          style="border: 1px solid var(--rc-border); background: var(--rc-surface-subtle); color: var(--rc-text-primary);"
-          @click="openGlobalActions"
-        >
-          <span class="text-xs font-medium">动作</span>
-          <kbd class="rc-kbd text-[10px] ml-1">Ctrl K</kbd>
+        <button type="button" class="action-btn" @click="openGlobalActions">
+          动作
+          <ShortcutKeys combo="Ctrl+K" />
         </button>
-
-        <button
-          type="button"
-          class="flex items-center gap-1.5 px-2.5 py-1 rounded-md transition-colors hover:bg-[var(--rc-surface-hover)] cursor-pointer"
-          style="border: 1px solid var(--rc-border); background: var(--rc-surface-subtle); color: var(--rc-text-primary);"
-          @click="openSearchOrActions"
-        >
-          <span class="text-xs font-medium">Ctrl+F 搜索</span>
+        <button type="button" class="action-btn" @click="openSearchOrActions">
+          搜索
+          <ShortcutKeys combo="Ctrl+F" />
         </button>
       </div>
     </footer>
@@ -188,6 +169,63 @@ useKeymap(KEYMAP_SCOPES.GLOBAL, {
 </template>
 
 <style scoped>
+.action-bar {
+  height: 36px;
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 10px 0 18px;
+  border-top: 1px solid var(--rc-border);
+  background: var(--rc-head);
+  font-size: 12px;
+  color: var(--rc-text-muted);
+}
+
+.action-hint {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  border: none;
+  background: transparent;
+  padding: 0;
+  font: inherit;
+  color: var(--rc-text-muted);
+  cursor: default;
+}
+
+button.action-hint {
+  cursor: pointer;
+}
+
+button.action-hint:hover {
+  color: var(--rc-text-primary);
+}
+
+.action-hint.is-primary {
+  color: var(--rc-text-secondary);
+}
+
+.action-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 26px;
+  padding: 0 8px;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  font: inherit;
+  color: var(--rc-text-muted);
+  cursor: pointer;
+  transition: background-color 0.15s ease, color 0.15s ease;
+}
+
+.action-btn:hover {
+  background: var(--rc-surface-hover);
+  color: var(--rc-text-primary);
+}
+
 .fade-enter-active {
   transition: opacity 0.07s ease-in;
 }

@@ -1,12 +1,19 @@
 <script setup>
 import { ref, computed, nextTick, onMounted, onUnmounted, watch } from 'vue'
+import ShortcutKeys from '@/components/base/ShortcutKeys.vue'
 import { usePluginsStore } from '@/stores/plugins'
 import { useUserStore } from '@/stores/user'
 import { useRouter } from 'vue-router'
 import { useToast } from '@/composables/useToast'
 import { useUIStore } from '@/stores/ui'
 import PluginCard3D from '@/components/PluginCard3D.vue'
-import { RcSegmented } from '@/components/raycast'
+import PluginTile from '@/components/PluginTile.vue'
+import BrandMark from '@/components/BrandMark.vue'
+import { RcSegmented, RcSquircle } from '@/components/base'
+import { resolvePluginGlyph } from '@/utils/brandIcons'
+import { formatRelativeTime } from '@/utils/relativeTime'
+import { buildLaunchHotkeyMap } from '@/utils/launchHotkeyTargets'
+import { getPluginFeatureHotkeyItemByTrigger } from '@/utils/pluginFeatureHotkeys'
 import { Empty, Button, Modal, Spin } from 'ant-design-vue'
 import { RocketOutlined, AppstoreOutlined } from '@ant-design/icons-vue'
 import {
@@ -17,10 +24,9 @@ import {
   getPluginVersionIncompatibleMessage
 } from '@/api/apiserver'
 import { routeUtils } from '@/router/routes'
-import { getPluginGradient } from '@/composables/usePluginIcon'
 import { getHotkeyHostPlatform } from '@/utils/hotkeyRecorder'
 import { isOfficialPlugin } from '@/utils/officialPlugins'
-import { useKeymap, KEYMAP_SCOPES, dispatchKeyEvent } from '@/utils/keymap'
+import { useKeymap, KEYMAP_SCOPES, dispatchKeyEvent, isModalOpen } from '@/utils/keymap'
 
 // Stores
 const pluginsStore = usePluginsStore()
@@ -37,12 +43,6 @@ const {
   toastSuccess,
   toastWarning
 } = useToast()
-
-// 根据插件名称确定性分配渐变色
-const getGradientType = (plugin) => {
-  const name = typeof plugin === 'string' ? plugin : (plugin?.name || '')
-  return getPluginGradient(name)
-}
 
 const getPluginId = (pluginOrId) => {
   if (pluginOrId === null || pluginOrId === undefined) return ''
@@ -116,8 +116,31 @@ const focusedCardIndex = ref(0) // 键盘流当前聚焦的卡片索引
 
 // Constants
 const MAX_PINNED_COUNT = 8
-const PLUGINS_PER_ROW = 6 // 每行显示数量（紧凑布局）
-const DEFAULT_ROWS = 2 // 默认显示行数
+const DEFAULT_ROWS = 2 // 「常用」默认显示行数
+const RECENT_LIMIT = 5 // 「最近使用」最多显示条数
+
+// 网格实际列数：auto-fill 会随窗口宽度变化，键盘上下移动与默认显示数量都以真实列数为准
+const gridColumns = ref(5)
+let gridObserver = null
+function measureGridColumns(el) {
+  if (!el) return
+  const template = getComputedStyle(el).gridTemplateColumns || ''
+  const count = template.split(' ').filter((part) => part && part !== 'none').length
+  if (count > 0) gridColumns.value = count
+}
+function bindGridEl(el) {
+  if (gridObserver) {
+    gridObserver.disconnect()
+    gridObserver = null
+  }
+  if (!el || typeof ResizeObserver === 'undefined') {
+    measureGridColumns(el)
+    return
+  }
+  gridObserver = new ResizeObserver(() => measureGridColumns(el))
+  gridObserver.observe(el)
+  measureGridColumns(el)
+}
 const DEBOUNCE_DELAY = 300
 
 // Debounce timer
@@ -188,12 +211,12 @@ const currentTabList = computed(() => {
 const displayedPlugins = computed(() => {
   const all = currentTabList.value
   if (showAllPlugins.value) return all
-  return all.slice(0, PLUGINS_PER_ROW * DEFAULT_ROWS)
+  return all.slice(0, gridColumns.value * DEFAULT_ROWS)
 })
 
 // Computed - 是否有更多插件需要折叠
 const hasMorePlugins = computed(() => {
-  return currentTabList.value.length > PLUGINS_PER_ROW * DEFAULT_ROWS
+  return currentTabList.value.length > gridColumns.value * DEFAULT_ROWS
 })
 
 // Computed - 插件数量
@@ -212,6 +235,59 @@ const favoritePlugins = computed(() => {
 })
 
 // Computed - 推荐插件
+// 最近使用：按打开记录倒序，只保留仍然安装着的插件
+const recentPlugins = computed(() => {
+  const byId = new Map((pluginsStore.installedPlugins || []).map((p) => [getPluginId(p), p]))
+  const list = []
+  // recents 是插件 ID 列表；recentItems getter 依赖市场数据 items，离线或未加载时为空，这里不用它
+  for (const id of pluginsStore.recents || []) {
+    const plugin = byId.get(id)
+    if (plugin) list.push(plugin)
+    if (list.length >= RECENT_LIMIT) break
+  }
+  return list
+})
+
+// 与 PluginCard3D 一致：updateMap 对每个插件都有记录，只有 hasUpdate 且兼容时才算可更新
+function hasUsableUpdate(id) {
+  const info = updateMap.value?.[id]
+  return Boolean(info?.hasUpdate && !info?.incompatible)
+}
+
+// 插件启动快捷键：{ [pluginId]: 'Alt+V' }，与设置页 / 快捷键弹窗同源（触发器列表）
+const launchHotkeys = ref({})
+async function loadLaunchHotkeys() {
+  try {
+    if (!window.ztools?.trigger?.list) return
+    const result = await window.ztools.trigger.list()
+    const triggers = result?.data || result || []
+    const map = buildLaunchHotkeyMap(triggers, getPluginFeatureHotkeyItemByTrigger)
+    const next = {}
+    for (const [id, entry] of Object.entries(map)) {
+      if (entry.kind === 'plugin' && typeof entry.key === 'string' && entry.key) next[id] = entry.key
+    }
+    launchHotkeys.value = next
+  } catch (error) {
+    // 快捷键只是辅助信息，加载失败不影响工作台
+    console.warn('[MyPage] 加载插件快捷键失败:', error)
+  }
+}
+
+function recentTimeLabel(plugin) {
+  return formatRelativeTime(pluginsStore.recentUsedAt?.[getPluginId(plugin)])
+}
+
+// 磁贴点击：已安装直接打开（与 Enter 一致），未安装的收藏项进入详情页
+function onTileOpen(plugin) {
+  const id = getPluginId(plugin)
+  if (!id) return
+  if (installedSet.value.has(id)) {
+    handleOpenPlugin(id)
+  } else {
+    goDetails(id)
+  }
+}
+
 const recommendedPlugins = computed(() => {
   return (pluginsStore.recommendedItems || [])
     .filter((p) => !pluginsStore.installedSet.has(getPluginId(p)))
@@ -751,9 +827,11 @@ function hideDragTip() {
 function openCardActionMenu(plugin) {
   if (!plugin) return
   selectedPlugin.value = plugin
+  // 动作面板贴着当前聚焦的磁贴弹出
+  const rect = document.querySelector('.is-card-focused')?.getBoundingClientRect?.()
   menuPosition.value = {
-    x: Math.min(window.innerWidth - 200, 160 + (focusedCardIndex.value % PLUGINS_PER_ROW) * 180),
-    y: Math.min(window.innerHeight - 200, 240 + Math.floor(focusedCardIndex.value / PLUGINS_PER_ROW) * 100)
+    x: Math.min(window.innerWidth - 200, rect ? rect.left + 12 : 160),
+    y: Math.min(window.innerHeight - 200, rect ? rect.bottom + 6 : 240)
   }
   showMenu.value = true
 }
@@ -783,14 +861,14 @@ useKeymap(KEYMAP_SCOPES.PAGE, {
   },
   'ArrowDown': () => {
     if (displayedPlugins.value.length === 0) return false
-    focusedCardIndex.value = Math.min(focusedCardIndex.value + PLUGINS_PER_ROW, displayedPlugins.value.length - 1)
+    focusedCardIndex.value = Math.min(focusedCardIndex.value + gridColumns.value, displayedPlugins.value.length - 1)
     uiStore.focusGrid()
     scrollFocusedCardIntoView()
     return true
   },
   'ArrowUp': () => {
     if (displayedPlugins.value.length === 0) return false
-    focusedCardIndex.value = Math.max(focusedCardIndex.value - PLUGINS_PER_ROW, 0)
+    focusedCardIndex.value = Math.max(focusedCardIndex.value - gridColumns.value, 0)
     uiStore.focusGrid()
     scrollFocusedCardIntoView()
     return true
@@ -835,6 +913,8 @@ useKeymap(KEYMAP_SCOPES.PAGE, {
 
 // Keyboard shortcuts (兼容测试直调与全局事件分发)
 function handleKeyDown(event) {
+  // 对话框（如卸载确认）打开时，回车 / Delete 只作用于对话框，不再打开或卸载列表里的插件
+  if (isModalOpen()) return
   if (dispatchKeyEvent(event)) return
 
   if (!selectedPlugin.value) return
@@ -935,6 +1015,7 @@ async function loadDragTipState() {
 
 // Lifecycle
 onMounted(async () => {
+  loadLaunchHotkeys()
   isUnmounted = false
   loading.value = true // 开始加载
 
@@ -983,6 +1064,10 @@ onMounted(async () => {
 })
 
 onUnmounted(() => {
+  if (gridObserver) {
+    gridObserver.disconnect()
+    gridObserver = null
+  }
   isUnmounted = true
 
   if (reorderDebounceTimer) {
@@ -1056,6 +1141,7 @@ onUnmounted(() => {
         <!-- 空状态 -->
         <Empty
           v-if="displayedPlugins.length === 0"
+          :image="Empty.PRESENTED_IMAGE_SIMPLE"
           :description="activeTab === 'plugins' ? '暂无已安装插件' : '暂无收藏'"
           style="margin: 40px 0"
         >
@@ -1065,7 +1151,7 @@ onUnmounted(() => {
         </Empty>
 
         <!-- 插件列表（统一卡片样式） -->
-        <div v-else class="plugin-grid-3d">
+        <div v-else :ref="bindGridEl" class="plugin-tile-grid">
           <div
             v-for="(plugin, index) in displayedPlugins"
             :key="getPluginId(plugin)"
@@ -1091,44 +1177,60 @@ onUnmounted(() => {
             @drop.prevent="handleDrop(index)"
             @dragend="handleDragEnd"
           >
-            <PluginCard3D
+            <PluginTile
               :plugin="plugin"
-              :gradient-type="getGradientType(plugin)"
-              :showFavorite="true"
-              :isFavorite="pluginsStore.isFavorite(getPluginId(plugin))"
-              :isInstalled="installedSet.has(getPluginId(plugin))"
-              :downloading="downloadingSet.has(getPluginId(plugin))"
-              :installFailed="installFailedSet.has(getPluginId(plugin))"
-              :updateInfo="updateMap[getPluginId(plugin)]"
-              @toggle-favorite="handleToggleFavorite"
-              @open="goDetails"
-              @open-app="openApp"
-              @download="handleDownload"
-              @plugin-updated="onPluginUpdated"
+              :focused="focusedCardIndex === index"
+              :pinned="isPinned(getPluginId(plugin))"
+              :revoked="pluginsStore.isRevoked(getPluginId(plugin))"
+              :hasUpdate="hasUsableUpdate(getPluginId(plugin))"
+              :hotkey="launchHotkeys[getPluginId(plugin)] || ''"
+              :installed="installedSet.has(getPluginId(plugin))"
+              @open="onTileOpen"
+              @menu="showPluginMenu"
             />
           </div>
         </div>
       </section>
 
-      <!-- 热门推荐（始终显示） -->
-      <section class="plugin-section">
+      <!-- 最近使用：紧凑列表 -->
+      <section v-if="!isNewUser && recentPlugins.length > 0" class="plugin-section">
+        <div class="section-header">
+          <h2 class="section-title">最近使用</h2>
+        </div>
+        <div class="recent-list">
+          <button
+            v-for="plugin in recentPlugins"
+            :key="getPluginId(plugin)"
+            type="button"
+            class="recent-row"
+            @click="handleOpenPlugin(getPluginId(plugin))"
+            @contextmenu.prevent="showPluginMenu(plugin, $event)"
+          >
+            <RcSquircle
+              :glyph="resolvePluginGlyph(plugin)"
+              :src="plugin.localIconPath || (String(plugin.icon || '').startsWith('http') ? plugin.icon : '')"
+              icon="fa-cube"
+              :size="30"
+            />
+            <span class="recent-text">
+              <span class="recent-name">{{ plugin.name || getPluginId(plugin) }}</span>
+              <span class="recent-desc">{{ plugin.description || '暂无描述' }}</span>
+            </span>
+            <span class="recent-cat">{{ plugin.category || '' }}</span>
+            <span class="recent-time">{{ recentTimeLabel(plugin) }}</span>
+            <span class="recent-open">打开 <ShortcutKeys combo="Enter" /></span>
+          </button>
+        </div>
+      </section>
+
+      <!-- 热门推荐：只在拿到推荐数据时显示，避免空状态占位 -->
+      <section v-if="recommendedPlugins.length > 0" class="plugin-section">
         <h2 class="section-title">热门推荐</h2>
-        <Empty
-          v-if="recommendedPlugins.length === 0"
-          description="暂无推荐"
-          style="margin: 40px 0"
-        >
-          <template #extra>
-            <p>稍后再试或访问插件市场</p>
-            <Button type="primary" @click="goToMarket">浏览插件市场</Button>
-          </template>
-        </Empty>
-        <div v-else class="plugin-grid-3d">
+        <div class="plugin-grid-3d">
           <PluginCard3D
-            v-for="(plugin, index) in recommendedPlugins"
+            v-for="plugin in recommendedPlugins"
             :key="getPluginId(plugin)"
             :plugin="plugin"
-            :gradient-type="getGradientType(plugin)"
             :showFavorite="true"
             :isFavorite="pluginsStore.isFavorite(getPluginId(plugin))"
             :isInstalled="installedSet.has(getPluginId(plugin))"
@@ -1144,6 +1246,16 @@ onUnmounted(() => {
         </div>
       </section>
 
+      <!-- 再拼一块：去插件市场 -->
+      <button v-if="!isNewUser" type="button" class="market-banner" @click="goToMarket">
+        <BrandMark :size="26" />
+        <span class="market-banner-text">
+          <span class="market-banner-title">再拼一块</span>
+          <span class="market-banner-desc">插件市场里的插件都经过官方审核，源码公开，免费安装</span>
+        </span>
+        <span class="market-banner-link">去插件市场 →</span>
+      </button>
+
       <!-- 右键菜单 -->
       <div
         v-if="showMenu && selectedPlugin"
@@ -1153,17 +1265,20 @@ onUnmounted(() => {
         <div
           v-if="pluginsStore.isRevoked(getPluginId(selectedPlugin))"
           class="menu-item disabled"
-          style="opacity: 0.5; cursor: not-allowed; color: #ef4444;"
+          style="opacity: 0.5; cursor: not-allowed; color: var(--rc-error);"
           :title="pluginsStore.getRevokedReason(getPluginId(selectedPlugin))"
         >
-          🚫 已下架 (禁止启动)
+          已下架（禁止启动）
         </div>
         <div
           v-else
           class="menu-item"
           @click="handleOpenPlugin(getPluginId(selectedPlugin))"
         >
-          📌 打开
+          打开
+        </div>
+        <div class="menu-item" @click="goDetails(getPluginId(selectedPlugin)); hideMenu()">
+          查看详情
         </div>
         <div
           class="menu-item"
@@ -1171,15 +1286,15 @@ onUnmounted(() => {
         >
           {{
             pluginsStore.isFavorite(getPluginId(selectedPlugin))
-              ? '★ 取消收藏'
-              : '☆ 收藏'
+              ? '取消收藏'
+              : '收藏'
           }}
         </div>
         <div class="menu-item" @click="togglePin(getPluginId(selectedPlugin))">
           {{
             isPinned(getPluginId(selectedPlugin))
-              ? '✓ 从固定中移除'
-              : '📌 固定最前'
+              ? '取消固定'
+              : '固定到最前'
           }}
         </div>
         <div class="menu-divider"></div>
@@ -1187,7 +1302,7 @@ onUnmounted(() => {
           class="menu-item danger"
           @click="handleUninstallPlugin(getPluginId(selectedPlugin))"
         >
-          🗑️ 卸载
+          卸载
         </div>
       </div>
 
@@ -1202,8 +1317,8 @@ onUnmounted(() => {
 
 <style scoped>
 .my-page {
-  padding: 12px;
-  max-width: 1400px;
+  padding: 18px 22px 32px;
+  max-width: 1040px;
   margin: 0 auto;
 }
 
@@ -1258,26 +1373,24 @@ onUnmounted(() => {
 
 /* 区块样式 */
 .plugin-section {
-  margin-bottom: 20px;
+  margin-bottom: 32px;
 }
 
 .section-header {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  margin-bottom: 8px;
+  margin-bottom: 12px;
 }
 
 .section-title {
-  font-size: 11px;
+  font-size: 13px;
   font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: 0.06em;
-  margin: 0 0 10px 0;
-  color: var(--rc-text-muted);
+  margin: 0 0 12px 0;
+  color: var(--rc-text-primary);
 }
 
-/* 标签切换样式 - Raycast Segmented Control */
+/* 标签切换 */
 .tab-switcher {
   display: flex;
   gap: 2px;
@@ -1311,11 +1424,141 @@ onUnmounted(() => {
   box-shadow: var(--rc-shadow-sm);
 }
 
-/* 统一的 Raycast Bento 卡片网格布局 */
+/* 「常用」紧凑磁贴网格（设计稿：minmax(170px, 1fr)，间距 8px） */
+.plugin-tile-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(168px, 1fr));
+  gap: 8px;
+}
+
+/* 最近使用：带分隔线的紧凑行 */
+.recent-list {
+  display: flex;
+  flex-direction: column;
+  border-top: 1px solid var(--rc-border);
+}
+
+.recent-row {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  width: 100%;
+  padding: 10px 8px;
+  border: none;
+  border-bottom: 1px solid var(--rc-border);
+  background: transparent;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition: background-color 0.15s ease;
+}
+
+.recent-row:hover {
+  background: var(--rc-surface-hover);
+}
+
+.recent-text {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.recent-name {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--rc-text-primary);
+}
+
+.recent-desc {
+  font-size: 12px;
+  color: var(--rc-text-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.recent-cat {
+  width: 72px;
+  flex-shrink: 0;
+  font-size: 12px;
+  color: var(--rc-text-muted);
+}
+
+.recent-time {
+  width: 64px;
+  flex-shrink: 0;
+  text-align: right;
+  font-size: 12px;
+  color: var(--rc-text-faint);
+}
+
+.recent-open {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--rc-text-faint);
+  opacity: 0;
+  transition: opacity 0.15s ease;
+}
+
+.recent-row:hover .recent-open,
+.recent-row:focus-visible .recent-open {
+  opacity: 1;
+}
+
+.market-banner {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 14px 18px;
+  border-radius: var(--rc-radius-lg);
+  border: 1px solid var(--rc-border-highlight);
+  background: var(--rc-surface);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition: border-color 0.15s ease;
+}
+
+.market-banner:hover {
+  border-color: var(--rc-accent);
+}
+
+.market-banner-text {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.market-banner-title {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--rc-text-primary);
+}
+
+.market-banner-desc {
+  font-size: 12px;
+  color: var(--rc-text-muted);
+}
+
+.market-banner-link {
+  flex-shrink: 0;
+  font-size: 13px;
+  color: var(--rc-accent-text);
+}
+
+/* 推荐卡片网格 */
 .plugin-grid-3d {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
-  gap: 10px;
+  grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+  gap: 8px;
 }
 
 .draggable-card {
@@ -1334,9 +1577,9 @@ onUnmounted(() => {
 }
 
 .draggable-card.is-drag-over {
-  outline: 2px dashed var(--zt-primary);
-  outline-offset: 4px;
-  border-radius: 14px;
+  outline: 1.5px dashed var(--rc-accent);
+  outline-offset: 3px;
+  border-radius: var(--rc-radius-lg);
 }
 
 .draggable-card.is-dragging {
@@ -1366,21 +1609,25 @@ onUnmounted(() => {
 /* 右键菜单 */
 .context-menu {
   position: fixed;
-  background: var(--zt-bg-elevated);
-  border: 1px solid var(--zt-border);
-  border-radius: 8px;
-  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.15);
+  background: var(--rc-surface);
+  border: 1px solid var(--rc-border-highlight);
+  border-radius: 10px;
+  box-shadow: var(--rc-shadow-lg);
   z-index: 1000;
-  min-width: 160px;
-  padding: 4px 0;
+  min-width: 168px;
+  padding: 4px;
 }
 
 .menu-item {
-  padding: 10px 16px;
+  height: 32px;
+  display: flex;
+  align-items: center;
+  padding: 0 10px;
+  border-radius: 6px;
   cursor: pointer;
-  color: var(--zt-text);
-  transition: background-color 0.2s ease;
-  font-size: 14px;
+  color: var(--rc-text-primary);
+  transition: background-color 0.15s ease;
+  font-size: 13px;
 }
 
 .menu-item:hover {
@@ -1388,11 +1635,11 @@ onUnmounted(() => {
 }
 
 .menu-item.danger {
-  color: #ff4d4f;
+  color: var(--rc-error);
 }
 
 .menu-item.danger:hover {
-  background-color: rgba(255, 77, 79, 0.1);
+  background-color: var(--rc-error-subtle);
 }
 
 .menu-divider {
@@ -1418,8 +1665,11 @@ onUnmounted(() => {
 }
 
 .is-card-focused {
-  outline: 2px solid var(--rc-accent, #38bdf8);
-  outline-offset: 2px;
   border-radius: var(--rc-radius-lg, 12px);
+  box-shadow: var(--rc-focus-ring);
+}
+
+.is-card-focused :deep(.card-compact) {
+  border-color: transparent;
 }
 </style>

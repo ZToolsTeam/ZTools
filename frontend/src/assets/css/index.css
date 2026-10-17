@@ -1,5 +1,5 @@
-/* 引入 Raycast 双模设计标记系统 */
-@import './raycast-theme.css';
+/* 引入积木 Z × 余烬橙双模设计标记 */
+@import './theme.css';
 /* 引入通用样式（包含滚动条等） */
 @import './common.css';
 /* 引入设置中心卡片与列表设计系统 */
@@ -14,20 +14,30 @@
     content-visibility: auto;
   }
 
-  /* 侧边栏项目 - Raycast 沉浸极简风格 */
+  /* 侧边栏项目：左侧 6px 积木标记，选中时点亮为余烬橙 */
   .sidebar-item {
     display: flex;
     align-items: center;
     gap: 10px;
-    padding: 0 10px;
-    height: 32px;
+    padding: 0 10px 0 6px;
+    height: 34px;
     border-radius: var(--rc-radius-md, 8px);
     color: var(--rc-text-secondary);
     cursor: pointer;
-    transition: all 0.15s cubic-bezier(0.16, 1, 0.3, 1);
+    transition: background-color 0.15s ease, color 0.15s ease;
     font-size: 13px;
-    font-weight: 500;
+    font-weight: 400;
     user-select: none;
+  }
+
+  .sidebar-item::before {
+    content: '';
+    width: 6px;
+    height: 6px;
+    border-radius: 1.7px;
+    flex-shrink: 0;
+    background: transparent;
+    transition: background-color 0.15s ease, box-shadow 0.15s ease;
   }
 
   .sidebar-item:hover {
@@ -37,20 +47,25 @@
 
   .sidebar-item.active {
     background: var(--rc-surface-active);
-    color: var(--rc-text-primary) !important;
-    font-weight: 600;
-    box-shadow: inset 2.5px 0 0 0 var(--rc-accent);
+    color: var(--rc-text-primary);
+    font-weight: 500;
   }
 
-  .sidebar-item.active i,
-  .sidebar-item.active svg {
-    color: var(--rc-accent) !important;
+  .sidebar-item.active::before {
+    background: var(--rc-accent);
+    box-shadow: var(--rc-marker-glow);
   }
 
-  /* 确保图标颜色继承 */
   .sidebar-item i,
   .sidebar-item svg {
+    flex-shrink: 0;
+    color: var(--rc-text-muted);
     transition: color 0.15s ease;
+  }
+
+  .sidebar-item:hover svg,
+  .sidebar-item.active svg {
+    color: var(--rc-text-primary);
   }
 
   /* 工具卡片 - 符合设计规范 */
@@ -264,4 +279,11 @@ a:hover {
 .ant-image-preview-img {
   max-width: calc(100vw - 120px) !important;
   max-height: calc(100vh - 120px) !important;
+}
+
+/* 悬浮条透明窗口：去掉页面底色，只保留圆角面板 */
+html.is-launcher-window,
+html.is-launcher-window body,
+html.is-launcher-window #app {
+  background: transparent !important;
 }

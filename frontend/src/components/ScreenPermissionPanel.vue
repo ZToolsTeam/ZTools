@@ -96,9 +96,6 @@ onBeforeUnmount(() => {
   <div class="settings-card" data-testid="screen-permission-panel">
     <!-- 卡片头部 -->
     <div class="card-header">
-      <div class="card-icon icon-cyan">
-        <i class="fa fa-shield"></i>
-      </div>
       <h2 class="card-title">隐私与权限</h2>
     </div>
 
@@ -106,9 +103,6 @@ onBeforeUnmount(() => {
       <!-- 屏幕截取权限 -->
       <div class="setting-item">
         <div class="setting-info">
-          <div class="setting-icon">
-            <i class="fa fa-desktop"></i>
-          </div>
           <div class="setting-text">
             <span class="setting-label">屏幕截取权限</span>
             <span class="setting-desc" data-testid="screen-permission-status">
@@ -130,9 +124,6 @@ onBeforeUnmount(() => {
       <!-- 运行时授权保护 -->
       <div class="setting-item">
         <div class="setting-info">
-          <div class="setting-icon">
-            <i class="fa fa-lock"></i>
-          </div>
           <div class="setting-text">
             <span class="setting-label">插件授权保护</span>
             <span class="setting-desc" data-testid="screen-authorization-status">
@@ -148,14 +139,14 @@ onBeforeUnmount(() => {
       <a-alert v-if="state.error" class="my-1 text-xs" type="warning" :message="state.error" show-icon />
 
       <!-- macOS 权限异常时的极简引导 -->
-      <div v-if="isMac && state.value.snapshot?.osPermission === 'denied'" class="flex items-center gap-2 px-3 py-2 rounded-lg bg-amber-500/10 border border-amber-500/20 text-xs text-amber-300 my-1">
+      <div v-if="isMac && state.snapshot?.osPermission === 'denied'" class="flex items-center gap-2 px-3 py-2 rounded-lg bg-[var(--rc-warning-subtle)] border border-[var(--rc-border)] text-xs text-[var(--rc-warning)] my-1">
         <i class="fa fa-exclamation-triangle"></i>
         <span>请前往“系统设置 > 隐私与安全性 > 屏幕录制”允许 ZTools</span>
       </div>
 
       <!-- 已授权插件列表 -->
-      <div class="mt-2 pt-2 border-t border-[var(--rc-border)]" data-testid="screen-permission-grants">
-        <div class="flex items-center justify-between mb-2 px-1">
+      <div class="pt-4 pb-2" data-testid="screen-permission-grants">
+        <div class="flex items-center justify-between mb-2">
           <span class="text-xs font-semibold text-[var(--rc-text-primary)]">已授权插件</span>
           <a-button size="small" :loading="grantState.loading" @click="refreshGrants">
             <i class="fa fa-refresh mr-1" :class="{ 'fa-spin': grantState.loading }"></i>

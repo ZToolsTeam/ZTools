@@ -1,5 +1,4 @@
 <script setup>
-import { computed, ref } from 'vue'
 import PluginActions from './PluginActions.vue'
 
 const props = defineProps({
@@ -60,31 +59,22 @@ defineEmits([
 ])
 
 // 图标优先级：远程 icon URL > 本地 localIconPath > FA 图标（公共逻辑）
-import { usePluginIcon, getPluginGradient } from '@/composables/usePluginIcon'
-const { pluginIcon, displayIconUrl, iconFailed, showImgOverlay, onIconLoad, onIconError } = usePluginIcon(() => props.plugin)
-
-// 根据插件名称确定性生成渐变色（与列表页一致）
-const gradientClass = computed(() => {
-  return 'gradient-' + getPluginGradient(props.plugin?.name)
-})
+import { usePluginIcon } from '@/composables/usePluginIcon'
+import { RcSquircle } from '@/components/base'
+const { pluginIcon, pluginGlyph, displayIconUrl, iconFailed } = usePluginIcon(() => props.plugin)
 </script>
 
 <template>
   <div class="detail-header">
     <!-- 顶部信息区 -->
     <div class="header-top">
-      <!-- 插件图标：远程 icon URL > 本地 localIconPath > FA 图标 -->
-      <div class="plugin-icon" :class="showImgOverlay ? 'plugin-icon-plain' : gradientClass" style="position:relative;">
-        <i :class="['fa', pluginIcon]" :style="showImgOverlay ? 'opacity:0' : ''"></i>
-        <img
-          v-if="displayIconUrl && !iconFailed"
-          :src="displayIconUrl"
-          style="position:absolute;inset:0;width:100%;height:100%;object-fit:contain;border-radius:inherit;"
-          :style="showImgOverlay ? '' : 'opacity:0'"
-          @load="onIconLoad"
-          @error="onIconError"
-        />
-      </div>
+      <!-- 插件图标：官方插件用品牌线性图形，第三方插件用自带图标 -->
+      <RcSquircle
+        :glyph="pluginGlyph"
+        :src="displayIconUrl && !iconFailed ? displayIconUrl : ''"
+        :icon="pluginIcon"
+        :size="64"
+      />
 
       <!-- 插件信息 -->
       <div class="plugin-info">
@@ -94,7 +84,7 @@ const gradientClass = computed(() => {
         <!-- 标签 -->
         <div class="plugin-tags">
           <span v-if="plugin.category" class="tag">{{ plugin.category }}</span>
-          <span v-if="plugin.revoked || isRevoked" class="tag revoked" :title="revokedReason || plugin.revoked_reason || '该插件已被官方下架禁用'" style="background: rgba(239, 68, 68, 0.15); color: #ef4444; border: 1px solid rgba(239, 68, 68, 0.3);">已下架</span>
+          <span v-if="plugin.revoked || isRevoked" class="tag revoked" :title="revokedReason || plugin.revoked_reason || '该插件已被官方下架禁用'" style="background: var(--rc-error-subtle); color: var(--rc-error); border: 1px solid transparent;">已下架</span>
           <span v-if="isInstalled" class="tag installed">已安装</span>
           <span v-if="hasUpdate" class="tag update">有更新</span>
           <span v-else-if="updateInfo?.incompatible" class="tag incompat" :title="updateInfo.incompatReason">需升级</span>
@@ -185,56 +175,6 @@ const gradientClass = computed(() => {
 }
 
 /* 插件图标 */
-.plugin-icon {
-  width: 56px;
-  height: 56px;
-  border-radius: 12px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  font-size: 32px;
-  color: white;
-  flex-shrink: 0;
-  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.15);
-}
-
-/* 展示真实图标时无渐变背景 */
-.plugin-icon.plugin-icon-plain {
-  background: var(--color-hover);
-  box-shadow: none;
-}
-
-.plugin-icon.gradient-blue {
-  background: linear-gradient(135deg, #4a8cff 0%, #2d71ff 100%);
-  box-shadow: 0 6px 20px rgba(45, 113, 255, 0.3);
-}
-
-.plugin-icon.gradient-green {
-  background: linear-gradient(135deg, #4ed7c2 0%, #34d399 100%);
-  box-shadow: 0 6px 20px rgba(78, 215, 194, 0.3);
-}
-
-.plugin-icon.gradient-orange {
-  background: linear-gradient(135deg, #ffaf41 0%, #ff9500 100%);
-  box-shadow: 0 6px 20px rgba(255, 175, 65, 0.3);
-}
-
-.plugin-icon.gradient-pink {
-  background: linear-gradient(135deg, #ff6b9d 0%, #ff4081 100%);
-  box-shadow: 0 6px 20px rgba(255, 107, 157, 0.3);
-}
-
-.plugin-icon.gradient-purple {
-  background: linear-gradient(135deg, #a78bfa 0%, #8b5cf6 100%);
-  box-shadow: 0 6px 20px rgba(139, 92, 246, 0.3);
-}
-
-.plugin-icon.gradient-cyan {
-  background: linear-gradient(135deg, #22d3ee 0%, #06b6d4 100%);
-  box-shadow: 0 6px 20px rgba(6, 182, 212, 0.3);
-}
-
-/* 插件信息 */
 .plugin-info {
   flex: 1;
   min-width: 0;
@@ -272,18 +212,18 @@ const gradientClass = computed(() => {
 }
 
 .tag.installed {
-  background: rgba(78, 215, 194, 0.15);
-  color: #10b981;
+  background: var(--rc-success-subtle);
+  color: var(--rc-success);
 }
 
 .tag.update {
-  background: rgba(255, 175, 65, 0.15);
-  color: #f59e0b;
+  background: var(--rc-warning-subtle);
+  color: var(--rc-warning);
 }
 
 .tag.incompat {
-  background: rgba(239, 68, 68, 0.12);
-  color: #ef4444;
+  background: var(--rc-error-subtle);
+  color: var(--rc-error);
   cursor: help;
 }
 
@@ -330,11 +270,11 @@ const gradientClass = computed(() => {
 
 .stars .fa {
   font-size: 11px;
-  color: #fbbf24;
+  color: var(--rc-accent);
 }
 
 .stars .fa-star-o {
-  color: #d1d5db;
+  color: var(--rc-border-highlight);
 }
 
 /* 响应式 */

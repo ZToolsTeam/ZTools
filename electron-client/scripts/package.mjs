@@ -32,7 +32,8 @@ const privilegedManifestSource = path.join(
   'service',
   'privileged-dlls-v1.xml'
 )
-const applicationIcon = path.resolve(root, '..', 'framework', 'Res', 'LOGO.ico')
+// 应用图标随客户端仓库维护（resources/app/brand 为 SVG 源文件），不再依赖未纳入版本管理的旧 framework 目录
+const applicationIcon = path.join(root, 'resources', 'app', 'LOGO.ico')
 const retainedLocales = new Set(['en-US.pak', 'zh-CN.pak'])
 const privilegedDll = {
   pluginId: 'context-menu',

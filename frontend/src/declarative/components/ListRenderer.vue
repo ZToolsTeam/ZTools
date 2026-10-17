@@ -3,45 +3,45 @@
     <!-- 顶栏系统监控看板 (MetricGrid) -->
     <div
       v-if="metricGridData?.items && metricGridData.items.length > 0"
-      class="px-4 py-2.5 border-b border-white/10 bg-white/[0.015] grid gap-2.5"
+      class="px-4 py-2.5 border-b border-[var(--rc-border)] bg-[var(--rc-surface-subtle)] grid gap-2.5"
       :style="{ gridTemplateColumns: `repeat(auto-fit, minmax(168px, 1fr))` }"
     >
       <div
         v-for="(m, mIdx) in metricGridData.items"
         :key="m.id || mIdx"
-        class="bg-white/[0.03] hover:bg-white/[0.05] border border-white/10 rounded-xl px-3 py-2.5 flex flex-col justify-between transition-all min-w-0"
+        class="bg-[var(--rc-surface-subtle)] hover:bg-[var(--rc-surface-hover)] border border-[var(--rc-border)] rounded-xl px-3 py-2.5 flex flex-col justify-between transition-all min-w-0"
       >
-        <div class="flex items-center justify-between gap-1.5 text-xs text-slate-300 mb-1 min-w-0">
+        <div class="flex items-center justify-between gap-1.5 text-xs text-[var(--rc-text-secondary)] mb-1 min-w-0">
           <span class="font-medium whitespace-nowrap overflow-hidden text-ellipsis" :title="m.label">{{ m.label }}</span>
           <span
             v-if="m.status"
             class="text-[10px] px-1.5 py-0.2 rounded font-medium flex-shrink-0"
             :class="{
-              'bg-emerald-500/15 text-emerald-400 border border-emerald-500/20': m.status === 'success' || m.status === 'normal',
-              'bg-amber-500/15 text-amber-400 border border-amber-500/20': m.status === 'warning',
-              'bg-rose-500/15 text-rose-400 border border-rose-500/20': m.status === 'danger'
+              'bg-[var(--rc-success-subtle)] text-[var(--rc-success)] border border-[var(--rc-border)]': m.status === 'success' || m.status === 'normal',
+              'bg-[var(--rc-warning-subtle)] text-[var(--rc-warning)] border border-[var(--rc-border)]': m.status === 'warning',
+              'bg-[var(--rc-error-subtle)] text-[var(--rc-error)] border border-[var(--rc-error)]': m.status === 'danger'
             }"
           >
             {{ m.status === 'danger' ? '高负荷' : m.status === 'warning' ? '关注' : '正常' }}
           </span>
         </div>
         <div class="flex items-baseline justify-between gap-2 min-w-0">
-          <span class="text-base font-bold text-slate-100 font-mono tracking-tight whitespace-nowrap">{{ m.value }}</span>
+          <span class="text-base font-bold text-[var(--rc-text-primary)] font-mono tracking-tight whitespace-nowrap">{{ m.value }}</span>
           <span
             v-if="m.subValue"
-            class="text-[11px] text-slate-400 font-mono truncate"
+            class="text-[11px] text-[var(--rc-text-muted)] font-mono truncate"
             :title="m.subValue"
           >
             {{ m.subValue }}
           </span>
         </div>
-        <div v-if="typeof m.progress === 'number'" class="w-full bg-white/10 h-1.5 rounded-full overflow-hidden mt-2">
+        <div v-if="typeof m.progress === 'number'" class="w-full bg-[var(--rc-surface-active)] h-1.5 rounded-full overflow-hidden mt-2">
           <div
             class="h-full transition-all duration-300 rounded-full"
             :class="{
-              'bg-rose-500': m.progress > 85,
-              'bg-amber-500': m.progress > 60 && m.progress <= 85,
-              'bg-sky-400': m.progress <= 60
+              'bg-[var(--rc-error)]': m.progress > 85,
+              'bg-[var(--rc-warning)]': m.progress > 60 && m.progress <= 85,
+              'bg-[var(--rc-accent)]': m.progress <= 60
             }"
             :style="{ width: `${Math.min(100, Math.max(0, m.progress))}%` }"
           />
@@ -52,23 +52,23 @@
     <!-- 多色比例分布条与图例胶囊 (DistributionBar) -->
     <div
       v-if="distributionBarData?.segments && distributionBarData.segments.length > 0"
-      class="px-4 py-2 border-b border-white/10 bg-white/[0.012] space-y-2"
+      class="px-4 py-2 border-b border-[var(--rc-border)] bg-[var(--rc-surface-subtle)] space-y-2"
     >
-      <div class="flex items-center justify-between text-[11px] text-slate-300">
+      <div class="flex items-center justify-between text-[11px] text-[var(--rc-text-secondary)]">
         <span class="font-medium">{{ distributionBarData.title || '类型体积分布占比' }}</span>
-        <span v-if="distributionBarData.totalText || distributionBarData.totalLabel" class="font-mono text-slate-400">
+        <span v-if="distributionBarData.totalText || distributionBarData.totalLabel" class="font-mono text-[var(--rc-text-muted)]">
           {{ distributionBarData.totalText || distributionBarData.totalLabel }}
         </span>
       </div>
       <!-- 多色堆叠比例条 -->
-      <div class="w-full h-2.5 bg-white/10 rounded-full overflow-hidden flex gap-0.5 p-0.5">
+      <div class="w-full h-2.5 bg-[var(--rc-surface-active)] rounded-full overflow-hidden flex gap-0.5 p-0.5">
         <div
           v-for="seg in distributionBarData.segments"
           :key="seg.id"
           class="h-full transition-all duration-300 cursor-pointer first:rounded-l-full last:rounded-r-full hover:brightness-125"
           :style="{
             width: `${Math.max(1.2, seg.percent)}%`,
-            backgroundColor: seg.color || '#38bdf8',
+            backgroundColor: seg.color || 'var(--rc-accent)',
             opacity:
               !(distributionBarData.activeId || distributionBarData.activeSegmentId) ||
               (distributionBarData.activeId || distributionBarData.activeSegmentId) === 'ALL' ||
@@ -89,28 +89,28 @@
           class="px-2 py-0.5 rounded-md text-[11px] flex items-center gap-1.5 flex-shrink-0 transition-all border"
           :class="[
             (distributionBarData.activeId || distributionBarData.activeSegmentId) === seg.id
-              ? 'bg-white/15 text-white border-white/30 font-semibold shadow-sm'
-              : 'bg-white/[0.03] text-slate-300 border-white/5 hover:bg-white/10'
+              ? 'bg-[var(--rc-surface-active)] text-[var(--rc-text-primary)] border-[var(--rc-border-highlight)] font-semibold shadow-sm'
+              : 'bg-[var(--rc-surface-subtle)] text-[var(--rc-text-secondary)] border-[var(--rc-border)] hover:bg-[var(--rc-surface-hover)]'
           ]"
           @click="handleDistributionSelect(seg.id)"
         >
-          <span class="w-2 h-2 rounded-full flex-shrink-0" :style="{ backgroundColor: seg.color || '#38bdf8' }" />
+          <span class="w-2 h-2 rounded-full flex-shrink-0" :style="{ backgroundColor: seg.color || 'var(--rc-accent)' }" />
           <span>{{ seg.label }}</span>
-          <span class="font-mono text-[10px] text-slate-400">{{ seg.valueText || seg.formattedSize }}</span>
-          <span class="font-mono text-[10px] text-slate-500">{{ Number(seg.percent || 0).toFixed(0) }}%</span>
+          <span class="font-mono text-[10px] text-[var(--rc-text-muted)]">{{ seg.valueText || seg.formattedSize }}</span>
+          <span class="font-mono text-[10px] text-[var(--rc-text-muted)]">{{ Number(seg.percent || 0).toFixed(0) }}%</span>
         </button>
       </div>
     </div>
 
     <!-- 顶部搜索栏与筛选器 -->
-    <div class="px-4 py-2 border-b border-white/10 flex items-center gap-3 bg-white/[0.02]">
-      <DeclarativeIcon icon="magnifying-glass" :size="18" class="text-slate-400 flex-shrink-0" />
+    <div class="px-4 py-2 border-b border-[var(--rc-border)] flex items-center gap-3 bg-[var(--rc-surface-subtle)]">
+      <DeclarativeIcon icon="magnifying-glass" :size="18" class="text-[var(--rc-text-muted)] flex-shrink-0" />
       <input
         ref="searchInputRef"
         :value="descriptor.props?.searchText ?? localSearchText"
         type="text"
         :placeholder="descriptor.props?.searchBarPlaceholder || '搜索...'"
-        class="flex-1 bg-transparent text-sm text-slate-100 placeholder-slate-400 outline-none"
+        class="flex-1 bg-transparent text-sm text-[var(--rc-text-primary)] placeholder:text-[var(--rc-text-faint)] outline-none"
         @input="handleSearchInput"
         @keydown.down.prevent="focusNextItem"
         @keydown.up.prevent="focusPrevItem"
@@ -120,14 +120,14 @@
       <div v-if="searchBarAccessory" class="flex-shrink-0">
         <select
           :value="searchBarAccessory.props?.value || searchBarAccessory.props?.defaultValue"
-          class="bg-white/10 text-xs text-slate-200 border border-white/10 rounded-md px-2 py-1 outline-none cursor-pointer hover:bg-white/15"
+          class="bg-[var(--rc-surface-active)] text-xs text-[var(--rc-text-primary)] border border-[var(--rc-border)] rounded-md px-2 py-1 outline-none cursor-pointer hover:bg-[var(--rc-surface-hover)]"
           @change="handleDropdownChange"
         >
           <option
             v-for="(opt, oIdx) in dropdownOptions"
             :key="oIdx"
             :value="opt.props?.value"
-            class="bg-slate-800 text-slate-200"
+            class="bg-[var(--rc-surface)] text-[var(--rc-text-primary)]"
           >
             {{ opt.props?.title }}
           </option>
@@ -135,7 +135,7 @@
       </div>
 
       <!-- 加载微动效 -->
-      <div v-if="descriptor.props?.isLoading" class="animate-spin text-sky-400 flex-shrink-0">
+      <div v-if="descriptor.props?.isLoading" class="animate-spin text-[var(--rc-accent-text)] flex-shrink-0">
         <svg class="w-4 h-4" viewBox="0 0 24 24" fill="none">
           <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4" />
           <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8H4z" />
@@ -146,7 +146,7 @@
     <!-- 顶栏分段控制器 (SegmentedControl) -->
     <div
       v-if="segmentedControlData?.options && segmentedControlData.options.length > 0"
-      class="px-4 py-1.5 border-b border-white/10 bg-white/[0.01] flex items-center gap-1.5 overflow-x-auto"
+      class="px-4 py-1.5 border-b border-[var(--rc-border)] bg-[var(--rc-surface-subtle)] flex items-center gap-1.5 overflow-x-auto"
     >
       <button
         v-for="opt in segmentedControlData.options"
@@ -154,8 +154,8 @@
         class="px-2.5 py-1 rounded-lg text-xs font-medium transition-all duration-150 flex items-center gap-1.5 flex-shrink-0"
         :class="[
           segmentedControlData.value === opt.value
-            ? 'bg-sky-500/20 text-sky-300 border border-sky-500/40 shadow-sm'
-            : 'text-slate-400 hover:text-slate-200 hover:bg-white/5 border border-transparent'
+            ? 'bg-[var(--rc-accent-subtle)] text-[var(--rc-accent-text)] border border-[var(--rc-border-highlight)] shadow-sm'
+            : 'text-[var(--rc-text-muted)] hover:text-[var(--rc-text-primary)] hover:bg-[var(--rc-surface-hover)] border border-transparent'
         ]"
         @click="handleSegmentedChange(opt.value)"
       >
@@ -164,7 +164,7 @@
         <span
           v-if="opt.badge !== undefined"
           class="px-1.5 py-0.2 rounded-full text-[10px] font-mono"
-          :class="segmentedControlData.value === opt.value ? 'bg-sky-400/20 text-sky-200' : 'bg-white/10 text-slate-400'"
+          :class="segmentedControlData.value === opt.value ? 'bg-[var(--rc-accent-subtle)] text-[var(--rc-accent-text)]' : 'bg-[var(--rc-surface-active)] text-[var(--rc-text-muted)]'"
         >
           {{ opt.badge }}
         </span>
@@ -174,7 +174,7 @@
     <!-- 向导步骤条与多维二级筛选/批量工具栏 (FilterBar) -->
     <div
       v-if="filterBarData && ((filterBarData.wizardSteps && filterBarData.wizardSteps.length > 0) || (filterBarData.groups && filterBarData.groups.length > 0) || (filterBarData.actions && filterBarData.actions.length > 0) || filterBarData.summaryText)"
-      class="px-4 py-1.5 border-b border-white/10 bg-white/[0.018] flex flex-col gap-1.5"
+      class="px-4 py-1.5 border-b border-[var(--rc-border)] bg-[var(--rc-surface-subtle)] flex flex-col gap-1.5"
     >
       <!-- 第一行：向导步骤状态条 / 实时汇总文字 + 右侧快捷批量操作按钮 -->
       <div
@@ -188,19 +188,19 @@
                 type="button"
                 class="px-2 py-0.5 rounded-md font-medium flex items-center gap-1 flex-shrink-0 transition-all"
                 :class="{
-                  'bg-emerald-500/15 text-emerald-300 border border-emerald-500/25 hover:bg-emerald-500/25': step.status === 'done',
-                  'bg-sky-500/20 text-sky-300 border border-sky-500/35 font-semibold': step.status === 'active',
-                  'bg-white/5 text-slate-500 border border-white/5 hover:text-slate-300': step.status === 'pending'
+                  'bg-[var(--rc-success-subtle)] text-[var(--rc-success)] border border-[var(--rc-border)] hover:bg-[var(--rc-success-subtle)]': step.status === 'done',
+                  'bg-[var(--rc-accent-subtle)] text-[var(--rc-accent-text)] border border-[var(--rc-border-highlight)] font-semibold': step.status === 'active',
+                  'bg-[var(--rc-surface-hover)] text-[var(--rc-text-muted)] border border-[var(--rc-border)] hover:text-[var(--rc-text-secondary)]': step.status === 'pending'
                 }"
                 @click="step.onSelect && step.onSelect()"
               >
                 <span>{{ step.status === 'done' ? '✓' : '●' }}</span>
                 <span>{{ step.label }}</span>
               </button>
-              <span v-if="stIdx < filterBarData.wizardSteps.length - 1" class="text-slate-600">➔</span>
+              <span v-if="stIdx < filterBarData.wizardSteps.length - 1" class="text-[var(--rc-text-faint)]">➔</span>
             </template>
           </div>
-          <span v-if="filterBarData.summaryText" class="text-[11px] font-mono text-sky-300 truncate">
+          <span v-if="filterBarData.summaryText" class="text-[11px] font-mono text-[var(--rc-accent-text)] truncate">
             {{ filterBarData.summaryText }}
           </span>
         </div>
@@ -216,15 +216,15 @@
             :disabled="act.disabled"
             class="px-2.5 py-0.5 rounded-lg text-[11px] font-medium transition-all flex items-center gap-1 border"
             :class="{
-              'bg-sky-500/25 hover:bg-sky-500/35 text-sky-200 border-sky-400/40 shadow-sm': act.style === 'primary',
-              'bg-rose-500/25 hover:bg-rose-500/35 text-rose-200 border-rose-400/40 shadow-sm': act.style === 'destructive' || act.style === 'danger',
-              'bg-white/5 hover:bg-white/10 text-slate-300 border-white/10': !act.style || act.style === 'secondary',
+              'bg-[var(--rc-accent-subtle)] hover:bg-[var(--rc-accent-subtle)] text-[var(--rc-accent-text)] border-[var(--rc-border-highlight)] shadow-sm': act.style === 'primary',
+              'bg-[var(--rc-error-subtle)] hover:bg-[var(--rc-error-subtle)] text-[var(--rc-error)] border-[var(--rc-error)] shadow-sm': act.style === 'destructive' || act.style === 'danger',
+              'bg-[var(--rc-surface-hover)] hover:bg-[var(--rc-surface-hover)] text-[var(--rc-text-secondary)] border-[var(--rc-border)]': !act.style || act.style === 'secondary',
               'opacity-40 cursor-not-allowed': act.disabled
             }"
             @click="act.onAction && act.onAction()"
           >
             <span>{{ act.label }}</span>
-            <span v-if="act.badge !== undefined" class="font-mono text-[10px] px-1 rounded bg-black/20">{{ act.badge }}</span>
+            <span v-if="act.badge !== undefined" class="font-mono text-[10px] px-1 rounded bg-[var(--rc-surface-subtle)]">{{ act.badge }}</span>
           </button>
         </div>
       </div>
@@ -239,15 +239,15 @@
           :key="grp.id"
           class="flex items-center gap-1 flex-wrap"
         >
-          <span v-if="grp.label" class="text-[11px] text-slate-400 mr-0.5 font-medium">{{ grp.label }}:</span>
+          <span v-if="grp.label" class="text-[11px] text-[var(--rc-text-muted)] mr-0.5 font-medium">{{ grp.label }}:</span>
           <button
             v-for="opt in grp.options.slice(0, 7)"
             :key="opt.value"
             class="px-2 py-0.5 rounded-md text-[11px] transition-all flex items-center gap-1 flex-shrink-0 border"
             :class="[
               grp.value === opt.value
-                ? 'bg-indigo-500/25 text-indigo-200 border-indigo-400/40 font-medium'
-                : 'bg-white/[0.03] text-slate-400 border-white/5 hover:text-slate-200 hover:bg-white/10'
+                ? 'bg-[var(--rc-accent-subtle)] text-[var(--rc-accent-text)] border-[var(--rc-border-highlight)] font-medium'
+                : 'bg-[var(--rc-surface-subtle)] text-[var(--rc-text-muted)] border-[var(--rc-border)] hover:text-[var(--rc-text-primary)] hover:bg-[var(--rc-surface-hover)]'
             ]"
             @click="grp.onChange && grp.onChange(opt.value)"
           >
@@ -274,7 +274,7 @@
         <div v-for="(sec, sIdx) in sections" :key="sIdx" class="space-y-1">
           <div
             v-if="sec.title"
-            class="px-3 py-1 text-xs font-semibold text-slate-300 flex items-center justify-between gap-2 bg-white/[0.02] rounded-lg border border-white/5"
+            class="px-3 py-1 text-xs font-semibold text-[var(--rc-text-secondary)] flex items-center justify-between gap-2 bg-[var(--rc-surface-subtle)] rounded-lg border border-[var(--rc-border)]"
           >
             <div class="flex items-center gap-2 min-w-0">
               <button
@@ -283,10 +283,10 @@
                 class="w-4 h-4 rounded flex items-center justify-center border transition-all flex-shrink-0"
                 :class="[
                   sec.checked === true
-                    ? 'bg-sky-500 border-sky-400 text-white'
+                    ? 'bg-[var(--rc-accent)] border-[var(--rc-border-highlight)] text-[var(--rc-accent-contrast)]'
                     : sec.checked === 'indeterminate'
-                    ? 'bg-sky-500/40 border-sky-400 text-sky-200'
-                    : 'bg-white/5 border-white/25 text-transparent hover:border-sky-400/60'
+                    ? 'bg-[var(--rc-accent-subtle)] border-[var(--rc-border-highlight)] text-[var(--rc-accent-text)]'
+                    : 'bg-[var(--rc-surface-hover)] border-[var(--rc-border-highlight)] text-transparent hover:border-[var(--rc-border-highlight)]'
                 ]"
                 @click.stop="sec.onCheckChange && sec.onCheckChange(sec.checked !== true)"
               >
@@ -294,7 +294,7 @@
               </button>
               <span class="truncate">{{ sec.title }}</span>
             </div>
-            <span v-if="sec.subtitle" class="text-[11px] font-mono text-slate-400 flex-shrink-0">{{ sec.subtitle }}</span>
+            <span v-if="sec.subtitle" class="text-[11px] font-mono text-[var(--rc-text-muted)] flex-shrink-0">{{ sec.subtitle }}</span>
           </div>
 
           <!-- Items 遍历 -->
@@ -302,11 +302,11 @@
             v-for="(item, iIdx) in sec.items"
             :key="item.id || `${sIdx}-${iIdx}`"
             :ref="el => registerItemEl(item, el)"
-            class="flex items-center justify-between px-3 py-2.5 rounded-xl text-sm cursor-pointer transition-all duration-100"
+            class="flex items-center justify-between pl-2 pr-3 py-2.5 rounded-[10px] text-sm cursor-pointer transition-colors duration-100 border border-transparent"
             :class="[
               selectedItem === item
-                ? 'bg-sky-500/15 text-white font-medium shadow-sm border border-sky-500/30'
-                : 'text-slate-300 hover:bg-white/5 border border-transparent'
+                ? 'bg-[var(--rc-surface-active)] text-[var(--rc-text-primary)] font-medium'
+                : 'text-[var(--rc-text-secondary)] hover:bg-[var(--rc-surface-hover)]'
             ]"
             @click="selectItem(item)"
             @dblclick="emit('trigger-primary', item)"
@@ -314,16 +314,18 @@
           >
             <!-- 左侧复选框、图标与文本 -->
             <div class="flex items-center gap-2.5 min-w-0 flex-1 overflow-hidden pr-2">
+              <!-- 积木选中标记：与悬浮条 / 侧边栏一致 -->
+              <span class="decl-marker" :class="{ 'is-on': selectedItem === item }" aria-hidden="true"></span>
               <button
                 v-if="item.props?.checkable"
                 type="button"
                 class="w-4 h-4 rounded flex items-center justify-center border transition-all flex-shrink-0"
                 :class="[
                   item.props?.checked === true
-                    ? 'bg-sky-500 border-sky-400 text-white'
+                    ? 'bg-[var(--rc-accent)] border-[var(--rc-border-highlight)] text-[var(--rc-accent-contrast)]'
                     : item.props?.checked === 'indeterminate'
-                    ? 'bg-sky-500/40 border-sky-400 text-sky-200'
-                    : 'bg-white/5 border-white/25 text-transparent hover:border-sky-400/60'
+                    ? 'bg-[var(--rc-accent-subtle)] border-[var(--rc-border-highlight)] text-[var(--rc-accent-text)]'
+                    : 'bg-[var(--rc-surface-hover)] border-[var(--rc-border-highlight)] text-transparent hover:border-[var(--rc-border-highlight)]'
                 ]"
                 @click.stop="toggleItemCheck(item)"
               >
@@ -333,13 +335,13 @@
                 v-if="item.props?.icon"
                 :icon="item.props.icon"
                 :size="18"
-                :class="selectedItem === item ? 'text-sky-400' : 'text-slate-400'"
+                :class="selectedItem === item ? 'text-[var(--rc-text-primary)]' : 'text-[var(--rc-text-muted)]'"
               />
               <div class="flex flex-col justify-center min-w-0 flex-1 overflow-hidden">
-                <span class="truncate font-medium text-slate-100 leading-snug">{{ item.props?.title }}</span>
+                <span class="truncate font-medium text-[var(--rc-text-primary)] leading-snug">{{ item.props?.title }}</span>
                 <span
                   v-if="item.props?.subtitle"
-                  class="text-[11px] text-slate-400 truncate leading-tight"
+                  class="text-[11px] text-[var(--rc-text-muted)] truncate leading-tight"
                 >
                   {{ item.props.subtitle }}
                 </span>
@@ -363,7 +365,7 @@
                 <!-- Text 文本标签 -->
                 <span
                   v-else-if="acc.text"
-                  class="px-2 py-0.5 text-xs font-mono text-slate-300 bg-white/5 border border-white/5 rounded-md"
+                  class="px-2 py-0.5 text-xs font-mono text-[var(--rc-text-secondary)] bg-[var(--rc-surface-hover)] border border-[var(--rc-border)] rounded-md"
                 >
                   {{ typeof acc.text === 'object' ? acc.text.value : acc.text }}
                 </span>
@@ -374,7 +376,7 @@
 
         <div
           v-if="flatItems.length === 0"
-          class="p-12 text-center text-sm text-slate-400"
+          class="p-12 text-center text-sm text-[var(--rc-text-muted)]"
         >
           未找到匹配条目
         </div>
@@ -383,7 +385,7 @@
       <!-- 右侧 Detail 分栏 (如果启用了 isShowingDetail，分配 55% 宽并纵向堆叠展示，对齐 Raycast Master-Detail 规范) -->
       <div
         v-if="descriptor.props?.isShowingDetail && selectedItem?.props?.detail"
-        class="w-[55%] border-l border-white/10 overflow-hidden flex flex-col bg-white/[0.01]"
+        class="w-[55%] border-l border-[var(--rc-border)] overflow-hidden flex flex-col bg-[var(--rc-surface-subtle)]"
       >
         <DetailRenderer :descriptor="selectedItem.props.detail" :is-list-detail="true" />
       </div>
@@ -532,9 +534,9 @@ function getTagStyle(tag) {
   const color = typeof tag === "object" ? tag.color : null;
   if (!color) {
     return {
-      backgroundColor: "rgba(255, 255, 255, 0.05)",
-      borderColor: "rgba(255, 255, 255, 0.1)",
-      color: "#cbd5e1"
+      backgroundColor: "var(--rc-kbd-bg)",
+      borderColor: "var(--rc-border)",
+      color: "var(--rc-text-secondary)"
     };
   }
   return {
@@ -690,3 +692,18 @@ defineExpose({
   getViewStateSnapshot
 });
 </script>
+
+<style scoped>
+.decl-marker {
+  width: 6px;
+  height: 6px;
+  border-radius: 1.7px;
+  flex-shrink: 0;
+  background: transparent;
+}
+
+.decl-marker.is-on {
+  background: var(--rc-accent);
+  box-shadow: var(--rc-marker-glow);
+}
+</style>

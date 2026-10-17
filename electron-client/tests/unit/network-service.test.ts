@@ -336,7 +336,8 @@ test('cookies and proxy are scoped to the caller session', async () => {
 })
 
 test('download rejects an ungranted destination and writes atomically after Main authorizes it', async () => {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'ztools-network-'))
+  // macOS 的临时目录在 /var 下，而 /var 是指向 /private/var 的系统链接；服务返回规范化后的真实路径，测试也按真实路径断言
+  const root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'ztools-network-')))
   let removed: ((webContentsId: number) => void) | undefined
   const registry = {
     onRemoved(listener: (webContentsId: number) => void) {

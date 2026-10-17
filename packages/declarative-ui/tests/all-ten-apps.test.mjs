@@ -25,6 +25,7 @@ import {
   GoogleTranslateCommand,
   TranslateDetailView,
   translateText,
+  fetchLiveTranslation,
   getTranslateHistory,
   saveTranslateHistory,
   clearTranslateHistory,
@@ -220,9 +221,54 @@ describe("Raycast Compat: 10 Classic Open-Source Applications Suite", () => {
       assert.ok(resHello.phonetic);
       assert.ok(resHello.synonyms?.length > 0);
 
-      const resGeneral = translateText("Good morning developers", "auto", "ja");
-      assert.match(resGeneral.translatedText, /Good morning developers/);
-      assert.equal(resGeneral.targetLang, "ja");
+      // 词典没收录的句子不再编造「[日本語訳] 原文」，交给联网翻译
+      assert.equal(translateText("Good morning developers", "auto", "ja"), null);
+    });
+
+    describe("fetchLiveTranslation 联网翻译", () => {
+      const realFetch = globalThis.fetch;
+      const respond = (body, ok = true) => async () => ({ ok, json: async () => body });
+      const restore = () => { globalThis.fetch = realFetch; };
+
+      test("接口成功时返回接口译文", async () => {
+        globalThis.fetch = respond({ code: 0, data: { from: "en", trans_result: [{ dst: "苹果派很好吃" }] } });
+        try {
+          const res = await fetchLiveTranslation("apple pie is delicious", "auto", "zh-CN");
+          assert.equal(res.translatedText, "苹果派很好吃");
+        } finally { restore(); }
+      });
+
+      test("[破坏性] 断网、5xx、业务错误码、畸形响应时：词典没有就抛错，不返回伪造译文", async () => {
+        const failures = [
+          async () => { throw new TypeError("Failed to fetch"); },
+          respond({}, false),
+          respond({ code: 429, msg: "Too Many Requests" }),
+          respond({ code: 0, data: { trans_result: [] } }),
+          async () => ({ ok: true, json: async () => { throw new SyntaxError("Unexpected token <"); } })
+        ];
+        for (const fake of failures) {
+          globalThis.fetch = fake;
+          try {
+            await assert.rejects(fetchLiveTranslation("Good morning developers", "auto", "ja"), /翻译服务暂时不可用/);
+          } finally { restore(); }
+        }
+      });
+
+      test("[破坏性] 断网时词典收录的词仍可离线返回", async () => {
+        globalThis.fetch = async () => { throw new TypeError("Failed to fetch"); };
+        try {
+          const res = await fetchLiveTranslation("Hello", "en", "zh-CN");
+          assert.equal(res.translatedText, "你好");
+        } finally { restore(); }
+      });
+
+      test("请求被取消时原样抛出取消错误", async () => {
+        const controller = new AbortController();
+        globalThis.fetch = async () => { controller.abort(); const e = new Error("aborted"); e.name = "AbortError"; throw e; };
+        try {
+          await assert.rejects(fetchLiveTranslation("anything", "auto", "zh-CN", controller.signal), (e) => e.name === "AbortError");
+        } finally { restore(); }
+      });
     });
 
     test("getTranslateHistory, saveTranslateHistory, clearTranslateHistory persist to LocalStorage", async () => {

@@ -16,6 +16,12 @@ const EXPECTED_PACKAGER_VERSION = '20.3.0'
 const EXPECTED_ELECTRON_VERSION = '43.4.1'
 const EXPECTED_CLASSIC_LEVEL_VERSION = '3.0.0'
 const APPLICATION_NAME = 'ZTools'
+// 应用图标：由 resources/app/brand/app-icon.svg 生成的 macOS iconset（16–512 及 @2x）
+const MAC_APPLICATION_ICON = ['resources', 'app', 'ZTools.icns']
+
+export function macApplicationIconPath(sourceRoot) {
+  return path.join(sourceRoot, ...MAC_APPLICATION_ICON)
+}
 const MAC_NATIVE_LOAD_PROOF_UNAVAILABLE = 'MAC_NATIVE_SAME_OBJECT_PROOF_UNAVAILABLE'
 const RUNTIME_TARGET_MANIFEST_FILE = 'ztools-runtime-target.json'
 const RUNTIME_TARGET_MANIFEST_VERSION = 1
@@ -146,6 +152,8 @@ export function createMacUniversalPackagerOptions({ sourceRoot, outputRoot, appB
     appBundleId: validatedBundleId,
     appVersion: shortVersion,
     buildVersion,
+    // 未指定时打包器会使用 Electron 默认图标
+    icon: macApplicationIconPath(sourceRoot),
     extendInfo: {
       CFBundleURLTypes: [{ CFBundleURLName: 'ZTools plugin open', CFBundleURLSchemes: ['ztools'] }],
       ...(minimumOs ? { LSMinimumSystemVersion: minimumOs } : {})
@@ -188,6 +196,34 @@ function reserveOutputRoot(fsApi, outputRoot) {
       throw new Error(`macOS staging 输出目录已存在，请先归档后重试: ${outputRoot}`)
     }
     throw error
+  }
+}
+
+export function assertMacApplicationIcon(fsApi, iconPath) {
+  let stats
+  try {
+    stats = fsApi.lstatSync(iconPath)
+  } catch {
+    throw new Error(`缺少 macOS 应用图标: ${iconPath}`)
+  }
+  if (!stats.isFile() || stats.isSymbolicLink() || stats.size <= 0) {
+    throw new Error(`macOS 应用图标不是有效的普通文件: ${iconPath}`)
+  }
+  const header = fsApi.readFileSync(iconPath).subarray(0, 4).toString('latin1')
+  if (header !== 'icns') throw new Error(`macOS 应用图标不是 ICNS 格式: ${iconPath}`)
+}
+
+/** 打包器会把图标复制为 Contents/Resources/electron.icns；逐字节比对，防止静默回退为 Electron 默认图标 */
+export function verifyPackagedIcon(fsApi, appBundlePath, iconPath) {
+  const packaged = path.join(appBundlePath, 'Contents', 'Resources', 'electron.icns')
+  let bundled
+  try {
+    bundled = fsApi.readFileSync(packaged)
+  } catch {
+    throw new Error('MAC_APPLICATION_ICON_NOT_PACKAGED')
+  }
+  if (!Buffer.from(bundled).equals(Buffer.from(fsApi.readFileSync(iconPath)))) {
+    throw new Error('MAC_APPLICATION_ICON_MISMATCH')
   }
 }
 
@@ -289,6 +325,8 @@ export async function stageMacUniversal({
   compareOsVersions(minimumOs, minimumOs)
   validateMacBundleVersions(shortVersion, buildVersion)
   assertBuildDependencies(sourcePackage)
+  // 在耗时的构建与 Universal 合并之前先确认图标可用
+  assertMacApplicationIcon(fsApi, macApplicationIconPath(sourceRoot))
   const outputRoot = resolveOutputRoot({ sourceRoot, sourcePackage, buildQualifier })
   if (fsApi.existsSync(outputRoot)) {
     throw new Error(`macOS staging 输出目录已存在，请先归档后重试: ${outputRoot}`)
@@ -324,6 +362,7 @@ export async function stageMacUniversal({
   const appBundlePath = path.join(expectedPackagePath, `${APPLICATION_NAME}.app`)
   const addonPath = path.join(appBundlePath, ...CLASSIC_LEVEL_UNIVERSAL_ADDON.split('/'))
   verifyPackagedAddon(fsApi, addonPath)
+  verifyPackagedIcon(fsApi, appBundlePath, macApplicationIconPath(sourceRoot))
   const helperStats = fsApi.lstatSync(native.executable)
   if (!helperStats.isFile() || helperStats.isSymbolicLink()) throw new Error('INVALID_MAC_CLIPBOARD_HELPER')
   const nativeDestination = path.join(validatedResourcesRoot(fsApi, appBundlePath), 'native')

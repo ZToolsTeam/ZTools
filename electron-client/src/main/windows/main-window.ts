@@ -14,11 +14,29 @@ export function isWindows11OrLater(): boolean {
   return (parseInt(buildStr, 10) || 0) >= 22000
 }
 
-export function getTitleBarOverlayOptions(isDark: boolean): Electron.TitleBarOverlayOptions {
+/** 标题栏高度：主窗口 52px（与 Header.vue 一致），独立插件窗口 42px（与 DeclarativePage.vue 一致） */
+export const MAIN_TITLE_BAR_HEIGHT = 52
+export const POPOUT_TITLE_BAR_HEIGHT = 42
+
+/** 积木 Z × 余烬橙：窗口首帧底色（与 theme.css 的 --rc-canvas 一致，避免打开时闪出旧配色） */
+export function getWindowBackgroundColor(isDark: boolean): string {
+  return isDark ? '#0b0b0c' : '#f4f3f0'
+}
+
+/** macOS 红绿灯（12px 高）垂直居中到自定义标题栏 */
+export function getTrafficLightPosition(titleBarHeight: number): Electron.Point {
+  return { x: 18, y: Math.round((titleBarHeight - 12) / 2) }
+}
+
+export function getTitleBarOverlayOptions(
+  isDark: boolean,
+  height: number = MAIN_TITLE_BAR_HEIGHT
+): Electron.TitleBarOverlayOptions {
   return {
-    color: isDark ? '#101216' : '#f8fafc',
-    symbolColor: isDark ? '#94a3b8' : '#475569',
-    height: 40
+    // 与 theme.css 的 --rc-head 一致，Windows 窗口控制按钮与标题栏融为一体
+    color: isDark ? '#0e0e10' : '#f7f6f3',
+    symbolColor: isDark ? '#a0a0a8' : '#55555c',
+    height
   }
 }
 
@@ -31,7 +49,7 @@ export function updateMainWindowTheme(window: BrowserWindow, isDark: boolean): v
       // 容错处理
     }
   }
-  window.setBackgroundColor(isDark ? '#101216' : '#f8fafc')
+  window.setBackgroundColor(getWindowBackgroundColor(isDark))
 }
 
 export interface MainWindowOptions {
@@ -138,9 +156,10 @@ export function createMainWindow(options: MainWindowOptions): BrowserWindow {
     minWidth,
     minHeight,
     show: false,
-    backgroundColor: isDark ? '#101216' : '#f8fafc',
+    backgroundColor: getWindowBackgroundColor(isDark),
     autoHideMenuBar: true,
     titleBarStyle: isMac ? 'hiddenInset' : 'hidden',
+    ...(isMac ? { trafficLightPosition: getTrafficLightPosition(MAIN_TITLE_BAR_HEIGHT) } : {}),
     ...(isWin ? {
       titleBarOverlay: getTitleBarOverlayOptions(isDark)
     } : {}),

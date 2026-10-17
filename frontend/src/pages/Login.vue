@@ -5,7 +5,7 @@ import { generateQrcode, checkQrcodeStatus } from '../api/auth'
 import { useUserStore } from '@/stores/user'
 import { useToast } from '@/composables/useToast'
 import { ROUTES } from '@/router/routes'
-import { RcButton, RcCard } from '@/components/raycast'
+import { RcButton, RcCard } from '@/components/base'
 
 const router = useRouter()
 const userStore = useUserStore()
@@ -97,7 +97,7 @@ onBeforeUnmount(() => {
   <div class="login-page-container w-full h-full min-h-screen flex items-center justify-center p-4 relative select-none">
     <!-- 顶部返回/关闭按钮 -->
     <div class="absolute top-4 left-4">
-      <RcButton size="sm" variant="ghost" icon="fa-arrow-left" kbd="Esc" @click="handleClose">
+      <RcButton size="sm" variant="ghost" icon="fa-arrow-left" kbd="Escape" @click="handleClose">
         返回主页
       </RcButton>
     </div>
@@ -117,7 +117,7 @@ onBeforeUnmount(() => {
 
       <div class="flex flex-col items-center text-center">
         <!-- 头部图标 -->
-        <div class="w-12 h-12 rounded-xl bg-white/[0.04] border border-white/[0.08] flex items-center justify-center text-[#07c160] mb-3 text-xl">
+        <div class="w-12 h-12 rounded-xl bg-[var(--rc-surface-subtle)] border border-white/[0.08] flex items-center justify-center text-[#07c160] mb-3 text-xl">
           <i class="fa fa-wechat"></i>
         </div>
 
@@ -130,20 +130,20 @@ onBeforeUnmount(() => {
 
         <!-- 二维码展示区 -->
         <div class="w-[210px] h-[210px] rounded-lg bg-white p-2.5 flex items-center justify-center shadow-inner relative overflow-hidden">
-          <div v-if="loading" class="flex flex-col items-center gap-2 text-slate-500 text-xs">
-            <i class="fa fa-spinner fa-spin text-lg text-[var(--rc-accent)]"></i>
+          <div v-if="loading" class="flex flex-col items-center gap-2 text-[var(--rc-text-muted)] text-xs">
+            <i class="fa fa-spinner fa-spin text-lg text-[var(--rc-accent-text)]"></i>
             <span>生成二维码...</span>
           </div>
 
           <div v-else-if="error" class="flex flex-col items-center gap-2 text-center p-2">
-            <span class="text-xs text-red-500">{{ error }}</span>
+            <span class="text-xs text-[var(--rc-error)]">{{ error }}</span>
             <RcButton size="xs" variant="secondary" icon="fa-refresh" @click="generateQrcodeHandler">
               重试
             </RcButton>
           </div>
 
           <div v-else-if="status === 'expired'" class="absolute inset-0 bg-white/90 backdrop-blur-xs flex flex-col items-center justify-center gap-2">
-            <span class="text-xs text-slate-700 font-medium">二维码已失效</span>
+            <span class="text-xs text-[var(--rc-text-secondary)] font-medium">二维码已失效</span>
             <RcButton size="xs" variant="primary" icon="fa-refresh" @click="generateQrcodeHandler">
               刷新
             </RcButton>

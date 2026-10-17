@@ -9,7 +9,12 @@ import { errorCodes, ZToolsError } from '../../src/contracts/errors.js'
 import { runtimePathsForBusinessDataRoot } from '../../src/main/runtime/runtime-paths.js'
 import { UpdateService } from '../../src/main/services/update-service.js'
 
-test('update service preserves the legacy response shape and verifies downloads', async () => {
+// 这些用例依赖 Windows 路径语义（C:\\ / E:\\）或 Windows 宿主能力（DLL、进程启动、更新安装链、本地 .exe 软件），
+// 在其他平台上功能代码按设计会拒绝执行，因此只在 Windows 宿主运行；Windows CI 上照常覆盖。
+const windowsOnly = { skip: process.platform === 'win32' ? false : '依赖 Windows 路径或宿主能力，仅在 Windows 上运行' }
+
+
+test('update service preserves the legacy response shape and verifies downloads', windowsOnly, async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'ztools-update-service-'))
   const runtimePaths = runtimePathsForBusinessDataRoot(path.join(root, 'Data'))
   const body = Buffer.from('verified installer payload')
@@ -90,7 +95,7 @@ test('update service preserves the legacy response shape and verifies downloads'
   await fs.rm(root, { recursive: true, force: true })
 })
 
-test('web package installation requires the independent resource service', async () => {
+test('web package installation requires the independent resource service', windowsOnly, async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'ztools-update-web-'))
   const service = new UpdateService({
     runtimePaths: runtimePathsForBusinessDataRoot(path.join(root, 'Data')),
@@ -111,7 +116,7 @@ test('web package installation requires the independent resource service', async
   await fs.rm(root, { recursive: true, force: true })
 })
 
-test('App package formats leave install-scope resolution to the native updater', async () => {
+test('App package formats leave install-scope resolution to the native updater', windowsOnly, async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'ztools-update-updater-'))
   const runtimePaths = runtimePathsForBusinessDataRoot(path.join(root, 'Data'))
   await fs.mkdir(runtimePaths.installRoot, { recursive: true })
@@ -159,7 +164,7 @@ test('App package formats leave install-scope resolution to the native updater',
   await fs.rm(root, { recursive: true, force: true })
 })
 
-test('UAC cancellation and updater launch failures remain visible and retryable', async () => {
+test('UAC cancellation and updater launch failures remain visible and retryable', windowsOnly, async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'ztools-update-updater-errors-'))
   const runtimePaths = runtimePathsForBusinessDataRoot(path.join(root, 'Data'))
   await fs.mkdir(runtimePaths.installRoot, { recursive: true })
@@ -214,7 +219,7 @@ test('UAC cancellation and updater launch failures remain visible and retryable'
   await fs.rm(root, { recursive: true, force: true })
 })
 
-test('update service compares all four numeric version components and rejects malformed versions', async () => {
+test('update service compares all four numeric version components and rejects malformed versions', windowsOnly, async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'ztools-update-version-'))
   const runtimePaths = runtimePathsForBusinessDataRoot(path.join(root, 'Data'))
   const service = new UpdateService({

@@ -1,42 +1,42 @@
 /* ===== ZTools Frontend 主题变量 =====
    统一的设计 Token，支持亮色/暗黑模式切换
-   与 plugins/create-plugin 保持一致，基于 Ant Design 默认颜色
+   颜色全部引用 theme.css 的 --rc-* 积木 Z × 余烬橙标记，不再硬编码
    使用方式：在样式中引用 var(--zt-xxx) 变量
 */
 
 :root {
   /* ===== 基础背景色 ===== */
-  --zt-bg: #ffffff;
-  --zt-bg-secondary: #fafbfc;
-  --zt-bg-elevated: #ffffff;
-  --zt-bg-hover: rgba(0, 0, 0, 0.04);
-  --zt-bg-active: rgba(0, 0, 0, 0.08);
+  --zt-bg: var(--rc-canvas);
+  --zt-bg-secondary: var(--rc-surface-subtle);
+  --zt-bg-elevated: var(--rc-surface);
+  --zt-bg-hover: var(--rc-surface-hover);
+  --zt-bg-active: var(--rc-surface-active);
 
   /* ===== 文字颜色 (Ant Design 标准) ===== */
-  --zt-text: rgba(0, 0, 0, 0.88);
-  --zt-text-secondary: rgba(0, 0, 0, 0.45);
-  --zt-text-disabled: rgba(0, 0, 0, 0.25);
+  --zt-text: var(--rc-text-primary);
+  --zt-text-secondary: var(--rc-text-muted);
+  --zt-text-disabled: var(--rc-text-faint);
 
   /* ===== 主题色 (Ant Design 标准) ===== */
-  --zt-primary: #1677ff;
-  --zt-primary-hover: #4096ff;
-  --zt-primary-active: #0958d9;
-  --zt-primary-bg: rgba(22, 119, 255, 0.1);
-  --zt-primary-border: rgba(22, 119, 255, 0.3);
+  --zt-primary: var(--rc-accent);
+  --zt-primary-hover: var(--rc-accent-hover);
+  --zt-primary-active: var(--rc-accent-hover);
+  --zt-primary-bg: var(--rc-accent-subtle);
+  --zt-primary-border: rgba(255, 107, 61, 0.35);
 
   /* ===== 状态色 (Ant Design 标准) ===== */
-  --zt-success: #52c41a;
-  --zt-success-bg: rgba(82, 196, 26, 0.1);
-  --zt-warning: #faad14;
-  --zt-warning-bg: rgba(250, 173, 20, 0.1);
-  --zt-error: #ff4d4f;
-  --zt-error-bg: rgba(255, 77, 79, 0.1);
-  --zt-info: #1677ff;
-  --zt-info-bg: rgba(22, 119, 255, 0.1);
+  --zt-success: var(--rc-success);
+  --zt-success-bg: var(--rc-success-subtle);
+  --zt-warning: var(--rc-warning);
+  --zt-warning-bg: var(--rc-warning-subtle);
+  --zt-error: var(--rc-error);
+  --zt-error-bg: var(--rc-error-subtle);
+  --zt-info: var(--rc-h-slate-fg);
+  --zt-info-bg: var(--rc-h-slate-bg);
 
   /* ===== 边框 ===== */
-  --zt-border: rgba(0, 0, 0, 0.06);
-  --zt-border-strong: rgba(0, 0, 0, 0.15);
+  --zt-border: var(--rc-border);
+  --zt-border-strong: var(--rc-border-highlight);
 
   /* ===== 阴影 ===== */
   --zt-shadow: 0 2px 8px rgba(0, 0, 0, 0.06);
@@ -98,38 +98,38 @@
 /* ===== 暗黑模式变量覆盖 (与插件保持一致) ===== */
 .dark {
   /* 基础背景色 - 与插件统一 */
-  --zt-bg: #0f0f0f;
-  --zt-bg-secondary: #1a1a1a;
-  --zt-bg-elevated: #1f1f1f;
-  --zt-header-bg: #0f0f0f;
-  --zt-bg-hover: #2a2a2a;
-  --zt-bg-active: #353535;
+  --zt-bg: var(--rc-canvas);
+  --zt-bg-secondary: var(--rc-surface-subtle);
+  --zt-bg-elevated: var(--rc-surface);
+  --zt-header-bg: var(--rc-head);
+  --zt-bg-hover: var(--rc-surface-hover);
+  --zt-bg-active: var(--rc-surface-active);
 
   /* 文字颜色 - 与插件统一 */
-  --zt-text: #e0e0e0;
-  --zt-text-secondary: #9e9e9e;
-  --zt-text-disabled: #5c5c5c;
+  --zt-text: var(--rc-text-primary);
+  --zt-text-secondary: var(--rc-text-muted);
+  --zt-text-disabled: var(--rc-text-faint);
 
   /* 主题色 - 与插件统一 */
-  --zt-primary: #4a8cff;
-  --zt-primary-hover: #5a9aff;
-  --zt-primary-active: #3a7cff;
-  --zt-primary-bg: rgba(74, 140, 255, 0.15);
-  --zt-primary-border: rgba(74, 140, 255, 0.4);
+  --zt-primary: var(--rc-accent);
+  --zt-primary-hover: var(--rc-accent-hover);
+  --zt-primary-active: var(--rc-accent-hover);
+  --zt-primary-bg: var(--rc-accent-subtle);
+  --zt-primary-border: rgba(255, 107, 61, 0.35);
 
   /* 状态色 - 与插件统一 */
-  --zt-success: #34d399;
-  --zt-success-bg: rgba(52, 211, 153, 0.15);
-  --zt-warning: #fbbf24;
-  --zt-warning-bg: rgba(251, 191, 36, 0.15);
-  --zt-error: #f87171;
-  --zt-error-bg: rgba(248, 113, 113, 0.15);
-  --zt-info: #4a8cff;
-  --zt-info-bg: rgba(74, 140, 255, 0.15);
+  --zt-success: var(--rc-success);
+  --zt-success-bg: var(--rc-success-subtle);
+  --zt-warning: var(--rc-warning);
+  --zt-warning-bg: var(--rc-warning-subtle);
+  --zt-error: var(--rc-error);
+  --zt-error-bg: var(--rc-error-subtle);
+  --zt-info: var(--rc-h-slate-fg);
+  --zt-info-bg: var(--rc-h-slate-bg);
 
   /* 边框 - 与插件统一 */
-  --zt-border: #2a2a2a;
-  --zt-border-strong: #3a3a3a;
+  --zt-border: var(--rc-border);
+  --zt-border-strong: var(--rc-border-highlight);
 
   /* 阴影 - 暗黑模式下淡化 */
   --zt-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
@@ -205,7 +205,7 @@
   line-height: 20px;
   border-radius: 10px;
   background-color: var(--zt-primary);
-  color: #ffffff;
+  color: var(--rc-accent-contrast);
   font-weight: 500;
 }
 
@@ -215,7 +215,7 @@
 
 .zt-badge-warning {
   background-color: var(--zt-warning);
-  color: #333;
+  color: var(--rc-text-inverse);
 }
 
 .zt-badge-error {
@@ -287,177 +287,80 @@
   gap: 8px;
 }
 
-/* 分页项通用样式 */
+/* 分页项：全部引用主题标记，亮/暗模式自动切换 */
 .ant-pagination .ant-pagination-item,
 .ant-pagination .ant-pagination-prev,
 .ant-pagination .ant-pagination-next,
 .ant-pagination .ant-pagination-jump-prev,
 .ant-pagination .ant-pagination-jump-next {
-  min-width: 40px;
-  height: 40px;
-  line-height: 40px;
-  border-radius: 12px;
-  border: none;
-  background: #f0f2f5;
-  transition: all 0.2s ease;
+  min-width: 32px;
+  height: 32px;
+  line-height: 32px;
+  border-radius: var(--rc-radius-md);
+  border: 1px solid transparent;
+  background: transparent;
+  transition: background-color 0.15s ease, color 0.15s ease;
   margin: 0;
 }
 
 .ant-pagination .ant-pagination-item a {
-  color: #8c8c8c;
+  color: var(--rc-text-muted);
   font-weight: 500;
-  font-size: 14px;
+  font-size: 13px;
 }
 
-/* 悬停效果 */
-.ant-pagination .ant-pagination-item:hover {
-  background: #e8eaed;
-}
-
-.ant-pagination .ant-pagination-item:hover a {
-  color: #5b8def;
-}
-
-/* 当前页 - 蓝色背景 */
-.ant-pagination .ant-pagination-item-active {
-  background: #5b8def;
-  box-shadow: 0 4px 12px rgba(91, 141, 239, 0.35);
-}
-
-.ant-pagination .ant-pagination-item-active a {
-  color: #ffffff !important;
-  font-weight: 600;
-}
-
-.ant-pagination .ant-pagination-item-active:hover {
-  background: #4a7de0;
-  box-shadow: 0 6px 16px rgba(91, 141, 239, 0.45);
-}
-
-/* 上一页/下一页按钮 */
-.ant-pagination .ant-pagination-prev,
-.ant-pagination .ant-pagination-next {
-  background: #f0f2f5;
-}
-
+.ant-pagination .ant-pagination-item:hover,
 .ant-pagination .ant-pagination-prev:hover,
 .ant-pagination .ant-pagination-next:hover {
-  background: #e8eaed;
+  background: var(--rc-surface-hover);
+}
+
+.ant-pagination .ant-pagination-item:hover a,
+.ant-pagination .ant-pagination-prev:hover button,
+.ant-pagination .ant-pagination-next:hover button {
+  color: var(--rc-text-primary);
+}
+
+/* 当前页：选中底色 + 橙色文字，不做大面积橙色填充 */
+.ant-pagination .ant-pagination-item-active,
+.ant-pagination .ant-pagination-item-active:hover {
+  background: var(--rc-surface-active);
+  border-color: var(--rc-border-highlight);
+}
+
+.ant-pagination .ant-pagination-item-active a,
+.ant-pagination .ant-pagination-item-active:hover a {
+  color: var(--rc-accent-text) !important;
+  font-weight: 600;
 }
 
 .ant-pagination .ant-pagination-prev button,
 .ant-pagination .ant-pagination-next button {
-  color: #bfbfbf;
+  color: var(--rc-text-muted);
 }
 
-.ant-pagination .ant-pagination-prev:hover button,
-.ant-pagination .ant-pagination-next:hover button {
-  color: #5b8def;
-}
-
-/* 禁用状态 */
 .ant-pagination .ant-pagination-disabled,
 .ant-pagination .ant-pagination-disabled:hover {
-  background: #f5f5f5;
+  background: transparent;
   cursor: not-allowed;
 }
 
 .ant-pagination .ant-pagination-disabled button {
-  color: #d9d9d9 !important;
-}
-
-/* 省略号样式 */
-.ant-pagination .ant-pagination-jump-prev,
-.ant-pagination .ant-pagination-jump-next {
-  background: #f0f2f5;
+  color: var(--rc-text-faint) !important;
+  opacity: 0.5;
 }
 
 .ant-pagination .ant-pagination-jump-prev .ant-pagination-item-ellipsis,
 .ant-pagination .ant-pagination-jump-next .ant-pagination-item-ellipsis {
-  color: #bfbfbf;
+  color: var(--rc-text-faint);
 }
 
-/* Small 尺寸调整 */
 .ant-pagination.ant-pagination-mini .ant-pagination-item,
 .ant-pagination.ant-pagination-mini .ant-pagination-prev,
 .ant-pagination.ant-pagination-mini .ant-pagination-next,
 .ant-pagination.ant-pagination-mini .ant-pagination-jump-prev,
 .ant-pagination.ant-pagination-mini .ant-pagination-jump-next {
-  min-width: 36px;
-  height: 36px;
-  line-height: 36px;
-  border-radius: 10px;
-}
-
-/* ===== 暗色模式分页样式 - 与插件统一 ===== */
-.dark .ant-pagination .ant-pagination-item,
-.dark .ant-pagination .ant-pagination-prev,
-.dark .ant-pagination .ant-pagination-next,
-.dark .ant-pagination .ant-pagination-jump-prev,
-.dark .ant-pagination .ant-pagination-jump-next {
-  background: #1f1f1f;
-}
-
-.dark .ant-pagination .ant-pagination-item a {
-  color: #9e9e9e;
-}
-
-.dark .ant-pagination .ant-pagination-item:hover {
-  background: #2a2a2a;
-}
-
-.dark .ant-pagination .ant-pagination-item:hover a {
-  color: #4a8cff;
-}
-
-.dark .ant-pagination .ant-pagination-item-active {
-  background: #4a8cff;
-  box-shadow: 0 4px 12px rgba(74, 140, 255, 0.4);
-}
-
-.dark .ant-pagination .ant-pagination-item-active a {
-  color: #ffffff !important;
-}
-
-.dark .ant-pagination .ant-pagination-item-active:hover {
-  background: #5a9aff;
-}
-
-.dark .ant-pagination .ant-pagination-prev,
-.dark .ant-pagination .ant-pagination-next {
-  background: #1f1f1f;
-}
-
-.dark .ant-pagination .ant-pagination-prev:hover,
-.dark .ant-pagination .ant-pagination-next:hover {
-  background: #2a2a2a;
-}
-
-.dark .ant-pagination .ant-pagination-prev button,
-.dark .ant-pagination .ant-pagination-next button {
-  color: #5c5c5c;
-}
-
-.dark .ant-pagination .ant-pagination-prev:hover button,
-.dark .ant-pagination .ant-pagination-next:hover button {
-  color: #4a8cff;
-}
-
-.dark .ant-pagination .ant-pagination-disabled,
-.dark .ant-pagination .ant-pagination-disabled:hover {
-  background: #0f0f0f;
-}
-
-.dark .ant-pagination .ant-pagination-disabled button {
-  color: #3f3f3f !important;
-}
-
-.dark .ant-pagination .ant-pagination-jump-prev,
-.dark .ant-pagination .ant-pagination-jump-next {
-  background: #1f1f1f;
-}
-
-.dark .ant-pagination .ant-pagination-jump-prev .ant-pagination-item-ellipsis,
-.dark .ant-pagination .ant-pagination-jump-next .ant-pagination-item-ellipsis {
-  color: #5c5c5c;
+  min-width: 28px;
+  height: 28px;
+  line-height: 28px;
 }

@@ -3,6 +3,7 @@ import { ref, computed, nextTick, onMounted, onUnmounted, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 
 import SearchBar from './SearchBar.vue'
+import BrandMark from './BrandMark.vue'
 import HeaderUser from './HeaderUser.vue'
 import HeaderGeekModeTrigger from './HeaderGeekModeTrigger.vue'
 
@@ -38,7 +39,7 @@ const currentCategoryTitle = computed(() => {
 
 const keyword = ref('')
 const searchBarRef = ref(null)
-const searchPlaceholder = ref('搜索插件与命令...')
+const searchPlaceholder = ref('搜索插件、命令与文件')
 const searchFocusTimers = new Set()
 
 const isDevelopment = import.meta.env.DEV
@@ -48,12 +49,9 @@ const isWindowsPlatform = ref(
 )
 
 // 诊断/调试信息显示逻辑：
-// 1. 如果是原生壳子环境(isNative)，严格遵循后端返回的 debug 标识
-// 2. 如果是纯网页开发环境(Mock)，遵循 Vite 的开发模式标识
-const showDebugInfo = computed(() => {
-  if (isNative) return isNativeDebug.value
-  return isDevelopment
-})
+// 只在「浏览器 + Mock 接口」的开发模式下提示：此时看到的是模拟数据，需要提醒。
+// 运行在客户端里时前端必然连着原生接口，常驻「Native」标记没有信息量，不再显示。
+const showDebugInfo = computed(() => !isNative && isDevelopment)
 
 const showDiagnostics = computed(() => {
   if (isNative) return isNativeDebug.value
@@ -155,28 +153,29 @@ onUnmounted(() => {
   <header
     class="border-b select-none flex items-center justify-between"
     style="
-      height: 46px;
-      background: var(--rc-surface-translucent, var(--rc-surface));
-      border-color: var(--rc-border-subtle, var(--rc-border));
-      backdrop-filter: blur(24px) saturate(180%);
-      -webkit-backdrop-filter: blur(24px) saturate(180%);
+      height: 52px;
+      background: var(--rc-head);
+      border-color: var(--rc-border);
       -webkit-app-region: drag;
     "
   >
     <div
       class="h-full w-full flex items-center justify-between"
       :style="{
-        paddingLeft: isMacPlatform ? '78px' : '14px',
+        // macOS：红绿灯 x=18、3×12px + 2×8px 间距，再留 16px 到侧栏按钮（与设计稿一致）
+        paddingLeft: isMacPlatform ? '86px' : '14px',
         paddingRight: isWindowsPlatform ? '142px' : '14px'
       }"
     >
       <!-- Logo与侧栏折叠控制区域 -->
-      <div class="flex items-center" style="gap: 8px; -webkit-app-region: no-drag">
+      <div class="flex items-center" style="gap: 10px; -webkit-app-region: no-drag">
         <!-- 侧栏折叠/展开切换按钮 (macOS 风格) -->
         <button
           type="button"
           class="sidebar-toggle-btn"
           :class="{ 'is-active': !isSidebarCollapsed }"
+          :aria-label="isSidebarCollapsed ? '展开侧边栏' : '收起侧边栏'"
+          :aria-pressed="!isSidebarCollapsed"
           :title="
             isSidebarCollapsed
               ? (isMacPlatform ? '展开侧边栏 (⌘B)' : '展开侧边栏 (Ctrl+B)')
@@ -184,17 +183,11 @@ onUnmounted(() => {
           "
           @click="toggleSidebar"
         >
-          <svg
-            class="w-4 h-4"
-            viewBox="0 0 24 24"
-            fill="none"
-            stroke="currentColor"
-            stroke-width="2"
-            stroke-linecap="round"
-            stroke-linejoin="round"
-          >
-            <rect x="3" y="3" width="18" height="18" rx="2" ry="2" />
-            <line x1="9" y1="3" x2="9" y2="21" />
+          <!-- 侧栏状态图标：展开时左栏填充，收起时只保留细线 -->
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <rect x="3" y="4.5" width="18" height="15" rx="3" />
+            <rect class="sidebar-pane" x="5.6" y="7.1" width="3.6" height="9.8" rx="1.1" stroke="none" />
+            <path d="M11.5 4.5v15" />
           </svg>
         </button>
 
@@ -202,14 +195,12 @@ onUnmounted(() => {
         <button
           @click="goHome"
           class="flex items-center hover:opacity-85 transition-opacity"
-          style="gap: 6px; cursor: pointer"
+          style="gap: 10px; cursor: pointer"
         >
-          <div class="w-6 h-6 rounded-lg bg-[var(--rc-accent)] flex items-center justify-center text-white font-bold text-xs shadow-sm">
-            Z
-          </div>
+          <BrandMark :size="20" />
           <span
-            class="font-semibold text-sm tracking-tight"
-            style="color: var(--rc-text-primary)"
+            class="font-semibold text-sm"
+            style="color: var(--rc-text-primary); letter-spacing: -0.02em"
           >
             ZTools
           </span>
@@ -222,7 +213,7 @@ onUnmounted(() => {
           @click="toggleSidebar"
           title="点击展开侧边栏"
         >
-          <span class="w-1.5 h-1.5 rounded-full bg-[var(--rc-accent)]"></span>
+          <span class="breadcrumb-marker"></span>
           <span>{{ currentCategoryTitle }}</span>
         </div>
 
@@ -241,9 +232,9 @@ onUnmounted(() => {
             color: 'var(--rc-text-muted)',
             border: '1px solid var(--rc-border)'
           }"
-          :title="isNative ? '已连接 ZTools 原生接口' : '使用 Mock API（开发模式）'"
+          title="当前使用 Mock 接口（浏览器开发模式），数据为模拟数据"
         >
-          {{ isNative ? 'Native' : 'Mock' }}
+          Mock
         </span>
       </div>
 
@@ -282,26 +273,33 @@ onUnmounted(() => {
   justify-content: center;
   width: 28px;
   height: 28px;
-  border-radius: var(--rc-radius-md, 6px);
-  color: var(--rc-text-secondary);
+  border-radius: var(--rc-radius-md, 8px);
+  color: var(--rc-text-muted);
   background: transparent;
-  border: 1px solid transparent;
+  border: none;
   cursor: pointer;
-  transition: all 0.15s ease;
+  transition: background-color 0.15s ease, color 0.15s ease;
 }
 
 .sidebar-toggle-btn:hover {
   background-color: var(--rc-surface-hover);
   color: var(--rc-text-primary);
-  border-color: var(--rc-border-subtle);
 }
 
-.sidebar-toggle-btn:active {
-  transform: scale(0.95);
+.sidebar-toggle-btn:focus-visible {
+  outline: none;
+  box-shadow: var(--rc-focus-ring);
 }
 
-.sidebar-toggle-btn.is-active {
-  color: var(--rc-text-primary);
+.sidebar-toggle-btn .sidebar-pane {
+  fill: currentColor;
+  opacity: 0;
+  transition: opacity 0.15s ease;
+}
+
+/* 侧栏展开：左栏以淡色填充，表示「当前显示中」 */
+.sidebar-toggle-btn.is-active .sidebar-pane {
+  opacity: 0.35;
 }
 
 .category-breadcrumb-pill {
@@ -321,30 +319,5 @@ onUnmounted(() => {
   vertical-align: middle;
   display: inline-flex;
   align-items: center;
-}
-
-.contact-btn {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  height: 32px;
-  padding: 0 12px;
-  border: 1px solid #cfe0ff;
-  border-radius: 10px;
-  background: #f4f8ff;
-  color: #2f6fee;
-  font-size: var(--font-size-body-s);
-  font-weight: var(--font-weight-semibold);
-  cursor: pointer;
-  transition: all var(--duration-fast) var(--easing-ease);
-}
-
-.contact-btn:hover {
-  border-color: #8db4ff;
-  background: #edf4ff;
-}
-
-.contact-btn:active {
-  transform: scale(0.97);
 }
 </style>

@@ -274,7 +274,6 @@ watch(dialogVisible, (newVal) => {
   justify-content: center;
   font-size: 22px;
   color: white;
-  box-shadow: 0 4px 12px rgba(7, 193, 96, 0.3);
 }
 
 .login-title {
@@ -350,18 +349,18 @@ watch(dialogVisible, (newVal) => {
 .error-icon {
   width: 48px;
   height: 48px;
-  background: linear-gradient(135deg, #ff6b6b 0%, #ee5a5a 100%);
+  background: var(--rc-error-subtle);
   border-radius: 50%;
   display: flex;
   align-items: center;
   justify-content: center;
   font-size: 24px;
-  color: white;
+  color: var(--rc-error);
 }
 
 .error-text {
   font-size: 13px;
-  color: #ee5a5a;
+  color: var(--rc-error);
   margin: 0;
 }
 
@@ -436,7 +435,7 @@ watch(dialogVisible, (newVal) => {
   align-items: center;
   justify-content: center;
   font-size: 28px;
-  color: white;
+  color: inherit;
   animation: scaleIn 0.4s cubic-bezier(0.34, 1.56, 0.64, 1);
 }
 
@@ -450,13 +449,13 @@ watch(dialogVisible, (newVal) => {
 }
 
 .overlay-icon.success {
-  background: linear-gradient(135deg, #4ed7c2 0%, #34d399 100%);
-  box-shadow: 0 8px 24px rgba(78, 215, 194, 0.3);
+  background: var(--rc-success-subtle);
+  color: var(--rc-success);
 }
 
 .overlay-icon.warning {
-  background: linear-gradient(135deg, #ffaf41 0%, #ff9500 100%);
-  box-shadow: 0 8px 24px rgba(255, 175, 65, 0.3);
+  background: var(--rc-warning-subtle);
+  color: var(--rc-warning);
 }
 
 .overlay-text {
@@ -477,20 +476,19 @@ watch(dialogVisible, (newVal) => {
   align-items: center;
   gap: 6px;
   padding: 10px 20px;
-  background: linear-gradient(135deg, #4a8cff 0%, #2d71ff 100%);
+  background: var(--rc-accent);
   border: none;
   border-radius: 20px;
   font-size: 13px;
   font-weight: 500;
-  color: white;
+  color: var(--rc-accent-contrast);
   cursor: pointer;
   transition: all 0.3s ease;
-  box-shadow: 0 4px 12px rgba(45, 113, 255, 0.3);
 }
 
 .refresh-btn:hover {
   transform: translateY(-2px);
-  box-shadow: 0 6px 16px rgba(45, 113, 255, 0.4);
+  background: var(--rc-accent-hover);
 }
 
 /* 底部提示 */
@@ -527,7 +525,7 @@ watch(dialogVisible, (newVal) => {
 
 .device-login-link {
   background: transparent;
-  border: 1px dashed var(--color-gray-300, #d9d9d9);
+  border: 1px dashed var(--color-gray-300);
   font-size: 11px;
   color: var(--zt-text-secondary);
   cursor: pointer;
@@ -542,9 +540,9 @@ watch(dialogVisible, (newVal) => {
 
 .device-login-link:hover:not(:disabled) {
   opacity: 1;
-  color: var(--zt-primary, #1677ff);
-  border-color: var(--zt-primary, #1677ff);
-  background: var(--color-gray-100, rgba(0, 0, 0, 0.04));
+  color: var(--rc-accent-text);
+  border-color: var(--rc-accent-text);
+  background: var(--color-gray-100);
 }
 
 .device-login-link:disabled {

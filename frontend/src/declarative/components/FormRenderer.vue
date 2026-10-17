@@ -11,11 +11,11 @@
         <div class="flex items-center justify-between">
           <label
             :for="field.props?.id"
-            class="font-medium text-slate-200 flex items-center gap-1.5"
+            class="font-medium text-[var(--rc-text-primary)] flex items-center gap-1.5"
           >
             <span>{{ field.props?.title || field.props?.id }}</span>
           </label>
-          <span v-if="field.props?.info" class="text-xs text-slate-400">
+          <span v-if="field.props?.info" class="text-xs text-[var(--rc-text-muted)]">
             {{ field.props.info }}
           </span>
         </div>
@@ -27,11 +27,11 @@
             type="text"
             :value="formValues[field.props.id] ?? field.props?.defaultValue ?? ''"
             :placeholder="field.props?.placeholder"
-            class="w-full bg-white/5 border rounded-xl px-3.5 py-2.5 text-slate-100 placeholder-slate-500 outline-none transition-all duration-150"
+            class="w-full bg-[var(--rc-surface-hover)] border rounded-xl px-3.5 py-2.5 text-[var(--rc-text-primary)] placeholder:text-[var(--rc-text-faint)] outline-none transition-all duration-150"
             :class="[
               field.props?.error
-                ? 'border-rose-500/50 focus:border-rose-400 focus:ring-2 focus:ring-rose-500/20'
-                : 'border-white/10 focus:border-sky-400 focus:ring-2 focus:ring-sky-500/20'
+                ? 'border-[var(--rc-error)] focus:border-[var(--rc-error)] focus:ring-2 focus:ring-[var(--rc-error-subtle)]'
+                : 'border-[var(--rc-border)] focus:border-[var(--rc-accent)] focus:ring-2 focus:ring-[var(--rc-accent-subtle)]'
             ]"
             @input="e => updateFieldValue(field, e.target.value)"
           />
@@ -44,11 +44,11 @@
             rows="5"
             :value="formValues[field.props.id] ?? field.props?.defaultValue ?? ''"
             :placeholder="field.props?.placeholder"
-            class="w-full bg-white/5 border rounded-xl px-3.5 py-2.5 text-slate-100 placeholder-slate-500 outline-none transition-all duration-150 resize-y font-mono text-xs leading-relaxed"
+            class="w-full bg-[var(--rc-surface-hover)] border rounded-xl px-3.5 py-2.5 text-[var(--rc-text-primary)] placeholder:text-[var(--rc-text-faint)] outline-none transition-all duration-150 resize-y font-mono text-xs leading-relaxed"
             :class="[
               field.props?.error
-                ? 'border-rose-500/50 focus:border-rose-400 focus:ring-2 focus:ring-rose-500/20'
-                : 'border-white/10 focus:border-sky-400 focus:ring-2 focus:ring-sky-500/20'
+                ? 'border-[var(--rc-error)] focus:border-[var(--rc-error)] focus:ring-2 focus:ring-[var(--rc-error-subtle)]'
+                : 'border-[var(--rc-border)] focus:border-[var(--rc-accent)] focus:ring-2 focus:ring-[var(--rc-accent-subtle)]'
             ]"
             @input="e => updateFieldValue(field, e.target.value)"
           />
@@ -60,12 +60,12 @@
             :id="field.props?.id"
             type="checkbox"
             :checked="formValues[field.props.id] ?? field.props?.defaultValue ?? false"
-            class="w-4 h-4 rounded border-white/20 bg-white/5 text-sky-500 focus:ring-sky-500 focus:ring-offset-0 cursor-pointer"
+            class="w-4 h-4 rounded border-[var(--rc-border-highlight)] bg-[var(--rc-surface-hover)] text-[var(--rc-accent-text)] focus:ring-[var(--rc-accent-subtle)] focus:ring-offset-0 cursor-pointer"
             @change="e => updateFieldValue(field, e.target.checked)"
           />
           <label
             :for="field.props?.id"
-            class="text-sm text-slate-300 cursor-pointer select-none"
+            class="text-sm text-[var(--rc-text-secondary)] cursor-pointer select-none"
           >
             {{ field.props?.label }}
           </label>
@@ -76,14 +76,14 @@
           <select
             :id="field.props?.id"
             :value="formValues[field.props.id] ?? field.props?.defaultValue"
-            class="w-full bg-slate-800/80 border border-white/10 rounded-xl px-3.5 py-2.5 text-slate-100 outline-none focus:border-sky-400 cursor-pointer transition-all"
+            class="w-full bg-[var(--rc-surface)] border border-[var(--rc-border)] rounded-xl px-3.5 py-2.5 text-[var(--rc-text-primary)] outline-none focus:border-[var(--rc-accent)] cursor-pointer transition-all"
             @change="e => updateFieldValue(field, e.target.value)"
           >
             <option
               v-for="(item, iIdx) in getDropdownItems(field)"
               :key="iIdx"
               :value="item.props?.value"
-              class="bg-slate-800 text-slate-200"
+              class="bg-[var(--rc-surface)] text-[var(--rc-text-primary)]"
             >
               {{ item.props?.title }}
             </option>
@@ -91,7 +91,7 @@
         </div>
 
         <!-- 字段校验错误提示 -->
-        <div v-if="field.props?.error" class="text-xs text-rose-400 flex items-center gap-1 mt-1">
+        <div v-if="field.props?.error" class="text-xs text-[var(--rc-error)] flex items-center gap-1 mt-1">
           <svg class="w-3.5 h-3.5 fill-current" viewBox="0 0 20 20">
             <path fill-rule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7 4a1 1 0 11-2 0 1 1 0 012 0zm-1-9a1 1 0 00-1 1v4a1 1 0 102 0V6a1 1 0 00-1-1z" clip-rule="evenodd" />
           </svg>

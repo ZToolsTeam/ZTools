@@ -1101,13 +1101,11 @@ describe("M1.5 Core Built-in Suites Integration & Chaos Resilience", () => {
   // 8. Notes: Multi-Note Lifecycle, Live Markdown & Full Keyboard Flow
   // =========================================================================
   describe("Notes: Multi-Note Lifecycle, Live Markdown & Full Keyboard Flow", () => {
-    test("Happy Path: default sample notes, stats calculation and auto title derivation", async () => {
-      // 1. 默认自动初始化精选便签
+    test("Happy Path: empty by default, stats calculation and auto title derivation", async () => {
+      // 1. 首次使用没有任何便签，不预置示例内容
       const initialNotes = await getNotes();
-      assert.ok(initialNotes.length >= 4);
-
-      // 验证置顶优先排序规则 (Pinned First)
-      assert.equal(initialNotes[0].pinned, true);
+      assert.deepEqual(initialNotes, []);
+      assert.equal(await LocalStorage.getItem(NOTES_STORAGE_KEY), undefined);
 
       // 2. 字数、行数与阅读耗时统计验证
       const stats = calculateNoteStats("# 核心标题\n\n这是第一段文字。\n\n- 任务 1\n- 任务 2\n");
@@ -1184,8 +1182,24 @@ describe("M1.5 Core Built-in Suites Integration & Chaos Resilience", () => {
       assert.match(exported, /---\n\n# ZTools 架构设计纲领/);
     });
 
-    test("Search & Filter: keyword fuzzy search in title, body, and tags with pinned filter tab", async () => {
+    test("Migration: untouched seeded samples from old versions are removed, edited samples and user notes are kept", async () => {
+      const edited = { ...SAMPLE_NOTES[1], content: SAMPLE_NOTES[1].content + "\n我加的一行" };
+      const mine = { ...SAMPLE_NOTES[0], id: "note-mine", title: "我的便签" };
+      const stored = SAMPLE_NOTES.map(n => (n.id === edited.id ? edited : n)).concat([mine]);
+      await LocalStorage.setItem(NOTES_STORAGE_KEY, JSON.stringify(stored));
       const list = await getNotes();
+      assert.deepEqual(list.map(n => n.id).sort(), [edited.id, "note-mine"].sort());
+      // 清理结果已写回存储
+      const again = JSON.parse(await LocalStorage.getItem(NOTES_STORAGE_KEY));
+      assert.equal(again.length, 2);
+    });
+
+    test("Search & Filter: keyword fuzzy search in title, body, and tags with pinned filter tab", async () => {
+      // 示例便签只作测试数据；标题加个空格，避免被当成旧版本预置的示例清理掉
+      await LocalStorage.setItem(NOTES_STORAGE_KEY, JSON.stringify(SAMPLE_NOTES.map(n => ({ ...n, title: n.title + " " }))));
+      const list = await getNotes();
+      // 置顶优先排序
+      assert.equal(list[0].pinned, true);
 
       // 1. 按标题关键字检索
       const titleMatches = filterNotes(list, "架构设计");
@@ -1206,6 +1220,20 @@ describe("M1.5 Core Built-in Suites Integration & Chaos Resilience", () => {
       const pinnedOnly = filterNotes(list, "", "pinned");
       assert.ok(pinnedOnly.length >= 2);
       assert.ok(pinnedOnly.every(n => n.pinned));
+    });
+
+    test("Fault Injection: deleting the last note stays empty; corrupt storage returns empty without overwriting", async () => {
+      const only = await saveNote({ title: "唯一一条", content: "内容" });
+      assert.equal((await getNotes()).length, 1);
+      assert.equal(await deleteNote(only.id), true);
+      assert.deepEqual(await getNotes(), []);
+
+      await LocalStorage.setItem(NOTES_STORAGE_KEY, "{not json");
+      assert.deepEqual(await getNotes(), []);
+      assert.equal(await LocalStorage.getItem(NOTES_STORAGE_KEY), "{not json");
+
+      await LocalStorage.setItem(NOTES_STORAGE_KEY, JSON.stringify({ not: "an array" }));
+      assert.deepEqual(await getNotes(), []);
     });
 
     test("Chaos & Fault Injection: 50KB ultra-large note, non-existent ID resilience, special characters and rapid concurrency", async () => {

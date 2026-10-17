@@ -4,13 +4,13 @@
       <div
         v-for="toast in toasts"
         :key="toast.id"
-        class="declarative-mica-shell flex items-center gap-3 px-4 py-3 rounded-xl shadow-xl pointer-events-auto border border-white/10 text-sm max-w-sm"
+        class="declarative-mica-shell flex items-center gap-3 px-4 py-3 rounded-xl shadow-xl pointer-events-auto border border-[var(--rc-border)] text-sm max-w-sm"
       >
         <!-- 状态图标 -->
         <span class="flex-shrink-0">
           <svg
             v-if="toast.style === 'SUCCESS'"
-            class="w-5 h-5 text-emerald-400"
+            class="w-5 h-5 text-[var(--rc-success)]"
             fill="none"
             viewBox="0 0 24 24"
             stroke="currentColor"
@@ -20,7 +20,7 @@
           </svg>
           <svg
             v-else-if="toast.style === 'FAILURE'"
-            class="w-5 h-5 text-rose-400"
+            class="w-5 h-5 text-[var(--rc-error)]"
             fill="none"
             viewBox="0 0 24 24"
             stroke="currentColor"
@@ -30,7 +30,7 @@
           </svg>
           <svg
             v-else
-            class="w-5 h-5 text-sky-400 animate-spin"
+            class="w-5 h-5 text-[var(--rc-accent-text)] animate-spin"
             fill="none"
             viewBox="0 0 24 24"
           >
@@ -41,8 +41,8 @@
 
         <!-- 文本 -->
         <div class="flex-1 min-w-0">
-          <div class="font-medium text-slate-100 truncate">{{ toast.title }}</div>
-          <div v-if="toast.message" class="text-xs text-slate-400 mt-0.5 break-words">
+          <div class="font-medium text-[var(--rc-text-primary)] truncate">{{ toast.title }}</div>
+          <div v-if="toast.message" class="text-xs text-[var(--rc-text-muted)] mt-0.5 break-words">
             {{ toast.message }}
           </div>
         </div>

@@ -6,6 +6,7 @@
   "type": "module",
   "scripts": {
     "dev": "npm --prefix electron-client start",
+    "pretest": "node packages/declarative-ui/scripts/ensure-dist.mjs",
     "test": "node --test tests/e2e-cross-module-resilience.test.mjs",
     "test:anti-reverse": "node --test tests/anti-reverse-resilience.test.mjs",
     "test:winget": "node --test tests/publish-winget.test.mjs",
@@ -13,6 +14,7 @@
     "test:dx": "node --test tests/dx-create-plugin.test.mjs",
     "create-plugin": "node scripts/create-plugin.mjs",
     "scan-plugins": "node scripts/scan-plugin-security.mjs",
+    "changelog": "node scripts/update-changelog.mjs",
     "release": "node scripts/sync-release.mjs all",
     "release:oss": "node scripts/sync-release.mjs oss",
     "release:extensions": "node scripts/sync-release.mjs extensions",
@@ -21,7 +23,8 @@
     "release:winget": "node scripts/publish-winget.mjs",
     "release:winget:dry-run": "node scripts/publish-winget.mjs --dry-run",
     "start:mac": "npm --prefix electron-client run start:mac",
-    "package:mac": "npm --prefix electron-client run package:app:darwin:universal --"
+    "package:mac": "npm --prefix electron-client run package:app:darwin:universal --",
+    "package:mac:dmg": "npm --prefix electron-client run package:dmg:darwin --"
   },
   "workspaces": [
     "packages/*"

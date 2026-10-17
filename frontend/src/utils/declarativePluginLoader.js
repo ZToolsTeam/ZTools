@@ -224,7 +224,7 @@ export function transpileEsmToCjs(sourceCode) {
 
   // 1. import React, { a, b as c } from "mod"
   code = code.replace(
-    /^\s*import\s+([A-Za-z_$][\w$]*)\s*,\s*\{([^}]*)\}\s*from\s*['"]([^'"]+)['"]\s*;?/gm,
+    /^[ \t]*import\s+([A-Za-z_$][\w$]*)\s*,\s*\{([^}]*)\}\s*from\s*['"]([^'"]+)['"][ \t]*;?/gm,
     (_, defaultName, namedBlock, modName) => {
       const normalizedNamed = namedBlock.replace(/\bas\b/g, ':')
       return `const __mod_${defaultName} = require("${modName}"); const ${defaultName} = __mod_${defaultName}.default || __mod_${defaultName}; const { ${normalizedNamed} } = __mod_${defaultName};`
@@ -233,13 +233,13 @@ export function transpileEsmToCjs(sourceCode) {
 
   // 2. import * as ns from "mod"
   code = code.replace(
-    /^\s*import\s+\*\s+as\s+([A-Za-z_$][\w$]*)\s+from\s*['"]([^'"]+)['"]\s*;?/gm,
+    /^[ \t]*import\s+\*\s+as\s+([A-Za-z_$][\w$]*)\s+from\s*['"]([^'"]+)['"][ \t]*;?/gm,
     (_, nsName, modName) => `const ${nsName} = require("${modName}");`
   )
 
   // 3. import { a, b as c } from "mod" (支持跨行)
   code = code.replace(
-    /^\s*import\s*\{([\s\S]*?)\}\s*from\s*['"]([^'"]+)['"]\s*;?/gm,
+    /^[ \t]*import\s*\{([\s\S]*?)\}\s*from\s*['"]([^'"]+)['"][ \t]*;?/gm,
     (_, namedBlock, modName) => {
       const normalizedNamed = namedBlock.replace(/\bas\b/g, ':')
       return `const { ${normalizedNamed} } = require("${modName}");`
@@ -248,20 +248,20 @@ export function transpileEsmToCjs(sourceCode) {
 
   // 4. import DefaultName from "mod"
   code = code.replace(
-    /^\s*import\s+([A-Za-z_$][\w$]*)\s+from\s*['"]([^'"]+)['"]\s*;?/gm,
+    /^[ \t]*import\s+([A-Za-z_$][\w$]*)\s+from\s*['"]([^'"]+)['"][ \t]*;?/gm,
     (_, defaultName, modName) =>
       `const __mod_${defaultName} = require("${modName}"); const ${defaultName} = __mod_${defaultName}.default || __mod_${defaultName};`
   )
 
   // 5. export * from "mod"
   code = code.replace(
-    /^\s*export\s+\*\s+from\s*['"]([^'"]+)['"]\s*;?/gm,
+    /^[ \t]*export\s+\*\s+from\s*['"]([^'"]+)['"][ \t]*;?/gm,
     (_, modName) => `Object.assign(exports, require("${modName}"));`
   )
 
   // 6. export { a, b as c } from "mod"
   code = code.replace(
-    /^\s*export\s*\{([^}]*)\}\s*from\s*['"]([^'"]+)['"]\s*;?/gm,
+    /^[ \t]*export\s*\{([^}]*)\}\s*from\s*['"]([^'"]+)['"][ \t]*;?/gm,
     (_, namedBlock, modName) => {
       const pairs = namedBlock
         .split(',')
@@ -280,22 +280,22 @@ export function transpileEsmToCjs(sourceCode) {
 
   // 7. export default async function Name(...) / export default function Name(...)
   code = code.replace(
-    /^\s*export\s+default\s+(async\s+)?function\s+([A-Za-z_$][\w$]*)/gm,
+    /^[ \t]*export\s+default\s+(async\s+)?function\s+([A-Za-z_$][\w$]*)/gm,
     (_, asyncKw, fnName) => `exports.default = ${fnName}; ${asyncKw || ''}function ${fnName}`
   )
 
   // 8. export default ...
-  code = code.replace(/^\s*export\s+default\s+/gm, 'exports.default = ')
+  code = code.replace(/^[ \t]*export\s+default\s+/gm, 'exports.default = ')
 
   // 9. export async function Name(...) / export function Name(...)
   code = code.replace(
-    /^\s*export\s+(async\s+)?function\s+([A-Za-z_$][\w$]*)/gm,
+    /^[ \t]*export\s+(async\s+)?function\s+([A-Za-z_$][\w$]*)/gm,
     (_, asyncKw, fnName) => `exports.${fnName} = ${fnName}; ${asyncKw || ''}function ${fnName}`
   )
 
   // 10. export class Name (避免 class TDZ 暂时性死区，在文件尾部统一挂载到 exports)
   code = code.replace(
-    /^\s*export\s+class\s+([A-Za-z_$][\w$]*)/gm,
+    /^[ \t]*export\s+class\s+([A-Za-z_$][\w$]*)/gm,
     (_, className) => {
       exportedClasses.push(className)
       return `class ${className}`
@@ -304,12 +304,12 @@ export function transpileEsmToCjs(sourceCode) {
 
   // 11. export const/let/var Name =
   code = code.replace(
-    /^\s*export\s+(const|let|var)\s+([A-Za-z_$][\w$]*)\s*=/gm,
+    /^[ \t]*export\s+(const|let|var)\s+([A-Za-z_$][\w$]*)\s*=/gm,
     (_, declType, varName) => `${declType} ${varName} = exports.${varName} =`
   )
 
   // 12. export { a, b as c }
-  code = code.replace(/^\s*export\s*\{([^}]*)\}\s*;?/gm, (_, namedBlock) => {
+  code = code.replace(/^[ \t]*export\s*\{([^}]*)\}[ \t]*;?/gm, (_, namedBlock) => {
     const pairs = namedBlock
       .split(',')
       .map((s) => s.trim())
@@ -488,10 +488,35 @@ export async function loadInstalledDeclarativePlugin(pluginId, options = {}) {
   }
 
   const entryExports = evaluateModule(entryRelPath)
+  const requestedFeatureCode = typeof options.featureCode === 'string' ? options.featureCode.trim() : ''
 
-  let rootCommand =
-    entryExports?.default ||
-    (typeof entryExports === 'function' ? entryExports : null)
+  let rootCommand = null
+
+  if (requestedFeatureCode && entryExports && typeof entryExports === 'object') {
+    const camelCode = requestedFeatureCode.replace(/[-_]+([a-zA-Z0-9])/g, (_, ch) => ch.toUpperCase())
+    const pascalCode = camelCode ? camelCode[0].toUpperCase() + camelCode.slice(1) : ''
+    const candidates = [
+      entryExports[requestedFeatureCode],
+      camelCode ? entryExports[camelCode] : null,
+      pascalCode ? entryExports[pascalCode] : null,
+      entryExports[`${camelCode}Command`],
+      pascalCode ? entryExports[`${pascalCode}Command`] : null,
+      entryExports.commands?.[requestedFeatureCode],
+      entryExports.features?.[requestedFeatureCode]
+    ]
+    for (const candidate of candidates) {
+      if (typeof candidate === 'function') {
+        rootCommand = candidate
+        break
+      }
+    }
+  }
+
+  if (typeof rootCommand !== 'function') {
+    rootCommand =
+      entryExports?.default ||
+      (typeof entryExports === 'function' ? entryExports : null)
+  }
 
   if (typeof rootCommand !== 'function' && entryExports && typeof entryExports === 'object') {
     for (const val of Object.values(entryExports)) {
@@ -508,22 +533,78 @@ export async function loadInstalledDeclarativePlugin(pluginId, options = {}) {
     throw err
   }
 
-  const iconRel = manifest.icon ? String(manifest.icon).replace(/^\/+/, '') : 'icon.svg'
+  const matchedFeature = Array.isArray(manifest.features)
+    ? manifest.features.find((f) => f && String(f.code || '').trim() === requestedFeatureCode)
+    : null
+
+  const iconRel = (matchedFeature?.icon || manifest.icon)
+    ? String(matchedFeature?.icon || manifest.icon).replace(/^\/+/, '')
+    : 'icon.svg'
+
+  const effectiveMode = matchedFeature?.mode || manifest.mode || 'view'
+  const effectiveTitle = matchedFeature?.explain || manifest.name || pid
 
   return {
     id: manifest.id || pid,
     pluginId: manifest.id || pid,
-    name: manifest.name || pid,
-    title: manifest.name || pid,
+    featureCode: requestedFeatureCode || '',
+    name: effectiveTitle,
+    title: effectiveTitle,
     description: manifest.description || '',
     version: manifest.version || '1.0.0',
     author: typeof manifest.author === 'string' ? manifest.author : (manifest.author?.name || 'ZTools Official'),
     icon: `ztools://plugins/${encodeURIComponent(pid)}/${iconRel}`,
     faIcon: 'fa-bolt',
-    iconGradient: 'linear-gradient(135deg, #0ea5e9, #6366f1)',
+    mode: effectiveMode,
+    alias: matchedFeature?.alias || manifest.alias || '',
+    features: Array.isArray(manifest.features) ? manifest.features : [],
     isDeclarative: true,
     isInstalledDeclarative: true,
     command: rootCommand,
     manifest
+  }
+}
+
+/**
+ * 在受控沙箱中执行 mode="no-view" 的无视图极速命令
+ *
+ * @param {string} pluginId - 插件 ID
+ * @param {object} [options]
+ * @param {string} [options.featureCode] - 子命令标识
+ * @param {string} [options.query] - 当前搜索框输入文本
+ * @param {(pluginId: string, relPath: string) => Promise<string>} [options.readFile] - 测试可注入读取器
+ */
+export async function executeDeclarativeNoViewCommand(pluginId, options = {}) {
+  const loaded = await loadInstalledDeclarativePlugin(pluginId, options)
+  try {
+    const context = {
+      pluginId: loaded.pluginId,
+      featureCode: loaded.featureCode || '',
+      query: typeof options.query === 'string' ? options.query : '',
+      launchType: 'user-initiated'
+    }
+    const rawResult = await Promise.resolve(loaded.command(context))
+    let message = `${loaded.title} 已执行`
+    if (typeof rawResult === 'string' && rawResult.trim()) {
+      message = rawResult.trim()
+    } else if (rawResult && typeof rawResult === 'object') {
+      const customMsg = rawResult.message || rawResult.title || rawResult.toast
+      if (typeof customMsg === 'string' && customMsg.trim()) {
+        message = customMsg.trim()
+      }
+    }
+    return {
+      success: true,
+      pluginId: loaded.pluginId,
+      featureCode: loaded.featureCode || '',
+      title: loaded.title,
+      message,
+      result: rawResult
+    }
+  } catch (execErr) {
+    const err = new Error(`执行极速命令 [${loaded.title}] 失败: ${execErr?.message || String(execErr)}`)
+    err.code = 'NO_VIEW_EXECUTION_ERROR'
+    err.cause = execErr
+    throw err
   }
 }

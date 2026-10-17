@@ -886,7 +886,7 @@ onBeforeUnmount(() => {
   width: 72px;
   height: 72px;
   border-radius: 16px;
-  background: linear-gradient(90deg, #f0f0f0 25%, #e8e8e8 50%, #f0f0f0 75%);
+  background: linear-gradient(90deg, var(--rc-surface-subtle) 25%, var(--rc-surface-active) 50%, var(--rc-surface-subtle) 75%);
   background-size: 200% 100%;
   animation: shimmer 1.5s infinite;
 }
@@ -902,7 +902,7 @@ onBeforeUnmount(() => {
   width: 40%;
   height: 24px;
   border-radius: 6px;
-  background: linear-gradient(90deg, #f0f0f0 25%, #e8e8e8 50%, #f0f0f0 75%);
+  background: linear-gradient(90deg, var(--rc-surface-subtle) 25%, var(--rc-surface-active) 50%, var(--rc-surface-subtle) 75%);
   background-size: 200% 100%;
   animation: shimmer 1.5s infinite;
 }
@@ -911,7 +911,7 @@ onBeforeUnmount(() => {
   width: 60%;
   height: 16px;
   border-radius: 4px;
-  background: linear-gradient(90deg, #f0f0f0 25%, #e8e8e8 50%, #f0f0f0 75%);
+  background: linear-gradient(90deg, var(--rc-surface-subtle) 25%, var(--rc-surface-active) 50%, var(--rc-surface-subtle) 75%);
   background-size: 200% 100%;
   animation: shimmer 1.5s infinite;
 }
@@ -926,7 +926,7 @@ onBeforeUnmount(() => {
 .skeleton-stat {
   height: 60px;
   border-radius: 10px;
-  background: linear-gradient(90deg, #f0f0f0 25%, #e8e8e8 50%, #f0f0f0 75%);
+  background: linear-gradient(90deg, var(--rc-surface-subtle) 25%, var(--rc-surface-active) 50%, var(--rc-surface-subtle) 75%);
   background-size: 200% 100%;
   animation: shimmer 1.5s infinite;
 }
@@ -934,7 +934,7 @@ onBeforeUnmount(() => {
 .skeleton-content {
   height: 300px;
   border-radius: 16px;
-  background: linear-gradient(90deg, #f0f0f0 25%, #e8e8e8 50%, #f0f0f0 75%);
+  background: linear-gradient(90deg, var(--rc-surface-subtle) 25%, var(--rc-surface-active) 50%, var(--rc-surface-subtle) 75%);
   background-size: 200% 100%;
   animation: shimmer 1.5s infinite;
 }
@@ -965,12 +965,12 @@ onBeforeUnmount(() => {
   width: 64px;
   height: 64px;
   border-radius: 50%;
-  background: linear-gradient(135deg, #ff6b6b 0%, #ee5a5a 100%);
+  background: var(--rc-error-subtle);
   display: flex;
   align-items: center;
   justify-content: center;
   font-size: 28px;
-  color: white;
+  color: var(--rc-error);
   margin-bottom: 20px;
 }
 
@@ -991,21 +991,20 @@ onBeforeUnmount(() => {
   display: inline-flex;
   align-items: center;
   gap: 8px;
-  padding: 10px 24px;
-  background: linear-gradient(135deg, #4a8cff 0%, #2d71ff 100%);
+  height: 34px;
+  padding: 0 16px;
+  background: var(--rc-accent);
   border: none;
-  border-radius: 10px;
-  font-size: 14px;
+  border-radius: var(--rc-radius-md);
+  font-size: 13px;
   font-weight: 500;
-  color: white;
+  color: var(--rc-accent-contrast);
   cursor: pointer;
-  transition: all 0.3s ease;
-  box-shadow: 0 4px 12px rgba(45, 113, 255, 0.3);
+  transition: background-color 0.15s ease;
 }
 
 .retry-btn:hover {
-  transform: translateY(-2px);
-  box-shadow: 0 6px 16px rgba(45, 113, 255, 0.4);
+  background: var(--rc-accent-hover);
 }
 
 /* Tab 容器 */
@@ -1016,73 +1015,44 @@ onBeforeUnmount(() => {
   overflow: hidden;
 }
 
+/* 标签页：底部 2px 橙色指示条，选中态不做整块填充 */
 .tab-header {
   display: flex;
   gap: 4px;
-  padding: 10px 16px;
-  border-bottom: 1px solid var(--color-border);
-  background: var(--color-gray-50);
+  padding: 0 12px;
+  border-bottom: 1px solid var(--rc-border);
 }
 
 .tab-btn {
-  padding: 6px 16px;
+  position: relative;
+  height: 42px;
+  padding: 0 12px;
   background: transparent;
   border: none;
-  border-radius: 10px;
-  font-size: 14px;
+  font-size: 13px;
   font-weight: 500;
-  color: var(--zt-text-secondary);
+  color: var(--rc-text-muted);
   cursor: pointer;
-  transition:
-    transform 0.2s cubic-bezier(0.34, 1.56, 0.64, 1),
-    background 0.15s ease,
-    box-shadow 0.2s ease;
-  position: relative;
-  overflow: hidden;
-}
-
-.tab-btn::before {
-  content: '';
-  position: absolute;
-  inset: 0;
-  background: linear-gradient(135deg, #4a8cff 0%, #2d71ff 100%);
-  opacity: 0;
-  transform: scale(0.85);
-  transition:
-    opacity 0.2s ease,
-    transform 0.25s cubic-bezier(0.34, 1.56, 0.64, 1);
-  border-radius: 10px;
-  z-index: 0;
-}
-
-.tab-btn span {
-  position: relative;
-  z-index: 1;
+  transition: color 0.15s ease;
 }
 
 .tab-btn:hover {
-  transform: translateY(-1px);
-  background: var(--color-gray-200);
-}
-
-.tab-btn:active {
-  transform: scale(0.96);
+  color: var(--rc-text-primary);
 }
 
 .tab-btn.active {
-  color: white;
-  box-shadow: 0 4px 12px rgba(74, 140, 255, 0.25);
-  transform: translateY(-1px);
+  color: var(--rc-text-primary);
 }
 
-.tab-btn.active::before {
-  opacity: 1;
-  transform: scale(1);
-}
-
-.tab-btn.active:hover {
-  background: transparent;
-  box-shadow: 0 6px 16px rgba(74, 140, 255, 0.35);
+.tab-btn.active::after {
+  content: '';
+  position: absolute;
+  left: 12px;
+  right: 12px;
+  bottom: -1px;
+  height: 2px;
+  border-radius: 2px;
+  background: var(--rc-accent);
 }
 
 .tab-content {

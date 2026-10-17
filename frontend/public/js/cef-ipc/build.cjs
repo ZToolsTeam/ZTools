@@ -246,17 +246,14 @@ function copyToOutputDirectories(sourcePath) {
 }
 
 // 生成文件头注释
+// 不写入构建日期：产物只由源码决定，重复构建不会让已跟踪的 SDK 副本（packages/api/runtime）产生无意义改动
 function generateHeader() {
-  const now = new Date()
-  const dateStr = now.toISOString().split('T')[0]
-
   return `/**
  * ZTools API - 统一前端接口
  *
  * 这是一个自动生成的文件,请勿直接修改!
  * 如需修改,请编辑 src/ 目录下的源文件,然后重新运行 build.js
  *
- * 构建时间: ${dateStr}
  * 版本: 2.0.0
  *
  * 使用方法:

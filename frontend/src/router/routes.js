@@ -26,10 +26,11 @@ export const ROUTES = {
  * 路由工具函数
  */
 export const routeUtils = {
-  // 跳转到声明式应用页
-  toDeclarative: (pluginId) => ({
+  // 跳转到声明式应用页（支持携带状态快照与 feature 子命令查询参数）
+  toDeclarative: (pluginId, query = {}) => ({
     ...ROUTES.DECLARATIVE,
-    params: { pluginId }
+    params: { pluginId },
+    ...(query && Object.keys(query).length > 0 ? { query } : {})
   }),
 
   // 跳转到独立窗口声明式应用页

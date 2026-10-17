@@ -17,7 +17,7 @@ vi.mock('@/stores/update', () => ({
   useUpdateStore: () => storeMock
 }))
 
-import { useAppUpdate } from '../useAppUpdate'
+import { useAppUpdate, isUpdateUnsupported } from '../useAppUpdate'
 
 describe('useAppUpdate', () => {
   beforeEach(() => {
@@ -58,6 +58,23 @@ describe('useAppUpdate', () => {
       const { checkVersion } = useAppUpdate()
       await expect(checkVersion()).rejects.toThrow('网络错误')
       expect(storeMock.setError).toHaveBeenCalledWith('网络错误')
+    })
+
+    it('平台不支持应用内更新（NOT_SUPPORTED）时照常抛出，但不写入更新错误状态', async () => {
+      const unsupported = Object.assign(new Error('当前更新安装链仅支持 Windows；Mac 更新尚未验收'), { code: 'NOT_SUPPORTED' })
+      window.ztools.update.check.mockRejectedValue(unsupported)
+      const { checkVersion } = useAppUpdate()
+      await expect(checkVersion('startup')).rejects.toBe(unsupported)
+      expect(storeMock.setError).not.toHaveBeenCalled()
+    })
+  })
+
+  describe('isUpdateUnsupported', () => {
+    it('只认主进程明确声明的 NOT_SUPPORTED，其余失败仍视为错误', () => {
+      expect(isUpdateUnsupported({ code: 'NOT_SUPPORTED' })).toBe(true)
+      for (const value of [null, undefined, 'NOT_SUPPORTED', new Error('x'), { code: 'NETWORK_ERROR' }, { code: 'not_supported' }]) {
+        expect(isUpdateUnsupported(value)).toBe(false)
+      }
     })
   })
 

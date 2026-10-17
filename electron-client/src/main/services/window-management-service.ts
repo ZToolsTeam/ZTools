@@ -182,25 +182,226 @@ export const WINDOW_ACTIONS: Record<WindowActionName, WindowActionMeta> = {
   }
 }
 
+export interface WindowBounds {
+  x: number
+  y: number
+  width: number
+  height: number
+}
+
 export interface WindowActionResult {
   success: boolean
   action: WindowActionName
   title: string
-  rect?: { x: number; y: number; width: number; height: number } | undefined
+  targetWindowId?: string | undefined
+  rect?: WindowBounds | undefined
+  previousRect?: WindowBounds | undefined
   error?: string | undefined
 }
 
 export interface WindowManagementServiceOptions {
   sidecarManager?: SidecarManager | undefined
   hudService?: HudService | undefined
+  workArea?: WindowBounds | undefined
+}
+
+export interface ApplyWindowActionContext {
+  windowId?: string | undefined
+  currentBounds?: WindowBounds | undefined
+  workArea?: WindowBounds | undefined
+  isZToolsWindow?: boolean | undefined
+}
+
+/**
+ * 1:1 复刻 Raycast 原厂 Ob(cur, target) 坐标变化检测函数
+ */
+export function hasWindowBoundsChanged(a: WindowBounds, b: WindowBounds): boolean {
+  return (
+    Math.round(a.x) !== Math.round(b.x) ||
+    Math.round(a.y) !== Math.round(b.y) ||
+    Math.round(a.width) !== Math.round(b.width) ||
+    Math.round(a.height) !== Math.round(b.height)
+  )
+}
+
+/**
+ * 判断窗口句柄是否属于 ZTools 自身窗口（大主界面 MainWindow 或极客框 LauncherWindow）
+ */
+export function isZToolsInternalWindowId(windowId?: string | null): boolean {
+  if (!windowId) return false
+  const lower = String(windowId).trim().toLowerCase()
+  return (
+    lower === 'ztools' ||
+    lower.startsWith('ztools-') ||
+    lower.includes('ztools-main') ||
+    lower.includes('ztools-launcher')
+  )
 }
 
 /**
  * 窗口极速调度服务 (Window Management Service)
- * 对标 Raycast REA 15 种 Win32 分屏吸附动作与毫秒级半透明 HUD 提示
+ * 1:1 复刻 Raycast Window Management (Ob + saveWindowState / getSavedWindowState)
+ * 并适配 ZTools “小白大主界面 + 极客悬浮框”双界面下的外部目标窗口追踪 (lastExternalForegroundHwnd)
  */
 export class WindowManagementService {
-  constructor(private readonly options: WindowManagementServiceOptions = {}) {}
+  private lastExternalForegroundHwnd: string | null = null
+  private readonly currentWindowBounds = new Map<string, WindowBounds>()
+  private readonly savedWindowStates = new Map<string, WindowBounds>()
+  private readonly defaultWorkArea: WindowBounds
+
+  constructor(private readonly options: WindowManagementServiceOptions = {}) {
+    this.defaultWorkArea = options.workArea ?? { x: 0, y: 0, width: 1920, height: 1040 }
+  }
+
+  /**
+   * 记录前台活动窗口（自动过滤 ZTools 自身的主界面与悬浮框，避免小白在主界面点击分屏时误操作 ZTools 自身）
+   */
+  public recordForegroundWindow(
+    windowId: string,
+    bounds?: WindowBounds,
+    isZToolsSelf = false
+  ): string | null {
+    if (!windowId || typeof windowId !== 'string') return this.lastExternalForegroundHwnd
+    const trimmed = windowId.trim()
+    if (!trimmed || isZToolsSelf || isZToolsInternalWindowId(trimmed)) {
+      return this.lastExternalForegroundHwnd
+    }
+
+    this.lastExternalForegroundHwnd = trimmed
+    if (bounds && Number.isFinite(bounds.width) && Number.isFinite(bounds.height)) {
+      this.currentWindowBounds.set(trimmed, { ...bounds })
+    } else if (!this.currentWindowBounds.has(trimmed)) {
+      this.currentWindowBounds.set(trimmed, { x: 120, y: 100, width: 1000, height: 700 })
+    }
+    return this.lastExternalForegroundHwnd
+  }
+
+  /**
+   * 获取最近一次激活的非 ZTools 外部目标窗口句柄
+   */
+  public getLastExternalForegroundWindow(): string | null {
+    return this.lastExternalForegroundHwnd
+  }
+
+  /**
+   * 1:1 复刻 Raycast saveWindowState(windowId, bounds)
+   */
+  public saveWindowState(windowId: string, bounds: WindowBounds): void {
+    if (!windowId) return
+    this.savedWindowStates.set(windowId, {
+      x: Math.round(bounds.x),
+      y: Math.round(bounds.y),
+      width: Math.round(bounds.width),
+      height: Math.round(bounds.height)
+    })
+  }
+
+  /**
+   * 1:1 复刻 Raycast getSavedWindowState(windowId)
+   */
+  public getSavedWindowState(windowId: string): WindowBounds | undefined {
+    if (!windowId) return undefined
+    const state = this.savedWindowStates.get(windowId)
+    return state ? { ...state } : undefined
+  }
+
+  /**
+   * 获取窗口当前已知坐标
+   */
+  public getCurrentWindowBounds(windowId: string): WindowBounds | undefined {
+    if (!windowId) return undefined
+    const b = this.currentWindowBounds.get(windowId)
+    return b ? { ...b } : undefined
+  }
+
+  /**
+   * 根据分屏动作计算目标窗口坐标
+   */
+  public computeTargetBounds(
+    action: WindowActionName,
+    cur: WindowBounds,
+    workArea: WindowBounds = this.defaultWorkArea
+  ): WindowBounds {
+    const { x: wx, y: wy, width: ww, height: wh } = workArea
+    const halfW = Math.floor(ww / 2)
+    const halfH = Math.floor(wh / 2)
+    const thirdW = Math.floor(ww / 3)
+    const twoThirdsW = ww - thirdW
+
+    switch (action) {
+      case 'left-half':
+        return { x: wx, y: wy, width: halfW, height: wh }
+      case 'right-half':
+        return { x: wx + halfW, y: wy, width: ww - halfW, height: wh }
+      case 'top-half':
+        return { x: wx, y: wy, width: ww, height: halfH }
+      case 'bottom-half':
+        return { x: wx, y: wy + halfH, width: ww, height: wh - halfH }
+      case 'top-left':
+        return { x: wx, y: wy, width: halfW, height: halfH }
+      case 'top-right':
+        return { x: wx + halfW, y: wy, width: ww - halfW, height: halfH }
+      case 'bottom-left':
+        return { x: wx, y: wy + halfH, width: halfW, height: wh - halfH }
+      case 'bottom-right':
+        return { x: wx + halfW, y: wy + halfH, width: ww - halfW, height: wh - halfH }
+      case 'first-third':
+        return { x: wx, y: wy, width: thirdW, height: wh }
+      case 'center-third':
+        return { x: wx + thirdW, y: wy, width: thirdW, height: wh }
+      case 'last-third':
+        return { x: wx + 2 * thirdW, y: wy, width: ww - 2 * thirdW, height: wh }
+      case 'first-two-thirds':
+        return { x: wx, y: wy, width: twoThirdsW, height: wh }
+      case 'last-two-thirds':
+        return { x: wx + thirdW, y: wy, width: twoThirdsW, height: wh }
+      case 'maximize':
+        return { x: wx, y: wy, width: ww, height: wh }
+      case 'center': {
+        const w = Math.min(cur.width, ww)
+        const h = Math.min(cur.height, wh)
+        return {
+          x: wx + Math.round((ww - w) / 2),
+          y: wy + Math.round((wh - h) / 2),
+          width: w,
+          height: h
+        }
+      }
+      case 'reasonable-size': {
+        const w = Math.round(ww * 0.6)
+        const h = Math.round(wh * 0.8)
+        return {
+          x: wx + Math.round((ww - w) / 2),
+          y: wy + Math.round((wh - h) / 2),
+          width: w,
+          height: h
+        }
+      }
+      case 'make-larger': {
+        const w = Math.min(ww, cur.width + 100)
+        const h = Math.min(wh, cur.height + 100)
+        return {
+          x: Math.max(wx, cur.x - 50),
+          y: Math.max(wy, cur.y - 50),
+          width: w,
+          height: h
+        }
+      }
+      case 'make-smaller': {
+        const w = Math.max(300, cur.width - 100)
+        const h = Math.max(200, cur.height - 100)
+        return {
+          x: cur.x + 50,
+          y: cur.y + 50,
+          width: w,
+          height: h
+        }
+      }
+      case 'restore':
+      default:
+        return { ...cur }
+    }
+  }
 
   /**
    * 标准化动作名称（支持 kebab-case 与 snake_case 互转）
@@ -221,7 +422,10 @@ export class WindowManagementService {
   /**
    * 应用窗口排版动作并触发毫秒级半透明 HUD 提示
    */
-  public async applyAction(actionName: string): Promise<WindowActionResult> {
+  public async applyAction(
+    actionName: string,
+    context: ApplyWindowActionContext = {}
+  ): Promise<WindowActionResult> {
     const normalized = this.normalizeActionName(actionName)
     if (!normalized) {
       return {
@@ -232,18 +436,97 @@ export class WindowManagementService {
       }
     }
 
-    const meta = WINDOW_ACTIONS[normalized]
-    let resultRect: { x: number; y: number; width: number; height: number } | undefined
+    // 解析真实目标窗口（若当前传入的是 ZTools 主界面或未传，自动回退至 lastExternalForegroundHwnd）
+    let targetWindowId = context.windowId?.trim() || ''
+    if (!targetWindowId || context.isZToolsWindow || isZToolsInternalWindowId(targetWindowId)) {
+      targetWindowId = this.lastExternalForegroundHwnd || 'external-active-window'
+    } else {
+      this.lastExternalForegroundHwnd = targetWindowId
+    }
 
-    // 1. 尝试通过 ztools-uiaccess 预编译侧车执行原生 Win32 排版
-    if (this.options.sidecarManager) {
-      const res = await this.options.sidecarManager.manageWindow(normalized)
-      if (res && res.success) {
-        resultRect = res.rect
+    if (context.currentBounds) {
+      this.currentWindowBounds.set(targetWindowId, { ...context.currentBounds })
+    }
+
+    const currentBounds: WindowBounds = this.currentWindowBounds.get(targetWindowId) ?? {
+      x: 120,
+      y: 100,
+      width: 1000,
+      height: 700
+    }
+    const workArea = context.workArea ?? this.defaultWorkArea
+    const meta = WINDOW_ACTIONS[normalized]
+
+    // Raycast 1:1 Restore 动作处理 (tx 函数逻辑)
+    if (normalized === 'restore') {
+      const savedBounds = this.getSavedWindowState(targetWindowId)
+      if (!savedBounds) {
+        const errMsg = '未找到该窗口的上一位置状态 (No previous window state)'
+        if (this.options.hudService) {
+          try {
+            void this.options.hudService.showHUD(errMsg, {
+              icon: meta.icon,
+              durationMs: 1200
+            })
+          } catch {
+            // ignore
+          }
+        }
+        return {
+          success: false,
+          action: 'restore',
+          title: meta.title,
+          targetWindowId,
+          error: errMsg
+        }
+      }
+
+      // 将还原前的当前位置再次保存，以支持连续按两次 Restore 来回切换
+      if (hasWindowBoundsChanged(currentBounds, savedBounds)) {
+        this.saveWindowState(targetWindowId, currentBounds)
+      }
+      this.currentWindowBounds.set(targetWindowId, { ...savedBounds })
+
+      if (this.options.sidecarManager) {
+        await this.options.sidecarManager.manageWindow('restore').catch(() => null)
+      }
+
+      if (this.options.hudService) {
+        try {
+          void this.options.hudService.showHUD(`窗口已${meta.title}`, {
+            icon: meta.icon,
+            durationMs: 1200
+          })
+        } catch {
+          // ignore
+        }
+      }
+
+      return {
+        success: true,
+        action: 'restore',
+        title: meta.title,
+        targetWindowId,
+        rect: { ...savedBounds },
+        previousRect: { ...currentBounds }
       }
     }
 
-    // 2. 毫秒级半透明 HUD 弹出反馈
+    // 非 restore 分屏动作：计算目标坐标，若坐标发生变化则通过 saveWindowState 保存移动前坐标
+    let targetRect = this.computeTargetBounds(normalized, currentBounds, workArea)
+
+    if (this.options.sidecarManager) {
+      const res = await this.options.sidecarManager.manageWindow(normalized)
+      if (res && res.success && res.rect) {
+        targetRect = res.rect
+      }
+    }
+
+    if (hasWindowBoundsChanged(currentBounds, targetRect)) {
+      this.saveWindowState(targetWindowId, currentBounds)
+    }
+    this.currentWindowBounds.set(targetWindowId, { ...targetRect })
+
     if (this.options.hudService) {
       try {
         void this.options.hudService.showHUD(`窗口已${meta.title}`, {
@@ -259,7 +542,9 @@ export class WindowManagementService {
       success: true,
       action: normalized,
       title: meta.title,
-      rect: resultRect
+      targetWindowId,
+      rect: { ...targetRect },
+      previousRect: { ...currentBounds }
     }
   }
 }

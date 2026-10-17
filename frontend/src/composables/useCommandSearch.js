@@ -11,12 +11,96 @@
 import { ref, computed } from 'vue'
 import { usePluginsStore } from '@/stores/plugins'
 import { matchItemWithQuery } from '@/utils/pinyinSearch'
-import { getPluginGradient } from '@/composables/usePluginIcon'
 import { openSettings } from '@/utils/internalPlugins'
 import { getOfficialPlugin } from '@/utils/officialPlugins'
 import { switchWindowMode, WINDOW_MODES } from '@/utils/windowMode'
+import { evaluateCalculatorQuery, addCalculatorHistory } from '@ztools/declarative-ui'
 
 const STORAGE_KEY_FRECENCY = 'ztools_command_frecency'
+
+/**
+ * 复制文本到系统剪贴板（兼容宿主 IPC 与浏览器 Clipboard API）
+ */
+export async function copyInlineAnswerToClipboard(text) {
+  const val = String(text ?? '')
+  if (!val) return false
+  try {
+    if (typeof window !== 'undefined' && window.ztools?.clipboard?.writeText) {
+      await window.ztools.clipboard.writeText(val)
+      return true
+    }
+    if (typeof navigator !== 'undefined' && navigator.clipboard?.writeText) {
+      await navigator.clipboard.writeText(val)
+      return true
+    }
+  } catch {
+    // 忽略异常
+  }
+  return false
+}
+
+/**
+ * 1:1 复刻 Raycast calculator & color rootSearch 机制：
+ * 当搜索词命中数学算式、单位换算、汇率、日期推算或色值时，生成置顶临时结果项
+ * (ephemeral: true, omitFromFrecencyTracking: true)
+ */
+export function evaluateInlineCommandItem(rawQuery) {
+  if (!rawQuery || typeof rawQuery !== 'string') return null
+  const trimmed = rawQuery.trim()
+  if (!trimmed) return null
+
+  try {
+    const res = evaluateCalculatorQuery(trimmed)
+    if (!res || res.type === 'none' || res.error || !res.formattedAnswer) {
+      return null
+    }
+
+    const isColor = res.type === 'color'
+    const badgeMap = {
+      math: '即时计算',
+      unit: '单位换算',
+      currency: '汇率换算',
+      date: '日期推算',
+      color: '色值速查'
+    }
+
+    return {
+      key: `inline-calc:${res.type}:${res.expression}`,
+      type: isColor ? 'inline-color' : 'inline-calculator',
+      calcType: res.type,
+      ephemeral: true,
+      omitFromFrecencyTracking: true,
+      expression: res.expression,
+      answer: res.formattedAnswer,
+      rawAnswer: res.rawAnswer,
+      colorResult: res.colorResult || null,
+      name: `${res.expression} = ${res.formattedAnswer}`,
+      title: `${res.expression} = ${res.formattedAnswer}`,
+      description:
+        res.details ||
+        (isColor
+          ? `${res.colorResult?.rgb || ''} · 按 Enter 复制 HEX`
+          : '即时计算结果 · 按 Enter 复制结果'),
+      subtitle: res.details || '即时计算结果',
+      badge: badgeMap[res.type] || '即时计算',
+      actionLabel: '复制结果',
+      icon: res.colorResult?.svgDataUri || '',
+      faIcon: isColor ? 'fa-tint' : 'fa-calculator',
+      pluginId: 'calculator',
+      action: async () => {
+        await copyInlineAnswerToClipboard(res.formattedAnswer)
+        try {
+          await addCalculatorHistory(res.expression, res.formattedAnswer, res.type)
+        } catch {
+          // 忽略历史写入异常
+        }
+        return res.formattedAnswer
+      }
+    }
+  } catch {
+    return null
+  }
+}
 
 // 内置快捷工具条目定义
 export const BUILTIN_COMMAND_ITEMS = Object.freeze([
@@ -27,21 +111,10 @@ export const BUILTIN_COMMAND_ITEMS = Object.freeze([
     badge: '系统',
     actionLabel: '打开设置',
     faIcon: 'fa-sliders',
-    iconGradient: 'linear-gradient(135deg, #6366f1, #a855f7)',
     action: () => {
       switchWindowMode(WINDOW_MODES.DASHBOARD).catch(() => {})
       openSettings()
     }
-  },
-  {
-    key: 'everything-search',
-    name: 'Everything文件搜索',
-    description: '自研硬件级 Flat-Trie MFT 索引秒搜，极客全键盘操作与双栏实时预览',
-    badge: '工具',
-    actionLabel: '启动',
-    faIcon: 'fa-search',
-    iconGradient: 'linear-gradient(135deg, #0284c7, #38bdf8)',
-    pluginId: 'everything-search'
   },
   {
     key: 'system-dashboard',
@@ -50,7 +123,6 @@ export const BUILTIN_COMMAND_ITEMS = Object.freeze([
     badge: '工作台',
     actionLabel: '展开',
     faIcon: 'fa-th-large',
-    iconGradient: 'linear-gradient(135deg, #0ea5e9, #38bdf8)',
     action: () => {
       switchWindowMode(WINDOW_MODES.DASHBOARD).catch(() => {})
     }
@@ -62,7 +134,6 @@ export const BUILTIN_COMMAND_ITEMS = Object.freeze([
     badge: '开发者',
     actionLabel: '开发指南',
     faIcon: 'fa-code',
-    iconGradient: 'linear-gradient(135deg, #10b981, #06b6d4)',
     action: () => {
       if (window.ztools?.shell?.openExternal) {
         window.ztools.shell.openExternal('https://github.com/codingmuse/ZTools-extensions')
@@ -74,11 +145,10 @@ export const BUILTIN_COMMAND_ITEMS = Object.freeze([
   {
     key: 'developer-github-repo',
     name: '开源插件生态大仓 (ZTools Extensions)',
-    description: '访问 GitHub 插件大仓，查看 34 款开源扩展源码与投稿 PR 指南',
+    description: '在 GitHub 上查看开源插件源码和投稿指南',
     badge: '开源',
     actionLabel: '前往 GitHub',
     faIcon: 'fa-github',
-    iconGradient: 'linear-gradient(135deg, #24292e, #0f172a)',
     action: () => {
       if (window.ztools?.shell?.openExternal) {
         window.ztools.shell.openExternal('https://github.com/codingmuse/ZTools-extensions')
@@ -122,18 +192,6 @@ export function resolveFileFaIcon(fileName, isDir) {
   if (['js', 'ts', 'vue', 'html', 'css', 'json', 'py', 'cpp', 'c', 'h', 'rs', 'go', 'java'].includes(ext)) return 'fa-file-code-o'
   if (['exe', 'bat', 'cmd', 'ps1', 'msi'].includes(ext)) return 'fa-terminal'
   return 'fa-file-text-o'
-}
-
-export function getFileGradient(fileName, isDir) {
-  if (isDir) return 'linear-gradient(135deg, #f59e0b, #fbbf24)'
-  const ext = (fileName.split('.').pop() || '').toLowerCase()
-  if (['png', 'jpg', 'jpeg', 'gif', 'webp', 'svg'].includes(ext)) return 'linear-gradient(135deg, #10b981, #34d399)'
-  if (['pdf'].includes(ext)) return 'linear-gradient(135deg, #ef4444, #f87171)'
-  if (['doc', 'docx'].includes(ext)) return 'linear-gradient(135deg, #3b82f6, #60a5fa)'
-  if (['xls', 'xlsx'].includes(ext)) return 'linear-gradient(135deg, #059669, #10b981)'
-  if (['zip', 'rar', '7z'].includes(ext)) return 'linear-gradient(135deg, #8b5cf6, #a78bfa)'
-  if (['exe', 'bat'].includes(ext)) return 'linear-gradient(135deg, #64748b, #94a3b8)'
-  return 'linear-gradient(135deg, #0284c7, #38bdf8)'
 }
 
 export function truncatePath(fullPath) {
@@ -201,7 +259,7 @@ export function calculateFrecencyBonus(stats, now = Date.now()) {
  * @param {string} itemKey 
  */
 export function recordCommandUsage(itemKey) {
-  if (!itemKey) return
+  if (!itemKey || String(itemKey).startsWith('inline-calc:')) return
   const map = loadFrecencyMap()
   const existing = map[itemKey] || { count: 0, lastUsed: 0 }
   map[itemKey] = {
@@ -209,6 +267,60 @@ export function recordCommandUsage(itemKey) {
     lastUsed: Date.now()
   }
   saveFrecencyMap(map)
+}
+
+/**
+ * 判断插件条目是否为可原位渲染/执行的声明式插件
+ */
+export function isDeclarativePluginItem(plugin) {
+  if (!plugin || typeof plugin !== 'object') return false
+  const pid = String(plugin.pluginId || plugin.id || '').trim()
+  if (pid && getOfficialPlugin(pid)) return true
+  if (plugin.isDeclarative === true || plugin.isInstalledDeclarative === true) return true
+  if (plugin.channel === 'v2') return true
+  const entry = String(plugin.entry || plugin.manifest?.entry || '').trim().toLowerCase()
+  return entry.endsWith('.js') || entry.endsWith('.mjs')
+}
+
+/**
+ * 规范化解析插件声明的 features 子命令列表（防御性校验外部 manifest 数据）
+ */
+export function normalizePluginFeatures(plugin) {
+  if (!plugin || typeof plugin !== 'object') return []
+  const rawFeatures = Array.isArray(plugin.features)
+    ? plugin.features
+    : Array.isArray(plugin.manifest?.features)
+      ? plugin.manifest.features
+      : []
+
+  const seenCodes = new Set()
+  const result = []
+
+  for (const feat of rawFeatures) {
+    if (!feat || typeof feat !== 'object') continue
+    const code = String(feat.code || '').trim()
+    const explain = String(feat.explain || feat.title || feat.name || '').trim()
+    if (!code || !explain || seenCodes.has(code)) continue
+    seenCodes.add(code)
+
+    const rawMode = String(feat.mode || plugin.mode || plugin.manifest?.mode || 'view').trim()
+    const mode = ['view', 'no-view', 'menu-bar'].includes(rawMode) ? rawMode : 'view'
+    const alias = typeof feat.alias === 'string' ? feat.alias.trim() : ''
+    const shortcut = typeof feat.shortcut === 'string' ? feat.shortcut.trim() : ''
+    const cmds = Array.isArray(feat.cmds) ? feat.cmds : []
+
+    result.push({
+      code,
+      explain,
+      mode,
+      alias,
+      shortcut,
+      icon: typeof feat.icon === 'string' ? feat.icon : '',
+      cmds
+    })
+  }
+
+  return result
 }
 
 /**
@@ -280,7 +392,6 @@ export function useCommandSearch(options = {}) {
           mtime: f.mtime,
           badge: f.is_dir ? '文件夹' : '文件',
           faIcon: resolveFileFaIcon(f.name, f.is_dir),
-          iconGradient: getFileGradient(f.name, f.is_dir),
           description: truncatePath(f.path),
           subtitle: truncatePath(f.path),
           actionLabel: '打开'
@@ -330,32 +441,77 @@ export function useCommandSearch(options = {}) {
   }
 
   /**
-   * 本地插件与内置命令的排序与匹配流
+   * 本地插件、子命令 (features) 与内置命令的排序与匹配流
    */
   const matchedPlugins = computed(() => {
     const frecencyMap = loadFrecencyMap()
     const now = Date.now()
+    const q = query.value.trim().toLowerCase()
 
-    // 1. 组装安装的插件
-    const installed = (pluginsStore.installedPlugins || []).map((p) => {
-      const key = p.pluginId
-      return {
+    // 1. 组装安装的插件及其 features 子命令（过滤已下架或已禁用插件）
+    const installed = []
+    const featureItems = []
+
+    for (const p of pluginsStore.installedPlugins || []) {
+      if (!p || typeof p !== 'object') continue
+      const key = String(p.pluginId || p.id || '').trim()
+      if (!key) continue
+      if (p.revoked === true || p.enabled === false || pluginsStore.isRevoked?.(key)) {
+        continue
+      }
+
+      const rawMode = String(p.mode || p.manifest?.mode || 'view').trim()
+      const mode = ['view', 'no-view', 'menu-bar'].includes(rawMode) ? rawMode : 'view'
+      const alias = String(p.alias || p.manifest?.alias || '').trim()
+      const features = normalizePluginFeatures(p)
+      const isDeclarative = isDeclarativePluginItem(p)
+
+      installed.push({
         ...p,
         key,
+        pluginId: key,
         type: 'plugin',
-        badge: p.badge || '插件',
+        mode,
+        alias,
+        features,
+        isDeclarative,
+        badge: p.badge || (mode === 'no-view' ? '极速动作' : '插件'),
         faIcon: p.faIcon || resolveCommandFaIcon(p.name, p.category),
-        iconGradient: p.iconGradient || getPluginGradient(p.name || p.pluginId),
-        actionLabel: '启动'
+        actionLabel: mode === 'no-view' ? '执行' : '启动'
+      })
+
+      for (const feat of features) {
+        const featKey = `${key}:${feat.code}`
+        // 空查询时仅展示曾经使用过的子命令以保持首屏清爽；有查询词时全量参与匹配
+        if (!q && !frecencyMap[featKey]) continue
+
+        featureItems.push({
+          key: featKey,
+          type: 'plugin-feature',
+          pluginId: key,
+          pluginName: p.name || p.title || key,
+          featureCode: feat.code,
+          name: feat.explain,
+          title: feat.explain,
+          description: `${p.name || key}${feat.alias ? ` · 别名 ${feat.alias}` : ''}`,
+          subtitle: p.name || key,
+          alias: feat.alias,
+          mode: feat.mode,
+          shortcut: feat.shortcut,
+          cmds: feat.cmds,
+          icon: feat.icon || p.icon,
+          faIcon: p.faIcon || resolveCommandFaIcon(feat.explain, p.category),
+          badge: feat.mode === 'no-view' ? '极速动作' : (p.name || '子命令'),
+          actionLabel: feat.mode === 'no-view' ? '执行' : '打开',
+          isDeclarative
+        })
       }
-    })
+    }
 
     // 2. 组装内置系统条目
     const installedKeys = new Set(installed.map((item) => item.key))
     const remainingBuiltins = BUILTIN_COMMAND_ITEMS.filter((item) => !installedKeys.has(item.key))
-    const allAvailable = [...installed, ...remainingBuiltins]
-
-    const q = query.value.trim().toLowerCase()
+    const allAvailable = [...installed, ...featureItems, ...remainingBuiltins]
 
     // 3. 计算打分（匹配得分 + Frecency 额外权重）
     const scored = []
@@ -370,11 +526,18 @@ export function useCommandSearch(options = {}) {
     }
 
     scored.sort((a, b) => b.totalScore - a.totalScore)
-    return scored.map((s) => s.item)
+    const ranked = scored.map((s) => s.item)
+
+    // 4. Raycast rootSearch: 当输入命中有效算式/单位换算/汇率/日期/色值时，置顶展示临时结果卡片
+    const inlineItem = evaluateInlineCommandItem(query.value)
+    if (inlineItem) {
+      return [inlineItem, ...ranked]
+    }
+    return ranked
   })
 
   /**
-   * 最终呈现的组合列表：高权重应用在前，本地文件在后
+   * 最终呈现的组合列表：高权重应用（含内联计算结果）在前，本地文件在后
    */
   const filteredItems = computed(() => {
     if (!query.value.trim()) {

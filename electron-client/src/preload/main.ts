@@ -634,7 +634,9 @@ contextBridge.exposeInMainWorld('__ztoolsLauncher', Object.freeze({
   show: () => ipcRenderer.invoke('ztools:launcher_call', 'show'),
   hide: () => ipcRenderer.invoke('ztools:launcher_call', 'hide'),
   toggle: () => ipcRenderer.invoke('ztools:launcher_call', 'toggle'),
-  expandToDashboard: () => ipcRenderer.invoke('ztools:launcher_call', 'expand_to_dashboard'),
+  expandToDashboard: (route?: string) => typeof route === 'string'
+    ? ipcRenderer.invoke('ztools:launcher_call', 'expand_to_dashboard', { route })
+    : ipcRenderer.invoke('ztools:launcher_call', 'expand_to_dashboard'),
   searchFiles: async (query: string, limit = 20) => {
     const res = await invoke('system_search_files', { query, limit }) as { success?: boolean; data?: unknown }
     return res?.data ?? res

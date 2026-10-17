@@ -49,6 +49,11 @@ function createTestRouter(initialRoute = '/') {
         component: { template: '<div class="test-list-page">List Page</div>' }
       },
       {
+        path: '/advanced-settings',
+        name: 'advanced-settings',
+        component: { template: '<div class="test-settings-page">Settings</div>' }
+      },
+      {
         path: '/declarative/:pluginId?',
         name: 'declarative',
         component: { template: '<div class="test-declarative-page">Declarative Page</div>' }
@@ -250,5 +255,37 @@ describe('方案 A 架构：MainLayout 与通透侧边栏端到端集成测试',
       localStorage.getItem = originalGetItem
       localStorage.setItem = originalSetItem
     }
+  })
+
+  it('[快捷键] ⌘, / Ctrl+, 打开设置；已在设置页时重复按不会重复入栈', async () => {
+    const wrapper = mount(MainLayout, {
+      global: {
+        plugins: [pinia, router],
+        stubs: { SearchBar: true, HeaderUser: true, HeaderGeekModeTrigger: true, LoginModal: true }
+      }
+    })
+    await flushPromises()
+    const nav = useNavStore()
+
+    // macOS：metaKey 归一化为 Ctrl
+    const handled = dispatchKeyEvent(new KeyboardEvent('keydown', { key: ',', metaKey: true }))
+    await flushPromises()
+    expect(handled).toBe(true)
+    expect(router.currentRoute.value.name).toBe('advanced-settings')
+    expect(nav.currentPage).toBe('advanced-settings')
+
+    const pushSpy = vi.spyOn(router, 'push')
+    dispatchKeyEvent(new KeyboardEvent('keydown', { key: ',', ctrlKey: true }))
+    await flushPromises()
+    expect(router.currentRoute.value.name).toBe('advanced-settings')
+    expect(pushSpy).not.toHaveBeenCalled()
+    pushSpy.mockRestore()
+
+    // 不带修饰键的逗号不触发
+    await router.push('/')
+    expect(dispatchKeyEvent(new KeyboardEvent('keydown', { key: ',' }))).toBe(false)
+    await flushPromises()
+    expect(router.currentRoute.value.name).toBe('my')
+    wrapper.unmount()
   })
 })

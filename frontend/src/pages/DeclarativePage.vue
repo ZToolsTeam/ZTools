@@ -1,11 +1,13 @@
 <template>
-  <div class="h-full flex flex-col overflow-hidden bg-slate-950 text-slate-100 select-none">
+  <div class="h-full flex flex-col overflow-hidden bg-[var(--rc-canvas)] text-[var(--rc-text-primary)] select-none">
     <!-- 顶部一体化可拖拽窗口标题与面包屑栏 (自动避让 Windows 原生最小化/最大化/关闭按钮区) -->
     <div
-      class="flex items-center justify-between border-b border-white/10 bg-slate-900/75 backdrop-blur-xl flex-shrink-0"
+      class="flex items-center justify-between border-b border-[var(--rc-border)] bg-[var(--rc-head)] backdrop-blur-xl flex-shrink-0"
       :style="{
-        height: '42px',
-        paddingLeft: '14px',
+        // 标题栏高度与主进程 MAIN/POPOUT_TITLE_BAR_HEIGHT 一致：主窗口 52px、独立窗口 42px，系统按钮才能垂直居中
+        height: effectiveIsPopout ? '42px' : '52px',
+        // macOS 红绿灯位于左侧（x=18，3×12px + 2×8px），需要留出空间
+        paddingLeft: isMacPlatform ? '86px' : '14px',
         paddingRight: isWindowsPlatform ? '142px' : '14px',
         WebkitAppRegion: 'drag'
       }"
@@ -13,7 +15,7 @@
       <div class="flex items-center gap-2.5 min-w-0" style="-webkit-app-region: no-drag">
         <button
           v-if="!effectiveIsPopout"
-          class="flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-medium text-slate-300 hover:text-white hover:bg-white/10 transition-all border border-white/10 cursor-pointer"
+          class="flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-medium text-[var(--rc-text-secondary)] hover:text-[var(--rc-text-primary)] hover:bg-[var(--rc-surface-hover)] transition-all border border-[var(--rc-border)] cursor-pointer"
           title="返回我的插件 (Esc)"
           @click="goBack"
         >
@@ -25,25 +27,20 @@
 
         <span
           v-else
-          class="flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-medium bg-emerald-500/15 text-emerald-300 border border-emerald-500/30"
+          class="flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-medium bg-[var(--rc-success-subtle)] text-[var(--rc-success)] border border-[var(--rc-border)]"
           title="当前处于独立常驻窗口模式，按 Esc 不会误关窗口"
         >
           <i class="fa fa-window-restore text-[11px]"></i>
           <span>独立窗口</span>
         </span>
 
-        <span class="text-slate-600">/</span>
+        <span class="text-[var(--rc-text-faint)]">/</span>
 
         <!-- 应用标题与语义图标 -->
         <div v-if="plugin" class="flex items-center gap-2 min-w-0">
-          <div
-            class="w-5 h-5 rounded-md flex items-center justify-center text-[10px] text-white flex-shrink-0"
-            :style="{ background: plugin.iconGradient || 'linear-gradient(135deg, #0ea5e9, #38bdf8)' }"
-          >
-            <i :class="['fa', plugin.faIcon || 'fa-cube']"></i>
-          </div>
-          <span class="text-sm font-semibold text-white truncate">{{ plugin.name }}</span>
-          <span class="px-1.5 py-0.5 rounded text-[10px] font-mono bg-sky-500/20 text-sky-300 border border-sky-500/30 flex-shrink-0">
+          <RcSquircle :glyph="resolvePluginGlyph(plugin.pluginId || plugin.id || targetPluginId)" :icon="plugin.faIcon || 'fa-cube'" :size="22" />
+          <span class="text-sm font-semibold text-[var(--rc-text-primary)] truncate">{{ plugin.name }}</span>
+          <span class="px-1.5 py-0.5 rounded text-[10px] font-mono bg-[var(--rc-accent-subtle)] text-[var(--rc-accent-text)] border border-[var(--rc-border-highlight)] flex-shrink-0">
             {{ plugin.isInstalledDeclarative ? 'V2 声明式扩展' : '官方标杆' }}
           </span>
         </div>
@@ -54,7 +51,7 @@
         <button
           v-if="!effectiveIsPopout && plugin"
           type="button"
-          class="declarative-popout-btn flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-medium text-sky-300 bg-sky-500/15 hover:bg-sky-500/25 border border-sky-500/30 transition-all cursor-pointer"
+          class="declarative-popout-btn flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-medium text-[var(--rc-accent-text)] bg-[var(--rc-accent-subtle)] hover:bg-[var(--rc-accent-subtle)] border border-[var(--rc-border-highlight)] transition-all cursor-pointer"
           title="弹出为独立常驻窗口，自动携带当前搜索与选中状态 (Ctrl+Shift+O)"
           @click="handlePopout"
         >
@@ -72,8 +69,8 @@
             type="button"
             class="declarative-pin-btn flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-medium transition-all border cursor-pointer"
             :class="isAlwaysOnTop
-              ? 'bg-amber-500/20 text-amber-300 border-amber-500/40'
-              : 'bg-white/5 text-slate-300 hover:text-white hover:bg-white/10 border-white/10'"
+              ? 'bg-[var(--rc-warning-subtle)] text-[var(--rc-warning)] border-[var(--rc-border)]'
+              : 'bg-[var(--rc-surface-hover)] text-[var(--rc-text-secondary)] hover:text-[var(--rc-text-primary)] hover:bg-[var(--rc-surface-hover)] border-[var(--rc-border)]'"
             title="切换独立窗口始终置顶 (Always on Top)"
             @click="toggleAlwaysOnTop"
           >
@@ -83,7 +80,7 @@
 
           <button
             type="button"
-            class="declarative-dock-btn flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-medium text-slate-300 hover:text-white hover:bg-white/10 border border-white/10 transition-all cursor-pointer"
+            class="declarative-dock-btn flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-medium text-[var(--rc-text-secondary)] hover:text-[var(--rc-text-primary)] hover:bg-[var(--rc-surface-hover)] border border-[var(--rc-border)] transition-all cursor-pointer"
             title="收回至主工作台视图"
             @click="dockBackToMain"
           >
@@ -94,7 +91,7 @@
     </div>
 
     <!-- 主体区域：声明式统一渲染器 (零外边距占满视口) -->
-    <div class="flex-1 overflow-hidden p-2 bg-slate-950/90">
+    <div class="flex-1 overflow-hidden p-2 bg-[var(--rc-canvas)]">
       <template v-if="plugin && plugin.command">
         <DeclarativeView
           ref="declarativeViewRef"
@@ -110,30 +107,34 @@
       <!-- 动态加载中或异常状态处理 (Beyond Happy Path: 非法或不存在的插件ID) -->
       <div
         v-else
-        class="h-full flex flex-col items-center justify-center text-center p-8 bg-slate-900/40 rounded-2xl border border-white/10"
+        class="h-full flex flex-col items-center justify-center text-center p-8 bg-[var(--rc-surface)] rounded-2xl border border-[var(--rc-border)]"
       >
         <div
           v-if="loadingDynamic"
-          class="mb-4 flex items-center gap-2 text-xs text-sky-400 font-mono"
+          class="mb-4 flex items-center gap-2 text-xs text-[var(--rc-accent-text)] font-mono"
         >
           <i class="fa fa-spinner fa-spin"></i>
           <span>正在加载声明式插件组件...</span>
         </div>
-        <div class="w-14 h-14 rounded-2xl bg-amber-500/10 text-amber-400 border border-amber-500/20 flex items-center justify-center text-2xl mb-4">
+        <div class="w-14 h-14 rounded-2xl bg-[var(--rc-warning-subtle)] text-[var(--rc-warning)] border border-[var(--rc-border)] flex items-center justify-center text-2xl mb-4">
           <i class="fa fa-exclamation-triangle"></i>
         </div>
-        <h3 class="text-base font-semibold text-slate-200 mb-1">未找到指定的声明式应用</h3>
-        <p class="text-xs text-slate-400 max-w-md mb-3">
-          插件标识符 “<code class="text-sky-300 font-mono">{{ targetPluginId || pluginId }}</code>” 未在官方标杆应用注册表中注册，或者其组件未能成功加载。
+        <template v-if="unsupportedOfficial">
+          <h3 class="text-base font-semibold text-[var(--rc-text-primary)] mb-1">当前系统暂不可用</h3>
+          <p class="text-xs text-[var(--rc-text-muted)] max-w-md mb-5">{{ loadError }}</p>
+        </template>
+        <h3 v-if="!unsupportedOfficial" class="text-base font-semibold text-[var(--rc-text-primary)] mb-1">未找到指定的声明式应用</h3>
+        <p v-if="!unsupportedOfficial" class="text-xs text-[var(--rc-text-muted)] max-w-md mb-3">
+          插件标识符 “<code class="text-[var(--rc-accent-text)] font-mono">{{ targetPluginId || pluginId }}</code>” 未在官方标杆应用注册表中注册，或者其组件未能成功加载。
         </p>
         <p
-          v-if="loadError"
-          class="text-xs text-rose-400 font-mono max-w-md mb-5 px-3 py-2 rounded-lg bg-rose-500/10 border border-rose-500/20"
+          v-if="loadError && !unsupportedOfficial"
+          class="text-xs text-[var(--rc-error)] font-mono max-w-md mb-5 px-3 py-2 rounded-lg bg-[var(--rc-error-subtle)] border border-[var(--rc-error)]"
         >
           {{ loadError }}
         </p>
         <button
-          class="declarative-error-back-btn px-4 py-2 rounded-xl text-xs font-medium bg-sky-500 hover:bg-sky-600 text-white transition-all shadow-md cursor-pointer"
+          class="declarative-error-back-btn px-4 py-2 rounded-xl text-xs font-medium bg-[var(--rc-accent)] hover:bg-[var(--rc-accent-hover)] text-[var(--rc-accent-contrast)] transition-all shadow-md cursor-pointer"
           @click="goBack"
         >
           返回我的插件列表
@@ -149,8 +150,12 @@ import { useRoute, useRouter } from 'vue-router'
 import { getActivePinia } from 'pinia'
 import { useUIStore } from '@/stores/ui'
 import { getOfficialPlugin } from '@/utils/officialPlugins'
+import { isPluginSupportedOnCurrentPlatform } from '@/utils/platform'
+import { isModalOpen } from '@/utils/keymap'
 import { loadInstalledDeclarativePlugin } from '@/utils/declarativePluginLoader'
 import DeclarativeView from '@/declarative/DeclarativeView.vue'
+import { RcSquircle } from '@/components/base'
+import { resolvePluginGlyph } from '@/utils/brandIcons'
 import { ROUTES, routeUtils } from '@/router/routes'
 import { win as nativeWin } from '@/api/apiserver'
 
@@ -173,6 +178,10 @@ const dynamicPlugin = ref(null)
 const loadingDynamic = ref(false)
 const loadError = ref('')
 const isAlwaysOnTop = ref(false)
+const isMacPlatform = ref(
+  typeof navigator !== 'undefined' &&
+    (navigator.userAgent.includes('Mac') || navigator.platform?.includes('Mac'))
+)
 const isWindowsPlatform = ref(
   typeof navigator !== 'undefined' && navigator.userAgent.includes('Windows')
 )
@@ -199,6 +208,7 @@ const initialSnapshot = computed(() => {
 })
 
 function handleKeyDown(e) {
+  if (isModalOpen()) return
   if ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key.toLowerCase() === 'o') {
     if (!effectiveIsPopout.value && plugin.value) {
       e.preventDefault()
@@ -229,27 +239,39 @@ const targetPluginId = computed(() => {
   return String(props.pluginId || route?.params?.pluginId || '').trim()
 })
 
+const targetFeatureCode = computed(() => {
+  return typeof route?.query?.feature === 'string' ? route.query.feature.trim() : ''
+})
+
+// 直接打开路由（旧快捷方式、历史记录）也要拦住当前系统上不能工作的插件
+const unsupportedOfficial = computed(() => {
+  const official = getOfficialPlugin(targetPluginId.value)
+  return Boolean(official && !isPluginSupportedOnCurrentPlatform(official))
+})
+
 const plugin = computed(() => {
+  if (unsupportedOfficial.value) return null
   return getOfficialPlugin(targetPluginId.value) || dynamicPlugin.value
 })
 
 let currentLoadToken = 0
 
 watch(
-  targetPluginId,
-  async (id) => {
+  [targetPluginId, targetFeatureCode],
+  async ([id, featureCode]) => {
     const token = ++currentLoadToken
     dynamicPlugin.value = null
     loadError.value = ''
 
     if (!id || getOfficialPlugin(id)) {
       loadingDynamic.value = false
+      if (unsupportedOfficial.value) loadError.value = `「${getOfficialPlugin(id).name}」在当前系统上暂不可用`
       return
     }
 
     loadingDynamic.value = true
     try {
-      const loaded = await loadInstalledDeclarativePlugin(id)
+      const loaded = await loadInstalledDeclarativePlugin(id, { featureCode })
       if (token === currentLoadToken) {
         dynamicPlugin.value = loaded
       }
@@ -277,6 +299,7 @@ async function handlePopout() {
   if (snap.segmentedValue) query.seg = String(snap.segmentedValue)
   if (snap.dropdownValue) query.drop = String(snap.dropdownValue)
   if (snap.selectedId) query.sel = String(snap.selectedId)
+  if (targetFeatureCode.value) query.feature = targetFeatureCode.value
 
   const searchParams = new URLSearchParams(query).toString()
   const hashRoute = `#/popout/${encodeURIComponent(id)}${searchParams ? `?${searchParams}` : ''}`
@@ -328,11 +351,9 @@ async function dockBackToMain() {
   if (snap.segmentedValue) query.seg = String(snap.segmentedValue)
   if (snap.dropdownValue) query.drop = String(snap.dropdownValue)
   if (snap.selectedId) query.sel = String(snap.selectedId)
+  if (targetFeatureCode.value) query.feature = targetFeatureCode.value
 
-  router.push({
-    ...routeUtils.toDeclarative(targetPluginId.value),
-    query
-  })
+  router.push(routeUtils.toDeclarative(targetPluginId.value, query))
 }
 
 function goBack() {

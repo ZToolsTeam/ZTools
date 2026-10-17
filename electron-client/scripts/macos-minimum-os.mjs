@@ -1,4 +1,6 @@
 import { execFileSync } from 'node:child_process'
+import fs from 'node:fs'
+import os from 'node:os'
 import path from 'node:path'
 
 export function compareOsVersions(a, b) {
@@ -33,11 +35,22 @@ export function parseMacDeploymentVersion(output) {
   return versions[0]
 }
 
-export function inspectMacDeployment(filePath, architecture, { exec = execFileSync } = {}) {
+export function inspectMacDeployment(filePath, architecture, { exec = execFileSync, fsApi = fs, tmpdir = os.tmpdir } = {}) {
   if (!['arm64', 'x86_64'].includes(architecture)) throw new Error('INVALID_MACHO_SLICE')
-  return parseMacDeploymentVersion(exec('/usr/bin/otool', ['-arch', architecture, '-l', filePath], {
+  const run = (target) => parseMacDeploymentVersion(exec('/usr/bin/otool', ['-arch', architecture, '-l', target], {
     encoding: 'utf8', shell: false, timeout: 15_000, maxBuffer: 1024 * 1024
   }))
+  // otool 把 `文件(成员)` 解析为静态库成员语法：Electron 的「ZTools Helper (GPU)」等路径会被截断成不存在的文件。
+  // 含括号时改为读取临时目录中同名无括号的符号链接（otool 会跟随链接），用完即删。
+  if (!/[()]/.test(filePath)) return run(filePath)
+  const directory = fsApi.mkdtempSync(path.join(tmpdir(), 'ztools-otool-'))
+  try {
+    const alias = path.join(directory, 'macho')
+    fsApi.symlinkSync(path.resolve(filePath), alias)
+    return run(alias)
+  } finally {
+    fsApi.rmSync(directory, { recursive: true, force: true })
+  }
 }
 
 export function inspectMacBundleMinimumOs(bundlePath, { exec = execFileSync } = {}) {

@@ -11,7 +11,12 @@ import {
 } from '../../src/main/runtime/runtime-paths.js'
 import { PluginInstallService } from '../../src/main/services/plugin-install-service.js'
 
-test('production paths keep the business data root on DataV2 and isolate runtime state from legacy Data', () => {
+// 这些用例依赖 Windows 路径语义（C:\\ / E:\\）或 Windows 宿主能力（DLL、进程启动、更新安装链、本地 .exe 软件），
+// 在其他平台上功能代码按设计会拒绝执行，因此只在 Windows 宿主运行；Windows CI 上照常覆盖。
+const windowsOnly = { skip: process.platform === 'win32' ? false : '依赖 Windows 路径或宿主能力，仅在 Windows 上运行' }
+
+
+test('production paths keep the business data root on DataV2 and isolate runtime state from legacy Data', windowsOnly, () => {
   const paths = resolveRuntimePaths({
     mode: 'production',
     appDataRoot: 'C:\\Users\\tester\\AppData\\Roaming',
@@ -26,7 +31,7 @@ test('production paths keep the business data root on DataV2 and isolate runtime
   assert.notEqual(paths.backupRoot, paths.businessDataRoot)
 })
 
-test('production paths honor an explicit isolated business data root', () => {
+test('production paths honor an explicit isolated business data root', windowsOnly, () => {
   const paths = resolveRuntimePaths({
     mode: 'production',
     appDataRoot: 'C:\\Users\\tester\\AppData\\Roaming',
@@ -41,7 +46,7 @@ test('production paths honor an explicit isolated business data root', () => {
   assert.equal(paths.logRoot, 'E:\\isolated\\ZTools\\Logs')
 })
 
-test('development and test paths cannot fall back to the production data root', () => {
+test('development and test paths cannot fall back to the production data root', windowsOnly, () => {
   const production = resolveRuntimePaths({
     mode: 'production',
     appDataRoot: 'C:\\Users\\tester\\AppData\\Roaming',

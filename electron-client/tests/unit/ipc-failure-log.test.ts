@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { getIpcFailureLogIdentifierFields } from '../../src/main/ipc/router.js'
+import { getIpcFailureLogIdentifierFields, isIpcCapabilityBoundary } from '../../src/main/ipc/router.js'
+import { errorCodes, ZToolsError } from '../../src/contracts/errors.js'
 import type { ZToolsRequest } from '../../src/contracts/ipc.js'
 
 test('credential IPC failure diagnostics do not inspect request parameters', () => {
@@ -37,3 +38,19 @@ test('non-credential IPC failures retain safe DLL diagnostic identifiers', () =>
     { dllId: 'CapturePlugin', functionName: 'TakeScreenshot' }
   )
 })
+
+test('只有显式 NOT_SUPPORTED 的 ZToolsError 视为平台能力边界，其余失败仍按故障记录', () => {
+  assert.equal(isIpcCapabilityBoundary(new ZToolsError(errorCodes.notSupported, '当前更新安装链仅支持 Windows')), true)
+  for (const error of [
+    new ZToolsError(errorCodes.pluginNotFound, '插件不存在'),
+    new ZToolsError(errorCodes.permissionDenied, 'denied'),
+    Object.assign(new Error('forged'), { code: errorCodes.notSupported }),
+    { code: errorCodes.notSupported },
+    'NOT_SUPPORTED',
+    undefined,
+    null
+  ]) {
+    assert.equal(isIpcCapabilityBoundary(error), false, String((error as { message?: string })?.message ?? error))
+  }
+})
+

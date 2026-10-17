@@ -1,36 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import { ref } from 'vue'
-import { getPluginGradient, getPluginFaIcon, usePluginIcon } from '../usePluginIcon'
-
-describe('getPluginGradient', () => {
-  const GRADIENT_TYPES = ['blue', 'green', 'orange', 'pink', 'purple', 'cyan']
-
-  it('同一名称始终返回相同颜色', () => {
-    const a = getPluginGradient('截图工具')
-    const b = getPluginGradient('截图工具')
-    expect(a).toBe(b)
-  })
-
-  it('返回值在预定义列表中', () => {
-    expect(GRADIENT_TYPES).toContain(getPluginGradient('test'))
-    expect(GRADIENT_TYPES).toContain(getPluginGradient('hello'))
-  })
-
-  it('空名称返回第一个颜色', () => {
-    expect(getPluginGradient('')).toBe('blue')
-    expect(getPluginGradient(null)).toBe('blue')
-    expect(getPluginGradient(undefined)).toBe('blue')
-  })
-
-  it('不同名称可能返回不同颜色', () => {
-    const results = new Set()
-    for (let i = 0; i < 100; i++) {
-      results.add(getPluginGradient(`plugin-${i}`))
-    }
-    // 100 个不同名称应该覆盖多种颜色
-    expect(results.size).toBeGreaterThan(1)
-  })
-})
+import { getPluginFaIcon, usePluginIcon } from '../usePluginIcon'
 
 describe('getPluginFaIcon', () => {
   it.each([

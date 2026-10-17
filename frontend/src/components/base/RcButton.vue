@@ -1,5 +1,6 @@
 <script setup>
 import { computed } from 'vue'
+import ShortcutKeys from './ShortcutKeys.vue'
 
 const props = defineProps({
   variant: {
@@ -35,7 +36,7 @@ const sizeClasses = computed(() => {
 const variantClasses = computed(() => {
   switch (props.variant) {
     case 'primary':
-      return 'bg-[var(--rc-accent)] text-white hover:opacity-90 border-transparent shadow-sm'
+      return 'bg-[var(--rc-accent)] text-[var(--rc-accent-contrast)] hover:bg-[var(--rc-accent-hover)] border-transparent shadow-sm'
     case 'danger':
       return 'bg-[var(--rc-error-subtle)] text-[var(--rc-error)] border-[var(--rc-error)]/20 hover:bg-[var(--rc-error-subtle)]/80'
     case 'secondary':
@@ -67,12 +68,7 @@ const handleClick = (e) => {
     <i v-if="loading" class="fa fa-spinner fa-spin text-xs"></i>
     <i v-else-if="icon && icon.startsWith('fa')" :class="['fa', icon]"></i>
     <slot></slot>
-    <kbd
-      v-if="kbd"
-      class="rc-kbd inline-flex items-center text-[10px] px-1 py-0.2 rounded font-mono select-none"
-    >
-      {{ kbd }}
-    </kbd>
+    <ShortcutKeys v-if="kbd" :combo="kbd" />
   </button>
 </template>
 
@@ -85,15 +81,5 @@ const handleClick = (e) => {
 .rc-btn-ghost:hover:not(:disabled) {
   background: var(--rc-surface-hover);
   border-color: var(--rc-border-highlight);
-}
-
-:global(.dark) .rc-btn-ghost {
-  background: rgba(255, 255, 255, 0.04);
-  border-color: rgba(255, 255, 255, 0.08);
-}
-
-:global(.dark) .rc-btn-ghost:hover:not(:disabled) {
-  background: rgba(255, 255, 255, 0.08);
-  border-color: rgba(255, 255, 255, 0.16);
 }
 </style>

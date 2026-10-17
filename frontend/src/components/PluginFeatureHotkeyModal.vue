@@ -645,7 +645,7 @@ defineExpose({ show, hide, configuredCount })
 }
 
 .feature-plugin {
-  color: var(--rc-accent);
+  color: var(--rc-accent-text);
 }
 
 .feature-separator {
@@ -664,7 +664,7 @@ defineExpose({ show, hide, configuredCount })
   border: none;
   background: transparent;
   font-size: 12px;
-  color: var(--rc-accent);
+  color: var(--rc-accent-text);
   cursor: pointer;
 }
 
@@ -714,7 +714,7 @@ defineExpose({ show, hide, configuredCount })
 .recording-text {
   font-size: 12px;
   font-weight: 500;
-  color: var(--rc-accent);
+  color: var(--rc-accent-text);
 }
 
 .hotkey-keys {
