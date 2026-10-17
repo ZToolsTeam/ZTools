@@ -27,7 +27,7 @@ export const DEFAULT_ROOT_DIR = path.resolve(__dirname, '..')
 export const DEFAULT_CHANGELOG_PATH = path.join(DEFAULT_ROOT_DIR, 'CHANGELOG.md')
 
 const PRIVATE_SCOPE_OR_KEYWORD_PATTERNS = [
-  /^(?:feat|fix|chore|refactor|docs|test|perf)\((?:website|backend|dll|installer|bin|admin)\):/i,
+  /^(?:feat|fix|chore|refactor|docs|test|perf)\((?:website|backend|dll|installer|bin|admin|changelog)\):/i,
   /\b(?:DLLPlugins|ZToolsSetup|ZToolsUninstall|suno-copyright|official-website)\b/i,
   /^chore(?:\([^)]+\))?:\s*同步\s*(?:frontend|electron-client|官方网站|docs|bin|子模块)/i,
   /^chore(?:\([^)]+\))?:\s*更新官方网站子模块/i,

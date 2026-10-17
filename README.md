@@ -149,11 +149,12 @@ ZTools 采用现代声明式交互与开源插件生态范式，规避多语言�
 
 ## 📋 更新日志 (Changelog)
 
-遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 规范，每次功能迭代与问题修复均持续追加记录：
+ZTools 自 **2025 年 11 月**立项发布 `v0.1.0` 以来持续高频迭代，遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 规范记录每一次演进：
 
 - **2026-10-17（核心效率流 Phase 1~3 落地与双模态打磨）**：新增内联计算器/单位换算/色板顶层直出 (`E4`)、窗口分屏 `Restore` 上一位置还原与主界面焦点隔离 (`E5`)、3500+ 常用汉字全拼/首字母/多音字检索与命中高亮 (`E6`)、`Snippets` `{argument}` 动态参数填空表单与跨窗回填 (`E7`)、`Script Commands` 四模式与 ANSI 着色渲染 (`E8`)，以及 macOS DMG 打包与站内确认对话框。
 - **v1.1.7.1（2026-10-16）**：升级声明式 UI 2.0 (`@ztools/declarative-ui`)、客户端「积木 Z × 余烬橙」品牌视觉重设计（亮/暗双主题）、新增微软官方 Winget 自动化分发流水线 (`npm run release:winget`)、修复内置 Web 资源按内容指纹刷新。
-- **v1.0.0（2026-10-14）**：ZTools 双仓开源架构首发，集成预编译 Rust 侧车（NTFS MFT 毫秒级索引 & UIAccess 穿透）、Local-First SQLite WAL 底座、去中心化 E2EE 云同步与 BYOK / 本地离线 AI 网关。
+- **v1.0.0（2026-10-14）**：结束 `0.x` 早期架构演进，正式发布双仓开源 `1.0` 现代架构，集成预编译 Rust 侧车（NTFS MFT 毫秒级索引 & UIAccess 穿透）、Local-First SQLite WAL 底座、去中心化 E2EE 云同步与 BYOK / 本地离线 AI 网关。
+- **v0.1.0 ~ v0.8.0（2025-11-20 ~ 2026-04-29 早期版本演进）**：完成初代客户端与插件 SDK 诞生 (`v0.1.0`)、全局暗黑模式与插件分类体系 (`v0.3.0`)、超级面板与插件增量热更新 (`v0.5.0`)、全局插件快捷键中心与窗口控制 SDK (`v0.8.0`)。
 
 👉 查看全部历史版本与详细变更记录：**[CHANGELOG.md](CHANGELOG.md)**
 

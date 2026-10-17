@@ -1,11 +1,11 @@
 # 更新日志 (Changelog)
 
-本仓库的所有重要版本更新、新增特性、体验优化与问题修复均记录在此文件中。
+本仓库记录了 ZTools 自 **2025 年 11 月**立项发布以来的重要版本演进、新增特性、架构升级与问题修复。
 
 日志格式遵循业界通用的 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 规范，版本号遵循 [语义化版本 (Semantic Versioning)](https://semver.org/lang/zh-CN/) 标准，每次代码同步与版本发布均在顶部持续追加最新记录。
 
 <!-- changelog-auto-append-start -->
-<!-- last-synced-commit: 682b7b7 -->
+<!-- last-synced-commit: b8302a3 -->
 
 ## [Unreleased / 2026-10-17] - 核心效率流 (Phase 1~3) 落地、双模态交互打磨与跨平台增强
 
@@ -39,12 +39,49 @@
 
 ---
 
-## [v1.0.0] - 2026-10-14 - 纯粹开源双仓架构首发、Rust 高性能侧车与 AI / E2EE 底座
+## [v1.0.0] - 2026-10-14 - 现代双端架构重构与双仓开源 1.0 正式版发布
 
 ### ✨ 新增特性 (Features)
-- **双仓开源飞轮架构首发**：确立 `codingmuse/ZTools`（GPL-3.0 核心宿主大仓）与 `codingmuse/ZTools-extensions`（MIT 插件生态大仓）双仓解耦体系，内置 4 大开发者生态引导触点与 AST 静态安全扫描门禁 (`scan-plugin-security.mjs`)。
-- **轻量 TS 宿主 + 预编译 Rust Native 侧车**：集成 `ztools-indexer.exe`（NTFS MFT / USN Journal 百万文件毫秒级检索）与 `ztools-uiaccess.exe`（Win32 UIAccess 跨权限取词与活动浏览器 Tab URL 获取）。
+- **双仓开源飞轮架构正式发布**：从 `0.x` 早期架构全面升级为 `1.0` 现代化开源体系，确立 `codingmuse/ZTools`（GPL-3.0 核心宿主大仓）与 `codingmuse/ZTools-extensions`（MIT 插件生态大仓）双仓解耦模式，内置开发者生态引导触点与 AST 静态安全扫描门禁。
+- **轻量 TS 宿主 + 预编译 Rust Native 侧车**：全面拥抱 Electron 43 + TypeScript 宿主，集成 `ztools-indexer.exe`（NTFS MFT / USN Journal 百万文件毫秒级检索）与 `ztools-uiaccess.exe`（Win32 UIAccess 跨权限取词与活动浏览器 Tab URL 获取）。
 - **大主界面工作台 (`Dashboard`) + 极客悬浮搜索条 (`Launcher`) 双模态**：支持 `Ctrl/Cmd + M` 一键丝滑切换，窗口隐藏 15 秒自动挂起释放 GPU 显存，双层 `requestAnimationFrame` 防闪烁极速唤醒（SLA < 100ms）。
 - **Local-First 免登录底座与去中心化 E2EE 云同步 (`@ztools/sync-crypto`)**：核心数据 100% 本地 SQLite WAL 持久化，支持 Argon2id 密钥派生 + AES-256-GCM 认证加密，提供 WebDAV（ETag 乐观锁）与 GitHub Gist 多端同步适配器。
 - **AI Native 与原生 MCP 网关 (`@ztools/ai-mcp`)**：支持 BYOK（DeepSeek R1、OpenAI、Claude、SiliconFlow）及本地离线大模型（Ollama `11434` / LM Studio `1234`）零配置嗅探直连，内置原生 MCP 协议栈。
+
+---
+
+## [v0.8.0] - 2026-04-29 - 全局插件快捷键中心、窗口控制 SDK 与多级缓存加速
+
+### ✨ 新增特性 (Features)
+- **全局与插件内快捷键统一管理**：新增 `ShortcutSettingsModal` 快捷方式映射管理弹窗与快捷键冲突检测机制，支持在高级设置中统一配置超级面板与插件内部子功能全局热键。
+- **插件窗口控制与截图公共 SDK**：SDK 新增插件窗口状态控制接口（`hidePluginWindow` / `showPluginWindow` / `minimizePluginWindow` / `restorePluginWindow`）及公共截图接口。
+- **安装进度细分与版本兼容过滤**：支持插件依赖库安装阶段进度展示，下载与更新检查携带客户端版本参数实现兼容性过滤。
+
+### ⚡ 体验优化与重构 (Improvements)
+- **异步渲染与缓存提速**：图像与重度 I/O 接口全面改为异步调用以避免阻塞主线程；插件市场列表引入多级内存缓存并优化紧凑布局。
+
+---
+
+## [v0.5.0] - 2026-02-28 - 超级面板、全局唤醒热键与插件热更新机制
+
+### ✨ 新增特性 (Features)
+- **全局唤醒与超级面板**：支持自定义全局唤醒快捷键与快捷方式启动，补齐超级面板核心配置项。
+- **插件收藏与增量热更新**：新增「我的插件」收藏夹管理、拖拽排序与文件拖拽遮罩交互；将插件首次安装与版本增量更新语义解耦，支持静默检测更新。
+
+---
+
+## [v0.3.0] - 2025-12-31 - 暗黑模式、插件分类体系与底层存储优化
+
+### ✨ 新增特性 (Features)
+- **全局暗黑模式适配**：新增客户端暗黑模式（Dark Mode）与骨架屏主题自适应切换。
+- **插件分类与图像/OCR 能力扩展**：上线插件市场多维分类体系，扩展看图、OCR 识别与带回调异步任务接口。
+- **大文件读写与数据库防阻塞优化**：优化 `readAsDataURL` 与 `ArrayBuffer` 传输性能，修复大文件与 `db.get` 同步阻塞问题。
+
+---
+
+## [v0.1.0] - 2025-11-20 - ZTools 项目立项与首个预览版诞生
+
+### ✨ 新增特性 (Features)
+- **项目启动与初代宿主发布**：完成 ZTools 初代桌面客户端与 Vue 前端主界面构建，支持插件免拷贝直接加载运行。
+- **初代插件 SDK 与首批工具集**：推出初代插件开发脚手架 (`create-plugin`)、本地 `db` 存储接口、剪贴板操作与文件系统读写 API，并上线 Base64 转换、哈希加解密、图片处理等首批内置效率插件。
 <!-- changelog-auto-append-end -->
