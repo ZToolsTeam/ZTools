@@ -71,10 +71,10 @@ const IGNORE_PATTERNS = [
   /\.mp4$/,
   /\.m4a$/,
   /\.wav$/,
-  // 3. 历史废弃与冗余模块黑名单（严禁进入开源发布）
+  // 3. 历史废弃与冗余模块黑名单（严禁进入开源发布，仅匹配顶层废弃 examples，保留 packages/declarative-ui/src/examples）
   /[\\/]\.kiro([\\/]|$)/,
   /[\\/]devtools([\\/]|$)/,
-  /[\\/]examples([\\/]|$)/,
+  /^examples([\\/]|$)/,
   /[\\/]design-system([\\/]|$)/,
   /[\\/]src[\\/]sdk([\\/]|$)/,
   /[\\/]create-ztools-plugin([\\/]|$)/,

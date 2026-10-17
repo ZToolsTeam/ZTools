@@ -378,6 +378,10 @@ export function runReleasePackagingPipeline(rawArgs = process.argv.slice(2)) {
     !fs.existsSync(path.join(artifacts.applicationRoot, 'ZTools.exe'))
 
   if (needBuildApp && !options.dryRun) {
+    if (fs.existsSync(artifacts.artifactRoot)) {
+      console.log(`\n[清理] 移除旧的 staging 目录: ${artifacts.artifactRoot}`)
+      fs.rmSync(artifacts.artifactRoot, { recursive: true, force: true })
+    }
     console.log('\n[2/4] 正在构建 Electron win32-x64 应用程序包...')
     runCommand('npm.cmd', ['--prefix', 'electron-client', 'run', 'package:app:win32:x64'], ROOT_DIR)
   } else {

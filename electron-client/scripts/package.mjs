@@ -79,10 +79,8 @@ function powershellLiteral(value) {
   return `'${value.replaceAll("'", "''")}'`
 }
 
-function iconFingerprint(file, executable) {
-  const iconExpression = executable
-    ? `[Drawing.Icon]::ExtractAssociatedIcon(${powershellLiteral(file)})`
-    : `[Drawing.Icon]::new(${powershellLiteral(file)}, 32, 32)`
+function iconFingerprint(file, _executable) {
+  const iconExpression = `[Drawing.Icon]::ExtractAssociatedIcon(${powershellLiteral(file)})`
   const script = [
     '$ErrorActionPreference="Stop"',
     'Add-Type -AssemblyName System.Drawing',
