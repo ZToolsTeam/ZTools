@@ -1,0 +1,107 @@
+name: ZTools GitOps Plugins Release & CDN Distribution
+
+on:
+  push:
+    branches:
+      - main
+      - master
+    paths:
+      - 'plugins/**'
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: '仅执行打包与部署仿真演练 (dry-run)'
+        required: false
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+  packages: write
+
+jobs:
+  publish-plugins:
+    name: Build Packages, Index & Deploy to CDN
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: 'npm'
+          cache-dependency-path: 'frontend/package-lock.json'
+
+      - name: Install Frontend Parser Dependencies
+        run: |
+          if [ -d "frontend" ]; then
+            npm --prefix frontend ci || npm --prefix frontend install
+          fi
+
+      - name: Run Security AST Scan Gate
+        run: |
+          echo "🔒 执行正式发布前的 AST 安全终审门禁..."
+          node scripts/scan-plugin-security.mjs plugins/
+
+      - name: Package Plugins & Generate Static Index (plugins.json)
+        id: build-release
+        run: |
+          echo "📦 打包所有通过审查的插件并生成全网索引 plugins.json..."
+          node scripts/build-plugins-release.mjs \
+            --plugins-dir plugins \
+            --output-dir dist/plugins \
+            --cdn-base-url "https://plugins.ztools.cn"
+
+      - name: Deploy to Cloud Object Storage & EdgeOne CDN
+        env:
+          TENCENT_COS_SECRET_ID: ${{ secrets.TENCENT_COS_SECRET_ID }}
+          TENCENT_COS_SECRET_KEY: ${{ secrets.TENCENT_COS_SECRET_KEY }}
+          TENCENT_COS_BUCKET: ${{ secrets.TENCENT_COS_BUCKET }}
+          TENCENT_COS_REGION: ${{ secrets.TENCENT_COS_REGION }}
+          R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          R2_BUCKET_NAME: ${{ secrets.R2_BUCKET_NAME }}
+          EDGEONE_SECRET_ID: ${{ secrets.EDGEONE_SECRET_ID }}
+          EDGEONE_SECRET_KEY: ${{ secrets.EDGEONE_SECRET_KEY }}
+          EDGEONE_ZONE_ID: ${{ secrets.EDGEONE_ZONE_ID }}
+        run: |
+          DRY_RUN_FLAG=""
+          if [ "${{ github.event.inputs.dry_run }}" = "true" ] || [ -z "$TENCENT_COS_SECRET_ID" ]; then
+            echo "💡 提示: 检测到演练模式或未注入真实云端秘钥，将以 --dry-run 仿真模式执行对象存储与 CDN 同步验证"
+            DRY_RUN_FLAG="--dry-run"
+          fi
+          node scripts/deploy-plugins-storage.mjs --dir dist/plugins $DRY_RUN_FLAG
+
+      - name: Archive Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: ztools-plugins-release-bundle
+          path: dist/plugins/**
+          retention-days: 30
+
+      - name: Generate Release Summary
+        run: |
+          node -e "
+          import fs from 'node:fs';
+          const indexPath = 'dist/plugins/plugins.json';
+          if (!fs.existsSync(indexPath)) process.exit(0);
+          const index = JSON.parse(fs.readFileSync(indexPath, 'utf8'));
+
+          let summary = '### 🚀 ZTools GitOps 插件分发流水线发布成功！\n\n';
+          summary += '- **全网静态索引**: \`' + index.cdnBaseUrl + '/plugins.json\`\n';
+          summary += '- **全网插件总数**: ' + index.total + '\n';
+          summary += '- **更新时间**: ' + index.generatedAt + '\n\n';
+          summary += '| 插件名称 | 插件 ID | 版本 | 大小 | SHA256 校验和 | 下载直链 |\n';
+          summary += '| :--- | :--- | :--- | :--- | :--- | :--- |\n';
+
+          for (const p of index.plugins) {
+            summary += '| ' + p.name + ' | ' + p.id + ' | ' + p.version + ' | ' + (p.size / 1024).toFixed(1) + ' KB | \`' + p.sha256.substring(0, 12) + '...\` | [下载](' + p.downloadUrl + ') |\n';
+          }
+
+          fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY, summary);
+          "

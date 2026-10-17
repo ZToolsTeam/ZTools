@@ -5,7 +5,9 @@
   "description": "ZTools - 纯粹开源、免费极客、轻量宿主、极致性能的现代化双端效率中枢平台",
   "type": "module",
   "scripts": {
-    "dev": "npm --prefix electron-client start",
+    "postinstall": "node scripts/dev-bootstrap.mjs --install-only",
+    "dev": "node scripts/dev-bootstrap.mjs",
+    "start": "node scripts/dev-bootstrap.mjs",
     "pretest": "node packages/declarative-ui/scripts/ensure-dist.mjs",
     "test": "node --test tests/e2e-cross-module-resilience.test.mjs",
     "test:anti-reverse": "node --test tests/anti-reverse-resilience.test.mjs",
@@ -24,7 +26,10 @@
     "release:winget:dry-run": "node scripts/publish-winget.mjs --dry-run",
     "start:mac": "npm --prefix electron-client run start:mac",
     "package:mac": "npm --prefix electron-client run package:app:darwin:universal --",
-    "package:mac:dmg": "npm --prefix electron-client run package:dmg:darwin --"
+    "package:mac:dmg": "npm --prefix electron-client run package:dmg:darwin --",
+    "release:mac": "node scripts/build-macos-remote.mjs",
+    "release:mac:download": "node scripts/build-macos-remote.mjs --download",
+    "release:mac:dry-run": "node scripts/build-macos-remote.mjs --dry-run"
   },
   "workspaces": [
     "packages/*"

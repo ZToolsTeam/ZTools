@@ -76,10 +76,6 @@ export const UNAVAILABLE_PLUGIN_IDS = new Set([
   'trial-nudges',
   'organizations',
   // 宿主未提供所需能力，只能展示示例数据或假成功
-  'window-management',
-  'clipboard-history',
-  'snippets',
-  'everything-file-search',
   'kill-process',
   'wifi-password-reveal',
   'applications',

@@ -212,7 +212,22 @@ export function useDeclarativeStack(initialRoot) {
     }
   }
 
-  // 注册全局 Bridge，使子组件无论直接调用 showToast 还是 useNavigation 都能与此栈连通
+  // 注册全局 Bridge，使子组件无论直接调用 showToast、useNavigation 还是内置服务都能与宿主连通
+  const getElectronMethods = () =>
+    typeof window !== "undefined" ? window.__ztoolsElectron?.methods : null;
+
+  const unwrapIpc = async (callPromise, fallback) => {
+    try {
+      const res = await callPromise;
+      if (res && typeof res === "object" && "success" in res && "data" in res) {
+        return res.success ? res.data : fallback;
+      }
+      return res ?? fallback;
+    } catch {
+      return fallback;
+    }
+  };
+
   setDeclarativeBridge({
     showToast,
     navigation: {
@@ -220,15 +235,133 @@ export function useDeclarativeStack(initialRoot) {
       pop
     },
     copyToClipboard: async (text) => {
+      const methods = getElectronMethods();
+      if (methods?.clipboard_copy_text) {
+        await unwrapIpc(methods.clipboard_copy_text({ text: String(text) }), undefined);
+        return;
+      }
       if (typeof navigator !== "undefined" && navigator.clipboard) {
         await navigator.clipboard.writeText(String(text));
       }
     },
     readClipboardText: async () => {
+      const methods = getElectronMethods();
+      if (methods?.clipboard_read_text) {
+        const res = await unwrapIpc(methods.clipboard_read_text({}), "");
+        return typeof res === "string" ? res : String(res?.text ?? "");
+      }
       if (typeof navigator !== "undefined" && navigator.clipboard) {
         return await navigator.clipboard.readText();
       }
       return "";
+    },
+    pasteToActive: async (text) => {
+      const methods = getElectronMethods();
+      if (methods?.clipboard_hide_and_paste_text) {
+        await unwrapIpc(methods.clipboard_hide_and_paste_text({ text: String(text) }), undefined);
+        return;
+      }
+      if (typeof navigator !== "undefined" && navigator.clipboard) {
+        await navigator.clipboard.writeText(String(text));
+      }
+    },
+    manageWindow: async (action) => {
+      const methods = getElectronMethods();
+      if (methods?.window_manage_action) {
+        const res = await unwrapIpc(methods.window_manage_action({ action }), null);
+        return Boolean(res?.applied ?? res?.success ?? res);
+      }
+      return false;
+    },
+    clipboardHistory: {
+      query: async (options = {}) => {
+        const methods = getElectronMethods();
+        if (!methods?.clipboard_history_query) return [];
+        const res = await unwrapIpc(methods.clipboard_history_query(options), []);
+        return Array.isArray(res) ? res : [];
+      },
+      togglePin: async (id) => {
+        const methods = getElectronMethods();
+        if (!methods?.clipboard_history_toggle_pin) return false;
+        const res = await unwrapIpc(methods.clipboard_history_toggle_pin({ id }), null);
+        return Boolean(res?.success ?? res);
+      },
+      delete: async (id) => {
+        const methods = getElectronMethods();
+        if (!methods?.clipboard_history_delete) return false;
+        const res = await unwrapIpc(methods.clipboard_history_delete({ id }), null);
+        return Boolean(res?.success ?? res);
+      },
+      clearUnpinned: async () => {
+        const methods = getElectronMethods();
+        if (!methods?.clipboard_history_clear_unpinned) return 0;
+        const res = await unwrapIpc(methods.clipboard_history_clear_unpinned({}), null);
+        return Number(res?.count ?? res ?? 0);
+      },
+      pasteSequential: async () => {
+        const methods = getElectronMethods();
+        if (!methods?.clipboard_history_paste_sequential) return { success: false };
+        return await unwrapIpc(methods.clipboard_history_paste_sequential({}), { success: false });
+      },
+      resetSequence: async () => {
+        const methods = getElectronMethods();
+        if (!methods?.clipboard_history_reset_sequence) return { success: false };
+        return await unwrapIpc(methods.clipboard_history_reset_sequence({}), { success: false });
+      }
+    },
+    snippets: {
+      list: async (query) => {
+        const methods = getElectronMethods();
+        if (!methods?.snippets_list) return [];
+        const res = await unwrapIpc(methods.snippets_list(query ? { query } : {}), []);
+        return Array.isArray(res) ? res : [];
+      },
+      create: async (snippet) => {
+        const methods = getElectronMethods();
+        if (!methods?.snippets_create) return null;
+        return await unwrapIpc(methods.snippets_create(snippet), null);
+      },
+      update: async (id, snippet) => {
+        const methods = getElectronMethods();
+        if (!methods?.snippets_update) return null;
+        return await unwrapIpc(methods.snippets_update({ id, ...snippet }), null);
+      },
+      delete: async (id) => {
+        const methods = getElectronMethods();
+        if (!methods?.snippets_delete) return false;
+        const res = await unwrapIpc(methods.snippets_delete({ id }), null);
+        return Boolean(res?.success ?? res);
+      },
+      toggle: async (id) => {
+        const methods = getElectronMethods();
+        if (!methods?.snippets_toggle) return false;
+        const res = await unwrapIpc(methods.snippets_toggle({ id }), null);
+        return Boolean(res?.success ?? res);
+      },
+      matchAndExpand: async (typedText, clipboardContent) => {
+        const methods = getElectronMethods();
+        if (!methods?.snippets_match_and_expand) return { matched: false };
+        return await unwrapIpc(
+          methods.snippets_match_and_expand({ typedText, clipboardContent }),
+          { matched: false }
+        );
+      },
+      import: async (data) => {
+        const methods = getElectronMethods();
+        if (!methods?.snippets_import) return { total: 0, imported: 0, updated: 0, failed: 0 };
+        return await unwrapIpc(methods.snippets_import({ snippets: data }), {
+          total: 0,
+          imported: 0,
+          updated: 0,
+          failed: 0
+        });
+      },
+      export: async () => {
+        const methods = getElectronMethods();
+        if (!methods?.snippets_export) return [];
+        const res = await unwrapIpc(methods.snippets_export({}), []);
+        return Array.isArray(res) ? res : [];
+      }
     },
     // 站内确认框（跟随主题），不用系统原生 window.confirm
     confirmAlert: (options) => showInAppConfirm(options)

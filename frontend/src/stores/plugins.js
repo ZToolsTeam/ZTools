@@ -24,7 +24,8 @@ import { isOnline } from '@/config/runtime-mode'
 import {
   StoreCatalogManager,
   resolveApiBaseUrl,
-  isOfficialPluginItem
+  isOfficialPluginItem,
+  normalizeCdnCatalogPayload
 } from '@/utils/storeCatalogManager'
 import {
   loadInstalledDeclarativePlugin,
@@ -400,7 +401,7 @@ export const usePluginsStore = defineStore('plugins', {
             const res = await fetch(V2_CATALOG_CDN_URL, {
               headers: { Accept: 'application/json' }
             })
-            return res.ok ? await res.json() : null
+            return res.ok ? normalizeCdnCatalogPayload(await res.json()) : null
           },
           fetchRemote: async (url) => {
             if (apiBase) {
@@ -410,7 +411,7 @@ export const usePluginsStore = defineStore('plugins', {
                   headers: { Accept: 'application/json' }
                 })
                 if (v2Res.ok) {
-                  return await v2Res.json()
+                  return normalizeCdnCatalogPayload(await v2Res.json())
                 }
               } catch (e) {
                 console.warn('[plugins] V2 catalog 拉取失败，尝试回退:', e)
@@ -420,7 +421,7 @@ export const usePluginsStore = defineStore('plugins', {
                   headers: { Accept: 'application/json' }
                 })
                 if (v2CdnRes.ok) {
-                  return await v2CdnRes.json()
+                  return normalizeCdnCatalogPayload(await v2CdnRes.json())
                 }
               } catch (e) {
                 console.warn('[plugins] V2 CDN 静态索引拉取失败，尝试回退:', e)
@@ -429,7 +430,7 @@ export const usePluginsStore = defineStore('plugins', {
                 try {
                   const res = await fetch(url, { headers: { Accept: 'application/json' } })
                   if (res.ok) {
-                    return await res.json()
+                    return normalizeCdnCatalogPayload(await res.json())
                   }
                 } catch (e) {
                   console.warn('[plugins] 官方 catalog 拉取失败，回退默认接口:', e)
@@ -440,7 +441,7 @@ export const usePluginsStore = defineStore('plugins', {
               try {
                 const res = await fetch(targetUrl, { headers: { Accept: 'application/json' } })
                 if (res.ok) {
-                  return await res.json()
+                  return normalizeCdnCatalogPayload(await res.json())
                 }
               } catch (e) {
                 console.warn('[plugins] 静态 catalog 拉取失败，回退默认接口:', e)

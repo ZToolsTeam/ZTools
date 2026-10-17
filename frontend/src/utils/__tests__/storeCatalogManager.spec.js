@@ -1,5 +1,9 @@
 import { describe, it, expect, vi, afterEach } from 'vitest'
-import { StoreCatalogManager } from '@/utils/storeCatalogManager'
+import {
+  StoreCatalogManager,
+  normalizeCdnCatalogPayload,
+  COMMUNITY_EXTENSION_IDS
+} from '@/utils/storeCatalogManager'
 import { isPluginSupportedOnCurrentPlatform } from '@/utils/platform'
 
 function asMac() {
@@ -63,12 +67,12 @@ describe('StoreCatalogManager 远程条目与内置插件同 ID 合并', () => {
 
   it('[破坏性] 内置插件在不可用名单里时，远程同名条目也不能把它带回市场', async () => {
     asMac()
-    const builtinClipboard = { id: 'clipboard-history', pluginId: 'clipboard-history', name: '剪贴板历史' }
+    const builtinVault = { id: 'password-vault', pluginId: 'password-vault', name: '密码保险箱' }
     const { catalog } = await createManager(
-      [{ id: 'clipboard-history', name: '剪贴板', platforms: ['darwin', 'windows'] }],
-      [builtinClipboard]
+      [{ id: 'password-vault', name: '密码保险箱', platforms: ['darwin', 'windows'] }],
+      [builtinVault]
     ).ensureCatalog(true)
-    expect(catalog.find((p) => p.pluginId === 'clipboard-history')).toBeUndefined()
+    expect(catalog.find((p) => p.pluginId === 'password-vault')).toBeUndefined()
   })
 })
 
@@ -119,3 +123,41 @@ describe('StoreCatalogManager 远程清单超时', () => {
     expect(result.catalog.map((p) => p.pluginId)).toEqual(['todo'])
   })
 })
+
+describe('StoreCatalogManager 开源社区扩展 (ZTools-extensions) 识别与过滤', () => {
+  it('normalizeCdnCatalogPayload 将 CDN 批量构建的 26 款社区扩展归类为 community，保留官方插件与独立作者', async () => {
+    expect(COMMUNITY_EXTENSION_IDS.size).toBe(26)
+    const rawPayload = {
+      plugins: [
+        { id: 'todo', name: '待办事项', author: 'ZTools Team', is_official: true },
+        { id: 'uuid-generator', name: 'UUID 生成器', author: 'Alice Dev', is_official: true },
+        { id: 'cleaner', name: '系统清理', author: 'ZTools Team', is_official: true }
+      ]
+    }
+    const normalized = normalizeCdnCatalogPayload(rawPayload)
+    const manager = new StoreCatalogManager({
+      apiBaseUrl: '',
+      getStaticCatalog: async () => normalized,
+      getOfficialList: () => [builtinCalculator]
+    })
+
+    const communityRes = await manager.query({ sourceType: 'community' })
+    expect(communityRes.list.map((p) => p.pluginId).sort()).toEqual(['todo', 'uuid-generator'])
+    const todoItem = communityRes.list.find((p) => p.pluginId === 'todo')
+    expect(todoItem.author).toBe('ZTools Community')
+    expect(todoItem.is_official).toBe(false)
+    const uuidItem = communityRes.list.find((p) => p.pluginId === 'uuid-generator')
+    expect(uuidItem.author).toBe('Alice Dev')
+
+    const officialRes = await manager.query({ sourceType: 'official' })
+    expect(officialRes.list.map((p) => p.pluginId).sort()).toEqual(['calculator', 'cleaner'])
+  })
+
+  it('[破坏性] normalizeCdnCatalogPayload 面对 null、非对象或畸形条目安全返回不崩溃', () => {
+    expect(normalizeCdnCatalogPayload(null)).toBeNull()
+    expect(normalizeCdnCatalogPayload(undefined)).toBeUndefined()
+    expect(normalizeCdnCatalogPayload('invalid')).toBe('invalid')
+    expect(normalizeCdnCatalogPayload([null, { id: 'todo', author: 'ZTools Team' }])[1].source_type).toBe('community')
+  })
+})
+

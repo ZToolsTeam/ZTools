@@ -189,9 +189,10 @@ describe('官方标杆声明式应用注册表与端到端集成测试', () => {
       const officeRes = await store.loadWithCache({ category: '办公效率' }, true)
       expect(officeRes.list.some((p) => p.pluginId === 'json-format')).toBe(true)
       expect(officeRes.list.some((p) => p.pluginId === 'notes')).toBe(true)
+      expect(officeRes.list.some((p) => p.pluginId === 'clipboard-history')).toBe(true)
+      expect(officeRes.list.some((p) => p.pluginId === 'snippets')).toBe(true)
       // 只能展示示例数据的插件不进市场
       expect(officeRes.list.some((p) => p.pluginId === 'github')).toBe(false)
-      expect(officeRes.list.some((p) => p.pluginId === 'clipboard-history')).toBe(false)
 
       // 2. 分类筛选：'系统工具'
       const sysRes = await store.loadWithCache({ category: '系统工具' }, true)
@@ -316,7 +317,7 @@ describe('官方标杆声明式应用注册表与端到端集成测试', () => {
     it('[破坏性] 不可用的内置插件即使绕过列表直接打开也会被拒绝，且不跳转', async () => {
       const store = usePluginsStore()
       mockPush.mockClear()
-      for (const id of ['clipboard-history', ' KILL-PROCESS ', 'trial-nudges']) {
+      for (const id of ['github', ' KILL-PROCESS ', 'trial-nudges']) {
         await expect(store.openPlugin(id)).rejects.toThrow('当前系统上暂不可用')
       }
       expect(mockPush).not.toHaveBeenCalled()
@@ -324,12 +325,12 @@ describe('官方标杆声明式应用注册表与端到端集成测试', () => {
 
     it('[破坏性] 直接访问不可用插件的路由时显示「当前系统暂不可用」，不渲染插件', async () => {
       const wrapper = mount(DeclarativePage, {
-        props: { pluginId: 'window-management' },
+        props: { pluginId: 'kill-process' },
         global: { stubs: { DeclarativeView: true } }
       })
       await nextTick()
       expect(wrapper.text()).toContain('当前系统暂不可用')
-      expect(wrapper.text()).toContain('窗口极速调度')
+      expect(wrapper.text()).toContain('进程管理急救箱')
       expect(wrapper.text()).not.toContain('未找到指定的声明式应用')
       expect(wrapper.findComponent({ name: 'DeclarativeView' }).exists()).toBe(false)
       wrapper.unmount()

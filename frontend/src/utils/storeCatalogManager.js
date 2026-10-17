@@ -43,6 +43,76 @@ const OFFICIAL_AUTHORS = new Set([
 ])
 
 /**
+ * ZTools-extensions 开源社区生态插件集合（26 款跨平台开源扩展）
+ * 当静态 CDN 索引 (plugins-v2/plugins.json) 批量构建产物的默认作者为 ZTools Team 时，
+ * 将这些开源社区扩展归类到「社区精选 (community)」，确保开源与商业客户端的「社区精选」Tab 均可正常浏览与安装。
+ */
+export const COMMUNITY_EXTENSION_IDS = new Set([
+  'base64image',
+  'batch-text-convert',
+  'browser-bookmarks',
+  'browser-history',
+  'calendar',
+  'chinese-number-converter',
+  'crypto-tool',
+  'file-compare',
+  'google-auth',
+  'image-editor',
+  'image-tool',
+  'lan-share',
+  'memo',
+  'port-manager',
+  'quick-folders',
+  'record',
+  'screen-color-picker',
+  'shredder',
+  'sqlite-plugin',
+  'super-markdown',
+  'text-formatter',
+  'timestamp',
+  'todo',
+  'unit-converter',
+  'uuid-generator',
+  'world-clock'
+])
+
+/**
+ * 规范化静态 CDN 插件目录载荷，将 ZTools-extensions 开源社区扩展标记为 community 来源
+ * @param {any} payload
+ * @returns {any}
+ */
+export function normalizeCdnCatalogPayload(payload) {
+  if (!payload || typeof payload !== 'object') return payload
+  const mapItem = (item) => {
+    if (!item || typeof item !== 'object') return item
+    const pid = normalizePluginId(item.pluginId || item.id).toLowerCase()
+    if (!pid || !COMMUNITY_EXTENSION_IDS.has(pid)) return item
+    const rawAuthor = String(item.author || '').trim()
+    const isDefaultOfficialAuthor = !rawAuthor || isOfficialAuthor(rawAuthor)
+    return {
+      ...item,
+      author: isDefaultOfficialAuthor ? 'ZTools Community' : rawAuthor,
+      is_official: false,
+      isOfficial: false,
+      official_badge: null,
+      officialBadge: null,
+      source_type: 'community',
+      sourceType: 'community'
+    }
+  }
+  if (Array.isArray(payload)) {
+    return payload.map(mapItem)
+  }
+  if (Array.isArray(payload.plugins)) {
+    return { ...payload, plugins: payload.plugins.map(mapItem) }
+  }
+  if (Array.isArray(payload.list)) {
+    return { ...payload, list: payload.list.map(mapItem) }
+  }
+  return payload
+}
+
+/**
  * 判断作者名称是否属于官方自营团队
  * @param {string} [author]
  * @returns {boolean}
@@ -64,8 +134,6 @@ export function isOfficialAuthor(author) {
  */
 export function isOfficialPluginItem(item, builtinMatch = null) {
   if (!item || typeof item !== 'object') return false
-  if (item.is_official === true || item.isOfficial === true) return true
-  if (item.source_type === 'official' || item.sourceType === 'official') return true
   if (
     item.isBuiltin === true ||
     builtinMatch?.is_official === true ||
@@ -74,6 +142,15 @@ export function isOfficialPluginItem(item, builtinMatch = null) {
   ) {
     return true
   }
+  if (
+    (item.source_type === 'community' || item.sourceType === 'community') &&
+    item.is_official !== true &&
+    item.isOfficial !== true
+  ) {
+    return false
+  }
+  if (item.is_official === true || item.isOfficial === true) return true
+  if (item.source_type === 'official' || item.sourceType === 'official') return true
   if (isOfficialAuthor(item.author) || isOfficialAuthor(builtinMatch?.author)) {
     return true
   }

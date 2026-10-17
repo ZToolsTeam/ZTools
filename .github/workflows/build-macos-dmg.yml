@@ -1,0 +1,144 @@
+name: Build macOS Universal DMG
+
+on:
+  workflow_dispatch:
+    inputs:
+      upload_to_release:
+        description: '编译完成后是否自动挂载到 GitHub Release (v<version>)'
+        required: false
+        default: 'true'
+        type: choice
+        options:
+          - 'true'
+          - 'false'
+      bundle_id:
+        description: 'macOS App Bundle ID'
+        required: false
+        default: 'cn.ztools.app'
+        type: string
+      minimum_os:
+        description: 'macOS 最低系统版本要求 (LSMinimumSystemVersion)'
+        required: false
+        default: '13.0'
+        type: string
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  build-macos-universal:
+    name: Build macOS Universal (.app & .dmg)
+    runs-on: macos-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22.14.0'
+          cache: 'npm'
+
+      - name: Verify Xcode & macOS packaging toolchain
+        run: |
+          sw_vers
+          xcodebuild -version
+          which clang lipo codesign ditto hdiutil
+
+      - name: Install all subproject dependencies & build declarative-ui
+        run: |
+          npm install --no-audit --no-fund
+          node scripts/dev-bootstrap.mjs --install-only
+
+      - name: Resolve package version & macOS bundle versions
+        id: meta
+        run: |
+          node - <<'EOF'
+          const fs = require('node:fs');
+          const clientPkg = JSON.parse(fs.readFileSync('electron-client/package.json', 'utf8'));
+          const rootPkg = JSON.parse(fs.readFileSync('package.json', 'utf8'));
+          const rawVersion = String(clientPkg.version || rootPkg.version || '1.0.0').trim();
+          const nums = rawVersion.split(/[^0-9]+/).filter(Boolean);
+          const shortVersion = [nums[0] || '1', nums[1] || '0', nums[2] || '0'].join('.');
+          const buildVersion = nums.length >= 4 ? [nums[0], nums[1], nums[3]].join('.') : shortVersion;
+          const out = process.env.GITHUB_OUTPUT;
+          fs.appendFileSync(out, `version=${rawVersion}\n`);
+          fs.appendFileSync(out, `short_version=${shortVersion}\n`);
+          fs.appendFileSync(out, `build_version=${buildVersion}\n`);
+          fs.appendFileSync(out, `tag=v${rawVersion}\n`);
+          console.log({ rawVersion, shortVersion, buildVersion });
+          EOF
+
+      - name: Build macOS Universal App Bundle (arm64 + x86_64)
+        env:
+          BUNDLE_ID: ${{ inputs.bundle_id || 'cn.ztools.app' }}
+          MINIMUM_OS: ${{ inputs.minimum_os || '13.0' }}
+          SHORT_VERSION: ${{ steps.meta.outputs.short_version }}
+          BUILD_VERSION: ${{ steps.meta.outputs.build_version }}
+        run: |
+          npm --prefix electron-client run package:app:darwin:universal -- \
+            --app-bundle-id "${BUNDLE_ID}" \
+            --minimum-os "${MINIMUM_OS}" \
+            --short-version "${SHORT_VERSION}" \
+            --build-version "${BUILD_VERSION}"
+
+      - name: Apply Ad-hoc Deep Code Signature for Apple Silicon compatibility
+        env:
+          VERSION: ${{ steps.meta.outputs.version }}
+        run: |
+          APP_PATH="${GITHUB_WORKSPACE}/electron-client/artifacts/${VERSION}/darwin-universal/ZTools-darwin-universal/ZTools.app"
+          echo "Signing app bundle (ad-hoc): ${APP_PATH}"
+          /usr/bin/codesign --force --deep --sign - "${APP_PATH}"
+          /usr/bin/codesign --verify --deep --strict "${APP_PATH}"
+
+      - name: Package macOS Universal DMG Installer & SHA-256
+        id: dmg
+        env:
+          VERSION: ${{ steps.meta.outputs.version }}
+        run: |
+          APP_PATH="${GITHUB_WORKSPACE}/electron-client/artifacts/${VERSION}/darwin-universal/ZTools-darwin-universal/ZTools.app"
+          OUT_DIR="${GITHUB_WORKSPACE}/dist/macos"
+          mkdir -p "${OUT_DIR}"
+          DMG_NAME="ZTools-${VERSION}-darwin-universal.dmg"
+          DMG_PATH="${OUT_DIR}/${DMG_NAME}"
+          npm --prefix electron-client run package:dmg:darwin -- \
+            --app "${APP_PATH}" \
+            --output "${DMG_PATH}" \
+            --allow-unsigned
+          ls -lh "${OUT_DIR}"
+          echo "dmg_name=${DMG_NAME}" >> "${GITHUB_OUTPUT}"
+          echo "dmg_path=${DMG_PATH}" >> "${GITHUB_OUTPUT}"
+          echo "sha256_path=${DMG_PATH}.sha256" >> "${GITHUB_OUTPUT}"
+
+      - name: Upload DMG to GitHub Actions Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: ZTools-${{ steps.meta.outputs.version }}-darwin-universal
+          path: |
+            ${{ steps.dmg.outputs.dmg_path }}
+            ${{ steps.dmg.outputs.sha256_path }}
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Attach DMG to GitHub Release
+        if: ${{ github.event_name == 'push' || inputs.upload_to_release != 'false' }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ steps.meta.outputs.tag }}
+          VERSION: ${{ steps.meta.outputs.version }}
+          DMG_PATH: ${{ steps.dmg.outputs.dmg_path }}
+          SHA_PATH: ${{ steps.dmg.outputs.sha256_path }}
+        run: |
+          if ! gh release view "${TAG}" >/dev/null 2>&1; then
+            echo "Release ${TAG} does not exist yet, creating..."
+            gh release create "${TAG}" \
+              --title "ZTools ${TAG}" \
+              --notes "ZTools ${TAG} Windows & macOS Universal Release"
+          fi
+          gh release upload "${TAG}" "${DMG_PATH}" "${SHA_PATH}" --clobber
+          echo "✅ Uploaded ${DMG_PATH} to GitHub Release ${TAG}"

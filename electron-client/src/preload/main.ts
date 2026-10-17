@@ -199,6 +199,12 @@ type PreloadMethod =
   | 'snippets_match_and_expand'
   | 'snippets_import'
   | 'snippets_export'
+  | 'filesearch_query'
+  | 'filesearch_open'
+  | 'filesearch_reveal'
+  | 'filesearch_sha256'
+  | 'window_manage_action'
+  | 'window_manage_list_actions'
   | 'db_put'
   | 'db_get'
   | 'db_delete'
@@ -471,6 +477,12 @@ const bridge = Object.freeze({
       snippets_match_and_expand: (request: unknown) => invokeMethod('snippets_match_and_expand', request),
       snippets_import: (request: unknown) => invokeMethod('snippets_import', request),
       snippets_export: (request: unknown) => invokeMethod('snippets_export', request),
+      filesearch_query: (request: unknown) => invokeMethod('filesearch_query', request),
+      filesearch_open: (request: unknown) => invokeMethod('filesearch_open', request),
+      filesearch_reveal: (request: unknown) => invokeMethod('filesearch_reveal', request),
+      filesearch_sha256: (request: unknown) => invokeMethod('filesearch_sha256', request),
+      window_manage_action: (request: unknown) => invokeMethod('window_manage_action', request),
+      window_manage_list_actions: (request: unknown) => invokeMethod('window_manage_list_actions', request),
       db_put: (request: unknown) => invokeMethod('db_put', request),
       db_get: (request: unknown) => invokeMethod('db_get', request),
       db_delete: (request: unknown) => invokeMethod('db_delete', request),

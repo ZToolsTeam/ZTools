@@ -6,6 +6,7 @@ import { createPinia, setActivePinia } from 'pinia'
 
 const items = ref([])
 vi.mock('@/composables/useCommandSearch', () => ({
+  normalizePluginFeatures: () => [],
   useCommandSearch: () => ({
     query: ref(''),
     fileResults: ref([]),

@@ -42,6 +42,7 @@ const WHITELIST_FILES = [
 ]
 
 const WHITELIST_DIRS = [
+  '.github',
   'assets',
   'electron-client',
   'frontend',

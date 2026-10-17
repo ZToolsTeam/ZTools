@@ -47,13 +47,24 @@ describe('isPluginSupportedOnCurrentPlatform', () => {
 
   it('[破坏性] 插件清单自称支持所有平台也不能绕过不可用名单', () => {
     asPlatform('mac')
-    expect(isPluginSupportedOnCurrentPlatform({ pluginId: 'clipboard-history', platforms: ['darwin', 'win32'] })).toBe(false)
+    expect(isPluginSupportedOnCurrentPlatform({ pluginId: 'password-vault', platforms: ['darwin', 'win32'] })).toBe(false)
   })
 
-  it('Mac 上实际可见的内置插件只剩真正能用的几个；Windows 多出依赖 Windows 组件的插件', () => {
+  it('Mac 上实际可见的内置插件包含已打通宿主的跨平台核心插件；Windows 多出依赖 Windows 组件的插件', () => {
     asPlatform('mac')
     const mac = OFFICIAL_PLUGINS_LIST.filter(isPluginSupportedOnCurrentPlatform).map((p) => p.pluginId).sort()
-    expect(mac).toEqual(['calculator', 'emoji-picker', 'google-translate', 'json-format', 'notes', 'quicklinks'])
+    expect(mac).toEqual([
+      'calculator',
+      'clipboard-history',
+      'emoji-picker',
+      'everything-file-search',
+      'google-translate',
+      'json-format',
+      'notes',
+      'quicklinks',
+      'snippets',
+      'window-management'
+    ])
     vi.restoreAllMocks()
     asPlatform('win')
     const win = OFFICIAL_PLUGINS_LIST.filter(isPluginSupportedOnCurrentPlatform).map((p) => p.pluginId)

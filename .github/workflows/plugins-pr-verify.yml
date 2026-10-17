@@ -1,0 +1,87 @@
+name: ZTools Plugins PR Verification Gate
+
+on:
+  pull_request:
+    branches:
+      - main
+      - master
+    paths:
+      - 'plugins/**'
+      - 'packages/ztools-plugins-spec/**'
+      - 'scripts/scan-plugin-security.mjs'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  verify-plugins:
+    name: Security AST Scan & Schema Gate
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: 'npm'
+          cache-dependency-path: 'frontend/package-lock.json'
+
+      - name: Install Frontend Parser Dependencies
+        run: |
+          if [ -d "frontend" ]; then
+            npm --prefix frontend ci || npm --prefix frontend install
+          fi
+
+      - name: Run Plugin Security AST Scanner
+        id: security-scan
+        run: |
+          echo "🔍 正在对变更插件执行 AST 语法树安全扫描门禁..."
+          node scripts/scan-plugin-security.mjs plugins/ --json > scan-report.json || true
+          node scripts/scan-plugin-security.mjs plugins/
+
+      - name: Parse Scan Report & Evaluate Two-Man Rule
+        id: eval-gate
+        run: |
+          node -e "
+          import fs from 'node:fs';
+          if (!fs.existsSync('scan-report.json')) process.exit(0);
+          const raw = fs.readFileSync('scan-report.json', 'utf8');
+          const data = JSON.parse(raw);
+          const list = Array.isArray(data) ? data : [data];
+
+          let hasErrors = false;
+          let twoManList = [];
+
+          for (const item of list) {
+            if (!item.passed) hasErrors = true;
+            if (item.requiresTwoManReview) {
+              twoManList.push({ id: item.pluginId, reasons: item.twoManReviewReasons });
+            }
+          }
+
+          let summary = '### 🛡️ ZTools 插件安全 AST 扫描与权限审查结果\n\n';
+          if (hasErrors) {
+            summary += '❌ **安全门禁拦截：检测到高危安全违规（如 eval/Function/混淆/未授权Node原生模块），禁止合并！**\n\n';
+          } else {
+            summary += '✅ **AST 静态安全分析全部通过！**\n\n';
+          }
+
+          if (twoManList.length > 0) {
+            summary += '⚠️ **【Two-Man Rule 双人审查门禁触发】**\n';
+            summary += '以下插件包含敏感系统权限或外部交互能力，必须由至少两位核心维护者审查代码并 Approve 后方可合并：\n';
+            for (const t of twoManList) {
+              summary += '- **' + t.id + '**: ' + t.reasons.join('; ') + '\n';
+            }
+          } else {
+            summary += '✨ 未触发双人人工复核（属于纯前端标准安全沙箱插件）。\n';
+          }
+
+          fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY, summary);
+          if (hasErrors) process.exit(1);
+          "

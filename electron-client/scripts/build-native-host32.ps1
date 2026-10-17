@@ -12,10 +12,18 @@ $build = Join-Path $root 'out\native\build-win32'
 $output = Join-Path $root 'out\native\win32-ia32'
 $serviceOutput = Join-Path $root 'out\native\service-win32-ia32'
 $testOutput = Join-Path $root 'out\native\test-win32-ia32'
-$cmake = 'D:\Program Files\CMake\bin\cmake.exe'
+$cmakeCandidates = @(
+  (Get-Command cmake -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Source -ErrorAction SilentlyContinue),
+  'D:\Program Files\CMake\bin\cmake.exe',
+  'C:\Program Files\CMake\bin\cmake.exe',
+  'C:\Program Files (x86)\Microsoft Visual Studio\2022\Community\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\bin\cmake.exe',
+  'C:\Program Files\Microsoft Visual Studio\2022\Community\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\bin\cmake.exe'
+) | Where-Object { $_ -and (Test-Path -LiteralPath $_ -PathType Leaf) }
 
-if (-not (Test-Path -LiteralPath $cmake -PathType Leaf)) {
-  throw "CMake not found: $cmake"
+$cmake = $cmakeCandidates | Select-Object -First 1
+
+if (-not $cmake) {
+  throw "CMake not found in PATH or standard installation directories."
 }
 
 New-Item -ItemType Directory -Path $build -Force | Out-Null

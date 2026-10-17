@@ -25,7 +25,7 @@ import { fileURLToPath } from 'node:url'
 import { discoverPluginDirectories } from '../scripts/build-plugins-release.mjs'
 import { loadInstalledDeclarativePlugin } from '../frontend/src/utils/declarativePluginLoader.js'
 import { StoreCatalogManager } from '../frontend/src/utils/storeCatalogManager.js'
-import { renderDeclarativeRoot } from '../packages/raycast-compat/dist/index.js'
+import { renderDeclarativeRoot } from '../packages/declarative-ui/dist/index.js'
 
 import {
   PluginInstallService
