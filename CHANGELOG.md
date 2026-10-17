@@ -5,7 +5,7 @@
 日志格式遵循业界通用的 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 规范，版本号遵循 [语义化版本 (Semantic Versioning)](https://semver.org/lang/zh-CN/) 标准，每次代码同步与版本发布均在顶部持续追加最新记录。
 
 <!-- changelog-auto-append-start -->
-<!-- last-synced-commit: 8cf32c7 -->
+<!-- last-synced-commit: 4c589ae -->
 
 ## [v1.1.8.0] - 2026-10-17 - 核心效率流 (Phase 1~3) 落地、双模态交互打磨与跨平台三包齐发
 
@@ -19,6 +19,7 @@
 - **macOS 打包与双窗口流转增强**：新增 `package:mac:dmg` DMG 镜像构建与应用图标校验；悬浮条展开至大主界面工作台时支持精准携带并跳转至目标插件页面；插件危险操作统一接入站内确认对话框。
 
 ### 🐛 问题修复 (Bug Fixes)
+- 升级云端Mac工作流至Node24(npm11)并默认开启legacy-peer-deps解决edgesOut报错 (`4c589ae`)
 - 升级四段式版本至v1.1.8.0并增强macOS跨平台npm依赖安装自愈 (`8cf32c7`)
 - **文件秒搜 (`Quick Look`) 快捷键对齐**：将文件秒搜预览快捷键统一对齐为 `Ctrl+Y`，支持空文件与超大文件安全截断预览。
 - **平台能力过滤与数据纯净性**：插件市场自动按当前操作系统过滤展示可用插件，隐藏空分类；移除便签、翻译、快捷直达中的示例占位数据；修复 macOS 下 `/var` 系统软链接导致的文件授权测试卡死问题。
