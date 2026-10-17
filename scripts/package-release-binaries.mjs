@@ -296,13 +296,25 @@ export function uploadDualArtifactsToGitHub({
   )
 
   if (checkResult.status === 0) {
-    console.log(`\n⏳ Release ${plan.releaseTag} 已存在，正在覆盖上传 EXE 安装包 + ZIP 免安装包...`)
+    console.log(`\n⏳ Release ${plan.releaseTag} 已存在，正在覆盖上传 EXE 安装包 + ZIP 免安装包并同步说明文案...`)
     runCommand(ghExecutable, [
       'release',
       'upload',
       plan.releaseTag,
       ...plan.assets,
       '--clobber',
+      '--repo',
+      plan.repo
+    ])
+    runCommand(ghExecutable, [
+      'release',
+      'edit',
+      plan.releaseTag,
+      '--title',
+      `ZTools ${plan.releaseTag} - 纯粹开源效率中枢平台`,
+      '--notes',
+      plan.releaseNotes,
+      '--latest',
       '--repo',
       plan.repo
     ])
@@ -314,9 +326,10 @@ export function uploadDualArtifactsToGitHub({
       plan.releaseTag,
       ...plan.assets,
       '--title',
-      `ZTools ${plan.releaseTag}`,
+      `ZTools ${plan.releaseTag} - 纯粹开源效率中枢平台`,
       '--notes',
       plan.releaseNotes,
+      '--latest',
       '--repo',
       plan.repo
     ])
