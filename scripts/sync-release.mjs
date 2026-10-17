@@ -73,8 +73,32 @@ function ensureGiteeRemote(repoDir, giteeUrl) {
   return true
 }
 
+function ensureGithubRemoteWithGhToken(repoDir, githubUrl) {
+  if (!githubUrl || !githubUrl.startsWith('https://github.com/')) return
+  const ghCandidates = [
+    path.join(process.env.LOCALAPPDATA || '', 'Programs', 'GitHub CLI', 'bin', 'gh.exe'),
+    'C:\\Program Files\\GitHub CLI\\gh.exe',
+    'gh'
+  ]
+  for (const ghBin of ghCandidates) {
+    try {
+      if (ghBin !== 'gh' && !fs.existsSync(ghBin)) continue
+      const token = execSync(`"${ghBin}" auth token`, { cwd: repoDir, stdio: 'pipe', encoding: 'utf8' }).trim()
+      if (token) {
+        const authUrl = githubUrl.replace('https://github.com/', `https://x-access-token:${token}@github.com/`) +
+          (githubUrl.endsWith('.git') ? '' : '.git')
+        run(`git remote set-url origin "${authUrl}"`, repoDir)
+        return
+      }
+    } catch {
+      // 忽略并尝试下一个候选
+    }
+  }
+}
+
 function pushToRemotes(repoDir, name, githubUrl, giteeUrl) {
   console.log(`⏳ 正在推送至 GitHub (${githubUrl}) main 分支...`)
+  ensureGithubRemoteWithGhToken(repoDir, githubUrl)
   run('git push origin main', repoDir)
   const latestSha = run('git rev-parse --short HEAD', repoDir)
   console.log(`🎉 [GitHub 同步成功] ${name} 已推送至 GitHub！最新版本: ${latestSha}`)
