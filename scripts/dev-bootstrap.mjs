@@ -40,11 +40,31 @@ export function resolveNpmRunner(env = process.env, platform = process.platform)
   }
 }
 
+export function sanitizeSubprojectEnv(env = process.env, cwd = '') {
+  const cleaned = { ...env }
+  for (const key of Object.keys(cleaned)) {
+    if (
+      key === 'INIT_CWD' ||
+      key === 'npm_package_json' ||
+      key === 'npm_config_local_prefix' ||
+      key === 'npm_lifecycle_event' ||
+      key === 'npm_lifecycle_script'
+    ) {
+      delete cleaned[key]
+    }
+  }
+  if (cwd) {
+    cleaned.INIT_CWD = cwd
+  }
+  return cleaned
+}
+
 export function runNpm(args, cwd, { env = process.env, platform = process.platform, runner = spawnSync } = {}) {
   const { command, baseArgs, shell } = resolveNpmRunner(env, platform)
+  const subEnv = sanitizeSubprojectEnv(env, cwd)
   const result = runner(command, [...baseArgs, ...args], {
     cwd,
-    env,
+    env: subEnv,
     stdio: 'inherit',
     shell
   })
@@ -80,7 +100,25 @@ export function ensureSubprojectDependencies({
     if (!fs.existsSync(path.join(sub.dir, 'package.json'))) continue
     if (!fs.existsSync(sub.probe)) {
       log(`📦 [bootstrap] 检测到 ${sub.name} 尚未安装依赖，正在自动执行 npm install...`)
-      const code = runNpm(['install', '--no-audit', '--no-fund'], sub.dir, { env, platform, runner })
+      let code = runNpm(['install', '--no-audit', '--no-fund', '--workspaces=false'], sub.dir, {
+        env,
+        platform,
+        runner
+      })
+      if (code !== 0) {
+        log(`⚠️ [bootstrap] ${sub.name} 首次安装遇到跨平台锁文件冲突，正在清理 package-lock.json 并自动重试...`)
+        try {
+          fs.rmSync(path.join(sub.dir, 'package-lock.json'), { force: true })
+          fs.rmSync(path.join(sub.dir, 'node_modules'), { recursive: true, force: true })
+        } catch {
+          // 忽略清理异常
+        }
+        code = runNpm(
+          ['install', '--no-package-lock', '--no-audit', '--no-fund', '--workspaces=false'],
+          sub.dir,
+          { env, platform, runner }
+        )
+      }
       if (code !== 0) {
         throw new Error(`${sub.name} 依赖安装失败（退出码 ${code}）`)
       }
