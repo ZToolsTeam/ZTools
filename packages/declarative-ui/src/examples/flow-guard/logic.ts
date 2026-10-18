@@ -6,6 +6,7 @@
 
 import {
   callHostTransport,
+  isRealElectronHost,
   showRealItemInFolder
 } from '../shared/native-ipc.js'
 
@@ -149,6 +150,75 @@ const PRESET_ITEMS: CapabilityActionItem[] = [
     tag: '连接审计',
     method: 'GetProcessConnections',
     params: {}
+  }
+]
+
+const FALLBACK_ENDPOINTS: PortEndpointItem[] = [
+  {
+    protocol: 'TCP',
+    localAddress: '192.168.1.108',
+    localPort: 54312,
+    remoteAddress: '142.250.190.46',
+    remotePort: 443,
+    state: 'ESTABLISHED',
+    pid: 14208,
+    processName: 'chrome.exe',
+    remoteScope: 'public'
+  },
+  {
+    protocol: 'TCP',
+    localAddress: '192.168.1.108',
+    localPort: 54318,
+    remoteAddress: '20.205.243.166',
+    remotePort: 443,
+    state: 'ESTABLISHED',
+    pid: 19844,
+    processName: 'Code.exe',
+    remoteScope: 'public'
+  },
+  {
+    protocol: 'TCP',
+    localAddress: '192.168.1.108',
+    localPort: 51820,
+    remoteAddress: '192.168.1.1',
+    remotePort: 53,
+    state: 'ESTABLISHED',
+    pid: 1044,
+    processName: 'svchost.exe',
+    remoteScope: 'lan'
+  },
+  {
+    protocol: 'TCP',
+    localAddress: '127.0.0.1',
+    localPort: 18580,
+    remoteAddress: '0.0.0.0',
+    remotePort: 0,
+    state: 'LISTENING',
+    pid: 22104,
+    processName: 'ZTools.exe',
+    remoteScope: 'listening'
+  },
+  {
+    protocol: 'TCP',
+    localAddress: '0.0.0.0',
+    localPort: 3000,
+    remoteAddress: '0.0.0.0',
+    remotePort: 0,
+    state: 'LISTENING',
+    pid: 28440,
+    processName: 'node.exe',
+    remoteScope: 'listening'
+  },
+  {
+    protocol: 'UDP',
+    localAddress: '127.0.0.1',
+    localPort: 5353,
+    remoteAddress: '127.0.0.1',
+    remotePort: 5353,
+    state: 'BOUND',
+    pid: 22104,
+    processName: 'ZTools.exe',
+    remoteScope: 'loopback'
   }
 ]
 
@@ -301,7 +371,12 @@ export async function fetchFlowGuardSnapshot(hostOverride?: any): Promise<FlowGu
     }
   }
 
-  const rawPorts = portsRes.ok && Array.isArray(portsRes.data) ? portsRes.data : []
+  const rawPorts =
+    portsRes.ok && Array.isArray(portsRes.data)
+      ? portsRes.data
+      : !hostOverride && !isRealElectronHost()
+      ? FALLBACK_ENDPOINTS
+      : []
   const groupMap = new Map<number, ProcessNetworkGroup>()
 
   let totalEstablished = 0
@@ -323,7 +398,7 @@ export async function fetchFlowGuardSnapshot(hostOverride?: any): Promise<FlowGu
 
     if (proto === 'UDP') totalUdp += 1
     if (state === 'ESTABLISHED') totalEstablished += 1
-    if (state === 'LISTENING') totalListening += 1
+    if (state === 'LISTENING' || state === 'LISTEN') totalListening += 1
     if (remoteScope === 'public') totalPublic += 1
     else if (remoteScope === 'lan') totalLan += 1
     else if (remoteScope === 'loopback') totalLoopback += 1
@@ -355,7 +430,7 @@ export async function fetchFlowGuardSnapshot(hostOverride?: any): Promise<FlowGu
       group.tcpCount += 1
     }
     if (state === 'ESTABLISHED') group.establishedCount += 1
-    if (state === 'LISTENING') group.listeningCount += 1
+    if (state === 'LISTENING' || state === 'LISTEN') group.listeningCount += 1
     if (remoteScope === 'public') group.publicCount += 1
     else if (remoteScope === 'lan') group.lanCount += 1
     else if (remoteScope === 'loopback') group.loopbackCount += 1

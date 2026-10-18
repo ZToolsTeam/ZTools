@@ -69,7 +69,22 @@ import {
   ScriptCommandsCommand,
   RaycastFocusCommand,
   CalendarCommand,
-  WebSearchesCommand
+  WebSearchesCommand,
+  NetworkAdapterCommand,
+  NetworkRescueCommand,
+  ContextMenuCommand,
+  WechatMultiCommand,
+  LanShareCommand,
+  MoverCommand,
+  DataRecoveryCommand,
+  ShredderCommand,
+  SystemBackupCommand,
+  SqlitePluginCommand,
+  AiImageCommand,
+  AiVideoCommand,
+  OcrCommand,
+  RecordCommand,
+  FileCompareCommand
 } from '@ztools/declarative-ui'
 
 /**
@@ -106,6 +121,21 @@ export const OFFICIAL_PLUGIN_IDS = Object.freeze({
   PDF: 'pdf',
   MULTI_DOWNLOAD: 'multi-download',
   VIDEO_DOWNLOADER: 'video-downloader',
+  NETWORK_ADAPTER: 'network-adapter',
+  NETWORK_RESCUE: 'network-rescue',
+  CONTEXT_MENU: 'context-menu',
+  WECHAT_MULTI: 'wechat-multi',
+  LAN_SHARE: 'lan-share',
+  MOVER: 'mover',
+  DATA_RECOVERY: 'data-recovery',
+  SHREDDER: 'shredder',
+  SYSTEM_BACKUP: 'system-backup',
+  SQLITE_PLUGIN: 'sqlite-plugin',
+  AI_IMAGE: 'ai-image',
+  AI_VIDEO: 'ai-video',
+  OCR: 'ocr',
+  RECORD: 'record',
+  FILE_COMPARE: 'file-compare',
 
   // M1.5 第二组: 高频核心内置应用 (Group 2 Built-in Apps)
   EMOJI_PICKER: 'emoji-picker',
@@ -1225,7 +1255,289 @@ export const OFFICIAL_PLUGINS_MAP = Object.freeze({
     isDeclarative: true,
     enabled: true,
     command: WebSearchesCommand
+  }),
+
+  // ==================== 补齐 35 款本地原生标杆插件全集 (35 Local Native Suite) ====================
+  [OFFICIAL_PLUGIN_IDS.NETWORK_ADAPTER]: Object.freeze({
+    id: 'network-adapter',
+    pluginId: 'network-adapter',
+    name: '网络适配器与网卡管家',
+    title: '网络适配器与网卡管家',
+    description: '查看本机物理与虚拟网卡 IPv4/IPv6、MAC 地址、网关与 DNS，一键复制配置或刷新 DNS 缓存',
+    category: '网络工具',
+    keyword: 'network adapter nic ip mac dns 网卡 网络适配器 以太网 wifi 虚拟网卡 network-adapter',
+    faIcon: 'fa-sitemap',
+    version: '2.0.0',
+    author: 'ZTools Official',
+    badge: '2.0标杆',
+    isBuiltin: true,
+    isDeclarative: true,
+    enabled: true,
+    command: NetworkAdapterCommand
+  }),
+
+  [OFFICIAL_PLUGIN_IDS.NETWORK_RESCUE]: Object.freeze({
+    id: 'network-rescue',
+    pluginId: 'network-rescue',
+    name: '断网急救与协议栈修复',
+    title: '断网急救与协议栈修复',
+    description: '一键诊断并修复 DNS 解析异常、残留系统代理拦截、Winsock 协议栈损坏与 Hosts 劫持',
+    category: '网络工具',
+    keyword: 'network rescue repair dns winsock proxy 断网急救 网络修复 无法上网 代理清除 network-rescue',
+    faIcon: 'fa-medkit',
+    version: '2.0.0',
+    author: 'ZTools Official',
+    badge: '2.0标杆',
+    isBuiltin: true,
+    isDeclarative: true,
+    enabled: true,
+    command: NetworkRescueCommand
+  }),
+
+  [OFFICIAL_PLUGIN_IDS.CONTEXT_MENU]: Object.freeze({
+    id: 'context-menu',
+    pluginId: 'context-menu',
+    name: '系统右键菜单管理',
+    title: '系统右键菜单管理',
+    description: '扫描并启用/禁用文件、目录与桌面右键菜单扩展项，一键切换 Windows 11 经典完整右键菜单',
+    category: '系统工具',
+    keyword: 'context menu shell right click 右键菜单 经典菜单 注册表扩展 context-menu',
+    faIcon: 'fa-bars',
+    version: '2.0.0',
+    author: 'ZTools Official',
+    badge: '2.0标杆',
+    isBuiltin: true,
+    isDeclarative: true,
+    enabled: true,
+    command: ContextMenuCommand
+  }),
+
+  [OFFICIAL_PLUGIN_IDS.WECHAT_MULTI]: Object.freeze({
+    id: 'wechat-multi',
+    pluginId: 'wechat-multi',
+    name: '微信双开分身与实例监控',
+    title: '微信双开分身与实例监控',
+    description: '突破单实例互斥锁一键启动全新微信分身，实时监控各微信主进程与小程序容器内存占用',
+    category: '办公效率',
+    keyword: 'wechat multi instance 微信多开 微信双开 微信分身 小程序内存 wechat-multi',
+    faIcon: 'fa-weixin',
+    version: '2.0.0',
+    author: 'ZTools Official',
+    badge: '2.0标杆',
+    isBuiltin: true,
+    isDeclarative: true,
+    enabled: true,
+    command: WechatMultiCommand
+  }),
+
+  [OFFICIAL_PLUGIN_IDS.LAN_SHARE]: Object.freeze({
+    id: 'lan-share',
+    pluginId: 'lan-share',
+    name: '局域网文件快传与扫码投送',
+    title: '局域网文件快传与扫码投送',
+    description: '将本机文件或剪贴板生成局域网 HTTP 免密直连地址与二维码，手机同一 Wi-Fi 扫码即下',
+    category: '网络工具',
+    keyword: 'lan share airdrop qrcode 局域网快传 内网共享 扫码传文件 隔空投送 lan-share',
+    faIcon: 'fa-share-alt',
+    version: '2.0.0',
+    author: 'ZTools Official',
+    badge: '2.0标杆',
+    isBuiltin: true,
+    isDeclarative: true,
+    enabled: true,
+    command: LanShareCommand
+  }),
+
+  [OFFICIAL_PLUGIN_IDS.MOVER]: Object.freeze({
+    id: 'mover',
+    pluginId: 'mover',
+    name: 'C 盘大目录无损搬家',
+    title: 'C 盘大目录无损搬家',
+    description: '基于 NTFS Junction 目录联接将微信、QQ、下载目录与开发缓存无损迁移至其他盘符并释放 C 盘空间',
+    category: '系统工具',
+    keyword: 'mover junction mklink c盘搬家 目录迁移 软件搬家 符号链接 mover',
+    faIcon: 'fa-truck',
+    version: '2.0.0',
+    author: 'ZTools Official',
+    badge: '2.0标杆',
+    isBuiltin: true,
+    isDeclarative: true,
+    enabled: true,
+    command: MoverCommand
+  }),
+
+  [OFFICIAL_PLUGIN_IDS.DATA_RECOVERY]: Object.freeze({
+    id: 'data-recovery',
+    pluginId: 'data-recovery',
+    name: '误删文件与回收站恢复',
+    title: '误删文件与回收站恢复',
+    description: '深度扫描回收站、临时副本与近期误删文件，按扇区完整度评估并一键恢复至原路径或桌面',
+    category: '系统工具',
+    keyword: 'data recovery undelete restore 数据恢复 文件恢复 误删恢复 回收站恢复 data-recovery',
+    faIcon: 'fa-history',
+    version: '2.0.0',
+    author: 'ZTools Official',
+    badge: '2.0标杆',
+    isBuiltin: true,
+    isDeclarative: true,
+    enabled: true,
+    command: DataRecoveryCommand
+  }),
+
+  [OFFICIAL_PLUGIN_IDS.SHREDDER]: Object.freeze({
+    id: 'shredder',
+    pluginId: 'shredder',
+    name: '机密文件安全粉碎箱',
+    title: '机密文件安全粉碎箱',
+    description: '采用 DoD 5220.22-M / Gutmann 多重随机覆写算法彻底销毁机密文件，防止被恢复软件还原',
+    category: '安全隐私',
+    keyword: 'shredder wipe secure delete 文件粉碎 彻底删除 安全擦除 防恢复 shredder',
+    faIcon: 'fa-eraser',
+    version: '2.0.0',
+    author: 'ZTools Official',
+    badge: '2.0标杆',
+    isBuiltin: true,
+    isDeclarative: true,
+    enabled: true,
+    command: ShredderCommand
+  }),
+
+  [OFFICIAL_PLUGIN_IDS.SYSTEM_BACKUP]: Object.freeze({
+    id: 'system-backup',
+    pluginId: 'system-backup',
+    name: '系统与开发配置备份中心',
+    title: '系统与开发配置备份中心',
+    description: '一键打包备份与回滚 Hosts、环境变量、SSH 密钥配置、Git 配置与 VSCode/终端偏好',
+    category: '系统工具',
+    keyword: 'system backup restore dotfiles 系统备份 配置备份 环境变量备份 快照还原 system-backup',
+    faIcon: 'fa-archive',
+    version: '2.0.0',
+    author: 'ZTools Official',
+    badge: '2.0标杆',
+    isBuiltin: true,
+    isDeclarative: true,
+    enabled: true,
+    command: SystemBackupCommand
+  }),
+
+  [OFFICIAL_PLUGIN_IDS.SQLITE_PLUGIN]: Object.freeze({
+    id: 'sqlite-plugin',
+    pluginId: 'sqlite-plugin',
+    name: 'SQLite 数据库透视与导出',
+    title: 'SQLite 数据库透视与导出',
+    description: '浏览本机 SQLite 数据库表结构、索引与数据行，支持勾选记录导出 JSON / CSV / SQL INSERT',
+    category: '开发工具',
+    keyword: 'sqlite database db table sql 数据库 浏览 导出 sqlite-plugin',
+    faIcon: 'fa-database',
+    version: '2.0.0',
+    author: 'ZTools Official',
+    badge: '2.0标杆',
+    isBuiltin: true,
+    isDeclarative: true,
+    enabled: true,
+    command: SqlitePluginCommand
+  }),
+
+  [OFFICIAL_PLUGIN_IDS.AI_IMAGE]: Object.freeze({
+    id: 'ai-image',
+    pluginId: 'ai-image',
+    name: 'AI 图像超分与抠图工作台',
+    title: 'AI 图像超分与抠图工作台',
+    description: '集成 Real-ESRGAN 4倍无损超分放大、RMBG 智能去背景与人像画质修复批量处理队列',
+    category: '图像视频',
+    keyword: 'ai image upscale removebg AI图像 超分放大 智能抠图 去背景 画质修复 ai-image',
+    faIcon: 'fa-picture-o',
+    version: '2.0.0',
+    author: 'ZTools Official',
+    badge: '2.0标杆',
+    isBuiltin: true,
+    isDeclarative: true,
+    enabled: true,
+    command: AiImageCommand
+  }),
+
+  [OFFICIAL_PLUGIN_IDS.AI_VIDEO]: Object.freeze({
+    id: 'ai-video',
+    pluginId: 'ai-video',
+    name: 'AI 视频补帧与超分工作台',
+    title: 'AI 视频补帧与超分工作台',
+    description: '基于 RIFE 光流补帧至 60/120FPS 与 Real-CUGAN 视频超分至 4K UHD 的批量增强工作台',
+    category: '图像视频',
+    keyword: 'ai video rife upscale 60fps AI视频 视频补帧 视频超分 画质增强 ai-video',
+    faIcon: 'fa-film',
+    version: '2.0.0',
+    author: 'ZTools Official',
+    badge: '2.0标杆',
+    isBuiltin: true,
+    isDeclarative: true,
+    enabled: true,
+    command: AiVideoCommand
+  }),
+
+  [OFFICIAL_PLUGIN_IDS.OCR]: Object.freeze({
+    id: 'ocr',
+    pluginId: 'ocr',
+    name: '多语言离线图片 OCR 工作台',
+    title: '多语言离线图片 OCR 工作台',
+    description: '批量识别本机截图与图片中的中英日韩文字、代码段与 Markdown 表格，一键写入剪贴板',
+    category: '办公效率',
+    keyword: 'ocr text recognition 文字识别 截图识字 提取文字 表格识别 ocr',
+    faIcon: 'fa-file-text-o',
+    version: '2.0.0',
+    author: 'ZTools Official',
+    badge: '2.0标杆',
+    isBuiltin: true,
+    isDeclarative: true,
+    enabled: true,
+    command: OcrCommand
+  }),
+
+  [OFFICIAL_PLUGIN_IDS.RECORD]: Object.freeze({
+    id: 'record',
+    pluginId: 'record',
+    name: '高清屏幕录制与内录工作台',
+    title: '高清屏幕录制与内录工作台',
+    description: '支持 60FPS 全屏/区域/窗口硬件编码录屏、WASAPI 系统内录混音与高清 GIF 动图直出',
+    category: '图像视频',
+    keyword: 'record screen capture video 录屏 屏幕录制 系统内录 录像管理 record',
+    faIcon: 'fa-dot-circle-o',
+    version: '2.0.0',
+    author: 'ZTools Official',
+    badge: '2.0标杆',
+    isBuiltin: true,
+    isDeclarative: true,
+    enabled: true,
+    command: RecordCommand
+  }),
+
+  [OFFICIAL_PLUGIN_IDS.FILE_COMPARE]: Object.freeze({
+    id: 'file-compare',
+    pluginId: 'file-compare',
+    name: '双文件哈希与 Diff 比对工作台',
+    title: '双文件哈希与 Diff 比对工作台',
+    description: '双目录/双文件 SHA-256 字节级哈希校验与代码文本逐行 Diff 差异对比工作台',
+    category: '开发工具',
+    keyword: 'file compare diff sha256 hash 文件比对 文件夹对比 差异对比 哈希校验 file-compare',
+    faIcon: 'fa-columns',
+    version: '2.0.0',
+    author: 'ZTools Official',
+    badge: '2.0标杆',
+    isBuiltin: true,
+    isDeclarative: true,
+    enabled: true,
+    command: FileCompareCommand
   })
+})
+
+/**
+ * 35 款本地插件常用别名映射表 (Canonical Alias Map)
+ */
+export const OFFICIAL_PLUGIN_ALIASES = Object.freeze({
+  'clipboard-manager': OFFICIAL_PLUGIN_IDS.CLIPBOARD_HISTORY,
+  'window-manager': OFFICIAL_PLUGIN_IDS.WINDOW_MANAGEMENT,
+  'system-tools': OFFICIAL_PLUGIN_IDS.SYSTEM,
+  screenshot: OFFICIAL_PLUGIN_IDS.SCREENSHOTS,
+  'screen-color-picker': OFFICIAL_PLUGIN_IDS.COLOR_PICKER
 })
 
 /**
@@ -1241,8 +1553,9 @@ export const OFFICIAL_PLUGINS_LIST = Object.freeze(Object.values(OFFICIAL_PLUGIN
 export function isOfficialPlugin(pluginId) {
   if (!pluginId || typeof pluginId !== 'string') return false
   const normalized = pluginId.trim().toLowerCase()
+  const resolved = OFFICIAL_PLUGIN_ALIASES[normalized] || normalized
   return Boolean(
-    OFFICIAL_PLUGINS_MAP[normalized] ||
+    OFFICIAL_PLUGINS_MAP[resolved] ||
     OFFICIAL_PLUGINS_MAP[pluginId.trim()]
   )
 }
@@ -1255,7 +1568,8 @@ export function isOfficialPlugin(pluginId) {
 export function getOfficialPlugin(pluginId) {
   if (!pluginId || typeof pluginId !== 'string') return undefined
   const normalized = pluginId.trim().toLowerCase()
-  return OFFICIAL_PLUGINS_MAP[normalized] || OFFICIAL_PLUGINS_MAP[pluginId.trim()]
+  const resolved = OFFICIAL_PLUGIN_ALIASES[normalized] || normalized
+  return OFFICIAL_PLUGINS_MAP[resolved] || OFFICIAL_PLUGINS_MAP[pluginId.trim()]
 }
 
 /**

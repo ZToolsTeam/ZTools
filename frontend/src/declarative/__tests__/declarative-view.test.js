@@ -334,4 +334,128 @@ describe("端到端移植应用集成渲染验证", () => {
       vi.unstubAllGlobals();
     }
   });
+
+  it("集成验证 4: 支持次要动作 (Ctrl+Enter)、自定义 Action 快捷键免开菜单直达、右侧详情快捷按钮栏与 PasswordField 切换", async () => {
+    const executedLog = [];
+
+    const listDescriptor = List(
+      {
+        navigationTitle: "交互增强测试",
+        isShowingDetail: true
+      },
+      [
+        List.Item({
+          id: "item-a",
+          title: "测试进程 A",
+          detail: List.Item.Detail({
+            markdown: "# 进程详情\n占用内存 512MB"
+          }),
+          actions: ActionPanel({}, [
+            Action({
+              title: "温和结束进程",
+              onAction: () => executedLog.push("primary")
+            }),
+            Action({
+              title: "强制杀死进程 (-9)",
+              style: "destructive",
+              onAction: () => executedLog.push("secondary")
+            }),
+            Action({
+              title: "新建监控规则",
+              shortcut: { modifiers: ["cmd"], key: "n" },
+              onAction: () => executedLog.push("ctrl+n")
+            })
+          ])
+        })
+      ]
+    );
+
+    const wrapper = mount(DeclarativeView, {
+      props: {
+        rootComponent: () => listDescriptor
+      }
+    });
+    await nextTick();
+
+    // 1. 验证底部黄金三键按钮栏渲染出主动作、次动作与动作面板 (3)，低频第3动作收纳于面板内
+    expect(wrapper.text()).toContain("温和结束进程");
+    expect(wrapper.text()).toContain("强制杀死进程 (-9)");
+    expect(wrapper.text()).toContain("动作面板 (3)");
+
+    // 2. 触发 Ctrl+Enter 执行次动作
+    await wrapper.trigger("keydown", { key: "Enter", ctrlKey: true });
+    await nextTick();
+    expect(executedLog).toContain("secondary");
+
+    // 3. 免开菜单直接触发 Ctrl+N 自定义快捷键
+    await wrapper.trigger("keydown", { key: "n", ctrlKey: true });
+    await nextTick();
+    expect(executedLog).toContain("ctrl+n");
+
+    // 4. Beyond Happy Path: 当用户在搜索输入框内输入了文字并按下 Ctrl+A / Ctrl+V 时，不应误触自定义动作
+    let ctrlATriggered = false;
+    const listWithCtrlA = List({}, [
+      List.Item({
+        id: "item-b",
+        title: "条目 B",
+        actions: ActionPanel({}, [
+          Action({
+            title: "全选动作",
+            shortcut: { modifiers: ["ctrl"], key: "a" },
+            onAction: () => {
+              ctrlATriggered = true;
+            }
+          })
+        ])
+      })
+    ]);
+    const wrapper2 = mount(DeclarativeView, {
+      props: { rootComponent: () => listWithCtrlA }
+    });
+    await nextTick();
+    const searchInput = wrapper2.find("input[type='text']");
+    await searchInput.setValue("hello");
+    await searchInput.trigger("keydown", { key: "a", ctrlKey: true });
+    expect(ctrlATriggered).toBe(false);
+
+    // 5. 验证 Form.PasswordField 掩码与明文切换及表单内嵌提交按钮
+    let formSubmitted = null;
+    const passwordForm = Form(
+      {
+        navigationTitle: "解锁密码库",
+        actions: ActionPanel({}, [
+          Action.SubmitForm({
+            title: "立即解锁",
+            onSubmit: (vals) => {
+              formSubmitted = vals;
+            }
+          })
+        ])
+      },
+      [
+        Form.Description({ text: "请输入 AES-256-GCM 主密码" }),
+        Form.PasswordField({ id: "masterPwd", title: "主密码", defaultValue: "Secret#2026" })
+      ]
+    );
+    const wrapper3 = mount(DeclarativeView, {
+      props: { rootComponent: () => passwordForm }
+    });
+    await nextTick();
+    expect(wrapper3.text()).toContain("请输入 AES-256-GCM 主密码");
+    const pwdInput = wrapper3.find("input#masterPwd");
+    expect(pwdInput.exists()).toBe(true);
+    expect(pwdInput.attributes("type")).toBe("password");
+
+    // 点击“显示”切换为 text
+    const toggleBtn = wrapper3.findAll("button").find((b) => b.text() === "显示");
+    expect(toggleBtn).toBeDefined();
+    await toggleBtn.trigger("click");
+    expect(pwdInput.attributes("type")).toBe("text");
+
+    // 点击表单内嵌提交按钮
+    const submitBtn = wrapper3.findAll("button").find((b) => b.text().includes("立即解锁"));
+    expect(submitBtn).toBeDefined();
+    await submitBtn.trigger("click");
+    expect(formSubmitted).toEqual({ masterPwd: "Secret#2026" });
+  });
 });

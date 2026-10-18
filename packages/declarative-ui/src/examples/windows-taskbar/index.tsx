@@ -155,8 +155,74 @@ export default function WindowsTaskbarCommand() {
     }
   };
 
+  const handleSetAlignment = async (alignment: TaskbarAlignment) => {
+    try {
+      const res = await defaultWindowsTaskbarManager.setTaskbarAlignment(alignment);
+      setState(res.state);
+      await showToast(
+        Toast.Style.Success,
+        res.message,
+        `当前对齐: ${alignment === "center" ? "居中 (Center)" : "靠左 (Left)"}`
+      );
+    } catch (err: any) {
+      await showToast(Toast.Style.Failure, "设置对齐方式失败", err.message || String(err));
+    }
+  };
+
   return (
-    <List searchBarPlaceholder="治理系统任务栏与 macOS 程序坞 (Dock) 显隐、自动隐藏、停靠位置...">
+    <List
+      searchBarPlaceholder="治理系统任务栏与 macOS 程序坞 (Dock) 显隐、自动隐藏、停靠位置..."
+      filterBar={{
+        summaryText: `任务栏/Dock 状态: ${state.visible ? "显示中 (Visible)" : "已隐藏 (Hidden)"} · 自动隐藏: ${state.autoHide ? "已开启" : "常驻"} · 对齐: ${state.alignment === "center" ? "居中" : "靠左"}`,
+        actions: [
+          {
+            id: "tb-act-visibility",
+            label: "👁️ 切换任务栏/Dock显隐",
+            title: "👁️ 切换任务栏/Dock显隐",
+            style: "primary",
+            onAction: () => {
+              void handleToggleVisibility();
+            }
+          },
+          {
+            id: "tb-act-autohide",
+            label: "🔄 切换自动隐藏",
+            title: "🔄 切换自动隐藏",
+            style: "secondary",
+            onAction: () => {
+              void handleToggleAutoHide();
+            }
+          },
+          {
+            id: "tb-act-align-left",
+            label: "⬅️ 靠左对齐",
+            title: "⬅️ 靠左对齐",
+            style: "secondary",
+            onAction: () => {
+              void handleSetAlignment("start");
+            }
+          },
+          {
+            id: "tb-act-align-center",
+            label: "🎯 居中对齐",
+            title: "🎯 居中对齐",
+            style: "secondary",
+            onAction: () => {
+              void handleSetAlignment("center");
+            }
+          },
+          {
+            id: "tb-act-restart",
+            label: "♻️ 重启 Explorer / Dock",
+            title: "♻️ 重启 Explorer / Dock",
+            style: "danger",
+            onAction: () => {
+              void handleRestartExplorer();
+            }
+          }
+        ]
+      }}
+    >
       {/* 1. 跨平台核心显隐与自动隐藏治理 */}
       <List.Section title="Win32 原生治理动作 (Core Actions)">
         <List.Item

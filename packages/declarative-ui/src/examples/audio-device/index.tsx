@@ -191,6 +191,7 @@ export default function AudioDeviceCommand() {
   const [ioFilter, setIoFilter] = useState<IOType | "all" | "favourites">("all");
   const [version, setVersion] = useState(0);
   const [isLoading, setIsLoading] = useState(() => isRealElectronHost());
+  const [selectedId, setSelectedId] = useState<string | null>(null);
   const refresh = () => setVersion((v) => v + 1);
 
   useEffect(() => {
@@ -224,10 +225,17 @@ export default function AudioDeviceCommand() {
   const outputDevices = devices.filter((d) => d.type === "output");
   const inputDevices = devices.filter((d) => d.type === "input");
   const combos = useMemo(() => defaultAudioDeviceManager.getCombos(), [version]);
+  const activeDevice =
+    devices.find((d) => d.id === selectedId) ||
+    devices.find((d) => d.isDefault) ||
+    devices[0];
+  const defaultOut = outputDevices.find((d) => d.isDefault) || outputDevices[0];
+  const defaultIn = inputDevices.find((d) => d.isDefault) || inputDevices[0];
 
   const renderDeviceItem = (dev: AudioDevice) => (
     <List.Item
       key={dev.id}
+      id={dev.id}
       icon={{
         source: dev.isMuted
           ? Icon.SpeakerOff
@@ -347,6 +355,94 @@ export default function AudioDeviceCommand() {
       navigationTitle="音频设备一键切换 (Set Audio Device)"
       searchBarPlaceholder="搜索耳机、显示器音响、扬声器或麦克风..."
       onSearchTextChange={setSearchText}
+      onSelectionChange={setSelectedId}
+      filterBar={{
+        summaryText: `默认输出: ${defaultOut ? `${defaultOut.name} (${defaultOut.isMuted ? "静音" : `${defaultOut.volume}%`})` : "无"} • 默认输入: ${defaultIn ? defaultIn.name : "无"}`,
+        groups: [
+          {
+            id: "ioFilter",
+            label: "声道方向",
+            value: ioFilter,
+            onChange: (val: string) => setIoFilter(val as IOType | "all" | "favourites"),
+            options: [
+              { value: "all", label: "全部设备" },
+              { value: "output", label: "输出设备 (扬声器/耳机)" },
+              { value: "input", label: "输入设备 (麦克风)" }
+            ]
+          }
+        ],
+        actions: [
+          {
+            id: "set-default",
+            label: "✅ 设为默认设备",
+            title: "✅ 设为默认设备",
+            style: "primary",
+            onAction: async () => {
+              if (activeDevice) {
+                const res = defaultAudioDeviceManager.setDefaultDevice(activeDevice.id);
+                await showToast(
+                  res.success ? Toast.Style.Success : Toast.Style.Failure,
+                  res.success ? `已切换至: ${activeDevice.name}` : res.error || "切换失败"
+                );
+                refresh();
+              }
+            }
+          },
+          {
+            id: "toggle-mute",
+            label: "🔇 静音/取消静音",
+            title: "🔇 静音/取消静音",
+            style: "secondary",
+            onAction: async () => {
+              if (activeDevice) {
+                const res = defaultAudioDeviceManager.toggleDeviceMute(activeDevice.id);
+                await showToast(
+                  Toast.Style.Success,
+                  `${res.device?.isMuted ? "已静音" : "已恢复声音"}: ${activeDevice.name}`
+                );
+                refresh();
+              }
+            }
+          },
+          {
+            id: "vol-up",
+            label: "🔊 音量 +10%",
+            title: "🔊 音量 +10%",
+            style: "secondary",
+            onAction: async () => {
+              if (activeDevice) {
+                const res = defaultAudioDeviceManager.stepDeviceVolume(activeDevice.id, 10);
+                await showToast(Toast.Style.Success, `${activeDevice.name} 音量: ${res.device?.volume}%`);
+                refresh();
+              }
+            }
+          },
+          {
+            id: "vol-down",
+            label: "🔉 音量 -10%",
+            title: "🔉 音量 -10%",
+            style: "secondary",
+            onAction: async () => {
+              if (activeDevice) {
+                const res = defaultAudioDeviceManager.stepDeviceVolume(activeDevice.id, -10);
+                await showToast(Toast.Style.Success, `${activeDevice.name} 音量: ${res.device?.volume}%`);
+                refresh();
+              }
+            }
+          },
+          {
+            id: "refresh-audio",
+            label: "🔄 刷新声卡",
+            title: "🔄 刷新声卡",
+            style: "secondary",
+            onAction: async () => {
+              const list = await defaultAudioDeviceManager.syncDevicesFromHost();
+              refresh();
+              await showToast(Toast.Style.Success, `已刷新音频设备 (${list.length} 个)`);
+            }
+          }
+        ]
+      }}
       actions={
         <ActionPanel>
           <Action

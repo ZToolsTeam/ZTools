@@ -113,6 +113,7 @@ export interface ListItemAccessory {
   icon?: IconResolvable;
   tooltip?: string;
   tag?: string | { value: string; color?: ColorResolvable };
+  progress?: number | { value: number; color?: ColorResolvable };
   date?: Date;
 }
 
@@ -126,6 +127,8 @@ export interface ListItemProps extends BaseProps {
   checkable?: boolean;
   checked?: boolean | "indeterminate";
   onCheckChange?: (checked: boolean) => void;
+  onToggleCheck?: (checked: boolean) => void;
+  onSelect?: () => void;
   actions?: ViewDescriptor | any;
   detail?: ViewDescriptor | any;
 }
@@ -187,7 +190,8 @@ export interface DistributionBarProps extends BaseProps {
 
 export interface FilterBarOption {
   value: string;
-  label: string;
+  label?: string;
+  title?: string;
   badge?: string | number;
   count?: number;
 }
@@ -195,6 +199,7 @@ export interface FilterBarOption {
 export interface FilterBarGroup {
   id: string;
   label?: string;
+  title?: string;
   value: string;
   options: FilterBarOption[];
   onChange?: (value: string) => void;
@@ -229,6 +234,53 @@ export interface FilterBarProps extends BaseProps {
 
 export type ViewNode = ViewDescriptor<any> | any;
 
+export interface WorkbenchFieldOption {
+  label: string;
+  value: string;
+}
+
+export interface WorkbenchFieldItem {
+  id: string;
+  label: string;
+  type: "select" | "toggle" | "text" | "info";
+  value: string | boolean;
+  options?: WorkbenchFieldOption[];
+  badge?: string;
+  onChange?: (val: any) => void;
+}
+
+export interface WorkbenchPreviewMetric {
+  label: string;
+  value: string;
+  color?: string;
+}
+
+export interface WorkbenchPreviewCard {
+  title: string;
+  subtitle?: string;
+  badge?: string;
+  metrics?: WorkbenchPreviewMetric[];
+  imageUrl?: string;
+}
+
+export interface WorkbenchPanelProps {
+  title?: string;
+  subtitle?: string;
+  fields: WorkbenchFieldItem[];
+  previewCard?: WorkbenchPreviewCard;
+}
+
+export interface SubListProps {
+  title?: string;
+  subtitle?: string;
+  emptyText?: string;
+  checkable?: boolean;
+  checked?: boolean | "indeterminate";
+  onCheckChange?: (checked: boolean) => void;
+  items?: ViewDescriptor<ListItemProps>[];
+  sections?: ViewDescriptor<ListSectionProps>[];
+}
+
 export interface ListProps extends BaseProps {
   isLoading?: boolean;
   searchText?: string;
@@ -244,6 +296,8 @@ export interface ListProps extends BaseProps {
   distributionBar?: DistributionBarProps | ViewDescriptor;
   segmentedControl?: ViewDescriptor | SegmentedControlProps | any;
   filterBar?: FilterBarProps | ViewDescriptor;
+  workbenchPanel?: WorkbenchPanelProps;
+  subList?: SubListProps;
   actions?: ViewDescriptor | any;
   children?: any;
 }

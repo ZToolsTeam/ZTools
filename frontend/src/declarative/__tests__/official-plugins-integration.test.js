@@ -196,8 +196,8 @@ describe('官方标杆声明式应用注册表与端到端集成测试', () => {
 
       // 2. 分类筛选：'系统工具'
       const sysRes = await store.loadWithCache({ category: '系统工具' }, true)
-      expect(sysRes.list.some((p) => p.pluginId === 'qr-code')).toBe(false)
-      expect(sysRes.list.some((p) => p.pluginId === 'kill-process')).toBe(false)
+      expect(sysRes.list.some((p) => p.pluginId === 'qr-code')).toBe(true)
+      expect(sysRes.list.some((p) => p.pluginId === 'kill-process')).toBe(true)
       expect(sysRes.list.some((p) => p.pluginId === 'trial-nudges')).toBe(false)
 
       // 3. 关键词检索：'json'
@@ -317,7 +317,7 @@ describe('官方标杆声明式应用注册表与端到端集成测试', () => {
     it('[破坏性] 不可用的内置插件即使绕过列表直接打开也会被拒绝，且不跳转', async () => {
       const store = usePluginsStore()
       mockPush.mockClear()
-      for (const id of ['github', ' KILL-PROCESS ', 'trial-nudges']) {
+      for (const id of ['github', ' SPEEDTEST ', 'trial-nudges']) {
         await expect(store.openPlugin(id)).rejects.toThrow('当前系统上暂不可用')
       }
       expect(mockPush).not.toHaveBeenCalled()
@@ -325,12 +325,12 @@ describe('官方标杆声明式应用注册表与端到端集成测试', () => {
 
     it('[破坏性] 直接访问不可用插件的路由时显示「当前系统暂不可用」，不渲染插件', async () => {
       const wrapper = mount(DeclarativePage, {
-        props: { pluginId: 'kill-process' },
+        props: { pluginId: 'trial-nudges' },
         global: { stubs: { DeclarativeView: true } }
       })
       await nextTick()
       expect(wrapper.text()).toContain('当前系统暂不可用')
-      expect(wrapper.text()).toContain('进程管理急救箱')
+      expect(wrapper.text()).toContain('核心特权与技术方案')
       expect(wrapper.text()).not.toContain('未找到指定的声明式应用')
       expect(wrapper.findComponent({ name: 'DeclarativeView' }).exists()).toBe(false)
       wrapper.unmount()

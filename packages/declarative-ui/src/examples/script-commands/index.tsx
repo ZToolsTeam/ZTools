@@ -661,6 +661,7 @@ export function ScriptCommandsCommand() {
   const [lastOutputs, setLastOutputs] = useState<Record<string, ScriptExecutionResult>>({});
   const [searchText, setSearchText] = useState("");
   const [filterMode, setFilterMode] = useState<string>("all");
+  const [selectedId, setSelectedId] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState<boolean>(realHost);
   const { push } = useNavigation();
 
@@ -741,12 +742,114 @@ export function ScriptCommandsCommand() {
     await showToast(Toast.Style.Success, "已重新扫描加载本地脚本目录", `共 ${list.length} 个脚本`);
   };
 
+  const activeScript = useMemo(
+    () => displayedScripts.find((s) => s.id === selectedId) || displayedScripts[0] || null,
+    [displayedScripts, selectedId]
+  );
+
+  const executedCount = Object.keys(lastOutputs).length;
+
   return (
     <List
       isLoading={isLoading}
       isShowingDetail={true}
       searchBarPlaceholder="搜索本地自定义脚本 (@raycast.title, 分组, 语言)..."
       onSearchTextChange={setSearchText}
+      onSelectionChange={setSelectedId}
+      filterBar={{
+        summaryText: `📜 脚本工作台 • 已加载 ${scripts.length} 个脚本 | 当前显示 ${displayedScripts.length} 个 | 本次已运行 ${executedCount} 次`,
+        groups: [
+          {
+            id: "mode-filter",
+            value: filterMode,
+            onChange: setFilterMode,
+            options: [
+              { title: "全部脚本", value: "all", count: scripts.length },
+              {
+                title: "Compact",
+                value: "compact",
+                count: scripts.filter((s) => s.mode === "compact").length
+              },
+              {
+                title: "Full Output",
+                value: "fullOutput",
+                count: scripts.filter((s) => s.mode === "fullOutput").length
+              },
+              {
+                title: "Inline",
+                value: "inline",
+                count: scripts.filter((s) => s.mode === "inline").length
+              },
+              {
+                title: "PowerShell",
+                value: "powershell",
+                count: scripts.filter((s) => s.language === "powershell").length
+              }
+            ]
+          }
+        ],
+        actions: [
+          {
+            id: "run-selected-script",
+            label: "▶️ 立即运行选中脚本",
+            title: "▶️ 立即运行选中脚本",
+            style: "primary",
+            onAction: async () => {
+              if (activeScript) {
+                await handleRunScript(activeScript);
+              }
+            }
+          },
+          {
+            id: "run-with-args",
+            label: "⌨️ 传入参数运行...",
+            title: "⌨️ 传入参数运行...",
+            style: "secondary",
+            onAction: () => {
+              if (activeScript) {
+                push(
+                  <RunScriptWithArgsForm
+                    script={activeScript}
+                    onExecuted={(res) => recordExecutionResult(activeScript, res)}
+                  />
+                );
+              }
+            }
+          },
+          {
+            id: "create-script-command",
+            label: "➕ 新建脚本命令",
+            title: "➕ 新建脚本命令",
+            style: "primary",
+            onAction: () => {
+              push(
+                <CreateScriptCommandForm
+                  onCreated={(created) => setScripts((prev) => [created, ...prev])}
+                />
+              );
+            }
+          },
+          {
+            id: "copy-script-output",
+            label: "📋 复制执行输出",
+            title: "📋 复制执行输出",
+            style: "secondary",
+            onAction: async () => {
+              if (!activeScript) return;
+              const out = lastOutputs[activeScript.id]?.output || activeScript.lastOutput || activeScript.sourceCode;
+              await Clipboard.copy(out);
+              await showToast(Toast.Style.Success, "已复制脚本输出/源码");
+            }
+          },
+          {
+            id: "reload-scripts-dir",
+            label: "🔄 重新加载脚本目录",
+            title: "🔄 重新加载脚本目录",
+            style: "secondary",
+            onAction: handleReload
+          }
+        ]
+      }}
       searchBarAccessory={
         <List.Dropdown
           tooltip="按输出模式或语言过滤"

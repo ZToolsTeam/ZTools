@@ -93,6 +93,13 @@ test("Declarative UI 2.0 原生插件 #3 ~ #15 1:1 全量升级集成与异常�
         Array.isArray(fb.groups) && fb.groups.length >= 1,
         `${id} FilterBar 必须包含多维筛选胶囊组 (groups)`
       );
+      if (id === "batch-video") {
+        assert.ok(descriptor.props.workbenchPanel, "batch-video 必须挂载范式三左侧参数工作台面板 workbenchPanel");
+        assert.equal(descriptor.props.workbenchPanel.fields.length >= 6, true, "batch-video 参数面板应包含至少 6 项转码配置参数");
+        assert.ok(descriptor.props.workbenchPanel.previewCard, "batch-video 参数面板应包含输出预估摘要卡 previewCard");
+        assert.ok(descriptor.props.subList, "batch-video 必须挂载范式三右侧可勾选待处理视频队列 subList");
+        assert.equal(descriptor.props.subList.items.length > 0, true, "batch-video 右侧队列应包含待处理视频文件");
+      }
       root.unmount();
     }
   });

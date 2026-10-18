@@ -40,7 +40,7 @@
         <div v-if="plugin" class="flex items-center gap-2 min-w-0">
           <RcSquircle :glyph="resolvePluginGlyph(plugin.pluginId || plugin.id || targetPluginId)" :icon="plugin.faIcon || 'fa-cube'" :size="22" />
           <span class="text-sm font-semibold text-[var(--rc-text-primary)] truncate">{{ plugin.name }}</span>
-          <span class="px-1.5 py-0.5 rounded text-[10px] font-mono bg-[var(--rc-accent-subtle)] text-[var(--rc-accent-text)] border border-[var(--rc-border-highlight)] flex-shrink-0">
+          <span class="px-1.5 py-0.5 rounded text-[10px] font-mono bg-[var(--rc-surface-hover)] text-[var(--rc-text-muted)] border border-[var(--rc-border)] flex-shrink-0">
             {{ plugin.isInstalledDeclarative ? 'V2 声明式扩展' : '官方标杆' }}
           </span>
         </div>
@@ -51,7 +51,7 @@
         <button
           v-if="!effectiveIsPopout && plugin"
           type="button"
-          class="declarative-popout-btn flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-medium text-[var(--rc-accent-text)] bg-[var(--rc-accent-subtle)] hover:bg-[var(--rc-accent-subtle)] border border-[var(--rc-border-highlight)] transition-all cursor-pointer"
+          class="declarative-popout-btn flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-medium text-[var(--rc-text-secondary)] hover:text-[var(--rc-text-primary)] hover:bg-[var(--rc-surface-hover)] border border-[var(--rc-border)] transition-all cursor-pointer"
           title="弹出为独立常驻窗口，自动携带当前搜索与选中状态 (Ctrl+Shift+O)"
           @click="handlePopout"
         >

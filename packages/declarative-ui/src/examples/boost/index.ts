@@ -3,7 +3,6 @@ import {
   ActionPanel,
   Action,
   Icon,
-  Color,
   useState,
   useEffect,
   showToast,
@@ -27,24 +26,87 @@ import {
 
 import { trashRealItem } from '../shared/native-ipc.js'
 
+const INIT_BOOST_SNAPSHOT: BoostSnapshot = {
+  totalMemoryBytes: 32 * 1024 * 1024 * 1024,
+  usedMemoryBytes: 22 * 1024 * 1024 * 1024,
+  availableMemoryBytes: 10 * 1024 * 1024 * 1024,
+  memoryUsagePercent: 68,
+  cpuUsagePercent: 18,
+  reclaimableEstimateBytes: 2.8 * 1024 * 1024 * 1024,
+  startupItemCount: 3,
+  candidates: [
+    {
+      id: 'boost-init-proc-1',
+      type: 'process',
+      pid: 14820,
+      name: 'chrome.exe',
+      path: 'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe',
+      memoryOrSizeBytes: 1.4 * 1024 * 1024 * 1024,
+      cpuPercent: 6.5,
+      isProtected: false,
+      impactLevel: '高耗时影响',
+      recommendation: '高内存占用后台渲染进程，闲置时可释放工作集'
+    },
+    {
+      id: 'boost-init-startup-1',
+      type: 'startup_item',
+      name: '[开机启动] SteamClientBootstrapper',
+      path: 'C:\\Users\\Admin\\AppData\\Roaming\\Microsoft\\Windows\\Start Menu\\Programs\\Startup\\Steam.lnk',
+      memoryOrSizeBytes: 320 * 1024 * 1024,
+      cpuPercent: 1.2,
+      isProtected: false,
+      startupScope: '用户启动目录 (Startup)',
+      impactLevel: '高耗时影响',
+      recommendation: '随 Windows 登录自动拉起，可移出启动目录以缩短开机耗时'
+    },
+    {
+      id: 'boost-init-temp-1',
+      type: 'temp_cache',
+      name: '[临时缓存] electron_crashpad_dump.dmp',
+      path: 'C:\\Users\\Admin\\AppData\\Local\\Temp\\electron_crashpad_dump.dmp',
+      memoryOrSizeBytes: 180 * 1024 * 1024,
+      cpuPercent: 0,
+      isProtected: false,
+      impactLevel: '低影响',
+      recommendation: '系统 %TEMP% 瞬时热点缓存残留，可安全移入回收站'
+    },
+    {
+      id: 'boost-init-sys-1',
+      type: 'process',
+      pid: 4,
+      name: 'System',
+      path: 'C:\\Windows\\System32\\ntoskrnl.exe',
+      memoryOrSizeBytes: 256 * 1024 * 1024,
+      cpuPercent: 0.8,
+      isProtected: true,
+      impactLevel: '低影响',
+      recommendation: 'Windows 系统内核进程 (安全锁定保护)'
+    }
+  ]
+}
+
 export default function BoostCommand() {
   const [searchText, setSearchText] = useState('')
   const [tab, setTab] = useState<'all' | 'process' | 'startup_item' | 'temp_cache'>('all')
   const [impactFilter, setImpactFilter] = useState<'all' | 'high' | 'cleanable'>('all')
-  const [snapshot, setSnapshot] = useState<BoostSnapshot | null>(null)
-  const [checkedIds, setCheckedIds] = useState<string[]>([])
+  const [snapshot, setSnapshot] = useState<BoostSnapshot>(() => INIT_BOOST_SNAPSHOT)
+  const [checkedIds, setCheckedIds] = useState<string[]>(() =>
+    INIT_BOOST_SNAPSHOT.candidates.filter(c => !c.isProtected).map(c => c.id)
+  )
   const [isLoading, setIsLoading] = useState(true)
 
   async function refreshBoost(showIndicator = false) {
     if (showIndicator) setIsLoading(true)
     try {
       const snap = await fetchBoostSnapshot()
-      setSnapshot(snap)
-      setCheckedIds(
-        snap.candidates
-          .filter(c => c.type === 'temp_cache' && !c.isProtected)
-          .map(c => c.id)
-      )
+      if (snap.candidates.length > 0) {
+        setSnapshot(snap)
+        setCheckedIds(
+          snap.candidates
+            .filter(c => (c.type === 'temp_cache' || c.impactLevel === '高耗时影响') && !c.isProtected)
+            .map(c => c.id)
+        )
+      }
       if (showIndicator) {
         showToast({
           style: Toast.Style.Success,
@@ -62,7 +124,6 @@ export default function BoostCommand() {
   }, [])
 
   async function handleQuickBoost() {
-    if (!snapshot) return
     const selectedItems = snapshot.candidates.filter(c => checkedIds.includes(c.id) && !c.isProtected)
     const tempItems =
       selectedItems.length > 0
@@ -70,7 +131,7 @@ export default function BoostCommand() {
         : snapshot.candidates.filter(c => c.type === 'temp_cache' && !c.isProtected)
 
     const confirmed = await confirmAlert({
-      title: `🚀 确认执行系统一键加速 (${tempItems.length} 项优化)？`,
+      title: `确认执行系统一键加速 (${tempItems.length} 项优化)？`,
       message: `将清理已勾选的临时缓存与闲置优化项，并整理物理内存工作集。\n\n核心系统服务与当前宿主受严格白名单保护。`,
       primaryAction: { title: '立即一键加速', style: 'default' }
     })
@@ -111,7 +172,7 @@ export default function BoostCommand() {
     if (!item.pid) return
     if (item.isProtected) {
       await confirmAlert({
-        title: `⚠️ 核心进程受保护 [${item.name}]`,
+        title: `核心进程受保护 [${item.name}]`,
         message: FORBIDDEN_REASON,
         primaryAction: { title: '我知道了', style: 'default' }
       })
@@ -138,26 +199,28 @@ export default function BoostCommand() {
     refreshBoost(false)
   }
 
-  const candidates = snapshot?.candidates || []
+  const candidates = snapshot.candidates || []
   const q = searchText.trim().toLowerCase()
-  const filtered = candidates.filter(c => {
-    if (tab !== 'all' && c.type !== tab) return false
-    if (impactFilter === 'high' && c.impactLevel !== '高耗时影响') return false
-    if (impactFilter === 'cleanable' && c.isProtected) return false
-    if (!q) return true
-    return (
-      c.name.toLowerCase().includes(q) ||
-      c.path.toLowerCase().includes(q) ||
-      String(c.pid || '').includes(q) ||
-      (c.startupScope && c.startupScope.toLowerCase().includes(q))
-    )
-  })
+  const filtered = candidates
+    .filter(c => {
+      if (tab !== 'all' && c.type !== tab) return false
+      if (impactFilter === 'high' && c.impactLevel !== '高耗时影响') return false
+      if (impactFilter === 'cleanable' && c.isProtected) return false
+      if (!q) return true
+      return (
+        c.name.toLowerCase().includes(q) ||
+        c.path.toLowerCase().includes(q) ||
+        String(c.pid || '').includes(q) ||
+        (c.startupScope && c.startupScope.toLowerCase().includes(q))
+      )
+    })
+    .sort((a, b) => b.memoryOrSizeBytes - a.memoryOrSizeBytes)
 
-  const memPct = snapshot?.memoryUsagePercent || 0
-  const cpuPct = snapshot?.cpuUsagePercent || 0
-  const totalMem = snapshot?.totalMemoryBytes || 1
-  const usedMem = snapshot?.usedMemoryBytes || 0
-  const availMem = snapshot?.availableMemoryBytes || 0
+  const memPct = snapshot.memoryUsagePercent || 0
+  const cpuPct = snapshot.cpuUsagePercent || 0
+  const totalMem = snapshot.totalMemoryBytes || 1
+  const usedMem = snapshot.usedMemoryBytes || 0
+  const availMem = snapshot.availableMemoryBytes || 0
 
   const procCandidates = candidates.filter(c => c.type === 'process')
   const top5ProcBytes = procCandidates.slice(0, 5).reduce((s, c) => s + c.memoryOrSizeBytes, 0)
@@ -166,38 +229,147 @@ export default function BoostCommand() {
   const memSegments = [
     {
       id: 'top5',
-      label: `🔥 Top 5 大户进程 (${formatBytes(top5ProcBytes)})`,
+      label: `Top 5 大户进程 (${formatBytes(top5ProcBytes)})`,
       valueBytes: top5ProcBytes,
       formattedSize: formatBytes(top5ProcBytes),
       percentage: Math.max(8, (top5ProcBytes / totalMem) * 100),
-      color: '#f59e0b',
+      color: '#64748b',
       active: true
     },
     {
       id: 'other-used',
-      label: `⚙️ 系统与其他驻留 (${formatBytes(otherUsedBytes)})`,
+      label: `系统与其他驻留 (${formatBytes(otherUsedBytes)})`,
       valueBytes: otherUsedBytes,
       formattedSize: formatBytes(otherUsedBytes),
       percentage: Math.max(10, (otherUsedBytes / totalMem) * 100),
-      color: '#3b82f6',
+      color: '#64748b',
       active: true
     },
     {
       id: 'free-ram',
-      label: `🟢 空闲可用内存 (${formatBytes(availMem)})`,
+      label: `空闲可用内存 (${formatBytes(availMem)})`,
       valueBytes: availMem,
       formattedSize: formatBytes(availMem),
       percentage: Math.max(8, (availMem / totalMem) * 100),
-      color: '#10b981',
+      color: '#64748b',
       active: true
     }
   ]
 
+  function toggleSingleBoost(id: string, checked: boolean) {
+    setCheckedIds(prev => {
+      const set = new Set(prev)
+      if (checked) set.add(id)
+      else set.delete(id)
+      return Array.from(set)
+    })
+  }
+
+  const maxItemBytes = Math.max(1, filtered[0]?.memoryOrSizeBytes || 1)
+  const rightSubListItems = filtered.map(item => {
+    const isChecked = !item.isProtected && checkedIds.includes(item.id)
+    const volRatio = Math.max(10, Math.min(100, Math.round((item.memoryOrSizeBytes / maxItemBytes) * 100)))
+    const typeLabel =
+      item.isProtected
+        ? '系统保护锁定'
+        : item.type === 'startup_item'
+        ? item.startupScope || '开机启动项'
+        : item.type === 'process'
+        ? '内存工作集'
+        : '瞬时缓存'
+
+    return List.Item({
+      id: item.id,
+      title: item.name,
+      subtitle:
+        item.type === 'startup_item'
+          ? `${item.startupScope || '开机自启'} · ${item.recommendation}`
+          : item.type === 'process'
+          ? `PID: ${item.pid} · ${item.recommendation}`
+          : item.path,
+      checkable: !item.isProtected,
+      checked: isChecked,
+      lockedReason: item.isProtected ? '系统核心进程安全保护锁定' : undefined,
+      onCheckChange: (c: boolean) => toggleSingleBoost(item.id, c),
+      onToggleCheck: (c: boolean) => toggleSingleBoost(item.id, c),
+      icon: {
+        source: item.isProtected
+          ? Icon.Lock
+          : item.type === 'startup_item'
+          ? Icon.Rocket
+          : item.type === 'process'
+          ? Icon.Bolt
+          : Icon.Trash
+      },
+      accessories: [
+        { progress: { value: volRatio } },
+        { tag: { value: typeLabel } },
+        { text: formatBytes(item.memoryOrSizeBytes) }
+      ],
+      detail: List.Item.Detail({
+        markdown: `# ${item.name}\n\n- **优化维度**: \`${item.type}\`\n- **物理路径**: \`${item.path}\`\n- **当前占用**: \`${formatBytes(item.memoryOrSizeBytes)}\`\n- **诊断建议**: ${item.recommendation}\n`
+      }),
+      actions: ActionPanel({
+        title: item.name,
+        children: [
+          Action({
+            title: '一键执行勾选加速',
+            icon: Icon.Bolt,
+            onAction: () => handleQuickBoost()
+          }),
+          ...(item.path
+            ? [
+                Action({
+                  title: '在资源管理器定位',
+                  icon: Icon.Folder,
+                  onAction: () => {
+                    openBoostItemLocation(item.path)
+                  }
+                })
+              ]
+            : []),
+          ...(item.pid && !item.isProtected
+            ? [
+                Action({
+                  title: '关闭该进程以释放内存',
+                  icon: Icon.XMarkCircle,
+                  style: Action.Style.Destructive,
+                  onAction: () => handleTerminateCandidate(item)
+                })
+              ]
+            : [])
+        ]
+      })
+    } as any)
+  })
+
+  const selectableFiltered = filtered.filter(i => !i.isProtected)
+  const checkedInFiltered = selectableFiltered.filter(i => checkedIds.includes(i.id))
+  const selectedBytes = checkedInFiltered.reduce((acc, i) => acc + i.memoryOrSizeBytes, 0)
+  const allChecked = selectableFiltered.length > 0 && checkedInFiltered.length === selectableFiltered.length
+  const someChecked = checkedInFiltered.length > 0 && !allChecked
+
   return List({
     searchBarPlaceholder: '搜索高内存进程、开机启动项 (Startup/常驻)、PID 或 %TEMP% 缓存...',
     onSearchTextChange: setSearchText,
-    isShowingDetail: true,
+    isShowingDetail: false,
     isLoading,
+    searchBarAccessory: List.Dropdown({
+      tooltip: '按加速影响等级筛选',
+      value: impactFilter,
+      onChange: val => setImpactFilter(val as any),
+      children: [
+        List.Dropdown.Item({ title: `全部加速候选 (${candidates.length})`, value: 'all' }),
+        List.Dropdown.Item({
+          title: `高内存/高耗时影响 (${candidates.filter(c => c.impactLevel === '高耗时影响').length})`,
+          value: 'high'
+        }),
+        List.Dropdown.Item({
+          title: `可安全加速项 (${candidates.filter(c => !c.isProtected).length})`,
+          value: 'cleanable'
+        })
+      ]
+    }),
     metricGrid: MetricGrid({
       columns: 4,
       items: [
@@ -212,16 +384,16 @@ export default function BoostCommand() {
         {
           id: 'boost-reclaim',
           label: '预计可释放内存/缓存',
-          value: formatBytes(snapshot?.reclaimableEstimateBytes || 0),
+          value: formatBytes(snapshot.reclaimableEstimateBytes || 0),
           subValue: `已勾选 ${checkedIds.length} 项待加速`,
           status: 'success'
         },
         {
           id: 'boost-startup',
           label: '开机启动与自启常驻',
-          value: `${snapshot?.startupItemCount || 0} 项`,
+          value: `${snapshot.startupItemCount || 0} 项`,
           subValue: 'Startup 目录 + 自启服务',
-          status: (snapshot?.startupItemCount || 0) > 10 ? 'warning' : 'normal'
+          status: (snapshot.startupItemCount || 0) > 10 ? 'warning' : 'normal'
         },
         {
           id: 'boost-cpu',
@@ -234,7 +406,7 @@ export default function BoostCommand() {
       ]
     }),
     distributionBar: DistributionBar({
-      title: '本机物理内存工作集构成分布 (Top 5 进程 vs 系统常驻 vs 空闲可用)',
+      title: '本机物理内存工作集构成分布',
       totalLabel: `总物理内存 ${formatBytes(totalMem)} · 已用 ${memPct}%`,
       segments: memSegments
     }),
@@ -245,30 +417,33 @@ export default function BoostCommand() {
         { step: 3, label: '3. 三态勾选优化项', status: 'active' },
         { step: 4, label: '4. 一键极速加速', status: 'pending' }
       ],
-      summaryText: `已勾选 ${checkedIds.length} 项 · 当前列表 ${filtered.length} 项`,
+      summaryText: `物理内存已用 ${memPct}% (${formatBytes(usedMem)}/${formatBytes(totalMem)}) · 已勾选 ${checkedInFiltered.length} 项待加速 (预计释放 ${formatBytes(selectedBytes)})`,
       groups: [
         {
           id: 'boost-impact',
           label: '优化筛选',
           value: impactFilter,
-          onChange: (v) => setImpactFilter(v as any),
+          onChange: v => setImpactFilter(v as any),
           options: [
             { value: 'all', label: '全部项目', badge: candidates.length },
-            { value: 'high', label: '🔥 高内存/高耗时影响', badge: candidates.filter(c => c.impactLevel === '高耗时影响').length },
-            { value: 'cleanable', label: '🟢 可安全加速项 (排除系统保护)', badge: candidates.filter(c => !c.isProtected).length }
+            {
+              value: 'high',
+              label: '高内存/高耗时影响',
+              badge: candidates.filter(c => c.impactLevel === '高耗时影响').length
+            },
+            {
+              value: 'cleanable',
+              label: '可安全加速项',
+              badge: candidates.filter(c => !c.isProtected).length
+            }
           ]
         }
       ],
       actions: [
         {
-          id: 'quick-boost-btn',
-          title: `⚡ 一键极速加速 (${checkedIds.length})`,
-          style: 'primary',
-          onAction: handleQuickBoost
-        },
-        {
           id: 'rescan-boost',
-          title: '🔄 刷新负载与启动项',
+          label: '重新扫描',
+          title: '重新扫描',
           style: 'secondary',
           onAction: () => refreshBoost(true)
         }
@@ -284,130 +459,60 @@ export default function BoostCommand() {
         { value: 'temp_cache', label: '%TEMP% 热点缓存', badge: candidates.filter(c => c.type === 'temp_cache').length }
       ]
     }),
+    subList: {
+      title: '系统内存释放、启动项与临时缓存明细 (按占用降序，直接勾选或按 ↵ 加速)',
+      subtitle: `${filtered.length} 项 · 已选 ${checkedInFiltered.length} 项 (${formatBytes(selectedBytes)})`,
+      checkable: selectableFiltered.length > 0,
+      checked: allChecked ? true : someChecked ? 'indeterminate' : false,
+      onCheckChange: checked => {
+        if (checked) {
+          const cleanableIds = selectableFiltered.map(i => i.id)
+          setCheckedIds(Array.from(new Set([...checkedIds, ...cleanableIds])))
+        } else {
+          const removeSet = new Set(selectableFiltered.map(i => i.id))
+          setCheckedIds(checkedIds.filter(id => !removeSet.has(id)))
+        }
+      },
+      emptyText: '当前分类下暂无可优化的进程或启动项',
+      items: rightSubListItems
+    },
     children: [
       List.Section({
-        title: `本机真实内存、开机启动项与缓存优化清单 (${filtered.length})`,
-        subtitle: '支持勾选非保护进程、启动项与临时缓存执行批量加速',
-        checkable: true,
-        checked:
-          filtered.length > 0 && filtered.filter(i => !i.isProtected).every(i => checkedIds.includes(i.id))
-            ? true
-            : filtered.some(i => checkedIds.includes(i.id))
-            ? 'indeterminate'
-            : false,
-        onCheckChange: (checked) => {
-          if (checked) {
-            const cleanableIds = filtered.filter(i => !i.isProtected).map(i => i.id)
-            setCheckedIds(Array.from(new Set([...checkedIds, ...cleanableIds])))
-          } else {
-            const removeSet = new Set(filtered.map(i => i.id))
-            setCheckedIds(checkedIds.filter(id => !removeSet.has(id)))
-          }
-        },
-        children: filtered.map(item => {
-          const isChecked = checkedIds.includes(item.id)
-          return List.Item({
-            id: item.id,
-            title: item.name,
-            subtitle:
-              item.type === 'startup_item'
-                ? `${item.startupScope || '开机自启'} · ${item.recommendation}`
-                : item.type === 'process'
-                ? `PID: ${item.pid} · ${item.recommendation}`
-                : item.path,
-            checkable: !item.isProtected,
-            checked: isChecked,
-            onCheckChange: (c) => {
-              if (c) {
-                setCheckedIds(Array.from(new Set([...checkedIds, item.id])))
-              } else {
-                setCheckedIds(checkedIds.filter(id => id !== item.id))
-              }
-            },
-            icon: {
-              source:
-                item.type === 'startup_item'
-                  ? Icon.Rocket
-                  : item.type === 'process'
-                  ? Icon.Bolt
-                  : Icon.Trash,
-              tintColor: item.isProtected
-                ? Color.SecondaryText
-                : item.impactLevel === '高耗时影响'
-                ? Color.Orange
-                : Color.Green
-            },
-            accessories: [
-              {
-                tag: {
-                  value: item.isProtected
-                    ? '🛡️ 系统保护'
-                    : item.type === 'startup_item'
-                    ? item.startupScope || '开机启动项'
-                    : item.type === 'process'
-                    ? '内存工作集'
-                    : '临时残留',
-                  color: item.isProtected
-                    ? Color.SecondaryText
-                    : item.type === 'startup_item'
-                    ? Color.Purple
-                    : Color.Blue
-                }
-              },
-              { text: formatBytes(item.memoryOrSizeBytes) }
-            ],
-            detail: List.Item.Detail({
-              markdown: `# ⚡ ${item.name}
-
-**优化维度**: \`${item.type === 'startup_item' ? `开机启动/自启常驻 (${item.startupScope})` : item.type === 'process' ? `运行中进程 (PID: ${item.pid})` : '系统 %TEMP% 缓存文件'}\`  
-**物理路径**: \`${item.path || '系统内核路径'}\`
-
----
-
-### 📊 资源消耗与启动耗时评估 (BoostPlugin.h)
-- **当前占用大小**: \`${formatBytes(item.memoryOrSizeBytes)}\`
-- **CPU 瞬时负载**: \`${item.cpuPercent.toFixed(1)}%\`
-- **影响评级**: \`${item.impactLevel || '普通'}\`
-- **诊断建议**: ${item.recommendation}
-`
-            }),
-            actions: ActionPanel({
-              title: item.name,
-              children: [
-                Action({
-                  title: '执行一键系统加速与清理',
-                  icon: Icon.Bolt,
-                  onAction: () => handleQuickBoost()
-                }),
-                ...(item.pid && !item.isProtected
-                  ? [
-                      Action({
-                        title: '关闭该进程以释放内存',
-                        icon: Icon.XMarkCircle,
-                        onAction: () => handleTerminateCandidate(item)
-                      })
-                    ]
-                  : []),
-                ...(item.path
-                  ? [
-                      Action({
-                        title: '在资源管理器中定位',
-                        icon: Icon.Folder,
-                        onAction: () => {
-                          openBoostItemLocation(item.path)
-                        }
-                      })
-                    ]
-                  : []),
-                Action({
-                  title: '刷新系统负载与启动项快照',
-                  icon: Icon.ArrowClockwise,
-                  onAction: () => refreshBoost(true)
-                })
-              ]
-            })
+        title: '系统加速导航树',
+        children: [
+          List.Item({
+            id: 'boost-nav-all',
+            title: '全部加速项汇总',
+            subtitle: `共 ${candidates.length} 项候选 · 预计释放 ${formatBytes(snapshot.reclaimableEstimateBytes)}`,
+            icon: { source: Icon.Bolt },
+            accessories: [{ text: `${candidates.length} 项` }],
+            onSelect: () => setTab('all')
+          }),
+          List.Item({
+            id: 'boost-nav-process',
+            title: '高内存后台进程治理',
+            subtitle: '释放高占用后台驻留进程内存工作集',
+            icon: { source: Icon.Cpu },
+            accessories: [{ text: `${candidates.filter(c => c.type === 'process').length} 项` }],
+            onSelect: () => setTab('process')
+          }),
+          List.Item({
+            id: 'boost-nav-startup',
+            title: 'Windows 开机启动项管理 (Startup)',
+            subtitle: '用户与公共 Startup 目录及注册表自启常驻',
+            icon: { source: Icon.Rocket },
+            accessories: [{ text: `${candidates.filter(c => c.type === 'startup_item').length} 项` }],
+            onSelect: () => setTab('startup_item')
+          }),
+          List.Item({
+            id: 'boost-nav-temp',
+            title: '%TEMP% 瞬时热点缓存清理',
+            subtitle: '清理运行时遗留转储与临时交换文件',
+            icon: { source: Icon.Trash },
+            accessories: [{ text: `${candidates.filter(c => c.type === 'temp_cache').length} 项` }],
+            onSelect: () => setTab('temp_cache')
           })
-        })
+        ]
       })
     ]
   })

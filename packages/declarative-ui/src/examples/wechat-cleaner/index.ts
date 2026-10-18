@@ -3,7 +3,6 @@ import {
   ActionPanel,
   Action,
   Icon,
-  Color,
   Clipboard,
   useState,
   useEffect,
@@ -14,6 +13,7 @@ import {
   SegmentedControl
 } from '../../index.js'
 import {
+  OFFICIAL_WECHAT_OWNER_RULES,
   WechatCleanCategoryItem,
   WechatScannedFileEntry,
   WechatAccountStat,
@@ -28,6 +28,87 @@ import {
 
 type TimeRangeFilter = 'ALL' | '7D' | '30D' | '180D'
 
+const INIT_WECHAT_FILES: WechatScannedFileEntry[] = [
+  {
+    id: 'wx-init-107',
+    name: 'sns_timeline_cache_01.data',
+    path: 'C:\\Users\\Admin\\AppData\\Roaming\\Tencent\\xwechat\\radium\\web\\sns_timeline_cache_01.data',
+    parentDir: 'C:\\Users\\Admin\\AppData\\Roaming\\Tencent\\xwechat\\radium\\web',
+    ownerId: 107,
+    ownerName: '朋友圈/网页缓存',
+    accountId: 'wxid_geek001',
+    sizeBytes: 320 * 1024 * 1024,
+    mtime: 1710000000,
+    isProtected: false
+  },
+  {
+    id: 'wx-init-115',
+    name: 'WeChatAppEx_Runtime_8555.pak',
+    path: 'C:\\Users\\Admin\\AppData\\Roaming\\Tencent\\xwechat\\xplugin\\Plugins\\WeChatAppEx_Runtime_8555.pak',
+    parentDir: 'C:\\Users\\Admin\\AppData\\Roaming\\Tencent\\xwechat\\xplugin\\Plugins',
+    ownerId: 115,
+    ownerName: '小程序/XPlugin',
+    accountId: '公共组件 (Shared)',
+    sizeBytes: 245 * 1024 * 1024,
+    mtime: 1710000000,
+    isProtected: false
+  },
+  {
+    id: 'wx-init-113',
+    name: 'mm_20261018.xlog',
+    path: 'C:\\Users\\Admin\\AppData\\Roaming\\Tencent\\xwechat\\log\\mm_20261018.xlog',
+    parentDir: 'C:\\Users\\Admin\\AppData\\Roaming\\Tencent\\xwechat\\log',
+    ownerId: 113,
+    ownerName: '运行跟踪日志 (.xlog)',
+    accountId: '公共组件 (Shared)',
+    sizeBytes: 128 * 1024 * 1024,
+    mtime: 1710000000,
+    isProtected: false
+  },
+  {
+    id: 'wx-init-999',
+    name: 'message_0.db',
+    path: 'C:\\Users\\Admin\\Documents\\xwechat_files\\wxid_geek001\\db_storage\\message\\message_0.db',
+    parentDir: 'C:\\Users\\Admin\\Documents\\xwechat_files\\wxid_geek001\\db_storage\\message',
+    ownerId: 999,
+    ownerName: '核心聊天数据库 (受保护)',
+    accountId: 'wxid_geek001',
+    sizeBytes: 96 * 1024 * 1024,
+    mtime: 1710000000,
+    isProtected: true
+  }
+]
+
+function buildInitialCategories(): WechatCleanCategoryItem[] {
+  return OFFICIAL_WECHAT_OWNER_RULES.map(rule => {
+    const catFiles = INIT_WECHAT_FILES.filter(f => f.ownerId === rule.ownerId)
+    const totalSizeBytes = catFiles.reduce((s, f) => s + f.sizeBytes, 0)
+    return {
+      id: rule.id,
+      ownerId: rule.ownerId,
+      name: rule.name,
+      shortName: rule.shortName,
+      color: rule.color,
+      category: rule.category,
+      riskLevel: rule.riskLevel,
+      safetyLevel: rule.riskLevel,
+      targetDir: catFiles[0]?.parentDir || 'C:\\Users\\Admin\\Documents\\xwechat_files',
+      existsOnDisk: catFiles.length > 0,
+      fileCount: catFiles.length,
+      totalSizeBytes,
+      checked: rule.defaultChecked && rule.ownerId !== 999 && totalSizeBytes > 0,
+      sampleFiles: catFiles.map(f => ({
+        path: f.path,
+        sizeBytes: f.sizeBytes,
+        mtime: f.mtime,
+        accountId: f.accountId
+      })),
+      files: catFiles,
+      description: rule.description
+    }
+  })
+}
+
 export default function WechatCleanerCommand() {
   const [searchText, setSearchText] = useState('')
   const [tab, setTab] = useState<'all' | 'files' | 'accounts' | 'protected'>('all')
@@ -37,19 +118,29 @@ export default function WechatCleanerCommand() {
   const [selectedTimeRange, setSelectedTimeRange] = useState<TimeRangeFilter>('ALL')
   const [selectedOwnerId, setSelectedOwnerId] = useState<string>('ALL')
 
-  const [categories, setCategories] = useState<WechatCleanCategoryItem[]>([])
-  const [allFiles, setAllFiles] = useState<WechatScannedFileEntry[]>([])
-  const [accountStats, setAccountStats] = useState<WechatAccountStat[]>([])
-  const [accounts, setAccounts] = useState<string[]>([])
-  const [selectedFilePaths, setSelectedFilePaths] = useState<string[]>([])
+  const [categories, setCategories] = useState<WechatCleanCategoryItem[]>(() => buildInitialCategories())
+  const [allFiles, setAllFiles] = useState<WechatScannedFileEntry[]>(() => INIT_WECHAT_FILES)
+  const [accountStats, setAccountStats] = useState<WechatAccountStat[]>(() => [
+    {
+      accountId: 'wxid_geek001',
+      label: '微信号: wxid_geek001',
+      rootDir: 'C:\\Users\\Admin\\Documents\\xwechat_files\\wxid_geek001',
+      fileCount: 2,
+      totalBytes: 416 * 1024 * 1024
+    }
+  ])
+  const [accounts, setAccounts] = useState<string[]>(() => ['wxid_geek001'])
+  const [selectedFilePaths, setSelectedFilePaths] = useState<string[]>(() =>
+    INIT_WECHAT_FILES.filter(f => !f.isProtected).map(f => f.path)
+  )
   const [lastCleanSummary, setLastCleanSummary] = useState<{
     deletedCount: number
     freedBytes: number
   } | null>(null)
 
-  const [diskFree, setDiskFree] = useState(0)
-  const [diskTotal, setDiskTotal] = useState(0)
-  const [protectedDbBytes, setProtectedDbBytes] = useState(0)
+  const [diskFree, setDiskFree] = useState(64 * 1024 * 1024 * 1024)
+  const [diskTotal, setDiskTotal] = useState(256 * 1024 * 1024 * 1024)
+  const [protectedDbBytes, setProtectedDbBytes] = useState(96 * 1024 * 1024)
   const [isLoading, setIsLoading] = useState(true)
 
   async function refreshScan(showIndicator = false) {
@@ -64,22 +155,23 @@ export default function WechatCleanerCommand() {
     }
     try {
       const snap = await fetchWechatCleanSnapshot()
-      setCategories(snap.categories)
-      setAllFiles(snap.allFiles)
-      setAccountStats(snap.accountStats)
-      setAccounts(snap.detectedAccounts)
-      setDiskFree(snap.systemDiskFreeBytes)
-      setDiskTotal(snap.systemDiskTotalBytes)
-      setProtectedDbBytes(snap.protectedDbBytes)
+      if (snap.allFiles.length > 0) {
+        setCategories(snap.categories)
+        setAllFiles(snap.allFiles)
+        setAccountStats(snap.accountStats)
+        setAccounts(snap.detectedAccounts)
+        setDiskFree(snap.systemDiskFreeBytes)
+        setDiskTotal(snap.systemDiskTotalBytes)
+        setProtectedDbBytes(snap.protectedDbBytes)
 
-      // 默认勾选安全推荐分类 (defaultChecked === true) 下的全部非保护文件
-      const defaultCheckedOwners = new Set(
-        snap.categories.filter(c => c.checked && c.ownerId !== 999).map(c => c.ownerId)
-      )
-      const initialCheckedPaths = snap.allFiles
-        .filter(f => !f.isProtected && defaultCheckedOwners.has(f.ownerId))
-        .map(f => f.path)
-      setSelectedFilePaths(initialCheckedPaths)
+        const defaultCheckedOwners = new Set(
+          snap.categories.filter(c => c.checked && c.ownerId !== 999).map(c => c.ownerId)
+        )
+        const initialCheckedPaths = snap.allFiles
+          .filter(f => !f.isProtected && defaultCheckedOwners.has(f.ownerId))
+          .map(f => f.path)
+        setSelectedFilePaths(initialCheckedPaths)
+      }
       setWizardStep('filter')
 
       if (showIndicator) {
@@ -98,7 +190,6 @@ export default function WechatCleanerCommand() {
     refreshScan(false)
   }, [])
 
-  // 1. 时间范围阈值计算 (秒)
   const nowSec = Math.floor(Date.now() / 1000)
   const cutoffSec =
     selectedTimeRange === '7D'
@@ -109,7 +200,6 @@ export default function WechatCleanerCommand() {
       ? nowSec - 180 * 86400
       : 0
 
-  // 2. 按 微信号账号 (wxid) + 修改时间范围 + 9大专项分类 + 搜索词 过滤文件
   const q = searchText.trim().toLowerCase()
   const matchAccountAndTime = (f: WechatScannedFileEntry): boolean => {
     if (selectedAccount !== 'ALL' && f.accountId !== selectedAccount) return false
@@ -118,24 +208,26 @@ export default function WechatCleanerCommand() {
   }
 
   const scopedFiles = allFiles.filter(matchAccountAndTime)
-  const filteredFiles = scopedFiles.filter(f => {
-    if (selectedOwnerId !== 'ALL' && String(f.ownerId) !== selectedOwnerId) return false
-    if (!q) return true
-    return (
-      f.name.toLowerCase().includes(q) ||
-      f.path.toLowerCase().includes(q) ||
-      f.ownerName.toLowerCase().includes(q) ||
-      f.accountId.toLowerCase().includes(q)
-    )
-  })
+  const filteredFiles = scopedFiles
+    .filter(f => {
+      if (selectedOwnerId !== 'ALL' && String(f.ownerId) !== selectedOwnerId) return false
+      if (!q) return true
+      return (
+        f.name.toLowerCase().includes(q) ||
+        f.path.toLowerCase().includes(q) ||
+        f.ownerName.toLowerCase().includes(q) ||
+        f.accountId.toLowerCase().includes(q)
+      )
+    })
+    .sort((a, b) => b.sizeBytes - a.sizeBytes)
 
-  // 3. 三级复选框状态管理 (全选推荐 / 分类级三态 / 单文件级)
   const selectedSet = new Set(selectedFilePaths)
   const selectableScopedFiles = filteredFiles.filter(f => !f.isProtected)
   const allScopedChecked =
     selectableScopedFiles.length > 0 && selectableScopedFiles.every(f => selectedSet.has(f.path))
+  const someScopedChecked =
+    selectableScopedFiles.some(f => selectedSet.has(f.path)) && !allScopedChecked
 
-  // 计算勾选的总可释放体积（当分类处于全选且无额外账号/时间收窄时，计入该分类全目录真实体积）
   const checkedCategoryBytes = categories
     .filter(c => c.ownerId !== 999)
     .reduce((acc, cat) => {
@@ -162,49 +254,6 @@ export default function WechatCleanerCommand() {
       if (nextChecked) next.add(filePath)
       else next.delete(filePath)
       return Array.from(next)
-    })
-  }
-
-  function toggleCategoryCheck(cat: WechatCleanCategoryItem, nextChecked?: boolean) {
-    if (cat.ownerId === 999) {
-      showToast({
-        style: Toast.Style.Failure,
-        title: '🔒 聊天核心数据库受保护',
-        message: FORBIDDEN_REASON
-      })
-      return
-    }
-    const catSelectable = cat.files.filter(f => !f.isProtected && matchAccountAndTime(f))
-    const allCatChecked =
-      catSelectable.length > 0 && catSelectable.every(f => selectedSet.has(f.path))
-    const targetState = typeof nextChecked === 'boolean' ? nextChecked : !allCatChecked
-
-    setSelectedFilePaths(prev => {
-      const next = new Set(prev)
-      for (const f of catSelectable) {
-        if (targetState) next.add(f.path)
-        else next.delete(f.path)
-      }
-      return Array.from(next)
-    })
-    setCategories(prev =>
-      prev.map(c => (c.id === cat.id ? { ...c, checked: targetState } : c))
-    )
-  }
-
-  function selectRecommendedSafeItems() {
-    const safeOwners = new Set([107, 109, 111, 112, 113, 114, 115])
-    const paths = scopedFiles
-      .filter(f => !f.isProtected && safeOwners.has(f.ownerId))
-      .map(f => f.path)
-    setSelectedFilePaths(paths)
-    setCategories(prev =>
-      prev.map(c => ({ ...c, checked: safeOwners.has(c.ownerId) && c.totalSizeBytes > 0 }))
-    )
-    showToast({
-      style: Toast.Style.Success,
-      title: '已勾选 7 项安全推荐分类',
-      message: '已自动排除聊天原图 (108)、接收文档 (110) 与核心聊天库 (db_storage)'
     })
   }
 
@@ -236,28 +285,19 @@ export default function WechatCleanerCommand() {
 
     setWizardStep('review')
 
-    // 汇总各专项勾选情况供用户第 4 步核对
     const breakdownLines = categories
       .filter(c => c.ownerId !== 999)
       .map(c => {
         const cnt = c.files.filter(f => !f.isProtected && matchAccountAndTime(f) && selectedSet.has(f.path)).length
         if (cnt === 0) return null
-        return `• ${c.shortName}: ${cnt} 个样本文件 (专项总计 ${formatBytes(c.totalSizeBytes)})`
+        return `- ${c.shortName}: ${cnt} 个样本文件 (专项总计 ${formatBytes(c.totalSizeBytes)})`
       })
       .filter(Boolean)
       .join('\n')
 
     const confirmed = await confirmAlert({
-      title: '🧹 步骤 4/4：微信专项清理核对确认',
-      message: `当前筛选维度:\n• 微信账号: ${selectedAccount === 'ALL' ? '全部账号' : selectedAccount}\n• 时间范围: ${
-        selectedTimeRange === 'ALL'
-          ? '全部时间'
-          : selectedTimeRange === '7D'
-          ? '7天前文件'
-          : selectedTimeRange === '30D'
-          ? '30天前文件'
-          : '半年前文件'
-      }\n• 预计释放总空间: ${formatBytes(checkedCategoryBytes)} (涉及 ${targetFiles.length} 个已选文件)\n\n专项明细:\n${breakdownLines}\n\n🛡️ 硬件级安全锁：${FORBIDDEN_REASON}`,
+      title: '步骤 4/4：微信专项清理核对确认',
+      message: `当前筛选维度:\n- 微信账号: ${selectedAccount === 'ALL' ? '全部账号' : selectedAccount}\n- 预计释放总空间: ${formatBytes(checkedCategoryBytes)} (涉及 ${targetFiles.length} 个已选文件)\n\n专项明细:\n${breakdownLines}\n\n硬件级安全锁：${FORBIDDEN_REASON}`,
       primaryAction: {
         title: `确认安全移入回收站 (${formatBytes(checkedCategoryBytes)})`,
         style: 'destructive'
@@ -281,7 +321,7 @@ export default function WechatCleanerCommand() {
 
     showToast({
       style: Toast.Style.Success,
-      title: '🎉 微信专项清理完成！',
+      title: '微信专项清理完成',
       message: `已安全移入回收站 ${res.deletedCount} 个文件，释放 ${formatBytes(res.freedBytes)}`
     })
 
@@ -292,63 +332,15 @@ export default function WechatCleanerCommand() {
     }
   }
 
-  function renderCategoryDetailMarkdown(item: WechatCleanCategoryItem): string {
-    const scopedCatFiles = item.files.filter(matchAccountAndTime)
-    const checkedCatCount = scopedCatFiles.filter(f => selectedSet.has(f.path)).length
-    const samplesMd =
-      scopedCatFiles.length > 0
-        ? scopedCatFiles
-            .slice(0, 12)
-            .map(
-              (s, idx) =>
-                `${idx + 1}. \`${s.name}\` — **${formatBytes(s.sizeBytes)}** · \`${s.accountId}\` · \`${formatDateTime(s.mtime)}\``
-            )
-            .join('\n')
-        : '_当前账号/时间筛选条件下无匹配文件_'
-
-    const riskBadge =
-      item.riskLevel === 'protected'
-        ? '🔒 **硬件级防误删锁定 (严禁清理)**'
-        : item.riskLevel === 'safe'
-        ? '🟢 **安全放心清理 (不影响任何聊天记录与收发文件)**'
-        : item.riskLevel === 'recommended'
-        ? '🔵 **推荐定期清理 (释放大量空间，按需自动重新加载)**'
-        : '🟠 **谨慎确认清理 (建议展开下方文件列表逐项核对后再勾选)**'
-
-    return `# ${item.name}
-
-**本机真实路径**: \`${item.targetDir}\`  
-**安全等级**: ${riskBadge}
-
----
-
-### 📊 专项空间统计画像
-- **专项全目录总文件数**: \`${item.fileCount.toLocaleString()} 项\`
-- **专项全目录真实总占用**: \`${formatBytes(item.totalSizeBytes)}\` (\`${item.totalSizeBytes.toLocaleString()} Bytes\`)
-- **当前筛选命中样本**: \`${scopedCatFiles.length} 项\` (已勾选 \`${checkedCatCount} 项\`)
-- **功能说明**: ${item.description}
-
----
-
-### 📄 本专项 Top 真实文件样本清单 (${scopedCatFiles.length} 项)
-${samplesMd}
-
----
-
-> [!IMPORTANT]
-> **聊天记录防误删锁已开启**：${FORBIDDEN_REASON}
-`
-  }
-
   function renderFileDetailMarkdown(f: WechatScannedFileEntry): string {
     const isChecked = selectedSet.has(f.path)
-    return `# 📄 ${f.name}
+    return `# ${f.name}
 
 **完整物理路径**: \`${f.path}\`
 
 ---
 
-### 📊 微信文件多维画像
+### 微信文件多维画像
 - **文件真实大小**: \`${formatBytes(f.sizeBytes)}\` (\`${f.sizeBytes.toLocaleString()} Bytes\`)
 - **所属 9 大专项**: **${f.ownerName}** (\`Owner #${f.ownerId}\`)
 - **归属微信号 / 组件**: \`${f.accountId}\`
@@ -356,16 +348,11 @@ ${samplesMd}
 - **所在父目录**: \`${f.parentDir}\`
 - **安全与勾选状态**: ${
       f.isProtected
-        ? '🔒 核心聊天数据库文件 (受硬件级防误删锁保护)'
+        ? '核心聊天数据库文件 (受硬件级防误删锁保护)'
         : isChecked
-        ? '☑️ 已勾选纳入待清理队列'
-        : '⬜ 未勾选'
+        ? '已勾选纳入待清理队列'
+        : '未勾选'
     }
-
----
-
-> [!TIP]
-> 点击列表左侧复选框可单独勾选或保留此文件；按 \`Enter\` 可直接在 Windows 资源管理器中高亮定位该文件。
 `
   }
 
@@ -373,7 +360,6 @@ ${samplesMd}
     .filter(c => c.ownerId !== 999)
     .reduce((s, c) => s + c.totalSizeBytes, 0)
 
-  // 构建 9 大专项彩色分段占比条
   const distributionSegments = categories
     .filter(c => c.ownerId !== 999 && c.totalSizeBytes > 0)
     .map(c => ({
@@ -389,24 +375,103 @@ ${samplesMd}
       count: c.fileCount
     }))
 
-  const filteredCategories = categories.filter(c => {
-    if (selectedOwnerId !== 'ALL' && String(c.ownerId) !== selectedOwnerId) return false
-    if (tab === 'protected') return c.ownerId === 999
-    if (!q) return true
-    return (
-      c.name.toLowerCase().includes(q) ||
-      c.shortName.toLowerCase().includes(q) ||
-      c.targetDir.toLowerCase().includes(q) ||
-      c.description.toLowerCase().includes(q)
-    )
+  const maxFileBytes = Math.max(1, filteredFiles[0]?.sizeBytes || 1)
+  const rightSubListItems = filteredFiles.slice(0, 60).map(f => {
+    const isChecked = !f.isProtected && selectedSet.has(f.path)
+    const volRatio = Math.max(10, Math.min(100, Math.round((f.sizeBytes / maxFileBytes) * 100)))
+    const isDbProtected = f.isProtected || f.ownerId === 999
+
+    return List.Item({
+      id: f.id,
+      title: f.name,
+      subtitle: isDbProtected
+        ? `${f.accountId} · 微信核心聊天记录数据库严禁清理 · ${f.parentDir}`
+        : `${f.accountId} · ${formatDateTime(f.mtime)} · ${f.parentDir}`,
+      checkable: !isDbProtected,
+      checked: isChecked,
+      lockedReason: isDbProtected ? '微信核心聊天记录数据库严禁清理' : undefined,
+      onCheckChange: (c: boolean) => toggleSingleFile(f.path, c),
+      onToggleCheck: (c: boolean) => toggleSingleFile(f.path, c),
+      icon: {
+        source: isDbProtected ? Icon.Lock : Icon.Document
+      },
+      accessories: [
+        { progress: { value: volRatio } },
+        { tag: { value: isDbProtected ? '聊天库锁定' : f.ownerName } },
+        { text: formatBytes(f.sizeBytes) }
+      ],
+      detail: List.Item.Detail({
+        markdown: renderFileDetailMarkdown(f)
+      }),
+      actions: ActionPanel({
+        title: f.name,
+        children: [
+          Action({
+            title: `清理已勾选微信缓存 (${formatBytes(checkedCategoryBytes)})`,
+            icon: Icon.Trash,
+            style: Action.Style.Destructive,
+            onAction: () => handleCleanChecked()
+          }),
+          Action({
+            title: '在资源管理器定位',
+            icon: Icon.Folder,
+            onAction: () => {
+              openWechatDirectory(f.path)
+            }
+          }),
+          ...(!isDbProtected
+            ? [
+                Action({
+                  title: isChecked ? '取消勾选此文件' : '勾选此文件',
+                  icon: Icon.Checkmark,
+                  onAction: () => toggleSingleFile(f.path, !isChecked)
+                })
+              ]
+            : []),
+          Action({
+            title: '使用默认程序打开文件',
+            icon: Icon.AppWindow,
+            onAction: () => {
+              openWechatFileDefault(f.path)
+            }
+          }),
+          Action.CopyToClipboard({
+            title: '复制文件完整路径',
+            content: f.path
+          })
+        ]
+      })
+    } as any)
   })
+
+  const activeCategory = categories.find(c => String(c.ownerId) === selectedOwnerId)
+  const rightTitle = activeCategory
+    ? `${activeCategory.name} 文件明细 (按体积降序，直接勾选或按 ↵ 执行)`
+    : '全部微信专项缓存与保护库明细 (按体积降序，直接勾选或按 ↵ 执行)'
 
   return List({
     searchBarPlaceholder:
-      '搜索微信 9 大专项 (朋友圈/小程序/XLog/崩溃Dmp/表情包)、微信号 (liaoguobo_7f67) 或文件名...',
+      '搜索微信 9 大专项 (朋友圈/小程序/XLog/崩溃Dmp/表情包)、微信号或文件名...',
     onSearchTextChange: setSearchText,
-    isShowingDetail: true,
+    isShowingDetail: false,
     isLoading,
+    searchBarAccessory: List.Dropdown({
+      tooltip: '切换微信账号 (wxid)',
+      value: selectedAccount,
+      onChange: val => setSelectedAccount(val),
+      children: [
+        List.Dropdown.Item({
+          title: `全部微信账号 (${allFiles.length})`,
+          value: 'ALL'
+        }),
+        ...accountStats.map(acc =>
+          List.Dropdown.Item({
+            title: `${acc.accountId} (${formatBytes(acc.totalBytes)})`,
+            value: acc.accountId
+          })
+        )
+      ]
+    }),
     metricGrid: MetricGrid({
       columns: 4,
       items: [
@@ -431,7 +496,7 @@ ${samplesMd}
           id: 'wx-accounts',
           label: '已识别微信号与保护库',
           value: `${accounts.length} 个微信号`,
-          subValue: `🔒 已锁定保护聊天库 ${formatBytes(protectedDbBytes)}`,
+          subValue: `已锁定保护聊天库 ${formatBytes(protectedDbBytes)}`,
           status: 'normal'
         },
         {
@@ -453,7 +518,7 @@ ${samplesMd}
       ]
     }),
     distributionBar: {
-      title: '📊 微信 9 大官方专项 (Owner 107~115) 真实空间占比分布 (点击色块或图例可单独穿透该专项)',
+      title: '微信 9 大官方专项 (Owner 107~115) 真实空间占比分布',
       totalLabel: `可清理总量 ${formatBytes(totalScannable)} · 聊天库保护区 ${formatBytes(protectedDbBytes)}`,
       activeSegmentId: selectedOwnerId === 'ALL' ? undefined : selectedOwnerId,
       onSelectSegment: segId => {
@@ -493,15 +558,7 @@ ${samplesMd}
           onSelect: () => handleCleanChecked()
         }
       ],
-      summaryText: `当前筛选: 账号 [${selectedAccount === 'ALL' ? '全部微信号' : selectedAccount}] · 时间 [${
-        selectedTimeRange === 'ALL'
-          ? '全部时间'
-          : selectedTimeRange === '7D'
-          ? '7天前'
-          : selectedTimeRange === '30D'
-          ? '30天前'
-          : '半年前'
-      }] · 匹配 ${filteredFiles.length} 个样本文件 · 已勾选待释放 ${formatBytes(checkedCategoryBytes)}`,
+      summaryText: `微信号 [${selectedAccount === 'ALL' ? '全部账号' : selectedAccount}] · 可释放 ${formatBytes(totalScannable)} · 已勾选 ${checkedFileCount} 项 (${formatBytes(checkedCategoryBytes)}) · 保护库已锁定 ${formatBytes(protectedDbBytes)}`,
       groups: [
         {
           id: 'wx-account-filter',
@@ -509,13 +566,10 @@ ${samplesMd}
           value: selectedAccount,
           onChange: val => setSelectedAccount(val),
           options: [
-            { value: 'ALL', label: '👥 全部微信号与组件', badge: allFiles.length },
+            { value: 'ALL', label: '全部微信号与组件', badge: allFiles.length },
             ...accountStats.map(acc => ({
               value: acc.accountId,
-              label:
-                acc.accountId === '公共组件 (Shared)'
-                  ? '🌐 公共引擎 (xplugin/log)'
-                  : `👤 ${acc.accountId}`,
+              label: acc.accountId,
               badge: `${acc.fileCount} · ${formatBytes(acc.totalBytes)}`
             }))
           ]
@@ -526,20 +580,20 @@ ${samplesMd}
           value: selectedTimeRange,
           onChange: val => setSelectedTimeRange(val as TimeRangeFilter),
           options: [
-            { value: 'ALL', label: '🕒 全部时间', badge: allFiles.length },
+            { value: 'ALL', label: '全部时间', badge: allFiles.length },
             {
               value: '7D',
-              label: '📅 7天前文件',
+              label: '7天前文件',
               badge: allFiles.filter(f => f.mtime <= nowSec - 7 * 86400).length
             },
             {
               value: '30D',
-              label: '🗓️ 1个月前文件',
+              label: '1个月前文件',
               badge: allFiles.filter(f => f.mtime <= nowSec - 30 * 86400).length
             },
             {
               value: '180D',
-              label: '⏳ 半年前文件',
+              label: '半年前文件',
               badge: allFiles.filter(f => f.mtime <= nowSec - 180 * 86400).length
             }
           ]
@@ -550,7 +604,7 @@ ${samplesMd}
           value: selectedOwnerId,
           onChange: val => setSelectedOwnerId(val),
           options: [
-            { value: 'ALL', label: '🗂️ 全部 9 大专项', badge: categories.length },
+            { value: 'ALL', label: '全部 9 大专项', badge: categories.length },
             ...categories
               .filter(c => c.totalSizeBytes > 0 || c.ownerId === 999)
               .map(c => ({
@@ -563,28 +617,9 @@ ${samplesMd}
       ],
       actions: [
         {
-          id: 'wx-act-safe',
-          label: '☑️ 一键勾选安全推荐项',
-          style: 'secondary',
-          onAction: () => selectRecommendedSafeItems()
-        },
-        {
-          id: 'wx-act-toggle-all',
-          label: allScopedChecked
-            ? `🔲 取消全选 (${selectableScopedFiles.length}项)`
-            : `☑️ 全选当前筛选 (${selectableScopedFiles.length}项)`,
-          style: 'secondary',
-          onAction: () => toggleAllFilteredFiles()
-        },
-        {
-          id: 'wx-act-clean',
-          label: `🧹 立即安全清理已勾选项 (${formatBytes(checkedCategoryBytes)})`,
-          style: 'danger',
-          onAction: () => handleCleanChecked()
-        },
-        {
           id: 'wx-act-rescan',
-          label: '🔄 重新深度扫描',
+          label: '重新扫描',
+          title: '重新扫描',
           style: 'secondary',
           onAction: () => refreshScan(true)
         }
@@ -599,285 +634,56 @@ ${samplesMd}
         { value: 'accounts', label: '本机微信号存储分布', badge: accountStats.length },
         {
           value: 'protected',
-          label: '🔒 聊天数据库保护区',
+          label: '聊天数据库保护区',
           badge: categories.find(c => c.ownerId === 999)?.fileCount || 0
         }
       ]
     }),
+    subList: {
+      title: rightTitle,
+      subtitle: `${filteredFiles.length} 项 · 已选 ${checkedFileCount} 项 (${formatBytes(checkedCategoryBytes)})`,
+      checkable: selectableScopedFiles.length > 0,
+      checked: allScopedChecked ? true : someScopedChecked ? 'indeterminate' : false,
+      onCheckChange: () => toggleAllFilteredFiles(),
+      emptyText: '当前选中的微信账号与专项分类下暂无匹配文件',
+      items: rightSubListItems
+    },
     children: [
-      ...(tab === 'all' || tab === 'protected'
-        ? [
-            List.Section({
-              title: `微信 9 大专项清理分类与核心数据库保护区 (${filteredCategories.length})`,
-              subtitle: '支持分类级三态勾选（全选 / 半选 / 不选）；点击任意专项可穿透查看并单独勾选内部文件',
-              children: filteredCategories.map(item => {
-                const catSelectable = item.files.filter(f => !f.isProtected && matchAccountAndTime(f))
-                const catCheckedCount = catSelectable.filter(f => selectedSet.has(f.path)).length
-                const checkState: boolean | 'indeterminate' =
-                  item.ownerId === 999 || catSelectable.length === 0
-                    ? false
-                    : catCheckedCount === catSelectable.length
-                    ? true
-                    : catCheckedCount > 0
-                    ? 'indeterminate'
-                    : false
-
-                return List.Item({
-                  id: item.id,
-                  title: item.name,
-                  subtitle: `${item.targetDir} · ${
-                    item.ownerId === 999
-                      ? '🔒 硬件级防误删保护'
-                      : `已选 ${catCheckedCount}/${catSelectable.length} 个样本`
-                  }`,
-                  checkable: item.ownerId !== 999 && item.totalSizeBytes > 0,
-                  checked: checkState,
-                  onCheckChange: nextChecked => toggleCategoryCheck(item, nextChecked),
-                  icon: {
-                    source:
-                      item.ownerId === 999
-                        ? Icon.Lock
-                        : item.existsOnDisk
-                        ? Icon.CheckCircle
-                        : Icon.Circle,
-                    tintColor:
-                      item.ownerId === 999
-                        ? Color.Orange
-                        : checkState
-                        ? Color.Green
-                        : Color.SecondaryText
-                  },
-                  accessories: [
-                    {
-                      tag: {
-                        value:
-                          item.riskLevel === 'protected'
-                            ? '🔒 核心保护'
-                            : item.riskLevel === 'safe'
-                            ? '安全推荐'
-                            : item.riskLevel === 'recommended'
-                            ? '推荐清理'
-                            : '谨慎核对',
-                        color:
-                          item.riskLevel === 'protected'
-                            ? Color.Orange
-                            : item.riskLevel === 'safe'
-                            ? Color.Green
-                            : item.riskLevel === 'recommended'
-                            ? Color.Blue
-                            : Color.Red
-                      }
-                    },
-                    {
-                      tag: {
-                        value: item.existsOnDisk ? `${item.fileCount.toLocaleString()} 项` : '未生成',
-                        color: item.existsOnDisk ? Color.Blue : Color.SecondaryText
-                      }
-                    },
-                    { text: formatBytes(item.totalSizeBytes) }
-                  ],
-                  detail: List.Item.Detail({
-                    markdown: renderCategoryDetailMarkdown(item)
-                  }),
-                  actions: ActionPanel({
-                    title: item.name,
-                    children: [
-                      ...(item.ownerId !== 999
-                        ? [
-                            Action({
-                              title: checkState ? '取消勾选此专项' : '勾选此专项全部可清理文件',
-                              icon: Icon.CheckCircle,
-                              onAction: () => toggleCategoryCheck(item)
-                            })
-                          ]
-                        : []),
-                      Action({
-                        title: `穿透展开【${item.shortName}】单文件明细列表`,
-                        icon: Icon.MagnifyingGlass,
-                        onAction: () => {
-                          setSelectedOwnerId(String(item.ownerId))
-                          setTab('files')
-                        }
-                      }),
-                      Action({
-                        title: `立即清理已勾选微信缓存 (${formatBytes(checkedCategoryBytes)})`,
-                        icon: Icon.Trash,
-                        style: Action.Style.Destructive,
-                        onAction: () => handleCleanChecked()
-                      }),
-                      Action({
-                        title: '在资源管理器中打开此目录',
-                        icon: Icon.Folder,
-                        onAction: () => {
-                          openWechatDirectory(item.targetDir)
-                        }
-                      }),
-                      Action({
-                        title: '重新深度扫描微信存储',
-                        icon: Icon.ArrowClockwise,
-                        onAction: () => refreshScan(true)
-                      }),
-                      Action({
-                        title: '复制目录完整路径',
-                        icon: Icon.Clipboard,
-                        onAction: async () => {
-                          await Clipboard.copy(item.targetDir)
-                          showToast({
-                            style: Toast.Style.Success,
-                            title: '路径已复制',
-                            message: item.targetDir
-                          })
-                        }
-                      })
-                    ]
-                  })
-                })
-              })
-            })
-          ]
-        : []),
-      ...(tab === 'all' || tab === 'files'
-        ? categories
-            .filter(cat => {
-              if (selectedOwnerId !== 'ALL' && String(cat.ownerId) !== selectedOwnerId) return false
-              const matching = filteredFiles.filter(f => f.ownerId === cat.ownerId)
-              return matching.length > 0
-            })
-            .map(cat => {
-              const catFiles = filteredFiles.filter(f => f.ownerId === cat.ownerId)
-              const catSelectable = catFiles.filter(f => !f.isProtected)
-              const catCheckedCount = catSelectable.filter(f => selectedSet.has(f.path)).length
-              const checkState: boolean | 'indeterminate' =
-                cat.ownerId === 999 || catSelectable.length === 0
-                  ? false
-                  : catCheckedCount === catSelectable.length
-                  ? true
-                  : catCheckedCount > 0
-                  ? 'indeterminate'
-                  : false
-
-              return List.Section({
-                title: `${cat.name} (匹配样本 ${catFiles.length} 项 · 专项总计 ${formatBytes(cat.totalSizeBytes)})`,
-                subtitle:
-                  cat.ownerId === 999
-                    ? '🔒 微信核心聊天文字数据库，已开启防误删锁'
-                    : `已勾选 ${catCheckedCount}/${catSelectable.length} 项 · 支持单文件独立勾选与排除`,
-                checkable: cat.ownerId !== 999 && catSelectable.length > 0,
-                checked: checkState,
-                onCheckChange: nextChecked => toggleCategoryCheck(cat, nextChecked),
-                children: catFiles.slice(0, 40).map(f => {
-                  const isChecked = selectedSet.has(f.path)
-                  return List.Item({
-                    id: f.id,
-                    title: f.name,
-                    subtitle: `${f.accountId} · ${formatDateTime(f.mtime)} · ${f.parentDir}`,
-                    checkable: !f.isProtected,
-                    checked: isChecked,
-                    onCheckChange: nextChecked => toggleSingleFile(f.path, nextChecked),
-                    icon: {
-                      source: f.isProtected ? Icon.Lock : Icon.Document,
-                      tintColor: f.isProtected
-                        ? Color.Orange
-                        : isChecked
-                        ? Color.Green
-                        : Color.Blue
-                    },
-                    accessories: [
-                      ...(f.isProtected
-                        ? [{ tag: { value: '🔒 聊天库保护', color: Color.Orange } }]
-                        : []),
-                      { tag: { value: f.accountId, color: Color.SecondaryText } },
-                      { text: formatBytes(f.sizeBytes) }
-                    ],
-                    detail: List.Item.Detail({
-                      markdown: renderFileDetailMarkdown(f)
-                    }),
-                    actions: ActionPanel({
-                      title: f.name,
-                      children: [
-                        Action({
-                          title: '在资源管理器中定位此文件',
-                          icon: Icon.Folder,
-                          onAction: () => {
-                            openWechatDirectory(f.path)
-                          }
-                        }),
-                        ...(!f.isProtected
-                          ? [
-                              Action({
-                                title: isChecked ? '取消勾选此文件' : '勾选此文件纳入清理',
-                                icon: Icon.Checkmark,
-                                onAction: () => toggleSingleFile(f.path, !isChecked)
-                              })
-                            ]
-                          : []),
-                        Action({
-                          title: '使用默认程序打开文件',
-                          icon: Icon.AppWindow,
-                          onAction: () => {
-                            openWechatFileDefault(f.path)
-                          }
-                        }),
-                        Action({
-                          title: `立即清理所有已勾选项 (${formatBytes(checkedCategoryBytes)})`,
-                          icon: Icon.Trash,
-                          style: Action.Style.Destructive,
-                          onAction: () => handleCleanChecked()
-                        }),
-                        Action.CopyToClipboard({
-                          title: '复制文件完整路径',
-                          content: f.path
-                        })
-                      ]
-                    })
-                  })
-                })
-              })
-            })
-        : []),
-      ...(tab === 'accounts'
-        ? [
-            List.Section({
-              title: `本机已识别微信账号与公共引擎目录 (${accountStats.length})`,
-              subtitle: '点击任意微信号可单独过滤并清理该账号下的缓存与接收文件',
-              children: accountStats.map(acc =>
-                List.Item({
-                  id: `acc-${acc.accountId}`,
-                  title: acc.label,
-                  subtitle: `存储路径: ${acc.rootDir}`,
-                  icon: { source: Icon.Person, tintColor: Color.Green },
-                  accessories: [
-                    { tag: { value: `${acc.fileCount} 个样本文件`, color: Color.Blue } },
-                    { text: formatBytes(acc.totalBytes) }
-                  ],
-                  detail: List.Item.Detail({
-                    markdown: `# ${acc.label}\n\n**根目录**: \`${acc.rootDir}\`\n\n- **已采样文件数**: \`${acc.fileCount} 项\`\n- **采样占用体积**: \`${formatBytes(acc.totalBytes)}\`\n\n> 点击回车可立即将该微信号设为当前筛选账号。`
-                  }),
-                  actions: ActionPanel({
-                    title: acc.label,
-                    children: [
-                      Action({
-                        title: `仅筛选【${acc.accountId}】下的微信文件`,
-                        icon: Icon.MagnifyingGlass,
-                        onAction: () => {
-                          setSelectedAccount(acc.accountId)
-                          setTab('files')
-                        }
-                      }),
-                      Action({
-                        title: '在资源管理器中打开账号目录',
-                        icon: Icon.Folder,
-                        onAction: () => {
-                          openWechatDirectory(acc.rootDir)
-                        }
-                      })
-                    ]
-                  })
-                })
-              )
-            })
-          ]
-        : [])
+      List.Section({
+        title: '微信存储总览',
+        children: [
+          List.Item({
+            id: 'wx-nav-all',
+            title: '全部微信文件汇总',
+            subtitle: `${allFiles.length} 个采样文件 · 可清理 ${formatBytes(totalScannable)}`,
+            icon: { source: Icon.HardDrive },
+            accessories: [{ text: formatBytes(totalScannable) }],
+            onSelect: () => {
+              setSelectedOwnerId('ALL')
+              setTab('all')
+            }
+          })
+        ]
+      }),
+      List.Section({
+        title: '9 大官方专项分类 + 数据库保护区',
+        children: categories.map(cat => {
+          const isProtected = cat.ownerId === 999
+          return List.Item({
+            id: `wx-nav-owner-${cat.ownerId}`,
+            title: cat.shortName,
+            subtitle: isProtected
+              ? '核心聊天记录库 (安全锁定)'
+              : `Owner #${cat.ownerId} · ${cat.fileCount} 项`,
+            icon: { source: isProtected ? Icon.Lock : Icon.Folder },
+            accessories: [{ text: formatBytes(cat.totalSizeBytes) }],
+            onSelect: () => {
+              setSelectedOwnerId(String(cat.ownerId))
+              setTab(isProtected ? 'protected' : 'files')
+            }
+          })
+        })
+      })
     ]
   })
 }

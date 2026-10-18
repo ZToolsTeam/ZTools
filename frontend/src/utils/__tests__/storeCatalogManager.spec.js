@@ -67,12 +67,12 @@ describe('StoreCatalogManager 远程条目与内置插件同 ID 合并', () => {
 
   it('[破坏性] 内置插件在不可用名单里时，远程同名条目也不能把它带回市场', async () => {
     asMac()
-    const builtinVault = { id: 'password-vault', pluginId: 'password-vault', name: '密码保险箱' }
+    const builtinUnavailable = { id: 'trial-nudges', pluginId: 'trial-nudges', name: '核心特权与技术方案' }
     const { catalog } = await createManager(
-      [{ id: 'password-vault', name: '密码保险箱', platforms: ['darwin', 'windows'] }],
-      [builtinVault]
+      [{ id: 'trial-nudges', name: '核心特权与技术方案', platforms: ['darwin', 'windows'] }],
+      [builtinUnavailable]
     ).ensureCatalog(true)
-    expect(catalog.find((p) => p.pluginId === 'password-vault')).toBeUndefined()
+    expect(catalog.find((p) => p.pluginId === 'trial-nudges')).toBeUndefined()
   })
 })
 

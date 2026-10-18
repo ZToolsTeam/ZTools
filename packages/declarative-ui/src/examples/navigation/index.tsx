@@ -479,6 +479,7 @@ export function NavigationCommand() {
   const realHost = isRealElectronHost();
   const [searchText, setSearchText] = useState("");
   const [filterMode, setFilterMode] = useState<NavigationFilterMode>("all");
+  const [selectedId, setSelectedId] = useState<string>("");
   const [windows, setWindows] = useState<NavigationWindowItem[]>(() =>
     realHost ? [] : [...DEFAULT_NAVIGATION_WINDOWS]
   );
@@ -535,6 +536,12 @@ export function NavigationCommand() {
     );
   }, [menuItems, searchText]);
 
+  const activeWindow =
+    filteredWindows.find((w) => w.id === selectedId) || filteredWindows[0] || null;
+  const activeMenu =
+    filteredMenus.find((m) => m.id === selectedId) ||
+    (filterMode === "menus" ? filteredMenus[0] || null : null);
+
   const handleActivateWindow = async (win: NavigationWindowItem) => {
     const res = await activateNavigationWindow(win.handle);
     await showToast(
@@ -585,6 +592,100 @@ export function NavigationCommand() {
       isShowingDetail={true}
       searchBarPlaceholder="搜索活动窗口 (Switch Windows) 或当前应用顶部菜单项 (Search Menu Items)..."
       onSearchTextChange={setSearchText}
+      onSelectionChange={(id) => setSelectedId(id || "")}
+      filterBar={{
+        summaryText: `当前本机活动窗口 ${windows.length} 个 · 应用顶部菜单命令 ${menuItems.length} 项`,
+        groups: [
+          {
+            id: "nav-view-mode",
+            label: "视图模式",
+            value: filterMode,
+            onChange: (val) => setFilterMode(val as NavigationFilterMode),
+            options: [
+              {
+                value: "all",
+                label: "全部视图",
+                badge: filteredWindows.length + filteredMenus.length
+              },
+              {
+                value: "windows",
+                label: "活动窗口 Switch Windows",
+                badge: filteredWindows.length
+              },
+              {
+                value: "menus",
+                label: "菜单栏命令 Search Menus",
+                badge: filteredMenus.length
+              }
+            ]
+          }
+        ],
+        actions: [
+          {
+            id: "nav-act-trigger",
+            label: "🎯 激活窗口 / 触发菜单",
+            title: "🎯 激活窗口 / 触发菜单",
+            style: "primary",
+            onAction: () => {
+              if (activeMenu) {
+                void handleClickMenu(activeMenu);
+              } else if (activeWindow) {
+                void handleActivateWindow(activeWindow);
+              } else {
+                void showToast(Toast.Style.Failure, "当前无可用窗口或菜单项");
+              }
+            }
+          },
+          {
+            id: "nav-act-left-half",
+            label: "⬅️ 窗口左半屏",
+            title: "⬅️ 窗口左半屏",
+            style: "secondary",
+            onAction: () => {
+              if (!activeWindow) {
+                void showToast(Toast.Style.Failure, "请先选择一个活动窗口");
+                return;
+              }
+              void handleManageWindow(activeWindow, "left_half");
+            }
+          },
+          {
+            id: "nav-act-right-half",
+            label: "➡️ 窗口右半屏",
+            title: "➡️ 窗口右半屏",
+            style: "secondary",
+            onAction: () => {
+              if (!activeWindow) {
+                void showToast(Toast.Style.Failure, "请先选择一个活动窗口");
+                return;
+              }
+              void handleManageWindow(activeWindow, "right_half");
+            }
+          },
+          {
+            id: "nav-act-close-win",
+            label: "✖️ 关闭选中窗口",
+            title: "✖️ 关闭选中窗口",
+            style: "danger",
+            onAction: () => {
+              if (!activeWindow) {
+                void showToast(Toast.Style.Failure, "请先选择要关闭的窗口");
+                return;
+              }
+              void handleCloseWindow(activeWindow);
+            }
+          },
+          {
+            id: "nav-act-refresh",
+            label: "🔄 刷新列表",
+            title: "🔄 刷新列表",
+            style: "secondary",
+            onAction: () => {
+              setRefreshTick((t) => t + 1);
+            }
+          }
+        ]
+      }}
       searchBarAccessory={
         <List.Dropdown
           tooltip="选择导航模式"

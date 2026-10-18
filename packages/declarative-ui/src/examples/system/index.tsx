@@ -1,13 +1,10 @@
 import React from "../../index.js";
 import {
   List,
-  Detail,
   ActionPanel,
   Action,
   Icon,
-  Color,
-  showToast,
-  Toast
+  Color
 } from "../../index.js";
 import { useState, useMemo } from "../../runtime/hooks.js";
 import {
@@ -22,13 +19,13 @@ export * from "./system-actions.js";
 
 function getCategoryTitle(category: string): string {
   switch (category) {
-    case "power": return "⚡ 电源与会话 (Power & Session)";
-    case "apps": return "🪟 进程与桌面治理 (Apps & Windows)";
-    case "audio": return "🔊 音频与硬件控制 (Audio & Hardware)";
-    case "maintenance": return "🛠️ 系统维护与通知 (Maintenance)";
-    case "desktop": return "🖥️ 桌面环境治理 (Desktop)";
-    case "process": return "⚡ 进程治理急救 (Process)";
-    default: return "原生系统指令";
+    case "power": return "电源与会话 (Power & Session)";
+    case "apps": return "进程与桌面治理 (Apps & Windows)";
+    case "audio": return "音频与硬件控制 (Audio & Hardware)";
+    case "maintenance": return "系统维护与通知 (Maintenance)";
+    case "desktop": return "桌面环境治理 (Desktop)";
+    case "process": return "进程治理急救 (Process)";
+    default: return "全部系统指令 (All Actions)";
   }
 }
 
@@ -36,6 +33,7 @@ export default function SystemCommand() {
   const [searchText, setSearchText] = useState("");
   const [category, setCategory] = useState("all");
   const [isShowingDetail, setIsShowingDetail] = useState(false);
+  const [selectedId, setSelectedId] = useState<string | null>(null);
 
   const filtered = useMemo(() => {
     return filterSystemActions(searchText, category);
@@ -45,7 +43,6 @@ export default function SystemCommand() {
     await executeSystemAction(item, options);
   };
 
-  // 分组数据计算
   const groupedSections = useMemo(() => {
     if (category !== "all") {
       return [{ title: `${getCategoryTitle(category)} (${filtered.length})`, items: filtered }];
@@ -70,8 +67,12 @@ export default function SystemCommand() {
   return (
     <List
       isShowingDetail={isShowingDetail}
-      searchBarPlaceholder="搜索 macOS / Windows 系统控制指令 (如 深色模式, 隐藏文件, 咖啡因防休眠, 锁屏, 清空废纸篓)..."
+      searchBarPlaceholder="搜索 macOS / Windows 系统控制指令 (如 深色模式, 隐藏文件, 防休眠, 锁屏, 清空回收站)..."
       onSearchTextChange={setSearchText}
+      onSelectionChange={setSelectedId}
+      filterBar={{
+        summaryText: `系统原生控制指令共 ${filtered.length} 项 · 当前视图: ${getCategoryTitle(category)} · 支持回车直接触发`
+      }}
       searchBarAccessory={
         <List.Dropdown tooltip="按类别筛选" value={category} onChange={setCategory}>
           <List.Dropdown.Item title="全部动作 (All Actions)" value="all" icon={Icon.List} />
@@ -89,33 +90,16 @@ export default function SystemCommand() {
               key={item.id}
               id={item.id}
               title={item.title}
-              subtitle={isShowingDetail ? undefined : item.subtitle}
+              subtitle={`${item.description} · ${item.subtitle}`}
               icon={item.icon}
               accessories={[
-                ...(item.destructive ? [{ icon: Icon.ExclamationMark, tooltip: "破坏性系统操作" }] : []),
-                ...(item.shortcut ? [{ text: item.shortcut }] : []),
-                { text: item.category.toUpperCase() }
+                ...(item.destructive ? [{ tag: { value: "高危操作", color: Color.Red } }] : []),
+                { tag: { value: item.category.toUpperCase() } },
+                ...(item.shortcut ? [{ text: item.shortcut }] : [])
               ]}
               detail={
                 <List.Item.Detail
-                  markdown={`### ${item.title}\n\n${item.description}\n\n> **底层调用契约**: \`${item.subtitle}\`\n\n${item.technicalDetails ? `**技术实现细节**:\n${item.technicalDetails}\n\n` : ''}${item.destructive ? '⚠️ **破坏性操作警告**：该操作会重置系统运行状态或导致正在运行的未保存数据丢失，执行前请务必确认关键工作已妥善存储。' : '✅ **安全运维指令**：该操作执行平稳无损，可在任意工作阶段直接调度。'}`}
-                  metadata={
-                    <List.Item.Detail.Metadata>
-                      <List.Item.Detail.Metadata.Label title="动作名称" text={item.title} icon={Icon.Gear} />
-                      <List.Item.Detail.Metadata.Label title="指令分类" text={item.category.toUpperCase()} icon={Icon.Document} />
-                      <List.Item.Detail.Metadata.Label title="底层协议" text={item.actionKey} icon={Icon.Code} />
-                      {item.shortcut && (
-                        <List.Item.Detail.Metadata.Label title="全局快捷键" text={item.shortcut} icon={Icon.Key} />
-                      )}
-                      <List.Item.Detail.Metadata.Separator />
-                      <List.Item.Detail.Metadata.TagList title="安全级别">
-                        <List.Item.Detail.Metadata.TagList.Item
-                          text={item.destructive ? "DESTRUCTIVE (高危)" : "SAFE (安全)"}
-                          color={item.destructive ? Color.Red : Color.Green}
-                        />
-                      </List.Item.Detail.Metadata.TagList>
-                    </List.Item.Detail.Metadata>
-                  }
+                  markdown={`### ${item.title}\n\n${item.description}\n\n> **底层调用契约**: \`${item.subtitle}\`\n\n${item.technicalDetails ? `**技术实现细节**:\n${item.technicalDetails}\n\n` : ''}${item.destructive ? '**破坏性操作警告**：该操作会重置系统运行状态或导致正在运行的未保存数据丢失，执行前请务必确认关键工作已妥善存储。' : '**安全运维指令**：该操作执行平稳无损，可在任意工作阶段直接调度。'}`}
                 />
               }
               actions={
@@ -129,7 +113,7 @@ export default function SystemCommand() {
                     <Action
                       title="强制直接执行 (跳过二次确认)"
                       icon={Icon.ExclamationMark}
-                      shortcut={{ modifiers: ["ctrl", "shift"], key: "enter" }}
+                      shortcut={{ modifiers: ["ctrl"], key: "return" }}
                       onAction={() => handleExecute(item, { force: true, confirmBypass: true })}
                     />
                   )}

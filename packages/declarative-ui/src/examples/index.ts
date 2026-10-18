@@ -488,3 +488,203 @@ export * from "./calendar/index.js";
 // 55. 全网多引擎搜索、活动浏览器标签页与通讯录中枢 (Web Searches, Browser Tab & Contacts)
 export { default as WebSearchesCommand } from "./web-searches/index.js";
 export * from "./web-searches/index.js";
+
+// 56. 网络适配器与 IPv4/MAC/DNS 快照管家 (Network Adapter - 布局一)
+export { default as NetworkAdapterCommand } from "./network-adapter/index.js";
+export {
+  type AdapterFilterMode,
+  type NetworkAdapterItem,
+  type NetworkAdapterSnapshot,
+  fetchNetworkAdapters,
+  flushDnsCache,
+  copyAdapterInfo,
+  filterNetworkAdapters
+} from "./network-adapter/logic.js";
+
+// 57. 断网急救箱与网络协议栈修复中枢 (Network Rescue - 布局一)
+export { default as NetworkRescueCommand } from "./network-rescue/index.js";
+export {
+  type RescueCategory,
+  type RescueFilterMode,
+  type NetworkRescueItem,
+  type NetworkDiagnosticSnapshot,
+  NETWORK_RESCUE_ITEMS,
+  runNetworkDiagnostics as runNetworkRescueDiagnostics,
+  executeNetworkRepair,
+  batchExecuteNetworkRepairs,
+  filterNetworkRescueItems
+} from "./network-rescue/logic.js";
+
+// 58. 系统右键菜单管理与 Win11 经典菜单切换 (Context Menu - 布局一)
+export { default as ContextMenuCommand } from "./context-menu/index.js";
+export {
+  type ContextMenuScope,
+  type ContextMenuFilterMode,
+  type ContextMenuEntry,
+  DEFAULT_CONTEXT_MENU_ENTRIES,
+  fetchContextMenuEntries,
+  toggleContextMenuEntry,
+  switchWin11ClassicMenu,
+  filterContextMenuEntries
+} from "./context-menu/logic.js";
+
+// 59. 微信双开/多开分身与实例监控 (WeChat Multi - 布局一)
+export { default as WechatMultiCommand } from "./wechat-multi/index.js";
+export {
+  type WechatFilterMode,
+  type WechatInstanceItem,
+  type WechatMultiSnapshot,
+  fetchWechatInstances,
+  launchNewWechatInstance,
+  terminateWechatInstance,
+  openWechatInstallLocation,
+  filterWechatInstances,
+  formatBytes as formatWechatMultiBytes
+} from "./wechat-multi/logic.js";
+
+// 60. 局域网文件快传与二维码投送 (LAN Share - 布局一)
+export { default as LanShareCommand } from "./lan-share/index.js";
+export {
+  type LanShareFilterMode,
+  type LanShareItem,
+  type LanShareSnapshot,
+  fetchLanShareSnapshot,
+  toggleFileShare,
+  openSharedFileLocation,
+  generateQrCodeSvgDataUri,
+  filterLanShareItems,
+  formatBytes as formatLanShareBytes
+} from "./lan-share/logic.js";
+
+// 61. C 盘大目录无损搬家工坊 (Mover - 布局二)
+export { default as MoverCommand } from "./mover/index.js";
+export {
+  MOVER_CATEGORIES,
+  DEFAULT_TARGET_DRIVES,
+  createInitialMoverSnapshot,
+  fetchMoverSnapshot,
+  executeDirectoryMove,
+  openMoverFolderLocation,
+  invokeMoverAction,
+  formatBytes as formatMoverBytes
+} from "./mover/logic.js";
+
+// 62. 误删文件与回收站深度恢复工坊 (Data Recovery - 布局二)
+export { default as DataRecoveryCommand } from "./data-recovery/index.js";
+export {
+  RECOVERY_CATEGORIES,
+  SCAN_DEPTH_MODES,
+  createInitialRecoverySnapshot,
+  fetchRecoverableFiles,
+  restoreSelectedFiles,
+  openRecoveryLocation,
+  formatBytes as formatDataRecoveryBytes
+} from "./data-recovery/logic.js";
+
+// 63. 军工级机密文件安全粉碎箱 (Shredder - 布局二)
+export { default as ShredderCommand } from "./shredder/index.js";
+export {
+  SHRED_STANDARDS,
+  SHRED_CATEGORIES,
+  createInitialShredderSnapshot,
+  fetchShredCandidates,
+  executeSecureShred,
+  openShredCandidateLocation,
+  formatBytes as formatShredderBytes
+} from "./shredder/logic.js";
+
+// 64. 系统与开发环境关键配置备份还原工坊 (System Backup - 布局二)
+export { default as SystemBackupCommand } from "./system-backup/index.js";
+export {
+  BACKUP_CATEGORIES,
+  BACKUP_PROFILES,
+  createInitialSystemBackupSnapshot,
+  fetchSystemBackupSnapshot,
+  createBackupArchive,
+  restoreBackupSnapshot,
+  openBackupConfigLocation,
+  formatBytes as formatSystemBackupBytes
+} from "./system-backup/logic.js";
+
+// 65. 本地 SQLite 数据库透视与导出工坊 (SQLite Plugin - 布局二)
+export { default as SqlitePluginCommand } from "./sqlite-plugin/index.js";
+export {
+  SQLITE_TABLES,
+  createInitialSqliteWorkspace,
+  fetchSqliteWorkspace,
+  exportTableRecords,
+  executeSqliteQuery,
+  openSqliteDbLocation,
+  formatBytes as formatSqlitePluginBytes
+} from "./sqlite-plugin/logic.js";
+
+// 66. AI 图像超分放大与智能抠图工作台 (AI Image - 布局三)
+export { default as AiImageCommand } from "./ai-image/index.js";
+export {
+  type AiImageEnginePreset,
+  type AiImageFileItem,
+  AI_IMAGE_ENGINES,
+  INITIAL_AI_IMAGE_FILES,
+  estimateTargetResolution,
+  fetchAiImageWorkspace,
+  openAiImageLocation,
+  runAiImageBatch,
+  formatBytes as formatAiImageBytes
+} from "./ai-image/logic.js";
+
+// 67. AI 视频光流补帧与超分增强工作台 (AI Video - 布局三)
+export { default as AiVideoCommand } from "./ai-video/index.js";
+export {
+  type AiVideoFileItem,
+  type AiVideoModelPreset,
+  AI_VIDEO_MODELS,
+  INITIAL_AI_VIDEO_FILES,
+  fetchAiVideoWorkspace,
+  openAiVideoLocation,
+  runAiVideoBatch,
+  formatBytes as formatAiVideoBytes
+} from "./ai-video/logic.js";
+
+// 68. 多语言离线屏幕与批量图片 OCR 工作台 (OCR - 布局三)
+export { default as OcrCommand } from "./ocr/index.js";
+export {
+  type OcrLanguagePreset,
+  type OcrQueueItem,
+  INITIAL_OCR_QUEUE_ITEMS,
+  OCR_LANGUAGE_MODELS,
+  captureScreenAreaOcr,
+  executeBatchOcr,
+  fetchOcrWorkspace,
+  openOcrFileLocation,
+  formatBytes as formatOcrBytes
+} from "./ocr/logic.js";
+
+// 69. 高清屏幕录制与系统内录工作台 (Record - 布局三)
+export { default as RecordCommand } from "./record/index.js";
+export {
+  type RecordSourcePreset,
+  type RecordedVideoItem,
+  INITIAL_RECORDED_VIDEOS,
+  RECORD_SOURCE_MODES,
+  estimateMbPerMinute,
+  fetchRecordWorkspace,
+  openRecordFileLocation,
+  openRecordedVideo,
+  startScreenRecording,
+  formatBytes as formatRecordBytes
+} from "./record/logic.js";
+
+// 70. 双文件/目录 SHA-256 哈希与 Diff 比对工作台 (File Compare - 布局三)
+export { default as FileCompareCommand } from "./file-compare/index.js";
+export {
+  type CompareEnginePreset,
+  type FileComparePairItem,
+  COMPARE_ENGINE_MODES,
+  INITIAL_COMPARE_PAIRS,
+  executeFileComparison,
+  fetchFileCompareWorkspace,
+  getDiffStatusLabel,
+  openComparedFileLocation,
+  formatBytes as formatFileCompareBytes
+} from "./file-compare/logic.js";
+

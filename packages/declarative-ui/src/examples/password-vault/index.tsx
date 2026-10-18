@@ -454,6 +454,7 @@ export function VaultImportCsvForm({ onImported }: { onImported?: () => void }) 
  * 密码保险箱主命令组件
  */
 export default function PasswordVaultCommand() {
+  const { push } = useNavigation();
   const [searchText, setSearchText] = useState("");
   const [folderFilter, setFolderFilter] = useState("all");
   const [version, setVersion] = useState(0);
@@ -485,7 +486,35 @@ export default function PasswordVaultCommand() {
 
   if (lockState === "locked") {
     return (
-      <List navigationTitle="密码保险箱 (已锁定)">
+      <List
+        navigationTitle="密码保险箱 (已锁定)"
+        filterBar={{
+          summaryText: `密码箱状态: 🔒 已锁定 · 请验证主密码解锁 · 随机密码生成器熵值: ${generatedStrength.entropyBits} bits`,
+          actions: [
+            {
+              id: "vault-act-unlock",
+              label: "🔓 解锁 / 🔒 锁定密码箱",
+              title: "🔓 解锁 / 🔒 锁定密码箱",
+              style: "primary",
+              onAction: () => {
+                push(<VaultUnlockForm onUnlocked={refresh} />);
+              }
+            },
+            {
+              id: "vault-act-gen20",
+              label: "🎲 复制 20 位随机强密码",
+              title: "🎲 复制 20 位随机强密码",
+              style: "secondary",
+              onAction: async () => {
+                const next = generateVaultPassword({ length: 20 });
+                setGeneratedPassword(next);
+                await Clipboard.copy(next);
+                await showToast(Toast.Style.Success, "已生成并复制 20 位随机强密码");
+              }
+            }
+          ]
+        }}
+      >
         <List.Section title="🔒 密码箱已锁定">
           <List.Item
             id="vault-locked-prompt"
@@ -513,6 +542,80 @@ export default function PasswordVaultCommand() {
       isShowingDetail={true}
       searchBarPlaceholder="搜索网站名称、账号、网址或备注..."
       onSearchTextChange={setSearchText}
+      filterBar={{
+        summaryText: `密码箱状态: 🔓 已解锁 · 保存凭据共 ${entries.length} 条 · 实时强密码熵值: ${generatedStrength.entropyBits} bits (${generatedStrength.label})`,
+        groups: [
+          {
+            id: "vault-folder-filter",
+            label: "分类筛选",
+            value: folderFilter,
+            onChange: (val) => setFolderFilter(val),
+            options: [
+              { value: "all", label: "全部凭据", badge: entries.length },
+              ...VAULT_CATEGORIES.map((cat) => ({
+                value: cat,
+                label: cat
+              }))
+            ]
+          }
+        ],
+        actions: [
+          {
+            id: "vault-act-toggle-lock",
+            label: "🔓 解锁 / 🔒 锁定密码箱",
+            title: "🔓 解锁 / 🔒 锁定密码箱",
+            style: "primary",
+            onAction: async () => {
+              defaultPasswordVaultManager.lockVault();
+              await showToast(Toast.Style.Success, "密码保险箱已安全锁定");
+              refresh();
+            }
+          },
+          {
+            id: "vault-act-new-entry",
+            label: "➕ 新建密码条目",
+            title: "➕ 新建密码条目",
+            style: "primary",
+            onAction: () => {
+              push(<VaultEntryForm onSaved={refresh} />);
+            }
+          },
+          {
+            id: "vault-act-copy-rand20",
+            label: "🎲 复制 20 位随机强密码",
+            title: "🎲 复制 20 位随机强密码",
+            style: "secondary",
+            onAction: async () => {
+              const next = generateVaultPassword({ length: 20 });
+              setGeneratedPassword(next);
+              await Clipboard.copy(next);
+              await showToast(
+                Toast.Style.Success,
+                "已生成并复制 20 位随机强密码",
+                `${generatedStrength.label} (${generatedStrength.entropyBits} bits)`
+              );
+            }
+          },
+          {
+            id: "vault-act-import-csv",
+            label: "📥 导入 CSV",
+            title: "📥 导入 CSV",
+            style: "secondary",
+            onAction: () => {
+              push(<VaultImportCsvForm onImported={refresh} />);
+            }
+          },
+          {
+            id: "vault-act-master-pwd",
+            label: "🔑 设置/修改主密码",
+            title: "🔑 设置/修改主密码",
+            style: "secondary",
+            onAction: () => {
+              push(<VaultChangeMasterPasswordForm onChanged={refresh} />);
+            }
+          }
+        ]
+      }}
       searchBarAccessory={
         <List.Dropdown
           tooltip="按分类文件夹筛选"

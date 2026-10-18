@@ -432,9 +432,12 @@ ${testExpansion.expanded}
  * 极客键盘钩子调度、动态宏展开与完整 ActionPanel
  */
 export default function SnippetsCommand() {
+  const { push } = useNavigation();
   const [snippets, setSnippets] = useState<Snippet[]>(SAMPLE_SNIPPETS);
   const [searchText, setSearchText] = useState<string>("");
   const [filterEnabled, setFilterEnabled] = useState<string>("all");
+  const [selectedId, setSelectedId] = useState<string>("");
+  const [expandCount, setExpandCount] = useState<number>(0);
   const [isShowingDetail, setIsShowingDetail] = useState<boolean>(true);
   const [isLoading, setIsLoading] = useState<boolean>(false);
 
@@ -451,6 +454,10 @@ export default function SnippetsCommand() {
     query: searchText,
     enabledOnly: filterEnabled === "enabled"
   });
+
+  const activeSnippet =
+    filteredSnippets.find((s) => s.id === selectedId) || filteredSnippets[0] || null;
+  const enabledCount = snippets.filter((s) => s.enabled).length;
 
   const handleSaveSnippet = async (item: Snippet) => {
     const exists = snippets.some(s => s.id === item.id);
@@ -494,12 +501,106 @@ export default function SnippetsCommand() {
     await showToast(Toast.Style.Success, "已导出 Snippets 到剪贴板", `共 ${snippets.length} 条短语`);
   };
 
+  const handleExpandAndPasteSelected = async () => {
+    if (!activeSnippet) {
+      await showToast(Toast.Style.Failure, "请先选择或新建一条快捷短语");
+      return;
+    }
+    if (hasSnippetArguments(activeSnippet.snippet)) {
+      push(
+        <SnippetArgumentFormView
+          snippet={activeSnippet}
+          onExpanded={() => setExpandCount((c) => c + 1)}
+        />
+      );
+      return;
+    }
+    const exp = expandSnippetTemplate(activeSnippet.snippet);
+    await Clipboard.paste(exp.expanded);
+    setExpandCount((c) => c + 1);
+    await showToast(Toast.Style.Success, `已展开并粘贴: ${activeSnippet.name}`, exp.expanded);
+  };
+
   return (
     <List
       isLoading={isLoading}
       isShowingDetail={isShowingDetail}
       searchBarPlaceholder="搜索 Snippets (名称、触发词或内容)..."
       onSearchTextChange={setSearchText}
+      onSelectionChange={(id) => setSelectedId(id || "")}
+      filterBar={{
+        summaryText: `快捷短语共 ${snippets.length} 个 · 已启用 ${enabledCount} 个 · 本次累计展开 ${expandCount} 次`,
+        groups: [
+          {
+            id: "snippets-status-filter",
+            label: "短语筛选",
+            value: filterEnabled,
+            onChange: (val) => setFilterEnabled(val),
+            options: [
+              { value: "all", label: "全部短语", badge: snippets.length },
+              { value: "enabled", label: "仅看已启用", badge: enabledCount }
+            ]
+          }
+        ],
+        actions: [
+          {
+            id: "snip-act-paste",
+            label: "⚡ 展开并粘贴选中短语",
+            title: "⚡ 展开并粘贴选中短语",
+            style: "primary",
+            onAction: () => {
+              void handleExpandAndPasteSelected();
+            }
+          },
+          {
+            id: "snip-act-create",
+            label: "➕ 新建快捷短语",
+            title: "➕ 新建快捷短语",
+            style: "primary",
+            onAction: () => {
+              push(<CreateSnippetForm onSaved={handleSaveSnippet} />);
+            }
+          },
+          {
+            id: "snip-act-edit",
+            label: "✏️ 编辑选中短语",
+            title: "✏️ 编辑选中短语",
+            style: "secondary",
+            onAction: async () => {
+              if (!activeSnippet) {
+                await showToast(Toast.Style.Failure, "请先选择一条快捷短语");
+                return;
+              }
+              push(<CreateSnippetForm initialSnippet={activeSnippet} onSaved={handleSaveSnippet} />);
+            }
+          },
+          {
+            id: "snip-act-import",
+            label: "📥 批量导入 JSON",
+            title: "📥 批量导入 JSON",
+            style: "secondary",
+            onAction: () => {
+              push(
+                <ImportSnippetsForm
+                  onImportCompleted={async () => {
+                    const updated = await getSnippets();
+                    setSnippets(updated);
+                  }}
+                />
+              );
+            }
+          },
+          {
+            id: "snip-act-export",
+            label: "📤 导出全部短语",
+            title: "📤 导出全部短语",
+            style: "secondary",
+            onAction: () => {
+              void handleExportAll();
+            }
+          }
+        ]
+      }}
       searchBarAccessory={
         <List.Dropdown
           tooltip="按状态筛选"

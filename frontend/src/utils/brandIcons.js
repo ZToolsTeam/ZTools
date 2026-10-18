@@ -149,7 +149,21 @@ export const OFFICIAL_PLUGIN_GLYPHS = Object.freeze({
   'script-commands': 'terminal',
   'raycast-focus': 'gauge',
   calendar: 'note',
-  'web-searches': 'link'
+  'web-searches': 'link',
+  'network-adapter': 'wifi',
+  'network-rescue': 'shield',
+  'context-menu': 'window',
+  'wechat-multi': 'chat',
+  'lan-share': 'qr',
+  mover: 'folder',
+  'data-recovery': 'update',
+  shredder: 'trash',
+  'system-backup': 'package',
+  'sqlite-plugin': 'disk',
+  'ai-image': 'image',
+  'ai-video': 'video',
+  record: 'video',
+  'file-compare': 'json'
 })
 
 /** 侧边栏 / 市场分类 → 图形 */
@@ -162,6 +176,7 @@ export const CATEGORY_GLYPHS = Object.freeze({
   安全工具: 'shield',
   安全隐私: 'shield',
   网络工具: 'wifi',
+  开发工具: 'terminal',
   金融理财: 'currency'
 })
 

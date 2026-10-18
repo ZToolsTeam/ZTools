@@ -107,7 +107,7 @@ describe('Declarative UI 2.0 深度复刻集成与破坏性异常测试: DiskAna
       assert.equal(videoGroup.topExtensions[0].extension, '.mp4')
     })
 
-    it('1.3 [Declarative UI 2.0 复合描述符] DiskAnalyzerCommand 渲染 MetricGrid + DistributionBar + FilterBar + 三态勾选', () => {
+    it('1.3 [Declarative UI 2.0 复合描述符] DiskAnalyzerCommand 渲染 MetricGrid + DistributionBar + FilterBar + 左导航树 + 右可勾选文件列表 (subList)', () => {
       const root = renderDeclarativeRoot(DiskAnalyzerCommand)
       const desc = root.getLatest()
       assert.equal(desc.type, 'List')
@@ -116,6 +116,14 @@ describe('Declarative UI 2.0 深度复刻集成与破坏性异常测试: DiskAna
       assert.equal(desc.props.distributionBar.segments.length > 0, true)
       assert.ok(desc.props.filterBar, '应包含多维筛选与批量操作栏 filterBar')
       assert.equal(desc.props.filterBar.groups.length, 3, '应包含 盘符 / 10大类型 / 二级后缀 3 组筛选器')
+      assert.ok(desc.props.subList, '应包含方案 2 右侧可勾选大文件列表 subList')
+      assert.equal(desc.props.subList.items.length > 0, true, '右侧大文件列表应包含可清理大文件条目')
+      const firstSubItem = desc.props.subList.items[0]
+      assert.ok(
+        firstSubItem.props.accessories.some(acc => acc.progress !== undefined),
+        '右侧大文件列表行应包含体积占比进度条 progress'
+      )
+      assert.equal(typeof firstSubItem.props.onToggleCheck, 'function', '右侧可清理大文件应支持勾选框 onToggleCheck')
       root.unmount()
     })
 

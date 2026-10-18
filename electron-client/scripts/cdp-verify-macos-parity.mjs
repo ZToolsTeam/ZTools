@@ -114,7 +114,8 @@ const MACOS_PARITY_TARGETS = [
   { id: 'script-commands', batch: 'P3-4', name: 'Script Commands 自定义脚本工作台' },
   { id: 'raycast-focus', batch: 'P3-4', name: 'Raycast Focus 专注时钟与应用屏蔽' },
   { id: 'calendar', batch: 'P3-4', name: 'Calendar 日程表与视频会议直达' },
-  { id: 'web-searches', batch: 'P3-4', name: 'Web Searches 多源搜索、浏览器标签与通讯录' }
+  { id: 'web-searches', batch: 'P3-4', name: 'Web Searches 多源搜索、浏览器标签与通讯录' },
+  { id: 'batch-video', batch: 'P3-5', name: '批量视频转码与瘦身工作台 (范式三标杆)' }
 ]
 
 async function main() {
@@ -312,8 +313,9 @@ async function main() {
       const filename = `${num}-${target.id}.png`
       const filepath = path.join(outputDir, filename)
 
+      const platformMode = target.id === 'batch-video' ? 'win32' : 'darwin'
       await cdp.evaluate(`
-        window.__ZTOOLS_PLATFORM_OVERRIDE__ = 'darwin';
+        window.__ZTOOLS_PLATFORM_OVERRIDE__ = '${platformMode}';
         window.location.hash = '#/declarative/${target.id}';
       `)
       await new Promise(r => setTimeout(r, 650))
@@ -336,12 +338,15 @@ async function main() {
           const headerTitle = document.querySelector('.truncate')?.innerText || '';
           const searchInput = document.querySelector('input')?.placeholder || '';
           const transportCheck = Boolean(window.__ztoolsElectron?.transport?.methods?.brew_exec && window.__ztoolsElectron?.transport?.methods?.navigation_search_menu_items);
+          const shellButtons = shell ? Array.from(shell.querySelectorAll('button')).map(b => (b.innerText || '').trim().replace(/\\s+/g, ' ')).filter(Boolean) : [];
           return {
             hasShell: Boolean(shell),
             isError,
             headerTitle,
             searchInput,
             transportCheck,
+            visibleActionButtonsCount: shellButtons.length,
+            visibleActionButtonsSample: shellButtons.slice(0, 10),
             bodyText,
             sampleText: bodyText.slice(0, 360).replace(/\\s+/g, ' ')
           };
@@ -352,9 +357,14 @@ async function main() {
       if (uiInfo) delete uiInfo.bodyText
 
       const shot = await cdp.captureScreenshot(filepath)
-      const passed = Boolean(uiInfo?.hasShell) && !uiInfo?.isError && matchedMockMarkers.length === 0 && shot.bytes > 15000
+      const passed =
+        Boolean(uiInfo?.hasShell) &&
+        !uiInfo?.isError &&
+        matchedMockMarkers.length === 0 &&
+        (uiInfo?.visibleActionButtonsCount || 0) >= 3 &&
+        shot.bytes > 15000
       console.log(
-        `📸 [${num}/${MACOS_PARITY_TARGETS.length}] (${target.batch}) ${target.id}: ${(shot.bytes / 1024).toFixed(1)} KB | Shell=${uiInfo?.hasShell} | MockMarkers=${matchedMockMarkers.length} | ${passed ? '✅ PASS' : '❌ FAIL'}`
+        `📸 [${num}/${MACOS_PARITY_TARGETS.length}] (${target.batch}) ${target.id}: ${(shot.bytes / 1024).toFixed(1)} KB | Buttons=${uiInfo?.visibleActionButtonsCount} | MockMarkers=${matchedMockMarkers.length} | ${passed ? '✅ PASS' : '❌ FAIL'}`
       )
       if (matchedMockMarkers.length > 0) {
         console.warn(`   ⚠️ Detected mock markers in ${target.id}:`, matchedMockMarkers)

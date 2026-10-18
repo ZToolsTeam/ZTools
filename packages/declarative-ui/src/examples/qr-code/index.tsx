@@ -721,13 +721,83 @@ export default function QrCodeCommand() {
     );
   };
 
+  const [selectedId, setSelectedId] = useState<string>("");
+  const allDisplayedQrItems = [
+    ...(liveSearchQrItem ? [liveSearchQrItem] : []),
+    ...(clipboardQrItem ? [clipboardQrItem] : []),
+    ...filteredItems
+  ];
+  const activeQrItem =
+    allDisplayedQrItems.find((i) => i.id === selectedId) || allDisplayedQrItems[0] || null;
+
   return (
     <List
       navigationTitle="二维码生成器"
       searchBarPlaceholder="输入任意文本或 URL 实时生成二维码，或搜索历史记录..."
       searchText={searchText}
       onSearchTextChange={(txt) => setSearchText(txt)}
+      onSelectionChange={(id) => setSelectedId(id || "")}
       isShowingDetail={true}
+      filterBar={{
+        summaryText: `当前预览: ${activeQrItem ? activeQrItem.content.slice(0, 36) : "在上方输入文本即可实时生成二维码"} · 历史记录 ${items.length} 条`,
+        actions: [
+          {
+            id: "qr-act-create",
+            label: "➕ 新建定制二维码 / Wi-Fi 码",
+            title: "➕ 新建定制二维码 / Wi-Fi 码",
+            style: "primary",
+            onAction: () => {
+              handleOpenCreate();
+            }
+          },
+          {
+            id: "qr-act-clipboard",
+            label: "📋 从剪贴板生成",
+            title: "📋 从剪贴板生成",
+            style: "secondary",
+            onAction: () => {
+              void handlePasteClipboard();
+            }
+          },
+          {
+            id: "qr-act-decode",
+            label: "🔍 扫码与解码",
+            title: "🔍 扫码与解码",
+            style: "secondary",
+            onAction: () => {
+              handleOpenDecode();
+            }
+          },
+          {
+            id: "qr-act-copy-svg",
+            label: "📋 复制 SVG",
+            title: "📋 复制 SVG",
+            style: "secondary",
+            onAction: async () => {
+              if (!activeQrItem) {
+                await showToast(Toast.Style.Failure, "当前无可用二维码");
+                return;
+              }
+              const { svg } = generateQrSvg(activeQrItem.content, {
+                size: 320,
+                errorCorrectionLevel: activeQrItem.level,
+                colorScheme: activeQrItem.colorScheme || "dark"
+              });
+              await Clipboard.copy(svg);
+              await showToast(Toast.Style.Success, "已复制当前二维码 SVG 源码", activeQrItem.title);
+            }
+          },
+          {
+            id: "qr-act-clear",
+            label: "🗑️ 清空历史",
+            title: "🗑️ 清空历史",
+            style: "danger",
+            onAction: () => {
+              void handleClear();
+            }
+          }
+        ]
+      }}
       actions={
         <ActionPanel title="全局操作">
           <Action.Push

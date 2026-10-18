@@ -422,6 +422,8 @@ export function RaycastFocusCommand() {
   const [stats, setStats] = useState<FocusStatsSummary>({ ...DEFAULT_FOCUS_STATS });
   const [searchText, setSearchText] = useState("");
   const [durationPreset, setDurationPreset] = useState("all");
+  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const { push } = useNavigation();
 
   useEffect(() => {
     let active = true;
@@ -522,11 +524,122 @@ export function RaycastFocusCommand() {
     return `[${bar}] ${pct}% (剩余 ${formatRemainingTime(s.remainingSeconds)})`;
   };
 
+  const activeCategory = useMemo(
+    () => filteredCategories.find((c) => c.id === selectedId) || filteredCategories[0] || null,
+    [filteredCategories, selectedId]
+  );
+
   return (
     <List
       isShowingDetail={true}
       searchBarPlaceholder="输入今日专注目标或搜索专注模式 (如 Deep Coding, 25m Pomodoro)..."
       onSearchTextChange={setSearchText}
+      onSelectionChange={setSelectedId}
+      filterBar={{
+        summaryText: session
+          ? `🎯 正在专注: ${session.goal} (${session.status === "paused" ? "已暂停" : `剩余 ${formatRemainingTime(session.remainingSeconds)}`}) | 累计完成 ${stats.completedSessions} 次 (${stats.totalFocusedMinutes} 分钟)`
+          : `🧘 当前空闲 • 累计完成 ${stats.completedSessions} 次专注 (${stats.totalFocusedMinutes} 分钟) | 连续打卡 ${stats.currentStreakDays} 天`,
+        groups: [
+          {
+            id: "duration-preset",
+            value: durationPreset,
+            onChange: setDurationPreset,
+            options: [
+              { title: "全部场景", value: "all", count: categories.length },
+              {
+                title: "短冲刺 (≤30m)",
+                value: "short",
+                count: categories.filter((c) => c.defaultDurationMinutes <= 30).length
+              },
+              {
+                title: "深度心流 (>30m)",
+                value: "long",
+                count: categories.filter((c) => c.defaultDurationMinutes > 30).length
+              }
+            ]
+          }
+        ],
+        actions: session
+          ? [
+              {
+                id: "toggle-focus-session",
+                label: session.status === "paused" ? "▶️ 继续专注" : "⏸️ 暂停/继续专注",
+                title: session.status === "paused" ? "▶️ 继续专注" : "⏸️ 暂停/继续专注",
+                style: "primary",
+                onAction: () => handleControl("toggle")
+              },
+              {
+                id: "complete-focus-session",
+                label: "✅ 完成并结算专注",
+                title: "✅ 完成并结算专注",
+                style: "primary",
+                onAction: () => handleControl("complete")
+              },
+              {
+                id: "cancel-focus-session",
+                label: "✖️ 取消本次专注",
+                title: "✖️ 取消本次专注",
+                style: "danger",
+                onAction: () => handleControl("cancel")
+              },
+              {
+                id: "create-focus-category",
+                label: "➕ 新建专注屏蔽分类",
+                title: "➕ 新建专注屏蔽分类",
+                style: "secondary",
+                onAction: () => {
+                  push(
+                    <CreateFocusCategoryForm
+                      onCreated={(created) => setCategories((prev) => [created, ...prev])}
+                    />
+                  );
+                }
+              }
+            ]
+          : [
+              {
+                id: "start-focus-now",
+                label: "🎯 立即开始专注",
+                title: "🎯 立即开始专注",
+                style: "primary",
+                onAction: async () => {
+                  if (activeCategory) {
+                    await handleStartCategory(activeCategory);
+                  }
+                }
+              },
+              {
+                id: "quick-pomodoro-25",
+                label: "🍅 25分钟番茄钟",
+                title: "🍅 25分钟番茄钟",
+                style: "secondary",
+                onAction: async () => {
+                  const cat = activeCategory || categories[0];
+                  if (!cat) return;
+                  const started = await startFocusSession({
+                    goal: searchText.trim() || "25m 极速番茄钟",
+                    categoryId: cat.id,
+                    durationMinutes: 25
+                  });
+                  setSession(started);
+                  await showToast(Toast.Style.Success, `🍅 已开启 25 分钟番茄钟: ${started.goal}`);
+                }
+              },
+              {
+                id: "create-focus-category",
+                label: "➕ 新建专注屏蔽分类",
+                title: "➕ 新建专注屏蔽分类",
+                style: "secondary",
+                onAction: () => {
+                  push(
+                    <CreateFocusCategoryForm
+                      onCreated={(created) => setCategories((prev) => [created, ...prev])}
+                    />
+                  );
+                }
+              }
+            ]
+      }}
       searchBarAccessory={
         <List.Dropdown
           tooltip="按专注时长筛选"

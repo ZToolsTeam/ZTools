@@ -37,6 +37,30 @@
           />
         </div>
 
+        <!-- 1b. Form.PasswordField 密码输入 -->
+        <div v-else-if="field.type === 'Form.PasswordField'" class="relative flex items-center">
+          <input
+            :id="field.props?.id"
+            :type="revealedPasswords[field.props?.id] ? 'text' : 'password'"
+            :value="formValues[field.props.id] ?? field.props?.defaultValue ?? ''"
+            :placeholder="field.props?.placeholder || '请输入密码...'"
+            class="w-full bg-[var(--rc-surface-hover)] border rounded-xl pl-3.5 pr-16 py-2.5 text-[var(--rc-text-primary)] placeholder:text-[var(--rc-text-faint)] outline-none transition-all duration-150 font-mono"
+            :class="[
+              field.props?.error
+                ? 'border-[var(--rc-error)] focus:border-[var(--rc-error)] focus:ring-2 focus:ring-[var(--rc-error-subtle)]'
+                : 'border-[var(--rc-border)] focus:border-[var(--rc-accent)] focus:ring-2 focus:ring-[var(--rc-accent-subtle)]'
+            ]"
+            @input="e => updateFieldValue(field, e.target.value)"
+          />
+          <button
+            type="button"
+            class="absolute right-2.5 px-2 py-1 rounded text-xs text-[var(--rc-text-muted)] hover:text-[var(--rc-text-primary)] bg-[var(--rc-surface-subtle)] border border-[var(--rc-border)] cursor-pointer"
+            @click="togglePasswordReveal(field.props?.id)"
+          >
+            {{ revealedPasswords[field.props?.id] ? '隐藏' : '显示' }}
+          </button>
+        </div>
+
         <!-- 2. Form.TextArea 多行输入 -->
         <div v-else-if="field.type === 'Form.TextArea'">
           <textarea
@@ -90,6 +114,17 @@
           </select>
         </div>
 
+        <!-- 5. Form.Description 说明文字 -->
+        <div
+          v-else-if="field.type === 'Form.Description'"
+          class="px-3.5 py-2.5 rounded-xl bg-[var(--rc-surface-subtle)] border border-[var(--rc-border)] text-xs text-[var(--rc-text-secondary)] leading-relaxed"
+        >
+          {{ field.props?.text }}
+        </div>
+
+        <!-- 6. Form.Separator 分割线 -->
+        <hr v-else-if="field.type === 'Form.Separator'" class="border-[var(--rc-border)] my-3" />
+
         <!-- 字段校验错误提示 -->
         <div v-if="field.props?.error" class="text-xs text-[var(--rc-error)] flex items-center gap-1 mt-1">
           <svg class="w-3.5 h-3.5 fill-current" viewBox="0 0 20 20">
@@ -97,6 +132,35 @@
           </svg>
           <span>{{ field.props.error }}</span>
         </div>
+      </div>
+
+      <!-- 表单内嵌可视化提交与取消按钮栏 (直观供鼠标点击) -->
+      <div class="pt-4 border-t border-[var(--rc-border)] flex items-center justify-end gap-3">
+        <button
+          v-if="canCancel"
+          type="button"
+          class="px-4 py-2 rounded-xl text-xs font-medium text-[var(--rc-text-secondary)] hover:text-[var(--rc-text-primary)] bg-[var(--rc-surface-hover)] border border-[var(--rc-border)] transition-all cursor-pointer"
+          @click="emit('cancel')"
+        >
+          取消 / 返回 (Esc)
+        </button>
+        <button
+          v-for="(secAct, sIdx) in secondaryFormActions"
+          :key="sIdx"
+          type="button"
+          class="px-4 py-2 rounded-xl text-xs font-medium text-[var(--rc-text-primary)] bg-[var(--rc-surface-hover)] hover:bg-[var(--rc-surface-active)] border border-[var(--rc-border)] transition-all cursor-pointer"
+          @click="emit('trigger-action', secAct)"
+        >
+          {{ secAct.props?.title }}
+        </button>
+        <button
+          type="button"
+          class="px-5 py-2 rounded-xl text-xs font-semibold bg-[var(--rc-accent)] hover:bg-[var(--rc-accent-hover)] text-[var(--rc-accent-contrast)] shadow-sm transition-all cursor-pointer flex items-center gap-1.5"
+          @click="submitForm"
+        >
+          <span>✓</span>
+          <span>{{ submitActionTitle }} (Enter)</span>
+        </button>
       </div>
     </div>
   </div>
@@ -109,21 +173,47 @@ const props = defineProps({
   descriptor: {
     type: Object,
     required: true
+  },
+  actions: {
+    type: Array,
+    default: () => []
+  },
+  canCancel: {
+    type: Boolean,
+    default: false
   }
 });
 
-const emit = defineEmits(["submit"]);
+const emit = defineEmits(["submit", "cancel", "trigger-action"]);
 
 const formValues = ref({});
+const revealedPasswords = ref({});
+
+function togglePasswordReveal(id) {
+  if (!id) return;
+  revealedPasswords.value[id] = !revealedPasswords.value[id];
+}
 
 const formFields = computed(() => {
   return (props.descriptor.children || []).filter(
     (c) =>
       c.type === "Form.TextField" ||
+      c.type === "Form.PasswordField" ||
       c.type === "Form.TextArea" ||
       c.type === "Form.Checkbox" ||
-      c.type === "Form.Dropdown"
+      c.type === "Form.Dropdown" ||
+      c.type === "Form.Description" ||
+      c.type === "Form.Separator"
   );
+});
+
+const submitActionTitle = computed(() => {
+  const first = (props.actions || [])[0];
+  return first?.props?.title || "提交保存";
+});
+
+const secondaryFormActions = computed(() => {
+  return (props.actions || []).slice(1, 3);
 });
 
 function getDropdownItems(field) {

@@ -50,12 +50,12 @@ export function getClipboardMarkdown(item: ClipboardItem): string {
 
   const sensitivity = maskSensitiveContent(item.content);
   if (sensitivity.isSensitive || item.isSensitive) {
-    markdown += `> 🔒 **安全防护提示**: 检测到敏感凭据 (${sensitivity.reason || "机密凭据"})，已自动对预览内容执行安全脱敏遮罩。\n\n`;
+    markdown += `> **安全防护提示**: 检测到敏感凭据 (${sensitivity.reason || "机密凭据"})，已自动对预览内容执行安全脱敏遮罩。\n\n`;
   }
 
   if (item.type === "color") {
     const details = parseColorDetails(item.content);
-    markdown += `### 🎨 调色盘与色彩代码\n\n`;
+    markdown += `### 调色盘与色彩代码\n\n`;
     if (details) {
       markdown += `\`\`\`css\n/* HEX 格式 */\ncolor: ${details.hex};\n\n/* RGB 格式 */\nbackground-color: ${details.rgb};\n\n/* HSL 格式 */\nborder-color: ${details.hsl};\n\`\`\`\n\n`;
       markdown += `> **HEX**: \`${details.hex}\` | **RGB**: \`${details.rgb}\` | **HSL**: \`${details.hsl}\``;
@@ -67,18 +67,18 @@ export function getClipboardMarkdown(item: ClipboardItem): string {
       const parsed = JSON.parse(item.content);
       const formatted = JSON.stringify(parsed, null, 2);
       const keysCount = typeof parsed === "object" && parsed !== null ? Object.keys(parsed).length : 0;
-      markdown += `### 🌲 JSON 结构化数据预览 (${keysCount} 个顶层属性)\n\n\`\`\`json\n${formatted}\n\`\`\``;
+      markdown += `### JSON 结构化数据预览 (${keysCount} 个顶层属性)\n\n\`\`\`json\n${formatted}\n\`\`\``;
     } catch {
       markdown += `\`\`\`json\n${item.content}\n\`\`\``;
     }
   } else if (item.type === "code") {
     markdown += "```typescript\n" + item.content + "\n```";
   } else if (item.type === "link") {
-    markdown += `### 🔗 网络链接\n\n[${item.content}](${item.content})\n\n> 协议: \`${item.content.startsWith("https") ? "HTTPS (安全加密)" : "HTTP"}\``;
+    markdown += `### 网络链接\n\n[${item.content}](${item.content})\n\n> 协议: \`${item.content.startsWith("https") ? "HTTPS (安全加密)" : "HTTP"}\``;
   } else if (item.type === "image") {
     markdown += `![图片预览](${item.content})\n\n> 分辨率: ${item.imageDimensions?.width ?? 0} x ${item.imageDimensions?.height ?? 0}`;
   } else if (item.type === "files") {
-    markdown += "### 📁 包含的文件列表\n" + (item.filePaths?.map(f => `- \`${f}\``).join("\n") ?? item.content);
+    markdown += "### 包含的文件列表\n" + (item.filePaths?.map(f => `- \`${f}\``).join("\n") ?? item.content);
   } else {
     if (sensitivity.isSensitive) {
       markdown += `\`\`\`text\n${sensitivity.masked}\n\`\`\``;
@@ -138,7 +138,7 @@ export function ClipboardDetailView({
           <Detail.Metadata.TagList title="分类标签">
             <Detail.Metadata.TagList.Item
               text={item.pinned ? "PINNED" : "STANDARD"}
-              color={item.pinned ? Color.Yellow : Color.Blue}
+              color={Color.SecondaryText}
             />
             {(sensitivity.isSensitive || item.isSensitive) ? (
               <Detail.Metadata.TagList.Item text="SENSITIVE" color={Color.Red} />
@@ -286,14 +286,16 @@ export function ClipboardItemForm({
 
 /**
  * 官方内置核心能力: 剪贴板历史管理器
- * 遵循 Raycast 极客全键盘声明式标准规范（双栏详情预览、10+ Action、流水粘贴状态机与偏好设置）
+ * 布局一标杆：左 48% 历史列表 + 右 52% 真实内容本体预览，零彩色 Emoji 污染
  */
 export default function ClipboardHistoryCommand() {
+  const { push } = useNavigation();
   const [items, setItems] = useState<ClipboardItem[]>(() =>
     isRealElectronHost() ? [] : SAMPLE_CLIPBOARD_ITEMS
   );
   const [filterType, setFilterType] = useState<string>("all");
   const [searchText, setSearchText] = useState<string>("");
+  const [selectedId, setSelectedId] = useState<string>("");
   const [isShowingDetail, setIsShowingDetail] = useState<boolean>(true);
   const [isLoading, setIsLoading] = useState<boolean>(() => isRealElectronHost());
   const [preferences, setPreferences] = useState<ClipboardPreferences>({
@@ -320,6 +322,8 @@ export default function ClipboardHistoryCommand() {
     type: filterType as any,
     query: searchText
   });
+
+  const pinnedCount = items.filter((item) => item.pinned).length;
 
   const handleTogglePin = async (id: string) => {
     await toggleClipboardItemPin(id);
@@ -403,6 +407,30 @@ export default function ClipboardHistoryCommand() {
       isShowingDetail={isShowingDetail}
       searchBarPlaceholder="搜索剪贴板历史 (支持拼音缩写、内容、代码、色彩、文件名)..."
       onSearchTextChange={setSearchText}
+      onSelectionChange={(id) => setSelectedId(id || "")}
+      filterBar={{
+        summaryText: `本地 SQLite 历史共 ${items.length} 条 · 置顶 ${pinnedCount} 条 · 支持流水粘贴`,
+        actions: [
+          {
+            id: "clear",
+            label: "清空非置顶",
+            title: "清空非置顶",
+            style: "secondary",
+            onAction: () => {
+              void handleClearUnpinned();
+            }
+          },
+          {
+            id: "sync",
+            label: "同步剪贴板",
+            title: "同步剪贴板",
+            style: "secondary",
+            onAction: () => {
+              void handleSyncSystemClipboard();
+            }
+          }
+        ]
+      }}
       actions={
         <ActionPanel title="剪贴板全局操作">
           <Action
@@ -426,13 +454,13 @@ export default function ClipboardHistoryCommand() {
         >
           <List.Dropdown.Item title="全部格式 (All)" value="all" icon={Icon.List} />
           <List.Dropdown.Item title="已置顶 (Pinned)" value="pinned" icon={Icon.Pin} />
-          <List.Dropdown.Item title="🎨 色彩代码 (Color)" value="color" icon={Icon.Eye} />
-          <List.Dropdown.Item title="🌲 JSON 数据 (JSON)" value="json" icon={Icon.Code} />
-          <List.Dropdown.Item title="💻 代码片段 (Code)" value="code" icon={Icon.Terminal} />
-          <List.Dropdown.Item title="🔗 链接网址 (Links)" value="link" icon={Icon.Globe} />
-          <List.Dropdown.Item title="📁 文件列表 (Files)" value="files" icon={Icon.Folder} />
-          <List.Dropdown.Item title="🖼️ 图片 (Images)" value="image" icon={Icon.Image} />
-          <List.Dropdown.Item title="📄 纯文本 (Text)" value="text" icon={Icon.Document} />
+          <List.Dropdown.Item title="色彩代码 (Color)" value="color" icon={Icon.Eye} />
+          <List.Dropdown.Item title="JSON 数据 (JSON)" value="json" icon={Icon.Code} />
+          <List.Dropdown.Item title="代码片段 (Code)" value="code" icon={Icon.Terminal} />
+          <List.Dropdown.Item title="链接网址 (Links)" value="link" icon={Icon.Globe} />
+          <List.Dropdown.Item title="文件列表 (Files)" value="files" icon={Icon.Folder} />
+          <List.Dropdown.Item title="图片 (Images)" value="image" icon={Icon.Image} />
+          <List.Dropdown.Item title="纯文本 (Text)" value="text" icon={Icon.Document} />
         </List.Dropdown>
       }
     >
@@ -450,8 +478,8 @@ export default function ClipboardHistoryCommand() {
               subtitle={formatCopiedTime(item.copiedAt)}
               icon={getItemIcon(item)}
               accessories={[
-                ...(item.pinned ? [{ icon: Icon.Pin, tooltip: "已置顶" }] : []),
-                ...(isItemSensitive ? [{ icon: Icon.Lock, tooltip: "敏感脱敏" }] : []),
+                ...(item.pinned ? [{ tag: { value: "置顶" } }] : []),
+                ...(isItemSensitive ? [{ tag: { value: "敏感", color: Color.Red } }] : []),
                 { text: item.type.toUpperCase() }
               ]}
               detail={
@@ -484,7 +512,7 @@ export default function ClipboardHistoryCommand() {
                       <List.Item.Detail.Metadata.TagList title="状态">
                         <List.Item.Detail.Metadata.TagList.Item
                           text={item.pinned ? "PINNED" : "STANDARD"}
-                          color={item.pinned ? Color.Yellow : Color.Blue}
+                          color={Color.SecondaryText}
                         />
                         {isItemSensitive ? (
                           <List.Item.Detail.Metadata.TagList.Item text="PROTECTED" color={Color.Red} />
@@ -496,14 +524,12 @@ export default function ClipboardHistoryCommand() {
               }
               actions={
                 <ActionPanel title="剪贴板动作">
-                  {/* Action 1: 首选主动作 (支持偏好设置切换 paste/copy) */}
                   <Action.Paste
                     title="回车粘贴到前台应用 (Paste to Active)"
                     content={item.content}
                     icon={Icon.Checkmark}
                   />
 
-                  {/* Action 2: 仅复制到剪贴板 */}
                   <Action.CopyToClipboard
                     title="仅复制到剪贴板"
                     content={item.content}
@@ -511,7 +537,6 @@ export default function ClipboardHistoryCommand() {
                     shortcut={{ modifiers: ["ctrl"], key: "c" }}
                   />
 
-                  {/* Action 3: 全屏查看详情 */}
                   <Action.Push
                     title="全屏查看详情"
                     target={
@@ -525,7 +550,6 @@ export default function ClipboardHistoryCommand() {
                     shortcut={{ modifiers: ["ctrl"], key: "d" }}
                   />
 
-                  {/* Action 4: 连续流水粘贴 */}
                   <Action
                     title="连续流水粘贴下一个 (Paste Sequentially)"
                     icon={Icon.ArrowRight}
@@ -533,7 +557,6 @@ export default function ClipboardHistoryCommand() {
                     onAction={handlePasteSequential}
                   />
 
-                  {/* Action 5: 重置流水粘贴指针 */}
                   <Action
                     title="重置流水粘贴指针"
                     icon={Icon.RotateClockwise}
@@ -541,7 +564,6 @@ export default function ClipboardHistoryCommand() {
                     onAction={handleResetSequence}
                   />
 
-                  {/* Action 6: 展开/折叠右侧双栏详情 */}
                   <Action
                     title={isShowingDetail ? "关闭右侧详情分栏" : "展开右侧详情分栏"}
                     icon={Icon.SidebarRight}
@@ -549,7 +571,6 @@ export default function ClipboardHistoryCommand() {
                     onAction={() => setIsShowingDetail(!isShowingDetail)}
                   />
 
-                  {/* Action 7: 针对文件在 Explorer 打开 */}
                   {item.type === "files" && item.filePaths && item.filePaths.length > 0 ? (
                     <Action
                       title="在资源管理器中定位文件"
@@ -564,7 +585,6 @@ export default function ClipboardHistoryCommand() {
                     />
                   ) : null}
 
-                  {/* Action 8: 针对网址在浏览器中打开 */}
                   {item.type === "link" ? (
                     <Action.OpenInBrowser
                       title="在浏览器中打开网址"
@@ -574,7 +594,6 @@ export default function ClipboardHistoryCommand() {
                     />
                   ) : null}
 
-                  {/* Action 9 & 10: 色彩快捷复制 RGB/HSL */}
                   {colorDetails ? (
                     <>
                       <Action.CopyToClipboard
@@ -592,7 +611,6 @@ export default function ClipboardHistoryCommand() {
                     </>
                   ) : null}
 
-                  {/* 编辑与新建剪贴板内容 */}
                   <Action.Push
                     title="编辑该剪贴板内容..."
                     icon={Icon.Pencil}
@@ -612,7 +630,6 @@ export default function ClipboardHistoryCommand() {
                     onAction={handleSyncSystemClipboard}
                   />
 
-                  {/* Action 11: 置顶/取消置顶 */}
                   <Action
                     title={item.pinned ? "取消置顶" : "置顶条目"}
                     icon={Icon.Pin}
@@ -620,7 +637,6 @@ export default function ClipboardHistoryCommand() {
                     onAction={() => handleTogglePin(item.id)}
                   />
 
-                  {/* Action 12: 删除单条 */}
                   <Action
                     title="删除该记录"
                     icon={Icon.Trash}
@@ -628,7 +644,6 @@ export default function ClipboardHistoryCommand() {
                     onAction={() => handleDelete(item.id)}
                   />
 
-                  {/* Action 13: 清空未置顶历史 */}
                   <Action
                     title="清空所有未置顶记录"
                     icon={Icon.Trash}

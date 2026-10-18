@@ -36,12 +36,29 @@ export default function DiskAnalyzerCommand() {
   const [tab, setTab] = useState<'all' | 'files' | 'drives' | 'ext'>('all')
   const [selectedDrive, setSelectedDrive] = useState<string>('ALL')
   const [selectedGroupId, setSelectedGroupId] = useState<string>('ALL')
+  const [selectedDirPath, setSelectedDirPath] = useState<string>('ALL')
   const [selectedExt, setSelectedExt] = useState<string>('ALL')
   const [selectedPaths, setSelectedPaths] = useState<string[]>([])
   const [pageSize, setPageSize] = useState<number>(60)
 
   const [drives, setDrives] = useState<DiskDriveItem[]>([])
-  const [files, setFiles] = useState<DiskFileEntry[]>([])
+  const [files, setFiles] = useState<DiskFileEntry[]>(() => [
+    {
+      id: 'init-disk-sample-1',
+      name: 'Windows11_x64_zh-cn.iso',
+      path: 'D:\\Downloads\\Windows11_x64_zh-cn.iso',
+      parentDir: 'D:\\Downloads',
+      drive: 'D:',
+      extension: '.iso',
+      category: 'archive',
+      groupId: 5,
+      groupName: '压缩包与镜像',
+      groupColor: '#f59e0b',
+      sizeBytes: 5.4 * 1024 ** 3,
+      mtime: 1710000000,
+      isProtected: false
+    }
+  ])
   const [topDirectories, setTopDirectories] = useState<
     Array<{ name: string; path: string; drive: string; sizeBytes: number; fileCount: number }>
   >([])
@@ -103,20 +120,31 @@ export default function DiskAnalyzerCommand() {
 
   const activeGroupExtensions = computeExtStats(groupScopedFiles).slice(0, 10)
 
-  // 4. 按二级后缀 + 搜索关键字最终过滤文件列表
+  // 4. 按目录 + 二级后缀 + 搜索关键字最终过滤文件列表，并按体积从大到小排序
   const q = searchText.trim().toLowerCase()
-  const finalFilteredFiles = groupScopedFiles.filter(f => {
-    if (selectedExt !== 'ALL' && f.extension.toLowerCase() !== selectedExt.toLowerCase()) {
-      return false
-    }
-    if (!q) return true
-    return (
-      f.name.toLowerCase().includes(q) ||
-      f.path.toLowerCase().includes(q) ||
-      f.extension.toLowerCase().includes(q) ||
-      f.groupName.toLowerCase().includes(q)
-    )
-  })
+  const finalFilteredFiles = groupScopedFiles
+    .filter(f => {
+      if (selectedDirPath !== 'ALL') {
+        const normDir = selectedDirPath.toLowerCase()
+        if (
+          !f.path.toLowerCase().startsWith(normDir) &&
+          !f.parentDir.toLowerCase().startsWith(normDir)
+        ) {
+          return false
+        }
+      }
+      if (selectedExt !== 'ALL' && f.extension.toLowerCase() !== selectedExt.toLowerCase()) {
+        return false
+      }
+      if (!q) return true
+      return (
+        f.name.toLowerCase().includes(q) ||
+        f.path.toLowerCase().includes(q) ||
+        f.extension.toLowerCase().includes(q) ||
+        f.groupName.toLowerCase().includes(q)
+      )
+    })
+    .sort((a, b) => b.sizeBytes - a.sizeBytes)
 
   const visibleFiles = finalFilteredFiles.slice(0, pageSize)
 
@@ -273,15 +301,15 @@ export default function DiskAnalyzerCommand() {
         ? `> [!WARNING]\n> **磁盘负载偏高 (${d.usagePercent}%)**：建议检查大体积视频或开发缓存目录。`
         : `> [!TIP]\n> **分区状态健康 (${d.usagePercent}%)**：空间充裕，读写性能良好。`
 
-    const groupTable =
+    const groupLines =
       driveGroups.length > 0
         ? driveGroups
             .map(
               g =>
-                `| ${g.name} | \`${g.fileCount} 项\` | \`${formatBytes(g.totalSizeBytes)}\` | \`${g.sharePercent}%\` |`
+                `- **${g.name}**: \`${formatBytes(g.totalSizeBytes)}\` (\`${g.sharePercent}%\` · ${g.fileCount} 项)`
             )
             .join('\n')
-        : '| 暂无采样文件 | - | - | - |'
+        : '- 暂无采样文件'
 
     return `# 💽 ${d.label}
 
@@ -298,11 +326,9 @@ export default function DiskAnalyzerCommand() {
 
 ---
 
-### 🗂️ 本分区 10 大官方分类采样分布 (${driveFiles.length} 项 · ${formatBytes(driveFiles.reduce((a, b) => a + b.sizeBytes, 0))})
+### 🗂️ 本分区 10 大分类空间采样 (${driveFiles.length} 项 · ${formatBytes(driveFiles.reduce((a, b) => a + b.sizeBytes, 0))})
 
-| 官方分类 | 命中文件数 | 采样总大小 | 占比 |
-| :--- | :--- | :--- | :--- |
-${groupTable}
+${groupLines}
 
 ---
 
@@ -316,10 +342,10 @@ ${alert}
         ? g.topExtensions
             .map(
               e =>
-                `| \`${e.extension}\` | ${e.fileCount} 个文件 | \`${formatBytes(e.totalSizeBytes)}\` | \`${e.sharePercent}%\` |`
+                `- **\`${e.extension}\`**: \`${formatBytes(e.totalSizeBytes)}\` (\`${e.sharePercent}%\` · ${e.fileCount} 个文件)`
             )
             .join('\n')
-        : '| 暂无文件 | 0 | 0 B | 0% |'
+        : '- 暂无文件'
 
     return `# ${g.name} (Group #${g.groupId})
 
@@ -334,10 +360,8 @@ ${g.description}
 
 ---
 
-### 🏷️ 分类内二级扩展名排行榜 (点击顶部二级筛选条可单独过滤后缀)
+### 🏷️ 分类内二级扩展名排行榜
 
-| 扩展名后缀 | 文件数量 | 累计占用体积 | 分类内占比 |
-| :--- | :--- | :--- | :--- |
 ${extRows}
 `
   }
@@ -415,11 +439,134 @@ ${extRows}
     }
   }).filter(sec => sec.groupVisibleFiles.length > 0)
 
+  // 构建右侧可交互大文件列表 (带复选框、体积占比条、分类标签与一键清理动作)
+  const maxFileBytes = Math.max(1, visibleFiles[0]?.sizeBytes || 1)
+  const rightFileItems = visibleFiles.map(f => {
+    const isChecked = selectedSet.has(f.path)
+    const volRatio = Math.max(8, Math.min(100, Math.round((f.sizeBytes / maxFileBytes) * 100)))
+    const catMeta = OFFICIAL_FILE_TYPE_GROUPS.find(g => g.groupId === f.groupId)
+    const shortCat = (catMeta?.name || f.groupName).replace(/^[^\s]+\s*/, '')
+
+    return List.Item({
+      id: f.id,
+      title: f.name,
+      subtitle: f.isProtected
+        ? `${f.parentDir} (系统核心文件，保护中)`
+        : `${f.parentDir} · ${formatDateTime(f.mtime)}`,
+      checkable: !f.isProtected,
+      checked: isChecked,
+      onCheckChange: nextChecked => toggleSingleFile(f.path, nextChecked),
+      onToggleCheck: nextChecked => toggleSingleFile(f.path, nextChecked),
+      icon: {
+        source: f.isProtected ? Icon.Lock : Icon.Document
+      },
+      accessories: [
+        {
+          progress: {
+            value: volRatio
+          }
+        },
+        {
+          tag: {
+            value: f.isProtected ? '系统保护' : shortCat,
+            color: Color.SecondaryText
+          }
+        },
+        { text: formatBytes(f.sizeBytes) }
+      ],
+      detail: List.Item.Detail({
+        markdown: renderFileMarkdown(f)
+      }),
+      actions: ActionPanel({
+        title: f.name,
+        children: [
+          Action({
+            title: '移入回收站清理',
+            icon: Icon.Trash,
+            style: Action.Style.Destructive,
+            onAction: () => handleTrashFile(f)
+          }),
+          Action({
+            title: '在资源管理器定位',
+            icon: Icon.Folder,
+            onAction: () => {
+              openDiskItemLocation(f.path)
+            }
+          }),
+          Action({
+            title: isChecked ? '取消勾选此文件' : '勾选加入批量清理队列',
+            icon: Icon.Checkmark,
+            onAction: () => toggleSingleFile(f.path, !isChecked)
+          }),
+          Action({
+            title: '使用默认程序打开文件',
+            icon: Icon.AppWindow,
+            onAction: () => {
+              openDiskFileDefault(f.path)
+            }
+          }),
+          Action({
+            title: `仅筛选 ${f.extension} 后缀文件`,
+            icon: Icon.MagnifyingGlass,
+            onAction: () => {
+              setSelectedGroupId(String(f.groupId))
+              setSelectedExt(f.extension)
+            }
+          }),
+          ...(selectedEntries.length > 0
+            ? [
+                Action({
+                  title: `批量清理已勾选的 ${selectedEntries.length} 项 (${formatBytes(selectedBytes)})`,
+                  icon: Icon.Trash,
+                  style: Action.Style.Destructive,
+                  onAction: () => handleBatchTrashSelected()
+                })
+              ]
+            : []),
+          Action.CopyToClipboard({
+            title: '复制文件完整路径',
+            content: f.path
+          })
+        ]
+      })
+    })
+  })
+
+  const rightScopeTitle =
+    selectedDirPath !== 'ALL'
+      ? `目录「${selectedDirPath}」下的大文件`
+      : selectedGroupId !== 'ALL'
+      ? `「${(scopedGroupStats.find(g => String(g.groupId) === selectedGroupId)?.name || '当前分类').replace(/^[^\s]+\s*/, '')}」下的大文件`
+      : selectedDrive !== 'ALL'
+      ? `${selectedDrive} 分区下的可清理大文件 (按体积从大到小)`
+      : `全盘可清理大文件明细 (按体积降序，直接勾选或按 ↵ 移入回收站)`
+
   return List({
-    searchBarPlaceholder: '搜索磁盘分区、10大分类名称、后缀名 (.mp4/.dll/.exe) 或文件路径...',
+    searchBarPlaceholder: '搜索大文件、后缀 (.mp4/.iso/.zip/.dll) 或路径...',
     onSearchTextChange: setSearchText,
     isShowingDetail: true,
     isLoading,
+    searchBarAccessory: List.Dropdown({
+      tooltip: '切换目标磁盘分区',
+      value: selectedDrive,
+      onChange: val => {
+        setSelectedDrive(val)
+        setSelectedDirPath('ALL')
+        setSelectedExt('ALL')
+      },
+      children: [
+        List.Dropdown.Item({
+          title: `全盘汇总 (${files.length})`,
+          value: 'ALL'
+        }),
+        ...drives.map(d =>
+          List.Dropdown.Item({
+            title: `${d.drive} (${d.usagePercent}%)`,
+            value: d.drive
+          })
+        )
+      ]
+    }),
     metricGrid: MetricGrid({
       columns: 4,
       items: [
@@ -466,18 +613,19 @@ ${extRows}
     distributionBar: {
       title:
         selectedDrive === 'ALL'
-          ? '📊 全盘 10 大官方文件类型空间占比分布 (点击色块或图例可穿透筛选该分类)'
-          : `📊 ${selectedDrive} 分区 10 大官方文件类型空间占比分布 (点击色块或图例穿透筛选)`,
-      totalLabel: `已采样 ${driveScopedFiles.length} 个大文件 · 共 ${formatBytes(scopedTotalBytes)}`,
+          ? '📊 全盘 10 大类型空间占比'
+          : `📊 ${selectedDrive} 分区 10 大类型占比`,
+      totalLabel: `已采样 ${driveScopedFiles.length} 项 · ${formatBytes(scopedTotalBytes)}`,
       activeSegmentId: selectedGroupId === 'ALL' ? undefined : selectedGroupId,
       onSelectSegment: segId => {
         setSelectedGroupId(segId || 'ALL')
+        setSelectedDirPath('ALL')
         setSelectedExt('ALL')
       },
       segments: distributionSegments
     },
     filterBar: {
-      summaryText: `当前作用域: ${selectedDrive === 'ALL' ? '全盘' : selectedDrive} · 匹配 ${finalFilteredFiles.length} 个文件 (展示前 ${ visibleFiles.length } 项) · 已勾选 ${selectedEntries.length} 项 (${formatBytes(selectedBytes)})`,
+      summaryText: `全盘总容量 ${formatBytes(metricCap)} / 已用 ${formatBytes(metricUsed)} (${overallPercent}%) / 剩余 ${formatBytes(metricAvail)} · 右侧共 ${finalFilteredFiles.length} 个大文件${selectedEntries.length > 0 ? ` · 已勾选 ${selectedEntries.length} 项 (${formatBytes(selectedBytes)})` : ''}`,
       groups: [
         {
           id: 'drive-filter',
@@ -485,13 +633,14 @@ ${extRows}
           value: selectedDrive,
           onChange: val => {
             setSelectedDrive(val)
+            setSelectedDirPath('ALL')
             setSelectedExt('ALL')
           },
           options: [
-            { value: 'ALL', label: '🌐 全盘汇总', badge: files.length },
+            { value: 'ALL', label: '全盘汇总', badge: files.length },
             ...drives.map(d => ({
               value: d.drive,
-              label: `💽 ${d.drive} (${d.usagePercent}%)`,
+              label: `${d.drive} (${d.usagePercent}%)`,
               badge: files.filter(f => f.drive.toUpperCase() === d.drive.toUpperCase()).length
             }))
           ]
@@ -502,15 +651,16 @@ ${extRows}
           value: selectedGroupId,
           onChange: val => {
             setSelectedGroupId(val)
+            setSelectedDirPath('ALL')
             setSelectedExt('ALL')
           },
           options: [
-            { value: 'ALL', label: '🗂️ 全部 10 大分类', badge: driveScopedFiles.length },
+            { value: 'ALL', label: '全部 10 大分类', badge: driveScopedFiles.length },
             ...scopedGroupStats
               .filter(g => g.fileCount > 0)
               .map(g => ({
                 value: String(g.groupId),
-                label: g.name,
+                label: g.name.replace(/^[^\s]+\s*/, ''),
                 badge: `${g.fileCount} · ${formatBytes(g.totalSizeBytes)}`
               }))
           ]
@@ -521,7 +671,7 @@ ${extRows}
           value: selectedExt,
           onChange: val => setSelectedExt(val),
           options: [
-            { value: 'ALL', label: '🏷️ 全部后缀', badge: groupScopedFiles.length },
+            { value: 'ALL', label: '全部后缀', badge: groupScopedFiles.length },
             ...activeGroupExtensions.map(ext => ({
               value: ext.extension,
               label: `${ext.extension}`,
@@ -531,19 +681,11 @@ ${extRows}
         }
       ],
       actions: [
-        {
-          id: 'act-toggle-all',
-          label: allFilteredChecked
-            ? `🔲 取消全选 (${selectableInFilter.length}项)`
-            : `☑️ 全选当前筛选 (${selectableInFilter.length}项)`,
-          style: 'secondary',
-          onAction: () => toggleSelectAllFiltered()
-        },
         ...(selectedEntries.length > 0
           ? [
               {
                 id: 'act-batch-trash',
-                label: `🗑️ 批量移入回收站 (${selectedEntries.length}项 · ${formatBytes(selectedBytes)})`,
+                label: `批量清理已选 (${selectedEntries.length}项 · ${formatBytes(selectedBytes)})`,
                 style: 'danger' as const,
                 onAction: () => {
                   handleBatchTrashSelected()
@@ -551,303 +693,186 @@ ${extRows}
               }
             ]
           : []),
-        ...(finalFilteredFiles.length > pageSize
-          ? [
-              {
-                id: 'act-load-more',
-                label: `➕ 加载更多 (${visibleFiles.length}/${finalFilteredFiles.length})`,
-                style: 'primary' as const,
-                onAction: () => setPageSize(prev => prev + 60)
-              }
-            ]
-          : []),
         {
           id: 'act-rescan',
-          label: '🔄 重新深度扫描',
+          label: '重新扫描',
           style: 'secondary',
           onAction: () => refreshAnalysis(true)
         }
       ]
     },
-    segmentedControl: SegmentedControl({
-      value: tab,
-      onChange: v => setTab(v as any),
-      options: [
-        { value: 'all', label: '全景 10 大分类与文件', badge: finalFilteredFiles.length },
-        { value: 'files', label: '分类文件明细 (可勾选清理)', badge: finalFilteredFiles.length },
-        { value: 'drives', label: '物理挂载分区', badge: drives.length },
-        { value: 'ext', label: '二级扩展名排行榜', badge: scopedExtStats.length }
-      ]
-    }),
+    subList: {
+      title: rightScopeTitle,
+      subtitle: `${finalFilteredFiles.length} 项 · ${formatBytes(finalFilteredFiles.reduce((a, b) => a + b.sizeBytes, 0))}`,
+      checkable: selectableInFilter.length > 0,
+      checked:
+        selectableInFilter.length === 0
+          ? false
+          : allFilteredChecked
+          ? true
+          : selectedEntries.length > 0
+          ? 'indeterminate'
+          : false,
+      onCheckChange: () => toggleSelectAllFiltered(),
+      emptyText: '当前选中的分区/分类/目录下没有匹配的大文件',
+      items: rightFileItems
+    },
     children: [
-      ...(tab === 'all' || tab === 'drives'
+      List.Section({
+        title: `物理挂载分区 (${filteredDrives.length})`,
+        children: [
+          List.Item({
+            id: 'drive-ALL',
+            title: '全盘所有大文件',
+            subtitle: `已用 ${formatBytes(totalUsed)} / 总计 ${formatBytes(totalCapacity)}`,
+            icon: { source: Icon.Globe },
+            accessories: [{ text: `${files.length} 项` }],
+            onSelect: () => {
+              setSelectedDrive('ALL')
+              setSelectedGroupId('ALL')
+              setSelectedDirPath('ALL')
+              setSelectedExt('ALL')
+            }
+          }),
+          ...filteredDrives.map(d => {
+            const isDanger = d.usagePercent >= 90
+            return List.Item({
+              id: `drive-${d.drive}`,
+              title: d.label.includes(d.drive) ? d.label : `${d.drive} ${d.label}`,
+              subtitle: `已用 ${formatBytes(d.usedBytes)} · 剩 ${formatBytes(d.availableBytes)}`,
+              icon: {
+                source: Icon.HardDrive
+              },
+              accessories: [
+                {
+                  tag: {
+                    value: `${d.usagePercent}%`,
+                    ...(isDanger ? { color: 'red' } : {})
+                  }
+                }
+              ],
+              onSelect: () => {
+                setSelectedDrive(d.drive)
+                setSelectedGroupId('ALL')
+                setSelectedDirPath('ALL')
+                setSelectedExt('ALL')
+              },
+              detail: List.Item.Detail({
+                markdown: renderDriveMarkdown(d)
+              }),
+              actions: ActionPanel({
+                title: d.label,
+                children: [
+                  Action({
+                    title: `聚焦查看 ${d.drive} 分区大文件`,
+                    icon: Icon.MagnifyingGlass,
+                    onAction: () => {
+                      setSelectedDrive(d.drive)
+                      setSelectedGroupId('ALL')
+                      setSelectedDirPath('ALL')
+                      setSelectedExt('ALL')
+                    }
+                  }),
+                  Action({
+                    title: '在资源管理器中打开此分区',
+                    icon: Icon.Folder,
+                    onAction: () => {
+                      openDiskItemLocation(`${d.drive}\\`)
+                    }
+                  })
+                ]
+              })
+            })
+          })
+        ]
+      }),
+      List.Section({
+        title: `10 大文件分类 (${scopedGroupStats.filter(g => g.fileCount > 0).length})`,
+        children: scopedGroupStats
+          .filter(g => g.fileCount > 0)
+          .map(g => {
+            const cleanGroupName = g.name.replace(/^[^\s]+\s*/, '')
+            return List.Item({
+              id: `group-${g.groupId}`,
+              title: cleanGroupName,
+              subtitle: `${g.fileCount} 个文件 · 占比 ${g.sharePercent}%`,
+              icon: { source: Icon.Folder },
+              accessories: [{ text: formatBytes(g.totalSizeBytes) }],
+              onSelect: () => {
+                setSelectedGroupId(String(g.groupId))
+                setSelectedDirPath('ALL')
+                setSelectedExt('ALL')
+              },
+              actions: ActionPanel({
+                title: cleanGroupName,
+                children: [
+                  Action({
+                    title: `查看「${cleanGroupName}」下的 ${g.fileCount} 个文件`,
+                    icon: Icon.MagnifyingGlass,
+                    onAction: () => {
+                      setSelectedGroupId(String(g.groupId))
+                      setSelectedDirPath('ALL')
+                      setSelectedExt('ALL')
+                    }
+                  }),
+                  Action({
+                    title: `全选「${cleanGroupName}」下所有可清理文件`,
+                    icon: Icon.Checkmark,
+                    onAction: () => {
+                      const groupFiles = driveScopedFiles.filter(f => f.groupId === g.groupId)
+                      toggleGroupCheck(groupFiles, true)
+                    }
+                  })
+                ]
+              })
+            })
+          })
+      }),
+      ...(topDirectories.length > 0
         ? [
             List.Section({
-              title: `本机物理挂载分区 (${filteredDrives.length})`,
-              subtitle: '点击回车可在资源管理器打开对应盘符，或点击顶部盘符胶囊单盘穿透分析',
-              children: filteredDrives.map(d =>
+              title: `热点大目录 (${Math.min(12, topDirectories.length)})`,
+              children: topDirectories.slice(0, 12).map((dir, idx) =>
                 List.Item({
-                  id: `drive-${d.drive}`,
-                  title: `${d.label} (${d.drive})`,
-                  subtitle: `已用 ${formatBytes(d.usedBytes)} / 总计 ${formatBytes(d.totalBytes)}`,
-                  icon: {
-                    source: Icon.HardDrive,
-                    tintColor:
-                      d.status === 'danger'
-                        ? Color.Red
-                        : d.status === 'warning'
-                        ? Color.Orange
-                        : Color.Blue
+                  id: `topdir-${idx}-${dir.path}`,
+                  title: `${dir.name} (${dir.drive})`,
+                  subtitle: dir.path,
+                  icon: { source: Icon.Folder },
+                  accessories: [{ text: formatBytes(dir.sizeBytes) }],
+                  onSelect: () => {
+                    setSelectedDrive(dir.drive)
+                    setSelectedGroupId('ALL')
+                    setSelectedDirPath(dir.path)
+                    setSelectedExt('ALL')
                   },
-                  accessories: [
-                    {
-                      tag: {
-                        value: `已用 ${d.usagePercent}%`,
-                        color:
-                          d.status === 'danger'
-                            ? Color.Red
-                            : d.status === 'warning'
-                            ? Color.Orange
-                            : Color.Green
-                      }
-                    },
-                    { text: `剩余 ${formatBytes(d.availableBytes)}` }
-                  ],
-                  detail: List.Item.Detail({
-                    markdown: renderDriveMarkdown(d)
-                  }),
                   actions: ActionPanel({
-                    title: d.label,
+                    title: dir.name,
                     children: [
                       Action({
-                        title: `仅聚焦分析 ${d.drive} 分区文件`,
+                        title: `穿透查看「${dir.name}」内部大文件`,
                         icon: Icon.MagnifyingGlass,
                         onAction: () => {
-                          setSelectedDrive(d.drive)
+                          setSelectedDrive(dir.drive)
+                          setSelectedGroupId('ALL')
+                          setSelectedDirPath(dir.path)
                           setSelectedExt('ALL')
                         }
                       }),
                       Action({
-                        title: '在资源管理器中打开此分区',
+                        title: '在资源管理器中打开此目录',
                         icon: Icon.Folder,
                         onAction: () => {
-                          openDiskItemLocation(`${d.drive}\\`)
+                          openDiskItemLocation(dir.path)
                         }
                       }),
-                      Action({
-                        title: '重新扫描全盘空间',
-                        icon: Icon.ArrowClockwise,
-                        onAction: () => refreshAnalysis(true)
+                      Action.CopyToClipboard({
+                        title: '复制目录路径',
+                        content: dir.path
                       })
                     ]
                   })
                 })
               )
-            }),
-            ...(topDirectories.length > 0
-              ? [
-                  List.Section({
-                    title: `📂 本机真实大体积热点目录排行 (${
-                      topDirectories.filter(
-                        dir =>
-                          (selectedDrive === 'ALL' ||
-                            dir.drive.toUpperCase() === selectedDrive.toUpperCase()) &&
-                          (!q ||
-                            dir.name.toLowerCase().includes(q) ||
-                            dir.path.toLowerCase().includes(q))
-                      ).length
-                    })`,
-                    subtitle: '基于真实挂载分区与用户目录实时扫描聚合的大体积子目录',
-                    children: topDirectories
-                      .filter(
-                        dir =>
-                          (selectedDrive === 'ALL' ||
-                            dir.drive.toUpperCase() === selectedDrive.toUpperCase()) &&
-                          (!q ||
-                            dir.name.toLowerCase().includes(q) ||
-                            dir.path.toLowerCase().includes(q))
-                      )
-                      .slice(0, 20)
-                      .map((dir, idx) =>
-                        List.Item({
-                          id: `topdir-${idx}-${dir.path}`,
-                          title: dir.name,
-                          subtitle: dir.path,
-                          icon: { source: Icon.Folder, tintColor: Color.Orange },
-                          accessories: [
-                            { tag: { value: `${dir.drive} · ${dir.fileCount} 项`, color: Color.Blue } },
-                            { text: formatBytes(dir.sizeBytes) }
-                          ],
-                          detail: List.Item.Detail({
-                            markdown: `# 📂 ${dir.name}\n\n**目录完整路径**: \`${dir.path}\`\n\n---\n\n- **累计占用空间**: \`${formatBytes(dir.sizeBytes)}\`\n- **包含文件总数**: \`${dir.fileCount} 个文件\`\n- **所在物理分区**: \`${dir.drive}\``
-                          }),
-                          actions: ActionPanel({
-                            title: dir.name,
-                            children: [
-                              Action({
-                                title: '在资源管理器中打开此目录',
-                                icon: Icon.Folder,
-                                onAction: () => {
-                                  openDiskItemLocation(dir.path)
-                                }
-                              }),
-                              Action.CopyToClipboard({
-                                title: '复制目录路径',
-                                content: dir.path
-                              })
-                            ]
-                          })
-                        })
-                      )
-                  })
-                ]
-              : [])
-          ]
-        : []),
-      ...(tab === 'all' || tab === 'files'
-        ? filesByGroupSection.map(sec =>
-            List.Section({
-              title: `${sec.meta.name} (${sec.groupAllFiles.length} 项 · ${formatBytes(sec.gStat?.totalSizeBytes || 0)})`,
-              subtitle:
-                sec.selectable.length > 0
-                  ? `已选 ${sec.checkedCount}/${sec.selectable.length} 项 · 常见后缀: ${
-                      sec.gStat?.topExtensions
-                        .slice(0, 4)
-                        .map(e => `${e.extension}(${e.fileCount})`)
-                        .join(' ') || '-'
-                    }`
-                  : '系统保护目录文件只读展示',
-              checkable: sec.selectable.length > 0,
-              checked: sec.checkState,
-              onCheckChange: nextChecked => toggleGroupCheck(sec.groupAllFiles, nextChecked),
-              children: sec.groupVisibleFiles.map(f => {
-                const isChecked = selectedSet.has(f.path)
-                return List.Item({
-                  id: f.id,
-                  title: f.name,
-                  subtitle: `${f.parentDir} · ${formatDateTime(f.mtime)}`,
-                  checkable: !f.isProtected,
-                  checked: isChecked,
-                  onCheckChange: nextChecked => toggleSingleFile(f.path, nextChecked),
-                  icon: {
-                    source: Icon.Document,
-                    tintColor:
-                      f.groupId === 1 || f.groupId === 2
-                        ? Color.Purple
-                        : f.groupId === 6
-                        ? Color.Orange
-                        : f.groupId === 8
-                        ? Color.Red
-                        : f.groupId === 3
-                        ? Color.Green
-                        : Color.Blue
-                  },
-                  accessories: [
-                    ...(f.isProtected
-                      ? [{ tag: { value: '🔒 系统保护', color: Color.Orange } }]
-                      : []),
-                    { tag: { value: `${f.drive} ${f.extension}`, color: Color.SecondaryText } },
-                    { text: formatBytes(f.sizeBytes) }
-                  ],
-                  detail: List.Item.Detail({
-                    markdown: renderFileMarkdown(f)
-                  }),
-                  actions: ActionPanel({
-                    title: f.name,
-                    children: [
-                      Action({
-                        title: '在资源管理器中定位文件',
-                        icon: Icon.Folder,
-                        onAction: () => {
-                          openDiskItemLocation(f.path)
-                        }
-                      }),
-                      Action({
-                        title: isChecked ? '取消勾选此文件' : '勾选加入批量清理队列',
-                        icon: Icon.Checkmark,
-                        onAction: () => toggleSingleFile(f.path, !isChecked)
-                      }),
-                      Action({
-                        title: '使用默认程序打开文件',
-                        icon: Icon.AppWindow,
-                        onAction: () => {
-                          openDiskFileDefault(f.path)
-                        }
-                      }),
-                      Action({
-                        title: `仅筛选 ${f.extension} 后缀文件`,
-                        icon: Icon.MagnifyingGlass,
-                        onAction: () => {
-                          setSelectedGroupId(String(f.groupId))
-                          setSelectedExt(f.extension)
-                        }
-                      }),
-                      Action({
-                        title: '安全移入系统回收站',
-                        icon: Icon.Trash,
-                        style: Action.Style.Destructive,
-                        onAction: () => handleTrashFile(f)
-                      }),
-                      ...(selectedEntries.length > 0
-                        ? [
-                            Action({
-                              title: `批量清理已勾选的 ${selectedEntries.length} 项 (${formatBytes(selectedBytes)})`,
-                              icon: Icon.Trash,
-                              style: Action.Style.Destructive,
-                              onAction: () => handleBatchTrashSelected()
-                            })
-                          ]
-                        : []),
-                      Action.CopyToClipboard({
-                        title: '复制文件完整路径',
-                        content: f.path
-                      })
-                    ]
-                  })
-                })
-              })
-            })
-          )
-        : []),
-      ...(tab === 'all' || tab === 'ext'
-        ? [
-            List.Section({
-              title: `二级扩展名空间占用排行 (${filteredExts.length})`,
-              subtitle: '点击任意后缀项可立即穿透筛选该后缀下的全部真实文件',
-              children: filteredExts.map(e => {
-                const gMeta = OFFICIAL_FILE_TYPE_GROUPS.find(g => g.groupId === e.groupId)
-                return List.Item({
-                  id: `ext-${e.extension}`,
-                  title: `${e.extension} (${e.categoryLabel})`,
-                  subtitle: `归属分类: ${gMeta?.name || e.categoryLabel} · 共 ${e.fileCount} 个文件`,
-                  icon: { source: Icon.Tag, tintColor: Color.Green },
-                  accessories: [
-                    { tag: { value: `占比 ${e.sharePercent}%`, color: Color.Blue } },
-                    { text: formatBytes(e.totalSizeBytes) }
-                  ],
-                  detail: List.Item.Detail({
-                    markdown: gMeta ? renderGroupMarkdown(scopedGroupStats.find(s => s.groupId === gMeta.groupId) || scopedGroupStats[0]) : `# ${e.extension}`
-                  }),
-                  actions: ActionPanel({
-                    title: e.extension,
-                    children: [
-                      Action({
-                        title: `穿透查看所有 ${e.extension} 文件 (${e.fileCount} 项)`,
-                        icon: Icon.MagnifyingGlass,
-                        onAction: () => {
-                          setSelectedGroupId(String(e.groupId))
-                          setSelectedExt(e.extension)
-                          setTab('files')
-                        }
-                      }),
-                      Action.CopyToClipboard({
-                        title: '复制类型汇总信息',
-                        content: `${e.extension} (${e.categoryLabel}): ${e.fileCount} 个文件, 共 ${formatBytes(e.totalSizeBytes)}`
-                      })
-                    ]
-                  })
-                })
-              })
             })
           ]
         : [])

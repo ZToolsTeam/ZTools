@@ -562,7 +562,9 @@ export function WebSearchesCommand() {
   const realHost = isRealElectronHost();
   const [searchText, setSearchText] = useState("");
   const [mode, setMode] = useState<WebHubViewMode>("all");
+  const [selectedId, setSelectedId] = useState<string | null>(null);
   const [customEngines, setCustomEngines] = useState<WebSearchEngine[]>([]);
+  const { push } = useNavigation();
   const [activeTab, setActiveTab] = useState<ActiveBrowserTabInfo | null>(() =>
     realHost
       ? null
@@ -613,11 +615,106 @@ export function WebSearchesCommand() {
 
   const trimmedQuery = searchText.trim();
 
+  const handleRefreshBrowserTab = async () => {
+    const [tabInfo, contactList] = await Promise.all([
+      fetchActiveBrowserTab(),
+      fetchContactsList(searchText)
+    ]);
+    setActiveTab(tabInfo);
+    setContacts(contactList);
+    await showToast(
+      Toast.Style.Success,
+      "已刷新浏览器当前标签页与通讯录",
+      tabInfo ? `${tabInfo.browserName}: ${tabInfo.title}` : undefined
+    );
+  };
+
   return (
     <List
       isShowingDetail={true}
       searchBarPlaceholder="输入搜索词实时用 Google/GitHub/知乎/B站 搜索，或添加自定义搜索引擎与联系人..."
       onSearchTextChange={setSearchText}
+      onSelectionChange={setSelectedId}
+      filterBar={{
+        summaryText: `🌐 全网搜索与通讯中枢 • 已配置 ${allEngines.length} 个搜索引擎 | 活动标签页: ${activeTab ? activeTab.browserName : "无"} | 本地联系人: ${contacts.length} 人`,
+        groups: [
+          {
+            id: "web-hub-mode",
+            value: mode,
+            onChange: (v) => setMode(v as WebHubViewMode),
+            options: [
+              { title: "全部视图", value: "all" },
+              { title: "搜索引擎 Web Search", value: "engines", count: allEngines.length },
+              { title: "浏览器当前标签 Active Tab", value: "browser", count: activeTab ? 1 : 0 },
+              { title: "通讯录 Contacts", value: "contacts", count: contacts.length }
+            ]
+          }
+        ],
+        actions: [
+          {
+            id: "search-or-open-selected",
+            label: "🔍 立即搜索 / 打开",
+            title: "🔍 立即搜索 / 打开",
+            style: "primary",
+            onAction: async () => {
+              if (selectedId === "active-browser-tab" && activeTab) {
+                await Clipboard.copy(activeTab.url);
+                await showToast(Toast.Style.Success, "已复制当前浏览器活动 Tab URL", activeTab.url);
+                return;
+              }
+              const matchedContact = contacts.find((c) => c.id === selectedId);
+              if (matchedContact) {
+                await Clipboard.copy(matchedContact.email);
+                await showToast(Toast.Style.Success, "已复制联系人邮箱", matchedContact.email);
+                return;
+              }
+              const targetEngine =
+                allEngines.find((e) => e.id === selectedId) || allEngines[0];
+              if (targetEngine) {
+                const res = await performWebSearch(targetEngine, trimmedQuery);
+                await showToast(
+                  Toast.Style.Success,
+                  `已通过 ${res.engineName} 打开搜索`,
+                  res.url
+                );
+              }
+            }
+          },
+          {
+            id: "add-custom-search-engine",
+            label: "➕ 添加自定义搜索引擎",
+            title: "➕ 添加自定义搜索引擎",
+            style: "secondary",
+            onAction: () => {
+              push(
+                <CreateWebSearchForm
+                  onCreated={(engine) => setCustomEngines((prev) => [engine, ...prev])}
+                />
+              );
+            }
+          },
+          {
+            id: "create-contact-entry",
+            label: "👤 新建联系人",
+            title: "👤 新建联系人",
+            style: "secondary",
+            onAction: () => {
+              push(
+                <CreateContactForm
+                  onCreated={(created) => setContacts((prev) => [created, ...prev])}
+                />
+              );
+            }
+          },
+          {
+            id: "refresh-browser-tab",
+            label: "🌐 刷新当前浏览器标签页",
+            title: "🌐 刷新当前浏览器标签页",
+            style: "secondary",
+            onAction: handleRefreshBrowserTab
+          }
+        ]
+      }}
       searchBarAccessory={
         <List.Dropdown
           tooltip="切换检索视图"

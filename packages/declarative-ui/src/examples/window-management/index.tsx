@@ -13,7 +13,6 @@ import {
 import { useState, useEffect } from "../../runtime/hooks.js";
 import {
   WindowActionDefinition,
-  WindowActionCategory,
   WindowManagementPreferences
 } from "./types.js";
 import {
@@ -226,19 +225,19 @@ export function WindowActionDetailView({
           <Detail.Metadata.TagList title="底层管道">
             <Detail.Metadata.TagList.Item
               text="Accessibility (AXUIElement)"
-              color={Color.Purple}
+              color={Color.SecondaryText}
             />
             <Detail.Metadata.TagList.Item
               text="Menu Bar / Dock WorkArea 自动避让"
-              color={Color.Orange}
+              color={Color.SecondaryText}
             />
             <Detail.Metadata.TagList.Item
               text="UIAccess UIPI Bypass"
-              color={Color.Green}
+              color={Color.SecondaryText}
             />
             <Detail.Metadata.TagList.Item
               text="Win32 SetWindowPos"
-              color={Color.Blue}
+              color={Color.SecondaryText}
             />
           </Detail.Metadata.TagList>
         </Detail.Metadata>
@@ -267,13 +266,15 @@ export function WindowActionDetailView({
 
 /**
  * 官方内置核心能力: Window Management (窗口调度器)
- * 具备 30+ 种精细分屏动作、边距偏好配置、Win32 SetWindowPos 下沉与 HUD 毫秒级反馈
+ * 布局一：100% 全宽极简列表，一目了然展示分屏比例、描述与全局快捷键
  */
 export default function WindowManagementCommand() {
   const [searchText, setSearchText] = useState<string>("");
   const [category, setCategory] = useState<string>("all");
-  const [isShowingDetail, setIsShowingDetail] = useState<boolean>(true);
+  const [isShowingDetail, setIsShowingDetail] = useState<boolean>(false);
   const [preferences, setPreferences] = useState<WindowManagementPreferences>(DEFAULT_WINDOW_PREFERENCES);
+  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const { push } = useNavigation();
 
   useEffect(() => {
     void getWindowPreferences().then(setPreferences);
@@ -304,39 +305,12 @@ export default function WindowManagementCommand() {
       subtitle={item.description}
       icon={getActionIcon(item)}
       accessories={[
+        { tag: { value: item.category.toUpperCase() } },
         ...(item.shortcut ? [{ text: item.shortcut }] : [])
       ]}
       detail={
         <List.Item.Detail
           markdown={getActionMarkdown(item, preferences)}
-          metadata={
-            <List.Item.Detail.Metadata>
-              <List.Item.Detail.Metadata.Label title="动作标识" text={item.id} icon={Icon.Key} />
-              <List.Item.Detail.Metadata.Label title="所属分类" text={item.category.toUpperCase()} icon={Icon.List} />
-              {item.shortcut && (
-                <List.Item.Detail.Metadata.Label title="全局热键" text={item.shortcut} icon={Icon.Terminal} />
-              )}
-              <List.Item.Detail.Metadata.Separator />
-              <List.Item.Detail.Metadata.TagList title="执行引擎">
-                <List.Item.Detail.Metadata.TagList.Item
-                  text="Accessibility (AXUIElement)"
-                  color={Color.Purple}
-                />
-                <List.Item.Detail.Metadata.TagList.Item
-                  text="Menu Bar / Dock WorkArea 自动避让"
-                  color={Color.Orange}
-                />
-                <List.Item.Detail.Metadata.TagList.Item
-                  text="UIAccess rcWork"
-                  color={Color.Green}
-                />
-                <List.Item.Detail.Metadata.TagList.Item
-                  text={`Gap: ${preferences.innerGap}/${preferences.outerGap}px`}
-                  color={Color.Blue}
-                />
-              </List.Item.Detail.Metadata.TagList>
-            </List.Item.Detail.Metadata>
-          }
         />
       }
       actions={
@@ -346,23 +320,23 @@ export default function WindowManagementCommand() {
             icon={Icon.Checkmark}
             onAction={() => handleExecute(item)}
           />
-          <Action
-            title={isShowingDetail ? "关闭右侧详情分栏" : "展开右侧详情分栏"}
-            icon={Icon.SidebarRight}
-            shortcut={{ modifiers: ["ctrl"], key: "b" }}
-            onAction={() => setIsShowingDetail(!isShowingDetail)}
-          />
           <Action.Push
             title="偏好设置与边距微调"
             target={<WindowPreferencesForm onSaved={setPreferences} />}
             icon={Icon.Gear}
-            shortcut={{ modifiers: ["ctrl"], key: "p" }}
+            shortcut={{ modifiers: ["ctrl"], key: "return" }}
           />
           <Action.Push
             title="全屏查看动作详情与底层说明"
             target={<WindowActionDetailView action={item} preferences={preferences} />}
             icon={Icon.Eye}
             shortcut={{ modifiers: ["ctrl"], key: "d" }}
+          />
+          <Action
+            title={isShowingDetail ? "关闭右侧详情分栏" : "展开右侧详情分栏"}
+            icon={Icon.SidebarRight}
+            shortcut={{ modifiers: ["ctrl"], key: "b" }}
+            onAction={() => setIsShowingDetail(!isShowingDetail)}
           />
           {item.shortcut && (
             <Action.CopyToClipboard
@@ -382,6 +356,21 @@ export default function WindowManagementCommand() {
       isShowingDetail={isShowingDetail}
       searchBarPlaceholder="搜索窗口管理动作 (如: 左半屏, 最大化, 居中, 60%, 快捷键)..."
       onSearchTextChange={setSearchText}
+      onSelectionChange={setSelectedId}
+      filterBar={{
+        summaryText: `窗口栅格调度动作 ${filtered.length} 项 · 分屏边距 ${preferences.innerGap}px / ${preferences.outerGap}px · Win32 WorkArea 自动避让`,
+        actions: [
+          {
+            id: "prefs",
+            label: "边距偏好设置",
+            title: "边距偏好设置",
+            style: "secondary",
+            onAction: () => {
+              push(<WindowPreferencesForm onSaved={setPreferences} />);
+            }
+          }
+        ]
+      }}
       searchBarAccessory={
         <List.Dropdown
           tooltip="按分类筛选"

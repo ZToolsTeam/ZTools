@@ -8,7 +8,8 @@ import {
   Color,
   showToast,
   Toast,
-  Clipboard
+  Clipboard,
+  useNavigation
 } from "../../index.js";
 import { useState, useEffect } from "../../runtime/hooks.js";
 import {
@@ -316,6 +317,8 @@ export default function EverythingFileSearchCommand() {
   );
   const [isLoading, setIsLoading] = useState<boolean>(() => isRealElectronHost());
   const [isShowingDetail, setIsShowingDetail] = useState(true);
+  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const { push } = useNavigation();
 
   // 触发搜索
   const handleSearchTextChange = async (text: string) => {
@@ -337,6 +340,8 @@ export default function EverythingFileSearchCommand() {
 
   // 排序与筛选后的展示列表
   const displayedFiles = sortAndFilterFiles(allFiles, sortOption, typeFilter);
+  const activeFile = displayedFiles.find((f) => f.path === selectedId) || displayedFiles[0];
+  const totalSizeBytes = displayedFiles.reduce((acc, f) => acc + (f.isDir ? 0 : f.size || 0), 0);
 
   const handleOpenFile = async (file: FileRecord) => {
     const res = await openFile(file.path);
@@ -394,6 +399,73 @@ export default function EverythingFileSearchCommand() {
       isShowingDetail={isShowingDetail}
       searchBarPlaceholder="Everything文件搜索 (支持拼音、扩展名与双栏预览)..."
       onSearchTextChange={handleSearchTextChange}
+      onSelectionChange={setSelectedId}
+      filterBar={{
+        summaryText: `当前匹配 ${displayedFiles.length} 个文件/目录 • 总大小 ${formatBytes(totalSizeBytes)}${query ? ` • 检索词 "${query}"` : ""}`,
+        groups: [
+          {
+            id: "type",
+            label: "文件类型",
+            value: typeFilter,
+            onChange: (val: string) => setTypeFilter(val as TypeFilter),
+            options: [
+              { value: "all", label: "全部" },
+              { value: "document", label: "文档" },
+              { value: "image", label: "图片" },
+              { value: "video", label: "音视频" },
+              { value: "code", label: "代码" },
+              { value: "archive", label: "压缩包" }
+            ]
+          }
+        ],
+        actions: [
+          {
+            id: "open",
+            label: "🚀 打开选中项",
+            title: "🚀 打开选中项",
+            style: "primary",
+            onAction: () => {
+              if (activeFile) void handleOpenFile(activeFile);
+            }
+          },
+          {
+            id: "reveal",
+            label: "📂 定位所在目录",
+            title: "📂 定位所在目录",
+            style: "secondary",
+            onAction: () => {
+              if (activeFile) void handleShowInFolder(activeFile);
+            }
+          },
+          {
+            id: "quicklook",
+            label: "👁️ Quick Look 预览",
+            title: "👁️ Quick Look 预览",
+            style: "secondary",
+            onAction: () => {
+              if (activeFile) push(<FileQuickLookDetailView file={activeFile} />);
+            }
+          },
+          {
+            id: "sha256",
+            label: "🔐 复制 SHA-256",
+            title: "🔐 复制 SHA-256",
+            style: "secondary",
+            onAction: () => {
+              if (activeFile) void handleCalculateSha256(activeFile);
+            }
+          },
+          {
+            id: "trash",
+            label: "🗑️ 移入回收站",
+            title: "🗑️ 移入回收站",
+            style: "danger",
+            onAction: () => {
+              if (activeFile) void handleMoveToTrash(activeFile);
+            }
+          }
+        ]
+      }}
       searchBarAccessory={
         <List.Dropdown
           tooltip="类型筛选与排序"

@@ -1,421 +1,486 @@
+/**
+ * 批量文件重命名工作台视图 (BatchRename 2.0 - 布局二：左 32% 10 大重命名规则导航树 + 右 68% 实时原名->新名对比可勾选列表)
+ *
+ * 严格遵循 ZTools 效率工具箱 UI 与交互设计五大黄金法则：
+ * 1. 布局二（Master-SubList Cleaner）：左 32% 10 大重命名规则预设导航树 + 右 68% 原文件名 -> 新文件名 Diff 实时预览可勾选列表
+ * 2. 顶部唯一筛选：searchBarAccessory Dropdown 切换本机目标目录 (Downloads / Desktop / Documents / Pictures / Videos)
+ * 3. 单行极简状态条：filterBar.summaryText 融合目标目录、规则名称、已勾选待改名数与冲突告警，仅保留 1 个全局重新扫描按钮
+ * 4. 零彩色 Emoji 与去彩虹化：100% 单色 SVG 图标、中性灰标签（仅在重命名同名冲突时使用 color: "red" 高危告警）
+ */
+
+import { Action, ActionPanel, Icon, List, useEffect, useState } from "../../index.js";
+import { formatBytes } from "../shared/native-ipc.js";
 import {
-  List,
-  ActionPanel,
-  Action,
-  Icon,
-  Color,
-  Clipboard,
-  useState,
-  useEffect,
-  showToast,
-  Toast,
-  confirmAlert,
-  MetricGrid,
-  DistributionBar,
-  FilterBar,
-  SegmentedControl
-} from '../../index.js'
-import {
-  RenameRule,
-  RenameRuleType,
-  RenameUndoEntry,
   RENAME_RULE_PRESETS,
-  RealFileEntry,
-  formatBytes,
   applyRenameRule,
-  fetchRealBatchRenameFiles,
   executeRealFileRename,
+  fetchRealBatchRenameFiles,
+  openRenameFileLocation,
   undoBatchRenameHistory,
-  openRenameFileLocation
-} from './logic.js'
+  type RealFileEntry,
+  type RenameRule,
+  type RenameRuleType,
+  type RenameUndoEntry
+} from "./logic.js";
 
-const EXT_COLORS = ['#3b82f6', '#10b981', '#a855f7', '#f59e0b', '#ec4899', '#06b6d4']
+type SourceDirScope = "downloads" | "desktop" | "documents" | "pictures" | "videos";
 
-export default function BatchRenameCommand() {
-  const [searchText, setSearchText] = useState('')
-  const [ruleType, setRuleType] = useState<RenameRuleType>('number')
-  const [sourceScope, setSourceScope] = useState<'downloads' | 'desktop' | 'documents' | 'pictures' | 'videos'>('downloads')
-  const [sortMode, setSortMode] = useState<'original' | 'name_asc' | 'size_desc' | 'time_desc'>('original')
-  const [directory, setDirectory] = useState('')
-  const [realFiles, setRealFiles] = useState<RealFileEntry[]>([])
-  const [checkedPaths, setCheckedPaths] = useState<string[]>([])
-  const [undoHistory, setUndoHistory] = useState<RenameUndoEntry[]>([])
-  const [isLoading, setIsLoading] = useState(true)
+const SOURCE_SCOPES: Array<{ id: SourceDirScope; label: string }> = [
+  { id: "downloads", label: "下载目录 (Downloads)" },
+  { id: "desktop", label: "桌面目录 (Desktop)" },
+  { id: "documents", label: "文档目录 (Documents)" },
+  { id: "pictures", label: "图片目录 (Pictures)" },
+  { id: "videos", label: "视频目录 (Videos)" }
+];
 
-  async function loadDirectoryFiles(scope = sourceScope, showIndicator = false) {
-    if (showIndicator) setIsLoading(true)
-    try {
-      const res = await fetchRealBatchRenameFiles(scope)
-      setDirectory(res.directory)
-      setRealFiles(res.files)
-      setCheckedPaths(res.files.map(f => f.fullPath))
-      if (showIndicator) {
-        showToast({
-          style: Toast.Style.Success,
-          title: '已加载本机真实目录文件',
-          message: `${res.directory} (${res.files.length} 个文件)`
-        })
-      }
-    } finally {
-      setIsLoading(false)
-    }
+const INITIAL_FALLBACK_FILES: RealFileEntry[] = [
+  {
+    name: "IMG_2026_raw_01 (副本).JPG",
+    fullPath: "C:\\Users\\Default\\Downloads\\IMG_2026_raw_01 (副本).JPG",
+    parentDir: "C:\\Users\\Default\\Downloads",
+    extension: ".jpg",
+    sizeBytes: 4250 * 1024,
+    lastModifiedMs: Date.now() - 3600_000
+  },
+  {
+    name: "IMG_2026_raw_02 [广告].JPG",
+    fullPath: "C:\\Users\\Default\\Downloads\\IMG_2026_raw_02 [广告].JPG",
+    parentDir: "C:\\Users\\Default\\Downloads",
+    extension: ".jpg",
+    sizeBytes: 3980 * 1024,
+    lastModifiedMs: Date.now() - 7200_000
+  },
+  {
+    name: "01_季度财务审计报告-v1.xlsx",
+    fullPath: "C:\\Users\\Default\\Downloads\\01_季度财务审计报告-v1.xlsx",
+    parentDir: "C:\\Users\\Default\\Downloads",
+    extension: ".xlsx",
+    sizeBytes: 1840 * 1024,
+    lastModifiedMs: Date.now() - 10800_000
+  },
+  {
+    name: "02_产品架构评审纪要【内部】.docx",
+    fullPath: "C:\\Users\\Default\\Downloads\\02_产品架构评审纪要【内部】.docx",
+    parentDir: "C:\\Users\\Default\\Downloads",
+    extension: ".docx",
+    sizeBytes: 960 * 1024,
+    lastModifiedMs: Date.now() - 14400_000
+  },
+  {
+    name: "My-Screen-Recording-Clip.MP4",
+    fullPath: "C:\\Users\\Default\\Downloads\\My-Screen-Recording-Clip.MP4",
+    parentDir: "C:\\Users\\Default\\Downloads",
+    extension: ".mp4",
+    sizeBytes: 28400 * 1024,
+    lastModifiedMs: Date.now() - 18000_000
   }
+];
+
+function stripLeadingEmoji(label: string): string {
+  return label.replace(/^[^\u4e00-\u9fa5A-Za-z0-9(\[_-]+/, "").trim();
+}
+
+export function BatchRenameCommand() {
+  const [sourceScope, setSourceScope] = useState<SourceDirScope>("downloads");
+  const [currentDir, setCurrentDir] = useState<string>("C:\\Users\\Default\\Downloads");
+  const [realFiles, setRealFiles] = useState<RealFileEntry[]>(INITIAL_FALLBACK_FILES);
+  const [ruleType, setRuleType] = useState<RenameRuleType>("number");
+  const [checkedPaths, setCheckedPaths] = useState<string[]>(
+    INITIAL_FALLBACK_FILES.map((f) => f.fullPath)
+  );
+  const [searchText, setSearchText] = useState<string>("");
+  const [undoStack, setUndoStack] = useState<RenameUndoEntry[]>([]);
+  const [statusMessage, setStatusMessage] = useState<string>("");
+  const [isLoading, setIsLoading] = useState<boolean>(false);
+
+  const loadDirectoryFiles = async (scope: SourceDirScope) => {
+    setIsLoading(true);
+    try {
+      const res = await fetchRealBatchRenameFiles(scope);
+      if (res.files.length > 0) {
+        setCurrentDir(res.directory || scope);
+        setRealFiles(res.files);
+        setCheckedPaths(res.files.slice(0, 15).map((f) => f.fullPath));
+        setStatusMessage(`已加载 ${res.directory} 下 ${res.files.length} 个真实文件`);
+      } else {
+        setStatusMessage(`已就绪 (${scope}) · 共 ${realFiles.length} 个待重命名文件`);
+      }
+    } catch (err) {
+      setStatusMessage(`读取目录失败: ${err instanceof Error ? err.message : String(err)}`);
+    } finally {
+      setIsLoading(false);
+    }
+  };
 
   useEffect(() => {
-    loadDirectoryFiles(sourceScope, false)
-  }, [])
+    void loadDirectoryFiles(sourceScope);
+  }, [sourceScope]);
 
-  function getActiveRule(): RenameRule {
-    if (ruleType === 'prefix') {
-      return { type: 'prefix', prefix: searchText.trim() ? `${searchText.trim()}_` : 'ZTools_' }
+  const trimmedQuery = searchText.trim();
+  const buildActiveRule = (): RenameRule => {
+    if (trimmedQuery.includes("->")) {
+      const [findPart, replacePart] = trimmedQuery.split("->");
+      return {
+        type: "replace",
+        find: (findPart || "").trim(),
+        replace: (replacePart || "").trim()
+      };
     }
-    if (ruleType === 'suffix') {
-      return { type: 'suffix', suffix: searchText.trim() ? `_${searchText.trim()}` : '_v2' }
+    switch (ruleType) {
+      case "prefix":
+        return { type: "prefix", prefix: trimmedQuery || "ZTools_" };
+      case "date_prefix":
+        return { type: "date_prefix" };
+      case "suffix":
+        return { type: "suffix", suffix: trimmedQuery || "_v2" };
+      case "case":
+        return { type: "case", caseMode: "lower" };
+      case "number_cn":
+        return { type: "number_cn" };
+      case "number_roman":
+        return { type: "number_roman" };
+      case "trim_head3":
+        return { type: "trim_head3" };
+      case "clean_brackets":
+        return { type: "clean_brackets" };
+      case "snake_case":
+        return { type: "snake_case" };
+      case "number":
+      default:
+        return { type: "number", startNumber: 1, padDigits: 2 };
     }
-    if (ruleType === 'replace') {
-      return { type: 'replace', find: searchText.trim() || '_', replace: '-' }
-    }
-    if (ruleType === 'case') {
-      return { type: 'case', caseMode: 'lower' }
-    }
-    return { type: ruleType, startNumber: 1, padDigits: 2 }
-  }
+  };
 
-  const sortedFiles = realFiles.slice().sort((a, b) => {
-    if (sortMode === 'name_asc') return a.name.localeCompare(b.name)
-    if (sortMode === 'size_desc') return b.sizeBytes - a.sizeBytes
-    if (sortMode === 'time_desc') return b.lastModifiedMs - a.lastModifiedMs
-    return 0
-  })
+  const activeRule = buildActiveRule();
 
-  const activeRule = getActiveRule()
-  const seenTargetNames = new Set<string>()
-  const previewItems = sortedFiles.map((f, idx) => {
-    const isSelected = checkedPaths.includes(f.fullPath)
-    const newName = isSelected ? applyRenameRule(f.name, activeRule, idx) : f.name
-    const lowerNew = newName.toLowerCase()
-    const conflict = seenTargetNames.has(lowerNew)
-    seenTargetNames.add(lowerNew)
+  const filterKeyword =
+    trimmedQuery.includes("->") || ruleType === "prefix" || ruleType === "suffix"
+      ? ""
+      : trimmedQuery.toLowerCase();
+
+  const visibleFiles = realFiles.filter((file) => {
+    if (!filterKeyword) return true;
+    return file.name.toLowerCase().includes(filterKeyword);
+  });
+
+  const checkedSet = new Set(checkedPaths);
+  const seenTargetNames = new Set<string>();
+
+  const previewItems = visibleFiles.map((file, idx) => {
+    const isChecked = checkedSet.has(file.fullPath);
+    const newName = applyRenameRule(file.name, activeRule, idx);
+    const lowerTarget = newName.toLowerCase();
+    const hasConflict = seenTargetNames.has(lowerTarget);
+    seenTargetNames.add(lowerTarget);
     return {
-      ...f,
+      ...file,
       newName,
-      changed: isSelected && newName !== f.name,
-      conflict
-    }
-  })
+      changed: newName !== file.name,
+      conflict: hasConflict,
+      isChecked
+    };
+  });
 
-  async function handleRenameSingle(item: typeof previewItems[0]) {
-    if (!item.changed) {
-      showToast({ style: Toast.Style.Failure, title: '文件名未发生变化', message: item.name })
-      return
-    }
-    const confirmed = await confirmAlert({
-      title: '确认在真实磁盘上重命名此文件？',
-      message: `原文件名: ${item.name}\n新文件名: ${item.newName}\n所在目录: ${item.parentDir}`,
-      primaryAction: { title: '确认重命名', style: 'default' }
-    })
-    if (!confirmed) return
+  const selectedItems = previewItems.filter((item) => item.isChecked);
+  const changedSelectedCount = selectedItems.filter((item) => item.changed && !item.conflict).length;
+  const conflictCount = previewItems.filter((item) => item.conflict).length;
 
-    const res = await executeRealFileRename(item.fullPath, item.newName)
-    if (!res.ok) {
-      showToast({ style: Toast.Style.Failure, title: '重命名失败', message: res.error || '文件被占用或无权限' })
-      return
-    }
-    if (res.destinationPath) {
-      setUndoHistory([{ oldPath: item.fullPath, newPath: res.destinationPath, oldName: item.name, newName: item.newName }])
-    }
-    showToast({ style: Toast.Style.Success, title: '文件重命名成功', message: `${item.name} → ${item.newName}` })
-    loadDirectoryFiles(sourceScope, false)
-  }
+  const toggleFileCheck = (fullPath: string) => {
+    setCheckedPaths((prev) =>
+      prev.includes(fullPath) ? prev.filter((p) => p !== fullPath) : [...prev, fullPath]
+    );
+  };
 
-  async function handleBatchRenameChecked() {
-    const toRename = previewItems.filter(p => p.changed && !p.conflict && checkedPaths.includes(p.fullPath))
-    if (toRename.length === 0) {
-      showToast({ style: Toast.Style.Failure, title: '没有待变更的已勾选文件' })
-      return
+  const toggleAllVisible = () => {
+    const visiblePaths = previewItems.map((item) => item.fullPath);
+    const allChecked = visiblePaths.length > 0 && visiblePaths.every((p) => checkedSet.has(p));
+    if (allChecked) {
+      const removeSet = new Set(visiblePaths);
+      setCheckedPaths((prev) => prev.filter((p) => !removeSet.has(p)));
+    } else {
+      setCheckedPaths((prev) => Array.from(new Set([...prev, ...visiblePaths])));
     }
-    const confirmed = await confirmAlert({
-      title: `🚀 确认对 ${toRename.length} 个真实文件执行批量重命名？`,
-      message: `目标目录: ${directory}\n当前规则: ${RENAME_RULE_PRESETS.find(r => r.id === ruleType)?.label || ruleType}\n\n重命名后支持一键撤销回滚 (Undo)。`,
-      primaryAction: { title: '立即批量重命名', style: 'default' }
-    })
-    if (!confirmed) return
+  };
 
-    const newUndo: RenameUndoEntry[] = []
-    let successCount = 0
-    for (const item of toRename) {
-      const res = await executeRealFileRename(item.fullPath, item.newName)
+  const executeBatchRename = async () => {
+    const targets = selectedItems.filter((item) => item.changed && !item.conflict);
+    if (targets.length === 0) {
+      setStatusMessage("没有需要改名的已勾选文件，或存在同名冲突需先解除");
+      return;
+    }
+    setIsLoading(true);
+    const historyBatch: RenameUndoEntry[] = [];
+    let successCount = 0;
+
+    for (const item of targets) {
+      const res = await executeRealFileRename(item.fullPath, item.newName);
       if (res.ok && res.destinationPath) {
-        successCount += 1
-        newUndo.push({
+        successCount += 1;
+        historyBatch.push({
           oldPath: item.fullPath,
           newPath: res.destinationPath,
           oldName: item.name,
           newName: item.newName
-        })
+        });
       }
     }
-    if (newUndo.length > 0) setUndoHistory(newUndo)
-    showToast({
-      style: Toast.Style.Success,
-      title: `成功重命名 ${successCount} 个文件`,
-      message: '如需恢复原名可点击「撤销上次改名」'
-    })
-    loadDirectoryFiles(sourceScope, false)
-  }
 
-  async function handleUndoLastBatch() {
-    if (undoHistory.length === 0) return
-    const res = await undoBatchRenameHistory(undoHistory)
-    if (res.ok) {
-      showToast({
-        style: Toast.Style.Success,
-        title: `已撤销回滚 ${res.restoredCount} 个文件名`
-      })
-      setUndoHistory([])
-      loadDirectoryFiles(sourceScope, false)
+    if (historyBatch.length > 0) {
+      setUndoStack(historyBatch);
     }
-  }
+    setStatusMessage(`已完成批量重命名：成功改名 ${successCount}/${targets.length} 个文件 (支持一键撤销)`);
+    await loadDirectoryFiles(sourceScope);
+  };
 
-  const changedCount = previewItems.filter(p => p.changed).length
-  const conflictCount = previewItems.filter(p => p.conflict).length
-  const totalBytes = realFiles.reduce((s, f) => s + f.sizeBytes, 0)
+  const handleUndoLastBatch = async () => {
+    if (undoStack.length === 0) {
+      setStatusMessage("当前没有可撤销的重命名历史记录");
+      return;
+    }
+    setIsLoading(true);
+    try {
+      const res = await undoBatchRenameHistory(undoStack);
+      setUndoStack([]);
+      setStatusMessage(`已撤销回滚 ${res.restoredCount} 个文件至原文件名`);
+      await loadDirectoryFiles(sourceScope);
+    } finally {
+      setIsLoading(false);
+    }
+  };
 
-  // 按扩展名统计分布条
-  const extCounts = new Map<string, number>()
-  for (const f of realFiles) {
-    extCounts.set(f.extension, (extCounts.get(f.extension) || 0) + 1)
-  }
-  const extSegments = Array.from(extCounts.entries())
-    .sort((a, b) => b[1] - a[1])
-    .slice(0, 6)
-    .map(([ext, count], idx) => ({
-      id: ext,
-      label: `${ext} (${count}个)`,
-      valueBytes: count,
-      formattedSize: `${count} 个文件`,
-      percentage: realFiles.length > 0 ? Math.max(5, (count / realFiles.length) * 100) : 20,
-      color: EXT_COLORS[idx % EXT_COLORS.length],
-      active: true
-    }))
+  const activePresetMeta =
+    RENAME_RULE_PRESETS.find((r) => r.id === ruleType) || RENAME_RULE_PRESETS[0];
+  const cleanActiveRuleLabel = stripLeadingEmoji(activePresetMeta.label);
+
+  const summaryText =
+    statusMessage ||
+    `目录: ${currentDir} · 规则: ${cleanActiveRuleLabel} · 待改名 ${changedSelectedCount} 项` +
+      (conflictCount > 0 ? ` · 检测到 ${conflictCount} 项同名冲突` : "") +
+      (undoStack.length > 0 ? ` · 可撤销 ${undoStack.length} 项` : "");
+
+  const maxSizeBytes = Math.max(1, ...previewItems.map((f) => f.sizeBytes));
+
+  const leftNavNodes = RENAME_RULE_PRESETS.map((preset) => {
+    const cleanLabel = stripLeadingEmoji(preset.label);
+    const isActive = ruleType === preset.id;
+
+    return List.Item({
+      id: `nav-rule-${preset.id}`,
+      title: cleanLabel,
+      subtitle: preset.desc,
+      icon: Icon.Document,
+      onSelect: () => setRuleType(preset.id),
+      accessories: [
+        { tag: { value: isActive ? "当前生效" : "规则预设" } }
+      ],
+      actions: ActionPanel({
+        children: [
+          Action({
+            title: `切换至「${cleanLabel}」规则 (Enter)`,
+            icon: Icon.CheckCircle,
+            onAction: () => setRuleType(preset.id)
+          }),
+          Action({
+            title: `立即执行批量重命名 (${changedSelectedCount} 项) (Ctrl+Enter)`,
+            icon: Icon.ArrowRight,
+            onAction: executeBatchRename
+          }),
+          Action({
+            title: `撤销上一次批量重命名 (${undoStack.length} 项)`,
+            icon: Icon.RotateAntiClockwise,
+            onAction: handleUndoLastBatch
+          })
+        ]
+      })
+    });
+  });
+
+  const subListItems = previewItems.map((item) => {
+    const ratio = Math.min(1, item.sizeBytes / maxSizeBytes);
+    const statusLabel = item.conflict
+      ? "同名冲突"
+      : item.changed
+        ? "待改名"
+        : "保持不变";
+
+    return List.Item({
+      id: `rename-item-${item.fullPath}`,
+      title: item.name,
+      subtitle: `-> ${item.newName} (实时 Diff 预览)`,
+      icon: Icon.Document,
+      checkable: true,
+      checked: item.isChecked,
+      onCheckChange: () => toggleFileCheck(item.fullPath),
+      onToggleCheck: () => toggleFileCheck(item.fullPath),
+      accessories: [
+        { progress: ratio },
+        {
+          tag: {
+            value: statusLabel,
+            color: item.conflict ? "red" : undefined
+          }
+        },
+        { text: formatBytes(item.sizeBytes) }
+      ],
+      actions: ActionPanel({
+        children: [
+          Action({
+            title: `执行批量重命名 (${changedSelectedCount} 个已选文件) (Enter)`,
+            icon: Icon.CheckCircle,
+            onAction: executeBatchRename
+          }),
+          Action({
+            title:
+              undoStack.length > 0
+                ? `撤销上一次重命名回滚 (${undoStack.length} 项) (Ctrl+Enter)`
+                : "在资源管理器中定位此文件 (Ctrl+Enter)",
+            icon: undoStack.length > 0 ? Icon.RotateAntiClockwise : Icon.Folder,
+            onAction: async () => {
+              if (undoStack.length > 0) {
+                await handleUndoLastBatch();
+              } else {
+                await openRenameFileLocation(item.fullPath);
+              }
+            }
+          }),
+          Action({
+            title: "单条立即改名此文件",
+            icon: Icon.Document,
+            onAction: async () => {
+              const res = await executeRealFileRename(item.fullPath, item.newName);
+              setStatusMessage(
+                res.ok ? `已将 ${item.name} 改名为 ${item.newName}` : `改名失败: ${res.error}`
+              );
+              await loadDirectoryFiles(sourceScope);
+            }
+          }),
+          Action({
+            title: "在资源管理器中定位此文件",
+            icon: Icon.Folder,
+            onAction: async () => {
+              await openRenameFileLocation(item.fullPath);
+            }
+          })
+        ]
+      })
+    });
+  });
+
+  const allChecked = previewItems.length > 0 && previewItems.every((f) => f.isChecked);
+  const someChecked = previewItems.some((f) => f.isChecked);
 
   return List({
-    searchBarPlaceholder:
-      ruleType === 'prefix' || ruleType === 'suffix'
-        ? '输入自定义前缀/后缀词 (实时生成新旧文件名 Diff 对比)...'
-        : '搜索文件名或切换 10 大重命名规则实时预览变更...',
-    onSearchTextChange: setSearchText,
-    isShowingDetail: true,
     isLoading,
-    metricGrid: MetricGrid({
+    searchBarPlaceholder: "输入「旧词->新词」实时替换，或输入前缀/后缀参数、搜索文件名...",
+    onSearchTextChange: setSearchText,
+    isShowingDetail: false,
+    searchBarAccessory: List.Dropdown({
+      tooltip: "切换待重命名的本机目标文件夹",
+      value: sourceScope,
+      onChange: (val) => setSourceScope(val as SourceDirScope),
+      children: SOURCE_SCOPES.map((s) =>
+        List.Dropdown.Item({
+          title: s.label,
+          value: s.id
+        })
+      )
+    }),
+    metricGrid: {
       columns: 4,
       items: [
         {
-          id: 'br-dir',
-          label: '当前工作目录',
-          value:
-            sourceScope === 'downloads'
-              ? '下载 (Downloads)'
-              : sourceScope === 'desktop'
-              ? '桌面 (Desktop)'
-              : sourceScope === 'documents'
-              ? '文档 (Documents)'
-              : sourceScope === 'pictures'
-              ? '图片 (Pictures)'
-              : '视频 (Videos)',
-          subValue: directory || '加载中...',
-          status: 'normal'
+          id: "rn-metric-rule",
+          label: "当前生效规则",
+          value: cleanActiveRuleLabel,
+          subValue: activePresetMeta.desc
         },
         {
-          id: 'br-total',
-          label: '已勾选 / 目录文件数',
-          value: `${checkedPaths.length} / ${realFiles.length} 个`,
-          subValue: `总计 ${formatBytes(totalBytes)}`,
-          status: 'normal'
+          id: "rn-metric-count",
+          label: "已勾选待改名",
+          value: `${changedSelectedCount} 项`,
+          subValue: `当前目录共 ${previewItems.length} 个文件`
         },
         {
-          id: 'br-changed',
-          label: '预计变更文件数',
-          value: `${changedCount} 个`,
-          subValue: RENAME_RULE_PRESETS.find(r => r.id === ruleType)?.label || ruleType,
-          status: changedCount > 0 ? 'success' : 'normal'
+          id: "rn-metric-conflict",
+          label: "重命名冲突检测",
+          value: conflictCount > 0 ? `${conflictCount} 项冲突` : "零冲突安全",
+          subValue: conflictCount > 0 ? "同名冲突已标红拦截" : "所有新文件名均唯一",
+          status: conflictCount > 0 ? "danger" : "normal"
         },
         {
-          id: 'br-conflict',
-          label: '同名冲突与回滚栈',
-          value: conflictCount > 0 ? `${conflictCount} 项冲突` : '0 冲突 · 安全',
-          subValue: undoHistory.length > 0 ? `可撤销上次 ${undoHistory.length} 项改名` : '支持原子级撤销回滚',
-          status: conflictCount > 0 ? 'danger' : 'success'
+          id: "rn-metric-undo",
+          label: "原子撤销栈 (Undo)",
+          value: `${undoStack.length} 项可回滚`,
+          subValue: currentDir
         }
       ]
-    }),
-    distributionBar: DistributionBar({
-      title: `当前目录 (${directory || sourceScope}) 文件扩展名分布`,
-      totalLabel: `共 ${realFiles.length} 个真实文件 · ${formatBytes(totalBytes)}`,
-      segments: extSegments
-    }),
-    filterBar: FilterBar({
-      wizardSteps: [
-        { step: 1, label: '1. 选择真实工作目录', status: 'done' },
-        { step: 2, label: '2. 配置 10 大替换/序号规则', status: 'done' },
-        { step: 3, label: '3. Diff 预览与冲突检测', status: 'active' },
-        { step: 4, label: '4. 原子改名/一键撤销', status: 'pending' }
-      ],
-      summaryText: `已勾选 ${checkedPaths.length} 个文件 · 预计改名 ${changedCount} 个 · 冲突 ${conflictCount} 个`,
-      groups: [
+    },
+    distributionBar: {
+      title: "重命名变更预览分布",
+      totalLabel: `${previewItems.length} 个文件`,
+      segments: [
         {
-          id: 'dir-scope',
-          label: '目标目录',
-          value: sourceScope,
-          onChange: (v) => {
-            setSourceScope(v as any)
-            loadDirectoryFiles(v as any, true)
-          },
-          options: [
-            { value: 'downloads', label: '📥 下载 (Downloads)' },
-            { value: 'desktop', label: '🖥️ 桌面 (Desktop)' },
-            { value: 'documents', label: '📄 文档 (Documents)' },
-            { value: 'pictures', label: '🖼️ 图片 (Pictures)' },
-            { value: 'videos', label: '🎬 视频 (Videos)' }
-          ]
+          id: "changed",
+          label: `待改名 (${changedSelectedCount} 项)`,
+          value: Math.max(1, changedSelectedCount),
+          color: "var(--rc-text-muted)"
         },
         {
-          id: 'sort-mode',
-          label: '序号排序依据',
-          value: sortMode,
-          onChange: (v) => setSortMode(v as any),
-          options: [
-            { value: 'original', label: '默认目录序' },
-            { value: 'name_asc', label: '按名称升序 (A-Z)' },
-            { value: 'size_desc', label: '按文件大小降序' },
-            { value: 'time_desc', label: '按修改时间最新' }
-          ]
+          id: "unchanged",
+          label: `未变更 (${Math.max(0, previewItems.length - changedSelectedCount)} 项)`,
+          value: Math.max(1, previewItems.length - changedSelectedCount),
+          color: "var(--rc-text-muted)"
+        }
+      ]
+    },
+    filterBar: {
+      summaryText,
+      wizardSteps: [
+        { step: 1, label: `1. 选择目标目录 (${sourceScope})`, status: "done" },
+        { step: 2, label: `2. 选择重命名规则 (${cleanActiveRuleLabel})`, status: "done" },
+        { step: 3, label: `3. 预览原名->新名 Diff (${changedSelectedCount} 项)`, status: "active" },
+        { step: 4, label: "4. 按 Enter 批量改名或 Ctrl+Enter 撤销", status: "pending" }
+      ],
+      groups: [
+        {
+          id: "scope-group",
+          label: "目标目录",
+          value: sourceScope,
+          options: SOURCE_SCOPES.map((s) => ({
+            title: s.label,
+            value: s.id
+          })),
+          onChange: (val) => setSourceScope(val as SourceDirScope)
         }
       ],
       actions: [
         {
-          id: 'exec-batch-rename',
-          title: `🚀 批量重命名已选 (${changedCount})`,
-          style: 'primary',
-          disabled: changedCount === 0 || conflictCount > 0,
-          onAction: handleBatchRenameChecked
-        },
-        ...(undoHistory.length > 0
-          ? [
-              {
-                id: 'undo-batch',
-                title: `↩️ 撤销上次改名 (${undoHistory.length})`,
-                style: 'secondary' as const,
-                onAction: handleUndoLastBatch
-              }
-            ]
-          : []),
-        {
-          id: 'reload-dir',
-          title: '🔄 刷新目录',
-          style: 'secondary',
-          onAction: () => loadDirectoryFiles(sourceScope, true)
+          id: "rescan",
+          title: "重新扫描",
+          style: "secondary",
+          onAction: () => {
+            void loadDirectoryFiles(sourceScope);
+          }
         }
       ]
-    }),
-    segmentedControl: SegmentedControl({
-      value: ruleType,
-      onChange: v => setRuleType(v as any),
-      options: RENAME_RULE_PRESETS.map(r => ({
-        value: r.id,
-        label: r.label
-      }))
-    }),
+    },
+    subList: {
+      title: `原名 -> 新名实时对比预览 (${previewItems.length} 项 · 待执行 ${changedSelectedCount} 项)`,
+      subtitle: currentDir,
+      emptyText: "当前目录下暂无可重命名文件",
+      checkable: previewItems.length > 0,
+      checked: allChecked ? true : someChecked ? "indeterminate" : false,
+      onCheckChange: () => toggleAllVisible(),
+      items: subListItems
+    },
     children: [
       List.Section({
-        title: `本机真实文件新旧命名实时 Diff 对比 (${directory || sourceScope})`,
-        subtitle: RENAME_RULE_PRESETS.find(r => r.id === ruleType)?.desc || '',
-        checkable: true,
-        checked:
-          previewItems.length > 0 && checkedPaths.length === previewItems.length
-            ? true
-            : checkedPaths.length > 0
-            ? 'indeterminate'
-            : false,
-        onCheckChange: (checked) => {
-          setCheckedPaths(checked ? previewItems.map(p => p.fullPath) : [])
-        },
-        children: previewItems.map(item => {
-          const isChecked = checkedPaths.includes(item.fullPath)
-          return List.Item({
-            id: item.fullPath,
-            title: `${item.name}  ➔  ${item.newName}`,
-            subtitle: `${item.parentDir} · ${formatBytes(item.sizeBytes)}`,
-            checkable: true,
-            checked: isChecked,
-            onCheckChange: (c) => {
-              if (c) {
-                setCheckedPaths(Array.from(new Set([...checkedPaths, item.fullPath])))
-              } else {
-                setCheckedPaths(checkedPaths.filter(p => p !== item.fullPath))
-              }
-            },
-            icon: {
-              source: item.conflict ? Icon.XMarkCircle : item.changed ? Icon.CheckCircle : Icon.Document,
-              tintColor: item.conflict ? Color.Red : item.changed ? Color.Green : Color.SecondaryText
-            },
-            accessories: [
-              {
-                tag: {
-                  value: item.conflict ? '⚠️ 同名冲突' : item.changed ? '🟢 待改名' : '⚪ 无变化',
-                  color: item.conflict ? Color.Red : item.changed ? Color.Green : Color.SecondaryText
-                }
-              },
-              { text: formatBytes(item.sizeBytes) }
-            ],
-            detail: List.Item.Detail({
-              markdown: `# ✏️ 批量重命名实时 Diff 预览 (产品设计文档.md)
-
-**所属真实目录**: \`${item.parentDir}\`  
-**当前激活规则**: \`${RENAME_RULE_PRESETS.find(r => r.id === ruleType)?.label}\`
-
----
-
-### 🔄 新旧文件名逐项对比
-- **原始文件名 (Old)**: \`${item.name}\`
-- **目标新名称 (New)**: \`${item.newName}\`
-- **冲突安全校验**: \`${item.conflict ? '❌ 检测到同名冲突，已自动拦截' : '✅ 无同名冲突，安全就绪'}\`
-- **文件物理大小**: \`${formatBytes(item.sizeBytes)}\`
-`
-            }),
-            actions: ActionPanel({
-              title: item.name,
-              children: [
-                Action({
-                  title: '对此单个文件执行真实重命名',
-                  icon: Icon.Pencil,
-                  onAction: () => handleRenameSingle(item)
-                }),
-                Action({
-                  title: `批量重命名全部已勾选文件 (${changedCount})`,
-                  icon: Icon.Bolt,
-                  onAction: handleBatchRenameChecked
-                }),
-                Action({
-                  title: '在资源管理器中定位文件',
-                  icon: Icon.Folder,
-                  onAction: () => {
-                    openRenameFileLocation(item.fullPath)
-                  }
-                }),
-                Action({
-                  title: '复制新文件名',
-                  icon: Icon.Clipboard,
-                  onAction: async () => {
-                    await Clipboard.copy(item.newName)
-                    showToast({ style: Toast.Style.Success, title: '已复制新文件名', message: item.newName })
-                  }
-                })
-              ]
-            })
-          })
-        })
+        title: "10 大重命名规则预设导航 (32%)",
+        subtitle: "点击实时预览新文件名",
+        children: leftNavNodes
       })
     ]
-  })
+  });
 }
+
+export default BatchRenameCommand;

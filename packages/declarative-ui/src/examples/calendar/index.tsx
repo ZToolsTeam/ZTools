@@ -351,6 +351,7 @@ export function CalendarCommand() {
   );
   const [searchText, setSearchText] = useState("");
   const [scope, setScope] = useState<CalendarFilterScope>("all");
+  const [selectedId, setSelectedId] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(realHost);
   const { push } = useNavigation();
 
@@ -401,12 +402,116 @@ export function CalendarCommand() {
     );
   };
 
+  const activeEvent = useMemo(
+    () => displayedEvents.find((e) => e.id === selectedId) || displayedEvents[0] || null,
+    [displayedEvents, selectedId]
+  );
+
+  const nextMeeting = useMemo(
+    () => events.find((e) => Boolean(e.conferenceUrl)) || events[0] || null,
+    [events]
+  );
+
   return (
     <List
       isLoading={isLoading}
       isShowingDetail={true}
       searchBarPlaceholder="搜索近期日程、视频会议或创建新事件 (My Schedule & Conferences)..."
       onSearchTextChange={setSearchText}
+      onSelectionChange={setSelectedId}
+      filterBar={{
+        summaryText: nextMeeting
+          ? `📅 日程安排 • 共 ${events.length} 场日程 (视频会议 ${events.filter((e) => Boolean(e.conferenceUrl)).length} 场) | 下一场: ${nextMeeting.title} (${nextMeeting.startTime})`
+          : `📅 日程安排 • 当前共 ${events.length} 场日程`,
+        groups: [
+          {
+            id: "calendar-scope",
+            value: scope,
+            onChange: (val) => setScope(val as CalendarFilterScope),
+            options: [
+              { title: "全部日程", value: "all", count: events.length },
+              { title: "即将开始", value: "upcoming", count: events.length },
+              {
+                title: "视频会议",
+                value: "meetings",
+                count: events.filter((e) => Boolean(e.conferenceUrl)).length
+              }
+            ]
+          }
+        ],
+        actions: [
+          {
+            id: "join-video-meeting",
+            label: "📹 一键加入视频会议",
+            title: "📹 一键加入视频会议",
+            style: "primary",
+            onAction: async () => {
+              const targetEvt =
+                activeEvent?.conferenceUrl
+                  ? activeEvent
+                  : displayedEvents.find((e) => Boolean(e.conferenceUrl)) || activeEvent;
+              if (!targetEvt || !targetEvt.conferenceUrl) {
+                await showToast(Toast.Style.Failure, "当前选中日程未包含在线视频会议链接");
+                return;
+              }
+              const res = await callHostTransport("shell_open_external", {
+                url: targetEvt.conferenceUrl
+              });
+              if (!res.ok) {
+                await Clipboard.copy(targetEvt.conferenceUrl);
+              }
+              await showToast(
+                Toast.Style.Success,
+                `正在加入会议: ${targetEvt.title}`,
+                targetEvt.conferenceUrl
+              );
+            }
+          },
+          {
+            id: "create-calendar-event",
+            label: "➕ 新建日程事件...",
+            title: "➕ 新建日程事件...",
+            style: "primary",
+            onAction: () => {
+              push(
+                <CreateCalendarEventForm
+                  onCreated={(created) => setEvents((prev) => [created, ...prev])}
+                />
+              );
+            }
+          },
+          {
+            id: "export-all-ics",
+            label: "📤 导出全部日程 (.ics)",
+            title: "📤 导出全部日程 (.ics)",
+            style: "secondary",
+            onAction: handleExportIcs
+          },
+          {
+            id: "copy-event-summary",
+            label: "📋 复制日程摘要",
+            title: "📋 复制日程摘要",
+            style: "secondary",
+            onAction: async () => {
+              if (!activeEvent) return;
+              const summary = `${activeEvent.title} (${activeEvent.startTime}-${activeEvent.endTime}) @ ${activeEvent.location}`;
+              await Clipboard.copy(summary);
+              await showToast(Toast.Style.Success, "已复制日程摘要", summary);
+            }
+          },
+          {
+            id: "delete-selected-event",
+            label: "🗑️ 删除选中日程",
+            title: "🗑️ 删除选中日程",
+            style: "danger",
+            onAction: async () => {
+              if (activeEvent) {
+                await handleDelete(activeEvent);
+              }
+            }
+          }
+        ]
+      }}
       searchBarAccessory={
         <List.Dropdown
           tooltip="筛选日程范围"

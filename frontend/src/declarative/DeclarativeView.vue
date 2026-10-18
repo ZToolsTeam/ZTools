@@ -38,8 +38,10 @@
         ref="listRendererRef"
         :descriptor="currentDescriptor"
         :initialSnapshot="initialSnapshot"
+        :activeActions="activeActions"
         @select="onItemSelected"
         @trigger-primary="triggerPrimaryAction"
+        @trigger-action="executeAction"
         @action-panel-change="onActionPanelChange"
         @open-action-panel="openActionPanel"
       />
@@ -49,6 +51,9 @@
         v-else-if="currentDescriptor?.type === 'Detail'"
         ref="detailRendererRef"
         :descriptor="currentDescriptor"
+        :actions="activeActions"
+        @trigger-action="executeAction"
+        @open-action-panel="openActionPanel"
       />
 
       <!-- 3. Form 视图 -->
@@ -56,7 +61,11 @@
         v-else-if="currentDescriptor?.type === 'Form'"
         ref="formRendererRef"
         :descriptor="currentDescriptor"
+        :actions="activeActions"
+        :canCancel="canGoBack"
         @submit="handleFormSubmit"
+        @cancel="handleBack"
+        @trigger-action="executeAction"
       />
 
       <!-- 空状态 -->
@@ -69,31 +78,13 @@
       </div>
     </div>
 
-    <!-- 底部 Fluent 风格快捷栏 -->
-    <div class="px-4 py-2 border-t border-[var(--rc-border)] flex items-center justify-between bg-[var(--rc-surface-subtle)] text-xs text-[var(--rc-text-muted)]">
-      <!-- 左侧：主要 Action 提示与分栏切换 -->
-      <div class="flex items-center gap-4">
-        <div
-          v-if="primaryAction"
-          class="flex items-center gap-1.5 cursor-pointer hover:text-[var(--rc-text-primary)] transition-colors"
-          title="执行首要动作 (Enter)"
-          @click="executeAction(primaryAction)"
-        >
-          <span class="text-[var(--rc-text-primary)] font-medium">{{ primaryAction.props?.title }}</span>
-          <ShortcutKeys combo="Enter" />
-        </div>
-        <div
-          v-if="toggleDetailAction"
-          class="flex items-center gap-1.5 cursor-pointer hover:text-[var(--rc-text-primary)] transition-colors"
-          :title="toggleDetailAction.props?.title"
-          @click="executeAction(toggleDetailAction)"
-        >
-          <span class="text-[var(--rc-text-secondary)]">{{ toggleDetailAction.props?.title }}</span>
-          <ShortcutKeys combo="Ctrl+D" />
-        </div>
+    <!-- 底部 Fluent / Raycast 风格三段式快捷动作栏 -->
+    <div class="px-4 py-2 border-t border-[var(--rc-border)] flex items-center justify-between gap-3 bg-[var(--rc-surface-subtle)] text-xs text-[var(--rc-text-muted)]">
+      <!-- 左侧：返回导航与分栏切换 -->
+      <div class="flex items-center gap-3 min-w-0">
         <div
           v-if="canGoBack"
-          class="flex items-center gap-1 text-[var(--rc-text-muted)] cursor-pointer hover:text-[var(--rc-text-primary)] transition-colors"
+          class="flex items-center gap-1 text-[var(--rc-text-muted)] cursor-pointer hover:text-[var(--rc-text-primary)] transition-colors flex-shrink-0"
           title="后退上一级 (Esc)"
           @click="handleBack"
         >
@@ -102,7 +93,7 @@
         </div>
         <div
           v-else-if="!isPopout"
-          class="flex items-center gap-1 text-[var(--rc-text-muted)] cursor-pointer hover:text-[var(--rc-text-primary)] transition-colors"
+          class="flex items-center gap-1 text-[var(--rc-text-muted)] cursor-pointer hover:text-[var(--rc-text-primary)] transition-colors flex-shrink-0"
           title="返回工作台 (Esc)"
           @click="emit('exit')"
         >
@@ -111,21 +102,54 @@
         </div>
         <div
           v-else
-          class="flex items-center gap-1.5 text-[var(--rc-success)] font-mono text-[11px]"
+          class="flex items-center gap-1.5 text-[var(--rc-success)] font-mono text-[11px] flex-shrink-0"
           title="独立常驻模式下按 Esc 仅清空搜索框，防止误触关闭盯盘窗口"
         >
           <span class="inline-block w-1.5 h-1.5 rounded-full bg-[var(--rc-success)]"></span>
           <span>独立常驻防误关 (Esc 仅清过滤)</span>
         </div>
+
+        <div
+          v-if="toggleDetailAction"
+          class="flex items-center gap-1.5 cursor-pointer hover:text-[var(--rc-text-primary)] transition-colors flex-shrink-0"
+          :title="cleanActionTitle(toggleDetailAction.props?.title)"
+          @click="executeAction(toggleDetailAction)"
+        >
+          <span class="text-[var(--rc-text-secondary)]">{{ cleanActionTitle(toggleDetailAction.props?.title) }}</span>
+          <ShortcutKeys combo="Ctrl+D" />
+        </div>
       </div>
 
-      <!-- 右侧：ActionPanel 呼出按钮 -->
-      <div class="flex items-center gap-2">
+      <!-- 右侧：对齐 Raycast「主动作 (Enter) + 次动作 (Ctrl+Enter) + 动作面板 (Ctrl+K)」三段式直观按钮栏 -->
+      <div class="flex items-center gap-2 flex-shrink-0">
         <button
-          class="flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-[var(--rc-surface-hover)] hover:bg-[var(--rc-surface-hover)] text-[var(--rc-text-secondary)] border border-[var(--rc-border)] transition-colors cursor-pointer"
+          v-if="primaryAction"
+          type="button"
+          class="flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-[var(--rc-accent-subtle)] hover:brightness-110 text-[var(--rc-accent-text)] border border-[var(--rc-border-highlight)] font-medium transition-all cursor-pointer"
+          title="执行首要动作 (Enter)"
+          @click="executeAction(primaryAction)"
+        >
+          <span class="truncate max-w-[180px]">{{ cleanActionTitle(primaryAction.props?.title) }}</span>
+          <ShortcutKeys combo="Enter" />
+        </button>
+
+        <button
+          v-if="secondaryAction"
+          type="button"
+          class="flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-[var(--rc-surface-hover)] hover:bg-[var(--rc-surface-active)] text-[var(--rc-text-primary)] border border-[var(--rc-border)] transition-all cursor-pointer"
+          :title="`执行次要动作 (${secondaryShortcutCombo})`"
+          @click="executeAction(secondaryAction)"
+        >
+          <span class="truncate max-w-[160px]">{{ cleanActionTitle(secondaryAction.props?.title) }}</span>
+          <ShortcutKeys :combo="secondaryShortcutCombo" />
+        </button>
+
+        <button
+          type="button"
+          class="flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-[var(--rc-surface-hover)] hover:bg-[var(--rc-surface-active)] text-[var(--rc-text-secondary)] border border-[var(--rc-border)] transition-colors cursor-pointer"
           @click="toggleActionPanel"
         >
-          <span>动作面板</span>
+          <span>动作面板{{ activeActions.length > 0 ? ` (${activeActions.length})` : '' }}</span>
           <ShortcutKeys combo="Ctrl+K" />
         </button>
       </div>
@@ -292,17 +316,21 @@ const activeActions = computed(() => {
 
   let panel = null;
 
-  // 1. 如果是 List，优先看当前选中 item 的 actions，再看首项或 list 级 actions
+  // 1. 如果是 List，优先看当前选中 item 的 actions，再合并 list 级 actions
+  let fallbackPanel = null;
   if (desc.type === "List") {
     const item = currentSelectedItem.value || findFirstItem(desc);
     panel = item?.props?.actions || desc.props?.actions;
+    if (item?.props?.actions && desc.props?.actions && item.props.actions !== desc.props.actions) {
+      fallbackPanel = desc.props.actions;
+    }
   } else if (desc.type === "Detail") {
     panel = desc.props?.actions;
   } else if (desc.type === "Form") {
     panel = desc.props?.actions;
   }
 
-  if (!panel) return [];
+  if (!panel && !fallbackPanel) return [];
 
   // 展开 ActionPanel.Section 与 Action，并保留所属 Section 标题
   const flat = [];
@@ -318,17 +346,65 @@ const activeActions = computed(() => {
         extract(child, currentTitle);
       }
     } else if (node.type && (node.type === "Action" || node.type.startsWith("Action."))) {
-      flat.push({ ...node, _sectionTitle: sectionTitle });
+      if (!flat.some((existing) => existing.props?.title === node.props?.title && existing.type === node.type)) {
+        flat.push({ ...node, _sectionTitle: sectionTitle });
+      }
     }
   }
 
   extract(panel);
+  if (fallbackPanel) {
+    extract(fallbackPanel, "全局操作");
+  }
   return flat;
 });
+
+function cleanActionTitle(title) {
+  if (!title) return "";
+  return String(title)
+    .replace(/[\u{1F300}-\u{1FAFF}\u{2600}-\u{27BF}\u{FE0F}]/gu, "")
+    .replace(/\s+/g, " ")
+    .trim();
+}
 
 // 首要 Action (列表第一项动作)
 const primaryAction = computed(() => {
   return activeActions.value[0] || null;
+});
+
+// 次要 Action (对齐 Raycast 右下角第二顺位动作 Ctrl+Enter)
+const secondaryAction = computed(() => {
+  return activeActions.value[1] || null;
+});
+
+const MODIFIER_COMBO = {
+  cmd: "Ctrl",
+  command: "Ctrl",
+  meta: "Ctrl",
+  ctrl: "Ctrl",
+  control: "Ctrl",
+  opt: "Alt",
+  option: "Alt",
+  alt: "Alt",
+  shift: "Shift"
+};
+
+function formatActionShortcut(action) {
+  const shortcut = action?.props?.shortcut;
+  if (!shortcut || typeof shortcut.key !== "string" || !shortcut.key.trim()) return "";
+  const modifiers = Array.isArray(shortcut.modifiers) ? shortcut.modifiers : [];
+  const parts = [];
+  for (const mod of modifiers) {
+    const name = MODIFIER_COMBO[String(mod).toLowerCase()];
+    if (name && !parts.includes(name)) parts.push(name);
+  }
+  parts.push(shortcut.key.trim());
+  return parts.join("+");
+}
+
+const secondaryShortcutCombo = computed(() => {
+  if (!secondaryAction.value) return "Ctrl+Enter";
+  return formatActionShortcut(secondaryAction.value) || "Ctrl+Enter";
 });
 
 // 详情切换 Action (例如 Ctrl+D 切换分栏预览)
@@ -516,6 +592,14 @@ useKeymap(KEYMAP_SCOPES.DECLARATIVE, {
     toggleActionPanel();
     return true;
   },
+  'Ctrl+Enter': () => {
+    if (actionPanelVisible.value) return false;
+    if (secondaryAction.value) {
+      executeAction(secondaryAction.value);
+      return true;
+    }
+    return false;
+  },
   'Ctrl+D': () => {
     if (actionPanelVisible.value) return false;
     if (toggleDetailAction.value) {
@@ -610,8 +694,60 @@ onUnmounted(() => {
   }
 });
 
-// 根节点键盘事件统一委托至调度器
+function normalizeShortcutKeyName(k) {
+  const lower = String(k || "").trim().toLowerCase();
+  if (lower === "return") return "enter";
+  if (lower === "del") return "delete";
+  if (lower === "up") return "arrowup";
+  if (lower === "down") return "arrowdown";
+  if (lower === "left") return "arrowleft";
+  if (lower === "right") return "arrowright";
+  return lower;
+}
+
+function matchActionShortcut(e, shortcut) {
+  if (!shortcut || typeof shortcut.key !== "string" || !shortcut.key.trim()) return false;
+  const mods = Array.isArray(shortcut.modifiers)
+    ? shortcut.modifiers.map((m) => String(m).toLowerCase())
+    : [];
+  const wantCtrl = mods.some((m) => m === "cmd" || m === "command" || m === "meta" || m === "ctrl" || m === "control");
+  const wantAlt = mods.some((m) => m === "opt" || m === "option" || m === "alt");
+  const wantShift = mods.some((m) => m === "shift");
+
+  const hasCtrl = Boolean(e.ctrlKey || e.metaKey);
+  const hasAlt = Boolean(e.altKey);
+  const hasShift = Boolean(e.shiftKey);
+
+  if (wantCtrl !== hasCtrl || wantAlt !== hasAlt || wantShift !== hasShift) {
+    return false;
+  }
+  const targetKey = normalizeShortcutKeyName(shortcut.key);
+  const eventKey = normalizeShortcutKeyName(e.key);
+  return targetKey === eventKey;
+}
+
+// 根节点键盘事件统一委托至调度器，并支持免开面板直接触发 ActionPanel 中声明的快捷键
 function handleGlobalKeyDown(e) {
+  if (!actionPanelVisible.value && (e.ctrlKey || e.metaKey || e.altKey)) {
+    const keyLower = String(e.key || "").toLowerCase();
+    // 保留标准输入框内全选/复制/粘贴/剪切给原生输入框，除非当前不在文本输入或按的是其它组合键
+    const inTextInput =
+      e.target &&
+      (e.target.tagName === "INPUT" || e.target.tagName === "TEXTAREA") &&
+      Boolean(e.target.value);
+    const isNativeEditCombo =
+      !e.shiftKey && !e.altKey && (keyLower === "a" || keyLower === "v" || keyLower === "x" || keyLower === "z");
+
+    if (!(inTextInput && isNativeEditCombo)) {
+      const matched = activeActions.value.find((act) => matchActionShortcut(e, act.props?.shortcut));
+      if (matched) {
+        e.preventDefault();
+        e.stopPropagation();
+        executeAction(matched);
+        return;
+      }
+    }
+  }
   dispatchKeyEvent(e);
 }
 

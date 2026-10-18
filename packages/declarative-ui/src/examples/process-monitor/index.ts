@@ -10,9 +10,7 @@ import {
   useRef,
   showToast,
   Toast,
-  confirmAlert,
-  MetricGrid,
-  SegmentedControl
+  confirmAlert
 } from '../../index.js'
 import {
   DLL_PLUGIN_NAME,
@@ -40,11 +38,14 @@ import {
 
 import { isRealElectronHost } from '../shared/native-ipc.js'
 
+export * from './logic.js'
+
+type ProcessViewFilter = 'memory' | 'cpu' | 'high-load' | 'system' | 'user' | 'name' | 'pid'
+
 export default function ProcessMonitorCommand() {
   const inRealHost = isRealElectronHost()
   const [searchText, setSearchText] = useState('')
-  const [tab, setTab] = useState<'all' | 'user' | 'system'>('all')
-  const [sortBy, setSortBy] = useState<ProcessSortKey>('cpu')
+  const [viewFilter, setViewFilter] = useState<ProcessViewFilter>('memory')
   const [autoRefresh, setAutoRefresh] = useState<boolean>(true)
   const [processes, setProcesses] = useState<ProcessItem[]>(inRealHost ? [] : getMockProcesses())
   const [systemInfo, setSystemInfo] = useState<SystemInfoData>(
@@ -81,7 +82,6 @@ export default function ProcessMonitorCommand() {
   const refreshingRef = useRef(false)
   const detailLoadedRef = useRef<Record<number, boolean>>({})
 
-  // 加载单个或焦点进程的详情与关联服务
   async function loadProcessExtra(proc: ProcessItem, showNotice = false) {
     if (!proc || proc.pid <= 0) return
     try {
@@ -109,7 +109,6 @@ export default function ProcessMonitorCommand() {
     }
   }
 
-  // 刷新全量数据（带互斥防抖锁）
   async function refreshData(showIndicator = false) {
     if (refreshingRef.current) return
     refreshingRef.current = true
@@ -118,7 +117,6 @@ export default function ProcessMonitorCommand() {
       const [newProcs, newSys] = await Promise.all([fetchProcesses(), fetchSystemInfo()])
       if (newProcs.length > 0) {
         setProcesses(newProcs)
-        // 为焦点高占用进程与首个 svchost 进程预取真实详情与托管服务
         const focus = getResourceFocus(newProcs)
         const candidates: ProcessItem[] = []
         if (focus.topCpu) candidates.push(focus.topCpu)
@@ -143,7 +141,6 @@ export default function ProcessMonitorCommand() {
     }
   }
 
-  // 挂载时拉取一次真实数据，并在开启自动刷新时每 2 秒轮询更新
   useEffect(() => {
     void refreshData(false)
     if (!autoRefresh) return undefined
@@ -168,7 +165,6 @@ export default function ProcessMonitorCommand() {
     })
   }
 
-  // 处理结束进程操作（支持强制 / 进程树 / 平缓三种模式 + 高危系统核心防护弹窗）
   async function handleTerminate(proc: ProcessItem, mode: ProcessTerminateMode = 'force') {
     const isCritical =
       CRITICAL_PROCESS_NAMES.some((c) => c.toLowerCase() === proc.name.toLowerCase()) ||
@@ -176,15 +172,15 @@ export default function ProcessMonitorCommand() {
       proc.pid === 4
     const modeLabel =
       mode === 'tree'
-        ? '终结完整进程树 (taskkill /F /T)'
+        ? '强制结束进程树 (taskkill /F /T)'
         : mode === 'graceful'
         ? '平缓关闭进程 (taskkill /PID)'
-        : '强制终止进程 (taskkill /F)'
+        : '结束进程 (taskkill /F)'
 
     if (isCritical) {
       const confirmed = await confirmAlert({
-        title: `⚠️ 高危拦截：终止系统核心进程 [${proc.name}]`,
-        message: `进程 PID: ${proc.pid} 属于 Windows 核心系统服务。强制终止将导致会话崩溃、黑屏或蓝屏死机 (BSOD)。\n\n确定依然执行 [${modeLabel}]？`,
+        title: `高危拦截：终止系统关键进程 [${proc.name}]`,
+        message: `进程 PID: ${proc.pid} 属于系统核心服务。强制终止将导致会话异常或系统崩溃。\n\n确定依然执行 [${modeLabel}]？`,
         primaryAction: {
           title: '强制终止',
           style: 'destructive'
@@ -229,7 +225,6 @@ export default function ProcessMonitorCommand() {
     void refreshData(false)
   }
 
-  // 在 Explorer 中定位进程路径
   async function handleOpenLocation(proc: ProcessItem) {
     const targetPath = details[proc.pid]?.path || proc.path
     if (!targetPath) {
@@ -256,257 +251,138 @@ export default function ProcessMonitorCommand() {
     }
   }
 
-  const focusSummary = getResourceFocus(processes)
+  const tab: 'all' | 'user' | 'system' =
+    viewFilter === 'system' ? 'system' : viewFilter === 'user' ? 'user' : 'all'
+  const sortBy: ProcessSortKey =
+    viewFilter === 'cpu' || viewFilter === 'high-load'
+      ? 'cpu'
+      : viewFilter === 'name'
+      ? 'name'
+      : viewFilter === 'pid'
+      ? 'pid'
+      : 'memory'
 
-  // 生成右侧 Markdown 进程深度画像
-  function renderDetailMarkdown(proc: ProcessItem) {
-    const detail = details[proc.pid]
-    const procServices = services[proc.pid] || []
-    const isCritical =
-      CRITICAL_PROCESS_NAMES.some((c) => c.toLowerCase() === proc.name.toLowerCase()) ||
-      proc.pid === 0 ||
-      proc.pid === 4
-    const memBytes = proc.workingSetBytes ?? proc.memoryBytes ?? 0
-    const privBytes = detail?.privateBytes ?? proc.privateBytes ?? Math.round(memBytes * 0.85)
-    const peakBytes = detail?.peakMemoryBytes ?? Math.round(memBytes * 1.15)
-    const handles = detail?.handleCount ?? proc.handleCount ?? 0
-    const cmdLine = detail?.commandLine || proc.commandLine || proc.path || proc.name
-    const company = detail?.companyName || proc.companyName || (proc.isSystem ? 'Microsoft Corporation' : '第三方应用厂商')
-    const signer =
-      detail?.signerName || (proc.isSystem ? 'Microsoft Windows 官方组件' : '未验证 / 本地可执行程序')
-
-    let servicesBlock = ''
-    if (procServices.length > 0) {
-      servicesBlock =
-        `\n\n### 📦 宿主托管的 Windows 服务 (${procServices.length})\n` +
-        procServices
-          .map(
-            (s) =>
-              `- **${s.displayName}** (\`${s.serviceName || s.name}\`) · 状态: \`${
-                s.status === 4 || s.status === 'Running' ? '运行中 (Running)' : s.status
-              }\` · 启动: \`${s.startType || 'Auto'}\``
-          )
-          .join('\n')
-    }
-
-    const focusBlock =
-      focusSummary.topCpu || focusSummary.topMemory
-        ? `\n\n### 🎯 全局资源焦点 (Resource Focus)\n` +
-          `- **CPU 峰值进程**: \`${focusSummary.topCpu?.name || '-'}\` (PID: ${focusSummary.topCpu?.pid ?? '-'} · \`${(focusSummary.topCpu?.cpuPercent ?? 0).toFixed(1)}%\`)\n` +
-          `- **内存峰值进程**: \`${focusSummary.topMemory?.name || '-'}\` (PID: ${focusSummary.topMemory?.pid ?? '-'} · \`${formatBytes(focusSummary.topMemory?.workingSetBytes ?? focusSummary.topMemory?.memoryBytes ?? 0)}\`)`
-        : ''
-
-    const safetyNote = isCritical
-      ? `> [!CAUTION]\n> **核心系统级进程**：此进程由系统直接调用与调度，严禁随意结束，否则会导致系统崩溃或异常。`
-      : proc.isSystem
-      ? `> [!NOTE]\n> **系统后台服务**：属于 Windows 后台标准任务或宿主服务模块。`
-      : `> [!TIP]\n> **标准用户应用**：属于用户手动启动的应用，占用资源高时可直接结束或终结进程树。`
-
-    return `
-# ${proc.name} (PID: ${proc.pid})
-
-**文件路径**: \`${detail?.path || proc.path || '未提供或受系统保护'}\`
-**启动命令行**: \`${cmdLine}\`
-
----
-
-### 📊 性能与资源指标
-- **CPU 瞬时占用率**: \`${proc.cpuPercent.toFixed(1)}%\`
-- **工作集物理内存 (Working Set)**: \`${formatBytes(memBytes)}\`
-- **专用提交内存 (Private Bytes)**: \`${formatBytes(privBytes)}\`
-- **峰值物理内存 (Peak Working Set)**: \`${formatBytes(peakBytes)}\`
-- **活动线程数 / 句柄数**: \`${proc.threadCount} 线程\` / \`${handles > 0 ? `${handles} 句柄` : '实时采集中'}\`
-- **父进程 PID (PPID)**: \`${proc.parentPid}\`
-- **厂商与数字签名**: \`${company}\` · \`${signer}\`${detail?.startTime ? `\n- **启动时间**: \`${detail.startTime}\`` : ''}
-${servicesBlock}${focusBlock}
-
----
-
-### 🛡️ 安全级别与管控建议
-${safetyNote}
-`
-  }
-
-  const filtered = filterProcesses(processes, searchText, tab, sortBy)
-  const userCount = processes.filter((p) => !p.isSystem).length
-  const systemCount = processes.filter((p) => p.isSystem).length
+  const baseFiltered = filterProcesses(processes, searchText, tab, sortBy)
+  const filtered =
+    viewFilter === 'high-load'
+      ? baseFiltered.filter(
+          (p) => p.cpuPercent >= 5 || (p.workingSetBytes ?? p.memoryBytes ?? 0) >= 250 * 1024 * 1024
+        )
+      : baseFiltered
 
   const totalMem = systemInfo.totalMemoryBytes || systemInfo.totalMemory || 0
   const availMem = systemInfo.availableMemoryBytes || systemInfo.availableMemory || 0
   const usedMem = systemInfo.usedMemoryBytes || Math.max(0, totalMem - availMem)
-  const memPercent = systemInfo.memoryUsagePercent || (totalMem > 0 ? Math.round((usedMem / totalMem) * 100) : 0)
+  const memPercent =
+    systemInfo.memoryUsagePercent || (totalMem > 0 ? Math.round((usedMem / totalMem) * 100) : 0)
   const sumProcCpu = Number(processes.reduce((acc, p) => acc + p.cpuPercent, 0).toFixed(1))
   const totalCpuPercent = Math.min(
     100,
     Math.round(sumProcCpu > 0 ? sumProcCpu : systemInfo.cpuUsagePercent || 0)
   )
 
-  const topCpuLabel = focusSummary.topCpu
-    ? `焦点: ${focusSummary.topCpu.name} (${focusSummary.topCpu.cpuPercent.toFixed(1)}%)`
-    : `${systemInfo.cpuCoreCount || 16} 核`
-  const topMemLabel = focusSummary.topMemory
-    ? `最大: ${focusSummary.topMemory.name} (${formatBytes(focusSummary.topMemory.workingSetBytes ?? focusSummary.topMemory.memoryBytes)})`
-    : `${formatBytes(usedMem)} / ${formatBytes(totalMem)}`
-
-  const sortLabelMap: Record<ProcessSortKey, string> = {
-    cpu: 'CPU 优先',
-    memory: '内存优先',
-    name: '名称 A-Z',
-    pid: 'PID 升序'
-  }
+  const maxMemBytes = Math.max(
+    1,
+    ...processes.map((p) => p.workingSetBytes ?? p.memoryBytes ?? 0)
+  )
 
   return List({
-    navigationTitle: `进程监控 (${DLL_PLUGIN_NAME}) · ${autoRefresh ? '实时刷新 2s' : '已暂停'}`,
-    searchBarPlaceholder: '搜索进程名称、PID、路径、厂商或描述 (支持多维排序与服务穿透)...',
+    navigationTitle: `进程监控 (${DLL_PLUGIN_NAME})`,
+    searchBarPlaceholder: '搜索进程名称、PID、完整路径、厂商或服务描述...',
     onSearchTextChange: setSearchText,
-    isShowingDetail: true,
+    isShowingDetail: false,
     isLoading,
     searchBarAccessory: List.Dropdown({
-      tooltip: '选择进程排序维度',
-      value: sortBy,
-      onChange: (val: string) => setSortBy(val as ProcessSortKey),
+      tooltip: '切换进程筛选与排序维度',
+      value: viewFilter,
+      onChange: (val: string) => setViewFilter(val as ProcessViewFilter),
       children: [
-        List.Dropdown.Item({ title: '🔥 按 CPU 占用排序 (CPU 优先)', value: 'cpu' }),
-        List.Dropdown.Item({ title: '🧠 按物理内存排序 (内存优先)', value: 'memory' }),
-        List.Dropdown.Item({ title: '🔤 按进程名称排序 (名称 A-Z)', value: 'name' }),
-        List.Dropdown.Item({ title: '🔢 按进程 PID 排序 (PID 升序)', value: 'pid' })
+        List.Dropdown.Item({ title: '全部进程 · 按内存排序 (Memory)', value: 'memory' }),
+        List.Dropdown.Item({ title: '全部进程 · 按 CPU 排序 (CPU)', value: 'cpu' }),
+        List.Dropdown.Item({ title: '仅高负载进程 (High Load)', value: 'high-load' }),
+        List.Dropdown.Item({ title: '系统关键服务 (System Services)', value: 'system' }),
+        List.Dropdown.Item({ title: '用户应用程序 (User Apps)', value: 'user' }),
+        List.Dropdown.Item({ title: '按进程名称排序 (Name A-Z)', value: 'name' }),
+        List.Dropdown.Item({ title: '按进程 PID 升序 (PID)', value: 'pid' })
       ]
     }),
-    metricGrid: MetricGrid({
-      columns: 4,
-      items: [
+    filterBar: {
+      summaryText: `CPU 负载 ${totalCpuPercent}% · 物理内存已用 ${formatBytes(usedMem)} / ${formatBytes(totalMem)} (${memPercent}%) · 活动进程 ${filtered.length} 个`,
+      actions: [
         {
-          id: 'metric-cpu',
-          label: '全局 CPU 负载',
-          value: `${totalCpuPercent}%`,
-          subValue: topCpuLabel,
-          progress: totalCpuPercent,
-          status: totalCpuPercent > 80 ? 'danger' : totalCpuPercent > 50 ? 'warning' : 'success'
+          id: 'refresh-list',
+          label: '刷新列表',
+          title: '刷新列表',
+          style: 'secondary',
+          onAction: () => {
+            void refreshData(true)
+          }
         },
         {
-          id: 'metric-mem',
-          label: '物理内存已用',
-          value: `${memPercent}%`,
-          subValue: topMemLabel,
-          progress: memPercent,
-          status: memPercent > 85 ? 'danger' : memPercent > 70 ? 'warning' : 'success'
-        },
-        {
-          id: 'metric-proc',
-          label: '活动进程总数',
-          value: `${processes.length}`,
-          subValue: `用户 ${userCount} · 系统 ${systemCount}`,
-          status: 'normal'
-        },
-        {
-          id: 'metric-threads',
-          label: '系统并发线程',
-          value: `${processes.reduce((sum, p) => sum + p.threadCount, 0)}`,
-          subValue: `${autoRefresh ? '⏱️ 2s 自动刷新' : '⏸️ 刷新已暂停'} · ${sortLabelMap[sortBy]}`,
-          status: 'normal'
+          id: 'toggle-auto-refresh',
+          label: autoRefresh ? '暂停自动刷新' : '开启自动刷新',
+          title: autoRefresh ? '暂停自动刷新' : '开启自动刷新',
+          style: 'secondary',
+          onAction: () => {
+            handleToggleAutoRefresh()
+          }
         }
       ]
-    }),
-    segmentedControl: SegmentedControl({
-      value: tab,
-      onChange: (v) => setTab(v as any),
-      options: [
-        { value: 'all', label: '全部进程', badge: processes.length },
-        { value: 'user', label: '用户应用', badge: userCount },
-        { value: 'system', label: '系统核心', badge: systemCount }
-      ]
-    }),
+    },
     children: [
       List.Section({
-        title: `系统活动进程快照 (${filtered.length}/${processes.length}) · 排序: ${sortLabelMap[sortBy]}`,
+        title: `活动进程列表 (${filtered.length})`,
         children: filtered.map((proc) => {
           const isCrit =
             CRITICAL_PROCESS_NAMES.some((c) => c.toLowerCase() === proc.name.toLowerCase()) ||
             proc.pid === 0 ||
             proc.pid === 4
           const memVal = proc.workingSetBytes ?? proc.memoryBytes ?? 0
+          const memRatio = Math.min(100, Math.max(4, Math.round((memVal / maxMemBytes) * 100)))
+          const isHighLoad = proc.cpuPercent >= 25 || memVal >= 1024 * 1024 * 1024
+          const procServices = services[proc.pid] || []
+          const svcHint = procServices.length > 0 ? ` · 托管服务 ${procServices.length} 项` : ''
+
           return List.Item({
             id: String(proc.pid),
-            title: proc.name,
-            subtitle: `PID: ${proc.pid} · 线程: ${proc.threadCount}${proc.path ? ` · ${proc.path}` : ''}`,
-            icon: {
-              source: proc.isSystem ? Icon.Gear : Icon.Bolt,
-              tintColor: isCrit ? Color.Red : proc.isSystem ? Color.SecondaryText : Color.Blue
-            },
+            title: `${proc.name} [PID: ${proc.pid}]`,
+            subtitle: `PID: ${proc.pid} · 线程 ${proc.threadCount}${svcHint} · ${proc.path || proc.commandLine || '系统内核进程'}`,
+            icon: isCrit ? Icon.Shield : isHighLoad ? Icon.ExclamationMark : Icon.Terminal,
             accessories: [
-              {
-                tag: {
-                  value: proc.isSystem ? (isCrit ? '系统核心' : '系统服务') : '用户应用',
-                  color: proc.isSystem ? (isCrit ? Color.Red : Color.SecondaryText) : Color.Blue
-                }
-              },
-              {
-                tag: {
-                  value: `CPU ${proc.cpuPercent.toFixed(1)}%`,
-                  color:
-                    proc.cpuPercent > 25
-                      ? Color.Red
-                      : proc.cpuPercent > 5
-                      ? Color.Orange
-                      : Color.SecondaryText
-                }
-              },
-              {
-                text: formatBytes(memVal)
-              }
+              { progress: { value: memRatio } },
+              ...(isCrit
+                ? [{ tag: { value: '系统关键' } }]
+                : isHighLoad
+                ? [{ tag: { value: '高负载', color: Color.Red } }]
+                : [{ tag: { value: proc.isSystem ? '系统服务' : '用户应用' } }]),
+              { text: `CPU ${proc.cpuPercent.toFixed(1)}%` },
+              { text: formatBytes(memVal) }
             ],
-            detail: List.Item.Detail({
-              markdown: renderDetailMarkdown(proc)
-            }),
             actions: ActionPanel({
               title: `${proc.name} (PID: ${proc.pid})`,
               children: [
                 Action({
-                  title: '强制终止进程 (taskkill /F)',
+                  title: '结束进程',
                   icon: Icon.XMarkCircle,
                   style: 'destructive',
-                  shortcut: { modifiers: ['ctrl'], key: 't' },
                   onAction: () => handleTerminate(proc, 'force')
                 }),
                 Action({
-                  title: '终结完整进程树 (taskkill /F /T)',
+                  title: '强制结束进程树',
                   icon: Icon.Trash,
                   style: 'destructive',
-                  shortcut: { modifiers: ['ctrl', 'shift'], key: 't' },
+                  shortcut: { modifiers: ['ctrl'], key: 'return' },
                   onAction: () => handleTerminate(proc, 'tree')
                 }),
                 Action({
-                  title: '平缓关闭进程 (Graceful Kill)',
-                  icon: Icon.Stop,
-                  onAction: () => handleTerminate(proc, 'graceful')
-                }),
-                Action({
-                  title: '即时刷新快照',
-                  icon: Icon.ArrowClockwise,
-                  shortcut: { modifiers: ['ctrl'], key: 'r' },
-                  onAction: () => refreshData(true)
-                }),
-                Action({
-                  title: autoRefresh ? '暂停 2 秒自动刷新' : '恢复 2 秒自动刷新',
-                  icon: Icon.Clock,
-                  shortcut: { modifiers: ['ctrl'], key: 'p' },
-                  onAction: () => handleToggleAutoRefresh()
-                }),
-                Action({
-                  title: '深度读取数字签名与托管服务',
-                  icon: Icon.MagnifyingGlass,
-                  shortcut: { modifiers: ['ctrl'], key: 'i' },
-                  onAction: () => loadProcessExtra(proc, true)
-                }),
-                Action({
-                  title: '在资源管理器中定位',
+                  title: '定位文件目录',
                   icon: Icon.Folder,
                   shortcut: { modifiers: ['ctrl'], key: 'o' },
                   onAction: () => handleOpenLocation(proc)
                 }),
                 Action({
-                  title: '复制进程 PID',
-                  icon: Icon.Clipboard,
+                  title: '复制 PID',
+                  icon: Icon.Key,
                   shortcut: { modifiers: ['ctrl'], key: 'c' },
                   onAction: () => {
                     Clipboard.copy(String(proc.pid))
@@ -518,8 +394,19 @@ ${safetyNote}
                   }
                 }),
                 Action({
+                  title: '平缓关闭进程 (Graceful)',
+                  icon: Icon.Stop,
+                  onAction: () => handleTerminate(proc, 'graceful')
+                }),
+                Action({
+                  title: '读取数字签名与托管服务',
+                  icon: Icon.MagnifyingGlass,
+                  shortcut: { modifiers: ['ctrl'], key: 'i' },
+                  onAction: () => loadProcessExtra(proc, true)
+                }),
+                Action({
                   title: '复制完整可执行路径',
-                  icon: Icon.Clipboard,
+                  icon: Icon.Document,
                   shortcut: { modifiers: ['ctrl', 'shift'], key: 'c' },
                   onAction: () => {
                     const targetPath = details[proc.pid]?.path || proc.path
@@ -543,7 +430,8 @@ ${safetyNote}
                   title: '复制启动命令行 (CommandLine)',
                   icon: Icon.Terminal,
                   onAction: () => {
-                    const cmdLine = details[proc.pid]?.commandLine || proc.commandLine || proc.path || proc.name
+                    const cmdLine =
+                      details[proc.pid]?.commandLine || proc.commandLine || proc.path || proc.name
                     Clipboard.copy(cmdLine)
                     showToast({
                       style: Toast.Style.Success,
@@ -553,17 +441,10 @@ ${safetyNote}
                   }
                 }),
                 Action({
-                  title: '复制 taskkill 强杀指令',
-                  icon: Icon.Code,
-                  onAction: () => {
-                    const cmd = `taskkill /F /PID ${proc.pid}`
-                    Clipboard.copy(cmd)
-                    showToast({
-                      style: Toast.Style.Success,
-                      title: '已复制命令',
-                      message: cmd
-                    })
-                  }
+                  title: '刷新列表',
+                  icon: Icon.ArrowClockwise,
+                  shortcut: { modifiers: ['ctrl'], key: 'r' },
+                  onAction: () => refreshData(true)
                 })
               ]
             })

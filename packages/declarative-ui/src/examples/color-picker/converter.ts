@@ -720,3 +720,6 @@ export async function saveColorHistory(item: PickedColorResult): Promise<PickedC
 export async function clearColorHistory(): Promise<void> {
   await LocalStorage.removeItem(HISTORY_STORAGE_KEY);
 }
+
+export const convertColor = parseColor;
+

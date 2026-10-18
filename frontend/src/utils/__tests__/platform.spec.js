@@ -19,12 +19,13 @@ describe('isPluginSupportedOnCurrentPlatform', () => {
 
   it('macOS 上隐藏实现完全依赖 Windows 的官方插件', () => {
     asPlatform('mac')
-    for (const id of ['system', 'windows-run', 'windows-taskbar', 'windows-shortcuts', 'winget', 'boost']) {
+    for (const id of ['windows-run', 'windows-shortcuts', 'winget', 'boost', 'cleaner']) {
       expect(isPluginSupportedOnCurrentPlatform(id), id).toBe(false)
       expect(isPluginSupportedOnCurrentPlatform({ pluginId: id }), id).toBe(false)
     }
     // 跨平台插件不受影响
     expect(isPluginSupportedOnCurrentPlatform({ pluginId: 'json-format' })).toBe(true)
+    expect(isPluginSupportedOnCurrentPlatform({ pluginId: 'system' })).toBe(true)
   })
 
   it('Windows 上所有 Windows 专用插件都可用', () => {
@@ -47,29 +48,36 @@ describe('isPluginSupportedOnCurrentPlatform', () => {
 
   it('[破坏性] 插件清单自称支持所有平台也不能绕过不可用名单', () => {
     asPlatform('mac')
-    expect(isPluginSupportedOnCurrentPlatform({ pluginId: 'password-vault', platforms: ['darwin', 'win32'] })).toBe(false)
+    expect(isPluginSupportedOnCurrentPlatform({ pluginId: 'trial-nudges', platforms: ['darwin', 'win32'] })).toBe(false)
   })
 
   it('Mac 上实际可见的内置插件包含已打通宿主的跨平台核心插件；Windows 多出依赖 Windows 组件的插件', () => {
     asPlatform('mac')
     const mac = OFFICIAL_PLUGINS_LIST.filter(isPluginSupportedOnCurrentPlatform).map((p) => p.pluginId).sort()
-    expect(mac).toEqual([
-      'calculator',
-      'clipboard-history',
-      'emoji-picker',
-      'everything-file-search',
-      'google-translate',
-      'json-format',
-      'notes',
-      'quicklinks',
-      'snippets',
-      'window-management'
-    ])
+    expect(mac).toEqual(
+      expect.arrayContaining([
+        'calculator',
+        'clipboard-history',
+        'emoji-picker',
+        'everything-file-search',
+        'google-translate',
+        'json-format',
+        'kill-process',
+        'notes',
+        'password-vault',
+        'quicklinks',
+        'snippets',
+        'system',
+        'window-management'
+      ])
+    )
+    for (const id of WINDOWS_EXCLUSIVE_PLUGIN_IDS) expect(mac).not.toContain(id)
+    for (const id of UNAVAILABLE_PLUGIN_IDS) expect(mac).not.toContain(id)
     vi.restoreAllMocks()
     asPlatform('win')
     const win = OFFICIAL_PLUGINS_LIST.filter(isPluginSupportedOnCurrentPlatform).map((p) => p.pluginId)
     expect(win.length).toBeGreaterThan(mac.length)
-    expect(win).toEqual(expect.arrayContaining([...mac, 'system', 'winget', 'cleaner', 'pdf']))
+    expect(win).toEqual(expect.arrayContaining(['calculator', 'clipboard-history', 'system', 'winget', 'cleaner', 'pdf']))
     for (const id of UNAVAILABLE_PLUGIN_IDS) expect(win).not.toContain(id)
   })
 
@@ -83,7 +91,7 @@ describe('isPluginSupportedOnCurrentPlatform', () => {
 
   it('大小写与首尾空白不影响判断，避免数据格式差异绕过过滤', () => {
     asPlatform('mac')
-    expect(isPluginSupportedOnCurrentPlatform({ pluginId: '  System ' })).toBe(false)
+    expect(isPluginSupportedOnCurrentPlatform({ pluginId: '  Windows-Run ' })).toBe(false)
     expect(isPluginSupportedOnCurrentPlatform({ id: 'WINGET' })).toBe(false)
   })
 

@@ -1,6 +1,6 @@
 /**
  * 电脑硬件深度检测、实时监控、场景战力评测与配置报告中心 (HardwareInfo 2.0 Logic)
- * 1:1 复刻 DLLPlugins/hardware-info (电脑硬件信息查看.md & HardwareInfo.h)
+ * 1:1 复刻 DLLPlugins/hardware-info (HardwareInfo.h)
  * 真实采集 CPU 微架构、物理内存、全量磁盘分区、多显示器、电源状态与 4 大场景战力评估
  */
 
@@ -88,7 +88,7 @@ const PRESET_ITEMS: CapabilityActionItem[] = [
   {
     id: 'hw-temp-monitor',
     title: '核心传感器实时温度巡检 (CPU Package / GPU Core)',
-    subtitle: '通过 Ring0 驱动读取 CPU 核心温度、显卡热点与风扇转速',
+    subtitle: '通过底层驱动读取 CPU 核心温度、显卡热点与风扇转速',
     tag: '温度监控',
     method: 'GetTemperature',
     params: { unit: 'celsius' }
@@ -236,13 +236,24 @@ export async function invokeNativeCapability(
 }
 
 /**
- * 基于本机真实硬件规格计算 4 大应用场景兼容性评估 (PRD 3.2 节)
+ * 基于本机真实硬件规格计算 4 大应用场景兼容性评估
  */
 export function evaluateHardwareScenarios(
-  logicalCpuCount: number,
-  totalMemoryBytes: number,
-  availableDiskBytes: number
+  logicalCpuCountOrSnap: number | Partial<HardwareTelemetrySnapshot>,
+  totalMemoryBytesArg?: number,
+  availableDiskBytesArg?: number
 ): ScenarioCompatibilityItem[] {
+  const isSnap = typeof logicalCpuCountOrSnap === 'object' && logicalCpuCountOrSnap !== null
+  const logicalCpuCount = isSnap
+    ? Number(logicalCpuCountOrSnap.logicalCpuCount ?? 8)
+    : Number(logicalCpuCountOrSnap || 8)
+  const totalMemoryBytes = isSnap
+    ? Number(logicalCpuCountOrSnap.totalMemoryBytes ?? 16 * 1024 * 1024 * 1024)
+    : Number(totalMemoryBytesArg ?? 16 * 1024 * 1024 * 1024)
+  const availableDiskBytes = isSnap
+    ? Number(logicalCpuCountOrSnap.availableDiskBytes ?? 128 * 1024 * 1024 * 1024)
+    : Number(availableDiskBytesArg ?? 128 * 1024 * 1024 * 1024)
+
   const ramGb = totalMemoryBytes / (1024 * 1024 * 1024)
   const freeDiskGb = availableDiskBytes / (1024 * 1024 * 1024)
   const cores = logicalCpuCount || 8
@@ -250,7 +261,7 @@ export function evaluateHardwareScenarios(
   return [
     {
       id: 'sc-office-dev',
-      scenario: '💻 极客开发、多开容器与重度办公',
+      scenario: '极客开发、多开容器与重度办公',
       tier: ramGb >= 24 && cores >= 12 ? '极致流畅' : ramGb >= 14 ? '主力胜任' : '基本满足',
       score: Math.min(99, Math.round(60 + Math.min(25, ramGb * 0.8) + Math.min(14, cores))),
       summary: `当前 ${cores} 逻辑线程 + ${formatBytes(totalMemoryBytes)} 物理内存，可轻松承载大型 IDE 编译、Docker 容器与数十个浏览器标签页。`,
@@ -258,7 +269,7 @@ export function evaluateHardwareScenarios(
     },
     {
       id: 'sc-4k-media',
-      scenario: '🎬 4K 影音剪辑、渲染与创意设计',
+      scenario: '4K 影音剪辑、渲染与创意设计',
       tier: ramGb >= 30 && cores >= 16 ? '极致流畅' : ramGb >= 15 && cores >= 8 ? '主力胜任' : '基本满足',
       score: Math.min(98, Math.round(55 + Math.min(25, ramGb * 0.75) + Math.min(18, cores * 1.1))),
       summary: `多线程并行编码能力 (${cores} 线程) 配合 ${formatBytes(availableDiskBytes)} 可用高速存储池，适合多轨道 4K 视频转码与合成。`,
@@ -266,7 +277,7 @@ export function evaluateHardwareScenarios(
     },
     {
       id: 'sc-aaa-gaming',
-      scenario: '🎮 主流电竞与 3A 次世代游戏大作',
+      scenario: '主流电竞与 3A 次世代游戏大作',
       tier: ramGb >= 15 && cores >= 12 ? '主力胜任' : '基本满足',
       score: Math.min(96, Math.round(58 + Math.min(22, ramGb * 0.7) + Math.min(16, cores))),
       summary: `处理器物理/逻辑线程充足，内存容量 ${formatBytes(totalMemoryBytes)} 满足大型 3A 游戏高画质纹理加载需求。`,
@@ -274,7 +285,7 @@ export function evaluateHardwareScenarios(
     },
     {
       id: 'sc-local-llm',
-      scenario: '🤖 本地离线 AI 大模型推理 (Ollama / DeepSeek)',
+      scenario: '本地离线 AI 大模型推理 (Ollama / DeepSeek)',
       tier: ramGb >= 30 ? '极致流畅' : ramGb >= 15 ? '主力胜任' : '瓶颈受限',
       score: Math.min(95, Math.round(45 + Math.min(35, ramGb * 1.1) + Math.min(15, cores * 0.8))),
       summary:
@@ -287,7 +298,7 @@ export function evaluateHardwareScenarios(
 }
 
 /**
- * 导出整机硬件资产报告 (支持 Markdown / JSON / TXT 三种格式，对应 PRD [📤 导出报告])
+ * 导出整机硬件资产报告 (支持 Markdown / JSON / TXT 三种格式)
  */
 export function exportHardwareReport(
   snap: HardwareTelemetrySnapshot,
@@ -362,7 +373,7 @@ export function exportHardwareReport(
     .map(s => `- **${s.scenario}**: \`${s.tier} (${s.score}分)\` — ${s.summary}`)
     .join('\n')
 
-  return `# 📋 ZTools 整机硬件配置与性能评测报告
+  return `# ZTools 整机硬件配置与性能评测报告
 
 - **报告生成时间**: \`${new Date().toLocaleString()}\`
 - **整机硬件综合健康度**: **${snap.healthScore} 分**
@@ -476,13 +487,13 @@ export async function fetchHardwareTelemetrySnapshot(hostOverride?: any): Promis
       subtitle: `${logicalCpuCount} 逻辑线程 · 指令集架构 ${osArch.toUpperCase()}`,
       value: `负载 ${cpuUsagePercent}%`,
       tag: `${logicalCpuCount} 线程`,
-      detailMarkdown: `# 🖥️ 中央处理器 (CPU)
+      detailMarkdown: `# 中央处理器 (CPU)
 
 **处理器型号**: \`${cpuModel}\`
 
 ---
 
-### 📊 核心规格与实时遥测 (HardwareInfo.h)
+### 核心规格与实时遥测 (HardwareInfo.h)
 - **逻辑处理器数量**: \`${logicalCpuCount} 线程\`
 - **指令集架构**: \`${osArch.toUpperCase()}\`
 - **当前瞬时总利用率**: \`${cpuUsagePercent}%\`
@@ -497,13 +508,13 @@ export async function fetchHardwareTelemetrySnapshot(hostOverride?: any): Promis
       subtitle: `已用 ${formatBytes(usedMemoryBytes)} · 可用余量 ${formatBytes(availableMemoryBytes)}`,
       value: `${memoryUsagePercent}% 已用`,
       tag: formatBytes(totalMemoryBytes),
-      detailMarkdown: `# 🧠 物理内存子系统 (RAM)
+      detailMarkdown: `# 物理内存子系统 (RAM)
 
 **安装总物理内存**: \`${formatBytes(totalMemoryBytes)}\` (${totalMemoryBytes.toLocaleString()} Bytes)
 
 ---
 
-### 📊 实时工作集分布
+### 实时工作集分布
 - **当前已用物理内存**: \`${formatBytes(usedMemoryBytes)}\` (${memoryUsagePercent}%)
 - **当前空闲可用内存**: \`${formatBytes(availableMemoryBytes)}\`
 - **内存健康度**: \`${memoryUsagePercent > 85 ? '高负载预警' : '充裕正常'}\``
@@ -515,7 +526,7 @@ export async function fetchHardwareTelemetrySnapshot(hostOverride?: any): Promis
       subtitle: `内核版本 ${osVersion} · Build ${osBuild}`,
       value: `Build ${osBuild}`,
       tag: osVersion,
-      detailMarkdown: `# 🪟 操作系统与供电状态
+      detailMarkdown: `# 操作系统与供电状态
 
 - **操作系统版本**: \`${osName}\`
 - **内核版本号**: \`${osVersion} (Build ${osBuild})\`
@@ -532,12 +543,12 @@ export async function fetchHardwareTelemetrySnapshot(hostOverride?: any): Promis
       subtitle: `总容量 ${formatBytes(d.totalBytes)} · 已用 ${formatBytes(d.usedBytes)} · 剩余可用 ${formatBytes(d.availableBytes)}`,
       value: `已用 ${d.usagePercent}%`,
       tag: formatBytes(d.totalBytes),
-      detailMarkdown: `# 💽 存储卷 ${d.drive}\\
+      detailMarkdown: `# 存储卷 ${d.drive}
 
 - **总计物理容量**: \`${formatBytes(d.totalBytes)}\`
 - **当前已用容量**: \`${formatBytes(d.usedBytes)} (${d.usagePercent}%)\`
 - **剩余可用容量**: \`${formatBytes(d.availableBytes)}\`
-- **空间状态**: \`${d.usagePercent > 85 ? '⚠️ 空间偏紧' : '🟢 健康充裕'}\``
+- **空间状态**: \`${d.usagePercent > 85 ? '空间偏紧' : '健康充裕'}\``
     })
   }
 
@@ -553,7 +564,7 @@ export async function fetchHardwareTelemetrySnapshot(hostOverride?: any): Promis
       subtitle: `DPI 缩放 ${scale}% · 刷新率 ${hz}Hz · 色深 ${disp.colorDepth || 24}-bit`,
       value: `${w}×${h} @${hz}Hz`,
       tag: `${scale}% DPI`,
-      detailMarkdown: `# 🖥️ 显示器输出端点 #${index + 1}
+      detailMarkdown: `# 显示器输出端点 #${index + 1}
 
 - **设备标识**: \`${disp.label || `Display #${disp.id || index + 1}`}\`
 - **逻辑分辨率**: \`${w} × ${h}\`
@@ -571,7 +582,7 @@ export async function fetchHardwareTelemetrySnapshot(hostOverride?: any): Promis
       subtitle: `${sc.summary}`,
       value: `${sc.score} 分`,
       tag: sc.tier,
-      detailMarkdown: `# 🏆 ${sc.scenario}
+      detailMarkdown: `# ${sc.scenario}
 
 - **兼容性评级**: **${sc.tier}** (\`${sc.score} / 100\`)
 - **硬件表现分析**: ${sc.summary}

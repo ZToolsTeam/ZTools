@@ -123,6 +123,7 @@ export default function DownloadsManagerCommand() {
   const [categoryFilter, setCategoryFilter] = useState<DownloadFilterCategory>("all");
   const [isShowingDetail, setIsShowingDetail] = useState(true);
   const [version, setVersion] = useState(0);
+  const [selectedId, setSelectedId] = useState<string | null>(null);
   const refresh = () => setVersion((v) => v + 1);
 
   useEffect(() => {
@@ -144,6 +145,11 @@ export default function DownloadsManagerCommand() {
     [searchText, categoryFilter, version]
   );
 
+  const activeFile = useMemo(
+    () => files.find((f) => f.id === selectedId) || files[0],
+    [files, selectedId]
+  );
+
   const totalBytes = useMemo(
     () => files.reduce((sum, item) => sum + item.sizeBytes, 0),
     [files]
@@ -155,6 +161,98 @@ export default function DownloadsManagerCommand() {
       searchBarPlaceholder="搜索下载文件名、后缀或按类型筛选..."
       isShowingDetail={isShowingDetail}
       onSearchTextChange={setSearchText}
+      onSelectionChange={setSelectedId}
+      filterBar={{
+        summaryText: `~/Downloads 共 ${files.length} 个文件 • 总占用空间 ${formatFileSize(totalBytes)}`,
+        groups: [
+          {
+            id: "category",
+            label: "文件类型",
+            value: categoryFilter,
+            onChange: (val: string) => setCategoryFilter(val as DownloadFilterCategory),
+            options: [
+              { value: "all", label: "全部" },
+              { value: "document", label: "文档" },
+              { value: "installer", label: "安装包" },
+              { value: "archive", label: "压缩包" },
+              { value: "image", label: "图片" },
+              { value: "media", label: "音视频" },
+              { value: "large", label: "大文件" },
+              { value: "expired", label: "过期文件" }
+            ]
+          }
+        ],
+        actions: [
+          {
+            id: "open-selected",
+            label: "🚀 打开选中文件",
+            title: "🚀 打开选中文件",
+            style: "primary",
+            onAction: async () => {
+              if (activeFile) {
+                const res = await defaultDownloadsManager.openDownload(activeFile.id);
+                await showToast(
+                  res.success ? Toast.Style.Success : Toast.Style.Failure,
+                  res.message
+                );
+              }
+            }
+          },
+          {
+            id: "reveal-selected",
+            label: "📂 在文件夹中定位",
+            title: "📂 在文件夹中定位",
+            style: "secondary",
+            onAction: async () => {
+              if (activeFile) {
+                const res = await defaultDownloadsManager.showInFinder(activeFile.id);
+                await showToast(
+                  res.success ? Toast.Style.Success : Toast.Style.Failure,
+                  res.message
+                );
+              }
+            }
+          },
+          {
+            id: "copy-latest",
+            label: "📋 复制最新下载文件",
+            title: "📋 复制最新下载文件",
+            style: "secondary",
+            onAction: async () => {
+              const res = await defaultDownloadsManager.copyLatestDownload();
+              if (res.file) {
+                await Clipboard.copy(res.file.path);
+              }
+              await showToast(
+                res.success ? Toast.Style.Success : Toast.Style.Failure,
+                res.message
+              );
+            }
+          },
+          {
+            id: "organize-all",
+            label: "🗂️ 一键分类自动归档",
+            title: "🗂️ 一键分类自动归档",
+            style: "primary",
+            onAction: async () => {
+              const res = await defaultDownloadsManager.organizeByCategory(false);
+              await showToast(Toast.Style.Success, res.message);
+              refresh();
+            }
+          },
+          {
+            id: "clean-expired",
+            label: "🧹 清理 30 天过期文件",
+            title: "🧹 清理 30 天过期文件",
+            style: "danger",
+            onAction: async () => {
+              const res = await defaultDownloadsManager.cleanExpiredDownloads(30, false);
+              await showToast(Toast.Style.Success, res.message);
+              refresh();
+            }
+          }
+        ]
+      }}
       searchBarAccessory={
         <List.Dropdown
           tooltip="按文件类型或状态筛选"
@@ -179,6 +277,7 @@ export default function DownloadsManagerCommand() {
         {files.map((item, idx) => (
           <List.Item
             key={item.id}
+            id={item.id}
             icon={{
               source: Icon.Document,
               tintColor: idx === 0 ? Color.Green : Color.Blue

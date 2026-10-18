@@ -11,24 +11,25 @@ import {
   Toast,
   confirmAlert,
   MetricGrid,
-  DistributionBar,
   FilterBar,
   SegmentedControl
 } from '../../index.js'
 import {
   ProcessNetworkGroup,
   FORBIDDEN_REASON,
-  formatBytes,
   fetchFlowGuardSnapshot,
   terminateNetworkProcess,
   openNetworkProcessLocation
 } from './logic.js'
 
+export * from './logic.js'
+
+type FlowDropdownFilter = 'all' | 'public' | 'lan' | 'listening' | 'processes'
+
 export default function FlowGuardCommand() {
   const [searchText, setSearchText] = useState('')
-  const [viewMode, setViewMode] = useState<'processes' | 'endpoints' | 'listening'>('processes')
+  const [dropdownFilter, setDropdownFilter] = useState<FlowDropdownFilter>('all')
   const [protoFilter, setProtoFilter] = useState<'ALL' | 'TCP' | 'UDP'>('ALL')
-  const [scopeFilter, setScopeFilter] = useState<'all' | 'public' | 'lan' | 'loopback' | 'listening'>('all')
   const [focusPid, setFocusPid] = useState<number>(0)
   const [groups, setGroups] = useState<ProcessNetworkGroup[]>([])
   const [totalEndpoints, setTotalEndpoints] = useState(0)
@@ -65,13 +66,13 @@ export default function FlowGuardCommand() {
   }
 
   useEffect(() => {
-    refreshConnections(false)
+    void refreshConnections(false)
   }, [])
 
   async function handleKillProcess(group: ProcessNetworkGroup) {
     if (group.isProtected) {
       await confirmAlert({
-        title: `⚠️ 核心网络服务保护 [${group.processName}]`,
+        title: `核心网络服务保护 [${group.processName}]`,
         message: `PID: ${group.pid}\n\n${FORBIDDEN_REASON}`,
         primaryAction: { title: '我知道了', style: 'default' }
       })
@@ -80,7 +81,7 @@ export default function FlowGuardCommand() {
 
     const confirmed = await confirmAlert({
       title: `确认阻断并结束联网进程 [${group.processName}]？`,
-      message: `进程 PID: ${group.pid}\n活跃连接数: ${group.publicCount} 个公网外联 / ${group.establishedCount} 个 ESTABLISHED / ${group.listeningCount} 个 LISTENING\n\n结束进程将立即释放其占用的全部端口与远端连接。`,
+      message: `进程 PID: ${group.pid}\n活跃连接数: ${group.publicCount} 个公网外联 / ${group.establishedCount} 个 ESTABLISHED / ${group.listeningCount} 个 LISTENING`,
       primaryAction: { title: '立即阻断结束', style: 'destructive' }
     })
     if (!confirmed) return
@@ -100,54 +101,21 @@ export default function FlowGuardCommand() {
       title: '已终止联网进程',
       message: `${group.processName} (PID: ${group.pid})`
     })
-    refreshConnections(false)
-  }
-
-  function renderDetailMarkdown(g: ProcessNetworkGroup): string {
-    const endpointRows = g.endpoints
-      .slice(0, 22)
-      .map(
-        (ep, idx) =>
-          `${idx + 1}. \`[${ep.protocol}]\` \`${ep.localAddress}:${ep.localPort}\` → \`${ep.remoteAddress}:${ep.remotePort}\` · **${ep.state}** (\`${ep.remoteScope === 'public' ? '🌐公网' : ep.remoteScope === 'lan' ? '🏠内网' : ep.remoteScope === 'loopback' ? '🔁回环' : '📡监听'}\`)`
-      )
-      .join('\n')
-
-    const guardBanner = g.isProtected
-      ? `> [!CAUTION]\n> **核心系统网络服务**：${FORBIDDEN_REASON}`
-      : `> [!TIP]\n> **第三方/用户态联网应用**：若发现异常公网外联连接或后台偷跑流量，可一键终止并释放端口。`
-
-    return `# 🌐 ${g.processName} (PID: ${g.pid})
-
-**可执行路径**: \`${g.processPath || '系统内核/受保护服务路径'}\`
-
----
-
-### 📊 网络五元组与连接域指标 (FlowGuardPlugin.h)
-- **活动套接字总数**: \`${g.endpoints.length} 个\` (TCP: \`${g.tcpCount}\` / UDP: \`${g.udpCount}\`)
-- **🌐 公网外联会话**: \`${g.publicCount} 个\` · **🏠 局域网会话**: \`${g.lanCount} 个\` · **🔁 本机回环 IPC**: \`${g.loopbackCount} 个\`
-- **已建立连接 (ESTABLISHED)**: \`${g.establishedCount} 个\` · **本地监听端口 (LISTENING)**: \`${g.listeningCount} 个\`
-- **物理内存占用**: \`${formatBytes(g.memoryBytes)}\` · **CPU 占用**: \`${g.cpuPercent.toFixed(1)}%\`
-
----
-
-### 🔌 实时五元组端口与远端 IP 明细 (前 ${Math.min(22, g.endpoints.length)} 条)
-${endpointRows || '_无活动端口_'}
-
----
-
-${guardBanner}
-`
+    void refreshConnections(false)
   }
 
   const q = searchText.trim().toLowerCase()
+  const scopeFilter =
+    dropdownFilter === 'public' || dropdownFilter === 'lan' || dropdownFilter === 'listening'
+      ? dropdownFilter
+      : 'all'
 
-  const filteredGroups = groups.filter(g => {
+  const filteredGroups = groups.filter((g) => {
     if (focusPid > 0 && g.pid !== focusPid) return false
     if (protoFilter === 'TCP' && g.tcpCount === 0) return false
     if (protoFilter === 'UDP' && g.udpCount === 0) return false
     if (scopeFilter === 'public' && g.publicCount === 0) return false
     if (scopeFilter === 'lan' && g.lanCount === 0) return false
-    if (scopeFilter === 'loopback' && g.loopbackCount === 0) return false
     if (scopeFilter === 'listening' && g.listeningCount === 0) return false
     if (!q) return true
     if (
@@ -158,7 +126,7 @@ ${guardBanner}
       return true
     }
     return g.endpoints.some(
-      ep =>
+      (ep) =>
         String(ep.localPort).includes(q) ||
         String(ep.remotePort).includes(q) ||
         ep.remoteAddress.toLowerCase().includes(q) ||
@@ -166,66 +134,41 @@ ${guardBanner}
     )
   })
 
-  const allEndpoints = filteredGroups.flatMap(g =>
+  const allEndpoints = filteredGroups.flatMap((g) =>
     g.endpoints
-      .filter(ep => {
+      .filter((ep) => {
         if (protoFilter !== 'ALL' && ep.protocol !== protoFilter) return false
         if (scopeFilter !== 'all' && ep.remoteScope !== scopeFilter) return false
-        if (viewMode === 'listening' && ep.state !== 'LISTENING' && ep.remoteScope !== 'listening') return false
         return true
       })
-      .map(ep => ({
+      .map((ep) => ({
         ...ep,
         processPath: g.processPath,
         isProtected: g.isProtected,
+        groupCount: g.endpoints.length,
         groupRef: g
       }))
   )
 
-  const distSegments = [
-    {
-      id: 'public',
-      label: `🌐 公网外联 (${totalPublic})`,
-      valueBytes: totalPublic,
-      formattedSize: `${totalPublic} 条`,
-      percentage: totalEndpoints > 0 ? Math.max(4, (totalPublic / totalEndpoints) * 100) : 20,
-      color: '#10b981',
-      active: scopeFilter === 'all' || scopeFilter === 'public'
-    },
-    {
-      id: 'lan',
-      label: `🏠 局域网通信 (${totalLan})`,
-      valueBytes: totalLan,
-      formattedSize: `${totalLan} 条`,
-      percentage: totalEndpoints > 0 ? Math.max(4, (totalLan / totalEndpoints) * 100) : 20,
-      color: '#3b82f6',
-      active: scopeFilter === 'all' || scopeFilter === 'lan'
-    },
-    {
-      id: 'loopback',
-      label: `🔁 本机回环 IPC (${totalLoopback})`,
-      valueBytes: totalLoopback,
-      formattedSize: `${totalLoopback} 条`,
-      percentage: totalEndpoints > 0 ? Math.max(4, (totalLoopback / totalEndpoints) * 100) : 20,
-      color: '#a855f7',
-      active: scopeFilter === 'all' || scopeFilter === 'loopback'
-    },
-    {
-      id: 'listening',
-      label: `📡 端口监听 (${totalListening})`,
-      valueBytes: totalListening,
-      formattedSize: `${totalListening} 个`,
-      percentage: totalEndpoints > 0 ? Math.max(4, (totalListening / totalEndpoints) * 100) : 20,
-      color: '#f59e0b',
-      active: scopeFilter === 'all' || scopeFilter === 'listening'
-    }
-  ]
+  const maxGroupEndpoints = Math.max(1, ...groups.map((g) => g.endpoints.length))
 
   return List({
-    searchBarPlaceholder: '搜索联网进程名称、PID、本地端口或远端公网服务器 IP...',
+    searchBarPlaceholder: '搜索联网进程名称、PID、本地端口或远端服务器 IP...',
     onSearchTextChange: setSearchText,
-    isShowingDetail: true,
+    isShowingDetail: false,
     isLoading,
+    searchBarAccessory: List.Dropdown({
+      tooltip: '选择网络连接筛选视图',
+      value: dropdownFilter,
+      onChange: (val: string) => setDropdownFilter(val as FlowDropdownFilter),
+      children: [
+        List.Dropdown.Item({ title: '全部活动连接 (All Connections)', value: 'all' }),
+        List.Dropdown.Item({ title: '仅看公网外联 (Public)', value: 'public' }),
+        List.Dropdown.Item({ title: '局域网连接 (LAN)', value: 'lan' }),
+        List.Dropdown.Item({ title: '本机监听端口 (LISTEN)', value: 'listening' }),
+        List.Dropdown.Item({ title: '按进程聚合视图 (By Process)', value: 'processes' })
+      ]
+    }),
     metricGrid: MetricGrid({
       columns: 4,
       items: [
@@ -238,14 +181,14 @@ ${guardBanner}
         },
         {
           id: 'fg-public',
-          label: '🌐 公网外联连接',
+          label: '公网外联连接',
           value: `${totalPublic} 条`,
           subValue: `ESTABLISHED 总数 ${totalEstablished}`,
           status: totalPublic > 60 ? 'warning' : 'success'
         },
         {
           id: 'fg-listen',
-          label: '📡 本机监听端口',
+          label: '本机监听端口',
           value: `${totalListening} 个`,
           subValue: `本机回环 IPC ${totalLoopback} 条`,
           status: 'normal'
@@ -259,14 +202,6 @@ ${guardBanner}
         }
       ]
     }),
-    distributionBar: DistributionBar({
-      title: '本机实时网络套接字五元组域分布 (点击图例筛选对应网络域)',
-      totalLabel: `共 ${totalEndpoints} 个活动端点`,
-      segments: distSegments,
-      onSegmentClick: (segId) => {
-        setScopeFilter(scopeFilter === segId ? 'all' : (segId as any))
-      }
-    }),
     filterBar: FilterBar({
       wizardSteps: [
         { step: 1, label: '1. 内核 TCP/UDP 套接字枚举', status: 'done' },
@@ -274,10 +209,7 @@ ${guardBanner}
         { step: 3, label: '3. 协议/连接域多维过滤', status: 'active' },
         { step: 4, label: '4. 异常外联阻断管控', status: 'pending' }
       ],
-      summaryText:
-        focusPid > 0
-          ? `当前下钻进程 PID: ${focusPid} · 共 ${allEndpoints.length} 条连接`
-          : `筛选出 ${filteredGroups.length} 个进程 · ${allEndpoints.length} 条连接`,
+      summaryText: `活跃套接字 ${totalEndpoints} 个 · 公网外联 ${totalPublic} 个 · 监听端口 ${totalListening} 个 · 联网进程 ${groups.length} 个`,
       groups: [
         {
           id: 'proto-filter',
@@ -289,19 +221,6 @@ ${guardBanner}
             { value: 'TCP', label: 'TCP 协议', badge: totalEndpoints - totalUdp },
             { value: 'UDP', label: 'UDP 协议', badge: totalUdp }
           ]
-        },
-        {
-          id: 'scope-filter',
-          label: '网络域范围',
-          value: scopeFilter,
-          onChange: (v) => setScopeFilter(v as any),
-          options: [
-            { value: 'all', label: '全部地址域' },
-            { value: 'public', label: '🌐 仅公网外联', badge: totalPublic },
-            { value: 'lan', label: '🏠 局域网通信', badge: totalLan },
-            { value: 'loopback', label: '🔁 本机回环 IPC', badge: totalLoopback },
-            { value: 'listening', label: '📡 监听服务端口', badge: totalListening }
-          ]
         }
       ],
       actions: [
@@ -309,172 +228,77 @@ ${guardBanner}
           ? [
               {
                 id: 'clear-focus-pid',
-                title: `🔙 退出单进程下钻 (PID:${focusPid})`,
-                style: 'primary' as const,
+                label: `退出进程过滤 (PID:${focusPid})`,
+                title: `退出进程过滤 (PID:${focusPid})`,
+                style: 'secondary' as const,
                 onAction: () => {
                   setFocusPid(0)
-                  setViewMode('processes')
                 }
               }
             ]
           : []),
         {
           id: 'refresh-net',
-          title: '🔄 刷新实时连接',
+          label: '刷新连接',
+          title: '刷新连接',
           style: 'secondary',
-          onAction: () => refreshConnections(true)
-        },
-        {
-          id: 'copy-audit',
-          title: '📋 复制连接审计表',
-          style: 'secondary',
-          onAction: async () => {
-            const lines = allEndpoints
-              .slice(0, 200)
-              .map(e => `${e.processName}(PID:${e.pid})\t${e.protocol}\t${e.localAddress}:${e.localPort} -> ${e.remoteAddress}:${e.remotePort}\t[${e.state}]`)
-              .join('\n')
-            await Clipboard.copy(lines)
-            showToast({ style: Toast.Style.Success, title: '已复制五元组连接审计表' })
-          }
+          onAction: () => void refreshConnections(true)
         }
       ]
     }),
     segmentedControl: SegmentedControl({
-      value: viewMode,
-      onChange: v => setViewMode(v as any),
+      value: dropdownFilter === 'processes' ? 'processes' : 'endpoints',
+      onChange: (v) => setDropdownFilter(v === 'processes' ? 'processes' : 'all'),
       options: [
-        { value: 'processes', label: '按进程聚合监控', badge: filteredGroups.length },
-        { value: 'endpoints', label: '五元组连接明细表', badge: allEndpoints.length },
-        { value: 'listening', label: '本机监听端口审计', badge: totalListening }
+        { value: 'endpoints', label: '五元组连接明细', badge: allEndpoints.length },
+        { value: 'processes', label: '按进程聚合视图', badge: filteredGroups.length }
       ]
     }),
     children:
-      viewMode === 'endpoints' || viewMode === 'listening'
+      dropdownFilter === 'processes'
         ? [
             List.Section({
-              title:
-                viewMode === 'listening'
-                  ? `本机监听端口审计清单 (${allEndpoints.length})`
-                  : `实时五元组套接字明细表 (显示前 ${Math.min(120, allEndpoints.length)}/${allEndpoints.length} 条)`,
-              children: allEndpoints.slice(0, 120).map((ep, idx) =>
-                List.Item({
-                  id: `ep-${idx}-${ep.pid}-${ep.localPort}-${ep.remotePort}`,
-                  title: `${ep.localAddress}:${ep.localPort} → ${ep.remoteAddress}:${ep.remotePort}`,
-                  subtitle: `${ep.processName} (PID: ${ep.pid}) · ${ep.protocol}`,
-                  icon: {
-                    source: Icon.Globe,
-                    tintColor:
-                      ep.remoteScope === 'public'
-                        ? Color.Green
-                        : ep.remoteScope === 'listening'
-                        ? Color.Orange
-                        : Color.Blue
-                  },
-                  accessories: [
-                    {
-                      tag: {
-                        value:
-                          ep.remoteScope === 'public'
-                            ? '🌐 公网外联'
-                            : ep.remoteScope === 'lan'
-                            ? '🏠 局域网'
-                            : ep.remoteScope === 'loopback'
-                            ? '🔁 本机回环'
-                            : '📡 端口监听',
-                        color:
-                          ep.remoteScope === 'public'
-                            ? Color.Green
-                            : ep.remoteScope === 'listening'
-                            ? Color.Orange
-                            : Color.Blue
-                      }
-                    },
-                    { text: ep.state }
-                  ],
-                  detail: List.Item.Detail({
-                    markdown: renderDetailMarkdown(ep.groupRef)
-                  }),
-                  actions: ActionPanel({
-                    title: `${ep.processName} (${ep.localPort})`,
-                    children: [
-                      Action({
-                        title: '仅查看该进程的全部连接',
-                        icon: Icon.MagnifyingGlass,
-                        onAction: () => {
-                          setFocusPid(ep.pid)
-                          setViewMode('endpoints')
-                        }
-                      }),
-                      Action({
-                        title: '阻断并结束该联网进程',
-                        icon: Icon.XMarkCircle,
-                        onAction: () => handleKillProcess(ep.groupRef)
-                      }),
-                      Action({
-                        title: '复制该五元组连接信息',
-                        icon: Icon.Clipboard,
-                        onAction: async () => {
-                          await Clipboard.copy(
-                            `${ep.processName} (PID:${ep.pid}) ${ep.protocol} ${ep.localAddress}:${ep.localPort} -> ${ep.remoteAddress}:${ep.remotePort} [${ep.state}]`
-                          )
-                          showToast({ style: Toast.Style.Success, title: '已复制五元组信息' })
-                        }
-                      })
-                    ]
-                  })
-                })
-              )
-            })
-          ]
-        : [
-            List.Section({
-              title: `本机实时网络连接与端口监控 (${filteredGroups.length})`,
-              subtitle: '支持点击或回车下钻查看进程全部五元组套接字',
-              children: filteredGroups.map(g =>
-                List.Item({
+              title: `联网进程聚合视图 (${filteredGroups.length})`,
+              children: filteredGroups.map((g) => {
+                const firstEp = g.endpoints[0]
+                const epSummary = firstEp
+                  ? `${firstEp.protocol} ${firstEp.localAddress}:${firstEp.localPort} -> ${firstEp.remoteAddress}:${firstEp.remotePort}`
+                  : g.processPath || '本机网络服务'
+                const ratio = Math.min(100, Math.max(5, Math.round((g.endpoints.length / maxGroupEndpoints) * 100)))
+                const scopeTag =
+                  g.publicCount > 0 ? '公网外联' : g.listeningCount > 0 ? '监听端口' : '局域网'
+
+                return List.Item({
                   id: `net-proc-${g.pid}`,
-                  title: g.processName,
-                  subtitle: `PID: ${g.pid} · 🌐公网: ${g.publicCount} / 🏠内网: ${g.lanCount} / 📡监听: ${g.listeningCount} / UDP: ${g.udpCount}`,
-                  icon: {
-                    source: Icon.Globe,
-                    tintColor: g.isProtected ? Color.SecondaryText : g.publicCount > 0 ? Color.Green : Color.Blue
-                  },
+                  title: `${g.processName} (PID: ${g.pid})`,
+                  subtitle: `${epSummary} · 公网 ${g.publicCount} / 局域网 ${g.lanCount} / 监听 ${g.listeningCount}`,
+                  icon: g.isProtected ? Icon.Shield : Icon.Globe,
                   accessories: [
+                    { progress: { value: ratio } },
                     {
                       tag: {
-                        value:
-                          g.publicCount > 0
-                            ? `🌐 ${g.publicCount} 公网连接`
-                            : g.establishedCount > 0
-                            ? `${g.establishedCount} 活动连接`
-                            : `📡 ${g.listeningCount} 监听`,
-                        color: g.publicCount > 0 ? Color.Green : Color.Blue
+                        value: scopeTag,
+                        ...(g.publicCount > 25 ? { color: Color.Red } : {})
                       }
                     },
-                    { text: `${g.endpoints.length} 套接字` }
+                    { text: `ESTABLISHED ${g.establishedCount} / LISTEN ${g.listeningCount}` }
                   ],
-                  detail: List.Item.Detail({
-                    markdown: renderDetailMarkdown(g)
-                  }),
                   actions: ActionPanel({
-                    title: g.processName,
+                    title: `${g.processName} (PID: ${g.pid})`,
                     children: [
                       Action({
-                        title: `下钻查看 [${g.processName}] 的全部连接 (${g.endpoints.length})`,
+                        title: `查看该进程全部连接 (${g.endpoints.length})`,
                         icon: Icon.MagnifyingGlass,
                         onAction: () => {
                           setFocusPid(g.pid)
-                          setViewMode('endpoints')
+                          setDropdownFilter('all')
                         }
-                      }),
-                      Action({
-                        title: '刷新实时网络连接快照',
-                        icon: Icon.ArrowClockwise,
-                        onAction: () => refreshConnections(true)
                       }),
                       Action({
                         title: '阻断并结束该联网进程',
                         icon: Icon.XMarkCircle,
+                        style: 'destructive',
+                        shortcut: { modifiers: ['ctrl'], key: 'return' },
                         onAction: () => handleKillProcess(g)
                       }),
                       ...(g.processPath
@@ -482,8 +306,9 @@ ${guardBanner}
                             Action({
                               title: '在资源管理器中定位程序',
                               icon: Icon.Folder,
+                              shortcut: { modifiers: ['ctrl'], key: 'o' },
                               onAction: () => {
-                                openNetworkProcessLocation(g.processPath)
+                                void openNetworkProcessLocation(g.processPath)
                               }
                             })
                           ]
@@ -491,18 +316,107 @@ ${guardBanner}
                       Action({
                         title: '复制连接审计明细',
                         icon: Icon.Clipboard,
+                        shortcut: { modifiers: ['ctrl'], key: 'c' },
                         onAction: async () => {
-                          const summaryText = g.endpoints
-                            .map(e => `${e.protocol} ${e.localAddress}:${e.localPort} -> ${e.remoteAddress}:${e.remotePort} (${e.state})`)
+                          const text = g.endpoints
+                            .map(
+                              (e) =>
+                                `${e.protocol} ${e.localAddress}:${e.localPort} -> ${e.remoteAddress}:${e.remotePort} (${e.state})`
+                            )
                             .join('\n')
-                          await Clipboard.copy(summaryText)
-                          showToast({ style: Toast.Style.Success, title: '已复制连接明细', message: `${g.endpoints.length} 条记录` })
+                          await Clipboard.copy(text)
+                          showToast({
+                            style: Toast.Style.Success,
+                            title: '已复制连接明细',
+                            message: `${g.endpoints.length} 条记录`
+                          })
                         }
+                      }),
+                      Action({
+                        title: '刷新连接',
+                        icon: Icon.ArrowClockwise,
+                        shortcut: { modifiers: ['ctrl'], key: 'r' },
+                        onAction: () => refreshConnections(true)
                       })
                     ]
                   })
                 })
-              )
+              })
+            })
+          ]
+        : [
+            List.Section({
+              title: `活动套接字连接明细 (${allEndpoints.length})`,
+              children: allEndpoints.slice(0, 120).map((ep, idx) => {
+                const scopeLabel =
+                  ep.remoteScope === 'public'
+                    ? '公网外联'
+                    : ep.remoteScope === 'lan'
+                    ? '局域网'
+                    : ep.remoteScope === 'loopback'
+                    ? '本机回环'
+                    : '监听端口'
+                const ratio = Math.min(100, Math.max(6, Math.round((ep.groupCount / maxGroupEndpoints) * 100)))
+
+                return List.Item({
+                  id: `ep-${idx}-${ep.pid}-${ep.localPort}-${ep.remotePort}`,
+                  title: `${ep.processName} (PID: ${ep.pid})`,
+                  subtitle: `${ep.protocol} ${ep.localAddress}:${ep.localPort} -> ${ep.remoteAddress}:${ep.remotePort} (${scopeLabel})`,
+                  icon: ep.isProtected ? Icon.Shield : Icon.Globe,
+                  accessories: [
+                    { progress: { value: ratio } },
+                    { tag: { value: scopeLabel } },
+                    { text: ep.state === 'LISTENING' ? 'LISTEN' : ep.state }
+                  ],
+                  actions: ActionPanel({
+                    title: `${ep.processName} (${ep.localPort})`,
+                    children: [
+                      Action({
+                        title: '阻断并结束该联网进程',
+                        icon: Icon.XMarkCircle,
+                        style: 'destructive',
+                        onAction: () => handleKillProcess(ep.groupRef)
+                      }),
+                      Action({
+                        title: '复制五元组连接信息',
+                        icon: Icon.Clipboard,
+                        shortcut: { modifiers: ['ctrl'], key: 'c' },
+                        onAction: async () => {
+                          await Clipboard.copy(
+                            `${ep.processName} (PID:${ep.pid}) ${ep.protocol} ${ep.localAddress}:${ep.localPort} -> ${ep.remoteAddress}:${ep.remotePort} [${ep.state}]`
+                          )
+                          showToast({ style: Toast.Style.Success, title: '已复制五元组信息' })
+                        }
+                      }),
+                      Action({
+                        title: '仅筛选该进程连接',
+                        icon: Icon.MagnifyingGlass,
+                        onAction: () => {
+                          setFocusPid(ep.pid)
+                        }
+                      }),
+                      ...(ep.processPath
+                        ? [
+                            Action({
+                              title: '在资源管理器中定位程序',
+                              icon: Icon.Folder,
+                              shortcut: { modifiers: ['ctrl'], key: 'o' },
+                              onAction: () => {
+                                void openNetworkProcessLocation(ep.processPath)
+                              }
+                            })
+                          ]
+                        : []),
+                      Action({
+                        title: '刷新连接',
+                        icon: Icon.ArrowClockwise,
+                        shortcut: { modifiers: ['ctrl'], key: 'r' },
+                        onAction: () => refreshConnections(true)
+                      })
+                    ]
+                  })
+                })
+              })
             })
           ]
   })

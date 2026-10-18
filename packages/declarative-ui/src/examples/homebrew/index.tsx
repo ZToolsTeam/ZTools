@@ -709,12 +709,110 @@ export function HomebrewCommand() {
     );
   };
 
+  const [selectedPkgName, setSelectedPkgName] = useState<string>("");
+  const installedCount = packages.filter((p) => Boolean(p.installedVersion)).length;
+  const outdatedCount = packages.filter((p) => p.outdated).length;
+  const activePkg =
+    displayedPackages.find((p) => p.name === selectedPkgName) || displayedPackages[0] || null;
+
   return (
     <List
       isLoading={isLoading}
       isShowingDetail={true}
       searchBarPlaceholder="搜索本机已安装软件包或远程检索 (Homebrew / Winget)..."
       onSearchTextChange={setSearchText}
+      onSelectionChange={(id) => setSelectedPkgName(id || "")}
+      filterBar={{
+        summaryText: `本机已安装软件包 ${installedCount} 个 · 可升级 ${outdatedCount} 个 · 当前匹配 ${displayedPackages.length} 个`,
+        groups: [
+          {
+            id: "brew-category-filter",
+            label: "包分类",
+            value: category,
+            onChange: (val) => setCategory(val as HomebrewFilterCategory),
+            options: [
+              { value: "all", label: "全部", badge: displayedPackages.length },
+              { value: "installed", label: "已安装 Installed", badge: installedCount },
+              { value: "outdated", label: "可升级 Outdated", badge: outdatedCount },
+              {
+                value: "formula",
+                label: "命令行 Formulae",
+                badge: packages.filter((p) => p.type === "formula").length
+              },
+              {
+                value: "cask",
+                label: "桌面应用 Casks",
+                badge: packages.filter((p) => p.type === "cask").length
+              }
+            ]
+          }
+        ],
+        actions: [
+          {
+            id: "brew-act-install-upgrade",
+            label: "⬆️ 安装 / 升级选中包",
+            title: "⬆️ 安装 / 升级选中包",
+            style: "primary",
+            onAction: () => {
+              if (!activePkg) {
+                void showToast(Toast.Style.Failure, "请先选择或搜索一个软件包");
+                return;
+              }
+              if (activePkg.installedVersion) {
+                void handleUpgrade(activePkg);
+              } else {
+                void handleInstall(activePkg);
+              }
+            }
+          },
+          {
+            id: "brew-act-uninstall",
+            label: "🗑️ 卸载选中包",
+            title: "🗑️ 卸载选中包",
+            style: "danger",
+            onAction: () => {
+              if (!activePkg) {
+                void showToast(Toast.Style.Failure, "请先选择要卸载的软件包");
+                return;
+              }
+              void handleUninstall(activePkg);
+            }
+          },
+          {
+            id: "brew-act-copy-cmd",
+            label: "📋 复制安装命令",
+            title: "📋 复制安装命令",
+            style: "secondary",
+            onAction: async () => {
+              if (!activePkg) {
+                await showToast(Toast.Style.Failure, "请先选择一个软件包");
+                return;
+              }
+              const cmd = getBrewCliCommand("install", activePkg);
+              await Clipboard.copy(cmd);
+              await showToast(Toast.Style.Success, "已复制安装命令", cmd);
+            }
+          },
+          {
+            id: "brew-act-cleanup",
+            label: "🧹 清理缓存 (cleanup)",
+            title: "🧹 清理缓存 (cleanup)",
+            style: "secondary",
+            onAction: () => {
+              void handleCleanup();
+            }
+          },
+          {
+            id: "brew-act-refresh",
+            label: "🔄 刷新列表",
+            title: "🔄 刷新列表",
+            style: "secondary",
+            onAction: () => {
+              setRefreshTick((t) => t + 1);
+            }
+          }
+        ]
+      }}
       searchBarAccessory={
         <List.Dropdown
           tooltip="按状态或类型筛选软件包"
@@ -727,12 +825,12 @@ export function HomebrewCommand() {
             icon={Icon.List}
           />
           <List.Dropdown.Item
-            title={`已安装 (Installed · ${packages.filter((p) => Boolean(p.installedVersion)).length})`}
+            title={`已安装 (Installed · ${installedCount})`}
             value="installed"
             icon={Icon.CheckCircle}
           />
           <List.Dropdown.Item
-            title={`可升级 (Outdated · ${packages.filter((p) => p.outdated).length})`}
+            title={`可升级 (Outdated · ${outdatedCount})`}
             value="outdated"
             icon={Icon.Upload}
           />

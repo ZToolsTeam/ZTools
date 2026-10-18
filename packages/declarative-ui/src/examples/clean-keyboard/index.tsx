@@ -184,6 +184,7 @@ export function CustomDurationForm({ onLocked }: { onLocked?: () => void }) {
 export default function CleanKeyboardCommand() {
   const [, setTickVersion] = useState(0);
   const refresh = () => setTickVersion((v) => v + 1);
+  const { push } = useNavigation();
 
   const state = defaultKeyboardLockManager.getState();
   const stats = defaultKeyboardLockManager.getStats();
@@ -192,6 +193,93 @@ export default function CleanKeyboardCommand() {
     <List
       navigationTitle="键盘清洁防误触锁 (Clean Keyboard)"
       searchBarPlaceholder="选择键盘锁定时长 (清洁键盘、擦屏幕、防猫踩键盘)..."
+      filterBar={{
+        summaryText:
+          state.status === "locked"
+            ? `🔒 键盘锁定中 (剩余 ${formatCleanDuration(state.remainingSeconds)}) • 本次已拦截 ${state.blockedKeystrokes} 次按键`
+            : `🟢 键盘正常输入未锁定 • 累计防误触拦截 ${stats.totalBlockedKeystrokes} 次按键`,
+        actions:
+          state.status === "locked"
+            ? [
+                {
+                  id: "unlock-now",
+                  label: "🔓 立即解锁键盘 (Ctrl+U)",
+                  title: "🔓 立即解锁键盘 (Ctrl+U)",
+                  style: "danger",
+                  onAction: async () => {
+                    const res = await defaultKeyboardLockManager.unlockKeyboard("manual");
+                    await showToast(
+                      res.success ? Toast.Style.Success : Toast.Style.Failure,
+                      res.message
+                    );
+                    refresh();
+                  }
+                },
+                {
+                  id: "view-stats",
+                  label: "📊 查看清洁统计",
+                  title: "📊 查看清洁统计",
+                  style: "secondary",
+                  onAction: () => {
+                    push(<CleanKeyboardDetailView onStateChange={refresh} />);
+                  }
+                }
+              ]
+            : [
+                {
+                  id: "lock-30s",
+                  label: "🔒 立即锁定 30 秒",
+                  title: "🔒 立即锁定 30 秒",
+                  style: "primary",
+                  onAction: async () => {
+                    const res = await defaultKeyboardLockManager.lockKeyboard(30, {
+                      presetTitle: "30 秒标准清洁",
+                      icon: "🧽"
+                    });
+                    await showToast(
+                      res.success ? Toast.Style.Success : Toast.Style.Failure,
+                      res.message
+                    );
+                    refresh();
+                  }
+                },
+                {
+                  id: "lock-2m",
+                  label: "🔒 锁定 2 分钟",
+                  title: "🔒 锁定 2 分钟",
+                  style: "secondary",
+                  onAction: async () => {
+                    const res = await defaultKeyboardLockManager.lockKeyboard(120, {
+                      presetTitle: "2 分钟深度擦拭",
+                      icon: "🚿"
+                    });
+                    await showToast(
+                      res.success ? Toast.Style.Success : Toast.Style.Failure,
+                      res.message
+                    );
+                    refresh();
+                  }
+                },
+                {
+                  id: "custom-duration",
+                  label: "⏱️ 自定义锁定时长...",
+                  title: "⏱️ 自定义锁定时长...",
+                  style: "secondary",
+                  onAction: () => {
+                    push(<CustomDurationForm onLocked={refresh} />);
+                  }
+                },
+                {
+                  id: "view-stats",
+                  label: "📊 查看清洁统计",
+                  title: "📊 查看清洁统计",
+                  style: "secondary",
+                  onAction: () => {
+                    push(<CleanKeyboardDetailView onStateChange={refresh} />);
+                  }
+                }
+              ]
+      }}
     >
       {state.status === "locked" && (
         <List.Section title="🔒 当前正在锁定清洁中">
