@@ -486,7 +486,7 @@ export function decodeQrCode(input: string): QrDecodeResult {
   if (/^[A-Za-z0-9+/=]{12,}$/.test(candidate) && candidate.length % 4 === 0) {
     try {
       const decoded = base64ToUtf8(candidate);
-      if (decoded && /^[\x20-\x7E\s\u4e00-\u9fa5]+$/.test(decoded)) {
+      if (decoded && /^[\u0020-\u007E\s\u4e00-\u9fa5]+$/.test(decoded)) {
         const detected = detectQrContentType(decoded);
         return {
           success: true,

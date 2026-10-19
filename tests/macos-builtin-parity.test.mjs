@@ -116,8 +116,11 @@ test('Gate-1: macOS 平台可见内置插件数量达到 32+ 款，且三批次�
 
     // Tier 4 Windows-exclusive plugins must still be hidden on macOS
     assert.equal(isPluginSupportedOnCurrentPlatform('windows-run'), false)
+    assert.equal(isPluginSupportedOnCurrentPlatform('windows-shortcuts'), false)
     assert.equal(isPluginSupportedOnCurrentPlatform('winget'), false)
-    assert.equal(isPluginSupportedOnCurrentPlatform('wechat-cleaner'), false)
+    // Declarative 2.0 upgraded self-operated plugins are unlocked on macOS
+    assert.equal(isPluginSupportedOnCurrentPlatform('wechat-cleaner'), true)
+    assert.equal(isPluginSupportedOnCurrentPlatform('batch-video'), true)
   })
 
   withSimulatedPlatform('Win32', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)', () => {

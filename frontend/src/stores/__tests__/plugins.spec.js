@@ -395,6 +395,48 @@ describe('usePluginsStore', () => {
       expect(store.installedSet.has('p-existing')).toBe(true)
       expect(store.installedSet.has('p-new')).toBe(true)
     })
+
+    it('[回归] 本地旧版同名或别名插件（如 clipboard-manager / everything-search）自动合并为 2.0 声明式定义并去重', async () => {
+      const store = usePluginsStore()
+      apiMocks.getLocalPlugins.mockResolvedValue([
+        {
+          pluginId: 'clipboard-manager',
+          name: '旧版剪贴板',
+          entry: 'index.html',
+          platforms: ['windows'],
+          lastUsedTime: 500
+        },
+        {
+          pluginId: 'everything-search',
+          name: '旧版文件搜索',
+          entry: 'index.html',
+          platforms: ['windows'],
+          lastUsedTime: 400
+        },
+        // 异常边界：同时存在别名与标准名时只保留一条
+        {
+          pluginId: 'clipboard-history',
+          name: '重复剪贴板',
+          lastUsedTime: 300
+        }
+      ])
+
+      const combined = await store.fetchInstalledPlugins()
+      const clipMatches = combined.filter(
+        (p) => p.pluginId === 'clipboard-manager' || p.pluginId === 'clipboard-history'
+      )
+      expect(clipMatches).toHaveLength(1)
+      expect(clipMatches[0].isDeclarative).toBe(true)
+      expect(typeof clipMatches[0].command).toBe('function')
+      expect(clipMatches[0].platforms).toBeUndefined()
+
+      const searchMatches = combined.filter(
+        (p) => p.pluginId === 'everything-search' || p.pluginId === 'everything-file-search'
+      )
+      expect(searchMatches).toHaveLength(1)
+      expect(searchMatches[0].isDeclarative).toBe(true)
+      expect(typeof searchMatches[0].command).toBe('function')
+    })
   })
 
   // ── 图标刷新 ────────────────────────────────────────────────────

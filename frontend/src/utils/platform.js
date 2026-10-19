@@ -42,25 +42,10 @@ export function isWindows() {
  * Windows-exclusive plugins that must be hidden on macOS (Tier 4).
  */
 export const WINDOWS_EXCLUSIVE_PLUGIN_IDS = new Set([
-  'boost',
-  'context-menu',
-  'cleaner',
-  'qq-cleaner',
-  'wechat-cleaner',
-  'flow-guard',
-  'network-adapter',
-  'network-rescue',
   // 实现完全依赖 Windows（运行对话框 / Windows 快捷方式 / winget）
   'windows-run',
   'windows-shortcuts',
-  'winget',
-  // 依赖 Windows 专属原生组件（DLLPlugins）
-  'software-manager',
-  'batch-audio',
-  'batch-video',
-  'multi-download',
-  'video-downloader',
-  'pdf'
+  'winget'
 ])
 
 /**

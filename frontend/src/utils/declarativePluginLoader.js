@@ -12,7 +12,7 @@
 
 import * as DeclarativeUI from '@ztools/declarative-ui'
 
-export const V2_CATALOG_CDN_URL = 'https://cdn.ztools.cn/plugins-v2/plugins.json'
+export const V2_CATALOG_CDN_URL = 'https://cdn.ztools.cn/plugins-v2/catalog.json'
 
 /**
  * 轻量浏览器端纯 JS 哈希与 HMAC 垫片（用于渲染进程无 Node 原生 crypto 时的兼容回退）

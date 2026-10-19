@@ -1,6 +1,6 @@
 {
   "name": "ztools",
-  "version": "1.1.8.0",
+  "version": "1.1.8.1",
   "private": true,
   "description": "ZTools - 纯粹开源、免费极客、轻量宿主、极致性能的现代化双端效率中枢平台",
   "type": "module",

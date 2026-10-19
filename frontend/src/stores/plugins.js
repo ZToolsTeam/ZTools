@@ -868,32 +868,60 @@ export const usePluginsStore = defineStore('plugins', {
         }
         this.installedSet = merged
 
-        // 合并插件列表：本地插件 + 官方标杆应用（若本地已有同 ID 则优先本地，并补齐官方自营标识）
-        const officialMap = new Map(
-          officialList.map((p) => [String(p.pluginId || '').toLowerCase(), p])
-        )
-        const localMap = new Map(
-          (locals || []).map((p) => [String(p.pluginId || '').toLowerCase(), p])
-        )
-        const combined = (locals || []).map((p) => {
+        // 合并插件列表：本地插件 + 官方标杆应用（若本地已有同 ID 或别名则合并官方声明式定义并去重）
+        const coveredOfficialKeys = new Set()
+        const combined = []
+        for (const p of locals || []) {
           const key = String(p.pluginId || p.id || '').toLowerCase()
-          const builtinMatch = officialMap.get(key)
+          const builtinMatch = getOfficialPlugin(key)
           const isOff = isOfficialPluginItem(p, builtinMatch)
-          if (isOff) {
-            const badge = p.official_badge || p.officialBadge || builtinMatch?.official_badge || builtinMatch?.officialBadge || '官方自营'
-            return {
+          if (builtinMatch) {
+            const canonicalKey = String(builtinMatch.pluginId || key).toLowerCase()
+            if (coveredOfficialKeys.has(canonicalKey)) {
+              continue
+            }
+            coveredOfficialKeys.add(canonicalKey)
+            const badge =
+              p.official_badge ||
+              p.officialBadge ||
+              builtinMatch.official_badge ||
+              builtinMatch.officialBadge ||
+              builtinMatch.badge ||
+              '官方自营'
+            const mergedPlugin = {
               ...p,
+              ...builtinMatch,
+              id: p.id || builtinMatch.id,
+              pluginId: p.pluginId || builtinMatch.pluginId,
+              lastUsedTime: p.lastUsedTime ?? builtinMatch.lastUsedTime,
+              enabled: p.enabled !== undefined ? p.enabled : builtinMatch.enabled,
+              revoked: p.revoked || false,
+              revoked_reason: p.revoked_reason || p.revokedReason || '',
               is_official: true,
               isOfficial: true,
               official_badge: badge,
               officialBadge: badge
             }
+            delete mergedPlugin.platforms
+            combined.push(mergedPlugin)
+            continue
           }
-          return p
-        })
+          if (isOff) {
+            const badge = p.official_badge || p.officialBadge || '官方自营'
+            combined.push({
+              ...p,
+              is_official: true,
+              isOfficial: true,
+              official_badge: badge,
+              officialBadge: badge
+            })
+            continue
+          }
+          combined.push(p)
+        }
         for (const official of officialList) {
           const key = String(official.pluginId || '').toLowerCase()
-          if (!localMap.has(key)) {
+          if (!coveredOfficialKeys.has(key)) {
             const badge = official.official_badge || official.officialBadge || '官方自营'
             combined.push({
               ...official,

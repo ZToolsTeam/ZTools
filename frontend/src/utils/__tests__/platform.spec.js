@@ -17,15 +17,16 @@ describe('isPluginSupportedOnCurrentPlatform', () => {
     vi.restoreAllMocks()
   })
 
-  it('macOS 上隐藏实现完全依赖 Windows 的官方插件', () => {
+  it('macOS 上隐藏实现完全依赖 Windows 的官方插件，而升级为声明式 2.0 的 35 款自营插件双端均可用', () => {
     asPlatform('mac')
-    for (const id of ['windows-run', 'windows-shortcuts', 'winget', 'boost', 'cleaner']) {
+    for (const id of ['windows-run', 'windows-shortcuts', 'winget']) {
       expect(isPluginSupportedOnCurrentPlatform(id), id).toBe(false)
       expect(isPluginSupportedOnCurrentPlatform({ pluginId: id }), id).toBe(false)
     }
-    // 跨平台插件不受影响
-    expect(isPluginSupportedOnCurrentPlatform({ pluginId: 'json-format' })).toBe(true)
-    expect(isPluginSupportedOnCurrentPlatform({ pluginId: 'system' })).toBe(true)
+    // 跨平台与声明式 2.0 升级后的自营插件在 macOS 与 Windows 均可用
+    for (const id of ['json-format', 'system', 'cleaner', 'boost', 'batch-video', 'disk-analyzer', 'kill-process']) {
+      expect(isPluginSupportedOnCurrentPlatform({ pluginId: id }), id).toBe(true)
+    }
   })
 
   it('Windows 上所有 Windows 专用插件都可用', () => {

@@ -5,18 +5,22 @@
 日志格式遵循业界通用的 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 规范，版本号遵循 [语义化版本 (Semantic Versioning)](https://semver.org/lang/zh-CN/) 标准，每次代码同步与版本发布均在顶部持续追加最新记录。
 
 <!-- changelog-auto-append-start -->
-<!-- last-synced-commit: f501de9 -->
+<!-- last-synced-commit: 298b450 -->
 
-## [Unreleased / 2026-10-18] - 持续迭代更新
+## [v1.1.8.1] - 2026-10-19 - 全量 35 款声明式 2.0 自营插件双端解封与线上 CDN 同步
 
 ### ✨ 新增特性 (Features)
-- 完成全量35款本地插件三大标准布局范式升级、单元测试与实机截图审查 (`100ad8f`)
-- 确立全仓35款插件三大标准UI布局范式并落地进程/磁盘/视频转码三大标杆模板 (`97d4d41`)
+- 升级v1.1.8.1并同步全量35款跨平台声明式2.0自营插件与线上CDN目录 (`298b450`)
+- **35 款声明式 2.0 自营插件全量升级与三大标准布局范式落地**：完成进程管理 (`kill-process`)、磁盘空间分析 (`disk-analyzer`)、批量视频/音频转码 (`batch-video` / `batch-audio`)、微信/QQ 专项清理、AI 图像/视频增强等全部 35 款自营插件的三大标准 UI 布局范式升级与单元测试、实机截图审查 (`100ad8f`, `97d4d41`)。
+- **Windows & macOS 双端全量解封与线上 CDN 同步**：解除历史 DLL 遗留的平台限制，确保全部 35 款跨平台声明式 2.0 插件在 macOS 与 Windows 双端开箱即用；同步更新 `plugins/` 独立扩展包至 `v2.0.0` 并发布至线上 CDN (`plugins-v2/catalog.json`)。
+
+### 🐛 问题修复 (Bug Fixes)
+- **本地旧版插件别名自动合并与去重**：修复本地存在旧版同名或别名目录（如 `clipboard-manager`、`everything-search`、`context-menu`）时产生重复卡片或误打开旧版静态页面的问题，自动合并至内置声明式 2.0 组件。
 
 ### 📝 文档与工程基建 (Chores & Docs)
-- 在AI插件选型决策树第0步加入no-view无界面瞬时命令规范 (`c8ccab9`)
-- 在AGENTS.md中新增AI开发插件的布局选型决策树与代码填空契约 (`80ba131`)
-- 确立原则5极简灰阶单色规范并清洗三大标杆插件彩虹色与Emoji污染 (`5de84d9`)
+- 在 AI 插件选型决策树第 0 步加入 `no-view` 无界面瞬时命令规范 (`c8ccab9`)
+- 在 `AGENTS.md` 中新增 AI 开发插件的布局选型决策树与代码填空契约 (`80ba131`)
+- 确立原则 5 极简灰阶单色规范并清洗三大标杆插件彩虹色与 Emoji 污染 (`5de84d9`)
 
 ---
 

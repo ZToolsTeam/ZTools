@@ -1534,6 +1534,7 @@ export const OFFICIAL_PLUGINS_MAP = Object.freeze({
  */
 export const OFFICIAL_PLUGIN_ALIASES = Object.freeze({
   'clipboard-manager': OFFICIAL_PLUGIN_IDS.CLIPBOARD_HISTORY,
+  'everything-search': OFFICIAL_PLUGIN_IDS.EVERYTHING_SEARCH,
   'window-manager': OFFICIAL_PLUGIN_IDS.WINDOW_MANAGEMENT,
   'system-tools': OFFICIAL_PLUGIN_IDS.SYSTEM,
   screenshot: OFFICIAL_PLUGIN_IDS.SCREENSHOTS,
