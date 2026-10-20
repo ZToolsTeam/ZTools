@@ -1,12 +1,22 @@
+<p align="center">
+  <img src="assets/ztools-logo.png" width="96" alt="ZTools Logo">
+</p>
+
 # ZTools
 
 <p align="center">
-  <strong>现代化、高性能、纯粹开源的 Windows & macOS 双端效率启动器与插件中枢</strong>
+  <strong>面向 Windows 与 macOS 的桌面效率启动器与插件中枢</strong>
+</p>
+
+<p align="center">
+  <a href="https://www.ztools.cn">官网</a> ·
+  <a href="https://www.ztools.cn/download.html">下载</a> ·
+  <a href="https://github.com/ZToolsTeam/ZTools-extensions">插件与开发工具</a> ·
+  <a href="https://github.com/ZToolsTeam/ZTools/issues">问题反馈</a>
 </p>
 
 <p align="center">
   <a href="#license"><img src="https://img.shields.io/badge/License-GPL--3.0-blue.svg" alt="License: GPL-3.0"></a>
-  <a href="https://github.com/codingmuse/ZTools/actions"><img src="https://img.shields.io/badge/CI-Passing-brightgreen.svg" alt="CI Status"></a>
   <a href="https://nodejs.org"><img src="https://img.shields.io/badge/Node.js-%3E%3D22-green.svg" alt="Node Version"></a>
   <a href="https://www.electronjs.org"><img src="https://img.shields.io/badge/Electron-43.4.1-blue.svg" alt="Electron Version"></a>
   <a href="CHANGELOG.md"><img src="https://img.shields.io/badge/Changelog-%E6%9B%B4%E6%96%B0%E6%97%A5%E5%BF%97-orange.svg" alt="Changelog"></a>
@@ -81,7 +91,7 @@ ZTools 采用**“核心宿主大仓 + 插件生态大仓”**的双仓解耦模
    - `frontend/`：Vue 3 纯声明式渲染器；
    - `packages/`：公共核心基础设施（`@ztools/declarative-ui` SDK、`@ztools/ai-mcp` 网关、`@ztools/sync-crypto` 加密核心等）；
    - 随包内置预编译的 Rust Native 侧车（`ztools-indexer.exe` 与 `ztools-uiaccess.exe`），普通开发者无需配置 C++ 或 Rust 编译环境。
-2. **插件生态大仓（[ZTools-extensions](https://github.com/codingmuse/ZTools-extensions)）**：
+2. **插件生态大仓（[ZTools-extensions](https://github.com/ZToolsTeam/ZTools-extensions)）**：
    - 包含日常开源通用插件与社区提交插件；
    - 内置一键脚手架（`npm run create-plugin`）；
    - 开放治理模式：**开放投稿，投稿即 PR，经 CI AST 安全扫描后官方审核合并，免运维静态分发**。
@@ -90,7 +100,7 @@ ZTools 采用**“核心宿主大仓 + 插件生态大仓”**的双仓解耦模
 
 ## 📦 安装包下载与双平台构建 (Windows & macOS Releases)
 
-每次正式版本发布均在 [GitHub Releases](https://github.com/codingmuse/ZTools/releases) 同步提供 **Windows** 与 **macOS** 双平台安装包（附带 `.sha256` 完整性校验）：
+每次正式版本发布均在 [GitHub Releases](https://github.com/ZToolsTeam/ZTools/releases) 同步提供 **Windows** 与 **macOS** 双平台安装包（附带 `.sha256` 完整性校验）：
 
 | 平台 | 产物格式 | 文件名示例 | 适用场景 |
 | :--- | :--- | :--- | :--- |
@@ -109,7 +119,7 @@ ZTools 采用**“核心宿主大仓 + 插件生态大仓”**的双仓解耦模
 ### 1. 克隆代码
 
 ```bash
-git clone https://github.com/codingmuse/ZTools.git
+git clone https://github.com/ZToolsTeam/ZTools.git
 cd ZTools
 ```
 
@@ -145,23 +155,10 @@ npm run release:mac
 
 想要为 ZTools 开发插件？无需克隆本仓库！
 
-1. 访问插件大仓：[ZTools-extensions](https://github.com/codingmuse/ZTools-extensions)；
+1. 访问插件大仓：[ZTools-extensions](https://github.com/ZToolsTeam/ZTools-extensions)；
 2. 运行 `npm run create-plugin my-tool` 一键生成遵循声明式规范的标准工程；
 3. 打开电脑上正在运行的 ZTools 客户端，在「设置」->「开发者」中直接加载本地目录实时预览；
-4. 编写完成直接提交 PR，官方审核后全网用户即可一键安装！
-
----
-
-## 🗺️ 开发路线图 (Roadmap)
-
-ZTools 采用现代声明式交互与开源插件生态范式，规避多语言臃肿缝合包袱，按阶段高速推进跨平台全覆盖（依托 AI 驱动研发，不设固定排期限制，以工程验收门禁为准绳持续迭代）：
-
-- **Stage 1（核心底座与双模态统一）**：纯 TS 宿主 + 预编译 Rust 侧车（NTFS MFT 百万文件秒搜 & UIAccess 穿透）、悬浮窗与大主界面双模态（`Ctrl/Cmd+M`）、四级快捷键分发器、38 款第一方核心内置套件基座与 BYOK/本地离线 AI 路由；
-- **Stage 2（扩展宿主与生态大仓闭环）**：`utilityProcess` + `worker_threads` 隔离扩展宿主（100MB 堆上限与预热池）、支持 `@ztools.*` 元数据注释的 `Script Commands` 脚本引擎、扩展 `tool` 自动接入 MCP、市场一键静默安装与 AST 安全扫描上架闭环；
-- **Stage 3（macOS 原生体验全量交付）**：Universal (`arm64` + `x86_64`) 双架构构建与 Apple 自动公证、`AXUIElement` 跨进程取词与菜单栏导航、Spotlight 秒搜与 `Quick Look` 预览、`ScreenCaptureKit` 高分屏截屏与 TCC 权限自愈引导；
-- **Stage 4（Linux 极客桌面与团队协同）**：Wayland (`XDG GlobalShortcuts Portal` / `wlr-layer-shell`) 与 X11 双栈适配、KWin/Mutter/Hyprland/Sway 多后端窗口分屏、`AT-SPI2` 取词与 Fcitx5 中文输入法兼容、AppImage/Flatpak/AUR 全渠道分发及 ZTools for Teams 协同。
-
-👉 查看完整的架构图、38 款内置套件清单与三大平台技术细节：**[ROADMAP.md](ROADMAP.md)**
+4. 编写完成提交 PR，由维护者审核、合并并安排发布。
 
 ---
 
