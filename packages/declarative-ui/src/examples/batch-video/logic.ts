@@ -5,10 +5,14 @@
  */
 
 import {
+  formatBytes,
   getRealSystemPath,
+  invokeDllPluginCapability,
   scanRealDirectoryTree,
   showRealItemInFolder
 } from '../shared/native-ipc.js'
+
+export { formatBytes } from '../shared/native-ipc.js'
 
 export interface CapabilityActionItem {
   id: string
@@ -50,7 +54,7 @@ export const FORBIDDEN_REASON = '视频批处理输出路径不可指向系统�
 export const VIDEO_WORKSHOP_MODES: CapabilityActionItem[] = [
   {
     id: 'video-compress-crf23',
-    title: '① 视频画质智能瘦身 (H.264 CRF 23)',
+    title: '01. 视频画质智能瘦身 (H.264 CRF 23)',
     subtitle: '视觉无损压缩，平均减少 50%~65% 视频文件体积',
     tag: '画质压缩',
     method: 'BatchCompressVideo',
@@ -60,7 +64,7 @@ export const VIDEO_WORKSHOP_MODES: CapabilityActionItem[] = [
   },
   {
     id: 'video-compress-hevc',
-    title: '② HEVC H.265 极限高压缩 (CRF 26)',
+    title: '02. HEVC H.265 极限高压缩 (CRF 26)',
     subtitle: '新一代 H.265 编码，体积缩小至原视频 30% 左右',
     tag: 'HEVC瘦身',
     method: 'BatchCompressVideo',
@@ -70,7 +74,7 @@ export const VIDEO_WORKSHOP_MODES: CapabilityActionItem[] = [
   },
   {
     id: 'video-convert-mp4',
-    title: '③ 多格式极速封装转标准 MP4',
+    title: '03. 多格式极速封装转标准 MP4',
     subtitle: '将 MKV/MOV/AVI/FLV/TS 统一转为全平台兼容 MP4 (+faststart)',
     tag: '格式转换',
     method: 'BatchConvertFormat',
@@ -80,7 +84,7 @@ export const VIDEO_WORKSHOP_MODES: CapabilityActionItem[] = [
   },
   {
     id: 'video-crop-9-16',
-    title: '④ 竖屏短视频画幅裁剪 (9:16 居中)',
+    title: '04. 竖屏短视频画幅裁剪 (9:16 居中)',
     subtitle: '适配抖音/视频号/Reels/Shorts 竖屏中心构图自动裁剪',
     tag: '9:16 竖屏',
     method: 'BatchCropByRatio',
@@ -90,7 +94,7 @@ export const VIDEO_WORKSHOP_MODES: CapabilityActionItem[] = [
   },
   {
     id: 'video-crop-1-1',
-    title: '⑤ 正方形/宽银幕画幅裁剪 (1:1 / 16:9)',
+    title: '05. 正方形/宽银幕画幅裁剪 (1:1 / 16:9)',
     subtitle: '去除上下黑边或裁剪为社交媒体 1:1 方形画幅',
     tag: '1:1 裁剪',
     method: 'BatchCropByRatio',
@@ -100,7 +104,7 @@ export const VIDEO_WORKSHOP_MODES: CapabilityActionItem[] = [
   },
   {
     id: 'video-trim-ends',
-    title: '⑥ 批量去片头片尾裁剪 (跳过首尾3秒)',
+    title: '06. 批量去片头片尾裁剪 (跳过首尾3秒)',
     subtitle: '自动切除固定片头广告与片尾定格贴片',
     tag: '去头去尾',
     method: 'BatchTrimDuration',
@@ -110,7 +114,7 @@ export const VIDEO_WORKSHOP_MODES: CapabilityActionItem[] = [
   },
   {
     id: 'video-to-gif',
-    title: '⑦ 高清全局调色板 GIF 动图导出',
+    title: '07. 高清全局调色板 GIF 动图导出',
     subtitle: '双通道 palettegen + paletteuse 生成无噪点高清 GIF 动图',
     tag: '转 GIF',
     method: 'BatchConvertToGif',
@@ -120,7 +124,7 @@ export const VIDEO_WORKSHOP_MODES: CapabilityActionItem[] = [
   },
   {
     id: 'video-watermark',
-    title: '⑧ 九宫格防盗版图片/文字水印合成',
+    title: '08. 九宫格防盗版图片/文字水印合成',
     subtitle: '支持左上/右上/左下/右下/居中/平铺锚点透明度合成',
     tag: '批量水印',
     method: 'BatchAddWatermark',
@@ -130,7 +134,7 @@ export const VIDEO_WORKSHOP_MODES: CapabilityActionItem[] = [
   },
   {
     id: 'video-scale-1080p',
-    title: '⑨ 分辨率尺寸标准化 (统一 1080P / 720P)',
+    title: '09. 分辨率尺寸标准化 (统一 1080P / 720P)',
     subtitle: '将 4K 大体积素材统一缩放为 1920×1080 标准全高清',
     tag: '尺寸缩放',
     method: 'BatchResizeResolution',
@@ -140,7 +144,7 @@ export const VIDEO_WORKSHOP_MODES: CapabilityActionItem[] = [
   },
   {
     id: 'video-speed-1-5x',
-    title: '⑩ 视频与音轨同步倍速调整 (1.5x 倍速)',
+    title: '10. 视频与音轨同步倍速调整 (1.5x 倍速)',
     subtitle: 'setpts 视频加速配合 atempo 音频变调补偿',
     tag: '倍速调整',
     method: 'BatchChangeSpeed',
@@ -150,7 +154,7 @@ export const VIDEO_WORKSHOP_MODES: CapabilityActionItem[] = [
   },
   {
     id: 'video-rotate-flip',
-    title: '⑪ 画面水平镜像翻转与 90° 旋转校正',
+    title: '11. 画面水平镜像翻转与 90° 旋转校正',
     subtitle: '一键批量纠正手机横竖颠倒录制素材或水平镜像',
     tag: '旋转翻转',
     method: 'BatchRotateFlip',
@@ -160,7 +164,7 @@ export const VIDEO_WORKSHOP_MODES: CapabilityActionItem[] = [
   },
   {
     id: 'video-extract-audio',
-    title: '⑫ 音轨无损提取与静音轨移除 (转 MP3 320k)',
+    title: '12. 音轨无损提取与静音轨移除 (转 MP3 320k)',
     subtitle: '剥离视频画面提取高品质 MP3/AAC 独立音频文件',
     tag: '音轨提取',
     method: 'BatchExtractAudio',
@@ -190,15 +194,6 @@ export function filterCapabilityItems(items: CapabilityActionItem[], query: stri
       item.method.toLowerCase().includes(q)
     )
   })
-}
-
-export function formatBytes(bytes: number): string {
-  if (!Number.isFinite(bytes) || bytes <= 0) return '0 B'
-  const units = ['B', 'KB', 'MB', 'GB', 'TB']
-  const k = 1024
-  const idx = Math.min(units.length - 1, Math.max(0, Math.floor(Math.log(bytes) / Math.log(k))))
-  const val = bytes / Math.pow(k, idx)
-  return `${val >= 100 || idx === 0 ? val.toFixed(0) : val.toFixed(1)} ${units[idx]}`
 }
 
 export function validateInvocationPayload(method: string, params: unknown): { valid: boolean; error?: string } {
@@ -234,76 +229,37 @@ export function validateInvocationPayload(method: string, params: unknown): { va
 export async function invokeNativeCapability(
   method: string,
   params: Record<string, unknown>,
-  hostBridge?: { dllplugin?: { call?: (plugin: string, fn: string, payload: unknown) => Promise<unknown> } }
+  hostBridge?: any
 ): Promise<NativeInvocationResult> {
   const check = validateInvocationPayload(method, params)
   if (!check.valid) {
     throw new Error(check.error || '参数校验失败')
   }
-
-  const runtimeHost = hostBridge ?? (typeof (globalThis as any).ztools !== 'undefined' ? (globalThis as any).ztools : undefined)
-  const callFn = runtimeHost?.dllplugin?.call
-
-  if (typeof callFn === 'function') {
-    try {
-      const raw = await callFn(DLL_PLUGIN_NAME, method.trim(), params)
-      let parsed: unknown = raw
-      if (typeof raw === 'string') {
-        try {
-          parsed = JSON.parse(raw)
-        } catch {
-          throw new Error('MALFORMED_DLL_RESPONSE: 原生组件返回了损坏的 JSON 数据')
-        }
-      }
-      if (parsed && typeof parsed === 'object' && 'error' in (parsed as Record<string, unknown>)) {
-        const errMsg = String((parsed as Record<string, unknown>).error || '原生组件返回未知错误')
-        return {
-          ok: false,
-          pluginName: DLL_PLUGIN_NAME,
-          method: method.trim(),
-          error: `DLL_ERROR: ${errMsg}`
-        }
-      }
-      return {
-        ok: true,
-        pluginName: DLL_PLUGIN_NAME,
-        method: method.trim(),
-        data: parsed,
-        fromFallback: false
-      }
-    } catch (err: any) {
-      const message = err instanceof Error ? err.message : String(err)
-      if (message.startsWith('MALFORMED_DLL_RESPONSE:')) {
-        throw err
-      }
-      return {
-        ok: false,
-        pluginName: DLL_PLUGIN_NAME,
-        method: method.trim(),
-        error: `NATIVE_CALL_FAILED: ${message}`
-      }
-    }
-  }
-
+  const res = await invokeDllPluginCapability(DLL_PLUGIN_NAME, method, params, hostBridge)
   return {
-    ok: true,
+    ok: res.ok,
     pluginName: DLL_PLUGIN_NAME,
     method: method.trim(),
-    data: { simulated: true, method: method.trim(), params },
-    fromFallback: true
+    data: res.data ?? undefined,
+    error: res.error,
+    fromFallback: res.fromFallback
   }
 }
 
 const VIDEO_EXT_REGEX = /\.(?:mp4|mkv|mov|avi|flv|webm|wmv|ts|m4v|gif)$/i
 
-/**
- * 深度扫描本机 Videos / Downloads / Desktop 目录下的真实视频文件
- */
-export async function fetchRealVideoWorkspace(hostOverride?: any): Promise<{
+export type VideoWorkspaceSnapshot = RealVideoFileItem[] & {
   scannedDirs: string[]
   files: RealVideoFileItem[]
+  items: RealVideoFileItem[]
   presets: CapabilityActionItem[]
-}> {
+}
+
+/**
+ * 深度扫描本机 Videos / Downloads / Desktop 目录下的真实视频文件
+ * 严禁回退扫描非视频文件充当视频，严禁在真实宿主下拼接 INITIAL_SAMPLE_VIDEOS
+ */
+export async function fetchRealVideoWorkspace(hostOverride?: any): Promise<VideoWorkspaceSnapshot> {
   const [videosDir, downloadsDir, desktopDir] = await Promise.all([
     getRealSystemPath('videos', hostOverride),
     getRealSystemPath('downloads', hostOverride),
@@ -312,17 +268,22 @@ export async function fetchRealVideoWorkspace(hostOverride?: any): Promise<{
 
   const scannedDirs = [videosDir, downloadsDir, desktopDir].filter(Boolean)
   const files: RealVideoFileItem[] = []
+  const seenPaths = new Set<string>()
 
   for (const dir of scannedDirs) {
     const videoScan = await scanRealDirectoryTree(dir, {
       maxDepth: 2,
       maxFiles: 250,
-      collectTopN: 25,
+      collectTopN: 40,
       filterExt: VIDEO_EXT_REGEX,
       hostOverride
     })
     for (const f of videoScan.files) {
       if (f.sizeBytes <= 0) continue
+      if (!VIDEO_EXT_REGEX.test(f.name)) continue
+      const normPath = f.path.toLowerCase()
+      if (seenPaths.has(normPath)) continue
+      seenPaths.add(normPath)
       const dot = f.name.lastIndexOf('.')
       const ext = dot > 0 ? f.name.slice(dot).toLowerCase() : '.mp4'
       files.push({
@@ -337,39 +298,18 @@ export async function fetchRealVideoWorkspace(hostOverride?: any): Promise<{
     }
   }
 
-  // 若用户视频目录无视频，回退扫描媒体与归档文件以确保真实文件列表可检视
-  if (files.length === 0) {
-    for (const dir of scannedDirs) {
-      const fallbackScan = await scanRealDirectoryTree(dir, {
-        maxDepth: 1,
-        maxFiles: 50,
-        collectTopN: 15,
-        hostOverride
-      })
-      for (const f of fallbackScan.files) {
-        if (f.sizeBytes <= 0) continue
-        const dot = f.name.lastIndexOf('.')
-        const ext = dot > 0 ? f.name.slice(dot).toLowerCase() : '.mp4'
-        files.push({
-          id: `vid-fb-${files.length}-${f.path}`,
-          name: f.name,
-          path: f.path,
-          parentDir: dir,
-          extension: ext,
-          sizeBytes: f.sizeBytes,
-          estimatedCompressedBytes: Math.round(f.sizeBytes * 0.42)
-        })
-      }
-    }
-  }
-
   files.sort((a, b) => b.sizeBytes - a.sizeBytes)
-  return {
+  const presets = getCapabilityItems()
+
+  return Object.assign([...files], {
     scannedDirs,
     files,
-    presets: getCapabilityItems()
-  }
+    items: files,
+    presets
+  })
 }
+
+export const scanLocalVideoQueue = fetchRealVideoWorkspace
 
 export async function openVideoFileLocation(fullPath: string, hostOverride?: any): Promise<boolean> {
   if (!fullPath) return false

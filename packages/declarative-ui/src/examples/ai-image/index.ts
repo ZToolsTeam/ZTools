@@ -9,9 +9,7 @@ import {
   showToast,
   Toast,
   confirmAlert,
-  MetricGrid,
-  FilterBar,
-  SegmentedControl
+  FilterBar
 } from '../../index.js'
 import {
   AI_IMAGE_ENGINES,
@@ -24,21 +22,23 @@ import {
   openAiImageLocation,
   runAiImageBatch
 } from './logic.js'
+import { isRealElectronHost } from '../shared/native-ipc.js'
 
 export * from './logic.js'
 
 export function AiImageCommand() {
   const [searchText, setSearchText] = useState('')
-  const [tab, setTab] = useState<'files' | 'engines' | 'all'>('files')
   const [activeEngineId, setActiveEngineId] = useState<string>(AI_IMAGE_ENGINES[0].id)
   const [scaleFactor, setScaleFactor] = useState<'1x' | '2x' | '4x'>('2x')
   const [denoiseStrength, setDenoiseStrength] = useState<'light' | 'standard' | 'strong'>('standard')
   const [outputFormat, setOutputFormat] = useState<'png' | 'webp' | 'jpg'>('png')
   const [gpuAccel, setGpuAccel] = useState<boolean>(true)
-  const [files, setFiles] = useState<AiImageFileItem[]>(INITIAL_AI_IMAGE_FILES)
-  const [checkedIds, setCheckedIds] = useState<string[]>(INITIAL_AI_IMAGE_FILES.map(f => f.id))
+  const isRealHost = isRealElectronHost()
+  const initialFiles = isRealHost ? [] : INITIAL_AI_IMAGE_FILES
+  const [files, setFiles] = useState<AiImageFileItem[]>(initialFiles)
+  const [checkedIds, setCheckedIds] = useState<string[]>(initialFiles.map(f => f.id))
   const [engines, setEngines] = useState<AiImageEnginePreset[]>(AI_IMAGE_ENGINES)
-  const [scannedDirs, setScannedDirs] = useState<string[]>(['C:\\Users\\Geek\\Pictures', 'C:\\Users\\Geek\\Desktop'])
+  const [, setScannedDirs] = useState<string[]>([])
   const [isLoading, setIsLoading] = useState(false)
 
   async function refreshWorkspace(showIndicator = false) {
@@ -171,13 +171,19 @@ export function AiImageCommand() {
                 outputFormat,
                 gpuAccel
               })
-              if (res.ok) {
+              if (!res.ok) {
                 showToast({
-                  style: Toast.Style.Success,
-                  title: `已处理 ${f.name}`,
-                  message: `输出分辨率 ${res.targetResolution}`
+                  style: Toast.Style.Failure,
+                  title: `处理 ${f.name} 失败`,
+                  message: res.error || '推理引擎返回异常'
                 })
+                return
               }
+              showToast({
+                style: Toast.Style.Success,
+                title: `已处理 ${f.name}`,
+                message: `输出分辨率 ${res.targetResolution}`
+              })
             }
           }),
           Action({
@@ -210,59 +216,8 @@ export function AiImageCommand() {
         })
       )
     }),
-    metricGrid: MetricGrid({
-      columns: 4,
-      items: [
-        {
-          id: 'ai-img-count',
-          label: '已选 / 扫描图片数',
-          value: `${checkedIds.length} / ${files.length} 张`,
-          subValue: `${scannedDirs.length} 个图片目录已穿透`,
-          status: 'normal'
-        },
-        {
-          id: 'ai-img-res',
-          label: '预计输出分辨率',
-          value: previewOutResolution,
-          subValue: `超分倍率 ${scaleFactor}`,
-          status: 'success'
-        },
-        {
-          id: 'ai-img-gpu',
-          label: '显存推理加速',
-          value: gpuAccel ? 'Vulkan / CUDA' : 'CPU NCNN',
-          subValue: activeEngine.modelName,
-          status: 'success'
-        },
-        {
-          id: 'ai-img-size',
-          label: '已选图片总大小',
-          value: formatBytes(totalBytes),
-          subValue: `目标格式 .${outputFormat.toUpperCase()}`,
-          status: 'normal'
-        }
-      ]
-    }),
     filterBar: FilterBar({
-      wizardSteps: [
-        { step: 1, label: '1. 扫描本机图片目录', status: 'done' },
-        { step: 2, label: '2. 选择 AI 超分/抠图引擎', status: 'done' },
-        { step: 3, label: '3. 配置倍率与降噪强度', status: 'active' },
-        { step: 4, label: '4. 批量推理导出', status: 'pending' }
-      ],
       summaryText: `队列已选 ${checkedIds.length}/${files.length} 张图片 (${formatBytes(totalBytes)}) · 引擎: ${activeEngine.tag} · 预计输出分辨率 ${previewOutResolution}`,
-      groups: [
-        {
-          id: 'ai-engine',
-          label: 'AI 视觉引擎',
-          value: activeEngineId,
-          onChange: v => setActiveEngineId(v),
-          options: AI_IMAGE_ENGINES.map(e => ({
-            value: e.id,
-            label: e.tag
-          }))
-        }
-      ],
       actions: [
         {
           id: 'rescan-ai-image',
@@ -277,17 +232,6 @@ export function AiImageCommand() {
       title: 'AI 图像超分与抠图参数工作台',
       subtitle: gpuAccel ? 'Vulkan / CUDA 硬件加速' : 'CPU 本地离线推理',
       fields: [
-        {
-          id: 'wb-ai-engine',
-          label: 'AI 视觉引擎',
-          type: 'select',
-          value: activeEngineId,
-          onChange: val => setActiveEngineId(val),
-          options: AI_IMAGE_ENGINES.map(e => ({
-            label: e.tag,
-            value: e.id
-          }))
-        },
         {
           id: 'wb-scale-factor',
           label: '超分放大倍率',
@@ -366,14 +310,6 @@ export function AiImageCommand() {
       emptyText: '当前未找到匹配的图片文件',
       items: rightQueueItems
     },
-    segmentedControl: SegmentedControl({
-      value: tab,
-      onChange: v => setTab(v as any),
-      options: [
-        { value: 'files', label: '待处理图片队列', badge: files.length },
-        { value: 'engines', label: '5 大 AI 视觉模型', badge: engines.length }
-      ]
-    }),
     children: [
       List.Section({
         title: `本机待处理图片队列 (${filteredFiles.length})`,
@@ -384,3 +320,4 @@ export function AiImageCommand() {
 }
 
 export default AiImageCommand
+

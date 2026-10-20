@@ -10,11 +10,16 @@
  */
 
 import {
+  callHostTransport,
   invokeHostCapability,
   invokePluginService,
+  isRealElectronHost,
+  openRealPath,
   resolveRealSpecialPaths,
   scanRealDirectoryTree,
+  showRealItemInFolder,
   showRealToast,
+  trashRealItem,
   writeRealClipboardText,
   formatBytes,
   type NativeInvocationResult
@@ -51,7 +56,7 @@ export const STREAM_PLATFORMS: StreamPlatformMeta[] = [
   {
     id: "bilibili",
     name: "哔哩哔哩 (Bilibili)",
-    icon: "📺",
+    icon: "Icon.Video",
     color: "#fb7299",
     handlerName: "BilibiliHandler",
     features: "支持 BV/av 号、番剧 ep/ss、分 P 合集列表、4K/1080P60 DASH 音画分离自动合并与弹幕/CC字幕导出"
@@ -59,7 +64,7 @@ export const STREAM_PLATFORMS: StreamPlatformMeta[] = [
   {
     id: "douyin",
     name: "抖音无水印 (Douyin)",
-    icon: "🎵",
+    icon: "Icon.Music",
     color: "#111827",
     handlerName: "DouyinHandler",
     features: "支持口令长短链自动还原、1080P 原画去水印视频提取、图集无损保存与原声 BGM 独立提取"
@@ -67,7 +72,7 @@ export const STREAM_PLATFORMS: StreamPlatformMeta[] = [
   {
     id: "kuaishou",
     name: "快手短视频 (Kuaishou)",
-    icon: "⚡",
+    icon: "Icon.Bolt",
     color: "#f97316",
     handlerName: "KuaishouHandler",
     features: "支持快手分享短链解析、去水印高清 MP4 原片直提与直播回放切片下载"
@@ -75,7 +80,7 @@ export const STREAM_PLATFORMS: StreamPlatformMeta[] = [
   {
     id: "youtube",
     name: "YouTube / 国际流媒体",
-    icon: "▶️",
+    icon: "Icon.Play",
     color: "#ef4444",
     handlerName: "GenericYtDlpHandler",
     features: "基于 yt-dlp + FFmpeg 引擎，支持 4K/8K WEBM/MP4 自适应流合并、多语种内嵌字幕与播放列表批量下载"
@@ -83,7 +88,7 @@ export const STREAM_PLATFORMS: StreamPlatformMeta[] = [
   {
     id: "weibo",
     name: "微博视频 (Weibo)",
-    icon: "🌐",
+    icon: "Icon.Globe",
     color: "#f59e0b",
     handlerName: "WeiboHandler",
     features: "支持微博正文视频、tv.weibo 連結与超话高清视频流直链提取"
@@ -91,7 +96,7 @@ export const STREAM_PLATFORMS: StreamPlatformMeta[] = [
   {
     id: "m3u8_direct",
     name: "HLS M3U8 / MP4 直链",
-    icon: "🔗",
+    icon: "Icon.Link",
     color: "#3b82f6",
     handlerName: "GenericStreamHandler",
     features: "支持 HLS (.m3u8) 分片并发拉取合并转封装 MP4、DASH (.mpd) 及常规直链视频高速拉取"
@@ -223,13 +228,12 @@ export function detectVideoPlatform(rawText: string): {
   return { url: extractedUrl, platform: STREAM_PLATFORMS[5] };
 }
 
-export async function readClipboardStreamUrl(): Promise<{
+export async function readClipboardStreamUrl(hostBridge?: any): Promise<{
   url: string;
   platform: StreamPlatformMeta;
 }> {
   try {
-    const { callHostTransport } = await import("../shared/native-ipc.js");
-    const ipcClip = await callHostTransport<any>("clipboard_read_text", {});
+    const ipcClip = await callHostTransport<any>("clipboard_read_text", {}, hostBridge);
     if (ipcClip.ok && ipcClip.data) {
       const txt = typeof ipcClip.data === "string" ? ipcClip.data : String(ipcClip.data.text || "");
       return detectVideoPlatform(txt);
@@ -242,21 +246,44 @@ export async function readClipboardStreamUrl(): Promise<{
 
 const VIDEO_EXT_SET = new Set([".mp4", ".mkv", ".mov", ".webm", ".flv", ".avi", ".m4v", ".ts"]);
 
-export async function fetchVideoDownloaderSnapshot(): Promise<VideoDownloaderSnapshot> {
-  const paths = await resolveRealSpecialPaths();
+export async function fetchVideoDownloaderSnapshot(hostBridge?: any): Promise<VideoDownloaderSnapshot> {
+  const paths = await resolveRealSpecialPaths(hostBridge);
   const videosDir = paths.videos || `${paths.userProfile}\\Videos`;
   const downloadsDir = paths.downloads || `${paths.userProfile}\\Downloads`;
   const driveLetter = (videosDir.match(/^[A-Za-z]:/) || ["C:"])[0].toUpperCase();
 
-  const [sysRes, videoEntries, downloadEntries, clipDetected] = await Promise.all([
-    invokeHostCapability<Record<string, unknown>>("system.info", { includeStorage: true }),
-    scanRealDirectoryTree(videosDir, { maxDepth: 3, maxFiles: 180, filterExt: /\.(?:mp4|mkv|mov|webm|flv|avi)$/i }),
-    scanRealDirectoryTree(downloadsDir, { maxDepth: 2, maxFiles: 180, filterExt: /\.(?:mp4|mkv|mov|webm|flv|avi)$/i }),
-    readClipboardStreamUrl()
+  const [diskUsageRes, sysRes, videoEntries, downloadEntries, clipDetected] = await Promise.all([
+    callHostTransport<Record<string, unknown>>(
+      "system_get_disk_usage",
+      { drive: `${driveLetter}\\` },
+      hostBridge
+    ),
+    invokeHostCapability<Record<string, unknown>>("system.info", { includeStorage: true }, hostBridge),
+    scanRealDirectoryTree(
+      videosDir,
+      { maxDepth: 3, maxFiles: 180, filterExt: /\.(?:mp4|mkv|mov|webm|flv|avi)$/i },
+      hostBridge
+    ),
+    scanRealDirectoryTree(
+      downloadsDir,
+      { maxDepth: 2, maxFiles: 180, filterExt: /\.(?:mp4|mkv|mov|webm|flv|avi)$/i },
+      hostBridge
+    ),
+    readClipboardStreamUrl(hostBridge)
   ]);
 
   let driveFreeBytes = 0;
-  if (sysRes.ok && sysRes.data) {
+  if (diskUsageRes.ok && diskUsageRes.data && typeof diskUsageRes.data === "object") {
+    const d = diskUsageRes.data;
+    const total = Number(d.total ?? d.size ?? d.totalBytes ?? 0);
+    const used = Number(d.used ?? d.usedBytes ?? 0);
+    const avail = Number(d.available ?? d.free ?? d.availableBytes ?? d.freeBytes ?? Math.max(0, total - used));
+    if (Number.isFinite(avail) && avail > 0) {
+      driveFreeBytes = avail;
+    }
+  }
+
+  if (driveFreeBytes <= 0 && sysRes.ok && sysRes.data) {
     const storageArr = Array.isArray((sysRes.data as { storage?: unknown }).storage)
       ? ((sysRes.data as { storage: Array<Record<string, unknown>> }).storage)
       : [];
@@ -347,25 +374,36 @@ export async function fetchVideoDownloaderSnapshot(): Promise<VideoDownloaderSna
 export async function parseAndDownloadStreamVideo(
   rawInput: string,
   saveDir: string,
-  qualityPreset: VideoQualityPreset
+  qualityPreset: VideoQualityPreset,
+  hostBridge?: any
 ): Promise<NativeInvocationResult> {
   const detected = detectVideoPlatform(rawInput);
   if (!detected.url) {
     return {
       ok: false,
       code: -1,
-      message: "未识别到有效的视频分享链接或 BV 号，请先复制 B站/抖音/快手/YouTube 链接"
+      message: "未识别到有效的视频分享链接或 BV 号，请先复制 B站/抖音/快手/YouTube 链接",
+      error: "INVALID_STREAM_URL"
+    };
+  }
+  if (!saveDir || FORBIDDEN_TARGET_PATTERN.test(saveDir)) {
+    return {
+      ok: false,
+      code: -1,
+      message: FORBIDDEN_REASON,
+      error: FORBIDDEN_REASON
     };
   }
 
-  // 1. 优先调用原生插件 `VideoDownloaderPlugin`
-  const pluginRes = await invokePluginService(DLL_PLUGIN_NAME, "StartDownload", {
+  // 1. 优先调用原生插件 `VideoDownloaderPlugin` (`downloadVideo` 或 `StartDownload`)
+  const payload = {
     url: detected.url,
     platform: detected.platform.id,
     saveDir,
     qualityId: qualityPreset.id,
     ytDlpArgs: qualityPreset.ytDlpArgs
-  });
+  };
+  const pluginRes = await invokePluginService(DLL_PLUGIN_NAME, "downloadVideo", payload, hostBridge);
   if (pluginRes.ok) {
     await showRealToast(
       `已通过 ${detected.platform.name} 解析引擎启动下载 (${qualityPreset.badge})`,
@@ -373,41 +411,120 @@ export async function parseAndDownloadStreamVideo(
     );
     return pluginRes;
   }
+  const legacyPluginRes = await invokePluginService(DLL_PLUGIN_NAME, "StartDownload", payload, hostBridge);
+  if (legacyPluginRes.ok) {
+    await showRealToast(
+      `已通过 ${detected.platform.name} 解析引擎启动下载 (${qualityPreset.badge})`,
+      "success"
+    );
+    return legacyPluginRes;
+  }
 
-  // 2. 生成标准工业级 yt-dlp 命令写入剪贴板并提示
+  // 2. 若为直链音视频 URL，则直接通过宿主 network_http_download 下载到本地目录
+  if (/\.(?:mp4|webm|mkv|mov|flv|m4v)(?:$|[?#])/i.test(detected.url)) {
+    const rawFileName =
+      decodeURIComponent(detected.url.split(/[?#]/)[0].split("/").pop() || "") ||
+      `video_${Date.now()}.mp4`;
+    const safeFileName = rawFileName.replace(/[<>:"/\\|?*]+/g, "_");
+    const destPath = `${saveDir.replace(/[\\/]+$/, "")}\\${safeFileName}`;
+    const dlRes = await callHostTransport<Record<string, unknown>>(
+      "network_http_download",
+      { url: detected.url, destPath, saveDir, fileName: safeFileName },
+      hostBridge
+    );
+    if (dlRes.ok) {
+      await showRealToast(`直链视频已下载至 ${destPath}`, "success");
+      return {
+        ok: true,
+        code: 0,
+        message: `已通过宿主 HTTP 通道下载直链视频至 ${destPath}`,
+        data: dlRes.data ?? { destPath }
+      };
+    }
+    const isRealHost = Boolean(hostBridge) || isRealElectronHost(hostBridge) || isRealElectronHost();
+    if (isRealHost) {
+      return {
+        ok: false,
+        code: -1,
+        message: dlRes.error || "直链视频下载失败",
+        error: dlRes.error || "直链视频下载失败"
+      };
+    }
+  }
+
+  // 3. 若未安装 yt-dlp 直接下载引擎，仅生成标准 yt-dlp 命令写入剪贴板并如实告知用户
   const cmd = `yt-dlp ${qualityPreset.ytDlpArgs} -P "${saveDir}" -o "%(title)s [%(id)s].%(ext)s" "${detected.url}"`;
-  await writeRealClipboardText(cmd);
+  await writeRealClipboardText(cmd, hostBridge);
+  if (isRealElectronHost(hostBridge) || isRealElectronHost()) {
+    return {
+      ok: false,
+      code: -1,
+      message: "本机未检测到 yt-dlp/aria2c 下载引擎，已将命令复制到剪贴板",
+      error: "ENGINE_NOT_FOUND"
+    };
+  }
   await showRealToast(
     `已识别「${detected.platform.name}」并生成 ${qualityPreset.badge} 下载命令至剪贴板`,
-    "success"
+    "info"
   );
   return {
     ok: true,
     code: 0,
-    message: `已识别 [${detected.platform.name}] 并复制下载命令: ${cmd}`
+    message: `已生成并复制 yt-dlp 命令到剪贴板（本机未检测到 yt-dlp 直接下载引擎）: ${cmd}`
   };
 }
 
-export async function trashLocalVideoFiles(paths: string[]): Promise<number> {
-  let count = 0;
+export async function trashLocalVideoFiles(
+  paths: string[],
+  knownVideos: LocalMediaVideoItem[] = [],
+  hostBridge?: any
+): Promise<{ deletedCount: number; freedBytes: number }> {
+  const sizeMap = new Map<string, number>();
+  for (const v of knownVideos) {
+    if (v?.path) sizeMap.set(v.path.toLowerCase(), Math.max(0, Number(v.sizeBytes || 0)));
+  }
+
+  let deletedCount = 0;
+  let freedBytes = 0;
   for (const p of paths) {
     if (!p || FORBIDDEN_TARGET_PATTERN.test(p)) continue;
-    const res = await invokeHostCapability("filesystem.deleteItem", {
-      path: p,
-      useTrash: true
-    });
-    if (res.ok) count += 1;
+    const trashed = await trashRealItem(p, hostBridge);
+    if (trashed.ok) {
+      deletedCount += 1;
+      freedBytes += sizeMap.get(p.toLowerCase()) || 0;
+    }
   }
-  if (count > 0) {
-    await showRealToast(`已将 ${count} 个视频文件移入回收站`, "success");
+  if (deletedCount > 0) {
+    await showRealToast(
+      `已将 ${deletedCount} 个视频文件移入回收站，释放 ${formatBytes(freedBytes)}`,
+      "success"
+    );
   }
-  return count;
+  return { deletedCount, freedBytes };
 }
 
-export async function openLocalVideoFile(targetPath: string): Promise<NativeInvocationResult> {
-  return invokeHostCapability("filesystem.openItem", { path: targetPath });
+export async function openLocalVideoFile(targetPath: string, hostBridge?: any): Promise<NativeInvocationResult> {
+  if (!targetPath || FORBIDDEN_TARGET_PATTERN.test(targetPath)) {
+    return { ok: false, code: -1, message: FORBIDDEN_REASON, error: FORBIDDEN_REASON };
+  }
+  const opened = await openRealPath(targetPath, hostBridge);
+  return {
+    ok: opened,
+    code: opened ? 0 : -1,
+    message: opened ? `已打开视频: ${targetPath}` : `打开视频失败: ${targetPath}`,
+    error: opened ? undefined : "OPEN_VIDEO_FAILED"
+  };
 }
 
-export async function openLocalVideoFolder(targetPath: string): Promise<NativeInvocationResult> {
-  return invokeHostCapability("system.showItemInFolder", { path: targetPath });
+export async function openLocalVideoFolder(targetPath: string, hostBridge?: any): Promise<NativeInvocationResult> {
+  if (!targetPath || FORBIDDEN_TARGET_PATTERN.test(targetPath)) {
+    return { ok: false, code: -1, message: FORBIDDEN_REASON, error: FORBIDDEN_REASON };
+  }
+  const shown = await showRealItemInFolder(targetPath, hostBridge);
+  return {
+    ok: shown,
+    code: shown ? 0 : -1,
+    message: shown ? `已在资源管理器定位: ${targetPath}` : `定位视频失败: ${targetPath}`,
+    error: shown ? undefined : "SHOW_IN_FOLDER_FAILED"
+  };
 }

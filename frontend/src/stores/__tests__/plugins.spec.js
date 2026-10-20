@@ -450,19 +450,56 @@ describe('usePluginsStore', () => {
       window.ztools = { plugin: { refreshIcon } }
       const store = usePluginsStore()
       store.installedPlugins = [
-        { pluginId: 'json-format', builtin: true, icon: '' },
+        { pluginId: 'cleaner', builtin: true, icon: '' },
         { pluginId: 'local-plugin', icon: '', localIconUrl: 'https://cdn.example.com/old.png' },
         { pluginId: 'up-to-date', icon: '', localIconUrl: 'https://cdn.example.com/same.png' }
       ]
       store._applyIconPatch({
-        'json-format': 'https://cdn.example.com/json.png',
+        cleaner: 'https://cdn.example.com/cleaner.png',
         'local-plugin': 'https://cdn.example.com/new.png',
         'up-to-date': 'https://cdn.example.com/same.png'
       })
       expect(refreshIcon).toHaveBeenCalledTimes(1)
       expect(refreshIcon).toHaveBeenCalledWith('local-plugin', 'https://cdn.example.com/new.png')
       // 界面仍然使用市场的远程图标
-      expect(store.installedPlugins[0].icon).toBe('https://cdn.example.com/json.png')
+      expect(store.installedPlugins[0].icon).toBe('https://cdn.example.com/cleaner.png')
+    })
+
+    it('[回归] 随客户端内置的插件不被市场旧图标覆盖（返回首页时图标闪一下再变）', () => {
+      const refreshIcon = vi.fn().mockResolvedValue({ success: true })
+      window.ztools = { plugin: { refreshIcon } }
+      const store = usePluginsStore()
+      store.installedPlugins = [{ pluginId: 'timestamp', builtin: true, icon: 'bundled-plugins/timestamp/icon.svg' }]
+      const list = store.installedPlugins
+      store._applyIconPatch({ timestamp: 'https://cdn.example.com/old-timestamp.png' })
+      expect(store.installedPlugins).toBe(list)
+      expect(store.installedPlugins[0].icon).toBe('bundled-plugins/timestamp/icon.svg')
+      expect(refreshIcon).not.toHaveBeenCalled()
+    })
+
+    it('[集成] 只有内置插件时不向市场查询图标', async () => {
+      apiMocks.getMarketPlugins.mockClear()
+      const store = usePluginsStore()
+      store.installedPlugins = [{ pluginId: 'timestamp', builtin: true, icon: '' }, { pluginId: 'todo', builtin: true, icon: '' }]
+      store._patchInstalledIcons()
+      await Promise.resolve()
+      expect(apiMocks.getMarketPlugins).not.toHaveBeenCalled()
+    })
+
+    it('[破坏性] 市场返回的列表里混入内置插件的图标也会被忽略', async () => {
+      apiMocks.getMarketPlugins.mockClear()
+      apiMocks.getMarketPlugins.mockResolvedValueOnce({
+        list: [
+          { pluginId: 'community-x', icon: 'https://cdn.example.com/x.png' },
+          { pluginId: 'todo', icon: 'https://cdn.example.com/old-todo.png' }
+        ]
+      })
+      const store = usePluginsStore()
+      store.installedPlugins = [{ pluginId: 'todo', builtin: true, icon: '' }, { pluginId: 'community-x', icon: '' }]
+      store._patchInstalledIcons()
+      await vi.waitFor(() => expect(store.installedPlugins.find((p) => p.pluginId === 'community-x').icon).toBe('https://cdn.example.com/x.png'))
+      expect(apiMocks.getMarketPlugins.mock.calls[0][0].ids).toEqual(['community-x'])
+      expect(store.installedPlugins.find((p) => p.pluginId === 'todo').icon).toBe('')
     })
 
     it('[破坏性] 主进程刷新失败不会抛到调用方', async () => {

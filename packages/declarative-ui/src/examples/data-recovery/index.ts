@@ -9,6 +9,7 @@
  */
 
 import { Action, ActionPanel, Icon, List, useEffect, useState } from "../../index.js";
+import { isRealElectronHost } from "../shared/native-ipc.js";
 import {
   RECOVERY_CATEGORIES,
   SCAN_DEPTH_MODES,
@@ -24,16 +25,24 @@ import {
 } from "./logic.js";
 
 export function DataRecoveryCommand() {
-  const [snapshot, setSnapshot] = useState<DataRecoverySnapshot>(() =>
-    createInitialRecoverySnapshot()
-  );
+  const [snapshot, setSnapshot] = useState<DataRecoverySnapshot>(() => {
+    const init = createInitialRecoverySnapshot();
+    if (isRealElectronHost()) {
+      return {
+        ...init,
+        items: [],
+        totalSizeBytes: 0,
+        highIntegrityCount: 0,
+        updatedAt: "正在扫描可恢复文件..."
+      };
+    }
+    return init;
+  });
   const [selectedCategory, setSelectedCategory] = useState<RecoveryCategory>("all");
   const [scanMode, setScanMode] = useState<ScanDepthMode>("quick_recycle");
-  const [checkedIds, setCheckedIds] = useState<string[]>([
-    "rec_doc_01",
-    "rec_doc_02",
-    "rec_img_01"
-  ]);
+  const [checkedIds, setCheckedIds] = useState<string[]>(() =>
+    isRealElectronHost() ? [] : ["rec_doc_01", "rec_doc_02", "rec_img_01"]
+  );
   const [searchText, setSearchText] = useState<string>("");
   const [statusBanner, setStatusBanner] = useState<string>("");
   const [isLoading, setIsLoading] = useState<boolean>(false);
@@ -43,6 +52,9 @@ export function DataRecoveryCommand() {
     try {
       const data = await fetchRecoverableFiles(mode);
       setSnapshot(data);
+      if (isRealElectronHost()) {
+        setCheckedIds(data.items.slice(0, 5).map((i) => i.id));
+      }
       setStatusBanner(
         `已完成扫描 · 发现 ${data.items.length} 个可恢复文件 (${formatBytes(data.totalSizeBytes)}) · 高完整度 ${data.highIntegrityCount} 项`
       );
@@ -224,70 +236,8 @@ export function DataRecoveryCommand() {
         })
       )
     }),
-    metricGrid: {
-      columns: 4,
-      items: [
-        {
-          id: "rec-metric-total",
-          label: "发现可恢复文件",
-          value: `${snapshot.items.length} 项`,
-          subValue: `总计 ${formatBytes(snapshot.totalSizeBytes)}`
-        },
-        {
-          id: "rec-metric-integrity",
-          label: "扇区完整度 >= 90%",
-          value: `${snapshot.highIntegrityCount} 项`,
-          subValue: "簇链未覆写，可 100% 完整还原"
-        },
-        {
-          id: "rec-metric-selected",
-          label: "已勾选待恢复",
-          value: formatBytes(selectedBytes),
-          subValue: `共勾选 ${selectedItems.length} 个文件`
-        },
-        {
-          id: "rec-metric-dir",
-          label: "安全导出目录",
-          value: "ZToolsRecovered",
-          subValue: snapshot.restoreTargetDir
-        }
-      ]
-    },
-    distributionBar: {
-      title: "可恢复文件类型分布",
-      totalLabel: formatBytes(snapshot.totalSizeBytes),
-      segments: RECOVERY_CATEGORIES.map((cat) => {
-        const sum = snapshot.items
-          .filter((i) => i.category === cat.id)
-          .reduce((s, i) => s + i.sizeBytes, 0);
-        return {
-          id: cat.id,
-          label: `${cat.name} (${formatBytes(sum)})`,
-          value: Math.max(1, sum),
-          color: "var(--rc-text-muted)"
-        };
-      })
-    },
     filterBar: {
       summaryText,
-      wizardSteps: [
-        { step: 1, label: `1. 选择扫描模式 (${scanMode})`, status: "done" },
-        { step: 2, label: "2. 按分类筛选误删文件", status: "done" },
-        { step: 3, label: `3. 预览完整度并勾选 (${selectedItems.length} 项)`, status: "active" },
-        { step: 4, label: "4. 按 Enter 导出恢复至安全目录", status: "pending" }
-      ],
-      groups: [
-        {
-          id: "rec-cat-group",
-          label: "文件类型",
-          value: selectedCategory,
-          options: [
-            { title: "全部可恢复项", value: "all" },
-            ...RECOVERY_CATEGORIES.map((c) => ({ title: c.name, value: c.id }))
-          ],
-          onChange: (val) => setSelectedCategory(val as RecoveryCategory)
-        }
-      ],
       actions: [
         {
           id: "rescan",

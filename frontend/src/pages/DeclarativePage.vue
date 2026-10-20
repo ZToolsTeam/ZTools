@@ -119,16 +119,20 @@
         <div class="w-14 h-14 rounded-2xl bg-[var(--rc-warning-subtle)] text-[var(--rc-warning)] border border-[var(--rc-border)] flex items-center justify-center text-2xl mb-4">
           <i class="fa fa-exclamation-triangle"></i>
         </div>
-        <template v-if="unsupportedOfficial">
+        <template v-if="hiddenPlugin">
+          <h3 class="text-base font-semibold text-[var(--rc-text-primary)] mb-1">该插件暂未开放</h3>
+          <p class="text-xs text-[var(--rc-text-muted)] max-w-md mb-5">这个插件还在完善中，完成真实功能验收后才会开放。</p>
+        </template>
+        <template v-else-if="unsupportedOfficial">
           <h3 class="text-base font-semibold text-[var(--rc-text-primary)] mb-1">当前系统暂不可用</h3>
           <p class="text-xs text-[var(--rc-text-muted)] max-w-md mb-5">{{ loadError }}</p>
         </template>
-        <h3 v-if="!unsupportedOfficial" class="text-base font-semibold text-[var(--rc-text-primary)] mb-1">未找到指定的声明式应用</h3>
-        <p v-if="!unsupportedOfficial" class="text-xs text-[var(--rc-text-muted)] max-w-md mb-3">
+        <h3 v-if="!unsupportedOfficial && !hiddenPlugin" class="text-base font-semibold text-[var(--rc-text-primary)] mb-1">未找到指定的声明式应用</h3>
+        <p v-if="!unsupportedOfficial && !hiddenPlugin" class="text-xs text-[var(--rc-text-muted)] max-w-md mb-3">
           插件标识符 “<code class="text-[var(--rc-accent-text)] font-mono">{{ targetPluginId || pluginId }}</code>” 未在官方标杆应用注册表中注册，或者其组件未能成功加载。
         </p>
         <p
-          v-if="loadError && !unsupportedOfficial"
+          v-if="loadError && !unsupportedOfficial && !hiddenPlugin"
           class="text-xs text-[var(--rc-error)] font-mono max-w-md mb-5 px-3 py-2 rounded-lg bg-[var(--rc-error-subtle)] border border-[var(--rc-error)]"
         >
           {{ loadError }}
@@ -150,6 +154,7 @@ import { useRoute, useRouter } from 'vue-router'
 import { getActivePinia } from 'pinia'
 import { useUIStore } from '@/stores/ui'
 import { getOfficialPlugin } from '@/utils/officialPlugins'
+import { isPluginVisible } from '@/utils/pluginVisibility'
 import { isPluginSupportedOnCurrentPlatform, isMacOS, isWindows } from '@/utils/platform'
 import { isModalOpen } from '@/utils/keymap'
 import { loadInstalledDeclarativePlugin } from '@/utils/declarativePluginLoader'
@@ -244,8 +249,10 @@ const unsupportedOfficial = computed(() => {
   return Boolean(official && !isPluginSupportedOnCurrentPlatform(official))
 })
 
+const hiddenPlugin = computed(() => Boolean(targetPluginId.value) && !isPluginVisible(targetPluginId.value))
+
 const plugin = computed(() => {
-  if (unsupportedOfficial.value) return null
+  if (unsupportedOfficial.value || hiddenPlugin.value) return null
   return getOfficialPlugin(targetPluginId.value) || dynamicPlugin.value
 })
 
@@ -257,6 +264,12 @@ watch(
     const token = ++currentLoadToken
     dynamicPlugin.value = null
     loadError.value = ''
+
+    if (id && !isPluginVisible(id)) {
+      loadingDynamic.value = false
+      loadError.value = '该插件暂未开放'
+      return
+    }
 
     if (!id || getOfficialPlugin(id)) {
       loadingDynamic.value = false

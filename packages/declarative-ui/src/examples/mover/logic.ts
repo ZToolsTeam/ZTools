@@ -12,8 +12,10 @@ import {
   formatBytes,
   invokeHostCapability,
   invokePluginService,
+  isRealElectronHost,
   openRealPath,
   probeRealDiskDrives,
+  readRealDirectory,
   resolveRealSpecialPaths,
   scanRealDirectoryTree,
   showRealItemInFolder,
@@ -240,12 +242,13 @@ export function createInitialMoverSnapshot(): MoverSnapshot {
   };
 }
 
-export async function fetchMoverSnapshot(): Promise<MoverSnapshot> {
+export async function fetchMoverSnapshot(hostBridge?: any): Promise<MoverSnapshot> {
   const initial = createInitialMoverSnapshot();
+  const isRealHost = Boolean(hostBridge) || isRealElectronHost(hostBridge) || isRealElectronHost();
   try {
     const [paths, drives] = await Promise.all([
-      resolveRealSpecialPaths(),
-      probeRealDiskDrives()
+      resolveRealSpecialPaths(hostBridge),
+      probeRealDiskDrives(undefined, hostBridge)
     ]);
 
     const cDrive = drives.find((d) => d.drive.toUpperCase().startsWith("C"));
@@ -265,54 +268,180 @@ export async function fetchMoverSnapshot(): Promise<MoverSnapshot> {
               totalBytes: d.totalBytes
             };
           })
-        : DEFAULT_TARGET_DRIVES;
+        : isRealHost
+          ? []
+          : DEFAULT_TARGET_DRIVES;
 
-    const dlScan = await scanRealDirectoryTree(paths.downloads, { maxDepth: 2, maxFiles: 120 });
-    const docScan = await scanRealDirectoryTree(paths.documents, { maxDepth: 2, maxFiles: 120 });
-    const tempScan = await scanRealDirectoryTree(paths.temp, { maxDepth: 2, maxFiles: 120 });
-
-    const dlSize = dlScan.totalBytes;
-    const docSize = docScan.totalBytes;
-    const tempSize = tempScan.totalBytes;
-
-    const updatedFolders = initial.folders.map((folder) => {
-      if (folder.id === "mover_downloads" && paths.downloads) {
-        return {
-          ...folder,
-          sourcePath: paths.downloads,
-          sizeBytes: dlSize > 0 ? dlSize : folder.sizeBytes,
-          fileCount: dlScan.files.length > 0 ? dlScan.files.length : folder.fileCount
-        };
+    const candidateDefs: Array<{
+      id: string;
+      name: string;
+      sourcePath: string;
+      category: MoverCategory;
+      categoryName: string;
+    }> = [
+      {
+        id: "mover_wechat",
+        name: "WeChat Files (微信聊天与附件目录)",
+        sourcePath: `${paths.documents}\\WeChat Files`,
+        category: "social_office",
+        categoryName: "社交与办公数据"
+      },
+      {
+        id: "mover_xwechat",
+        name: "xwechat_files (新版微信存储目录)",
+        sourcePath: `${paths.documents}\\xwechat_files`,
+        category: "social_office",
+        categoryName: "社交与办公数据"
+      },
+      {
+        id: "mover_qq",
+        name: "Tencent Files (QQ 群文件与缓存目录)",
+        sourcePath: `${paths.documents}\\Tencent Files`,
+        category: "social_office",
+        categoryName: "社交与办公数据"
+      },
+      {
+        id: "mover_downloads",
+        name: "Downloads (系统个人下载主目录)",
+        sourcePath: paths.downloads,
+        category: "user_profile",
+        categoryName: "系统用户个人目录"
+      },
+      {
+        id: "mover_documents",
+        name: "Documents (个人办公文档与工程库)",
+        sourcePath: paths.documents,
+        category: "user_profile",
+        categoryName: "系统用户个人目录"
+      },
+      {
+        id: "mover_videos",
+        name: "Videos (个人视频媒体库)",
+        sourcePath: paths.videos,
+        category: "user_profile",
+        categoryName: "系统用户个人目录"
+      },
+      {
+        id: "mover_npm_cache",
+        name: "npm-cache (前端包管理全局缓存)",
+        sourcePath: `${paths.localAppData}\\npm-cache`,
+        category: "dev_cache",
+        categoryName: "开发者与构建缓存"
+      },
+      {
+        id: "mover_pip_cache",
+        name: "pip Cache (Python 全局依赖缓存)",
+        sourcePath: `${paths.localAppData}\\pip\\Cache`,
+        category: "dev_cache",
+        categoryName: "开发者与构建缓存"
+      },
+      {
+        id: "mover_nuget_cache",
+        name: "NuGet Packages (C#/.NET 全局依赖缓存)",
+        sourcePath: `${paths.userProfile}\\.nuget\\packages`,
+        category: "dev_cache",
+        categoryName: "开发者与构建缓存"
+      },
+      {
+        id: "mover_temp_cache",
+        name: "Temp (用户本地临时工作目录)",
+        sourcePath: paths.temp,
+        category: "dev_cache",
+        categoryName: "开发者与构建缓存"
       }
-      if (folder.id === "mover_documents" && paths.documents) {
-        return {
-          ...folder,
-          sourcePath: paths.documents,
-          sizeBytes: docSize > 0 ? docSize : folder.sizeBytes,
-          fileCount: docScan.files.length > 0 ? docScan.files.length : folder.fileCount
-        };
-      }
-      if (folder.id === "mover_npm_cache" && paths.localAppData) {
-        return {
-          ...folder,
-          sourcePath: `${paths.localAppData}\\npm-cache`,
-          sizeBytes: tempSize > 0 ? tempSize + folder.sizeBytes : folder.sizeBytes
-        };
-      }
-      return folder;
-    });
+    ];
 
+    // 动态读取 %LOCALAPPDATA% 与 %APPDATA% 下真实存在的顶层应用目录
+    const [localAppEntries, roamingEntries] = await Promise.all([
+      readRealDirectory(paths.localAppData, hostBridge),
+      readRealDirectory(paths.appData, hostBridge)
+    ]);
+    for (const entry of [...localAppEntries.slice(0, 6), ...roamingEntries.slice(0, 6)]) {
+      if (!entry.isDirectory || !entry.path) continue;
+      if (candidateDefs.some((c) => c.sourcePath.toLowerCase() === entry.path.toLowerCase())) continue;
+      candidateDefs.push({
+        id: `mover_app_${entry.name.toLowerCase().replace(/[^a-z0-9]+/g, "_")}`,
+        name: `${entry.name} (应用数据缓存)`,
+        sourcePath: entry.path,
+        category: "dev_cache",
+        categoryName: "开发者与构建缓存"
+      });
+    }
+
+    const scannedResults = await Promise.all(
+      candidateDefs.map(async (def): Promise<MovableFolderItem | null> => {
+        if (!def.sourcePath) return null;
+        const scan = await scanRealDirectoryTree(
+          def.sourcePath,
+          { maxDepth: 2, maxFiles: 120 },
+          hostBridge
+        );
+        if (scan.totalFiles <= 0 && scan.totalBytes <= 0 && scan.files.length === 0) {
+          return null;
+        }
+        return {
+          id: def.id,
+          name: def.name,
+          sourcePath: def.sourcePath,
+          category: def.category,
+          categoryName: def.categoryName,
+          sizeBytes: scan.totalBytes,
+          fileCount: Math.max(scan.totalFiles, scan.files.length),
+          junctionSupported: true,
+          isSystemLocked: false
+        };
+      })
+    );
+
+    const realFolders = scannedResults.filter((item): item is MovableFolderItem => item !== null);
+
+    if (isRealHost) {
+      const systemLockedItem: MovableFolderItem = {
+        id: "mover_sys_windows",
+        name: "Windows System32 核心运行库目录",
+        sourcePath: "C:\\Windows\\System32",
+        category: "system_locked",
+        categoryName: "系统核心目录",
+        sizeBytes: 0,
+        fileCount: 0,
+        junctionSupported: false,
+        isSystemLocked: true,
+        lockedReason: "系统核心目录严禁迁移"
+      };
+      const folders = [...realFolders, systemLockedItem];
+      const totalMovableBytes = realFolders.reduce((acc, item) => acc + item.sizeBytes, 0);
+      return {
+        cDriveTotalBytes: cDrive?.totalBytes || 0,
+        cDriveFreeBytes: cDrive?.availableBytes || 0,
+        targetDrives: targetDrives.length > 0 ? targetDrives : DEFAULT_TARGET_DRIVES,
+        folders,
+        totalMovableBytes,
+        updatedAt: new Date().toLocaleTimeString()
+      };
+    }
+
+    const finalFolders = realFolders.length > 0 ? [...realFolders, initial.folders[initial.folders.length - 1]] : initial.folders;
     return {
       cDriveTotalBytes: cDrive?.totalBytes || initial.cDriveTotalBytes,
       cDriveFreeBytes: cDrive?.availableBytes || initial.cDriveFreeBytes,
-      targetDrives,
-      folders: updatedFolders,
-      totalMovableBytes: updatedFolders
+      targetDrives: targetDrives.length > 0 ? targetDrives : DEFAULT_TARGET_DRIVES,
+      folders: finalFolders,
+      totalMovableBytes: finalFolders
         .filter((f) => !f.isSystemLocked)
         .reduce((acc, item) => acc + item.sizeBytes, 0),
       updatedAt: new Date().toLocaleTimeString()
     };
   } catch {
+    if (isRealHost) {
+      return {
+        cDriveTotalBytes: 0,
+        cDriveFreeBytes: 0,
+        targetDrives: DEFAULT_TARGET_DRIVES,
+        folders: [],
+        totalMovableBytes: 0,
+        updatedAt: new Date().toLocaleTimeString()
+      };
+    }
     return initial;
   }
 }
@@ -325,27 +454,50 @@ export async function executeDirectoryMove(
   if (!targetRoot || FORBIDDEN_TARGET_PATTERN.test(targetRoot)) {
     return { ok: false, movedCount: 0, freedBytes: 0, message: FORBIDDEN_REASON };
   }
-  const movable = items.filter((item) => !item.isSystemLocked && !FORBIDDEN_TARGET_PATTERN.test(item.sourcePath));
+  const movable = (items || []).filter(
+    (item) => item && !item.isSystemLocked && !FORBIDDEN_TARGET_PATTERN.test(item.sourcePath)
+  );
   if (movable.length === 0) {
-    return { ok: false, movedCount: 0, freedBytes: 0, message: "未选择可安全迁移的目录（系统核心目录禁止迁移）" };
+    return {
+      ok: false,
+      movedCount: 0,
+      freedBytes: 0,
+      message: "未选择可安全迁移的目录（系统核心目录禁止迁移）"
+    };
   }
 
   let movedCount = 0;
   let freedBytes = 0;
+  let lastError = "";
   for (const folder of movable) {
     const folderBase = folder.sourcePath.split(/[\\/]/).pop() || folder.id;
     const destinationPath = `${targetRoot.replace(/[\\/]+$/, "")}\\${folderBase}`;
-    await invokeHostCapability(
+    const res = await invokeHostCapability(
       "mover.relocateWithJunction",
       {
         sourcePath: folder.sourcePath,
+        targetRoot,
+        targetPath: destinationPath,
         destinationPath,
         createJunction: true
       },
       hostOverride
     );
+    if (!res.ok) {
+      lastError = res.error || res.message || `迁移目录失败: ${folder.sourcePath}`;
+      continue;
+    }
     movedCount += 1;
     freedBytes += folder.sizeBytes;
+  }
+
+  if (movedCount === 0) {
+    return {
+      ok: false,
+      movedCount: 0,
+      freedBytes: 0,
+      message: lastError || "目录迁移失败：宿主未能执行物理搬移或建立 Junction 链接"
+    };
   }
 
   return {
@@ -356,11 +508,11 @@ export async function executeDirectoryMove(
   };
 }
 
-export async function openMoverFolderLocation(folderPath: string): Promise<boolean> {
+export async function openMoverFolderLocation(folderPath: string, hostBridge?: any): Promise<boolean> {
   if (!folderPath) return false;
-  const shown = await showRealItemInFolder(folderPath);
+  const shown = await showRealItemInFolder(folderPath, hostBridge);
   if (shown) return true;
-  return openRealPath(folderPath);
+  return openRealPath(folderPath, hostBridge);
 }
 
 export async function invokeMoverAction(

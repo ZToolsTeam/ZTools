@@ -10,10 +10,7 @@ import {
   showToast,
   Toast,
   confirmAlert,
-  MetricGrid,
-  DistributionBar,
-  FilterBar,
-  SegmentedControl
+  FilterBar
 } from '../../index.js'
 import {
   AUDIO_WORKSHOP_MODES,
@@ -24,10 +21,9 @@ import {
   invokeNativeCapability,
   openAudioFileLocation
 } from './logic.js'
+import { isRealElectronHost } from '../shared/native-ipc.js'
 
 export * from './logic.js'
-
-const EXT_COLORS = ['#10b981', '#3b82f6', '#a855f7', '#f59e0b', '#ec4899', '#06b6d4']
 
 const INITIAL_SAMPLE_AUDIOS: RealAudioFileItem[] = [
   {
@@ -114,7 +110,6 @@ const LOUDNESS_LABELS: Record<string, string> = {
 
 export function BatchAudioCommand() {
   const [searchText, setSearchText] = useState('')
-  const [tab, setTab] = useState<'files' | 'presets' | 'all'>('files')
   const [activeModeId, setActiveModeId] = useState<string>(AUDIO_WORKSHOP_MODES[0].id)
   const [audioProfile, setAudioProfile] = useState<'studio_48k' | 'cd_44k' | 'podcast_mono' | 'lossless_flac'>('studio_48k')
   const [outputFormat, setOutputFormat] = useState<'mp3_320k' | 'flac_lossless' | 'wav_pcm' | 'aac_256k' | 'm4a_aac' | 'ogg_vorbis'>('mp3_320k')
@@ -122,10 +117,11 @@ export function BatchAudioCommand() {
   const [sampleRateMode, setSampleRateMode] = useState<'48000' | '44100' | 'source'>('48000')
   const [stripSilence, setStripSilence] = useState<boolean>(true)
   const [afftdnDenoise, setAfftdnDenoise] = useState<boolean>(false)
-  const [files, setFiles] = useState<RealAudioFileItem[]>(INITIAL_SAMPLE_AUDIOS)
-  const [checkedIds, setCheckedIds] = useState<string[]>(INITIAL_SAMPLE_AUDIOS.map(f => f.id))
+  const isRealHost = isRealElectronHost()
+  const initialAudios = isRealHost ? [] : INITIAL_SAMPLE_AUDIOS
+  const [files, setFiles] = useState<RealAudioFileItem[]>(initialAudios)
+  const [checkedIds, setCheckedIds] = useState<string[]>(initialAudios.map(f => f.id))
   const [presets, setPresets] = useState<CapabilityActionItem[]>(AUDIO_WORKSHOP_MODES)
-  const [scannedDirs, setScannedDirs] = useState<string[]>(['D:\\Music', 'C:\\Users\\Geek\\Music'])
   const [isLoading, setIsLoading] = useState(false)
 
   async function refreshWorkspace(showIndicator = false) {
@@ -133,11 +129,14 @@ export function BatchAudioCommand() {
     try {
       const ws = await fetchRealAudioWorkspace()
       const audioOnly = ws.files.filter(f => /\.(mp3|flac|wav|aac|m4a|ogg|wma|opus|aiff)$/i.test(f.name))
-      const nextFiles = audioOnly.length >= 4 ? audioOnly : [...audioOnly, ...INITIAL_SAMPLE_AUDIOS].slice(0, 10)
+      const nextFiles = isRealElectronHost()
+        ? audioOnly
+        : audioOnly.length > 0
+          ? audioOnly
+          : INITIAL_SAMPLE_AUDIOS
       setFiles(nextFiles)
       setCheckedIds(nextFiles.map(f => f.id))
       setPresets(ws.presets)
-      if (ws.scannedDirs.length > 0) setScannedDirs(ws.scannedDirs)
       if (showIndicator) {
         showToast({
           style: Toast.Style.Success,
@@ -172,18 +171,33 @@ export function BatchAudioCommand() {
     if (!ok) return
 
     let count = 0
+    let lastErr = ''
     for (const f of selected) {
       const res = await invokeNativeCapability(activePreset.method, {
         ...activePreset.params,
         audioProfile,
-        outputFormat,
+        format: outExt,
+        preset: outputFormat,
+        outputFormat: outExt,
         loudnessTarget,
         sampleRateMode,
         stripSilence,
         afftdnDenoise,
         inputPath: f.path
       })
-      if (res.ok) count += 1
+      if (res.ok) {
+        count += 1
+      } else {
+        lastErr = res.error || '音频处理调用失败'
+      }
+    }
+    if (count === 0) {
+      showToast({
+        style: Toast.Style.Failure,
+        title: '批量音频处理未执行成功',
+        message: lastErr
+      })
+      return
     }
     showToast({
       style: Toast.Style.Success,
@@ -194,7 +208,9 @@ export function BatchAudioCommand() {
 
   async function handleRunPreset(preset: CapabilityActionItem, targetFile?: RealAudioFileItem) {
     try {
-      const payload = targetFile ? { ...preset.params, inputPath: targetFile.path } : preset.params
+      const payload = targetFile
+        ? { ...preset.params, format: outExt, preset: outputFormat, inputPath: targetFile.path }
+        : { ...preset.params, format: outExt, preset: outputFormat }
       const res = await invokeNativeCapability(preset.method, payload)
       if (!res.ok) {
         showToast({ style: Toast.Style.Failure, title: '音频处理失败', message: res.error || '原生模块返回错误' })
@@ -212,7 +228,6 @@ export function BatchAudioCommand() {
 
   const selectedFiles = files.filter(f => checkedIds.includes(f.id))
   const totalBytes = selectedFiles.reduce((s, f) => s + f.sizeBytes, 0)
-  const allTotalBytes = files.reduce((s, f) => s + f.sizeBytes, 0)
   const estimatedOutBytes = Math.round(totalBytes * ratio)
 
   const q = searchText.trim().toLowerCase()
@@ -222,23 +237,6 @@ export function BatchAudioCommand() {
   const filteredPresets = presets.filter(
     p => !q || p.title.toLowerCase().includes(q) || p.subtitle.toLowerCase().includes(q) || p.tag.toLowerCase().includes(q)
   )
-
-  const extBytesMap = new Map<string, number>()
-  for (const f of files) {
-    extBytesMap.set(f.extension, (extBytesMap.get(f.extension) || 0) + f.sizeBytes)
-  }
-  const extSegments = Array.from(extBytesMap.entries())
-    .sort((a, b) => b[1] - a[1])
-    .slice(0, 6)
-    .map(([ext, bytes], idx) => ({
-      id: ext,
-      label: `${ext.toUpperCase()} (${formatBytes(bytes)})`,
-      valueBytes: bytes,
-      formattedSize: formatBytes(bytes),
-      percentage: allTotalBytes > 0 ? Math.max(5, (bytes / allTotalBytes) * 100) : 25,
-      color: EXT_COLORS[idx % EXT_COLORS.length],
-      active: true
-    }))
 
   const maxAudioBytes = Math.max(1, filteredFiles[0]?.sizeBytes || 1)
   const rightQueueItems = filteredFiles.map(f => {
@@ -325,76 +323,8 @@ export function BatchAudioCommand() {
         })
       )
     }),
-    metricGrid: MetricGrid({
-      columns: 4,
-      items: [
-        {
-          id: 'ba-files',
-          label: '已勾选 / 扫描音轨',
-          value: `${checkedIds.length} / ${files.length} 首`,
-          subValue: `${scannedDirs.length} 个本机目录已扫描`,
-          status: 'normal'
-        },
-        {
-          id: 'ba-size',
-          label: '已勾选音频总大小',
-          value: formatBytes(totalBytes),
-          subValue: `预估输出 ${formatBytes(estimatedOutBytes)}`,
-          status: 'normal'
-        },
-        {
-          id: 'ba-lufs',
-          label: '广播级响度基准',
-          value: LOUDNESS_LABELS[loudnessTarget] || '-16 LUFS',
-          subValue: 'EBU R128 防爆音保护',
-          status: 'success'
-        },
-        {
-          id: 'ba-presets',
-          label: '当前激活音效引擎',
-          value: activePreset.tag,
-          subValue: `共 ${presets.length} 大声学工坊模式`,
-          status: 'success'
-        }
-      ]
-    }),
-    distributionBar: DistributionBar({
-      title: '本机音频与媒体文件格式体积分布',
-      totalLabel: `共 ${files.length} 首 · ${formatBytes(allTotalBytes)}`,
-      segments: extSegments
-    }),
     filterBar: FilterBar({
-      wizardSteps: [
-        { step: 1, label: '1. 扫描本机音频目录', status: 'done' },
-        { step: 2, label: '2. 选择 12 大声学处理引擎', status: 'done' },
-        { step: 3, label: '3. 配置采样率与LUFS响度', status: 'active' },
-        { step: 4, label: '4. 批量声学处理导出', status: 'pending' }
-      ],
       summaryText: `队列已选 ${checkedIds.length}/${files.length} 首音频 (${formatBytes(totalBytes)}) · 预计输出 ~${formatBytes(estimatedOutBytes)} · 响度 ${LOUDNESS_LABELS[loudnessTarget]}`,
-      groups: [
-        {
-          id: 'audio-mode',
-          label: '声学引擎 (12项)',
-          value: activeModeId,
-          onChange: v => setActiveModeId(v),
-          options: AUDIO_WORKSHOP_MODES.map(m => ({
-            value: m.id,
-            label: m.tag
-          }))
-        },
-        {
-          id: 'audio-profile',
-          label: '采样率与音质档位',
-          value: audioProfile,
-          onChange: v => setAudioProfile(v as any),
-          options: [
-            { value: 'studio_48k', label: '录音室级 (48kHz / 320kbps)' },
-            { value: 'cd_44k', label: '标准 CD 级 (44.1kHz / 256kbps)' },
-            { value: 'lossless_flac', label: '母带无损 (FLAC 24-bit)' },
-            { value: 'podcast_mono', label: '播客语音优化 (单声道 -16 LUFS)' }
-          ]
-        }
-      ],
       actions: [
         {
           id: 'rescan-audio',
@@ -410,17 +340,6 @@ export function BatchAudioCommand() {
       subtitle: stripSilence || afftdnDenoise ? 'EBU R128 + 降噪切静音管线' : 'FFmpeg 高精度声学管线',
       fields: [
         {
-          id: 'wb-audio-mode',
-          label: '处理模式',
-          type: 'select',
-          value: activeModeId,
-          onChange: val => setActiveModeId(val),
-          options: AUDIO_WORKSHOP_MODES.map(m => ({
-            label: m.tag,
-            value: m.id
-          }))
-        },
-        {
           id: 'wb-output-format',
           label: '输出格式',
           type: 'select',
@@ -433,6 +352,19 @@ export function BatchAudioCommand() {
             { label: 'AAC 256k (流媒体高效)', value: 'aac_256k' },
             { label: 'M4A (Apple ALAC/AAC)', value: 'm4a_aac' },
             { label: 'OGG Vorbis (游戏音轨)', value: 'ogg_vorbis' }
+          ]
+        },
+        {
+          id: 'wb-audio-profile',
+          label: '音质档位',
+          type: 'select',
+          value: audioProfile,
+          onChange: val => setAudioProfile(val as any),
+          options: [
+            { label: '录音室级 (48kHz / 320kbps)', value: 'studio_48k' },
+            { label: '标准 CD 级 (44.1kHz / 256kbps)', value: 'cd_44k' },
+            { label: '母带无损 (FLAC 24-bit)', value: 'lossless_flac' },
+            { label: '播客语音优化 (单声道 -16 LUFS)', value: 'podcast_mono' }
           ]
         },
         {
@@ -509,15 +441,6 @@ export function BatchAudioCommand() {
       emptyText: '当前未找到匹配的音频文件',
       items: rightQueueItems
     },
-    segmentedControl: SegmentedControl({
-      value: tab,
-      onChange: v => setTab(v as any),
-      options: [
-        { value: 'files', label: '本机音轨批处理队列 (三态勾选)', badge: files.length },
-        { value: 'presets', label: '12 大声学与音效引擎总览', badge: presets.length },
-        { value: 'all', label: '完整混合工作台', badge: files.length + presets.length }
-      ]
-    }),
     children: [
       List.Section({
         title: `本机目录音频与媒体队列 (${filteredFiles.length})`,
@@ -531,7 +454,8 @@ export function BatchAudioCommand() {
             title: p.title,
             subtitle: p.subtitle,
             icon: {
-              source: Icon.SpeakerHigh
+              source: Icon.SpeakerHigh,
+              tintColor: Color.SecondaryText
             },
             accessories: [
               { tag: { value: p.tag } },
@@ -557,3 +481,4 @@ export function BatchAudioCommand() {
 }
 
 export default BatchAudioCommand
+

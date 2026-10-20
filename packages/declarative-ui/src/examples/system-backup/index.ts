@@ -9,6 +9,7 @@
  */
 
 import { Action, ActionPanel, Icon, List, useEffect, useState } from "../../index.js";
+import { isRealElectronHost } from "../shared/native-ipc.js";
 import {
   BACKUP_CATEGORIES,
   BACKUP_PROFILES,
@@ -25,19 +26,32 @@ import {
 } from "./logic.js";
 
 export function SystemBackupCommand() {
-  const [snapshot, setSnapshot] = useState<SystemBackupSnapshot>(() =>
-    createInitialSystemBackupSnapshot()
-  );
+  const [snapshot, setSnapshot] = useState<SystemBackupSnapshot>(() => {
+    const init = createInitialSystemBackupSnapshot();
+    if (isRealElectronHost()) {
+      return {
+        ...init,
+        items: [],
+        totalSizeBytes: 0,
+        updatedAt: "正在扫描本机配置项..."
+      };
+    }
+    return init;
+  });
   const [selectedCategory, setSelectedCategory] = useState<BackupCategory>("all");
   const [profileMode, setProfileMode] = useState<BackupProfileMode>("full_bundle");
-  const [checkedIds, setCheckedIds] = useState<string[]>([
-    "bak_hosts",
-    "bak_env_path",
-    "bak_ssh_config",
-    "bak_gitconfig",
-    "bak_ps_profile",
-    "bak_vscode_settings"
-  ]);
+  const [checkedIds, setCheckedIds] = useState<string[]>(() =>
+    isRealElectronHost()
+      ? []
+      : [
+          "bak_hosts",
+          "bak_env_path",
+          "bak_ssh_config",
+          "bak_gitconfig",
+          "bak_ps_profile",
+          "bak_vscode_settings"
+        ]
+  );
   const [searchText, setSearchText] = useState<string>("");
   const [statusBanner, setStatusBanner] = useState<string>("");
   const [isLoading, setIsLoading] = useState<boolean>(false);
@@ -47,6 +61,11 @@ export function SystemBackupCommand() {
     try {
       const data = await fetchSystemBackupSnapshot();
       setSnapshot(data);
+      if (isRealElectronHost()) {
+        setCheckedIds(
+          data.items.filter((i) => i.category !== "snapshot_archives").map((i) => i.id)
+        );
+      }
       setStatusBanner(
         `已扫描本机关键配置项 · 共 ${data.items.length} 项 (${formatBytes(data.totalSizeBytes)}) · 仓库: ${data.backupVaultDir}`
       );
@@ -255,70 +274,8 @@ export function SystemBackupCommand() {
         })
       )
     }),
-    metricGrid: {
-      columns: 4,
-      items: [
-        {
-          id: "bak-metric-mode",
-          label: "当前备份策略",
-          value: profileMode === "full_bundle" ? "全量快照" : profileMode === "dotfiles_only" ? "Dotfiles" : "增量归档",
-          subValue: currentProfile.desc
-        },
-        {
-          id: "bak-metric-count",
-          label: "已勾选配置项",
-          value: `${selectedItems.length} 项`,
-          subValue: `共 ${formatBytes(selectedBytes)}`
-        },
-        {
-          id: "bak-metric-vault",
-          label: "本地快照仓库",
-          value: "ZToolsBackups",
-          subValue: snapshot.backupVaultDir
-        },
-        {
-          id: "bak-metric-hash",
-          label: "端到端校验",
-          value: "SHA-256 签名",
-          subValue: "支持一键无损回滚还原"
-        }
-      ]
-    },
-    distributionBar: {
-      title: "系统与开发环境配置分布",
-      totalLabel: formatBytes(snapshot.totalSizeBytes),
-      segments: BACKUP_CATEGORIES.map((cat) => {
-        const sum = snapshot.items
-          .filter((i) => i.category === cat.id)
-          .reduce((s, i) => s + i.sizeBytes, 0);
-        return {
-          id: cat.id,
-          label: `${cat.name} (${formatBytes(sum)})`,
-          value: Math.max(1, sum),
-          color: "var(--rc-text-muted)"
-        };
-      })
-    },
     filterBar: {
       summaryText,
-      wizardSteps: [
-        { step: 1, label: `1. 选择备份模式 (${profileMode})`, status: "done" },
-        { step: 2, label: "2. 浏览分类配置树", status: "done" },
-        { step: 3, label: `3. 勾选待打包配置项 (${selectedItems.length} 项)`, status: "active" },
-        { step: 4, label: "4. 按 Enter 创建归档快照或还原", status: "pending" }
-      ],
-      groups: [
-        {
-          id: "bak-cat-group",
-          label: "配置分类",
-          value: selectedCategory,
-          options: [
-            { title: "全部配置项", value: "all" },
-            ...BACKUP_CATEGORIES.map((c) => ({ title: c.name, value: c.id }))
-          ],
-          onChange: (val) => setSelectedCategory(val as BackupCategory)
-        }
-      ],
       actions: [
         {
           id: "rescan",

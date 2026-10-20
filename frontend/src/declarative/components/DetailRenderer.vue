@@ -275,13 +275,20 @@ const renderedHtml = computed(() => {
   text = text.replace(/`([^`\n]+)`/g, '<code class="bg-[var(--rc-surface-active)] px-1.5 py-0.5 rounded text-[var(--rc-text-secondary)] border border-[var(--rc-border)] text-xs font-mono">$1</code>');
 
   // 4. 图片 ![alt](src) (支持 SVG data URL)
+  // 地址只允许白名单协议，并转义引号，防止通过 `"` 闭合属性注入事件处理器
+  const escapeAttr = (v) => v.replace(/"/g, "&quot;").replace(/'/g, "&#39;");
   text = text.replace(/!\[([^\]]*)\]\(([^)]+)\)/g, (match, alt, src) => {
-    const cleanSrc = src.replace(/&amp;/g, "&");
-    return `<div class="my-4 flex items-center justify-center p-4 bg-[var(--rc-surface-hover)] rounded-2xl border border-[var(--rc-border)]"><img src="${cleanSrc}" alt="${alt}" class="max-h-72 object-contain rounded-lg shadow-lg" /></div>`;
+    const cleanSrc = src.trim();
+    if (!/^(data:image\/|https:\/\/|ztools:\/\/)/i.test(cleanSrc.replace(/&amp;/g, "&"))) return match;
+    return `<div class="my-4 flex items-center justify-center p-4 bg-[var(--rc-surface-hover)] rounded-2xl border border-[var(--rc-border)]"><img src="${escapeAttr(cleanSrc)}" alt="${escapeAttr(alt)}" class="max-h-72 object-contain rounded-lg shadow-lg" /></div>`;
   });
 
   // 5. 链接 [text](url)
-  text = text.replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2" target="_blank" class="text-[var(--rc-text-primary)] underline underline-offset-2">$1</a>');
+  text = text.replace(/\[([^\]]+)\]\(([^)]+)\)/g, (match, label, href) => {
+    const cleanHref = href.trim();
+    if (!/^(https?:\/\/|mailto:)/i.test(cleanHref)) return match;
+    return `<a href="${escapeAttr(cleanHref)}" target="_blank" rel="noopener noreferrer" class="text-[var(--rc-text-primary)] underline underline-offset-2">${label}</a>`;
+  });
 
   // 6. 水平分割线 ---
   text = text.replace(/^---+\s*$/gm, '<hr class="my-3 border-t border-[var(--rc-border)]" />');

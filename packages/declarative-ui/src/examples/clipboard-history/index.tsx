@@ -478,7 +478,7 @@ export default function ClipboardHistoryCommand() {
               subtitle={formatCopiedTime(item.copiedAt)}
               icon={getItemIcon(item)}
               accessories={[
-                ...(item.pinned ? [{ tag: { value: "置顶" } }] : []),
+                ...(item.pinned ? [{ tag: { value: "置顶" }, tooltip: "已置顶" }] : []),
                 ...(isItemSensitive ? [{ tag: { value: "敏感", color: Color.Red } }] : []),
                 { text: item.type.toUpperCase() }
               ]}

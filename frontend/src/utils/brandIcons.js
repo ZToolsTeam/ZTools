@@ -71,7 +71,12 @@ export const GLYPHS = Object.freeze({
   wrench: [p('M14.5 6.5a4 4 0 0 0 5 5L13 18a2.1 2.1 0 0 1-3-3l6.5-6.5'), p('M14.5 6.5 17.5 3.5 20.5 6.5 17.5 9.5'), p('M7.5 13 3.5 17a2.1 2.1 0 0 0 3 3l4-4')],
   briefcase: [r(3, 7, 18, 13, 2.5), p('M9 7V5.5A1.5 1.5 0 0 1 10.5 4h3A1.5 1.5 0 0 1 15 5.5V7M3 12.5h18')],
   image: [r(3, 4, 18, 16, 2.5), c(9, 10, 1.6), p('m21 16-5-5-8 9')],
-  grid: [r(3.5, 3.5, 7, 7, 2), r(13.5, 3.5, 7, 7, 2), r(3.5, 13.5, 7, 7, 2), r(13.5, 13.5, 7, 7, 2)]
+  grid: [r(3.5, 3.5, 7, 7, 2), r(13.5, 3.5, 7, 7, 2), r(3.5, 13.5, 7, 7, 2), r(13.5, 13.5, 7, 7, 2)],
+  clock: [c(12, 12, 8.5), p('M12 7.5V12l3 2')],
+  key: [c(8, 15, 4), p('M10.8 12.2 19 4M15.5 7.5l2.5 2.5M17.5 5.5 20 8')],
+  check: [r(4, 4, 16, 16, 3), p('m8.5 12 2.5 2.5 4.5-5')],
+  diff: [r(3.5, 4, 7, 16, 2), r(13.5, 4, 7, 16, 2), p('M5.5 9h3M15.5 9h3M17 7.5v3M15.5 15h3')],
+  hash: [p('M9.5 4 8 20M16 4l-1.5 16M4.5 9h15M4 15h15')]
 })
 
 /** 每个图形的底块色调（与 theme.css 中 --rc-h-<hue>-bg / -fg 对应） */
@@ -85,7 +90,8 @@ export const GLYPH_HUES = Object.freeze({
   gauge: 'slate', package: 'ochre', currency: 'olive', lock: 'clay', wifi: 'slate', speaker: 'ochre',
   keyboard: 'neutral', download: 'slate', pulse: 'clay', broom: 'olive', disk: 'amber', chat: 'olive',
   shield: 'clay', rename: 'ochre', video: 'clay', audio: 'amber', cube: 'neutral', folder: 'ochre',
-  wrench: 'neutral', briefcase: 'neutral', image: 'neutral', grid: 'neutral', home: 'neutral', store: 'neutral'
+  wrench: 'neutral', briefcase: 'neutral', image: 'neutral', grid: 'neutral', home: 'neutral', store: 'neutral',
+  clock: 'slate', key: 'amber', check: 'olive', diff: 'slate', hash: 'clay'
 })
 
 /** 官方插件 → 图形。第三方插件不在此表中，保留作者自己的图标 */
@@ -169,7 +175,13 @@ export const OFFICIAL_PLUGIN_GLYPHS = Object.freeze({
   'ai-image': 'image',
   'ai-video': 'video',
   record: 'video',
-  'file-compare': 'json'
+  'file-compare': 'diff',
+  timestamp: 'clock',
+  base64image: 'image',
+  'crypto-tool': 'hash',
+  'google-auth': 'key',
+  memo: 'note',
+  todo: 'check'
 })
 
 /** 侧边栏 / 市场分类 → 图形 */

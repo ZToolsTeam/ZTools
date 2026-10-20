@@ -3,7 +3,7 @@ import { mount, flushPromises } from '@vue/test-utils'
 import { createPinia, setActivePinia } from 'pinia'
 import { createRouter, createMemoryHistory } from 'vue-router'
 import { Modal } from 'ant-design-vue'
-import MyPage from '../MyPage.vue'
+import MyPage, { resetHomeLayoutCache } from '../MyPage.vue'
 import { usePluginsStore } from '@/stores/plugins'
 import { useUserStore } from '@/stores/user'
 
@@ -125,6 +125,7 @@ describe('MyPage Component', () => {
   }
 
   beforeEach(() => {
+    resetHomeLayoutCache()
     setActivePinia(createPinia())
     pluginsStore = usePluginsStore()
     userStore = useUserStore()
@@ -759,6 +760,46 @@ describe('MyPage Component', () => {
       await flushPromises()
       const times = wrapper.findAll('.recent-row .recent-time').map((n) => n.text())
       expect(times).toEqual(['5 分钟前', ''])
+    })
+  })
+
+  describe('从插件返回首页', () => {
+    const names = (w) => w.findAll('.plugin-tile .tile-name').map((n) => n.text())
+
+    it('[回归] 再次进入首页时不先闪「加载中」，并直接按上次的自定义顺序显示', async () => {
+      await mountPage({ installedPlugins: basePlugins, config: { 'my-page.recent-order': JSON.stringify(['plugin-3', 'plugin-1', 'plugin-2']) } })
+      expect(names(wrapper)).toEqual(['Plugin 3', 'Plugin 1', 'Plugin 2'])
+      wrapper.unmount()
+
+      // 第二次挂载：配置读取挂起，模拟主进程还没返回
+      let release
+      window.ztools.config.get = vi.fn(() => new Promise((r) => { release = r }))
+      wrapper = mount(MyPage, { ...mountOptions, global: { ...mountOptions.global, plugins: [router] } })
+      await wrapper.vm.$nextTick()
+      expect(wrapper.find('.loading-container').exists()).toBe(false)
+      expect(names(wrapper)).toEqual(['Plugin 3', 'Plugin 1', 'Plugin 2'])
+      release?.('[]')
+    })
+
+    it('[破坏性] 再次进入时读取排序失败，仍保留上次顺序且页面不报错', async () => {
+      await mountPage({ installedPlugins: basePlugins, config: { 'my-page.recent-order': JSON.stringify(['plugin-2', 'plugin-3', 'plugin-1']) } })
+      wrapper.unmount()
+      window.ztools.config.get = vi.fn().mockRejectedValue(new Error('IPC 超时'))
+      wrapper = mount(MyPage, { ...mountOptions, global: { ...mountOptions.global, plugins: [router] } })
+      await flushPromises()
+      expect(wrapper.find('.loading-container').exists()).toBe(false)
+      expect(names(wrapper).slice(0, 1)).toEqual(['Plugin 2'])
+    })
+
+    it('首次启动仍显示加载状态', async () => {
+      pluginsStore.$patch({ installedPlugins: basePlugins })
+      router = createTestRouter()
+      await router.push('/')
+      await router.isReady()
+      window.ztools.config.get = vi.fn(() => new Promise(() => {}))
+      wrapper = mount(MyPage, { ...mountOptions, global: { ...mountOptions.global, plugins: [router] } })
+      await wrapper.vm.$nextTick()
+      expect(wrapper.find('.loading-container').exists()).toBe(true)
     })
   })
 })

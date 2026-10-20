@@ -1,0 +1,37 @@
+{
+  "id": "calculator",
+  "name": "计算器",
+  "version": "2.0.0",
+  "description": "输入算式即时出结果，支持常用函数、单位换算、日期推算与计算历史",
+  "author": "ZTools Team",
+  "entry": "dist/index.js",
+  "icon": "icon.svg",
+  "permissions": [
+    "clipboard"
+  ],
+  "targets": [
+    {
+      "id": "windows-electron-any",
+      "platform": "windows",
+      "runtime": "electron",
+      "arch": "any"
+    },
+    {
+      "id": "macos-electron-any",
+      "platform": "macos",
+      "runtime": "electron",
+      "arch": "any"
+    }
+  ],
+  "nativeComponents": [],
+  "keywords": [
+    "calc",
+    "计算",
+    "计算器",
+    "换算",
+    "单位"
+  ],
+  "category": [
+    "效率工具"
+  ]
+}

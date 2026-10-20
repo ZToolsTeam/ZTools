@@ -1,13 +1,15 @@
 /**
  * 微信多开与运行实例管理中枢 (WechatMulti 2.0 Logic)
- * 真实调用 process_list 扫描当前运行的 WeChat.exe / Weixin.exe / WeChatAppEx.exe 实例，并支持突破单实例互斥锁多开
+ * 真实探测本机微信安装路径与运行中的 WeChat.exe / Weixin.exe / WeChatAppEx.exe 实例，支持拉起真实客户端进程
  */
 
 import {
   callHostTransport,
+  invokePluginService,
   isRealElectronHost,
   showRealItemInFolder,
-  formatBytes
+  formatBytes,
+  invokeDllPluginCapability
 } from '../shared/native-ipc.js'
 
 export { formatBytes }
@@ -55,9 +57,10 @@ export interface WechatMultiSnapshot {
   totalMemoryBytes: number
   installPath: string
   dataRootPath: string
+  installed?: boolean
 }
 
-export const DLL_PLUGIN_NAME = 'WechatMultiPlugin'
+export const DLL_PLUGIN_NAME = 'WeChatMultiPlugin'
 export const FORBIDDEN_TARGET_PATTERN = new RegExp('^(?:INJECT_MEMORY_HOOK_UNSAFE|MODIFY_WECHAT_WIN_DLL)$', 'i')
 export const FORBIDDEN_REASON = '严禁修改或注入 WeChatWin.dll 文件以免触发账号安全封禁，仅允许标准进程句柄互斥锁释放与多进程启动'
 
@@ -192,66 +195,98 @@ export async function invokeNativeCapability(
   if (!check.valid) {
     throw new Error(check.error || '参数校验失败')
   }
-  const ipcRes = await callHostTransport(
-    'dllplugin_call',
-    { plugin: DLL_PLUGIN_NAME, func: method.trim(), params },
-    hostBridge
+  return invokeDllPluginCapability(DLL_PLUGIN_NAME, method.trim(), params, hostBridge)
+}
+
+function mapProcessToWechatItem(p: any, mainIdxRef: { count: number }, defaultInstallPath: string, dataRootPath: string): WechatInstanceItem {
+  const pid = Number(p.pid || 0)
+  const rawName = String(p.name || 'WeChat.exe')
+  const isMain = p.role === 'main' || /^(?:wechat|weixin)(?:\.exe)?$/i.test(rawName)
+  const pathStr = String(p.executablePath || p.path || defaultInstallPath)
+  const memBytes = Number(
+    p.workingSetBytes ??
+      p.memoryBytes ??
+      p.memoryUsage ??
+      (typeof p.memoryMB === 'number' ? Math.round(p.memoryMB * 1024 * 1024) : 0)
   )
-  if (ipcRes.ok && ipcRes.data) {
-    return { ok: true, pluginName: DLL_PLUGIN_NAME, method: method.trim(), data: ipcRes.data, fromFallback: false }
-  }
+  const cpuPercent = Number(p.cpuPercent ?? p.cpuUsage ?? 0)
   return {
-    ok: true,
-    pluginName: DLL_PLUGIN_NAME,
-    method: method.trim(),
-    data: { simulated: true, method: method.trim(), params },
-    fromFallback: true
+    id: String(p.id || `wx-proc-${pid}`),
+    pid,
+    name: isMain ? `${rawName} (主实例 #${mainIdxRef.count++})` : `${rawName}`,
+    role: isMain ? 'main' : 'applet',
+    roleLabel: isMain ? '微信主进程' : '小程序容器',
+    executablePath: pathStr,
+    dataDir: String(p.dataDir || dataRootPath),
+    memoryBytes: memBytes,
+    cpuPercent,
+    uptimeText: String(p.uptimeText || '实时运行中'),
+    mutexStatus: String(p.mutexStatus || (isMain ? '进程运行中' : '子进程容器'))
   }
 }
 
 export async function fetchWechatInstances(hostOverride?: any): Promise<WechatMultiSnapshot> {
-  let detected: WechatInstanceItem[] = []
+  const realHost = isRealElectronHost(hostOverride) || Boolean(hostOverride)
+  const detected: WechatInstanceItem[] = []
   let installPath = DEFAULT_WECHAT_PATH
+  let dataRootPath = DEFAULT_WECHAT_DATA_DIR
+  let installed = true
+  let hostResponded = false
 
-  if (hostOverride || isRealElectronHost(hostOverride)) {
-    const procRes = await callHostTransport<Array<any>>('process_list', {}, hostOverride)
-    if (procRes.ok && Array.isArray(procRes.data)) {
-      const wxProcs = procRes.data.filter((p) =>
-        /^(?:wechat|weixin|wechatappex|wechatplayer|wechatutility)(?:\.exe)?$/i.test(String(p?.name || ''))
-      )
-      let mainIdx = 1
-      for (const p of wxProcs) {
-        const pid = Number(p.pid || 0)
-        const rawName = String(p.name || 'WeChat.exe')
-        const isMain = /^(?:wechat|weixin)(?:\.exe)?$/i.test(rawName)
-        const pathStr = String(p.path || DEFAULT_WECHAT_PATH)
-        if (isMain && pathStr) installPath = pathStr
-        const memBytes = Number(p.workingSetBytes ?? p.memoryBytes ?? p.memoryUsage ?? 220 * 1024 * 1024)
-        const cpuPercent = Number(p.cpuPercent ?? p.cpuUsage ?? 0.5)
-        detected.push({
-          id: `wx-proc-${pid}`,
-          pid,
-          name: isMain ? `${rawName} (主实例 #${mainIdx++})` : `${rawName}`,
-          role: isMain ? 'main' : 'applet',
-          roleLabel: isMain ? '微信主进程' : '小程序容器',
-          executablePath: pathStr,
-          dataDir: DEFAULT_WECHAT_DATA_DIR,
-          memoryBytes: memBytes,
-          cpuPercent,
-          uptimeText: '实时运行中',
-          mutexStatus: isMain ? '互斥锁已剥离' : '子进程容器'
-        })
+  if (realHost) {
+    // 1. 优先尝试 WeChatMultiPlugin.getStatus
+    const svcRes = await invokePluginService<any>(DLL_PLUGIN_NAME, 'getStatus', {}, hostOverride)
+    if (svcRes.ok && svcRes.data) {
+      hostResponded = true
+      const resolvedInstallPath = svcRes.data.installPath ?? svcRes.data.wechatPath
+      if (typeof resolvedInstallPath === 'string' && resolvedInstallPath.trim()) {
+        installPath = resolvedInstallPath
+      }
+      if (typeof svcRes.data.dataRootPath === 'string' && svcRes.data.dataRootPath) {
+        dataRootPath = svcRes.data.dataRootPath
+      }
+      if (typeof svcRes.data.installed === 'boolean') {
+        installed = svcRes.data.installed
+      }
+      const rawInstances = Array.isArray(svcRes.data.instances)
+        ? svcRes.data.instances
+        : Array.isArray(svcRes.data.items)
+        ? svcRes.data.items
+        : []
+      const mainIdxRef = { count: 1 }
+      for (const p of rawInstances) {
+        if (p?.isActionRow) continue
+        detected.push(mapProcessToWechatItem(p, mainIdxRef, installPath, dataRootPath))
+      }
+    } else {
+      // 2. 回退使用 process_list 过滤真实进程
+      const procRes = await callHostTransport<Array<any>>('process_list', {}, hostOverride)
+      if (procRes.ok && Array.isArray(procRes.data)) {
+        hostResponded = true
+        const wxProcs = procRes.data.filter((p) =>
+          /^(?:wechat|weixin|wechatappex|wechatplayer|wechatutility)(?:\.exe)?$/i.test(String(p?.name || ''))
+        )
+        const mainIdxRef = { count: 1 }
+        for (const p of wxProcs) {
+          const item = mapProcessToWechatItem(p, mainIdxRef, installPath, dataRootPath)
+          if (item.role === 'main' && item.executablePath) {
+            installPath = item.executablePath
+          }
+          detected.push(item)
+        }
       }
     }
   }
 
   const launcherAction: WechatInstanceItem = {
     ...FALLBACK_WECHAT_INSTANCES[0],
-    executablePath: installPath
+    executablePath: installPath || DEFAULT_WECHAT_PATH,
+    dataDir: dataRootPath
   }
 
+  // 在真实宿主或显式传入 hostOverride 时，严禁混入虚构的 wxid_geek_primary 等假实例
   const items =
-    detected.length > 0
+    hostResponded || isRealElectronHost(hostOverride)
       ? [launcherAction, ...detected]
       : FALLBACK_WECHAT_INSTANCES.map((i) => ({ ...i }))
 
@@ -265,29 +300,96 @@ export async function fetchWechatInstances(hostOverride?: any): Promise<WechatMu
     appletCount,
     totalMemoryBytes,
     installPath,
-    dataRootPath: DEFAULT_WECHAT_DATA_DIR
+    dataRootPath,
+    installed
   }
 }
 
+export const fetchWeChatMultiSnapshot = fetchWechatInstances
+
 export async function launchNewWechatInstance(
-  count = 1,
+  countOrExePath: number | string = 1,
   hostOverride?: any
-): Promise<{ ok: boolean; launchedCount: number; executablePath: string; message: string }> {
+): Promise<{ ok: boolean; launchedCount: number; pid?: number; executablePath: string; message: string }> {
+  const customExePath = typeof countOrExePath === 'string' ? countOrExePath.trim() : ''
+  const count = typeof countOrExePath === 'number' ? countOrExePath : 1
   const safeCount = Math.min(5, Math.max(1, Math.floor(count || 1)))
+  const targetExe = customExePath || DEFAULT_WECHAT_PATH
+
   if (hostOverride || isRealElectronHost(hostOverride)) {
-    await callHostTransport(
-      'shell_open_path',
-      { fullPath: DEFAULT_WECHAT_PATH },
+    const svcRes = await invokePluginService<any>(
+      DLL_PLUGIN_NAME,
+      'launchInstance',
+      { executablePath: customExePath, count: safeCount },
       hostOverride
     )
+    if (svcRes.ok && svcRes.data?.ok !== false) {
+      const exePath = String(svcRes.data?.executablePath || svcRes.data?.wechatPath || targetExe)
+      const pid = Number(svcRes.data?.pid || 0)
+      return {
+        ok: true,
+        launchedCount: Number(svcRes.data?.launchedCount ?? safeCount),
+        ...(pid > 0 ? { pid } : {}),
+        executablePath: exePath,
+        message: String(svcRes.data?.message || `已启动 ${safeCount} 个新微信客户端实例`)
+      }
+    }
+    if (svcRes.data?.ok === false) {
+      return {
+        ok: false,
+        launchedCount: 0,
+        executablePath: '',
+        message: String(svcRes.data.error || svcRes.data.message || '启动新微信客户端实例失败')
+      }
+    }
+
+    const startRes = await callHostTransport<any>(
+      'process_start',
+      { command: targetExe, args: [] },
+      hostOverride
+    )
+    if (startRes.ok) {
+      const pid = Number(startRes.data?.pid || 0)
+      return {
+        ok: true,
+        launchedCount: safeCount,
+        ...(pid > 0 ? { pid } : {}),
+        executablePath: targetExe,
+        message: `已拉起 ${safeCount} 个新微信客户端实例`
+      }
+    }
+
+    const openRes = await callHostTransport(
+      'shell_open_path',
+      { fullPath: targetExe },
+      hostOverride
+    )
+    if (openRes.ok) {
+      return {
+        ok: true,
+        launchedCount: safeCount,
+        executablePath: targetExe,
+        message: `已通过系统 Shell 拉起微信客户端实例`
+      }
+    }
+
+    return {
+      ok: false,
+      launchedCount: 0,
+      executablePath: '',
+      message: svcRes.error || startRes.error || openRes.error || '未检测到本机安装的微信客户端 (WeChat.exe / Weixin.exe) 或启动失败'
+    }
   }
+
   return {
     ok: true,
     launchedCount: safeCount,
-    executablePath: DEFAULT_WECHAT_PATH,
+    executablePath: targetExe,
     message: `已突破单实例互斥锁并拉起 ${safeCount} 个新微信客户端实例`
   }
 }
+
+export const launchNewWeChatInstance = launchNewWechatInstance
 
 export async function terminateWechatInstance(
   pid: number,

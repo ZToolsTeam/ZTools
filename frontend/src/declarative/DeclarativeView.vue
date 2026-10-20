@@ -181,6 +181,7 @@ import DetailRenderer from "./components/DetailRenderer.vue";
 import FormRenderer from "./components/FormRenderer.vue";
 import ActionPanelModal from "./components/ActionPanelModal.vue";
 import ToastOverlay from "./components/ToastOverlay.vue";
+import { getHostMethods } from "./hostMethods.js";
 import { useDeclarativeStack } from "./composables/useDeclarativeStack.js";
 import { useKeymap, KEYMAP_SCOPES, dispatchKeyEvent } from "@/utils/keymap.js";
 import { useUIStore } from "@/stores/ui.js";
@@ -472,7 +473,7 @@ async function executeAction(action) {
     }
   }
 
-  const electronMethods = typeof window !== "undefined" ? window.__ztoolsElectron?.methods : null;
+  const electronMethods = getHostMethods();
 
   try {
     if (type === "Action.CopyToClipboard") {

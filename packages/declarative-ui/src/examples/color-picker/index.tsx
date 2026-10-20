@@ -121,11 +121,11 @@ export function ColorDetailView({ color }: { color: ColorConversionResult }) {
           <Detail.Metadata.TagList title="WCAG 对比度评级">
             <Detail.Metadata.TagList.Item
               text={`White: ${color.wcag.whiteRating}`}
-              color={color.wcag.whiteRating === "AAA" || color.wcag.whiteRating === "AA" ? Color.Green : Color.Red}
+              color={Color.SecondaryText}
             />
             <Detail.Metadata.TagList.Item
               text={`Black: ${color.wcag.blackRating}`}
-              color={color.wcag.blackRating === "AAA" || color.wcag.blackRating === "AA" ? Color.Green : Color.Red}
+              color={Color.SecondaryText}
             />
           </Detail.Metadata.TagList>
         </Detail.Metadata>
@@ -172,7 +172,7 @@ export function ColorPickerCommand() {
   const [includeHashPrefix, setIncludeHashPrefix] = useState<boolean>(true);
   const [palette, setPalette] = useState<SavedColorItem[]>(DEFAULT_PALETTE_ITEMS);
   const [checkedIds, setCheckedIds] = useState<string[]>(DEFAULT_PALETTE_ITEMS.map((i) => i.id));
-  const [history, setHistory] = useState<PickedColorResult[]>([]);
+  const [, setHistory] = useState<PickedColorResult[]>([]);
   useNavigation();
 
   useEffect(() => {
@@ -347,15 +347,14 @@ export function ColorPickerCommand() {
       onSearchTextChange={(val) => setInputColor(val)}
       searchBarAccessory={
         <List.Dropdown
-          tooltip="选择默认复制色彩格式"
-          value={copyFormat}
-          onChange={(val) => setCopyFormat(val as any)}
+          tooltip="按色彩分组过滤调色板"
+          value={paletteGroup}
+          onChange={(val) => setPaletteGroup(val as any)}
         >
-          <List.Dropdown.Item title="默认格式: HEX (#RRGGBB)" value="hex" />
-          <List.Dropdown.Item title="默认格式: RGB (rgb())" value="rgb" />
-          <List.Dropdown.Item title="默认格式: HSL (hsl())" value="hsl" />
-          <List.Dropdown.Item title="默认格式: CSS OKLCH" value="oklch" />
-          <List.Dropdown.Item title="默认格式: Tailwind 类名" value="tailwind" />
+          <List.Dropdown.Item title="色彩分组: 全部色彩" value="all" />
+          <List.Dropdown.Item title="色彩分组: 近期屏幕拾取" value="recent" />
+          <List.Dropdown.Item title="色彩分组: 极客中性灰阶" value="neutral" />
+          <List.Dropdown.Item title="色彩分组: 品牌语义色" value="brand" />
         </List.Dropdown>
       }
       filterBar={{
@@ -419,19 +418,6 @@ export function ColorPickerCommand() {
             options: [
               { label: "8x 像素级标准网格", value: "8x" },
               { label: "16x 极限亚像素网格", value: "16x" }
-            ]
-          },
-          {
-            id: "wb-palette-group",
-            label: "调色板色彩分组过滤",
-            type: "select",
-            value: paletteGroup,
-            onChange: (val) => setPaletteGroup(val as any),
-            options: [
-              { label: "全部色彩", value: "all" },
-              { label: "近期屏幕拾取", value: "recent" },
-              { label: "极客中性灰阶", value: "neutral" },
-              { label: "品牌语义色", value: "brand" }
             ]
           },
           {

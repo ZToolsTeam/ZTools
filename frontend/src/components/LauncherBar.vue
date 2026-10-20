@@ -158,6 +158,8 @@ import { useRouter } from 'vue-router'
 import { usePluginsStore } from '@/stores/plugins'
 import { switchWindowMode, WINDOW_MODES, windowModeState } from '@/utils/windowMode'
 import { getOfficialPlugin } from '@/utils/officialPlugins'
+import { isBundledPlugin } from '@/utils/bundledPlugins'
+import { isPluginVisible } from '@/utils/pluginVisibility'
 import {
   loadInstalledDeclarativePlugin,
   executeDeclarativeNoViewCommand
@@ -246,7 +248,7 @@ function isDeclarativeTarget(pluginId, item = null) {
   if (item && item.isDeclarative === true) return true
   const pid = String(pluginId || '').trim()
   if (!pid) return false
-  if (getOfficialPlugin(pid)) return true
+  if (isBundledPlugin(pid) || getOfficialPlugin(pid)) return true
   const installed = findInstalledPluginMeta(pid)
   return isDeclarativePluginItem(installed)
 }
@@ -669,6 +671,10 @@ async function launchPlugin(pluginId, options = {}) {
   if (!pid) return
 
   const featureCode = typeof options.featureCode === 'string' ? options.featureCode.trim() : ''
+  if (!isPluginVisible(pid)) {
+    declarativeLoadError.value = '该插件暂未开放'
+    return
+  }
   const official = getOfficialPlugin(pid)
   if (official) {
     // 官方标杆应用：直接在 Launcher 内秒开以声明式模式运行

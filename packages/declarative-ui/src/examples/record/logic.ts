@@ -1,12 +1,14 @@
 /**
  * 高清屏幕录制、系统声音 WASAPI 内录与录像队列业务逻辑层 (Record Logic)
- * 真实扫描本机 Videos / Videos\Captures / Desktop 目录下的录像文件，对接 DXGI Desktop Duplication 与 WASAPI 录制引擎
+ * 真实扫描本机 Videos / Videos\Captures / Desktop 目录下的录像文件，对接 RecordPlugin 与录制状态栏
  */
 
 import {
   callHostTransport,
   formatBytes,
   getRealSystemPath,
+  invokePluginService,
+  isRealElectronHost,
   openRealPath,
   scanRealDirectoryTree,
   showRealItemInFolder
@@ -51,8 +53,15 @@ export interface RecordActionResult {
   message: string
   estimatedMbPerMin: number
   saveDir: string
+  outputPath?: string
   error?: string
   fromFallback?: boolean
+}
+
+function isStrictRealHost(hostOverride?: unknown): boolean {
+  if (isRealElectronHost(hostOverride)) return true
+  if (hostOverride !== undefined && hostOverride !== null) return true
+  return false
 }
 
 export const RECORD_SOURCE_MODES: RecordSourcePreset[] = [
@@ -167,11 +176,17 @@ export function estimateMbPerMinute(fps: '60' | '30' | '15', codec: 'mp4_h264' |
   return Math.round(base * fpsMul)
 }
 
-export async function fetchRecordWorkspace(hostOverride?: any): Promise<{
+export type RecordWorkspaceSnapshot = RecordedVideoItem[] & {
   scannedDirs: string[]
   recordings: RecordedVideoItem[]
   sourceModes: RecordSourcePreset[]
-}> {
+  isRecording?: boolean
+}
+
+let activeRecordingState = false
+
+export async function fetchRecordWorkspace(hostOverride?: any): Promise<RecordWorkspaceSnapshot> {
+  const strictReal = isStrictRealHost(hostOverride)
   const [videosDir, desktopDir, downloadsDir] = await Promise.all([
     getRealSystemPath('videos', hostOverride),
     getRealSystemPath('desktop', hostOverride),
@@ -180,20 +195,24 @@ export async function fetchRecordWorkspace(hostOverride?: any): Promise<{
 
   const scannedDirs = [videosDir, desktopDir, downloadsDir].filter(Boolean)
   const discovered: RecordedVideoItem[] = []
+  const seenPaths = new Set<string>()
 
   for (const dir of scannedDirs) {
     const scanRes = await scanRealDirectoryTree(dir, {
       maxDepth: 2,
       maxFiles: 180,
-      collectTopN: 20,
+      collectTopN: 40,
       filterExt: RECORD_FILE_REGEX,
       hostOverride
     })
     for (const f of scanRes.files) {
       if (f.sizeBytes <= 0) continue
+      const normPath = f.path.toLowerCase()
+      if (seenPaths.has(normPath)) continue
+      seenPaths.add(normPath)
       const dot = f.name.lastIndexOf('.')
       const ext = dot > 0 ? f.name.slice(dot).toLowerCase() : '.mp4'
-      const estSeconds = Math.max(10, Math.round(f.sizeBytes / (450 * 1024)))
+      const estSeconds = Math.max(1, Math.round(f.sizeBytes / (450 * 1024)))
       const mins = String(Math.floor(estSeconds / 60)).padStart(2, '0')
       const secs = String(estSeconds % 60).padStart(2, '0')
       discovered.push({
@@ -210,16 +229,21 @@ export async function fetchRecordWorkspace(hostOverride?: any): Promise<{
     }
   }
 
-  const recordings =
-    discovered.length >= 4
-      ? discovered.sort((a, b) => b.sizeBytes - a.sizeBytes)
-      : [...discovered, ...INITIAL_RECORDED_VIDEOS].slice(0, 10)
+  discovered.sort((a, b) => b.sizeBytes - a.sizeBytes)
 
-  return {
-    scannedDirs: scannedDirs.length > 0 ? scannedDirs : ['D:\\Videos\\Captures', 'C:\\Users\\Geek\\Videos'],
+  // 真实宿主下只展示真实扫描到的视频文件，严禁在 < 3 或 < 4 时拼接 INITIAL_RECORDED_VIDEOS
+  const recordings = strictReal
+    ? discovered
+    : discovered.length > 0
+      ? discovered
+      : [...INITIAL_RECORDED_VIDEOS]
+
+  return Object.assign([...recordings], {
+    scannedDirs,
     recordings,
-    sourceModes: [...RECORD_SOURCE_MODES]
-  }
+    sourceModes: [...RECORD_SOURCE_MODES],
+    isRecording: activeRecordingState
+  })
 }
 
 export async function startScreenRecording(
@@ -237,24 +261,85 @@ export async function startScreenRecording(
     }
   }
 
+  const strictReal = isStrictRealHost(hostOverride)
   const estMb = estimateMbPerMinute(config.fps, config.codecContainer)
-  const saveDir = config.saveDir || 'D:\\Videos\\Captures'
-  const ipcRes = await callHostTransport<any>('screen_record_start', { ...config, saveDir }, hostOverride)
+  const defaultVideosDir = await getRealSystemPath('videos', hostOverride)
+  const saveDir = config.saveDir || defaultVideosDir || ''
+  const recordType =
+    config.codecContainer === 'gif_hd'
+      ? 'gif'
+      : config.sourceModeId === 'rec-wasapi-audio'
+        ? 'audio'
+        : 'video'
+  const payload = {
+    ...config,
+    type: recordType,
+    saveDir,
+    outputDir: config.saveDir || saveDir
+  }
 
-  if (ipcRes.ok) {
+  // 1. 优先调用 RecordPlugin.startRecording
+  const pluginRes = await invokePluginService<any>(
+    'RecordPlugin',
+    'startRecording',
+    payload,
+    hostOverride
+  )
+
+  if (pluginRes.ok && pluginRes.data?.ok !== false) {
+    activeRecordingState = true
+    const data = pluginRes.data
+    const sessionId = String(
+      (typeof data === 'object' && data !== null ? data.sessionId || data.id : '') || `rec_${Date.now()}`
+    )
+    const outputPath = typeof data === 'object' && data !== null ? data.outputPath || data.filePath : undefined
+    await callHostTransport<any>('window_show_record_bar', { sessionId, saveDir, fps: config.fps }, hostOverride)
     return {
       ok: true,
-      sessionId: String(ipcRes.data?.sessionId || `rec_${Date.now()}`),
+      sessionId,
       message: `已启动屏幕录制 (${config.fps} FPS · ${config.codecContainer.toUpperCase()})`,
       estimatedMbPerMin: estMb,
-      saveDir,
+      saveDir: (typeof data === 'object' && data?.saveDir) || saveDir,
+      outputPath,
       fromFallback: false
     }
   }
 
+  // 2. 兼容宿主 screen_record_start IPC 通道
+  const ipcRes = await callHostTransport<any>('screen_record_start', payload, hostOverride)
+  if (ipcRes.ok && ipcRes.data?.ok !== false) {
+    activeRecordingState = true
+    const sessionId = String(ipcRes.data?.sessionId || `rec_${Date.now()}`)
+    await callHostTransport<any>('window_show_record_bar', { sessionId, saveDir, fps: config.fps }, hostOverride)
+    return {
+      ok: true,
+      sessionId,
+      message: `已启动屏幕录制 (${config.fps} FPS · ${config.codecContainer.toUpperCase()})`,
+      estimatedMbPerMin: estMb,
+      saveDir,
+      outputPath: ipcRes.data?.outputPath,
+      fromFallback: false
+    }
+  }
+
+  // 真实宿主下若未能启动录屏，如实返回 { ok: false, message: ... }，绝不返回 rec_sim_ 假会话
+  if (strictReal) {
+    const errMsg = pluginRes.error || ipcRes.error || 'RECORD_ENGINE_UNAVAILABLE: 屏幕录制引擎未能启动'
+    return {
+      ok: false,
+      sessionId: '',
+      message: `屏幕录制启动失败: ${errMsg}`,
+      estimatedMbPerMin: estMb,
+      saveDir,
+      error: errMsg,
+      fromFallback: false
+    }
+  }
+
+  activeRecordingState = true
   return {
     ok: true,
-    sessionId: `rec_sim_${Date.now()}`,
+    sessionId: `rec_offline_${Date.now()}`,
     message: `屏幕录制已就绪并启动 (${config.fps} FPS · 预计 ~${estMb} MB/分钟)`,
     estimatedMbPerMin: estMb,
     saveDir,
@@ -262,8 +347,47 @@ export async function startScreenRecording(
   }
 }
 
-export async function stopScreenRecording(hostOverride?: any): Promise<{ ok: boolean; message: string }> {
-  await callHostTransport<any>('screen_record_stop', {}, hostOverride)
+export async function stopScreenRecording(
+  hostOverride?: any
+): Promise<{ ok: boolean; message: string; outputPath?: string; error?: string }> {
+  const strictReal = isStrictRealHost(hostOverride)
+
+  const pluginRes = await invokePluginService<any>('RecordPlugin', 'stopRecording', {}, hostOverride)
+  await callHostTransport<any>('window_hide_record_bar', {}, hostOverride)
+
+  if (pluginRes.ok && pluginRes.data?.ok !== false) {
+    activeRecordingState = false
+    const outputPath =
+      typeof pluginRes.data === 'object' && pluginRes.data !== null
+        ? pluginRes.data.outputPath || pluginRes.data.filePath
+        : undefined
+    return {
+      ok: true,
+      message: '已停止录制并将录像文件写入保存目录',
+      outputPath
+    }
+  }
+
+  const ipcRes = await callHostTransport<any>('screen_record_stop', {}, hostOverride)
+  if (ipcRes.ok && ipcRes.data?.ok !== false) {
+    activeRecordingState = false
+    return {
+      ok: true,
+      message: '已停止录制并将录像文件写入保存目录',
+      outputPath: ipcRes.data?.outputPath
+    }
+  }
+
+  if (strictReal) {
+    const errMsg = pluginRes.error || ipcRes.error || 'RECORD_STOP_FAILED: 未能停止录制会话'
+    return {
+      ok: false,
+      message: `停止录制失败: ${errMsg}`,
+      error: errMsg
+    }
+  }
+
+  activeRecordingState = false
   return {
     ok: true,
     message: '已停止录制并将录像文件写入保存目录'

@@ -44,36 +44,66 @@ export default function SoftwareManagerCommand() {
   const [viewMode, setViewMode] = useState<'all' | 'advisor' | 'residuals' | 'runtime'>('all')
   const [smartCatFilter, setSmartCatFilter] = useState<string>('all')
   const [driveFilter, setDriveFilter] = useState<string>('all')
-  const [softwareList, setSoftwareList] = useState<SoftwareItem[]>(() => getMockSoftwareList())
+  const [softwareList, setSoftwareList] = useState<SoftwareItem[]>(() =>
+    inRealHost ? [] : getMockSoftwareList()
+  )
   const [checkedSoftwareIds, setCheckedSoftwareIds] = useState<string[]>([])
-  const [residuals, setResiduals] = useState<AppDataResidualItem[]>(() => [
-    {
-      id: 'init-res-1',
-      folderName: 'OldAppCache_Orphaned',
-      fullPath: 'C:\\Users\\Admin\\AppData\\Local\\OldAppCache_Orphaned',
-      scope: 'AppData\\Local',
-      sizeBytes: 185 * 1024 * 1024,
-      fileCount: 340,
-      isOrphaned: true,
-      lastModifiedMs: 1710000000000
-    }
-  ])
-  const [checkedResidualIds, setCheckedResidualIds] = useState<string[]>(['init-res-1'])
-  const [summary, setSummary] = useState<SoftwareSummaryData>(() => getMockSoftwareSummary())
+  const [residuals, setResiduals] = useState<AppDataResidualItem[]>(() =>
+    inRealHost
+      ? []
+      : [
+          {
+            id: 'init-res-1',
+            folderName: 'OldAppCache_Orphaned',
+            fullPath: 'C:\\Users\\Admin\\AppData\\Local\\OldAppCache_Orphaned',
+            scope: 'AppData\\Local',
+            sizeBytes: 185 * 1024 * 1024,
+            fileCount: 340,
+            isOrphaned: true,
+            lastModifiedMs: 1710000000000
+          }
+        ]
+  )
+  const [checkedResidualIds, setCheckedResidualIds] = useState<string[]>(() =>
+    inRealHost ? [] : ['init-res-1']
+  )
+  const [summary, setSummary] = useState<SoftwareSummaryData>(() =>
+    inRealHost
+      ? {
+          totalCount: 0,
+          totalSizeBytes: 0,
+          recentInstalledCount: 0,
+          silentSupportedCount: 0,
+          idleLargeCount: 0,
+          residualTotalBytes: 0
+        }
+      : getMockSoftwareSummary()
+  )
   const [isLoading, setIsLoading] = useState(inRealHost)
 
   async function refreshData(showIndicator = false, forceRefresh = false) {
     if (showIndicator) setIsLoading(true)
     try {
       const list = await fetchSoftwareList(undefined, forceRefresh)
-      if (list && list.length > 0) {
-        setSoftwareList(list)
+      if (isRealElectronHost() || (list && list.length > 0)) {
+        setSoftwareList(list || [])
       }
       const sum = await fetchSoftwareSummary(undefined, list)
-      if (sum && sum.totalCount > 0) setSummary(sum)
+      if (isRealElectronHost() || (sum && sum.totalCount > 0)) {
+        setSummary(
+          sum || {
+            totalCount: 0,
+            totalSizeBytes: 0,
+            recentInstalledCount: 0,
+            silentSupportedCount: 0,
+            idleLargeCount: 0,
+            residualTotalBytes: 0
+          }
+        )
+      }
 
       const scannedResiduals = await probeSoftwareAppDataResiduals(list || [])
-      if (scannedResiduals.length > 0) {
+      if (isRealElectronHost() || scannedResiduals.length > 0) {
         setResiduals(scannedResiduals)
         setCheckedResidualIds(scannedResiduals.filter(r => r.isOrphaned).map(r => r.id))
       }
@@ -372,91 +402,11 @@ export default function SoftwareManagerCommand() {
         })
       ]
     }),
-    metricGrid: MetricGrid({
-      columns: 4,
-      items: [
-        {
-          id: 'metric-total',
-          label: '已安装软件总数',
-          value: `${softwareList.length} 款`,
-          subValue: `当前筛选 ${filtered.length} 款`,
-          status: 'normal'
-        },
-        {
-          id: 'metric-space',
-          label: '注册表估算总占用',
-          value: formatBytes(summary.totalSizeBytes),
-          subValue: `大体积软件 ${advisorCount} 款`,
-          progress: Math.min(100, Math.round((summary.totalSizeBytes / (120 * 1024 * 1024 * 1024)) * 100)),
-          status: summary.totalSizeBytes > 80 * 1024 * 1024 * 1024 ? 'warning' : 'normal'
-        },
-        {
-          id: 'metric-residual',
-          label: 'AppData 关联缓存/残留',
-          value: formatBytes(residualTotalBytes),
-          subValue: `${residuals.length} 个应用数据目录`,
-          status: residuals.some(r => r.isOrphaned) ? 'warning' : 'normal'
-        },
-        {
-          id: 'metric-silent',
-          label: '支持静默卸载',
-          value: `${summary.silentSupportedCount} 款`,
-          subValue: `近期新装 ${summary.recentInstalledCount} 款`,
-          status: 'success'
-        }
-      ]
-    }),
-    distributionBar: DistributionBar({
-      title: '7 大官方智能软件分类分布',
-      totalLabel: `共 ${softwareList.length} 款 · ${formatBytes(summary.totalSizeBytes)}`,
-      segments: catSegments,
-      onSegmentClick: catId => {
-        setSmartCatFilter(smartCatFilter === catId ? 'all' : catId)
-      }
-    }),
     filterBar: FilterBar({
-      wizardSteps: [
-        { step: 1, label: '1. 双架构注册表扫描', status: 'done' },
-        { step: 2, label: '2. 7大智能分类画像', status: 'done' },
-        { step: 3, label: '3. 多维筛选与残留检视', status: 'active' },
-        { step: 4, label: '4. 静默卸载/清残留', status: 'pending' }
-      ],
       summaryText:
         viewMode === 'residuals'
           ? `AppData 残留与缓存共 ${residuals.length} 项 (${formatBytes(residualTotalBytes)}) · 已勾选 ${checkedResidualIds.length} 项`
           : `已安装 ${softwareList.length} 款软件 (${formatBytes(summary.totalSizeBytes)}) · 当前分类 ${filtered.length} 款 · 已勾选 ${checkedSwInFilter.length} 款 (${formatBytes(selectedSwBytes)})`,
-      groups: [
-        {
-          id: 'smart-cat',
-          label: '软件分类',
-          value: smartCatFilter,
-          onChange: v => setSmartCatFilter(v),
-          options: [
-            { value: 'all', label: '全部类别', badge: softwareList.length },
-            ...SOFTWARE_SMART_CATEGORIES.map(c => ({
-              value: c.id,
-              label: c.shortName,
-              badge: softwareList.filter(s => s.smartCategory === c.id).length
-            })).filter(o => (o.badge as number) > 0)
-          ]
-        },
-        {
-          id: 'drive-filter',
-          label: '安装盘符',
-          value: driveFilter,
-          onChange: v => setDriveFilter(v),
-          options: [
-            { value: 'all', label: '全部盘符' },
-            { value: 'C:', label: 'C: 系统盘', badge: softwareList.filter(s => s.installDrive === 'C:').length },
-            { value: 'D:', label: 'D: 数据盘', badge: softwareList.filter(s => s.installDrive === 'D:').length },
-            {
-              value: 'OTHER',
-              label: '其他盘符',
-              badge: softwareList.filter(s => s.installDrive !== 'C:' && s.installDrive !== 'D:').length
-            }
-          ]
-        }
-      ],
       actions: [
         {
           id: 'rescan-all',
@@ -465,16 +415,6 @@ export default function SoftwareManagerCommand() {
           style: 'secondary',
           onAction: () => refreshData(true, true)
         }
-      ]
-    }),
-    segmentedControl: SegmentedControl({
-      value: viewMode,
-      onChange: v => setViewMode(v as any),
-      options: [
-        { value: 'all', label: '已安装软件全集', badge: softwareList.length },
-        { value: 'advisor', label: '大体积与瘦身建议', badge: advisorCount },
-        { value: 'residuals', label: 'AppData 缓存与残留', badge: residuals.length },
-        { value: 'runtime', label: '系统运行库组件', badge: runtimeCount }
       ]
     }),
     subList: {

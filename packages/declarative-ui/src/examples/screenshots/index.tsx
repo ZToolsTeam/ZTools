@@ -30,6 +30,7 @@ import {
   generateScreenshotThumbnailSvg,
   INITIAL_SCREENSHOTS
 } from "./screenshots-service.js";
+import { isRealElectronHost } from "../shared/native-ipc.js";
 
 export * from "./types.js";
 export * from "./screenshots-service.js";
@@ -75,7 +76,7 @@ ${item.ocrText}
           <Detail.Metadata.TagList title="状态">
             <Detail.Metadata.TagList.Item
               text={item.pinned ? "PINNED (已置顶)" : "NORMAL"}
-              color={item.pinned ? Color.Yellow : Color.Blue}
+              color={Color.SecondaryText}
             />
           </Detail.Metadata.TagList>
           <Detail.Metadata.Separator />
@@ -124,8 +125,10 @@ ${item.ocrText}
 }
 
 export function ScreenshotsCommand() {
-  const [items, setItems] = useState<ScreenshotItem[]>(() => [...INITIAL_SCREENSHOTS]);
-  const [checkedIds, setCheckedIds] = useState<string[]>(() => INITIAL_SCREENSHOTS.map((s) => s.id));
+  const isRealHost = isRealElectronHost();
+  const initialList = isRealHost ? [] : [...INITIAL_SCREENSHOTS];
+  const [items, setItems] = useState<ScreenshotItem[]>(() => initialList);
+  const [checkedIds, setCheckedIds] = useState<string[]>(() => initialList.map((s) => s.id));
   const [searchText, setSearchText] = useState("");
   const [category, setCategory] = useState<ScreenshotCategory>("all");
   const [captureRegionMode, setCaptureRegionMode] = useState<"region" | "window" | "fullscreen" | "delay3s">("region");
@@ -133,14 +136,14 @@ export function ScreenshotsCommand() {
   const [postCaptureAction, setPostCaptureAction] = useState<"paste_clipboard" | "save_only" | "auto_ocr">("paste_clipboard");
   const [includeWindowShadow, setIncludeWindowShadow] = useState<boolean>(true);
   const [autoHashDedupe, setAutoHashDedupe] = useState<boolean>(true);
-  const [refreshCount, setRefreshCount] = useState(0);
+  const [refreshCount] = useState(0);
   const [selectedId, setSelectedId] = useState<string | null>(null);
 
   useEffect(() => {
     let active = true;
     defaultScreenshotsManager.loadScreenshots().then((list) => {
       if (active) {
-        const nextList = list.length > 0 ? list : [...INITIAL_SCREENSHOTS];
+        const nextList = list.length > 0 ? list : isRealElectronHost() ? [] : [...INITIAL_SCREENSHOTS];
         setItems(nextList);
         setCheckedIds(nextList.map((s) => s.id));
       }
@@ -152,14 +155,20 @@ export function ScreenshotsCommand() {
 
   const reloadScreenshots = (force = false) => {
     defaultScreenshotsManager.loadScreenshots(force).then((list) => {
-      const nextList = list.length > 0 ? list : [...INITIAL_SCREENSHOTS];
+      const nextList = list.length > 0 ? list : isRealElectronHost() ? [] : [...INITIAL_SCREENSHOTS];
       setItems(nextList);
       setCheckedIds(nextList.map((s) => s.id));
     });
   };
 
   const handleCaptureScreenNow = async () => {
-    const res = await defaultScreenshotsManager.captureScreenNow();
+    const res = await defaultScreenshotsManager.captureScreenNow({
+      captureRegionMode,
+      imageFormat,
+      postCaptureAction,
+      includeWindowShadow,
+      autoHashDedupe
+    });
     reloadScreenshots(true);
     await showToast(
       res.success ? Toast.Style.Success : Toast.Style.Failure,
@@ -171,7 +180,7 @@ export function ScreenshotsCommand() {
     return defaultScreenshotsManager.filterScreenshots(items, searchText, category);
   }, [items, searchText, category]);
 
-  const activeScreenshot = useMemo(() => {
+  useMemo(() => {
     return filtered.find((s) => s.id === selectedId) || filtered[0];
   }, [filtered, selectedId]);
 
@@ -395,20 +404,6 @@ export function ScreenshotsCommand() {
       onSelectionChange={setSelectedId}
       filterBar={{
         summaryText: `截图队列共 ${filtered.length} 张 (${formatTotalBytes(totalBytes)}) · 已置顶 ${pinnedCount} 张${filtered[0] ? ` · 最新: ${filtered[0].filename}` : ""}`,
-        groups: [
-          {
-            id: "category",
-            label: "截图筛选",
-            value: category,
-            onChange: (val: string) => setCategory(val as ScreenshotCategory),
-            options: [
-              { value: "all", label: "全部截图" },
-              { value: "pinned", label: "已置顶" },
-              { value: "recent", label: "最近 1 小时" },
-              { value: "ocr", label: "含 OCR 文字" }
-            ]
-          }
-        ],
         actions: [
           {
             id: "paste-latest",
@@ -560,54 +555,27 @@ export function ScreenshotsCommand() {
               { text: item.formattedDate }
             ]}
             detail={
-              <List.Item.Detail
-                markdown={`![${item.filename}](${item.thumbnailSvg})
-
----
-
-### OCR 文字提取识别 (Text Recognition)
-
-\`\`\`text
-${item.ocrText}
-\`\`\`
-`}
-                metadata={
-                  <List.Item.Detail.Metadata>
-                    <List.Item.Detail.Metadata.Label
-                      title="文件名称"
-                      text={item.filename}
-                      icon={Icon.Image}
-                    />
-                    <List.Item.Detail.Metadata.Label
-                      title="分辨率"
-                      text={item.dimensions}
-                      icon={Icon.Monitor}
-                    />
-                    <List.Item.Detail.Metadata.Label
-                      title="文件大小"
-                      text={item.formattedSize}
-                      icon={Icon.HardDrive}
-                    />
-                    <List.Item.Detail.Metadata.Label
-                      title="拍摄时间"
-                      text={item.formattedDate}
-                      icon={Icon.Calendar}
-                    />
-                    <List.Item.Detail.Metadata.TagList title="状态">
-                      <List.Item.Detail.Metadata.TagList.Item
-                        text={item.pinned ? "PINNED (已置顶)" : "NORMAL"}
-                        color={item.pinned ? Color.Yellow : Color.Blue}
-                      />
-                    </List.Item.Detail.Metadata.TagList>
-                    <List.Item.Detail.Metadata.Separator />
-                    <List.Item.Detail.Metadata.Label
-                      title="存储路径"
-                      text={item.path}
-                      icon={Icon.Folder}
-                    />
-                  </List.Item.Detail.Metadata>
-                }
-              />
+              isRealHost ? undefined : (
+                <List.Item.Detail
+                  markdown={`![${item.filename}](${item.thumbnailSvg})\n\n---\n\n### OCR 文字提取识别 (Text Recognition)\n\n\`\`\`text\n${item.ocrText}\n\`\`\``}
+                  metadata={
+                    <List.Item.Detail.Metadata>
+                      <List.Item.Detail.Metadata.Label title="文件名称" text={item.filename} icon={Icon.Image} />
+                      <List.Item.Detail.Metadata.Label title="分辨率" text={item.dimensions} icon={Icon.Monitor} />
+                      <List.Item.Detail.Metadata.Label title="文件大小" text={item.formattedSize} icon={Icon.HardDrive} />
+                      <List.Item.Detail.Metadata.Label title="拍摄时间" text={item.formattedDate} icon={Icon.Calendar} />
+                      <List.Item.Detail.Metadata.TagList title="状态">
+                        <List.Item.Detail.Metadata.TagList.Item
+                          text={item.pinned ? "PINNED (已置顶)" : "NORMAL"}
+                          color={Color.SecondaryText}
+                        />
+                      </List.Item.Detail.Metadata.TagList>
+                      <List.Item.Detail.Metadata.Separator />
+                      <List.Item.Detail.Metadata.Label title="存储路径" text={item.path} icon={Icon.Folder} />
+                    </List.Item.Detail.Metadata>
+                  }
+                />
+              )
             }
             actions={renderActionPanel(item)}
           />
@@ -618,3 +586,4 @@ ${item.ocrText}
 }
 
 export default ScreenshotsCommand;
+

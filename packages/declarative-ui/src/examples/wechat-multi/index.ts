@@ -58,27 +58,17 @@ export function WechatMultiCommand() {
   async function handleLaunchNew() {
     const res = await launchNewWechatInstance(1)
     if (res.ok) {
-      const newPid = Math.floor(28000 + Math.random() * 6000)
-      const newInst: WechatInstanceItem = {
-        id: `wx-main-${newPid}`,
-        pid: newPid,
-        name: `WeChat.exe (新多开实例 #${mainCount + 1})`,
-        role: 'main',
-        roleLabel: '微信主进程',
-        executablePath: res.executablePath,
-        dataDir: 'C:\\Users\\User\\Documents\\WeChat Files',
-        memoryBytes: 215 * 1024 * 1024,
-        cpuPercent: 1.2,
-        uptimeText: '刚刚启动',
-        mutexStatus: '互斥锁已剥离'
-      }
-      setItems((prev) => [prev[0], newInst, ...prev.slice(1)])
-      setMainCount((c) => c + 1)
-      setTotalMemBytes((m) => m + newInst.memoryBytes)
+      await refreshInstances(false)
       showToast({
         style: Toast.Style.Success,
         title: res.message,
-        message: `新实例 PID: ${newPid}`
+        message: res.pid ? `新实例 PID: ${res.pid}` : res.executablePath
+      })
+    } else {
+      showToast({
+        style: Toast.Style.Failure,
+        title: '启动微信实例失败',
+        message: res.message
       })
     }
   }
@@ -98,6 +88,12 @@ export function WechatMultiCommand() {
         style: Toast.Style.Success,
         title: res.message,
         message: item.name
+      })
+    } else {
+      showToast({
+        style: Toast.Style.Failure,
+        title: '结束微信实例失败',
+        message: res.message
       })
     }
   }

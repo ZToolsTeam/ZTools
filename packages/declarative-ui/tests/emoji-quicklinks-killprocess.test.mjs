@@ -442,7 +442,7 @@ describe("REA Deep Reverse Suite: Emoji-Picker, Quicklinks & Kill-Process", () =
       // 2. 系统核心高危进程
       const procCritical = SAMPLE_PROCESSES.find(p => p.name === "explorer.exe");
       const viewCritical = ProcessDetailView({ process: procCritical });
-      assert.match(viewCritical.props.markdown, /⚠️ \*\*系统关键高危进程\*\*/);
+      assert.match(viewCritical.props.markdown, /\[高危警告\] \*\*系统关键高危进程\*\*/);
     });
 
     test("KillProcessCommand: mounts with Dropdown sorting, section counters, and ActionPanel", () => {

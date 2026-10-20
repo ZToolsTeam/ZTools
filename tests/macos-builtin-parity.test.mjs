@@ -59,7 +59,7 @@ test('Gate-1: macOS 平台可见内置插件数量达到 32+ 款，且三批次�
 
     assert.ok(
       supportedOnMac.length >= 32,
-      `Expected at least 32 built-in plugins visible on macOS, got ${supportedOnMac.length}`
+      `Expected at least 32 built-in plugins supported on macOS, got ${supportedOnMac.length}`
     )
 
     const requiredMacPluginIds = [
@@ -71,7 +71,6 @@ test('Gate-1: macOS 平台可见内置插件数量达到 32+ 款，且三批次�
       'system',
       'apple-shortcuts',
       'kill-process',
-      'color-picker',
       // Batch 2 (8)
       'applications',
       'navigation',
@@ -86,7 +85,6 @@ test('Gate-1: macOS 平台可见内置插件数量达到 32+ 款，且三批次�
       'disk-analyzer',
       'hardware-info',
       'process-monitor',
-      'qr-code',
       'password-vault',
       'translator',
       'dictionary',
@@ -96,12 +94,17 @@ test('Gate-1: macOS 平台可见内置插件数量达到 32+ 款，且三批次�
       'calendar',
       'web-searches',
       // Core shared built-ins
-      'calculator',
       'quicklinks',
       'emoji-picker',
-      'notes',
-      'json-format'
+      'notes'
     ]
+
+    // color-picker、qr-code、calculator、json-format 等已改由 plugins 仓库的原版插件随客户端内置提供，
+    // 旧注册表里的同名实现必须让位（见 frontend/src/config/bundledPlugins.json）
+    for (const id of ['color-picker', 'qr-code', 'calculator', 'json-format']) {
+      assert.equal(isOfficialPlugin(id), false, `${id} 应由内置原版插件提供`)
+      assert.equal(getOfficialPlugin(id), undefined)
+    }
 
     for (const id of requiredMacPluginIds) {
       assert.equal(isOfficialPlugin(id), true, `Plugin ${id} should be registered in OFFICIAL_PLUGINS_MAP`)

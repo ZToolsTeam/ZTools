@@ -8,9 +8,7 @@ import {
   useEffect,
   showToast,
   Toast,
-  MetricGrid,
-  FilterBar,
-  SegmentedControl
+  FilterBar
 } from '../../index.js'
 import {
   INITIAL_RECORDED_VIDEOS,
@@ -22,30 +20,28 @@ import {
   formatBytes,
   openRecordFileLocation,
   openRecordedVideo,
-  startScreenRecording
+  startScreenRecording,
+  stopScreenRecording
 } from './logic.js'
+import { isRealElectronHost } from '../shared/native-ipc.js'
 
 export * from './logic.js'
 
-const CODEC_LABELS: Record<string, string> = {
-  mp4_h264: 'MP4 H.264 硬件编码',
-  mp4_hevc: 'MP4 HEVC (H.265 省空间)',
-  gif_hd: '高清 GIF 动图直出'
-}
-
 export function RecordCommand() {
   const [searchText, setSearchText] = useState('')
-  const [tab, setTab] = useState<'recordings' | 'sources'>('recordings')
   const [sourceModeId, setSourceModeId] = useState<string>(RECORD_SOURCE_MODES[0].id)
   const [fps, setFps] = useState<'60' | '30' | '15'>('60')
   const [codecContainer, setCodecContainer] = useState<'mp4_h264' | 'mp4_hevc' | 'gif_hd'>('mp4_h264')
   const [wasapiLoopback, setWasapiLoopback] = useState<boolean>(true)
   const [micMix, setMicMix] = useState<boolean>(false)
   const [cursorHighlight, setCursorHighlight] = useState<boolean>(true)
-  const [recordings, setRecordings] = useState<RecordedVideoItem[]>(INITIAL_RECORDED_VIDEOS)
-  const [checkedIds, setCheckedIds] = useState<string[]>(INITIAL_RECORDED_VIDEOS.map(r => r.id))
+  const [isRecording, setIsRecording] = useState<boolean>(false)
+  const isRealHost = isRealElectronHost()
+  const initialRecordings = isRealHost ? [] : INITIAL_RECORDED_VIDEOS
+  const [recordings, setRecordings] = useState<RecordedVideoItem[]>(initialRecordings)
+  const [checkedIds, setCheckedIds] = useState<string[]>(initialRecordings.map(r => r.id))
   const [sourceModes, setSourceModes] = useState<RecordSourcePreset[]>(RECORD_SOURCE_MODES)
-  const [scannedDirs, setScannedDirs] = useState<string[]>(['D:\\Videos\\Captures', 'C:\\Users\\Geek\\Videos'])
+  const [scannedDirs, setScannedDirs] = useState<string[]>([])
   const [isLoading, setIsLoading] = useState(false)
 
   async function refreshWorkspace(showIndicator = false) {
@@ -56,6 +52,9 @@ export function RecordCommand() {
       setCheckedIds(ws.recordings.map(r => r.id))
       setSourceModes(ws.sourceModes)
       setScannedDirs(ws.scannedDirs)
+      if (typeof ws.isRecording === 'boolean') {
+        setIsRecording(ws.isRecording)
+      }
       if (showIndicator) {
         showToast({
           style: Toast.Style.Success,
@@ -74,7 +73,7 @@ export function RecordCommand() {
 
   const activeSource = sourceModes.find(s => s.id === sourceModeId) || RECORD_SOURCE_MODES[0]
   const estMbPerMin = estimateMbPerMinute(fps, codecContainer)
-  const saveDir = scannedDirs[0] || 'D:\\Videos\\Captures'
+  const saveDir = scannedDirs[0] || ''
 
   async function handleStartRecording() {
     const res = await startScreenRecording({
@@ -90,10 +89,26 @@ export function RecordCommand() {
       showToast({ style: Toast.Style.Failure, title: '录制启动失败', message: res.error || res.message })
       return
     }
+    setIsRecording(true)
     showToast({
       style: Toast.Style.Success,
       title: res.message,
       message: `保存目录: ${res.saveDir}`
+    })
+  }
+
+  async function handleStopRecording() {
+    const res = await stopScreenRecording()
+    if (!res.ok) {
+      showToast({ style: Toast.Style.Failure, title: '停止录制失败', message: res.error || res.message })
+      return
+    }
+    setIsRecording(false)
+    await refreshWorkspace(false)
+    showToast({
+      style: Toast.Style.Success,
+      title: res.message,
+      message: res.outputPath || saveDir
     })
   }
 
@@ -140,16 +155,32 @@ export function RecordCommand() {
       actions: ActionPanel({
         title: item.name,
         children: [
-          Action({
-            title: '开始新屏幕录制 / 播放选中录像',
-            icon: Icon.Play,
-            onAction: handleStartRecording
-          }),
+          isRecording
+            ? Action({
+                title: '停止屏幕录制并保存',
+                icon: Icon.Stop,
+                onAction: handleStopRecording
+              })
+            : Action({
+                title: '开始新屏幕录制 / 播放选中录像',
+                icon: Icon.Play,
+                onAction: handleStartRecording
+              }),
           Action({
             title: '在资源管理器定位',
             icon: Icon.Folder,
             onAction: () => {
               openRecordFileLocation(item.path)
+            }
+          }),
+          Action({
+            title: isRecording ? '重新启动新屏幕录制' : '停止当前屏幕录制并保存',
+            icon: isRecording ? Icon.Play : Icon.Stop,
+            onAction: () => {
+              if (isRecording) {
+                return handleStartRecording()
+              }
+              return handleStopRecording()
             }
           }),
           Action({
@@ -188,60 +219,22 @@ export function RecordCommand() {
         })
       )
     }),
-    metricGrid: MetricGrid({
-      columns: 4,
-      items: [
-        {
-          id: 'rec-source',
-          label: '当前捕获源模式',
-          value: activeSource.tag,
-          subValue: activeSource.defaultResolution,
-          status: 'success'
-        },
-        {
-          id: 'rec-fps',
-          label: '录制帧率与编码',
-          value: `${fps} FPS`,
-          subValue: CODEC_LABELS[codecContainer],
-          status: 'success'
-        },
-        {
-          id: 'rec-audio',
-          label: '音频内录管线',
-          value: wasapiLoopback ? 'WASAPI 系统内录' : '静音画面录制',
-          subValue: micMix ? '已开启麦克风混音' : '纯系统数字音频',
-          status: 'normal'
-        },
-        {
-          id: 'rec-count',
-          label: '本机录像队列',
-          value: `${recordings.length} 个录像`,
-          subValue: `总计 ${formatBytes(totalBytes)}`,
-          status: 'normal'
-        }
-      ]
-    }),
     filterBar: FilterBar({
-      wizardSteps: [
-        { step: 1, label: '1. 选择屏幕/窗口捕获源', status: 'done' },
-        { step: 2, label: '2. 配置帧率与硬件编码', status: 'done' },
-        { step: 3, label: '3. 开启 WASAPI 系统内录', status: 'active' },
-        { step: 4, label: '4. 启动录制与管理队列', status: 'pending' }
-      ],
-      summaryText: `捕获源: ${activeSource.tag} (${activeSource.defaultResolution} @ ${fps}FPS) · 预计 ~${estMbPerMin} MB/分钟 · 已录制队列 ${recordings.length} 项 (${formatBytes(totalBytes)})`,
-      groups: [
-        {
-          id: 'rec-source-group',
-          label: '录制源模式',
-          value: sourceModeId,
-          onChange: v => setSourceModeId(v),
-          options: RECORD_SOURCE_MODES.map(s => ({
-            value: s.id,
-            label: s.tag
-          }))
-        }
-      ],
+      summaryText: `${isRecording ? '正在录制中 · ' : ''}捕获源: ${activeSource.tag} (${activeSource.defaultResolution} @ ${fps}FPS) · 预计 ~${estMbPerMin} MB/分钟 · 已录制队列 ${recordings.length} 项 (${formatBytes(totalBytes)})`,
       actions: [
+        {
+          id: 'toggle-record-session',
+          label: isRecording ? '停止屏幕录制' : '开始屏幕录制',
+          title: isRecording ? '停止屏幕录制并保存' : '开始新屏幕录制',
+          style: 'primary',
+          onAction: () => {
+            if (isRecording) {
+              void handleStopRecording()
+            } else {
+              void handleStartRecording()
+            }
+          }
+        },
         {
           id: 'rescan-record',
           label: '重新扫描队列',
@@ -255,17 +248,6 @@ export function RecordCommand() {
       title: '高清屏幕录制参数工作台',
       subtitle: `${activeSource.defaultResolution} · ${fps} FPS · ${wasapiLoopback ? 'WASAPI 内录' : '无音频'}`,
       fields: [
-        {
-          id: 'wb-rec-source',
-          label: '录制源模式',
-          type: 'select',
-          value: sourceModeId,
-          onChange: val => setSourceModeId(val),
-          options: RECORD_SOURCE_MODES.map(s => ({
-            label: s.tag,
-            value: s.id
-          }))
-        },
         {
           id: 'wb-rec-fps',
           label: '视频帧率',
@@ -314,7 +296,7 @@ export function RecordCommand() {
       ],
       previewCard: {
         title: '录制规格与磁盘占用预估',
-        badge: `${fps} FPS`,
+        badge: isRecording ? '录制进行中' : `${fps} FPS`,
         subtitle: `捕获源: ${activeSource.title}`,
         metrics: [
           { label: '目标显示器分辨率', value: activeSource.defaultResolution },
@@ -340,14 +322,6 @@ export function RecordCommand() {
       emptyText: '当前保存目录暂无已录制视频文件',
       items: rightQueueItems
     },
-    segmentedControl: SegmentedControl({
-      value: tab,
-      onChange: v => setTab(v as any),
-      options: [
-        { value: 'recordings', label: '本机录像队列', badge: recordings.length },
-        { value: 'sources', label: '4 大捕获源模式', badge: sourceModes.length }
-      ]
-    }),
     children: [
       List.Section({
         title: `本机已录制视频文件队列 (${filteredRecordings.length})`,
@@ -358,3 +332,4 @@ export function RecordCommand() {
 }
 
 export default RecordCommand
+

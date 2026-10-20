@@ -1,0 +1,43 @@
+{
+  "id": "crypto-tool",
+  "name": "加解密与散列",
+  "version": "1.0.0",
+  "description": "实时计算 MD5 / SHA-1 / SHA-256 / SHA-512 与 Base64、URL 编码，支持 AES 加解密与 HMAC",
+  "author": "ZTools Team",
+  "entry": "dist/index.js",
+  "icon": "icon.svg",
+  "permissions": [
+    "clipboard",
+    "crypto"
+  ],
+  "targets": [
+    {
+      "id": "windows-electron-any",
+      "platform": "windows",
+      "runtime": "electron",
+      "arch": "any"
+    },
+    {
+      "id": "macos-electron-any",
+      "platform": "macos",
+      "runtime": "electron",
+      "arch": "any"
+    }
+  ],
+  "nativeComponents": [],
+  "keywords": [
+    "md5",
+    "sha",
+    "sha256",
+    "hash",
+    "哈希",
+    "aes",
+    "hmac",
+    "加密",
+    "解密",
+    "base64"
+  ],
+  "category": [
+    "开发工具"
+  ]
+}

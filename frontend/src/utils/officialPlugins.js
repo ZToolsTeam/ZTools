@@ -86,6 +86,7 @@ import {
   RecordCommand,
   FileCompareCommand
 } from '@ztools/declarative-ui'
+import { isBundledPlugin } from './bundledPlugins.js'
 
 /**
  * 官方标杆应用唯一标识清单
@@ -1555,6 +1556,8 @@ export function isOfficialPlugin(pluginId) {
   if (!pluginId || typeof pluginId !== 'string') return false
   const normalized = pluginId.trim().toLowerCase()
   const resolved = OFFICIAL_PLUGIN_ALIASES[normalized] || normalized
+  // 与内置原版插件同 ID 的旧实现让位给原版
+  if (isBundledPlugin(normalized) || isBundledPlugin(resolved)) return false
   return Boolean(
     OFFICIAL_PLUGINS_MAP[resolved] ||
     OFFICIAL_PLUGINS_MAP[pluginId.trim()]
@@ -1570,6 +1573,7 @@ export function getOfficialPlugin(pluginId) {
   if (!pluginId || typeof pluginId !== 'string') return undefined
   const normalized = pluginId.trim().toLowerCase()
   const resolved = OFFICIAL_PLUGIN_ALIASES[normalized] || normalized
+  if (isBundledPlugin(normalized) || isBundledPlugin(resolved)) return undefined
   return OFFICIAL_PLUGINS_MAP[resolved] || OFFICIAL_PLUGINS_MAP[pluginId.trim()]
 }
 
@@ -1578,7 +1582,7 @@ export function getOfficialPlugin(pluginId) {
  * @returns {Array<typeof OFFICIAL_PLUGINS_MAP[string]>}
  */
 export function getOfficialPluginsList() {
-  return [...OFFICIAL_PLUGINS_LIST]
+  return OFFICIAL_PLUGINS_LIST.filter((p) => !isBundledPlugin(p.pluginId))
 }
 
 

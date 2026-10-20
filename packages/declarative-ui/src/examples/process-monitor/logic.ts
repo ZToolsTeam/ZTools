@@ -1,8 +1,12 @@
 import {
   callHostTransport,
+  formatBytes,
+  invokeDllPluginCapability,
   isRealElectronHost,
   showRealItemInFolder
 } from '../shared/native-ipc.js'
+
+export { formatBytes } from '../shared/native-ipc.js'
 
 export interface CapabilityActionItem {
   id: string
@@ -213,124 +217,15 @@ export async function invokeNativeCapability(
   if (!check.valid) {
     throw new Error(check.error || '参数校验失败')
   }
-
-  const trimmedMethod = method.trim()
-  const runtimeHost = hostBridge ?? (typeof (globalThis as any).ztools !== 'undefined' ? (globalThis as any).ztools : undefined)
-  const callFn = runtimeHost?.dllplugin?.call
-
-  if (typeof callFn === 'function') {
-    try {
-      const raw = await callFn(DLL_PLUGIN_NAME, trimmedMethod, params)
-      let parsed: unknown = raw
-      if (typeof raw === 'string') {
-        try {
-          parsed = JSON.parse(raw)
-        } catch {
-          throw new Error('MALFORMED_DLL_RESPONSE: 原生组件返回了损坏的 JSON 数据')
-        }
-      }
-      if (parsed && typeof parsed === 'object' && 'error' in (parsed as Record<string, unknown>)) {
-        const errMsg = String((parsed as Record<string, unknown>).error || '原生组件返回未知错误')
-        return {
-          ok: false,
-          pluginName: DLL_PLUGIN_NAME,
-          method: trimmedMethod,
-          error: `DLL_ERROR: ${errMsg}`
-        }
-      }
-      return {
-        ok: true,
-        pluginName: DLL_PLUGIN_NAME,
-        method: trimmedMethod,
-        data: parsed,
-        fromFallback: false
-      }
-    } catch (err: any) {
-      const message = err instanceof Error ? err.message : String(err)
-      if (message.startsWith('MALFORMED_DLL_RESPONSE:')) {
-        throw err
-      }
-      return {
-        ok: false,
-        pluginName: DLL_PLUGIN_NAME,
-        method: trimmedMethod,
-        error: `NATIVE_CALL_FAILED: ${message}`
-      }
-    }
-  }
-
-  // 通过 Electron Preload Transport 调用 dllplugin_call (对接宿主 ProcessService / NativeHost)
-  const hasTransportBridge =
-    isRealElectronHost(hostBridge) ||
-    typeof hostBridge?.dllplugin_call === 'function' ||
-    typeof hostBridge?.transport?.call === 'function'
-
-  if (hasTransportBridge) {
-    const ipcRes = await callHostTransport<any>(
-      'dllplugin_call',
-      {
-        plugin: DLL_PLUGIN_NAME,
-        func: trimmedMethod,
-        params
-      },
-      hostBridge
-    )
-    if (ipcRes.ok && ipcRes.data !== undefined) {
-      let parsed: any =
-        ipcRes.data && typeof ipcRes.data === 'object' && 'result' in ipcRes.data && ipcRes.data.result !== undefined
-          ? ipcRes.data.result
-          : ipcRes.data
-      if (typeof parsed === 'string') {
-        try {
-          parsed = JSON.parse(parsed)
-        } catch {
-          throw new Error('MALFORMED_DLL_RESPONSE: 原生组件返回了损坏的 JSON 数据')
-        }
-      }
-      if (parsed && typeof parsed === 'object' && 'error' in parsed && parsed.error) {
-        return {
-          ok: false,
-          pluginName: DLL_PLUGIN_NAME,
-          method: trimmedMethod,
-          error: `DLL_ERROR: ${String(parsed.error)}`
-        }
-      }
-      if (parsed && typeof parsed === 'object' && Object.keys(parsed).length > 0) {
-        return {
-          ok: true,
-          pluginName: DLL_PLUGIN_NAME,
-          method: trimmedMethod,
-          data: parsed,
-          fromFallback: false
-        }
-      }
-    } else if (!ipcRes.ok && ipcRes.error && !ipcRes.error.startsWith('METHOD_NOT_AVAILABLE:')) {
-      return {
-        ok: false,
-        pluginName: DLL_PLUGIN_NAME,
-        method: trimmedMethod,
-        error: `NATIVE_CALL_FAILED: ${ipcRes.error}`
-      }
-    }
-  }
-
+  const res = await invokeDllPluginCapability(DLL_PLUGIN_NAME, method, params, hostBridge)
   return {
-    ok: true,
+    ok: res.ok,
     pluginName: DLL_PLUGIN_NAME,
-    method: trimmedMethod,
-    data: { simulated: true, method: trimmedMethod, params },
-    fromFallback: true
+    method: method.trim(),
+    data: res.data ?? undefined,
+    error: res.error,
+    fromFallback: res.fromFallback
   }
-}
-
-export function formatBytes(bytes: number): string {
-  if (!Number.isFinite(bytes) || bytes <= 0) return '0 B'
-  const units = ['B', 'KB', 'MB', 'GB', 'TB']
-  const k = 1024
-  const i = Math.floor(Math.log(bytes) / Math.log(k))
-  const idx = Math.min(units.length - 1, Math.max(0, i))
-  const val = bytes / Math.pow(k, idx)
-  return `${val >= 10 || idx === 0 || Number.isInteger(val) ? val.toFixed(0) : val.toFixed(1)} ${units[idx]}`
 }
 
 export function normalizeProcessItem(raw: any): ProcessItem {
@@ -343,7 +238,7 @@ export function normalizeProcessItem(raw: any): ProcessItem {
   )
   const privateBytes = Math.max(
     0,
-    Number(raw?.privateBytes ?? Math.round(workingSetBytes * 0.85))
+    Number(raw?.privateBytes ?? workingSetBytes)
   )
   const cpuPercent = Math.max(
     0,
@@ -623,8 +518,8 @@ export async function fetchSystemInfo(host?: any): Promise<SystemInfoData> {
         const used = Number(d?.usedMemoryBytes ?? Math.max(0, total - avail))
         const memPct = Number(d?.memoryUsagePercent ?? Math.round((used / total) * 100))
         return {
-          cpuUsagePercent: Number(d?.cpuUsagePercent ?? 12),
-          cpuCoreCount: Number(d?.cpuCoreCount ?? 16),
+          cpuUsagePercent: Number(d?.cpuUsagePercent ?? 0),
+          cpuCoreCount: Number(d?.cpuCoreCount ?? 0),
           totalMemoryBytes: total,
           usedMemoryBytes: used,
           availableMemoryBytes: avail,
@@ -660,8 +555,8 @@ export async function fetchSystemInfo(host?: any): Promise<SystemInfoData> {
       const avail = memRes.data.available
       const used = memRes.data.used ?? Math.max(0, total - avail)
       return {
-        cpuUsagePercent: cpuRes.ok && typeof cpuRes.data?.total === 'number' ? cpuRes.data.total : 12,
-        cpuCoreCount: hwRes.ok && hwRes.data?.logicalCpuCount ? hwRes.data.logicalCpuCount : 16,
+        cpuUsagePercent: cpuRes.ok && typeof cpuRes.data?.total === 'number' ? cpuRes.data.total : 0,
+        cpuCoreCount: hwRes.ok && hwRes.data?.logicalCpuCount ? hwRes.data.logicalCpuCount : 0,
         totalMemoryBytes: total,
         usedMemoryBytes: used,
         availableMemoryBytes: avail,
@@ -700,8 +595,8 @@ export async function fetchProcessDetail(pid: number, host?: any): Promise<Proce
           handleCount: Number(raw.handleCount ?? 0),
           peakMemoryBytes: Number(raw.peakMemoryBytes ?? mem),
           memoryBytes: mem,
-          privateBytes: Number(raw.privateBytes ?? Math.round(mem * 0.85)),
-          threadCount: Number(raw.threadCount ?? 1),
+          privateBytes: Number(raw.privateBytes ?? mem),
+          threadCount: Number(raw.threadCount ?? 0),
           parentPid: Number(raw.parentPid ?? 0)
         }
       }
@@ -717,9 +612,14 @@ export async function fetchProcessDetail(pid: number, host?: any): Promise<Proce
       path: string
       cpuUsage: number
       memoryUsage: number
+      privateBytes?: number
+      peakMemoryBytes?: number
+      handleCount?: number
+      threadCount?: number
+      parentPid?: number
     }>('process_info', { pid }, host)
     if (infoRes.ok && infoRes.data) {
-      const mem = infoRes.data.memoryUsage || 0
+      const mem = Number(infoRes.data.memoryUsage || 0)
       return {
         pid,
         name: infoRes.data.name || `PID-${pid}`,
@@ -734,12 +634,15 @@ export async function fetchProcessDetail(pid: number, host?: any): Promise<Proce
           : '本机真实运行进程',
         startTime: '',
         memoryBytes: mem,
-        privateBytes: Math.round(mem * 0.85),
-        peakMemoryBytes: Math.round(mem * 1.15),
-        handleCount: Math.max(32, Math.round(mem / (2 * 1024 * 1024))),
-        threadCount: 4,
-        parentPid: 0
+        privateBytes: Number(infoRes.data.privateBytes ?? mem),
+        peakMemoryBytes: Number(infoRes.data.peakMemoryBytes ?? mem),
+        handleCount: Number(infoRes.data.handleCount ?? 0),
+        threadCount: Number(infoRes.data.threadCount ?? 0),
+        parentPid: Number(infoRes.data.parentPid ?? 0)
       }
+    }
+    if (isRealElectronHost(host)) {
+      return null
     }
   }
 

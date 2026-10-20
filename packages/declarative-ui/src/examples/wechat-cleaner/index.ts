@@ -23,7 +23,8 @@ import {
   fetchWechatCleanSnapshot,
   executeWechatCleanup,
   openWechatDirectory,
-  openWechatFileDefault
+  openWechatFileDefault,
+  isRealElectronHost
 } from './logic.js'
 
 type TimeRangeFilter = 'ALL' | '7D' | '30D' | '180D'
@@ -80,8 +81,9 @@ const INIT_WECHAT_FILES: WechatScannedFileEntry[] = [
 ]
 
 function buildInitialCategories(): WechatCleanCategoryItem[] {
+  const sourceFiles = isRealElectronHost() ? [] : INIT_WECHAT_FILES
   return OFFICIAL_WECHAT_OWNER_RULES.map(rule => {
-    const catFiles = INIT_WECHAT_FILES.filter(f => f.ownerId === rule.ownerId)
+    const catFiles = sourceFiles.filter(f => f.ownerId === rule.ownerId)
     const totalSizeBytes = catFiles.reduce((s, f) => s + f.sizeBytes, 0)
     return {
       id: rule.id,
@@ -110,6 +112,7 @@ function buildInitialCategories(): WechatCleanCategoryItem[] {
 }
 
 export default function WechatCleanerCommand() {
+  const inRealHost = isRealElectronHost()
   const [searchText, setSearchText] = useState('')
   const [tab, setTab] = useState<'all' | 'files' | 'accounts' | 'protected'>('all')
   const [wizardStep, setWizardStep] = useState<'scan' | 'filter' | 'review' | 'done'>('filter')
@@ -119,28 +122,34 @@ export default function WechatCleanerCommand() {
   const [selectedOwnerId, setSelectedOwnerId] = useState<string>('ALL')
 
   const [categories, setCategories] = useState<WechatCleanCategoryItem[]>(() => buildInitialCategories())
-  const [allFiles, setAllFiles] = useState<WechatScannedFileEntry[]>(() => INIT_WECHAT_FILES)
-  const [accountStats, setAccountStats] = useState<WechatAccountStat[]>(() => [
-    {
-      accountId: 'wxid_geek001',
-      label: '微信号: wxid_geek001',
-      rootDir: 'C:\\Users\\Admin\\Documents\\xwechat_files\\wxid_geek001',
-      fileCount: 2,
-      totalBytes: 416 * 1024 * 1024
-    }
-  ])
-  const [accounts, setAccounts] = useState<string[]>(() => ['wxid_geek001'])
+  const [allFiles, setAllFiles] = useState<WechatScannedFileEntry[]>(() =>
+    inRealHost ? [] : INIT_WECHAT_FILES
+  )
+  const [accountStats, setAccountStats] = useState<WechatAccountStat[]>(() =>
+    inRealHost
+      ? []
+      : [
+          {
+            accountId: 'wxid_geek001',
+            label: '微信号: wxid_geek001',
+            rootDir: 'C:\\Users\\Admin\\Documents\\xwechat_files\\wxid_geek001',
+            fileCount: 2,
+            totalBytes: 416 * 1024 * 1024
+          }
+        ]
+  )
+  const [accounts, setAccounts] = useState<string[]>(() => (inRealHost ? [] : ['wxid_geek001']))
   const [selectedFilePaths, setSelectedFilePaths] = useState<string[]>(() =>
-    INIT_WECHAT_FILES.filter(f => !f.isProtected).map(f => f.path)
+    inRealHost ? [] : INIT_WECHAT_FILES.filter(f => !f.isProtected).map(f => f.path)
   )
   const [lastCleanSummary, setLastCleanSummary] = useState<{
     deletedCount: number
     freedBytes: number
   } | null>(null)
 
-  const [diskFree, setDiskFree] = useState(64 * 1024 * 1024 * 1024)
-  const [diskTotal, setDiskTotal] = useState(256 * 1024 * 1024 * 1024)
-  const [protectedDbBytes, setProtectedDbBytes] = useState(96 * 1024 * 1024)
+  const [diskFree, setDiskFree] = useState(inRealHost ? 0 : 64 * 1024 * 1024 * 1024)
+  const [diskTotal, setDiskTotal] = useState(inRealHost ? 0 : 256 * 1024 * 1024 * 1024)
+  const [protectedDbBytes, setProtectedDbBytes] = useState(inRealHost ? 0 : 96 * 1024 * 1024)
   const [isLoading, setIsLoading] = useState(true)
 
   async function refreshScan(showIndicator = false) {
@@ -155,7 +164,7 @@ export default function WechatCleanerCommand() {
     }
     try {
       const snap = await fetchWechatCleanSnapshot()
-      if (snap.allFiles.length > 0) {
+      if (isRealElectronHost() || snap.allFiles.length > 0) {
         setCategories(snap.categories)
         setAllFiles(snap.allFiles)
         setAccountStats(snap.accountStats)
@@ -472,149 +481,8 @@ export default function WechatCleanerCommand() {
         )
       ]
     }),
-    metricGrid: MetricGrid({
-      columns: 4,
-      items: [
-        {
-          id: 'wx-total',
-          label: '微信 9 大专项可扫描总量',
-          value: formatBytes(totalScannable),
-          subValue: `共 ${categories
-            .filter(c => c.ownerId !== 999)
-            .reduce((s, c) => s + c.fileCount, 0)
-            .toLocaleString()} 个真实缓存文件`,
-          status: 'normal'
-        },
-        {
-          id: 'wx-checked',
-          label: '已勾选待释放空间',
-          value: formatBytes(checkedCategoryBytes),
-          subValue: `已选 ${checkedFileCount} 个样本文件 · 可一键移入回收站`,
-          status: 'success'
-        },
-        {
-          id: 'wx-accounts',
-          label: '已识别微信号与保护库',
-          value: `${accounts.length} 个微信号`,
-          subValue: `已锁定保护聊天库 ${formatBytes(protectedDbBytes)}`,
-          status: 'normal'
-        },
-        {
-          id: 'wx-c-free',
-          label: lastCleanSummary ? '本次已成功释放空间' : '系统盘 (C:) 可用空间',
-          value: lastCleanSummary
-            ? formatBytes(lastCleanSummary.freedBytes)
-            : formatBytes(diskFree),
-          subValue: lastCleanSummary
-            ? `已安全清理 ${lastCleanSummary.deletedCount} 个微信冗余文件`
-            : `C: 总容量 ${formatBytes(diskTotal)}`,
-          status:
-            lastCleanSummary
-              ? 'success'
-              : diskFree > 0 && diskFree < 15 * 1024 * 1024 * 1024
-              ? 'danger'
-              : 'normal'
-        }
-      ]
-    }),
-    distributionBar: {
-      title: '微信 9 大官方专项 (Owner 107~115) 真实空间占比分布',
-      totalLabel: `可清理总量 ${formatBytes(totalScannable)} · 聊天库保护区 ${formatBytes(protectedDbBytes)}`,
-      activeSegmentId: selectedOwnerId === 'ALL' ? undefined : selectedOwnerId,
-      onSelectSegment: segId => {
-        setSelectedOwnerId(segId || 'ALL')
-      },
-      segments: distributionSegments
-    },
     filterBar: {
-      wizardSteps: [
-        {
-          id: 'step-env',
-          label: `1. 环境与微信号识别 (${accounts.length}个账号)`,
-          status: 'done',
-          onSelect: () => setTab('accounts')
-        },
-        {
-          id: 'step-scan',
-          label: `2. 9大专项深度扫描 (${formatBytes(totalScannable)})`,
-          status: 'done',
-          onSelect: () => setTab('all')
-        },
-        {
-          id: 'step-filter',
-          label: `3. 账号/时间筛选与三级勾选 (已选 ${formatBytes(checkedCategoryBytes)})`,
-          status: wizardStep === 'filter' ? 'active' : 'done',
-          onSelect: () => {
-            setWizardStep('filter')
-            setTab('files')
-          }
-        },
-        {
-          id: 'step-clean',
-          label: lastCleanSummary
-            ? `4. 清理完成 (已释放 ${formatBytes(lastCleanSummary.freedBytes)})`
-            : '4. 清理核对确认',
-          status: wizardStep === 'done' ? 'done' : wizardStep === 'review' ? 'active' : 'pending',
-          onSelect: () => handleCleanChecked()
-        }
-      ],
       summaryText: `微信号 [${selectedAccount === 'ALL' ? '全部账号' : selectedAccount}] · 可释放 ${formatBytes(totalScannable)} · 已勾选 ${checkedFileCount} 项 (${formatBytes(checkedCategoryBytes)}) · 保护库已锁定 ${formatBytes(protectedDbBytes)}`,
-      groups: [
-        {
-          id: 'wx-account-filter',
-          label: '微信账号',
-          value: selectedAccount,
-          onChange: val => setSelectedAccount(val),
-          options: [
-            { value: 'ALL', label: '全部微信号与组件', badge: allFiles.length },
-            ...accountStats.map(acc => ({
-              value: acc.accountId,
-              label: acc.accountId,
-              badge: `${acc.fileCount} · ${formatBytes(acc.totalBytes)}`
-            }))
-          ]
-        },
-        {
-          id: 'wx-time-filter',
-          label: '时间范围',
-          value: selectedTimeRange,
-          onChange: val => setSelectedTimeRange(val as TimeRangeFilter),
-          options: [
-            { value: 'ALL', label: '全部时间', badge: allFiles.length },
-            {
-              value: '7D',
-              label: '7天前文件',
-              badge: allFiles.filter(f => f.mtime <= nowSec - 7 * 86400).length
-            },
-            {
-              value: '30D',
-              label: '1个月前文件',
-              badge: allFiles.filter(f => f.mtime <= nowSec - 30 * 86400).length
-            },
-            {
-              value: '180D',
-              label: '半年前文件',
-              badge: allFiles.filter(f => f.mtime <= nowSec - 180 * 86400).length
-            }
-          ]
-        },
-        {
-          id: 'wx-owner-filter',
-          label: '9大专项',
-          value: selectedOwnerId,
-          onChange: val => setSelectedOwnerId(val),
-          options: [
-            { value: 'ALL', label: '全部 9 大专项', badge: categories.length },
-            ...categories
-              .filter(c => c.totalSizeBytes > 0 || c.ownerId === 999)
-              .map(c => ({
-                value: String(c.ownerId),
-                label: c.shortName,
-                badge: formatBytes(c.totalSizeBytes)
-              }))
-          ]
-        }
-      ],
       actions: [
         {
           id: 'wx-act-rescan',
@@ -625,20 +493,6 @@ export default function WechatCleanerCommand() {
         }
       ]
     },
-    segmentedControl: SegmentedControl({
-      value: tab,
-      onChange: v => setTab(v as any),
-      options: [
-        { value: 'all', label: '9大专项总览与三级勾选', badge: categories.length },
-        { value: 'files', label: '按专项展开单文件明细', badge: filteredFiles.length },
-        { value: 'accounts', label: '本机微信号存储分布', badge: accountStats.length },
-        {
-          value: 'protected',
-          label: '聊天数据库保护区',
-          badge: categories.find(c => c.ownerId === 999)?.fileCount || 0
-        }
-      ]
-    }),
     subList: {
       title: rightTitle,
       subtitle: `${filteredFiles.length} 项 · 已选 ${checkedFileCount} 项 (${formatBytes(checkedCategoryBytes)})`,

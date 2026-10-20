@@ -14,6 +14,7 @@ import {
   type AdapterFilterMode,
   fetchNetworkAdapters,
   flushDnsCache,
+  applyDnsPreset,
   copyAdapterInfo,
   filterNetworkAdapters
 } from './logic.js'
@@ -24,8 +25,8 @@ export function NetworkAdapterCommand() {
   const [searchText, setSearchText] = useState('')
   const [filterMode, setFilterMode] = useState<AdapterFilterMode>('all')
   const [adapters, setAdapters] = useState<NetworkAdapterItem[]>([])
-  const [primaryIpv4, setPrimaryIpv4] = useState('192.168.1.108')
-  const [primaryGateway, setPrimaryGateway] = useState('192.168.1.1')
+  const [primaryIpv4, setPrimaryIpv4] = useState('127.0.0.1')
+  const [primaryGateway, setPrimaryGateway] = useState('10.0.0.1')
   const [primaryDns, setPrimaryDns] = useState('223.5.5.5')
   const [isLoading, setIsLoading] = useState(true)
 
@@ -58,6 +59,20 @@ export function NetworkAdapterCommand() {
     showToast({
       style: res.ok ? Toast.Style.Success : Toast.Style.Failure,
       title: res.ok ? 'DNS 缓存已刷新' : 'DNS 刷新失败',
+      message: res.message
+    })
+  }
+
+  async function handleApplyDns(item: NetworkAdapterItem, primary: string, secondary?: string) {
+    const res = await applyDnsPreset(item.name, primary, secondary)
+    if (res.ok) {
+      setAdapters((prev) =>
+        prev.map((a) => (a.id === item.id ? { ...a, dnsServers: res.dnsServers } : a))
+      )
+    }
+    showToast({
+      style: res.ok ? Toast.Style.Success : Toast.Style.Failure,
+      title: res.ok ? 'DNS 预设已应用' : '修改网卡 DNS 失败',
       message: res.message
     })
   }
@@ -139,6 +154,18 @@ export function NetworkAdapterCommand() {
                     await Clipboard.copy(mac)
                     showToast({ style: Toast.Style.Success, title: '已复制 MAC 地址', message: mac })
                   }
+                }),
+                Action({
+                  title: '切换为阿里/腾讯公共 DNS (223.5.5.5 / 119.29.29.29)',
+                  icon: Icon.Globe,
+                  shortcut: { modifiers: ['ctrl'], key: 'p' },
+                  onAction: () => handleApplyDns(item, '223.5.5.5', '119.29.29.29')
+                }),
+                Action({
+                  title: '恢复 DHCP 自动获取 DNS',
+                  icon: Icon.ArrowClockwise,
+                  shortcut: { modifiers: ['ctrl', 'shift'], key: 'd' },
+                  onAction: () => handleApplyDns(item, 'dhcp')
                 }),
                 Action({
                   title: '刷新 DNS 解析缓存 (ipconfig /flushdns)',

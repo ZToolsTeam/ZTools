@@ -1,24 +1,29 @@
 /**
  * QQ / NTQQ / TIM 专项深度清理业务逻辑与真实环境契约层 (QQCleaner Logic - 1:1 完整复刻版)
  * 完整对齐 DLLPlugins/qq-cleaner/qq_core/include/qq_rules.h 的 12 大官方专项分组 (Group 201~213) + 999 聊天数据库保护区：
- * - 穿透扫描 Documents\Tencent Files、AppData\Roaming\Tencent (Users / QQ / TIM / Logs，含 D:\Local\Roaming\Tencent 符号链接穿透)、
+ * - 穿透扫描 Documents\Tencent Files、AppData\Roaming\Tencent (Users / QQ / TIM / Logs，含多盘符自定义存储目录与符号链接穿透)、
  *   AppData\Roaming\QQ (NTQQ) 与 AppData\Local\Tencent
- * - 自动识别本机全部真实登录 QQ 号 (UIN，如 19982507, 2568644707, 3007262726, 3795391981)
+ * - 自动识别本机全部真实登录 QQ 号 (UIN)
  * - 严格保护聊天消息加密数据库 (Msg3.0.db / Msg3.0index.db / nt_msg.db / Registry.db / Info.db)
  * - 支持多 QQ 号维度与修改时间范围 (0:全部 / 1:7天前 / 2:30天前 / 3:180天前) 多维过滤及三级复选框联动
  */
 
 import {
   callHostTransport,
+  formatBytes,
   getRealFileSize,
   getRealSystemPath,
+  invokeDllPluginCapability,
   isRealElectronHost,
   listRealDirectoryContents,
+  probeRealDiskDrives,
   scanRealDirectoryTree,
   showRealItemInFolder,
   trashRealItem,
   openRealPath
 } from '../shared/native-ipc.js'
+
+export { formatBytes, isRealElectronHost } from '../shared/native-ipc.js'
 
 export interface CapabilityActionItem {
   id: string
@@ -126,7 +131,7 @@ export const OFFICIAL_QQ_GROUP_RULES: OfficialQQGroupRule[] = [
   {
     groupId: 203,
     id: 'qq-group-203-logs',
-    name: '📝 QQ / TIM 运行跟踪日志 (Group #203 & #210)',
+    name: 'QQ / TIM 运行跟踪日志 (Group #203 & #210)',
     shortName: '运行跟踪日志 (.tlg/.log)',
     color: '#06b6d4',
     category: 'logs',
@@ -138,7 +143,7 @@ export const OFFICIAL_QQ_GROUP_RULES: OfficialQQGroupRule[] = [
   {
     groupId: 201,
     id: 'qq-group-201-images',
-    name: '🖼️ 好友与群聊图片缓存 (Group #201)',
+    name: '好友与群聊图片缓存 (Group #201)',
     shortName: '聊天图片 (Image/Pic)',
     color: '#10b981',
     category: 'media',
@@ -150,7 +155,7 @@ export const OFFICIAL_QQ_GROUP_RULES: OfficialQQGroupRule[] = [
   {
     groupId: 208,
     id: 'qq-group-208-avatars',
-    name: '👤 好友与群头像缓存库 (Group #208)',
+    name: '好友与群头像缓存库 (Group #208)',
     shortName: '头像缓存 (Head/MiscHead)',
     color: '#a855f7',
     category: 'media',
@@ -162,7 +167,7 @@ export const OFFICIAL_QQ_GROUP_RULES: OfficialQQGroupRule[] = [
   {
     groupId: 202,
     id: 'qq-group-202-cache',
-    name: '⚡ 账号运行与网页临时缓存 (Group #202)',
+    name: '账号运行与网页临时缓存 (Group #202)',
     shortName: '账号运行缓存 (AppWebCache)',
     color: '#3b82f6',
     category: 'cache',
@@ -174,7 +179,7 @@ export const OFFICIAL_QQ_GROUP_RULES: OfficialQQGroupRule[] = [
   {
     groupId: 209,
     id: 'qq-group-209-app-cache',
-    name: '💿 QQ / TIM 系统级内核与应用缓存 (Group #209)',
+    name: 'QQ / TIM 系统级内核与应用缓存 (Group #209)',
     shortName: '系统内核缓存 (Roaming)',
     color: '#ec4899',
     category: 'cache',
@@ -186,7 +191,7 @@ export const OFFICIAL_QQ_GROUP_RULES: OfficialQQGroupRule[] = [
   {
     groupId: 211,
     id: 'qq-group-211-browser-miniapp',
-    name: '🌐 内置浏览器、小程序与频道缓存 (Group #211)',
+    name: '内置浏览器、小程序与频道缓存 (Group #211)',
     shortName: '内置浏览器/小程序',
     color: '#6366f1',
     category: 'cache',
@@ -198,7 +203,7 @@ export const OFFICIAL_QQ_GROUP_RULES: OfficialQQGroupRule[] = [
   {
     groupId: 205,
     id: 'qq-group-205-videos',
-    name: '🎬 聊天短视频与群视频缓存 (Group #205)',
+    name: '聊天短视频与群视频缓存 (Group #205)',
     shortName: '聊天视频 (Video)',
     color: '#8b5cf6',
     category: 'media',
@@ -210,7 +215,7 @@ export const OFFICIAL_QQ_GROUP_RULES: OfficialQQGroupRule[] = [
   {
     groupId: 206,
     id: 'qq-group-206-voice',
-    name: '🎙️ 聊天语音消息分片 (Group #206)',
+    name: '聊天语音消息分片 (Group #206)',
     shortName: '聊天语音 (Audio/Ptt)',
     color: '#14b8a6',
     category: 'media',
@@ -222,7 +227,7 @@ export const OFFICIAL_QQ_GROUP_RULES: OfficialQQGroupRule[] = [
   {
     groupId: 207,
     id: 'qq-group-207-emoji-cache',
-    name: '😀 接收表情与推荐贴纸缓存 (Group #207)',
+    name: '接收表情与推荐贴纸缓存 (Group #207)',
     shortName: '接收表情缓存',
     color: '#f59e0b',
     category: 'media',
@@ -234,7 +239,7 @@ export const OFFICIAL_QQ_GROUP_RULES: OfficialQQGroupRule[] = [
   {
     groupId: 212,
     id: 'qq-group-212-fav-emoji',
-    name: '⭐ 用户收藏的自定义表情包 (Group #212)',
+    name: '用户收藏的自定义表情包 (Group #212)',
     shortName: '收藏表情 (CustomFace)',
     color: '#f97316',
     category: 'files',
@@ -246,7 +251,7 @@ export const OFFICIAL_QQ_GROUP_RULES: OfficialQQGroupRule[] = [
   {
     groupId: 204,
     id: 'qq-group-204-file-recv',
-    name: '📂 聊天接收与云端下载文件 (Group #204)',
+    name: '聊天接收与云端下载文件 (Group #204)',
     shortName: '接收的文件 (FileRecv)',
     color: '#ef4444',
     category: 'files',
@@ -258,7 +263,7 @@ export const OFFICIAL_QQ_GROUP_RULES: OfficialQQGroupRule[] = [
   {
     groupId: 213,
     id: 'qq-group-213-session',
-    name: '🔑 登录会话与快速状态凭证 (Group #213)',
+    name: '登录会话与快速状态凭证 (Group #213)',
     shortName: '登录会话数据',
     color: '#eab308',
     category: 'files',
@@ -270,7 +275,7 @@ export const OFFICIAL_QQ_GROUP_RULES: OfficialQQGroupRule[] = [
   {
     groupId: 999,
     id: 'qq-group-999-protected-db',
-    name: '🔒 核心聊天记录与注册数据库保护区 (Msg3.0.db / nt_msg.db)',
+    name: '核心聊天记录与注册数据库保护区 (Msg3.0.db / nt_msg.db)',
     shortName: '核心聊天数据库 (受保护)',
     color: '#64748b',
     category: 'protected',
@@ -330,15 +335,6 @@ export function filterCapabilityItems(items: CapabilityActionItem[], query: stri
   })
 }
 
-export function formatBytes(bytes: number): string {
-  if (!Number.isFinite(bytes) || bytes <= 0) return '0 B'
-  const units = ['B', 'KB', 'MB', 'GB', 'TB']
-  const k = 1024
-  const idx = Math.min(units.length - 1, Math.max(0, Math.floor(Math.log(bytes) / Math.log(k))))
-  const val = bytes / Math.pow(k, idx)
-  return `${val >= 100 || idx === 0 ? val.toFixed(0) : val.toFixed(1)} ${units[idx]}`
-}
-
 export function formatDateTime(mtimeSeconds: number): string {
   if (!mtimeSeconds || !Number.isFinite(mtimeSeconds) || mtimeSeconds <= 0) return '未知日期'
   const ms = mtimeSeconds > 1e12 ? mtimeSeconds : mtimeSeconds * 1000
@@ -383,63 +379,20 @@ export function validateInvocationPayload(method: string, params: unknown): { va
 export async function invokeNativeCapability(
   method: string,
   params: Record<string, unknown>,
-  hostBridge?: { dllplugin?: { call?: (plugin: string, fn: string, payload: unknown) => Promise<unknown> } }
+  hostBridge?: any
 ): Promise<NativeInvocationResult> {
   const check = validateInvocationPayload(method, params)
   if (!check.valid) {
     throw new Error(check.error || '参数校验失败')
   }
-
-  const runtimeHost = hostBridge ?? (typeof (globalThis as any).ztools !== 'undefined' ? (globalThis as any).ztools : undefined)
-  const callFn = runtimeHost?.dllplugin?.call
-
-  if (typeof callFn === 'function') {
-    try {
-      const raw = await callFn(DLL_PLUGIN_NAME, method.trim(), params)
-      let parsed: unknown = raw
-      if (typeof raw === 'string') {
-        try {
-          parsed = JSON.parse(raw)
-        } catch {
-          throw new Error('MALFORMED_DLL_RESPONSE: 原生组件返回了损坏的 JSON 数据')
-        }
-      }
-      if (parsed && typeof parsed === 'object' && 'error' in (parsed as Record<string, unknown>)) {
-        const errMsg = String((parsed as Record<string, unknown>).error || '原生组件返回未知错误')
-        return {
-          ok: false,
-          pluginName: DLL_PLUGIN_NAME,
-          method: method.trim(),
-          error: `DLL_ERROR: ${errMsg}`
-        }
-      }
-      return {
-        ok: true,
-        pluginName: DLL_PLUGIN_NAME,
-        method: method.trim(),
-        data: parsed,
-        fromFallback: false
-      }
-    } catch (err: any) {
-      const message = err instanceof Error ? err.message : String(err)
-      if (message.startsWith('MALFORMED_DLL_RESPONSE:')) {
-        throw err
-      }
-      return {
-        ok: false,
-        pluginName: DLL_PLUGIN_NAME,
-        method: method.trim(),
-        error: `NATIVE_CALL_FAILED: ${message}`
-      }
-    }
-  }
-
+  const res = await invokeDllPluginCapability(DLL_PLUGIN_NAME, method, params, hostBridge)
   return {
-    ok: true,
+    ok: res.ok,
     pluginName: DLL_PLUGIN_NAME,
     method: method.trim(),
-    data: { simulated: true, method: method.trim(), params },
-    fromFallback: true
+    data: res.data ?? undefined,
+    error: res.error,
+    fromFallback: res.fromFallback
   }
 }
 
@@ -610,7 +563,7 @@ export function classifyQQFilePath(fullPath: string): {
  * 探测并深度扫描本机真实 QQ / NTQQ / TIM 存储路径、登录 QQ 号 (UIN)、12 大官方清理分组与核心聊天数据库保护区
  */
 export async function fetchQQCleanSnapshot(hostOverride?: any): Promise<QQScanSnapshot> {
-  const [documentsDir, appDataDir, homeDir, tempDir, diskRes] = await Promise.all([
+  const [documentsDir, appDataDir, homeDir, tempDir, diskRes, mountedDrives] = await Promise.all([
     getRealSystemPath('documents', hostOverride),
     getRealSystemPath('appData', hostOverride),
     getRealSystemPath('home', hostOverride),
@@ -619,7 +572,8 @@ export async function fetchQQCleanSnapshot(hostOverride?: any): Promise<QQScanSn
       'system_get_disk_usage',
       { drive: 'C:/' },
       hostOverride
-    )
+    ),
+    probeRealDiskDrives(undefined, hostOverride)
   ])
 
   const localAppData = homeDir ? `${homeDir}\\AppData\\Local` : ''
@@ -627,17 +581,16 @@ export async function fetchQQCleanSnapshot(hostOverride?: any): Promise<QQScanSn
     ? `${documentsDir}\\Tencent Files`
     : 'C:\\Users\\Default\\Documents\\Tencent Files'
 
+  const driveTencentRoots = mountedDrives.map(d => `${d.drive.replace(/[\\/]+$/, '')}\\Tencent Files`)
+
   const candidateRoots = [
     tencentFilesDir,
+    ...driveTencentRoots,
     appDataDir ? `${appDataDir}\\Tencent\\Users` : '',
     appDataDir ? `${appDataDir}\\Tencent\\Logs` : '',
     appDataDir ? `${appDataDir}\\Tencent\\QQ` : '',
     appDataDir ? `${appDataDir}\\Tencent\\TIM` : '',
     appDataDir ? `${appDataDir}\\QQ` : '',
-    'D:\\Local\\Roaming\\Tencent\\Users',
-    'D:\\Local\\Roaming\\Tencent\\Logs',
-    'D:\\Local\\Roaming\\Tencent\\QQ',
-    'D:\\Local\\Roaming\\Tencent\\TIM',
     localAppData ? `${localAppData}\\Tencent` : ''
   ].filter(Boolean)
 
@@ -645,7 +598,7 @@ export async function fetchQQCleanSnapshot(hostOverride?: any): Promise<QQScanSn
   const allFiles: QQScannedFileEntry[] = []
   const seenPaths = new Set<string>()
 
-  // 归一化 C:\Users\...\AppData\Roaming\Tencent 与 D:\Local\Roaming\Tencent 符号链接路径，严防重复计数
+  // 归一化 AppData\Roaming\Tencent 与符号链接路径，严防重复计数
   const canonicalizeQQKey = (p: string): string => {
     const lower = p.replace(/\//g, '\\').toLowerCase()
     const idx = lower.indexOf('\\tencent\\')
@@ -695,6 +648,7 @@ export async function fetchQQCleanSnapshot(hostOverride?: any): Promise<QQScanSn
   if (supportsDeepScan) {
     const deepTargets: Array<{ dir: string; defaultGroup?: QQGroupId }> = [
       { dir: tencentFilesDir },
+      ...driveTencentRoots.map(dir => ({ dir })),
       ...(appDataDir
         ? [
             { dir: `${appDataDir}\\Tencent\\Users`, defaultGroup: 209 as QQGroupId },
@@ -703,14 +657,6 @@ export async function fetchQQCleanSnapshot(hostOverride?: any): Promise<QQScanSn
             { dir: `${appDataDir}\\Tencent\\TIM`, defaultGroup: 209 as QQGroupId },
             { dir: `${appDataDir}\\Tencent\\QQTempSys`, defaultGroup: 209 as QQGroupId },
             { dir: `${appDataDir}\\QQ`, defaultGroup: 209 as QQGroupId }
-          ]
-        : []),
-      ...(!hostOverride
-        ? [
-            { dir: 'D:\\Local\\Roaming\\Tencent\\Users', defaultGroup: 209 as QQGroupId },
-            { dir: 'D:\\Local\\Roaming\\Tencent\\Logs', defaultGroup: 203 as QQGroupId },
-            { dir: 'D:\\Local\\Roaming\\Tencent\\QQ', defaultGroup: 209 as QQGroupId },
-            { dir: 'D:\\Local\\Roaming\\Tencent\\TIM', defaultGroup: 209 as QQGroupId }
           ]
         : []),
       ...(localAppData
@@ -883,8 +829,8 @@ export async function fetchQQCleanSnapshot(hostOverride?: any): Promise<QQScanSn
       accountId,
       label:
         accountId === '公共组件 (Shared)'
-          ? '🌐 腾讯公共组件与日志缓存 (Logs / QQ / TIM)'
-          : `🐧 QQ 号 (UIN): ${accountId}`,
+          ? '腾讯公共组件与日志缓存 (Logs / QQ / TIM)'
+          : `QQ 号 (UIN): ${accountId}`,
       clientType: stat.clientType,
       rootDir: stat.rootDir,
       fileCount: stat.fileCount,

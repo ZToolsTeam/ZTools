@@ -1,0 +1,38 @@
+{
+  "id": "json-format",
+  "name": "JSON 格式化",
+  "version": "2.0.0",
+  "description": "校验 JSON 并定位错误，一键美化、压缩，生成 TypeScript / Go / Rust 类型；长整数不丢精度",
+  "author": "ZTools Team",
+  "entry": "dist/index.js",
+  "icon": "icon.svg",
+  "permissions": [
+    "clipboard"
+  ],
+  "targets": [
+    {
+      "id": "windows-electron-any",
+      "platform": "windows",
+      "runtime": "electron",
+      "arch": "any"
+    },
+    {
+      "id": "macos-electron-any",
+      "platform": "macos",
+      "runtime": "electron",
+      "arch": "any"
+    }
+  ],
+  "nativeComponents": [],
+  "keywords": [
+    "json",
+    "格式化",
+    "format",
+    "minify",
+    "压缩",
+    "校验"
+  ],
+  "category": [
+    "开发工具"
+  ]
+}

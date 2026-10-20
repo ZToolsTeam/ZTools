@@ -9,6 +9,7 @@
  */
 
 import { Action, ActionPanel, Icon, List, useEffect, useState } from "../../index.js";
+import { isRealElectronHost } from "../shared/native-ipc.js";
 import {
   MOVER_CATEGORIES,
   createInitialMoverSnapshot,
@@ -22,15 +23,20 @@ import {
 } from "./logic.js";
 
 export function MoverCommand() {
-  const [snapshot, setSnapshot] = useState<MoverSnapshot>(() => createInitialMoverSnapshot());
+  const [snapshot, setSnapshot] = useState<MoverSnapshot>(() => {
+    const init = createInitialMoverSnapshot();
+    if (isRealElectronHost()) {
+      return { ...init, folders: [], totalMovableBytes: 0, updatedAt: "正在扫描本机目录..." };
+    }
+    return init;
+  });
   const [selectedCategory, setSelectedCategory] = useState<MoverCategory>("all");
   const [targetRoot, setTargetRoot] = useState<string>("D:\\ZToolsMoved");
-  const [checkedIds, setCheckedIds] = useState<string[]>([
-    "mover_wechat",
-    "mover_qq",
-    "mover_downloads",
-    "mover_npm_cache"
-  ]);
+  const [checkedIds, setCheckedIds] = useState<string[]>(() =>
+    isRealElectronHost()
+      ? []
+      : ["mover_wechat", "mover_qq", "mover_downloads", "mover_npm_cache"]
+  );
   const [searchText, setSearchText] = useState<string>("");
   const [statusBanner, setStatusBanner] = useState<string>("");
   const [isLoading, setIsLoading] = useState<boolean>(false);
@@ -40,6 +46,9 @@ export function MoverCommand() {
     try {
       const data = await fetchMoverSnapshot();
       setSnapshot(data);
+      if (isRealElectronHost()) {
+        setCheckedIds(data.folders.filter((f) => !f.isSystemLocked).map((f) => f.id));
+      }
       if (data.targetDrives.length > 0 && !data.targetDrives.some((d) => d.targetRoot === targetRoot)) {
         setTargetRoot(data.targetDrives[0].targetRoot);
       }
@@ -250,71 +259,8 @@ export function MoverCommand() {
         })
       )
     }),
-    metricGrid: {
-      columns: 4,
-      items: [
-        {
-          id: "mover-metric-free",
-          label: "C 盘当前剩余可用",
-          value: formatBytes(snapshot.cDriveFreeBytes),
-          subValue: `总容量 ${formatBytes(snapshot.cDriveTotalBytes)}`,
-          status: cDriveLow ? "danger" : "normal"
-        },
-        {
-          id: "mover-metric-save",
-          label: "预计为 C 盘腾出空间",
-          value: formatBytes(selectedMovableBytes),
-          subValue: `已勾选 ${selectedMovableFolders.length} 个大目录`
-        },
-        {
-          id: "mover-metric-target",
-          label: "目标迁移路径",
-          value: targetRoot,
-          subValue: "自动建立 NTFS Junction 无感联接"
-        },
-        {
-          id: "mover-metric-lock",
-          label: "系统核心目录保护",
-          value: "已强制锁定",
-          subValue: "C:\\Windows 核心目录严禁勾选"
-        }
-      ]
-    },
-    distributionBar: {
-      title: "C 盘大目录分类空间占用",
-      totalLabel: formatBytes(snapshot.totalMovableBytes),
-      segments: MOVER_CATEGORIES.map((cat) => {
-        const sum = snapshot.folders
-          .filter((f) => f.category === cat.id)
-          .reduce((s, f) => s + f.sizeBytes, 0);
-        return {
-          id: cat.id,
-          label: `${cat.name} (${formatBytes(sum)})`,
-          value: Math.max(1, sum),
-          color: "var(--rc-text-muted)"
-        };
-      })
-    },
     filterBar: {
       summaryText,
-      wizardSteps: [
-        { step: 1, label: "1. 扫描 C 盘高占用大目录", status: "done" },
-        { step: 2, label: `2. 选择目标分区 (${targetRoot})`, status: "done" },
-        { step: 3, label: `3. 勾选待搬移目录 (${selectedMovableFolders.length} 项)`, status: "active" },
-        { step: 4, label: "4. 按 Enter 物理搬移并建立符号链接", status: "pending" }
-      ],
-      groups: [
-        {
-          id: "mover-cat-group",
-          label: "目录类型",
-          value: selectedCategory,
-          options: [
-            { title: "全部目录", value: "all" },
-            ...MOVER_CATEGORIES.map((c) => ({ title: c.name, value: c.id }))
-          ],
-          onChange: (val) => setSelectedCategory(val as MoverCategory)
-        }
-      ],
       actions: [
         {
           id: "rescan",

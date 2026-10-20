@@ -410,7 +410,7 @@ export async function getClipboardHistory(hostOverride?: any): Promise<Clipboard
         { limit: 100 },
         hostOverride
       );
-      if (ipcRes.ok && ipcRes.data) {
+      if (ipcRes.ok && ipcRes.data !== undefined) {
         const list = Array.isArray(ipcRes.data)
           ? ipcRes.data
           : Array.isArray(ipcRes.data?.items)
@@ -440,15 +440,21 @@ export async function getClipboardHistory(hostOverride?: any): Promise<Clipboard
     }
   }
 
-  // 4. 在真实 Electron 宿主中，若历史数据库当前为空，主动读取当前操作系统剪贴板真实内容并拒絕假数据
-  if (realHost) {
+  // 4. 在真实 Electron 宿主或显式传入 hostOverride 时，若历史数据库当前为空，主动读取当前操作系统剪贴板真实内容并拒绝假数据
+  if (realHost || hostOverride) {
     let realStored: ClipboardItem[] = [];
     try {
       const raw = await LocalStorage.getItem(STORAGE_KEY);
       if (raw) {
-        const parsed = JSON.parse(raw);
+        const parsed = typeof raw === "string" ? JSON.parse(raw) : raw;
         if (Array.isArray(parsed)) {
-          realStored = parsed.filter((item: any) => item && !SAMPLE_IDS.has(String(item.id)));
+          realStored = parsed.filter(
+            (item: any) =>
+              item &&
+              !SAMPLE_IDS.has(String(item.id)) &&
+              !String(item.id).startsWith("clip-color-") &&
+              !String(item.id).startsWith("clip-json-")
+          );
         }
       }
     } catch {
@@ -526,7 +532,7 @@ export async function syncCurrentSystemClipboard(
     lineCount: liveText.split(/\r?\n/).length,
     sourceAppName: "System Clipboard"
   };
-  if (hostOverride || isRealElectronHost()) {
+  if (hostOverride || isRealElectronHost(hostOverride)) {
     void callHostTransport("clipboard_history_add", { content: liveText }, hostOverride);
   }
   const next = [newItem, ...currentItems];
@@ -544,18 +550,22 @@ export async function saveClipboardHistory(items: ClipboardItem[]): Promise<void
 /**
  * 切换条目置顶状态
  */
-export async function toggleClipboardItemPin(id: string): Promise<boolean> {
+export async function toggleClipboardItemPin(id: string, hostOverride?: any): Promise<boolean> {
+  if (!id || typeof id !== "string" || !id.trim()) return false;
   // 1. window.ztools
   if (typeof window !== "undefined" && (window as any).ztools?.clipboard_history_toggle_pin) {
     try {
       return await (window as any).ztools.clipboard_history_toggle_pin({ id });
     } catch {}
   }
-  if (isRealElectronHost()) {
+  if (hostOverride || isRealElectronHost(hostOverride)) {
     try {
-      const res = await callHostTransport<any>("clipboard_history_toggle_pin", { id });
-      if (res.ok) return Boolean(res.data ?? true);
-    } catch {}
+      const res = await callHostTransport<any>("clipboard_history_toggle_pin", { id }, hostOverride);
+      if (res.ok && res.data?.ok !== false) return Boolean(res.data ?? true);
+      return false;
+    } catch {
+      return false;
+    }
   }
   // 2. Bridge
   const bridge = getDeclarativeBridge();
@@ -564,24 +574,43 @@ export async function toggleClipboardItemPin(id: string): Promise<boolean> {
       return await bridge.clipboardHistory.togglePin(id);
     } catch {}
   }
-  return false;
+  // 3. LocalStorage fallback
+  try {
+    const items = await getClipboardHistory();
+    let newState = false;
+    const updated = items.map(item => {
+      if (item.id === id) {
+        newState = !item.pinned;
+        return { ...item, pinned: newState };
+      }
+      return item;
+    });
+    await saveClipboardHistory(updated);
+    return newState;
+  } catch {
+    return false;
+  }
 }
 
 /**
  * 删除剪贴板单条记录
  */
-export async function deleteClipboardItem(id: string): Promise<boolean> {
+export async function deleteClipboardItem(id: string, hostOverride?: any): Promise<boolean> {
+  if (!id || typeof id !== "string" || !id.trim()) return false;
   // 1. window.ztools
   if (typeof window !== "undefined" && (window as any).ztools?.clipboard_history_delete) {
     try {
       return await (window as any).ztools.clipboard_history_delete({ id });
     } catch {}
   }
-  if (isRealElectronHost()) {
+  if (hostOverride || isRealElectronHost(hostOverride)) {
     try {
-      const res = await callHostTransport<any>("clipboard_history_delete", { id });
-      if (res.ok) return true;
-    } catch {}
+      const res = await callHostTransport<any>("clipboard_history_delete", { id }, hostOverride);
+      if (res.ok && res.data?.ok !== false) return true;
+      return false;
+    } catch {
+      return false;
+    }
   }
   // 2. Bridge
   const bridge = getDeclarativeBridge();
@@ -590,24 +619,35 @@ export async function deleteClipboardItem(id: string): Promise<boolean> {
       return await bridge.clipboardHistory.delete(id);
     } catch {}
   }
-  return false;
+  // 3. LocalStorage fallback
+  try {
+    const items = await getClipboardHistory();
+    const updated = items.filter(item => item.id !== id);
+    await saveClipboardHistory(updated);
+    return updated.length < items.length;
+  } catch {
+    return false;
+  }
 }
 
 /**
  * 清空所有未置顶历史
  */
-export async function clearUnpinnedClipboardHistory(): Promise<number> {
+export async function clearUnpinnedClipboardHistory(hostOverride?: any): Promise<number> {
   // 1. window.ztools
   if (typeof window !== "undefined" && (window as any).ztools?.clipboard_history_clear_unpinned) {
     try {
       return await (window as any).ztools.clipboard_history_clear_unpinned();
     } catch {}
   }
-  if (isRealElectronHost()) {
+  if (hostOverride || isRealElectronHost(hostOverride)) {
     try {
-      const res = await callHostTransport<any>("clipboard_history_clear_unpinned", {});
-      if (res.ok) return Number(res.data ?? 0);
-    } catch {}
+      const res = await callHostTransport<any>("clipboard_history_clear_unpinned", {}, hostOverride);
+      if (res.ok) return Number(res.data?.clearedCount ?? res.data ?? 0);
+      return 0;
+    } catch {
+      return 0;
+    }
   }
   // 2. Bridge
   const bridge = getDeclarativeBridge();
@@ -616,7 +656,16 @@ export async function clearUnpinnedClipboardHistory(): Promise<number> {
       return await bridge.clipboardHistory.clearUnpinned();
     } catch {}
   }
-  return 0;
+  // 3. LocalStorage fallback
+  try {
+    const items = await getClipboardHistory();
+    const pinnedOnly = items.filter(item => item.pinned);
+    const removedCount = items.length - pinnedOnly.length;
+    await saveClipboardHistory(pinnedOnly);
+    return removedCount;
+  } catch {
+    return 0;
+  }
 }
 
 /**

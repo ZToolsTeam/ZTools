@@ -6,9 +6,14 @@
 
 import {
   callHostTransport,
+  formatBytes,
+  invokeDllPluginCapability,
+  isRealElectronHost,
   probeRealDiskDrives,
   RealDriveUsageInfo
 } from '../shared/native-ipc.js'
+
+export { formatBytes } from '../shared/native-ipc.js'
 
 export interface CapabilityActionItem {
   id: string
@@ -133,15 +138,6 @@ export function filterCapabilityItems(items: CapabilityActionItem[], query: stri
   })
 }
 
-export function formatBytes(bytes: number): string {
-  if (!Number.isFinite(bytes) || bytes <= 0) return '0 B'
-  const units = ['B', 'KB', 'MB', 'GB', 'TB']
-  const k = 1024
-  const idx = Math.min(units.length - 1, Math.max(0, Math.floor(Math.log(bytes) / Math.log(k))))
-  const val = bytes / Math.pow(k, idx)
-  return `${val >= 100 || idx === 0 ? val.toFixed(0) : val.toFixed(1)} ${units[idx]}`
-}
-
 export function validateInvocationPayload(method: string, params: unknown): { valid: boolean; error?: string } {
   if (typeof method !== 'string' || method.trim().length === 0) {
     return { valid: false, error: 'INVALID_METHOD: 调用方法名不能为空' }
@@ -175,63 +171,20 @@ export function validateInvocationPayload(method: string, params: unknown): { va
 export async function invokeNativeCapability(
   method: string,
   params: Record<string, unknown>,
-  hostBridge?: { dllplugin?: { call?: (plugin: string, fn: string, payload: unknown) => Promise<unknown> } }
+  hostBridge?: any
 ): Promise<NativeInvocationResult> {
   const check = validateInvocationPayload(method, params)
   if (!check.valid) {
     throw new Error(check.error || '参数校验失败')
   }
-
-  const runtimeHost = hostBridge ?? (typeof (globalThis as any).ztools !== 'undefined' ? (globalThis as any).ztools : undefined)
-  const callFn = runtimeHost?.dllplugin?.call
-
-  if (typeof callFn === 'function') {
-    try {
-      const raw = await callFn(DLL_PLUGIN_NAME, method.trim(), params)
-      let parsed: unknown = raw
-      if (typeof raw === 'string') {
-        try {
-          parsed = JSON.parse(raw)
-        } catch {
-          throw new Error('MALFORMED_DLL_RESPONSE: 原生组件返回了损坏的 JSON 数据')
-        }
-      }
-      if (parsed && typeof parsed === 'object' && 'error' in (parsed as Record<string, unknown>)) {
-        const errMsg = String((parsed as Record<string, unknown>).error || '原生组件返回未知错误')
-        return {
-          ok: false,
-          pluginName: DLL_PLUGIN_NAME,
-          method: method.trim(),
-          error: `DLL_ERROR: ${errMsg}`
-        }
-      }
-      return {
-        ok: true,
-        pluginName: DLL_PLUGIN_NAME,
-        method: method.trim(),
-        data: parsed,
-        fromFallback: false
-      }
-    } catch (err: any) {
-      const message = err instanceof Error ? err.message : String(err)
-      if (message.startsWith('MALFORMED_DLL_RESPONSE:')) {
-        throw err
-      }
-      return {
-        ok: false,
-        pluginName: DLL_PLUGIN_NAME,
-        method: method.trim(),
-        error: `NATIVE_CALL_FAILED: ${message}`
-      }
-    }
-  }
-
+  const res = await invokeDllPluginCapability(DLL_PLUGIN_NAME, method, params, hostBridge)
   return {
-    ok: true,
+    ok: res.ok,
     pluginName: DLL_PLUGIN_NAME,
     method: method.trim(),
-    data: { simulated: true, method: method.trim(), params },
-    fromFallback: true
+    data: res.data ?? undefined,
+    error: res.error,
+    fromFallback: res.fromFallback
   }
 }
 

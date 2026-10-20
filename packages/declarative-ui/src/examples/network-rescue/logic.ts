@@ -3,7 +3,7 @@
  * 针对 Windows / macOS 常见断网故障提供 8 大真实诊断与一键修复能力
  */
 
-import { callHostTransport, isRealElectronHost } from '../shared/native-ipc.js'
+import { callHostTransport, invokePluginService, isRealElectronHost, invokeDllPluginCapability } from '../shared/native-ipc.js'
 
 export interface CapabilityActionItem {
   id: string
@@ -33,7 +33,7 @@ export interface NetworkRescueItem {
   command: string
   category: RescueCategory
   categoryLabel: string
-  status: 'healthy' | 'warning' | 'repaired'
+  status: 'healthy' | 'warning' | 'error' | 'repaired'
   statusText: string
   healthScore: number
   requiresAdmin: boolean
@@ -67,7 +67,7 @@ export const NETWORK_RESCUE_ITEMS: NetworkRescueItem[] = [
     category: 'dns_proxy',
     categoryLabel: 'DNS与代理',
     status: 'healthy',
-    statusText: '缓存正常 (28 条)',
+    statusText: '缓存正常',
     healthScore: 95,
     requiresAdmin: false
   },
@@ -204,41 +204,72 @@ export async function invokeNativeCapability(
   if (!check.valid) {
     throw new Error(check.error || '参数校验失败')
   }
-  const ipcRes = await callHostTransport(
-    'dllplugin_call',
-    { plugin: DLL_PLUGIN_NAME, func: method.trim(), params },
-    hostBridge
-  )
-  if (ipcRes.ok && ipcRes.data) {
-    return { ok: true, pluginName: DLL_PLUGIN_NAME, method: method.trim(), data: ipcRes.data, fromFallback: false }
-  }
-  return {
-    ok: true,
-    pluginName: DLL_PLUGIN_NAME,
-    method: method.trim(),
-    data: { simulated: true, method: method.trim(), params },
-    fromFallback: true
-  }
+  return invokeDllPluginCapability(DLL_PLUGIN_NAME, method.trim(), params, hostBridge)
+}
+
+const HOST_CHECK_ID_MAP: Record<string, string> = {
+  'adapter-ip': 'renew-dhcp',
+  'dns-resolve': 'flush-dns',
+  'public-tcp': 'ping-gateway-dns',
+  'system-proxy': 'clear-proxy'
 }
 
 export async function runNetworkDiagnostics(hostOverride?: any): Promise<NetworkDiagnosticSnapshot> {
-  const items = NETWORK_RESCUE_ITEMS.map((item) => ({ ...item }))
+  const realHost = isRealElectronHost(hostOverride) || Boolean(hostOverride)
+  const items: NetworkRescueItem[] = NETWORK_RESCUE_ITEMS.map((item) => {
+    if (isRealElectronHost(hostOverride)) {
+      // 在真实宿主环境下，清除预设假告警，等待真实探测结果填充
+      return {
+        ...item,
+        status: 'healthy',
+        statusText: item.id === 'clear-proxy' ? '未检测到异常系统代理' : item.id === 'check-hosts' ? 'Hosts 映射正常' : item.statusText,
+        healthScore: item.status === 'warning' ? 95 : item.healthScore
+      }
+    }
+    return { ...item }
+  })
 
-  if (hostOverride || isRealElectronHost(hostOverride)) {
-    const diagRes = await callHostTransport<any>('network_run_diagnostics', {}, hostOverride)
-    if (diagRes.ok && Array.isArray(diagRes.data?.items)) {
-      for (const remoteItem of diagRes.data.items) {
-        const target = items.find((i) => i.id === remoteItem.id)
+  let latencyMs = 14
+
+  if (realHost) {
+    const pluginRes = await invokePluginService<any>(DLL_PLUGIN_NAME, 'diagnose', {}, hostOverride)
+    const diagData = pluginRes.ok && pluginRes.data
+      ? pluginRes.data
+      : (await callHostTransport<any>('network_run_diagnostics', {}, hostOverride)).data
+
+    if (diagData) {
+      if (typeof diagData.latencyMs === 'number' && diagData.latencyMs >= 0) {
+        latencyMs = diagData.latencyMs
+      }
+      const remoteList = Array.isArray(diagData.items)
+        ? diagData.items
+        : Array.isArray(diagData.checks)
+        ? diagData.checks
+        : []
+      for (const remoteItem of remoteList) {
+        const rawId = String(remoteItem.id || remoteItem.checkId || '')
+        const mappedId = HOST_CHECK_ID_MAP[rawId] || rawId
+        const target = items.find((i) => i.id === rawId || i.id === mappedId)
         if (target) {
-          target.status = remoteItem.status || target.status
-          target.statusText = remoteItem.statusText || target.statusText
-          target.healthScore = Number(remoteItem.healthScore ?? target.healthScore)
+          target.status =
+            remoteItem.status === 'error'
+              ? 'error'
+              : remoteItem.status === 'warning'
+              ? 'warning'
+              : remoteItem.status === 'repaired'
+              ? 'repaired'
+              : 'healthy'
+          target.statusText = String(remoteItem.statusText || remoteItem.detail || target.statusText)
+          target.healthScore = Number(
+            remoteItem.healthScore ??
+              (target.status === 'error' ? 20 : target.status === 'warning' ? 50 : 98)
+          )
         }
       }
     }
   }
 
-  const warningCount = items.filter((i) => i.status === 'warning').length
+  const warningCount = items.filter((i) => i.status === 'warning' || i.status === 'error').length
   const overallHealthScore = Math.round(
     items.reduce((acc, cur) => acc + cur.healthScore, 0) / Math.max(1, items.length)
   )
@@ -247,38 +278,77 @@ export async function runNetworkDiagnostics(hostOverride?: any): Promise<Network
     items,
     overallHealthScore,
     warningCount,
-    latencyMs: 14,
-    proxyInterceptDetected: items.some((i) => i.id === 'clear-proxy' && i.status === 'warning')
+    latencyMs,
+    proxyInterceptDetected: items.some(
+      (i) => i.id === 'clear-proxy' && (i.status === 'warning' || i.status === 'error')
+    )
   }
 }
+
+export const fetchNetworkDiagnostics = runNetworkDiagnostics
 
 export async function executeNetworkRepair(
   itemId: string,
   hostOverride?: any
 ): Promise<NetworkRepairResult> {
-  const target = NETWORK_RESCUE_ITEMS.find((i) => i.id === itemId)
+  const normalizedId = typeof itemId === 'string' ? itemId.trim() : ''
+  const mappedId = HOST_CHECK_ID_MAP[normalizedId] || normalizedId
+  const target = NETWORK_RESCUE_ITEMS.find((i) => i.id === normalizedId || i.id === mappedId)
   if (!target) {
     return {
       ok: false,
-      itemId,
+      itemId: normalizedId,
       command: '',
-      message: `未找到网络急救项: ${itemId}`
+      message: `未找到网络急救项: ${normalizedId}`
     }
   }
 
   if (hostOverride || isRealElectronHost(hostOverride)) {
-    const res = await callHostTransport(
+    const pluginRes = await invokePluginService<any>(
+      DLL_PLUGIN_NAME,
+      'repair',
+      { checkId: target.id, itemId: target.id, command: target.command },
+      hostOverride
+    )
+    if (pluginRes.ok && pluginRes.data?.ok !== false) {
+      return {
+        ok: true,
+        itemId: target.id,
+        command: target.command,
+        message: String(pluginRes.data?.message || `已执行修复: ${target.title}`)
+      }
+    }
+    if (pluginRes.data?.ok === false) {
+      return {
+        ok: false,
+        itemId: target.id,
+        command: target.command,
+        message: String(pluginRes.data.error || pluginRes.data.message || '修复失败')
+      }
+    }
+
+    const shellRes = await callHostTransport(
       'shell_exec',
       { command: target.command },
       hostOverride
     )
-    if (res.ok) {
+    if (shellRes.ok) {
       return {
         ok: true,
         itemId: target.id,
         command: target.command,
         message: `已执行修复: ${target.title}`
       }
+    }
+
+    return {
+      ok: false,
+      itemId: target.id,
+      command: target.command,
+      message:
+        pluginRes.error ||
+        shellRes.error ||
+        (target.requiresAdmin ? `修复失败 [${target.title}]：需要管理员权限` : `修复命令执行失败: ${target.command}`)
     }
   }
 
@@ -293,22 +363,40 @@ export async function executeNetworkRepair(
 export async function batchExecuteNetworkRepairs(
   itemIds?: string[],
   hostOverride?: any
-): Promise<{ ok: boolean; repairedCount: number; summary: string }> {
+): Promise<{ ok: boolean; repairedCount: number; failedCount?: number; summary: string }> {
   const targets =
     Array.isArray(itemIds) && itemIds.length > 0
       ? NETWORK_RESCUE_ITEMS.filter((i) => itemIds.includes(i.id))
-      : NETWORK_RESCUE_ITEMS.filter((i) => i.status === 'warning')
+      : NETWORK_RESCUE_ITEMS.filter((i) => i.status === 'warning' || i.status === 'error')
 
-  let repairedCount = 0
-  for (const t of targets) {
-    const res = await executeNetworkRepair(t.id, hostOverride)
-    if (res.ok) repairedCount += 1
+  if (targets.length === 0) {
+    return {
+      ok: false,
+      repairedCount: 0,
+      failedCount: 0,
+      summary: '未匹配到可执行的网络急救项'
+    }
   }
 
+  let repairedCount = 0
+  let failedCount = 0
+  for (const t of targets) {
+    const res = await executeNetworkRepair(t.id, hostOverride)
+    if (res.ok) {
+      repairedCount += 1
+    } else {
+      failedCount += 1
+    }
+  }
+
+  const allFailed = repairedCount === 0 && failedCount > 0
   return {
-    ok: true,
+    ok: !allFailed,
     repairedCount,
-    summary: `已自动修复 ${repairedCount} 项网络异常配置`
+    failedCount,
+    summary: allFailed
+      ? `网络修复失败（共 ${failedCount} 项未通过，请检查管理员权限）`
+      : `已自动修复 ${repairedCount} 项网络异常配置`
   }
 }
 
@@ -320,7 +408,7 @@ export function filterNetworkRescueItems(
   if (!Array.isArray(items)) return []
   let list = items
   if (filterMode === 'warning') {
-    list = list.filter((i) => i.status === 'warning')
+    list = list.filter((i) => i.status === 'warning' || i.status === 'error')
   } else if (filterMode === 'dns_proxy') {
     list = list.filter((i) => i.category === 'dns_proxy' || i.category === 'connectivity')
   } else if (filterMode === 'stack_reset') {

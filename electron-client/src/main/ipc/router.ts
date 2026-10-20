@@ -162,6 +162,7 @@ import { NetworkRequestCancellationService } from '../services/network-request-c
 import { NetworkRequestCancellationEndpoint } from './network-request-cancellation-endpoint.js'
 import { PluginInstallService } from '../services/plugin-install-service.js'
 import { resolvePluginRuntimeTarget } from '../services/plugin-runtime-target-resolver.js'
+import { BuiltinPluginHostService } from '../services/builtin-plugin-host-service.js'
 import { ProcessService, type ProcessDiscoveryAdapter } from '../services/process-service.js'
 import { PluginIconService } from '../services/plugin-icon-service.js'
 import { PluginShortcutService } from '../services/plugin-shortcut-service.js'
@@ -425,6 +426,7 @@ export class IpcRouter {
   readonly #pluginSessions: PluginSessionManager
   readonly #pluginWindows: PluginWindowManager
   readonly #processes: ProcessService
+  readonly #builtinPluginHost: BuiltinPluginHostService
   readonly #runtimeCapabilities: RuntimeCapabilityService
   readonly #capabilityAuthorization: RuntimeCapabilityAuthorizationService
   readonly #capabilityPrompt: RuntimeCapabilityPromptService
@@ -566,6 +568,15 @@ export class IpcRouter {
       (processes) => processes.stop()
     )
     const processes = this.#processes
+    this.#builtinPluginHost = constructionScope.own(
+      new BuiltinPluginHostService({
+        processService: processes,
+        shellService: shell,
+        platform: process.platform
+      }),
+      (host) => host.stop()
+    )
+    const builtinPluginHost = this.#builtinPluginHost
     const runtimeTarget = options.systemPlatformAdapter.getRuntimeTarget()
     const nativePlatform = runtimeTarget.platform === 'macos' ? 'darwin' : 'win32'
     const keyboardCandidate: unknown = services.nativeInput
@@ -1330,6 +1341,27 @@ export class IpcRouter {
               return { success: true, data: { opened: true, path: input.params.path.trim() } }
             }
             return processes.handleProcessMonitorCall(input.func, input.params ?? {}, signal)
+          }
+          const allowedBuiltinPluginCaller =
+            caller.type === 'main' ||
+            (caller.type === 'plugin' &&
+              (isInternalPlugin(caller.pluginId) ||
+                builtinPluginHost.supportsPlugin(caller.pluginId ?? '')))
+          if (
+            allowedBuiltinPluginCaller &&
+            builtinPluginHost.supportsPlugin(input.plugin) &&
+            error instanceof ZToolsError &&
+            (error.code === errorCodes.pluginNotFound ||
+              error.code === errorCodes.serviceUnavailable ||
+              error.code === errorCodes.nativeHostUnavailable)
+          ) {
+            return builtinPluginHost.handlePluginCall(
+              input.plugin,
+              input.func,
+              (input.params as Record<string, unknown>) ?? {},
+              signal,
+              caller
+            )
           }
           throw error
         }
@@ -2417,6 +2449,7 @@ export class IpcRouter {
         () => this.#triggers.stop(),
         () => this.#superPanelInput?.stop(),
         () => this.#processes.stop(),
+        () => this.#builtinPluginHost.stop(),
         () => this.#system.stop(),
         async () => { await this.#clipboard.stop(); await this.#database.stop() }
       ])

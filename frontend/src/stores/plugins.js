@@ -31,6 +31,8 @@ import {
   loadInstalledDeclarativePlugin,
   V2_CATALOG_CDN_URL
 } from '@/utils/declarativePluginLoader'
+import { getBundledPluginEntries, isBundledPlugin } from '@/utils/bundledPlugins'
+import { isPluginVisible } from '@/utils/pluginVisibility'
 
 /**
  * 规范化插件 ID（业务标识符）
@@ -211,7 +213,7 @@ export const usePluginsStore = defineStore('plugins', {
       const found = state.items.find(
         (item) => normalizePluginId(item.pluginId || item.id).toLowerCase() === pid
       )
-      return isOfficialPluginItem(found) || isOfficialPlugin(pid)
+      return isOfficialPluginItem(found) || isOfficialPlugin(pid) || isBundledPlugin(pid)
     }
   },
 
@@ -475,8 +477,8 @@ export const usePluginsStore = defineStore('plugins', {
               )
             }
           },
-          getOfficialList: () => getOfficialPluginsList(),
-          isPlatformSupported: isPluginSupportedOnCurrentPlatform,
+          getOfficialList: () => [...getBundledPluginEntries(), ...getOfficialPluginsList()],
+          isPlatformSupported: (item) => isPluginVisible(item) && isPluginSupportedOnCurrentPlatform(item),
           ttlMs: 5 * 60 * 1000
         })
       }
@@ -757,9 +759,10 @@ export const usePluginsStore = defineStore('plugins', {
       }
 
       // 找出不在市场列表里的已安装插件，单独请求它们的图标 URL
+      // 内置插件的图标随客户端一起发布，不向市场查询，避免被旧版本图标覆盖（返回首页时图标会闪一下再变）
       const missingIds = this.installedPlugins
         .map((p) => String(p.pluginId))
-        .filter((id) => !marketMap[id])
+        .filter((id) => !marketMap[id] && !isBundledPlugin(id))
 
       if (missingIds.length > 0) {
         apiGetMarketPlugins({ ids: missingIds, per_page: missingIds.length }).then((res) => {
@@ -780,6 +783,7 @@ export const usePluginsStore = defineStore('plugins', {
     _applyIconPatch(marketMap) {
       let changed = false
       for (const p of this.installedPlugins) {
+        if (isBundledPlugin(p.pluginId)) continue
         const remoteIcon = marketMap[String(p.pluginId)] || ''
         if (remoteIcon && p.icon !== remoteIcon) {
           p.icon = remoteIcon
@@ -840,9 +844,10 @@ export const usePluginsStore = defineStore('plugins', {
     },
 
     async fetchInstalledPlugins() {
+      const bundledEntries = getBundledPluginEntries()
       try {
         const locals = await apiGetLocalPlugins()
-        const officialList = getOfficialPluginsList()
+        const officialList = [...bundledEntries, ...getOfficialPluginsList()]
 
         // 识别本地已装插件的下架标记
         for (const p of locals || []) {
@@ -871,8 +876,14 @@ export const usePluginsStore = defineStore('plugins', {
         // 合并插件列表：本地插件 + 官方标杆应用（若本地已有同 ID 或别名则合并官方声明式定义并去重）
         const coveredOfficialKeys = new Set()
         const combined = []
+        // 与内置插件同 ID 的本地安装副本：以内置版本为准，只沿用其最近使用时间与启用状态
+        const localBundledState = new Map()
         for (const p of locals || []) {
           const key = String(p.pluginId || p.id || '').toLowerCase()
+          if (isBundledPlugin(key)) {
+            localBundledState.set(key, { lastUsedTime: p.lastUsedTime, enabled: p.enabled })
+            continue
+          }
           const builtinMatch = getOfficialPlugin(key)
           const isOff = isOfficialPluginItem(p, builtinMatch)
           if (builtinMatch) {
@@ -922,9 +933,13 @@ export const usePluginsStore = defineStore('plugins', {
         for (const official of officialList) {
           const key = String(official.pluginId || '').toLowerCase()
           if (!coveredOfficialKeys.has(key)) {
+            coveredOfficialKeys.add(key)
             const badge = official.official_badge || official.officialBadge || '官方自营'
+            const localState = localBundledState.get(key)
             combined.push({
               ...official,
+              ...(localState?.lastUsedTime !== undefined ? { lastUsedTime: localState.lastUsedTime } : {}),
+              ...(typeof localState?.enabled === 'boolean' ? { enabled: localState.enabled } : {}),
               // 内置官方声明式插件：没有本地安装目录，不参与本地图标刷新等文件级操作
               builtin: true,
               is_official: true,
@@ -937,7 +952,7 @@ export const usePluginsStore = defineStore('plugins', {
 
         // 保存完整插件信息，按最近使用时间排序；当前平台不支持的插件（如 macOS 上的 Windows 专用插件）
         // 不进入展示与检索列表，installedSet 保持原样以免影响卸载 / 更新等安装状态判断
-        this.installedPlugins = combined.filter(isPluginSupportedOnCurrentPlatform).sort((a, b) => {
+        this.installedPlugins = combined.filter((p) => isPluginVisible(p) && isPluginSupportedOnCurrentPlatform(p)).sort((a, b) => {
           const timeA = a.lastUsedTime || 0
           const timeB = b.lastUsedTime || 0
           return timeB - timeA
@@ -948,11 +963,11 @@ export const usePluginsStore = defineStore('plugins', {
         return combined
       } catch (err) {
         console.warn('[plugins] 获取本地插件失败，回退官方内置标杆插件列表:', err)
-        const officialList = getOfficialPluginsList()
+        const officialList = [...bundledEntries, ...getOfficialPluginsList()]
         const officialIds = officialList.map((p) => String(p.pluginId))
         this.installedSet = new Set(officialIds)
         this.installedPlugins = officialList
-          .filter(isPluginSupportedOnCurrentPlatform)
+          .filter((p) => isPluginVisible(p) && isPluginSupportedOnCurrentPlatform(p))
           .map((plugin) => ({ ...plugin, builtin: true }))
         return officialList
       }
@@ -1027,7 +1042,7 @@ export const usePluginsStore = defineStore('plugins', {
 
     onUninstallComplete(payload) {
       if (payload && payload.pluginId) {
-        if (isOfficialPlugin(payload.pluginId)) {
+        if (isOfficialPlugin(payload.pluginId) || isBundledPlugin(payload.pluginId)) {
           // 官方内置标杆应用不可卸载
           return
         }
@@ -1061,6 +1076,11 @@ export const usePluginsStore = defineStore('plugins', {
           throw new Error(`无法启动：该插件已被官方下架禁用（原因：${reason}）`)
         }
 
+        // 暂未开放的插件（未完成真实实现）不允许从旧快捷方式、历史记录等入口打开
+        if (!isPluginVisible(normalizedId)) {
+          throw new Error('无法启动：该插件暂未开放')
+        }
+
         // 当前系统上不能真正工作的插件不允许启动，避免展示示例数据或假成功
         if (!isPluginSupportedOnCurrentPlatform(normalizedId)) {
           throw new Error('无法启动：该插件在当前系统上暂不可用')
@@ -1080,6 +1100,7 @@ export const usePluginsStore = defineStore('plugins', {
           )
 
         const isDeclarativePlugin = Boolean(
+          isBundledPlugin(normalizedId) ||
           isOfficialPlugin(normalizedId) ||
             installedMatch?.isDeclarative === true ||
             catalogMatch?.isDeclarative === true ||
@@ -1323,7 +1344,7 @@ export const usePluginsStore = defineStore('plugins', {
      */
     async uninstallPlugin(pluginId) {
       try {
-        if (isOfficialPlugin(pluginId)) {
+        if (isOfficialPlugin(pluginId) || isBundledPlugin(pluginId)) {
           throw new Error('官方内置核心扩展不可卸载')
         }
 

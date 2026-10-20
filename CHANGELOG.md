@@ -5,11 +5,26 @@
 日志格式遵循业界通用的 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 规范，版本号遵循 [语义化版本 (Semantic Versioning)](https://semver.org/lang/zh-CN/) 标准，每次代码同步与版本发布均在顶部持续追加最新记录。
 
 <!-- changelog-auto-append-start -->
-<!-- last-synced-commit: 298b450 -->
+<!-- last-synced-commit: 9dadc58 -->
+
+## [Unreleased / 2026-10-20] - 持续迭代更新
+
+### ✨ 新增特性 (Features)
+- **declarative-ui**：完成35款声明式插件真实现、三端目录同步与rex-code-review提交门禁 (`09c1632`)
+
+### 📝 文档与工程基建 (Chores & Docs)
+- 合并远端分支并更新electron-client与plugins子模块最新提交 (`9dadc58`)
+- 合并同事的 35 款插件真实化改造，并更新 electron-client、frontend、plugins 子模块引用 (`ff073f6`)
+
+---
 
 ## [v1.1.8.1] - 2026-10-19 - 全量 35 款声明式 2.0 自营插件双端解封与线上 CDN 同步
 
+### ⚡ 体验优化与重构 (Improvements)
+- 修复rex-code-review全部6项审查发现并将rex-code-review技能存入仓库 (`267eaf5`)
+
 ### ✨ 新增特性 (Features)
+- 完成35款声明式插件与宿主IPC去假接真全量改造及集成测试 (`9a06ca5`)
 - 升级v1.1.8.1并同步全量35款跨平台声明式2.0自营插件与线上CDN目录 (`298b450`)
 - **35 款声明式 2.0 自营插件全量升级与三大标准布局范式落地**：完成进程管理 (`kill-process`)、磁盘空间分析 (`disk-analyzer`)、批量视频/音频转码 (`batch-video` / `batch-audio`)、微信/QQ 专项清理、AI 图像/视频增强等全部 35 款自营插件的三大标准 UI 布局范式升级与单元测试、实机截图审查 (`100ad8f`, `97d4d41`)。
 - **Windows & macOS 双端全量解封与线上 CDN 同步**：解除历史 DLL 遗留的平台限制，确保全部 35 款跨平台声明式 2.0 插件在 macOS 与 Windows 双端开箱即用；同步更新 `plugins/` 独立扩展包至 `v2.0.0` 并发布至线上 CDN (`plugins-v2/catalog.json`)。
@@ -18,6 +33,9 @@
 - **本地旧版插件别名自动合并与去重**：修复本地存在旧版同名或别名目录（如 `clipboard-manager`、`everything-search`、`context-menu`）时产生重复卡片或误打开旧版静态页面的问题，自动合并至内置声明式 2.0 组件。
 
 ### 📝 文档与工程基建 (Chores & Docs)
+- 将.agent/skills下的rex-code-review与自动审查技能纳入仓库版本控制 (`85e88e7`)
+- 插件扫描增加声明式 UI 规范检查（仅警告），更新内置插件让位后的测试断言 (`5ac74e1`)
+- 同步CHANGELOG发布记录 (`258d820`)
 - 在 AI 插件选型决策树第 0 步加入 `no-view` 无界面瞬时命令规范 (`c8ccab9`)
 - 在 `AGENTS.md` 中新增 AI 开发插件的布局选型决策树与代码填空契约 (`80ba131`)
 - 确立原则 5 极简灰阶单色规范并清洗三大标杆插件彩虹色与 Emoji 污染 (`5de84d9`)

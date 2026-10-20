@@ -12,10 +12,13 @@
 
 import {
   formatBytes,
+  getRealFileSize,
   invokeHostCapability,
   invokePluginService,
+  isRealElectronHost,
   openRealPath,
   resolveRealSpecialPaths,
+  scanRealDirectoryTree,
   showRealItemInFolder,
   type NativeInvocationResult
 } from "../shared/native-ipc.js";
@@ -24,8 +27,9 @@ export { formatBytes };
 export type { NativeInvocationResult };
 
 export const DLL_PLUGIN_NAME = "SystemBackupPlugin";
-export const FORBIDDEN_TARGET_PATTERN = /(\.\.[\\/])/i;
-export const FORBIDDEN_REASON = "备份目标路径严禁包含路径穿越字符";
+export const FORBIDDEN_TARGET_PATTERN =
+  /(^|[\\/])(Windows|System32|SysWOW64|Program Files|Program Files \(x86\)|\.\.)($|[\\/])/i;
+export const FORBIDDEN_REASON = "备份目标路径严禁指向系统核心保护目录或包含路径穿越字符";
 
 export type BackupCategory =
   | "all"
@@ -217,40 +221,149 @@ export function createInitialSystemBackupSnapshot(): SystemBackupSnapshot {
   };
 }
 
-export async function fetchSystemBackupSnapshot(): Promise<SystemBackupSnapshot> {
+export async function fetchSystemBackupSnapshot(hostBridge?: any): Promise<SystemBackupSnapshot> {
   const initial = createInitialSystemBackupSnapshot();
+  const isRealHost = Boolean(hostBridge) || isRealElectronHost(hostBridge) || isRealElectronHost();
   try {
-    const paths = await resolveRealSpecialPaths();
+    const paths = await resolveRealSpecialPaths(hostBridge);
     const userProfile = paths.userProfile || "C:\\Users\\Default";
     const appData = paths.appData || `${userProfile}\\AppData\\Roaming`;
+    const localAppData = paths.localAppData || `${userProfile}\\AppData\\Local`;
     const docs = paths.documents || `${userProfile}\\Documents`;
+    const backupVaultDir = `${docs}\\ZToolsBackups`;
 
-    const updatedItems = initial.items.map((item) => {
-      if (item.id === "bak_ssh_config") {
-        return { ...item, path: `${userProfile}\\.ssh\\config` };
+    const candidateConfigs: Array<Omit<BackupConfigItem, "sizeBytes" | "lastModified"> & { fallbackSize: number }> = [
+      {
+        id: "bak_hosts",
+        name: "Windows Hosts 域名映射表 (etc\\hosts)",
+        path: "C:\\Windows\\System32\\drivers\\etc\\hosts",
+        category: "network_sys",
+        categoryName: "网络与系统配置",
+        statusTag: "核心配置",
+        fallbackSize: 16 * 1024
+      },
+      {
+        id: "bak_ssh_config",
+        name: "SSH 客户端主机与跳板机配置 (.ssh\\config)",
+        path: `${userProfile}\\.ssh\\config`,
+        category: "dev_terminal",
+        categoryName: "开发者密钥与终端配置",
+        statusTag: "Dotfiles",
+        fallbackSize: 12 * 1024
+      },
+      {
+        id: "bak_gitconfig",
+        name: "Git 全局别名与签名配置 (.gitconfig)",
+        path: `${userProfile}\\.gitconfig`,
+        category: "dev_terminal",
+        categoryName: "开发者密钥与终端配置",
+        statusTag: "Dotfiles",
+        fallbackSize: 8 * 1024
+      },
+      {
+        id: "bak_npmrc",
+        name: "NPM 全局镜像与凭证配置 (.npmrc)",
+        path: `${userProfile}\\.npmrc`,
+        category: "dev_terminal",
+        categoryName: "开发者密钥与终端配置",
+        statusTag: "Dotfiles",
+        fallbackSize: 4 * 1024
+      },
+      {
+        id: "bak_wt_settings",
+        name: "Windows Terminal 终端配置 (settings.json)",
+        path: `${localAppData}\\Packages\\Microsoft.WindowsTerminal_8wekyb3d8bbwe\\LocalState\\settings.json`,
+        category: "dev_terminal",
+        categoryName: "开发者密钥与终端配置",
+        statusTag: "终端配置",
+        fallbackSize: 18 * 1024
+      },
+      {
+        id: "bak_ps_profile",
+        name: "PowerShell 7 终端启动脚本 (Microsoft.PowerShell_profile.ps1)",
+        path: `${docs}\\PowerShell\\Microsoft.PowerShell_profile.ps1`,
+        category: "dev_terminal",
+        categoryName: "开发者密钥与终端配置",
+        statusTag: "终端脚本",
+        fallbackSize: 24 * 1024
+      },
+      {
+        id: "bak_vscode_settings",
+        name: "VSCode 全局设置 (settings.json)",
+        path: `${appData}\\Code\\User\\settings.json`,
+        category: "editor_tools",
+        categoryName: "编辑器与效率工具配置",
+        statusTag: "IDE 配置",
+        fallbackSize: 96 * 1024
       }
-      if (item.id === "bak_gitconfig") {
-        return { ...item, path: `${userProfile}\\.gitconfig` };
-      }
-      if (item.id === "bak_ps_profile") {
-        return { ...item, path: `${docs}\\PowerShell\\Microsoft.PowerShell_profile.ps1` };
-      }
-      if (item.id === "bak_vscode_settings") {
-        return { ...item, path: `${appData}\\Code\\User\\settings.json` };
-      }
-      if (item.id === "bak_archive_latest") {
-        return { ...item, path: `${docs}\\ZToolsBackups\\ZTools_SystemBackup_20261018_Full.zip` };
-      }
-      return item;
-    });
+    ];
 
+    const [probedSizes, vaultScan] = await Promise.all([
+      Promise.all(candidateConfigs.map((c) => getRealFileSize(c.path, hostBridge))),
+      scanRealDirectoryTree(
+        backupVaultDir,
+        { maxDepth: 1, maxFiles: 30, filterExt: /\.(?:zip|zbak)$/i },
+        hostBridge
+      )
+    ]);
+
+    const realItems: BackupConfigItem[] = [];
+    for (let i = 0; i < candidateConfigs.length; i++) {
+      const cfg = candidateConfigs[i];
+      const realSize = probedSizes[i];
+      if (realSize > 0) {
+        realItems.push({
+          id: cfg.id,
+          name: cfg.name,
+          path: cfg.path,
+          category: cfg.category,
+          categoryName: cfg.categoryName,
+          sizeBytes: realSize,
+          lastModified: "本机已验证存在",
+          statusTag: cfg.statusTag
+        });
+      }
+    }
+
+    const archiveItems: BackupConfigItem[] = vaultScan.files
+      .filter((entry) => !entry.isDirectory && entry.sizeBytes > 0)
+      .map((entry, idx) => ({
+        id: `bak_archive_real_${idx}`,
+        name: entry.name,
+        path: entry.path,
+        category: "snapshot_archives" as const,
+        categoryName: "历史备份快照归档",
+        sizeBytes: entry.sizeBytes,
+        lastModified: entry.mtimeMs > 0 ? new Date(entry.mtimeMs).toLocaleDateString() : "历史归档",
+        statusTag: "可回滚快照"
+      }));
+
+    if (isRealHost) {
+      const combined = [...realItems, ...archiveItems];
+      return {
+        backupVaultDir,
+        items: combined,
+        totalSizeBytes: combined.reduce((acc, item) => acc + item.sizeBytes, 0),
+        updatedAt: new Date().toLocaleTimeString()
+      };
+    }
+
+    const fallbackItems = realItems.length > 0 || archiveItems.length > 0 ? [...realItems, ...archiveItems] : initial.items;
     return {
-      backupVaultDir: `${docs}\\ZToolsBackups`,
-      items: updatedItems,
-      totalSizeBytes: updatedItems.reduce((acc, item) => acc + item.sizeBytes, 0),
+      backupVaultDir,
+      items: fallbackItems,
+      totalSizeBytes: fallbackItems.reduce((acc, item) => acc + item.sizeBytes, 0),
       updatedAt: new Date().toLocaleTimeString()
     };
   } catch {
+    if (isRealHost) {
+      return {
+        backupVaultDir: "C:\\Users\\Default\\Documents\\ZToolsBackups",
+        items: [],
+        totalSizeBytes: 0,
+        updatedAt: new Date().toLocaleTimeString()
+      };
+    }
     return initial;
   }
 }
@@ -260,52 +373,109 @@ export async function createBackupArchive(
   profileMode: BackupProfileMode,
   vaultDir: string,
   hostOverride?: any
-): Promise<{ ok: boolean; archivePath: string; backedUpCount: number; message: string }> {
+): Promise<{
+  ok: boolean;
+  archivePath: string;
+  backedUpCount: number;
+  sizeBytes?: number;
+  message: string;
+}> {
   if (!vaultDir || FORBIDDEN_TARGET_PATTERN.test(vaultDir)) {
-    return { ok: false, archivePath: "", backedUpCount: 0, message: FORBIDDEN_REASON };
+    return { ok: false, archivePath: "", backedUpCount: 0, sizeBytes: 0, message: FORBIDDEN_REASON };
   }
   if (!items || items.length === 0) {
-    return { ok: false, archivePath: "", backedUpCount: 0, message: "请先勾选至少一项待备份配置" };
+    return {
+      ok: false,
+      archivePath: "",
+      backedUpCount: 0,
+      sizeBytes: 0,
+      message: "请先勾选至少一项待备份配置"
+    };
   }
 
   const stamp = new Date().toISOString().slice(0, 10).replace(/-/g, "");
   const archivePath = `${vaultDir.replace(/[\\/]+$/, "")}\\ZTools_Backup_${profileMode}_${stamp}.zip`;
+  const validPaths = items.map((i) => i.path).filter(Boolean);
 
-  await invokeHostCapability(
+  const res = await invokeHostCapability<any>(
     "backup.createSnapshotArchive",
     {
       profileMode,
+      vaultDir,
+      backupDir: vaultDir,
       archivePath,
-      paths: items.map((i) => i.path)
+      paths: validPaths,
+      sourcePaths: validPaths,
+      compression: "zstd"
     },
     hostOverride
   );
 
+  if (!res.ok) {
+    return {
+      ok: false,
+      archivePath: "",
+      backedUpCount: 0,
+      sizeBytes: 0,
+      message: res.error || res.message || "创建配置备份归档失败"
+    };
+  }
+
+  const resolvedArchivePath = String(
+    res.data?.archivePath ?? res.data?.backupPath ?? archivePath
+  );
+  const realArchiveSize =
+    Number(res.data?.sizeBytes ?? res.data?.size ?? 0) ||
+    (await getRealFileSize(resolvedArchivePath, hostOverride)) ||
+    items.reduce((s, i) => s + i.sizeBytes, 0);
+
   return {
     ok: true,
-    archivePath,
+    archivePath: resolvedArchivePath,
     backedUpCount: items.length,
-    message: `已成功打包 ${items.length} 项关键配置并生成快照归档: ${archivePath}`
+    sizeBytes: realArchiveSize,
+    message: `已成功打包 ${items.length} 项关键配置并生成快照归档: ${resolvedArchivePath} (${formatBytes(realArchiveSize)})`
   };
 }
 
 export async function restoreBackupSnapshot(
   archivePath: string,
+  targetDirOrHost?: any,
   hostOverride?: any
 ): Promise<{ ok: boolean; message: string }> {
-  if (!archivePath || FORBIDDEN_TARGET_PATTERN.test(archivePath)) {
+  const trimmed = String(archivePath || "").trim();
+  const targetDir = typeof targetDirOrHost === "string" ? targetDirOrHost.trim() : undefined;
+  const resolvedHost = typeof targetDirOrHost === "string" ? hostOverride : (hostOverride ?? targetDirOrHost);
+  if (!trimmed || FORBIDDEN_TARGET_PATTERN.test(trimmed)) {
     return { ok: false, message: FORBIDDEN_REASON };
   }
-  await invokeHostCapability("backup.restoreSnapshotArchive", { archivePath }, hostOverride);
+  if (targetDir && FORBIDDEN_TARGET_PATTERN.test(targetDir)) {
+    return { ok: false, message: FORBIDDEN_REASON };
+  }
+  const res = await invokeHostCapability(
+    "backup.restoreSnapshotArchive",
+    {
+      archivePath: trimmed,
+      backupPath: trimmed,
+      ...(targetDir ? { targetDir } : {})
+    },
+    resolvedHost
+  );
+  if (!res.ok) {
+    return {
+      ok: false,
+      message: res.error || res.message || `从归档快照 ${trimmed} 还原配置失败`
+    };
+  }
   return {
     ok: true,
-    message: `已从归档快照 ${archivePath} 原子还原所选配置文件`
+    message: `已从归档快照 ${trimmed} 原子还原所选配置文件`
   };
 }
 
-export async function openBackupConfigLocation(targetPath: string): Promise<boolean> {
+export async function openBackupConfigLocation(targetPath: string, hostBridge?: any): Promise<boolean> {
   if (!targetPath || targetPath.startsWith("HKCU")) return false;
-  const shown = await showRealItemInFolder(targetPath);
+  const shown = await showRealItemInFolder(targetPath, hostBridge);
   if (shown) return true;
-  return openRealPath(targetPath);
+  return openRealPath(targetPath, hostBridge);
 }

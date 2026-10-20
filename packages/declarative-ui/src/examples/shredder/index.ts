@@ -9,6 +9,7 @@
  */
 
 import { Action, ActionPanel, Icon, List, useEffect, useState } from "../../index.js";
+import { isRealElectronHost } from "../shared/native-ipc.js";
 import {
   SHRED_CATEGORIES,
   SHRED_STANDARDS,
@@ -24,15 +25,23 @@ import {
 } from "./logic.js";
 
 export function ShredderCommand() {
-  const [snapshot, setSnapshot] = useState<ShredderSnapshot>(() =>
-    createInitialShredderSnapshot()
-  );
+  const [snapshot, setSnapshot] = useState<ShredderSnapshot>(() => {
+    const init = createInitialShredderSnapshot();
+    if (isRealElectronHost()) {
+      return {
+        ...init,
+        candidates: [],
+        totalShreddableBytes: 0,
+        updatedAt: "正在扫描本机临时文件..."
+      };
+    }
+    return init;
+  });
   const [selectedCategory, setSelectedCategory] = useState<ShredCategory>("all");
   const [standardId, setStandardId] = useState<ShredStandardId>("dod_3pass");
-  const [checkedIds, setCheckedIds] = useState<string[]>([
-    "shred_temp_01",
-    "shred_temp_02"
-  ]);
+  const [checkedIds, setCheckedIds] = useState<string[]>(() =>
+    isRealElectronHost() ? [] : ["shred_temp_01", "shred_temp_02"]
+  );
   const [searchText, setSearchText] = useState<string>("");
   const [statusBanner, setStatusBanner] = useState<string>("");
   const [isLoading, setIsLoading] = useState<boolean>(false);
@@ -42,6 +51,9 @@ export function ShredderCommand() {
     try {
       const data = await fetchShredCandidates();
       setSnapshot(data);
+      if (isRealElectronHost()) {
+        setCheckedIds(data.candidates.filter((c) => !c.isSystemLocked).slice(0, 5).map((c) => c.id));
+      }
       setStatusBanner(
         `已扫描待销毁候选区 · 共 ${data.candidates.filter((c) => !c.isSystemLocked).length} 个可粉碎文件 (${formatBytes(data.totalShreddableBytes)})`
       );
@@ -250,70 +262,8 @@ export function ShredderCommand() {
         })
       )
     }),
-    metricGrid: {
-      columns: 4,
-      items: [
-        {
-          id: "shred-metric-std",
-          label: "当前覆写销毁标准",
-          value: currentStandard.badge,
-          subValue: currentStandard.name
-        },
-        {
-          id: "shred-metric-size",
-          label: "已勾选待粉碎体积",
-          value: formatBytes(selectedBytes),
-          subValue: `共勾选 ${selectedSafeItems.length} 个文件`
-        },
-        {
-          id: "shred-metric-mft",
-          label: "MFT 元数据擦除",
-          value: "自动重命名截断",
-          subValue: "消除文件名与大小扇区痕迹"
-        },
-        {
-          id: "shred-metric-lock",
-          label: "系统核心文件保护",
-          value: "强制锁定",
-          subValue: "禁止勾选 C:\\Windows 内核文件"
-        }
-      ]
-    },
-    distributionBar: {
-      title: "待粉碎候选区域体积分布",
-      totalLabel: formatBytes(snapshot.totalShreddableBytes),
-      segments: SHRED_CATEGORIES.map((cat) => {
-        const sum = snapshot.candidates
-          .filter((i) => i.category === cat.id)
-          .reduce((s, i) => s + i.sizeBytes, 0);
-        return {
-          id: cat.id,
-          label: `${cat.name} (${formatBytes(sum)})`,
-          value: Math.max(1, sum),
-          color: "var(--rc-text-muted)"
-        };
-      })
-    },
     filterBar: {
       summaryText,
-      wizardSteps: [
-        { step: 1, label: `1. 选择覆写标准 (${currentStandard.badge})`, status: "done" },
-        { step: 2, label: "2. 筛选待销毁文件区域", status: "done" },
-        { step: 3, label: `3. 勾选待销毁敏感文件 (${selectedSafeItems.length} 项)`, status: "active" },
-        { step: 4, label: "4. 按 Enter 二次确认并彻底覆写粉碎", status: "pending" }
-      ],
-      groups: [
-        {
-          id: "shred-cat-group",
-          label: "候选区域",
-          value: selectedCategory,
-          options: [
-            { title: "全部候选区", value: "all" },
-            ...SHRED_CATEGORIES.map((c) => ({ title: c.name, value: c.id }))
-          ],
-          onChange: (val) => setSelectedCategory(val as ShredCategory)
-        }
-      ],
       actions: [
         {
           id: "rescan",

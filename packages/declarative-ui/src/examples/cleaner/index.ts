@@ -36,9 +36,23 @@ export default function CleanerCommand() {
   const [viewMode, setViewMode] = useState<'groups' | 'files' | 'system' | 'browser' | 'app'>('groups')
   const [classIdFilter, setClassIdFilter] = useState<number>(0)
   const [riskFilter, setRiskFilter] = useState<string>('all')
-  const [groups, setGroups] = useState<CleanGroupItem[]>(() => getMockCleanGroups())
+  const [groups, setGroups] = useState<CleanGroupItem[]>(() =>
+    inRealHost ? [] : getMockCleanGroups()
+  )
   const [checkedFilePaths, setCheckedFilePaths] = useState<string[]>([])
-  const [summary, setSummary] = useState<CleanSummaryData>(() => getMockCleanSummary())
+  const [summary, setSummary] = useState<CleanSummaryData>(() =>
+    inRealHost
+      ? {
+          totalSizeBytes: 0,
+          checkedSizeBytes: 0,
+          totalFileCount: 0,
+          checkedFileCount: 0,
+          diskFreeSizeBytes: 0,
+          diskTotalSizeBytes: 0,
+          recycleBinSizeBytes: 0
+        }
+      : getMockCleanSummary()
+  )
   const [isLoading, setIsLoading] = useState(inRealHost)
 
   function updateSummary(currentGroups: CleanGroupItem[], baseSummary = summary): CleanSummaryData {
@@ -77,7 +91,7 @@ export default function CleanerCommand() {
 
     try {
       const res = await fetchCleanRulesAndScan()
-      if (res.groups.length > 0 || !inRealHost) {
+      if (isRealElectronHost() || res.groups.length > 0 || !inRealHost) {
         setGroups(res.groups)
         setSummary(res.summary)
         const defaultCheckedFiles: string[] = []
@@ -312,80 +326,165 @@ ${sampleTable}
     }
   }).filter(s => s.valueBytes > 0)
 
-  const maxGroupBytes = Math.max(1, filtered[0]?.totalSizeBytes || 1)
-  const rightSubListItems = filtered.map(item => {
-    const volRatio = Math.max(10, Math.min(100, Math.round((item.totalSizeBytes / maxGroupBytes) * 100)))
-    const riskLabel =
-      item.riskLevel === 'safe'
-        ? '安全缓存'
-        : item.riskLevel === 'caution'
-        ? '谨慎核对'
-        : '推荐清理'
-    const firstPath = item.sampleFiles[0]?.path || item.pathHint.split(/[;,]/)[0]?.trim() || 'C:\\Windows\\Temp'
-
-    return List.Item({
-      id: item.id,
-      title: item.name,
-      subtitle: `${item.className} · ${item.fileCount.toLocaleString()} 个文件 · ${item.pathHint}`,
-      checkable: !item.isProtected,
-      checked: item.checked,
-      onCheckChange: c => toggleGroupCheck(item.id, c),
-      onToggleCheck: c => toggleGroupCheck(item.id, c),
-      icon: {
-        source: item.isProtected ? Icon.Lock : Icon.Trash
-      },
-      accessories: [
-        { progress: { value: volRatio } },
-        { tag: { value: riskLabel } },
-        { text: formatBytes(item.totalSizeBytes) }
-      ],
-      detail: List.Item.Detail({
-        markdown: renderDetailMarkdown(item)
-      }),
-      actions: ActionPanel({
-        title: item.name,
-        children: [
-          Action({
-            title: `清理已勾选垃圾 (${formatBytes(summary.checkedSizeBytes)})`,
-            icon: Icon.Trash,
-            style: Action.Style.Destructive,
-            onAction: () => handleCleanSelected()
-          }),
-          Action({
-            title: '在资源管理器定位',
-            icon: Icon.Folder,
-            onAction: () => {
-              showRealItemInFolder(firstPath)
-            }
-          }),
-          Action({
-            title: item.checked ? '取消勾选此项' : '勾选纳入清理队列',
-            icon: Icon.Checkmark,
-            onAction: () => toggleGroupCheck(item.id, !item.checked)
-          }),
-          Action({
-            title: '一键清空系统回收站',
-            icon: Icon.Trash,
-            onAction: () => handleEmptyRecycleBin()
-          }),
-          Action.CopyToClipboard({
-            title: '复制清理路径',
-            content: item.pathHint
-          })
-        ]
-      })
+  function toggleSampleFileCheck(filePath: string, nextChecked?: boolean) {
+    setCheckedFilePaths(prev => {
+      const set = new Set(prev)
+      const shouldCheck = nextChecked !== undefined ? nextChecked : !set.has(filePath)
+      if (shouldCheck) set.add(filePath)
+      else set.delete(filePath)
+      return Array.from(set)
     })
-  })
+  }
+
+  const maxGroupBytes = Math.max(1, filtered[0]?.totalSizeBytes || 1)
+  const maxSampleFileBytes = Math.max(1, allSampleFiles[0]?.sizeBytes || 1)
+  const checkedFileSet = new Set(checkedFilePaths)
+
+  const rightSubListItems =
+    viewMode === 'files'
+      ? allSampleFiles.map((file, idx) => {
+          const fileName = file.path.split(/[\\/]/).pop() || file.path
+          const volRatio = Math.max(
+            8,
+            Math.min(100, Math.round((file.sizeBytes / maxSampleFileBytes) * 100))
+          )
+          const isChecked = checkedFileSet.has(file.path)
+          return List.Item({
+            id: `sample-file-${idx}-${file.path}`,
+            title: fileName,
+            subtitle: `${file.groupName} · ${file.path}`,
+            checkable: true,
+            checked: isChecked,
+            onCheckChange: c => toggleSampleFileCheck(file.path, c),
+            onToggleCheck: c => toggleSampleFileCheck(file.path, c),
+            icon: { source: Icon.Document },
+            accessories: [
+              { progress: { value: volRatio } },
+              { tag: { value: file.className } },
+              { text: formatBytes(file.sizeBytes) }
+            ],
+            actions: ActionPanel({
+              title: fileName,
+              children: [
+                Action({
+                  title: `清理已勾选垃圾文件 (${checkedFilePaths.length} 项)`,
+                  icon: Icon.Trash,
+                  style: Action.Style.Destructive,
+                  onAction: () => handleCleanSelected()
+                }),
+                Action({
+                  title: '在资源管理器定位',
+                  icon: Icon.Folder,
+                  onAction: () => {
+                    showRealItemInFolder(file.path)
+                  }
+                }),
+                Action({
+                  title: isChecked ? '取消勾选此文件' : '勾选纳入清理队列',
+                  icon: Icon.Checkmark,
+                  onAction: () => toggleSampleFileCheck(file.path, !isChecked)
+                }),
+                Action.CopyToClipboard({
+                  title: '复制文件完整路径',
+                  content: file.path
+                })
+              ]
+            })
+          })
+        })
+      : filtered.map(item => {
+          const volRatio = Math.max(
+            10,
+            Math.min(100, Math.round((item.totalSizeBytes / maxGroupBytes) * 100))
+          )
+          const riskLabel =
+            item.riskLevel === 'safe'
+              ? '安全缓存'
+              : item.riskLevel === 'caution'
+              ? '谨慎核对'
+              : '推荐清理'
+          const firstPath =
+            item.sampleFiles[0]?.path ||
+            item.pathHint.split(/[;,]/)[0]?.trim() ||
+            'C:\\Windows\\Temp'
+
+          return List.Item({
+            id: item.id,
+            title: item.name,
+            subtitle: `${item.className} · ${item.fileCount.toLocaleString()} 个文件 · ${item.pathHint}`,
+            checkable: !item.isProtected,
+            checked: item.checked,
+            onCheckChange: c => toggleGroupCheck(item.id, c),
+            onToggleCheck: c => toggleGroupCheck(item.id, c),
+            icon: {
+              source: item.isProtected ? Icon.Lock : Icon.Trash
+            },
+            accessories: [
+              { progress: { value: volRatio } },
+              { tag: { value: riskLabel } },
+              { text: formatBytes(item.totalSizeBytes) }
+            ],
+            detail: List.Item.Detail({
+              markdown: renderDetailMarkdown(item)
+            }),
+            actions: ActionPanel({
+              title: item.name,
+              children: [
+                Action({
+                  title: `清理已勾选垃圾 (${formatBytes(summary.checkedSizeBytes)})`,
+                  icon: Icon.Trash,
+                  style: Action.Style.Destructive,
+                  onAction: () => handleCleanSelected()
+                }),
+                Action({
+                  title: '在资源管理器定位',
+                  icon: Icon.Folder,
+                  onAction: () => {
+                    showRealItemInFolder(firstPath)
+                  }
+                }),
+                Action({
+                  title: item.checked ? '取消勾选此项' : '勾选纳入清理队列',
+                  icon: Icon.Checkmark,
+                  onAction: () => toggleGroupCheck(item.id, !item.checked)
+                }),
+                Action({
+                  title: '切换至样本大文件明细逐项勾选',
+                  icon: Icon.Document,
+                  onAction: () => setViewMode('files')
+                }),
+                Action({
+                  title: '一键清空系统回收站',
+                  icon: Icon.Trash,
+                  onAction: () => handleEmptyRecycleBin()
+                }),
+                Action.CopyToClipboard({
+                  title: '复制清理路径',
+                  content: item.pathHint
+                })
+              ]
+            })
+          })
+        })
 
   const activeClassMeta = CLEAN_CLASSES.find(c => c.classId === classIdFilter)
-  const rightTitle = activeClassMeta
-    ? `${activeClassMeta.name} 清理规则明细 (按体积降序，直接勾选或按 ↵ 执行)`
-    : '全部系统垃圾清理规则与采样明细 (按体积降序，直接勾选或按 ↵ 执行)'
+  const rightTitle =
+    viewMode === 'files'
+      ? '样本大文件明细 (按体积降序，直接勾选或按 ↵ 移入回收站)'
+      : activeClassMeta
+      ? `${activeClassMeta.name} 清理规则明细 (按体积降序，直接勾选或按 ↵ 执行)`
+      : '全部系统垃圾清理规则与采样明细 (按体积降序，直接勾选或按 ↵ 执行)'
 
   const checkedInFiltered = filtered.filter(g => g.checked)
   const selectedFilteredBytes = checkedInFiltered.reduce((acc, g) => acc + g.totalSizeBytes, 0)
   const allFilteredChecked = filtered.length > 0 && checkedInFiltered.length === filtered.length
   const someFilteredChecked = checkedInFiltered.length > 0 && !allFilteredChecked
+
+  const checkedSampleInScope = allSampleFiles.filter(f => checkedFileSet.has(f.path))
+  const selectedSampleBytes = checkedSampleInScope.reduce((acc, f) => acc + f.sizeBytes, 0)
+  const allSampleChecked =
+    allSampleFiles.length > 0 && checkedSampleInScope.length === allSampleFiles.length
+  const someSampleChecked = checkedSampleInScope.length > 0 && !allSampleChecked
 
   return List({
     searchBarPlaceholder: '搜索 6 大类垃圾清理规则、路径、浏览器缓存或样本文件...',
@@ -412,96 +511,8 @@ ${sampleTable}
         })
       ]
     }),
-    metricGrid: MetricGrid({
-      columns: 4,
-      items: [
-        {
-          id: 'metric-clean-space',
-          label: '已勾选待释放空间',
-          value: formatBytes(summary.checkedSizeBytes),
-          subValue: `已选 ${checkedGroupsCount}/${groups.length} 组规则`,
-          progress:
-            summary.totalSizeBytes > 0
-              ? Math.round((summary.checkedSizeBytes / summary.totalSizeBytes) * 100)
-              : 0,
-          status: summary.checkedSizeBytes > 1024 * 1024 * 1024 ? 'warning' : 'success'
-        },
-        {
-          id: 'metric-junk-files',
-          label: '本机扫描垃圾总量',
-          value: formatBytes(summary.totalSizeBytes),
-          subValue: `共 ${summary.totalFileCount.toLocaleString()} 个文件`,
-          status: 'normal'
-        },
-        {
-          id: 'metric-disk-free',
-          label: '系统盘 (C:) 可用空间',
-          value: formatBytes(summary.diskFreeSizeBytes),
-          subValue: `总容量 ${formatBytes(summary.diskTotalSizeBytes)}`,
-          status: summary.diskFreeSizeBytes < 25 * 1024 * 1024 * 1024 ? 'warning' : 'normal'
-        },
-        {
-          id: 'metric-sample-files',
-          label: '可检视大文件样本',
-          value: `${allSampleFiles.length} 个`,
-          subValue: '支持逐项勾选清理',
-          status: 'normal'
-        }
-      ]
-    }),
-    distributionBar: DistributionBar({
-      title: '6 大官方 CleanClass 垃圾空间分布',
-      totalLabel: `扫描总量 ${formatBytes(summary.totalSizeBytes)}`,
-      segments: classSegments,
-      onSegmentClick: id => {
-        const numId = Number(id)
-        setClassIdFilter(classIdFilter === numId ? 0 : numId)
-      }
-    }),
     filterBar: FilterBar({
-      wizardSteps: [
-        { step: 1, label: '1. 加载 6 大类 CleanClass 规则', status: 'done' },
-        { step: 2, label: '2. 穿透扫描真实缓存目录', status: 'done' },
-        { step: 3, label: '3. 三级复选框安全核对', status: 'active' },
-        { step: 4, label: '4. 一键释放磁盘空间', status: 'pending' }
-      ],
       summaryText: `共发现 ${formatBytes(summary.totalSizeBytes)} 系统垃圾 · 已勾选 ${checkedGroupsCount} 组规则 (${formatBytes(summary.checkedSizeBytes)}) · C盘可用 ${formatBytes(summary.diskFreeSizeBytes)}`,
-      groups: [
-        {
-          id: 'clean-class',
-          label: '垃圾分类',
-          value: String(classIdFilter),
-          onChange: v => setClassIdFilter(Number(v)),
-          options: [
-            { value: '0', label: '全部 6 大分类', badge: groups.length },
-            ...CLEAN_CLASSES.map(c => ({
-              value: String(c.classId),
-              label: c.shortName,
-              badge: groups.filter(g => g.classId === c.classId).length
-            })).filter(o => (o.badge as number) > 0)
-          ]
-        },
-        {
-          id: 'risk-level',
-          label: '安全等级',
-          value: riskFilter,
-          onChange: v => setRiskFilter(v),
-          options: [
-            { value: 'all', label: '全部等级' },
-            { value: 'safe', label: '安全缓存', badge: groups.filter(g => g.riskLevel === 'safe').length },
-            {
-              value: 'recommended',
-              label: '推荐深度清理',
-              badge: groups.filter(g => g.riskLevel === 'recommended').length
-            },
-            {
-              value: 'caution',
-              label: '谨慎核对项',
-              badge: groups.filter(g => g.riskLevel === 'caution').length
-            }
-          ]
-        }
-      ],
       actions: [
         {
           id: 'rescan',
@@ -512,24 +523,36 @@ ${sampleTable}
         }
       ]
     }),
-    segmentedControl: SegmentedControl({
-      value: viewMode,
-      onChange: v => setViewMode(v as any),
-      options: [
-        { value: 'groups', label: '规则分类总览', badge: groups.length },
-        { value: 'files', label: '样本大文件明细', badge: allSampleFiles.length },
-        { value: 'system', label: '系统与崩溃缓存', badge: groups.filter(g => g.category === 'system').length },
-        { value: 'browser', label: '浏览器网页缓存', badge: groups.filter(g => g.category === 'browser').length },
-        { value: 'app', label: '开发与办公软件', badge: groups.filter(g => g.category === 'app').length }
-      ]
-    }),
     subList: {
       title: rightTitle,
-      subtitle: `${filtered.length} 项 · 已选 ${checkedInFiltered.length} 项 (${formatBytes(selectedFilteredBytes)})`,
-      checkable: filtered.length > 0,
-      checked: allFilteredChecked ? true : someFilteredChecked ? 'indeterminate' : false,
-      onCheckChange: checked => toggleAllFilteredGroups(filtered, checked),
-      emptyText: '当前分类下暂无匹配的系统垃圾规则',
+      subtitle:
+        viewMode === 'files'
+          ? `${allSampleFiles.length} 项 · 已选 ${checkedSampleInScope.length} 项 (${formatBytes(selectedSampleBytes)})`
+          : `${filtered.length} 项 · 已选 ${checkedInFiltered.length} 项 (${formatBytes(selectedFilteredBytes)})`,
+      checkable: viewMode === 'files' ? allSampleFiles.length > 0 : filtered.length > 0,
+      checked:
+        viewMode === 'files'
+          ? allSampleChecked
+            ? true
+            : someSampleChecked
+            ? 'indeterminate'
+            : false
+          : allFilteredChecked
+          ? true
+          : someFilteredChecked
+          ? 'indeterminate'
+          : false,
+      onCheckChange: checked => {
+        if (viewMode === 'files') {
+          setCheckedFilePaths(checked ? allSampleFiles.map(f => f.path) : [])
+        } else {
+          toggleAllFilteredGroups(filtered, checked)
+        }
+      },
+      emptyText:
+        viewMode === 'files'
+          ? '当前分类下暂无可检视的样本大文件'
+          : '当前分类下暂无匹配的系统垃圾规则',
       items: rightSubListItems
     },
     children: [
@@ -545,6 +568,16 @@ ${sampleTable}
             onSelect: () => {
               setClassIdFilter(0)
               setViewMode('groups')
+            }
+          }),
+          List.Item({
+            id: 'nav-clean-files',
+            title: '样本大文件明细',
+            subtitle: `${allSampleFiles.length} 个采样大文件 · 支持逐项勾选移入回收站`,
+            icon: { source: Icon.Document },
+            accessories: [{ text: `${allSampleFiles.length} 项` }],
+            onSelect: () => {
+              setViewMode('files')
             }
           })
         ]

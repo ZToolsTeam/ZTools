@@ -8,6 +8,7 @@ import {
 import { LocalStorage } from "../../api/storage.js";
 import { getDeclarativeBridge } from "../../api/bridge.js";
 import { showHUD } from "../../api/hud.js";
+import { callHostTransport, isRealElectronHost } from "../shared/native-ipc.js";
 
 export const DEFAULT_WINDOW_PREFERENCES: WindowManagementPreferences = {
   innerGap: 0,
@@ -794,8 +795,19 @@ export async function executeWindowAction(
     curWin?: WindowRect;
     monRect?: WindowRect;
     preferences?: Partial<WindowManagementPreferences>;
+    hostBridge?: any;
+    hostOverride?: any;
   } = {}
 ): Promise<WindowActionResult> {
+  if (typeof actionId !== "string" || !actionId.trim()) {
+    return {
+      success: false,
+      actionId: String(actionId || ""),
+      actionName: "",
+      error: "窗口调度动作标识不能为空"
+    };
+  }
+
   const definition = WINDOW_ACTIONS.find(a => a.id === actionId || ALIASES[actionId] === a.id);
   const actionName = definition ? definition.name : actionId;
 
@@ -838,13 +850,87 @@ export async function executeWindowAction(
 
   currentWindowRectsMap.set(targetWindowId, { ...computedRect });
 
-  // 尝试通过宿主 Bridge 执行
-  const bridge = getDeclarativeBridge();
-  if (bridge?.manageWindow) {
+  const hostBridge = options.hostBridge ?? options.hostOverride;
+  let hostExecuted = false;
+  let hostError = "";
+
+  // 1. 优先尝试注入的 windowManagement.executeAction 或 hostBridge.executeAction
+  const customExec =
+    typeof hostBridge?.executeAction === "function"
+      ? hostBridge.executeAction
+      : typeof (globalThis as any).ztools?.windowManagement?.executeAction === "function"
+      ? (globalThis as any).ztools.windowManagement.executeAction
+      : null;
+
+  if (customExec) {
     try {
-      await bridge.manageWindow(actionId);
-    } catch {
-      // ignore
+      const res = await customExec(actionId, { windowId: targetWindowId, rect: computedRect });
+      if (res && typeof res === "object" && (res.ok === false || res.success === false)) {
+        return {
+          success: false,
+          actionId,
+          actionName,
+          rect: computedRect,
+          monitor: mon,
+          error: String(res.error || res.message || "宿主窗口调度执行失败")
+        };
+      }
+      hostExecuted = true;
+    } catch (err: any) {
+      return {
+        success: false,
+        actionId,
+        actionName,
+        rect: computedRect,
+        monitor: mon,
+        error: err instanceof Error ? err.message : String(err)
+      };
+    }
+  }
+
+  // 2. 通过宿主 IPC window_manage_action 调度真实前台窗口
+  if (!hostExecuted && (hostBridge || isRealElectronHost(hostBridge))) {
+    const ipcRes = await callHostTransport<any>(
+      "window_manage_action",
+      { action: actionId, windowId: targetWindowId, rect: computedRect },
+      hostBridge
+    );
+    if (ipcRes.ok && ipcRes.data?.ok !== false && ipcRes.data?.success !== false) {
+      hostExecuted = true;
+      if (ipcRes.data?.rect && typeof ipcRes.data.rect.width === "number") {
+        computedRect = ipcRes.data.rect;
+      }
+    } else {
+      hostError = ipcRes.error || String(ipcRes.data?.error || ipcRes.data?.message || "宿主窗口句柄移动失败");
+      return {
+        success: false,
+        actionId,
+        actionName,
+        rect: computedRect,
+        monitor: mon,
+        error: hostError
+      };
+    }
+  }
+
+  // 3. 兼容 Declarative Bridge manageWindow
+  if (!hostExecuted) {
+    const bridge = getDeclarativeBridge();
+    if (bridge?.manageWindow) {
+      try {
+        await bridge.manageWindow(actionId);
+      } catch (err: any) {
+        if (isRealElectronHost()) {
+          return {
+            success: false,
+            actionId,
+            actionName,
+            rect: computedRect,
+            monitor: mon,
+            error: err instanceof Error ? err.message : String(err)
+          };
+        }
+      }
     }
   }
 

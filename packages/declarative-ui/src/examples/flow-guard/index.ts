@@ -9,10 +9,7 @@ import {
   useEffect,
   showToast,
   Toast,
-  confirmAlert,
-  MetricGrid,
-  FilterBar,
-  SegmentedControl
+  confirmAlert
 } from '../../index.js'
 import {
   ProcessNetworkGroup,
@@ -24,12 +21,11 @@ import {
 
 export * from './logic.js'
 
-type FlowDropdownFilter = 'all' | 'public' | 'lan' | 'listening' | 'processes'
+type FlowDropdownFilter = 'all' | 'public' | 'lan' | 'listening' | 'processes' | 'tcp' | 'udp'
 
 export default function FlowGuardCommand() {
   const [searchText, setSearchText] = useState('')
   const [dropdownFilter, setDropdownFilter] = useState<FlowDropdownFilter>('all')
-  const [protoFilter, setProtoFilter] = useState<'ALL' | 'TCP' | 'UDP'>('ALL')
   const [focusPid, setFocusPid] = useState<number>(0)
   const [groups, setGroups] = useState<ProcessNetworkGroup[]>([])
   const [totalEndpoints, setTotalEndpoints] = useState(0)
@@ -105,6 +101,7 @@ export default function FlowGuardCommand() {
   }
 
   const q = searchText.trim().toLowerCase()
+  const protoFilter = dropdownFilter === 'tcp' ? 'TCP' : dropdownFilter === 'udp' ? 'UDP' : 'ALL'
   const scopeFilter =
     dropdownFilter === 'public' || dropdownFilter === 'lan' || dropdownFilter === 'listening'
       ? dropdownFilter
@@ -166,63 +163,13 @@ export default function FlowGuardCommand() {
         List.Dropdown.Item({ title: '仅看公网外联 (Public)', value: 'public' }),
         List.Dropdown.Item({ title: '局域网连接 (LAN)', value: 'lan' }),
         List.Dropdown.Item({ title: '本机监听端口 (LISTEN)', value: 'listening' }),
+        List.Dropdown.Item({ title: '仅看 TCP 协议连接 (TCP Only)', value: 'tcp' }),
+        List.Dropdown.Item({ title: '仅看 UDP 协议端点 (UDP Only)', value: 'udp' }),
         List.Dropdown.Item({ title: '按进程聚合视图 (By Process)', value: 'processes' })
       ]
     }),
-    metricGrid: MetricGrid({
-      columns: 4,
-      items: [
-        {
-          id: 'fg-procs',
-          label: '活跃联网进程',
-          value: `${groups.length} 个`,
-          subValue: `总计 ${totalEndpoints} 个活动套接字`,
-          status: 'normal'
-        },
-        {
-          id: 'fg-public',
-          label: '公网外联连接',
-          value: `${totalPublic} 条`,
-          subValue: `ESTABLISHED 总数 ${totalEstablished}`,
-          status: totalPublic > 60 ? 'warning' : 'success'
-        },
-        {
-          id: 'fg-listen',
-          label: '本机监听端口',
-          value: `${totalListening} 个`,
-          subValue: `本机回环 IPC ${totalLoopback} 条`,
-          status: 'normal'
-        },
-        {
-          id: 'fg-udp',
-          label: 'UDP / 局域网端点',
-          value: `${totalUdp} 个 UDP`,
-          subValue: `局域网会话 ${totalLan} 条`,
-          status: 'normal'
-        }
-      ]
-    }),
-    filterBar: FilterBar({
-      wizardSteps: [
-        { step: 1, label: '1. 内核 TCP/UDP 套接字枚举', status: 'done' },
-        { step: 2, label: '2. 进程 PID 与公网 IP 归属映射', status: 'done' },
-        { step: 3, label: '3. 协议/连接域多维过滤', status: 'active' },
-        { step: 4, label: '4. 异常外联阻断管控', status: 'pending' }
-      ],
-      summaryText: `活跃套接字 ${totalEndpoints} 个 · 公网外联 ${totalPublic} 个 · 监听端口 ${totalListening} 个 · 联网进程 ${groups.length} 个`,
-      groups: [
-        {
-          id: 'proto-filter',
-          label: '传输协议',
-          value: protoFilter,
-          onChange: (v) => setProtoFilter(v as any),
-          options: [
-            { value: 'ALL', label: '全部协议', badge: totalEndpoints },
-            { value: 'TCP', label: 'TCP 协议', badge: totalEndpoints - totalUdp },
-            { value: 'UDP', label: 'UDP 协议', badge: totalUdp }
-          ]
-        }
-      ],
+    filterBar: {
+      summaryText: `活跃套接字 ${totalEndpoints} 个 (TCP ${totalEndpoints - totalUdp} / UDP ${totalUdp}) · 公网外联 ${totalPublic} 条 (已建立 ${totalEstablished}) · 监听端口 ${totalListening} 个 · 局域网 ${totalLan} / 回环 ${totalLoopback} · 联网进程 ${groups.length} 个`,
       actions: [
         ...(focusPid > 0
           ? [
@@ -245,15 +192,7 @@ export default function FlowGuardCommand() {
           onAction: () => void refreshConnections(true)
         }
       ]
-    }),
-    segmentedControl: SegmentedControl({
-      value: dropdownFilter === 'processes' ? 'processes' : 'endpoints',
-      onChange: (v) => setDropdownFilter(v === 'processes' ? 'processes' : 'all'),
-      options: [
-        { value: 'endpoints', label: '五元组连接明细', badge: allEndpoints.length },
-        { value: 'processes', label: '按进程聚合视图', badge: filteredGroups.length }
-      ]
-    }),
+    },
     children:
       dropdownFilter === 'processes'
         ? [

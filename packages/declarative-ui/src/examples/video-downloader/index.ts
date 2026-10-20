@@ -9,6 +9,7 @@
  */
 
 import { Action, ActionPanel, Icon, List, useEffect, useState } from "../../index.js";
+import { isRealElectronHost } from "../shared/native-ipc.js";
 import {
   STREAM_PLATFORMS,
   VIDEO_QUALITY_PRESETS,
@@ -26,6 +27,19 @@ import {
 } from "./logic.js";
 
 function createInitialVideoSnapshot(): VideoDownloaderSnapshot {
+  if (isRealElectronHost()) {
+    return {
+      saveDir: "",
+      driveLetter: "C:",
+      driveFreeBytes: 0,
+      clipboardUrl: "",
+      detectedPlatform: STREAM_PLATFORMS[0],
+      videos: [],
+      totalSizeBytes: 0,
+      tierStats: [],
+      updatedAt: "正在扫描本机视频库..."
+    };
+  }
   const defaultVideos: LocalMediaVideoItem[] = [
     {
       id: "vid_init_0",
@@ -123,7 +137,9 @@ export function VideoDownloaderCommand() {
   const [snapshot, setSnapshot] = useState<VideoDownloaderSnapshot>(() => createInitialVideoSnapshot());
   const [selectedPlatform, setSelectedPlatform] = useState<StreamPlatformId>("auto");
   const [selectedQuality, setSelectedQuality] = useState<VideoQualityPresetId>("q_1080p_mp4");
-  const [checkedIds, setCheckedIds] = useState<string[]>(["vid_init_0", "vid_init_1"]);
+  const [checkedIds, setCheckedIds] = useState<string[]>(() =>
+    isRealElectronHost() ? [] : ["vid_init_0", "vid_init_1"]
+  );
   const [searchText, setSearchText] = useState<string>("");
   const [streamInput, setStreamInput] = useState<string>("");
   const [statusBanner, setStatusBanner] = useState<string>("");
@@ -133,14 +149,16 @@ export function VideoDownloaderCommand() {
     setIsLoading(true);
     try {
       const data = await fetchVideoDownloaderSnapshot();
-      if (data.videos.length > 0) {
+      if (isRealElectronHost() || data.videos.length > 0) {
         setSnapshot(data);
         setCheckedIds(data.videos.slice(0, 5).map((v) => v.id));
         if (data.clipboardUrl && !streamInput) {
           setStreamInput(data.clipboardUrl);
         }
         setStatusBanner(
-          `已扫描本地媒体库 · 共 ${data.videos.length} 个视频 (${formatBytes(data.totalSizeBytes)})`
+          data.videos.length > 0
+            ? `已扫描本地媒体库 · 共 ${data.videos.length} 个视频 (${formatBytes(data.totalSizeBytes)})`
+            : `媒体保存目录 ${data.saveDir} · 暂无本地视频 · 盘符剩余可用 ${formatBytes(data.driveFreeBytes)}`
         );
       } else {
         setStatusBanner(
@@ -226,11 +244,14 @@ export function VideoDownloaderCommand() {
     if (targets.length === 0) return;
     setIsLoading(true);
     try {
-      const removedCount = await trashLocalVideoFiles(targets.map((v) => v.path));
+      const res = await trashLocalVideoFiles(
+        targets.map((v) => v.path),
+        targets
+      );
       setStatusBanner(
-        removedCount > 0
-          ? `已将 ${removedCount} 个本地视频移入回收站，释放 ${formatBytes(selectedTotalBytes)}`
-          : "已完成本地视频清理操作"
+        res.deletedCount > 0
+          ? `已将 ${res.deletedCount} 个本地视频移入回收站，释放 ${formatBytes(res.freedBytes)}`
+          : "本地视频清理操作未删除任何文件"
       );
       await reloadVideoSnapshot();
     } finally {
@@ -399,70 +420,8 @@ export function VideoDownloaderCommand() {
         })
       )
     }),
-    metricGrid: {
-      columns: 4,
-      items: [
-        {
-          id: "vid-metric-plat",
-          label: "智能识别流媒体平台",
-          value: detected.platform.name,
-          subValue: detected.url || "复制分享链接或 BV 号后自动识别"
-        },
-        {
-          id: "vid-metric-qual",
-          label: "目标画质与音轨档位",
-          value: currentQuality.badge,
-          subValue: currentQuality.name
-        },
-        {
-          id: "vid-metric-size",
-          label: "本机视频库总体积",
-          value: formatBytes(snapshot.totalSizeBytes),
-          subValue: `共 ${snapshot.videos.length} 个视频文件`
-        },
-        {
-          id: "vid-metric-free",
-          label: `保存盘 (${snapshot.driveLetter}) 剩余可用`,
-          value: formatBytes(snapshot.driveFreeBytes),
-          subValue: snapshot.saveDir
-        }
-      ]
-    },
-    distributionBar: {
-      title: "本地视频库画质层级分布",
-      totalLabel: formatBytes(snapshot.totalSizeBytes),
-      segments: snapshot.tierStats
-        .filter((t) => t.sizeBytes > 0)
-        .map((t) => ({
-          id: t.tier,
-          label: `${t.label} (${formatBytes(t.sizeBytes)})`,
-          value: t.sizeBytes,
-          color: "var(--rc-text-muted)"
-        }))
-    },
     filterBar: {
       summaryText,
-      wizardSteps: [
-        { step: 1, label: `1. 识别平台 (${detected.platform.handlerName})`, status: "done" },
-        { step: 2, label: `2. 选择画质档位 (${currentQuality.badge})`, status: "done" },
-        { step: 3, label: `3. 管理本地视频队列 (${selectedVideos.length} 部)`, status: "active" },
-        { step: 4, label: "4. 按 Enter 解析下载或播放视频", status: "pending" }
-      ],
-      groups: [
-        {
-          id: "platform-filter",
-          label: "解析引擎",
-          value: selectedPlatform,
-          options: [
-            { title: "智能自动识别", value: "auto" },
-            ...STREAM_PLATFORMS.map((p) => ({
-              title: p.name,
-              value: p.id
-            }))
-          ],
-          onChange: (val) => setSelectedPlatform(val as StreamPlatformId)
-        }
-      ],
       actions: [
         {
           id: "rescan",

@@ -1,0 +1,38 @@
+{
+  "id": "timestamp",
+  "name": "时间戳转换",
+  "version": "1.0.0",
+  "description": "秒 / 毫秒时间戳与日期互转，显示本地时间、UTC 与相对时间",
+  "author": "ZTools Team",
+  "entry": "dist/index.js",
+  "icon": "icon.svg",
+  "permissions": [
+    "clipboard"
+  ],
+  "targets": [
+    {
+      "id": "windows-electron-any",
+      "platform": "windows",
+      "runtime": "electron",
+      "arch": "any"
+    },
+    {
+      "id": "macos-electron-any",
+      "platform": "macos",
+      "runtime": "electron",
+      "arch": "any"
+    }
+  ],
+  "nativeComponents": [],
+  "keywords": [
+    "timestamp",
+    "时间戳",
+    "unix",
+    "date",
+    "日期",
+    "时间"
+  ],
+  "category": [
+    "开发工具"
+  ]
+}

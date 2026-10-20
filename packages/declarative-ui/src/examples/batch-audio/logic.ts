@@ -5,10 +5,14 @@
  */
 
 import {
+  formatBytes,
   getRealSystemPath,
+  invokeDllPluginCapability,
   scanRealDirectoryTree,
   showRealItemInFolder
 } from '../shared/native-ipc.js'
+
+export { formatBytes } from '../shared/native-ipc.js'
 
 export interface CapabilityActionItem {
   id: string
@@ -48,7 +52,7 @@ export const FORBIDDEN_REASON = '音频批处理输出路径不可指向系统�
 export const AUDIO_WORKSHOP_MODES: CapabilityActionItem[] = [
   {
     id: 'audio-convert-mp3',
-    title: '① 批量格式转码为 MP3 (320kbps CBR)',
+    title: '01. 批量格式转码为 MP3 (320kbps CBR)',
     subtitle: '全平台高音质兼容模式，完整保留 ID3v2 专辑封面与元数据标签',
     tag: 'MP3 320k',
     method: 'BatchConvertFormat',
@@ -57,7 +61,7 @@ export const AUDIO_WORKSHOP_MODES: CapabilityActionItem[] = [
   },
   {
     id: 'audio-convert-flac',
-    title: '② 批量转码为无损 FLAC (Level 8)',
+    title: '02. 批量转码为无损 FLAC (Level 8)',
     subtitle: '母带级无损音频归档压缩，采样率与位深 100% 原样保持',
     tag: '无损 FLAC',
     method: 'BatchConvertFormat',
@@ -66,7 +70,7 @@ export const AUDIO_WORKSHOP_MODES: CapabilityActionItem[] = [
   },
   {
     id: 'audio-loudnorm',
-    title: '③ EBU R128 广播级响度标准化 (-16 LUFS)',
+    title: '03. EBU R128 广播级响度标准化 (-16 LUFS)',
     subtitle: '自动平衡多首音频响度差异，防止破音失真 (Podcast/流媒体标准)',
     tag: 'R128 响度',
     method: 'BatchLoudnorm',
@@ -75,7 +79,7 @@ export const AUDIO_WORKSHOP_MODES: CapabilityActionItem[] = [
   },
   {
     id: 'audio-gain',
-    title: '④ 固定音量分贝增益放大 (+3.5 dB)',
+    title: '04. 固定音量分贝增益放大 (+3.5 dB)',
     subtitle: '针对录音音量偏小的会议/课程素材统一提升分贝增益',
     tag: '音量增益',
     method: 'BatchAdjustVolume',
@@ -84,7 +88,7 @@ export const AUDIO_WORKSHOP_MODES: CapabilityActionItem[] = [
   },
   {
     id: 'audio-silence',
-    title: '⑤ 首尾静音片段自动检测与切除 (-50dB)',
+    title: '05. 首尾静音片段自动检测与切除 (-50dB)',
     subtitle: '基于 BatchAudioSilenceParser 自动剔除录音首尾空白静音段',
     tag: '切除静音',
     method: 'BatchTrimAudio',
@@ -93,7 +97,7 @@ export const AUDIO_WORKSHOP_MODES: CapabilityActionItem[] = [
   },
   {
     id: 'audio-trim-ends',
-    title: '⑥ 音频去头去尾定时裁剪 (跳过首尾2秒)',
+    title: '06. 音频去头去尾定时裁剪 (跳过首尾2秒)',
     subtitle: '批量去除固定片头播报或片尾版权提示音',
     tag: '去头去尾',
     method: 'BatchTrimDuration',
@@ -102,7 +106,7 @@ export const AUDIO_WORKSHOP_MODES: CapabilityActionItem[] = [
   },
   {
     id: 'audio-fade',
-    title: '⑦ 批量添加柔和淡入淡出过渡 (3秒)',
+    title: '07. 批量添加柔和淡入淡出过渡 (3秒)',
     subtitle: '为背景配乐与铃声添加平滑 afade 首尾过渡曲线',
     tag: '淡入淡出',
     method: 'BatchFadeInOut',
@@ -111,7 +115,7 @@ export const AUDIO_WORKSHOP_MODES: CapabilityActionItem[] = [
   },
   {
     id: 'audio-eq-vocal',
-    title: '⑧ 10 段频率均衡器 (EQ 人声与播客清晰增强)',
+    title: '08. 10 段频率均衡器 (EQ 人声与播客清晰增强)',
     subtitle: '衰减 100Hz 以下低频轰鸣，提升 3kHz 人声清晰度频段',
     tag: 'EQ 均衡器',
     method: 'BatchEqualizer',
@@ -120,7 +124,7 @@ export const AUDIO_WORKSHOP_MODES: CapabilityActionItem[] = [
   },
   {
     id: 'audio-compressor',
-    title: '⑨ 动态范围压缩器 (Compressor 防忽大忽小)',
+    title: '09. 动态范围压缩器 (Compressor 防忽大忽小)',
     subtitle: '压制突发大音量峰值并抬升轻声细语细节',
     tag: '动态压缩',
     method: 'BatchCompressor',
@@ -129,7 +133,7 @@ export const AUDIO_WORKSHOP_MODES: CapabilityActionItem[] = [
   },
   {
     id: 'audio-denoise',
-    title: '⑩ AI 频谱背景降噪 (afftdn 空调/电流底噪消除)',
+    title: '10. AI 频谱背景降噪 (afftdn 空调/电流底噪消除)',
     subtitle: '基于 FFT 频谱滤波消除环境白噪音与麦克风底噪',
     tag: '频谱降噪',
     method: 'BatchDenoise',
@@ -138,7 +142,7 @@ export const AUDIO_WORKSHOP_MODES: CapabilityActionItem[] = [
   },
   {
     id: 'audio-merge',
-    title: '⑪ 多音频轨道无缝拼接合并',
+    title: '11. 多音频轨道无缝拼接合并',
     subtitle: '按勾选顺序自动统一采样率并无缝合并为单一音频文件',
     tag: '无缝合并',
     method: 'BatchMergeAudio',
@@ -147,7 +151,7 @@ export const AUDIO_WORKSHOP_MODES: CapabilityActionItem[] = [
   },
   {
     id: 'audio-id3',
-    title: '⑫ 批量音频 ID3v2 元数据与版权标签写入',
+    title: '12. 批量音频 ID3v2 元数据与版权标签写入',
     subtitle: '统一写入艺术家、专辑名称、年份与发行版权签名',
     tag: 'ID3 标签',
     method: 'BatchWriteMetadata',
@@ -176,15 +180,6 @@ export function filterCapabilityItems(items: CapabilityActionItem[], query: stri
       item.method.toLowerCase().includes(q)
     )
   })
-}
-
-export function formatBytes(bytes: number): string {
-  if (!Number.isFinite(bytes) || bytes <= 0) return '0 B'
-  const units = ['B', 'KB', 'MB', 'GB', 'TB']
-  const k = 1024
-  const idx = Math.min(units.length - 1, Math.max(0, Math.floor(Math.log(bytes) / Math.log(k))))
-  const val = bytes / Math.pow(k, idx)
-  return `${val >= 100 || idx === 0 ? val.toFixed(0) : val.toFixed(1)} ${units[idx]}`
 }
 
 export function validateInvocationPayload(method: string, params: unknown): { valid: boolean; error?: string } {
@@ -220,73 +215,37 @@ export function validateInvocationPayload(method: string, params: unknown): { va
 export async function invokeNativeCapability(
   method: string,
   params: Record<string, unknown>,
-  hostBridge?: { dllplugin?: { call?: (plugin: string, fn: string, payload: unknown) => Promise<unknown> } }
+  hostBridge?: any
 ): Promise<NativeInvocationResult> {
   const check = validateInvocationPayload(method, params)
   if (!check.valid) {
     throw new Error(check.error || '参数校验失败')
   }
-
-  const runtimeHost = hostBridge ?? (typeof (globalThis as any).ztools !== 'undefined' ? (globalThis as any).ztools : undefined)
-  const callFn = runtimeHost?.dllplugin?.call
-
-  if (typeof callFn === 'function') {
-    try {
-      const raw = await callFn(DLL_PLUGIN_NAME, method.trim(), params)
-      let parsed: unknown = raw
-      if (typeof raw === 'string') {
-        try {
-          parsed = JSON.parse(raw)
-        } catch {
-          throw new Error('MALFORMED_DLL_RESPONSE: 原生组件返回了损坏的 JSON 数据')
-        }
-      }
-      if (parsed && typeof parsed === 'object' && 'error' in (parsed as Record<string, unknown>)) {
-        const errMsg = String((parsed as Record<string, unknown>).error || '原生组件返回未知错误')
-        return {
-          ok: false,
-          pluginName: DLL_PLUGIN_NAME,
-          method: method.trim(),
-          error: `DLL_ERROR: ${errMsg}`
-        }
-      }
-      return {
-        ok: true,
-        pluginName: DLL_PLUGIN_NAME,
-        method: method.trim(),
-        data: parsed,
-        fromFallback: false
-      }
-    } catch (err: any) {
-      const message = err instanceof Error ? err.message : String(err)
-      if (message.startsWith('MALFORMED_DLL_RESPONSE:')) {
-        throw err
-      }
-      return {
-        ok: false,
-        pluginName: DLL_PLUGIN_NAME,
-        method: method.trim(),
-        error: `NATIVE_CALL_FAILED: ${message}`
-      }
-    }
-  }
-
+  const res = await invokeDllPluginCapability(DLL_PLUGIN_NAME, method, params, hostBridge)
   return {
-    ok: true,
+    ok: res.ok,
     pluginName: DLL_PLUGIN_NAME,
     method: method.trim(),
-    data: { simulated: true, method: method.trim(), params },
-    fromFallback: true
+    data: res.data ?? undefined,
+    error: res.error,
+    fromFallback: res.fromFallback
   }
 }
 
-const AUDIO_EXT_REGEX = /\.(?:mp3|flac|wav|aac|m4a|ogg|wma|opus|aiff|mp4)$/i
+const AUDIO_EXT_REGEX = /\.(?:mp3|flac|wav|aac|m4a|ogg|wma|opus|aiff)$/i
 
-export async function fetchRealAudioWorkspace(hostOverride?: any): Promise<{
+export type AudioWorkspaceSnapshot = RealAudioFileItem[] & {
   scannedDirs: string[]
   files: RealAudioFileItem[]
+  items: RealAudioFileItem[]
   presets: CapabilityActionItem[]
-}> {
+}
+
+/**
+ * 扫描本机 Music / Downloads / Desktop 目录下的真实音频文件
+ * 严禁回退扫描非音频文件充当音频，严禁在真实宿主下拼接 INITIAL_SAMPLE_AUDIOS
+ */
+export async function fetchRealAudioWorkspace(hostOverride?: any): Promise<AudioWorkspaceSnapshot> {
   const [musicDir, downloadsDir, desktopDir] = await Promise.all([
     getRealSystemPath('music', hostOverride),
     getRealSystemPath('downloads', hostOverride),
@@ -295,17 +254,22 @@ export async function fetchRealAudioWorkspace(hostOverride?: any): Promise<{
 
   const scannedDirs = [musicDir, downloadsDir, desktopDir].filter(Boolean)
   const files: RealAudioFileItem[] = []
+  const seenPaths = new Set<string>()
 
   for (const dir of scannedDirs) {
     const audioScan = await scanRealDirectoryTree(dir, {
       maxDepth: 2,
       maxFiles: 250,
-      collectTopN: 25,
+      collectTopN: 40,
       filterExt: AUDIO_EXT_REGEX,
       hostOverride
     })
     for (const f of audioScan.files) {
       if (f.sizeBytes <= 0) continue
+      if (!AUDIO_EXT_REGEX.test(f.name)) continue
+      const normPath = f.path.toLowerCase()
+      if (seenPaths.has(normPath)) continue
+      seenPaths.add(normPath)
       const dot = f.name.lastIndexOf('.')
       const ext = dot > 0 ? f.name.slice(dot).toLowerCase() : '.mp3'
       files.push({
@@ -319,37 +283,18 @@ export async function fetchRealAudioWorkspace(hostOverride?: any): Promise<{
     }
   }
 
-  if (files.length === 0) {
-    for (const dir of scannedDirs) {
-      const fbScan = await scanRealDirectoryTree(dir, {
-        maxDepth: 1,
-        maxFiles: 40,
-        collectTopN: 12,
-        hostOverride
-      })
-      for (const f of fbScan.files) {
-        if (f.sizeBytes <= 0) continue
-        const dot = f.name.lastIndexOf('.')
-        const ext = dot > 0 ? f.name.slice(dot).toLowerCase() : '.mp3'
-        files.push({
-          id: `aud-fb-${files.length}-${f.path}`,
-          name: f.name,
-          path: f.path,
-          parentDir: dir,
-          extension: ext,
-          sizeBytes: f.sizeBytes
-        })
-      }
-    }
-  }
-
   files.sort((a, b) => b.sizeBytes - a.sizeBytes)
-  return {
+  const presets = getCapabilityItems()
+
+  return Object.assign([...files], {
     scannedDirs,
     files,
-    presets: getCapabilityItems()
-  }
+    items: files,
+    presets
+  })
 }
+
+export const scanLocalAudioQueue = fetchRealAudioWorkspace
 
 export async function openAudioFileLocation(fullPath: string, hostOverride?: any): Promise<boolean> {
   if (!fullPath) return false

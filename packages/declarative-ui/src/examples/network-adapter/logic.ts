@@ -3,7 +3,7 @@
  * 探测以太网 Ethernet、WLAN Wi-Fi、Loopback 回环与虚拟隧道网卡 (VMware / WSL / Clash TUN)
  */
 
-import { callHostTransport, isRealElectronHost } from '../shared/native-ipc.js'
+import { callHostTransport, invokePluginService, isRealElectronHost, invokeDllPluginCapability } from '../shared/native-ipc.js'
 
 export interface CapabilityActionItem {
   id: string
@@ -85,10 +85,10 @@ const FALLBACK_ADAPTERS: NetworkAdapterItem[] = [
     category: 'physical',
     typeLabel: '无线网卡',
     status: 'up',
-    ipv4: '192.168.1.108',
+    ipv4: '10.0.0.2',
     ipv6: 'fe80::4a2b:89ff:fe12:3456',
     netmask: '255.255.255.0',
-    gateway: '192.168.1.1',
+    gateway: '10.0.0.1',
     mac: 'A4-B1-C2-D3-E4-F5',
     dnsServers: ['223.5.5.5', '114.114.114.114'],
     speedMbps: 1201,
@@ -223,63 +223,118 @@ export async function invokeNativeCapability(
   if (!check.valid) {
     throw new Error(check.error || '参数校验失败')
   }
-  const ipcRes = await callHostTransport(
-    'dllplugin_call',
-    { plugin: DLL_PLUGIN_NAME, func: method.trim(), params },
-    hostBridge
-  )
-  if (ipcRes.ok && ipcRes.data) {
-    return { ok: true, pluginName: DLL_PLUGIN_NAME, method: method.trim(), data: ipcRes.data, fromFallback: false }
+  return invokeDllPluginCapability(DLL_PLUGIN_NAME, method.trim(), params, hostBridge)
+}
+
+function parseAdapterSpeedMbps(raw: any): number {
+  if (typeof raw?.speedMbps === 'number' && Number.isFinite(raw.speedMbps) && raw.speedMbps > 0) {
+    return raw.speedMbps
   }
+  if (typeof raw?.linkSpeed === 'string' && raw.linkSpeed.trim()) {
+    const match = raw.linkSpeed.trim().match(/^(\d+(?:\.\d+)?)\s*(gbps|mbps|kbps)?/i)
+    if (match) {
+      const val = parseFloat(match[1])
+      const unit = (match[2] || 'mbps').toLowerCase()
+      if (unit === 'gbps') return Math.round(val * 1000)
+      if (unit === 'kbps') return Math.max(1, Math.round(val / 1000))
+      return Math.round(val)
+    }
+  }
+  if (typeof raw?.linkSpeed === 'number' && Number.isFinite(raw.linkSpeed) && raw.linkSpeed > 0) {
+    return raw.linkSpeed
+  }
+  return 1000
+}
+
+function parseAdapterDnsServers(raw: any): string[] {
+  if (Array.isArray(raw?.dnsServers)) {
+    return raw.dnsServers.map(String).map((s: string) => s.trim()).filter(Boolean)
+  }
+  if (Array.isArray(raw?.dns)) {
+    return raw.dns.map(String).map((s: string) => s.trim()).filter(Boolean)
+  }
+  if (typeof raw?.dns === 'string' && raw.dns.trim()) {
+    return raw.dns
+      .split(/[,;\s]+/)
+      .map((s: string) => s.trim())
+      .filter(Boolean)
+  }
+  return []
+}
+
+function mapRawAdapter(raw: any, i: number): NetworkAdapterItem {
+  const nameStr = String(raw.name || `Interface #${i + 1}`)
+  const isLoopback = Boolean(raw.internal || raw.ipv4 === '127.0.0.1' || raw.category === 'loopback')
+  const isVirtual = Boolean(
+    raw.category === 'virtual' || /vethernet|vmware|virtual|wsl|tun|tap|clash|meta/i.test(nameStr)
+  )
+  const statusStr = String(raw.status || '').toLowerCase()
+  const isDown =
+    statusStr.includes('down') ||
+    statusStr.includes('disconnected') ||
+    statusStr.includes('disabled') ||
+    statusStr.includes('offline')
+
   return {
-    ok: true,
-    pluginName: DLL_PLUGIN_NAME,
-    method: method.trim(),
-    data: { simulated: true, method: method.trim(), params },
-    fromFallback: true
+    id: String(raw.id || `nic-${i}`),
+    name: nameStr,
+    description: String(raw.description || raw.name || 'Network Interface'),
+    category: isLoopback ? 'loopback' : isVirtual ? 'virtual' : 'physical',
+    typeLabel: String(
+      raw.typeLabel ||
+        (isLoopback
+          ? '本机回环'
+          : isVirtual
+          ? '虚拟网卡'
+          : /wi-?fi|wlan/i.test(nameStr)
+          ? '无线网卡'
+          : '物理以太网')
+    ),
+    status: isDown ? 'down' : 'up',
+    ipv4: String(raw.ipv4 || raw.address || ''),
+    ipv6: String(raw.ipv6 || ''),
+    netmask: String(raw.netmask || '255.255.255.0'),
+    gateway: String(raw.gateway || ''),
+    mac: String(raw.mac || '00-00-00-00-00-00').toUpperCase(),
+    dnsServers: parseAdapterDnsServers(raw),
+    speedMbps: parseAdapterSpeedMbps(raw),
+    mtu: Number(raw.mtu || 1500),
+    dhcpEnabled: Boolean(raw.dhcpEnabled ?? true)
   }
 }
 
 export async function fetchNetworkAdapters(hostOverride?: any): Promise<NetworkAdapterSnapshot> {
+  const realHost = isRealElectronHost(hostOverride) || Boolean(hostOverride)
   let adapters: NetworkAdapterItem[] = []
+  let resolvedFromHost = false
 
-  // 1. 优先尝试宿主 IPC system_get_network_interfaces 或 shell_exec
-  if (hostOverride || isRealElectronHost(hostOverride)) {
-    const netRes = await callHostTransport<any>('system_get_network_interfaces', {}, hostOverride)
-    if (netRes.ok && Array.isArray(netRes.data) && netRes.data.length > 0) {
-      adapters = netRes.data.map((raw: any, i: number) => ({
-        id: String(raw.id || `nic-${i}`),
-        name: String(raw.name || `Interface #${i + 1}`),
-        description: String(raw.description || raw.name || 'Network Interface'),
-        category:
-          raw.internal || raw.ipv4 === '127.0.0.1'
-            ? 'loopback'
-            : /vethernet|vmware|virtual|wsl|tun|tap|clash|meta/i.test(String(raw.name || ''))
-            ? 'virtual'
-            : 'physical',
-        typeLabel:
-          raw.internal || raw.ipv4 === '127.0.0.1'
-            ? '本机回环'
-            : /vethernet|vmware|virtual|wsl|tun|tap|clash|meta/i.test(String(raw.name || ''))
-            ? '虚拟网卡'
-            : /wi-?fi|wlan/i.test(String(raw.name || ''))
-            ? '无线网卡'
-            : '物理以太网',
-        status: raw.status === 'down' ? 'down' : 'up',
-        ipv4: String(raw.ipv4 || raw.address || ''),
-        ipv6: String(raw.ipv6 || ''),
-        netmask: String(raw.netmask || '255.255.255.0'),
-        gateway: String(raw.gateway || ''),
-        mac: String(raw.mac || '00-00-00-00-00-00').toUpperCase(),
-        dnsServers: Array.isArray(raw.dnsServers) ? raw.dnsServers.map(String) : ['223.5.5.5'],
-        speedMbps: Number(raw.speedMbps || 1000),
-        mtu: Number(raw.mtu || 1500),
-        dhcpEnabled: Boolean(raw.dhcpEnabled ?? true)
-      }))
+  if (realHost) {
+    // 1. 优先调用 NetworkAdapterPlugin.getAdapters (聚合 os.networkInterfaces + Get-NetIPConfiguration)
+    const pluginRes = await invokePluginService<any>(DLL_PLUGIN_NAME, 'getAdapters', {}, hostOverride)
+    if (pluginRes.ok && pluginRes.data) {
+      const rawList = Array.isArray(pluginRes.data)
+        ? pluginRes.data
+        : Array.isArray(pluginRes.data.adapters)
+        ? pluginRes.data.adapters
+        : null
+      if (rawList) {
+        adapters = rawList.map(mapRawAdapter)
+        resolvedFromHost = true
+      }
+    }
+
+    // 2. 回退尝试 system_get_network_interfaces
+    if (!resolvedFromHost) {
+      const netRes = await callHostTransport<any>('system_get_network_interfaces', {}, hostOverride)
+      if (netRes.ok && Array.isArray(netRes.data)) {
+        adapters = netRes.data.map(mapRawAdapter)
+        resolvedFromHost = true
+      }
     }
   }
 
-  if (adapters.length === 0) {
+  // 仅在非真实 Electron 宿主且宿主未返回结果时使用离线预览数据
+  if (!resolvedFromHost && !isRealElectronHost(hostOverride)) {
     adapters = FALLBACK_ADAPTERS.map((a) => ({ ...a, dnsServers: [...a.dnsServers] }))
   }
 
@@ -294,24 +349,102 @@ export async function fetchNetworkAdapters(hostOverride?: any): Promise<NetworkA
     physicalCount,
     virtualCount,
     primaryIpv4: primary?.ipv4 || '127.0.0.1',
-    primaryGateway: primary?.gateway || '192.168.1.1',
-    primaryDns: primary?.dnsServers?.[0] || '223.5.5.5'
+    primaryGateway: primary?.gateway || '',
+    primaryDns: primary?.dnsServers?.[0] || ''
   }
 }
 
-export async function flushDnsCache(hostOverride?: any): Promise<{ ok: boolean; message: string }> {
+const IPV4_REGEX = /^(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)(?:\.(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)){3}$/
+
+export async function applyDnsPreset(
+  adapterIdOrName: string,
+  primaryDns: string,
+  secondaryDns?: string,
+  hostOverride?: any
+): Promise<{ ok: boolean; adapterId: string; dnsServers: string[]; message: string }> {
+  const name = typeof adapterIdOrName === 'string' ? adapterIdOrName.trim() : ''
+  const pDns = typeof primaryDns === 'string' ? primaryDns.trim() : ''
+  const sDns = typeof secondaryDns === 'string' ? secondaryDns.trim() : ''
+
+  if (!name) {
+    return { ok: false, adapterId: '', dnsServers: [], message: '目标网卡名称或 ID 不能为空' }
+  }
+  const isDhcp = pDns.toLowerCase() === 'dhcp' || pDns.toLowerCase() === 'auto'
+  if (!isDhcp && !IPV4_REGEX.test(pDns)) {
+    return { ok: false, adapterId: name, dnsServers: [], message: `首选 DNS 地址格式不合法: ${pDns}` }
+  }
+  if (!isDhcp && sDns && !IPV4_REGEX.test(sDns)) {
+    return { ok: false, adapterId: name, dnsServers: [], message: `备选 DNS 地址格式不合法: ${sDns}` }
+  }
+
+  const dnsServers = isDhcp ? [] : sDns ? [pDns, sDns] : [pDns]
+
   if (hostOverride || isRealElectronHost(hostOverride)) {
-    const res = await callHostTransport(
+    const res = await invokePluginService<any>(
+      DLL_PLUGIN_NAME,
+      'applyDnsPreset',
+      {
+        adapterId: name,
+        name,
+        primaryDns: isDhcp ? 'dhcp' : pDns,
+        secondaryDns: isDhcp ? '' : sDns,
+        dnsServers
+      },
+      hostOverride
+    )
+    if (res.ok) {
+      return {
+        ok: true,
+        adapterId: name,
+        dnsServers,
+        message: String(
+          res.data?.message ||
+            (isDhcp ? `已将网卡 [${name}] 恢复为 DHCP 自动获取 DNS` : `已将网卡 [${name}] DNS 切换为 ${dnsServers.join(', ')}`)
+        )
+      }
+    }
+    return {
+      ok: false,
+      adapterId: name,
+      dnsServers: [],
+      message: res.error || `切换网卡 [${name}] DNS 失败（需要管理员权限执行 netsh interface ip set dns）`
+    }
+  }
+
+  return {
+    ok: true,
+    adapterId: name,
+    dnsServers,
+    message: isDhcp ? `已恢复 [${name}] 自动 DNS (离线预览)` : `已切换 [${name}] DNS 至 ${dnsServers.join(', ')} (离线预览)`
+  }
+}
+
+export async function flushSystemDnsCache(hostOverride?: any): Promise<{ ok: boolean; message: string }> {
+  if (hostOverride || isRealElectronHost(hostOverride)) {
+    const pluginRes = await invokePluginService<any>(DLL_PLUGIN_NAME, 'flushDns', {}, hostOverride)
+    if (pluginRes.ok) {
+      return {
+        ok: true,
+        message: String(pluginRes.data?.message || '已成功刷新本机 DNS 解析缓存 (ipconfig /flushdns)')
+      }
+    }
+    const shellRes = await callHostTransport(
       'shell_exec',
       { command: 'ipconfig /flushdns' },
       hostOverride
     )
-    if (res.ok) {
+    if (shellRes.ok) {
       return { ok: true, message: '已成功刷新本机 DNS 解析缓存 (ipconfig /flushdns)' }
+    }
+    return {
+      ok: false,
+      message: pluginRes.error || shellRes.error || '刷新 DNS 解析缓存失败'
     }
   }
   return { ok: true, message: '已刷新本机 DNS 解析缓存 (DNS Resolver Cache Flushed)' }
 }
+
+export const flushDnsCache = flushSystemDnsCache
 
 export function copyAdapterInfo(
   adapter: NetworkAdapterItem,

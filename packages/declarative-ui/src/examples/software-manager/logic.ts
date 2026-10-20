@@ -36,49 +36,49 @@ export interface SoftwareSmartCategoryMeta {
 export const SOFTWARE_SMART_CATEGORIES: SoftwareSmartCategoryMeta[] = [
   {
     id: 'dev_geek',
-    name: '💻 开发与极客工具',
+    name: '开发与极客工具',
     shortName: '开发极客',
     color: '#3b82f6',
     description: 'IDE 编辑器、编译器、SDK、Git、容器虚拟化与终端工具'
   },
   {
     id: 'browser_net',
-    name: '🌐 浏览器与社交通讯',
+    name: '浏览器与社交通讯',
     shortName: '浏览社交',
     color: '#10b981',
     description: '现代浏览器、即时通讯 (微信/QQ/钉钉/飞书)、远程控制与下载工具'
   },
   {
     id: 'media_design',
-    name: '🎬 影音娱乐与创意设计',
+    name: '影音娱乐与创意设计',
     shortName: '影音设计',
     color: '#a855f7',
     description: '音视频播放器、流媒体音乐、剪辑转码、3D 建模与平面设计套件'
   },
   {
     id: 'office_doc',
-    name: '📄 办公文档与效率工具',
+    name: '办公文档与效率工具',
     shortName: '办公效率',
     color: '#f59e0b',
     description: 'Office/WPS 办公套件、PDF 阅读处理、笔记知识库与解压缩工具'
   },
   {
     id: 'game_platform',
-    name: '🎮 游戏娱乐与外设平台',
+    name: '游戏娱乐与外设平台',
     shortName: '游戏外设',
     color: '#ec4899',
     description: 'Steam/Epic 游戏发行平台、电竞外设驱动中心与独立游戏客户端'
   },
   {
     id: 'security_driver',
-    name: '🛡️ 系统安全与硬件驱动',
+    name: '系统安全与硬件驱动',
     shortName: '安全驱动',
     color: '#06b6d4',
     description: '显卡/声卡/网卡底层硬件驱动、安全防护软件与主板芯片组组件'
   },
   {
     id: 'runtime_system',
-    name: '📦 运行库与系统组件',
+    name: '运行库与系统组件',
     shortName: '运行库',
     color: '#64748b',
     description: 'Visual C++ Redistributable、.NET Runtime、WebView2 与系统基础框架'
@@ -468,6 +468,45 @@ export async function invokeNativeCapability(
         error: err instanceof Error ? err.message : String(err),
         fromFallback: false
       }
+    }
+  }
+
+  const transportRes = await callHostTransport<any>(
+    'dllplugin_call',
+    { plugin: DLL_PLUGIN_NAME, func: method, params },
+    hostOverride
+  )
+  if (transportRes.ok && transportRes.data !== undefined) {
+    const parsed = transportRes.data
+    if (parsed && typeof parsed === 'object' && 'error' in (parsed as Record<string, unknown>)) {
+      return {
+        ok: false,
+        pluginName: DLL_PLUGIN_NAME,
+        method,
+        error: String((parsed as Record<string, unknown>).error || '原生组件返回未知错误'),
+        fromFallback: false
+      }
+    }
+    return {
+      ok: true,
+      pluginName: DLL_PLUGIN_NAME,
+      method,
+      data: parsed,
+      fromFallback: false
+    }
+  }
+
+  if (
+    isRealElectronHost(hostOverride) ||
+    isRealElectronHost() ||
+    Boolean(hostOverride?.__isRealHost || hostOverride?.invoke || hostOverride?.send)
+  ) {
+    return {
+      ok: false,
+      pluginName: DLL_PLUGIN_NAME,
+      method,
+      error: transportRes.error || 'NATIVE_HOST_UNAVAILABLE: 当前宿主未挂载 SoftwareManagerPlugin 原生组件',
+      fromFallback: false
     }
   }
 

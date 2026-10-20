@@ -1,23 +1,28 @@
 /**
  * 微信专项深度清理业务逻辑与真实环境契约层 (WechatCleaner Logic - 1:1 完整复刻版)
  * 完整对齐 DLLPlugins/wechat-cleaner/src/wechat_rules.h 的 9 大专项清理分类 (owner 107~115)：
- * - 穿透扫描 Documents\xwechat_files、WeChat Files、AppData\Roaming\Tencent\xwechat (含 D:\Local\Roaming\Tencent 符号链接穿透) 与 LocalLow\TENCENT\WeType
+ * - 穿透扫描 Documents\xwechat_files、WeChat Files、AppData\Roaming\Tencent\xwechat (含多盘符自定义存储目录与符号链接穿透) 与 LocalLow\TENCENT\WeType
  * - 严格保护聊天文字数据库 (MSG*.db / MicroMsg.db / db_storage\*.db)
  * - 支持多微信账号 (wxid) 维度与修改时间范围 (全部/7天前/30天前/半年前) 多维过滤及三级复选框联动
  */
 
 import {
   callHostTransport,
+  formatBytes,
   getRealFileSize,
   getRealSystemPath,
+  invokeDllPluginCapability,
   isRealElectronHost,
   listRealDirectoryContents,
+  probeRealDiskDrives,
   scanRealDirectoryTree,
   searchRealIndexedFiles,
   showRealItemInFolder,
   trashRealItem,
   openRealPath
 } from '../shared/native-ipc.js'
+
+export { formatBytes, isRealElectronHost } from '../shared/native-ipc.js'
 
 export interface CapabilityActionItem {
   id: string
@@ -279,15 +284,6 @@ export function filterCapabilityItems(items: CapabilityActionItem[], query: stri
   })
 }
 
-export function formatBytes(bytes: number): string {
-  if (!Number.isFinite(bytes) || bytes <= 0) return '0 B'
-  const units = ['B', 'KB', 'MB', 'GB', 'TB']
-  const k = 1024
-  const idx = Math.min(units.length - 1, Math.max(0, Math.floor(Math.log(bytes) / Math.log(k))))
-  const val = bytes / Math.pow(k, idx)
-  return `${val >= 100 || idx === 0 ? val.toFixed(0) : val.toFixed(1)} ${units[idx]}`
-}
-
 export function formatDateTime(mtimeSeconds: number): string {
   if (!mtimeSeconds || !Number.isFinite(mtimeSeconds) || mtimeSeconds <= 0) return '未知日期'
   const ms = mtimeSeconds > 1e12 ? mtimeSeconds : mtimeSeconds * 1000
@@ -332,63 +328,20 @@ export function validateInvocationPayload(method: string, params: unknown): { va
 export async function invokeNativeCapability(
   method: string,
   params: Record<string, unknown>,
-  hostBridge?: { dllplugin?: { call?: (plugin: string, fn: string, payload: unknown) => Promise<unknown> } }
+  hostBridge?: any
 ): Promise<NativeInvocationResult> {
   const check = validateInvocationPayload(method, params)
   if (!check.valid) {
     throw new Error(check.error || '参数校验失败')
   }
-
-  const runtimeHost = hostBridge ?? (typeof (globalThis as any).ztools !== 'undefined' ? (globalThis as any).ztools : undefined)
-  const callFn = runtimeHost?.dllplugin?.call
-
-  if (typeof callFn === 'function') {
-    try {
-      const raw = await callFn(DLL_PLUGIN_NAME, method.trim(), params)
-      let parsed: unknown = raw
-      if (typeof raw === 'string') {
-        try {
-          parsed = JSON.parse(raw)
-        } catch {
-          throw new Error('MALFORMED_DLL_RESPONSE: 原生组件返回了损坏的 JSON 数据')
-        }
-      }
-      if (parsed && typeof parsed === 'object' && 'error' in (parsed as Record<string, unknown>)) {
-        const errMsg = String((parsed as Record<string, unknown>).error || '原生组件返回未知错误')
-        return {
-          ok: false,
-          pluginName: DLL_PLUGIN_NAME,
-          method: method.trim(),
-          error: `DLL_ERROR: ${errMsg}`
-        }
-      }
-      return {
-        ok: true,
-        pluginName: DLL_PLUGIN_NAME,
-        method: method.trim(),
-        data: parsed,
-        fromFallback: false
-      }
-    } catch (err: any) {
-      const message = err instanceof Error ? err.message : String(err)
-      if (message.startsWith('MALFORMED_DLL_RESPONSE:')) {
-        throw err
-      }
-      return {
-        ok: false,
-        pluginName: DLL_PLUGIN_NAME,
-        method: method.trim(),
-        error: `NATIVE_CALL_FAILED: ${message}`
-      }
-    }
-  }
-
+  const res = await invokeDllPluginCapability(DLL_PLUGIN_NAME, method, params, hostBridge)
   return {
-    ok: true,
+    ok: res.ok,
     pluginName: DLL_PLUGIN_NAME,
     method: method.trim(),
-    data: { simulated: true, method: method.trim(), params },
-    fromFallback: true
+    data: res.data ?? undefined,
+    error: res.error,
+    fromFallback: res.fromFallback
   }
 }
 
@@ -407,7 +360,7 @@ export function classifyWechatFilePath(
   const norm = fullPath.replace(/\//g, '\\')
   const lower = norm.toLowerCase()
 
-  // 1. 识别所属账号 (wxid / liaoguobo_7f67 / 7f67d9ba... / 2055ce7d...)
+  // 1. 识别所属账号 (wxid / 微信号目录)
   let accountId = '公共组件 (Shared)'
   const xwMatch = norm.match(/xwechat_files\\([^\\]+)/i) || norm.match(/WeChat Files\\([^\\]+)/i)
   if (xwMatch && xwMatch[1]) {
@@ -494,7 +447,7 @@ export function classifyWechatFilePath(
  * 探测并深度扫描本机真实微信存储路径、微信号账号、9 大专项分类与聊天数据库保护区
  */
 export async function fetchWechatCleanSnapshot(hostOverride?: any): Promise<WechatScanSnapshot> {
-  const [documentsDir, appDataDir, homeDir, tempDir, diskRes] = await Promise.all([
+  const [documentsDir, appDataDir, homeDir, tempDir, diskRes, mountedDrives] = await Promise.all([
     getRealSystemPath('documents', hostOverride),
     getRealSystemPath('appData', hostOverride),
     getRealSystemPath('home', hostOverride),
@@ -503,25 +456,30 @@ export async function fetchWechatCleanSnapshot(hostOverride?: any): Promise<Wech
       'system_get_disk_usage',
       { drive: 'C:/' },
       hostOverride
-    )
+    ),
+    probeRealDiskDrives(undefined, hostOverride)
   ])
 
   const localAppData = homeDir ? `${homeDir}\\AppData\\Local` : ''
   const localLowAppData = homeDir ? `${homeDir}\\AppData\\LocalLow` : ''
 
-  // 同时覆盖默认路径与 D:\Local\Roaming\Tencent 符号链接真实物理路径
+  // 动态组合系统默认路径与各挂载盘符根目录下的微信数据路径
+  const driveWechatRoots = mountedDrives.flatMap(d => {
+    const letter = d.drive.replace(/[\\/]+$/, '')
+    return [`${letter}\\WeChat Files`, `${letter}\\xwechat_files`]
+  })
+
   const candidateRoots = [
     documentsDir ? `${documentsDir}\\xwechat_files` : '',
     documentsDir ? `${documentsDir}\\WeChat Files` : '',
     appDataDir ? `${appDataDir}\\Tencent\\xwechat` : '',
     appDataDir ? `${appDataDir}\\Tencent\\WeChat` : '',
-    'D:\\Local\\Roaming\\Tencent\\xwechat',
-    'D:\\Local\\Roaming\\Tencent\\WeChat',
+    ...driveWechatRoots,
     localLowAppData ? `${localLowAppData}\\TENCENT\\WeType` : '',
     localAppData ? `${localAppData}\\Tencent\\WeChat` : ''
   ].filter(Boolean)
 
-  // 1. 先探测本机微信号账号目录 (如 liaoguobo_7f67 等)
+  // 1. 先探测本机微信号账号目录
   const detectedAccountSet = new Set<string>()
   if (hostOverride || !isRealElectronHost()) {
     for (const root of candidateRoots.slice(0, 2)) {
@@ -542,7 +500,7 @@ export async function fetchWechatCleanSnapshot(hostOverride?: any): Promise<Wech
   const allFiles: WechatScannedFileEntry[] = []
   const seenPaths = new Set<string>()
 
-  // 映射 D:\Local\Roaming\Tencent 与 C:\Users\...\AppData\Roaming\Tencent 避免符号链接重复计数
+  // 归一化 AppData\Roaming\Tencent 与符号链接路径，避免重复计数
   const canonicalizeWechatKey = (p: string): string => {
     const lower = p.replace(/\//g, '\\').toLowerCase()
     const idx = lower.indexOf('\\tencent\\xwechat\\')
@@ -608,6 +566,7 @@ export async function fetchWechatCleanSnapshot(hostOverride?: any): Promise<Wech
             { dir: `${documentsDir}\\WeChat Files` }
           ]
         : []),
+      ...driveWechatRoots.map(dir => ({ dir })),
       ...(appDataDir
         ? [
             { dir: `${appDataDir}\\Tencent\\xwechat\\radium`, defaultOwner: 107 as WechatOwnerId },
@@ -615,15 +574,6 @@ export async function fetchWechatCleanSnapshot(hostOverride?: any): Promise<Wech
             { dir: `${appDataDir}\\Tencent\\xwechat\\log`, defaultOwner: 113 as WechatOwnerId },
             { dir: `${appDataDir}\\Tencent\\xwechat\\crashinfo`, defaultOwner: 112 as WechatOwnerId },
             { dir: `${appDataDir}\\Tencent\\xwechat\\net`, defaultOwner: 114 as WechatOwnerId }
-          ]
-        : []),
-      ...(!hostOverride
-        ? [
-            { dir: 'D:\\Local\\Roaming\\Tencent\\xwechat\\radium', defaultOwner: 107 as WechatOwnerId },
-            { dir: 'D:\\Local\\Roaming\\Tencent\\xwechat\\xplugin', defaultOwner: 115 as WechatOwnerId },
-            { dir: 'D:\\Local\\Roaming\\Tencent\\xwechat\\log', defaultOwner: 113 as WechatOwnerId },
-            { dir: 'D:\\Local\\Roaming\\Tencent\\xwechat\\crashinfo', defaultOwner: 112 as WechatOwnerId },
-            { dir: 'D:\\Local\\Roaming\\Tencent\\xwechat\\net', defaultOwner: 114 as WechatOwnerId }
           ]
         : []),
       ...(localLowAppData
@@ -798,8 +748,8 @@ export async function fetchWechatCleanSnapshot(hostOverride?: any): Promise<Wech
       accountId,
       label:
         accountId === '公共组件 (Shared)'
-          ? '🌐 微信公共引擎与跨端缓存 (xplugin/log/WMPF)'
-          : `👤 微信号: ${accountId}`,
+          ? '微信公共引擎与跨端缓存 (xplugin/log/WMPF)'
+          : `微信号: ${accountId}`,
       rootDir: stat.rootDir,
       fileCount: stat.fileCount,
       totalBytes: stat.totalBytes

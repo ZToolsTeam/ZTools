@@ -9,6 +9,7 @@
  */
 
 import { Action, ActionPanel, Icon, List, useEffect, useState } from "../../index.js";
+import { isRealElectronHost } from "../shared/native-ipc.js";
 import {
   SQLITE_TABLES,
   createInitialSqliteWorkspace,
@@ -22,19 +23,28 @@ import {
 } from "./logic.js";
 
 export function SqlitePluginCommand() {
-  const [workspace, setWorkspace] = useState<SqliteWorkspaceSnapshot>(() =>
-    createInitialSqliteWorkspace()
-  );
+  const [workspace, setWorkspace] = useState<SqliteWorkspaceSnapshot>(() => {
+    const init = createInitialSqliteWorkspace();
+    if (isRealElectronHost()) {
+      return {
+        ...init,
+        databases: [],
+        activeDbPath: "",
+        tables: [],
+        rows: [],
+        totalSizeBytes: 0,
+        updatedAt: "正在扫描本机 SQLite 数据库..."
+      };
+    }
+    return init;
+  });
   const [selectedTableId, setSelectedTableId] = useState<SqliteTableId>("all_tables");
-  const [activeDbPath, setActiveDbPath] = useState<string>(
-    "C:\\Users\\Default\\AppData\\Roaming\\ZTools\\ztools_core.sqlite"
+  const [activeDbPath, setActiveDbPath] = useState<string>(() =>
+    isRealElectronHost() ? "" : "C:\\Users\\Default\\AppData\\Roaming\\ZTools\\ztools_core.sqlite"
   );
-  const [checkedRowIds, setCheckedRowIds] = useState<string[]>([
-    "row_clip_01",
-    "row_snip_01",
-    "row_note_01",
-    "row_kv_01"
-  ]);
+  const [checkedRowIds, setCheckedRowIds] = useState<string[]>(() =>
+    isRealElectronHost() ? [] : ["row_clip_01", "row_snip_01", "row_note_01", "row_kv_01"]
+  );
   const [searchText, setSearchText] = useState<string>("");
   const [statusBanner, setStatusBanner] = useState<string>("");
   const [isLoading, setIsLoading] = useState<boolean>(false);
@@ -44,6 +54,9 @@ export function SqlitePluginCommand() {
     try {
       const data = await fetchSqliteWorkspace(dbPath);
       setWorkspace(data);
+      if (isRealElectronHost()) {
+        setCheckedRowIds(data.rows.slice(0, 5).map((r) => r.id));
+      }
       setStatusBanner(
         `已连接 SQLite (WAL) · 共 ${data.tables.length} 张表 / ${data.rows.length} 条采样记录 (${formatBytes(data.totalSizeBytes)})`
       );
@@ -254,65 +267,8 @@ export function SqlitePluginCommand() {
         })
       )
     }),
-    metricGrid: {
-      columns: 4,
-      items: [
-        {
-          id: "sql-metric-size",
-          label: "当前数据库文件总占用",
-          value: formatBytes(workspace.totalSizeBytes),
-          subValue: "PRAGMA journal_mode = WAL"
-        },
-        {
-          id: "sql-metric-tables",
-          label: "数据表与索引总数",
-          value: `${workspace.tables.length} 张表`,
-          subValue: `总计 ${totalRowCount} 行持久化记录`
-        },
-        {
-          id: "sql-metric-rows",
-          label: "已勾选待导出记录",
-          value: `${selectedRows.length} 条`,
-          subValue: "支持 JSON / CSV / SQL INSERT"
-        },
-        {
-          id: "sql-metric-e2ee",
-          label: "本地隐私安全等级",
-          value: "100% Local-First",
-          subValue: "敏感笔记采用 AES-256-GCM 密文存储"
-        }
-      ]
-    },
-    distributionBar: {
-      title: "SQLite 核心数据表容量分布",
-      totalLabel: formatBytes(workspace.totalSizeBytes),
-      segments: SQLITE_TABLES.map((t) => ({
-        id: t.id,
-        label: `${t.tableName} (${formatBytes(t.sizeBytes)})`,
-        value: Math.max(1, t.sizeBytes),
-        color: "var(--rc-text-muted)"
-      }))
-    },
     filterBar: {
       summaryText,
-      wizardSteps: [
-        { step: 1, label: "1. 选择本地 SQLite 数据库", status: "done" },
-        { step: 2, label: "2. 导航左侧数据表与索引树", status: "done" },
-        { step: 3, label: `3. 勾选记录与预览 Schema (${selectedRows.length} 条)`, status: "active" },
-        { step: 4, label: "4. 按 Enter 导出 JSON/SQL 或执行 VACUUM", status: "pending" }
-      ],
-      groups: [
-        {
-          id: "sql-table-group",
-          label: "数据表",
-          value: selectedTableId,
-          options: [
-            { title: "全部数据表", value: "all_tables" },
-            ...SQLITE_TABLES.map((t) => ({ title: t.tableName, value: t.id }))
-          ],
-          onChange: (val) => setSelectedTableId(val as SqliteTableId)
-        }
-      ],
       actions: [
         {
           id: "rescan",

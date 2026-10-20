@@ -1,3 +1,14 @@
+<script>
+// 跨次挂载保留的首页状态：从插件返回时先按上次的样子直接画出来，
+// 不再先闪「加载中」、也不会先按默认列数 / 默认顺序排一遍再跳到正确位置
+const homeLayoutCache = { ready: false, gridColumns: 5, pinnedList: [], recentOrder: [] }
+
+/** 仅供测试：清空跨挂载缓存，模拟应用刚启动 */
+export function resetHomeLayoutCache() {
+  Object.assign(homeLayoutCache, { ready: false, gridColumns: 5, pinnedList: [], recentOrder: [] })
+}
+</script>
+
 <script setup>
 import { ref, computed, nextTick, onMounted, onUnmounted, watch } from 'vue'
 import ShortcutKeys from '@/components/base/ShortcutKeys.vue'
@@ -99,7 +110,7 @@ const downloadingSet = computed(() => pluginsStore.downloadingSet)
 const installFailedSet = computed(() => pluginsStore.installFailedSet)
 
 // State
-const loading = ref(true) // 添加加载状态
+const loading = ref(!homeLayoutCache.ready) // 首次进入才显示加载状态
 const showDragTip = ref(true)
 const syncing = ref(false)
 const syncError = ref(null)
@@ -108,10 +119,10 @@ const showMenu = ref(false)
 const menuPosition = ref({ x: 0, y: 0 })
 const draggingPlugin = ref(null)
 const dragOverIndex = ref(null)
-const recentOrder = ref([])
+const recentOrder = ref([...homeLayoutCache.recentOrder])
 const showAllPlugins = ref(false) // 控制"我的插件"折叠/展开
 const activeTab = ref('plugins') // 'plugins' | 'favorites' - 标签切换
-const pinnedList = ref([]) // 响应式固定列表
+const pinnedList = ref([...homeLayoutCache.pinnedList]) // 响应式固定列表
 const focusedCardIndex = ref(0) // 键盘流当前聚焦的卡片索引
 
 // Constants
@@ -120,13 +131,16 @@ const DEFAULT_ROWS = 2 // 「常用」默认显示行数
 const RECENT_LIMIT = 5 // 「最近使用」最多显示条数
 
 // 网格实际列数：auto-fill 会随窗口宽度变化，键盘上下移动与默认显示数量都以真实列数为准
-const gridColumns = ref(5)
+const gridColumns = ref(homeLayoutCache.gridColumns)
 let gridObserver = null
 function measureGridColumns(el) {
   if (!el) return
   const template = getComputedStyle(el).gridTemplateColumns || ''
   const count = template.split(' ').filter((part) => part && part !== 'none').length
-  if (count > 0) gridColumns.value = count
+  if (count > 0) {
+    gridColumns.value = count
+    homeLayoutCache.gridColumns = count
+  }
 }
 function bindGridEl(el) {
   if (gridObserver) {
@@ -316,7 +330,9 @@ async function loadPinnedList() {
       return Array.isArray(parsed) ? parsed : []
     }
   } catch (e) {
+    // 读取失败返回 null：调用方保留当前列表，不把已有的固定项清空
     console.warn('加载固定列表失败:', e)
+    return null
   }
   return []
 }
@@ -357,7 +373,9 @@ async function loadRecentOrder() {
       return normalizeOrderList(parsed)
     }
   } catch (e) {
+    // 读取失败返回 null：调用方保留当前顺序，不把用户拖好的顺序打乱
     console.warn('加载排序失败:', e)
+    return null
   }
   return []
 }
@@ -1013,11 +1031,15 @@ async function loadDragTipState() {
   }
 }
 
+// 固定列表与排序变化时同步到跨挂载缓存
+watch(pinnedList, (list) => { homeLayoutCache.pinnedList = Array.isArray(list) ? [...list] : [] })
+watch(recentOrder, (order) => { homeLayoutCache.recentOrder = Array.isArray(order) ? [...order] : [] })
+
 // Lifecycle
 onMounted(async () => {
   loadLaunchHotkeys()
   isUnmounted = false
-  loading.value = true // 开始加载
+  loading.value = !homeLayoutCache.ready // 已加载过则保留上次画面，后台静默刷新
 
   window.addEventListener('keydown', handleKeyDown)
   window.addEventListener('click', hideMenu)
@@ -1039,10 +1061,10 @@ onMounted(async () => {
     await Promise.all([
       pluginsStore.fetchInstalledPlugins(),
       loadPinnedList().then((list) => {
-        pinnedList.value = list
+        if (list) pinnedList.value = list
       }),
       loadRecentOrder().then((order) => {
-        recentOrder.value = order
+        if (order) recentOrder.value = order
       }),
       loadDragTipState()
     ])
@@ -1051,6 +1073,7 @@ onMounted(async () => {
   } finally {
     if (!isUnmounted) {
       const shouldRestoreSearchFocus = isHomeSearchFocused()
+      homeLayoutCache.ready = true
       loading.value = false // 加载完成
       restoreHomeSearchFocusIfNeeded(shouldRestoreSearchFocus)
     }

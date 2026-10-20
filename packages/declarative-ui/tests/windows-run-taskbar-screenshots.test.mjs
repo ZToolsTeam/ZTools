@@ -467,7 +467,9 @@ describe("REA 深度逆向与全面对齐集成套件: Windows Run, Taskbar & Sc
       let desc = root.getLatest();
 
       assert.equal(desc.type, "List");
-      assert.equal(desc.props.isShowingDetail, true, "必须启用 List 双栏分栏模式");
+      assert.equal(desc.props.isShowingDetail, false, "布局三模式启用 workbenchPanel + subList");
+      assert.ok(desc.props.workbenchPanel, "必须挂载左侧参数工作台 workbenchPanel");
+      assert.ok(desc.props.subList, "必须挂载右侧截图队列 subList");
       assert.equal(desc.props.searchBarAccessory.type, "List.Dropdown");
 
       const section = desc.children[0];

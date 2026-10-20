@@ -1,0 +1,36 @@
+{
+  "id": "qr-code",
+  "name": "二维码生成",
+  "version": "2.0.0",
+  "description": "输入文字实时生成二维码，可复制图片或保存 PNG，支持 Wi-Fi 二维码与历史记录",
+  "author": "ZTools Team",
+  "entry": "dist/index.js",
+  "icon": "icon.svg",
+  "permissions": [
+    "clipboard"
+  ],
+  "targets": [
+    {
+      "id": "windows-electron-any",
+      "platform": "windows",
+      "runtime": "electron",
+      "arch": "any"
+    },
+    {
+      "id": "macos-electron-any",
+      "platform": "macos",
+      "runtime": "electron",
+      "arch": "any"
+    }
+  ],
+  "nativeComponents": [],
+  "keywords": [
+    "qr",
+    "qrcode",
+    "二维码",
+    "wifi"
+  ],
+  "category": [
+    "效率工具"
+  ]
+}

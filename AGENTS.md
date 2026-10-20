@@ -4,7 +4,7 @@
 - **项目战略定调**：ZTools 彻底卸下历史兼容包袱，不再投入精力维护同步转异步 Shim、黑盒环境模拟与非标兼容层。全面转向**“纯粹开源、免费极客、轻量宿主、极致性能”**的现代化架构体系，采用现代极客工程实践，打造对标国际一流的 Windows & macOS 双端效率中枢平台。
 - **本文件地位**：本文件是 ZTools 父仓库及其所有子模块的**唯一且最高权威规则文档**。
 - **沟通基准**：全面且强制使用中文进行沟通、思考、Git 提交备注（Commit Message）以及技术文档输出。
-- **开发原则**：坚持 KISS 原则，拒绝过度设计与重复造轮子。先找根因再改，事实导向，发现高风险问题必须暂停实现并等待确认，严禁“先写再说”。删除文件或覆盖核心配置前必须先确认。
+- **开发原则**：坚持 KISS 原则，拒绝过度设计与重复造轮子。设计任何 UI 与交互前，必须先思考该设计对用户的真实价值是什么、解决了什么具体问题，再决定是否这样做，严禁为了“看起来丰富”而堆砌无实质价值的视觉元素或交互层级。先找根因再改，事实导向，发现高风险问题必须暂停实现并等待确认，严禁“先写再说”。删除文件或覆盖核心配置前必须先确认。
 - **核心架构参考依据**：针对声明式 UI、Native 侧车（UIAccess 穿透 / MFT 硬件级索引）、React Reconciler 虚拟视图描述符与现代扩展兼容层，严格遵循本文件与 `@ztools/declarative-ui` 标准架构规范进行研发与测试。
 - **疑难困境工程设计准则**：当遇到复杂系统设计、技术瓶颈或方案选型时，**严禁闭门造车或凭空盲猜**。必须坚持以事实和成熟工业级工程实践为导向，全面评估并发模型、状态机契约与异常边界，确保方案经过严密自审与全异常测试后再行编码。
 
@@ -65,9 +65,12 @@
 - **核心组件抽象**：`<List>`（含 Item, Section, Dropdown）、`<Detail>`（含 Markdown 与 Metadata 侧边栏）、`<Form>`（含 TextField, TextArea, Checkbox, Dropdown）、`<ActionPanel>`、`<Action>`。
 - **统一极客键盘流**：上下键自动滚屏聚焦、`Enter` 激活首要动作、`Ctrl+Enter` 激活次要动作、`Ctrl+K` 弹出 ActionPanel 操作面板、`Esc` 导航栈后退；界面统一呈现沉浸式 Fluent / Mica 亚克力毛玻璃视觉。
 
-### 2.1 效率工具箱插件 UI 与交互设计五大黄金法则及三大标准布局范式
-ZTools 的核心定位是**“呼出即用、用完即走”的闪电效率工具箱**（对标 Raycast / Linear / Spotlight），**绝不是传统 Web 后台管理系统（Admin Dashboard）**。所有内置与社区声明式插件（以 `kill-process`、`disk-analyzer`、`batch-video` 为全仓三大标准模板）必须严格遵循以下 5 条黄金交互原则与 3 大标准布局范式：
+### 2.1 效率工具箱插件 UI 与交互设计黄金法则及三大标准布局范式
+ZTools 的核心定位是**“呼出即用、用完即走”的闪电效率工具箱**（对标 Raycast / Linear / Spotlight），**绝不是传统 Web 后台管理系统（Admin Dashboard）**。所有内置与社区声明式插件（以 `kill-process`、`disk-analyzer`、`batch-video` 为全仓三大标准模板）必须严格遵循以下黄金交互原则与 3 大标准布局范式：
 
+0. **原则 0（第一性原理）：用户价值与问题驱动先行原则（先问价值与痛点，再做设计决策）**
+   - **灵魂三问前置**：在设计任何 UI 组件、布局结构或交互步骤之前，必须先明确回答：**“这个设计对用户的真实价值是什么？它解决了用户的什么具体问题？如果不加这个元素，用户的核心任务会受阻吗？”** 想清楚后再决定要不要这样做。
+   - **拒绝无价值堆砌**：凡是不能直接帮助用户“更快定位目标、更准做出决策、更少按键完成操作”的视觉装饰、冗余统计卡片、重复状态回显或额外交互层级，一律砍掉，严禁为了“让界面看起来饱满”而做无用功。
 1. **原则 1：列表/主工作区主权原则（75%+ 屏幕面积必须留给核心交互内容）**
    - 用户唤起插件的第一诉求是快速定位并操作目标条目，而非浏览统计报表。
    - **硬性约束**：顶部区域（搜索栏 + 极简状态条）占用的垂直高度**严禁超过窗口总高度的 20%（约 72px~96px）**，必须将 **75%~80% 的垂直空间** 留给下方的主工作区（首屏列表区域至少完整展示 7~10 行数据），严禁在列表上方堆叠大尺寸统计卡片（`MetricGrid`）或多行筛选标签。
@@ -472,3 +475,8 @@ npm run release:mac:download # 遥控云端编译 Mac DMG 并自动拉回本地 
 - **提交备注强制使用中文**：提交 Git 代码时，提交备注/说明（Commit Message）必须 100% 使用中文编写（严禁纯英文提交），格式采用通用标准类型前缀 + 中文说明（例如：`feat: 新增...`、`fix: 修复...`、`refactor: 重构...`、`docs: 文档...`、`test: 测试...`、`chore: 构建/依赖...`）。
 - **子模块协作边界**：本仓库是父仓库，`backend/`、`bin/`、`DLLPlugins/`、`docs/`、`electron-client/`、`frontend/`、`installer/`、`official-website/`、`plugins/` 均为子模块。
 - **逐级提交原则**：修改子模块时先进入对应子模块目录提交和推送，父仓库仅记录子模块引用更新；除非用户明确说明，不要随意提交父仓库中的子模块引用变动。
+
+### 代码审查与提交前强制门禁规范（强制调用 `rex-code-review`）
+- **技能存放路径**：仓库内置双轴代码审查技能位于 [`.agent/skills/rex-code-review/SKILL.md`](file:///e:/csdwork3/git/ZTools/.agent/skills/rex-code-review/SKILL.md)（同步镜像于 [`skills/rex-code-review/SKILL.md`](file:///e:/csdwork3/git/ZTools/skills/rex-code-review/SKILL.md) 与 [`skills/code-review/SKILL.md`](file:///e:/csdwork3/git/ZTools/skills/code-review/SKILL.md)）。
+- **提交代码前默认审查门禁（Pre-Commit Review Gate）**：每次准备执行 `git commit` 提交代码前，**必须默认自动调用 `rex-code-review/SKILL.md`**，将本次全部变动代码（`git diff HEAD` / `git diff --cached`）作为审查范围执行一次完整的双轴审查（核对 `ZTOOLS-STD-1` ~ `ZTOOLS-STD-10` 十项硬红线、Fowler 12 项 Smell 基线与 Spec 契约），并运行 `node scripts/rex-precommit-gate.mjs` 静态门禁检查；凡发现 `hard` 级违规（`verdict: "changes_requested"`），必须先完成闭环修复并通过复审，严禁带病提交！
+- **显式指令与修改后自动触发**：每当用户提出“审查代码”、“代码审查”、“扫描插件”或完成代码修改时，同样自动读取并严格遵循 `rex-code-review/SKILL.md` 执行双轴独立审查，输出标准 `rex.standards-spec-review.v1` 结论信封。

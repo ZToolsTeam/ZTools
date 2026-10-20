@@ -60,7 +60,7 @@ import {
 } from "../dist/examples/multi-download/logic.js";
 
 test("Declarative UI 2.0 原生插件 #3 ~ #15 1:1 全量升级集成与异常测试套件", async (t) => {
-  await t.test("1. [#3~#15 声明式复合组件渲染闭环] 13 款插件均正确挂载 List + MetricGrid + FilterBar (含 4 步向导) + SegmentedControl", () => {
+  await t.test("1. [#3~#15 声明式三大标准布局闭环] 13 款插件均严守 20% 顶栏红线（零 MetricGrid / 零 DistributionBar / 零 WizardSteps / 零重复筛选胶囊）", () => {
     const commands = [
       { id: "software-manager", cmd: SoftwareManagerCommand },
       { id: "cleaner", cmd: CleanerCommand },
@@ -82,18 +82,16 @@ test("Declarative UI 2.0 原生插件 #3 ~ #15 1:1 全量升级集成与异常�
       const descriptor = root.getLatest();
       assert.ok(descriptor, `${id} 必须生成有效的顶层 ViewDescriptor`);
       assert.equal(descriptor.type, "List", `${id} 顶层容器应为 List`);
-      assert.ok(descriptor.props.metricGrid, `${id} 必须挂载 MetricGrid 指标看板`);
-      assert.ok(descriptor.props.filterBar, `${id} 必须挂载 FilterBar 多维筛选与向导栏`);
+      assert.equal(descriptor.props.metricGrid, undefined, `${id} 严禁挂载 MetricGrid 指标看板`);
+      assert.equal(descriptor.props.distributionBar, undefined, `${id} 严禁挂载 distributionBar 彩色比例条`);
+      assert.equal(descriptor.props.segmentedControl, undefined, `${id} 严禁挂载 segmentedControl`);
+      assert.ok(descriptor.props.filterBar, `${id} 必须挂载单行极简状态栏 filterBar`);
       const fb = descriptor.props.filterBar.props || descriptor.props.filterBar;
-      assert.ok(
-        Array.isArray(fb.wizardSteps) && fb.wizardSteps.length >= 4,
-        `${id} FilterBar 必须包含 4 步操作向导 (wizardSteps)`
-      );
-      assert.ok(
-        Array.isArray(fb.groups) && fb.groups.length >= 1,
-        `${id} FilterBar 必须包含多维筛选胶囊组 (groups)`
-      );
+      assert.ok(typeof fb.summaryText === "string" && fb.summaryText.length > 0, `${id} filterBar 必须提供单行 summaryText`);
+      assert.equal(fb.wizardSteps, undefined, `${id} FilterBar 严禁堆叠 wizardSteps`);
+      assert.equal(fb.groups, undefined, `${id} FilterBar 严禁重复挂载筛选胶囊组 (groups)`);
       if (id === "batch-video") {
+        assert.equal(descriptor.props.isShowingDetail, false, "batch-video 布局三必须设置 isShowingDetail: false");
         assert.ok(descriptor.props.workbenchPanel, "batch-video 必须挂载范式三左侧参数工作台面板 workbenchPanel");
         assert.equal(descriptor.props.workbenchPanel.fields.length >= 6, true, "batch-video 参数面板应包含至少 6 项转码配置参数");
         assert.ok(descriptor.props.workbenchPanel.previewCard, "batch-video 参数面板应包含输出预估摘要卡 previewCard");

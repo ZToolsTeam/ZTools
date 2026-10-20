@@ -426,9 +426,22 @@ export function filterSystemActions(query: string, category?: string): SystemAct
  * 执行系统原生运维调度
  */
 export async function executeSystemAction(
-  item: SystemActionItem,
+  itemOrId: SystemActionItem | string,
   options: { force?: boolean; confirmBypass?: boolean; hostOverride?: any } = {}
 ): Promise<{ success: boolean; executed: boolean; message: string }> {
+  const item =
+    typeof itemOrId === "string"
+      ? SYSTEM_ACTIONS.find(a => a.id === itemOrId || a.actionKey === itemOrId)
+      : itemOrId;
+
+  if (!item || typeof item !== "object" || (!item.id && !item.actionKey)) {
+    return {
+      success: false,
+      executed: false,
+      message: `未知或无效的系统指令: ${String(itemOrId || "")}`
+    };
+  }
+
   const bridge = getDeclarativeBridge();
 
   // 高危破坏性动作拦截确认
@@ -456,6 +469,11 @@ export async function executeSystemAction(
   try {
     if ((bridge as any)?.system?.execute) {
       const res = await (bridge as any).system.execute(item.actionKey, options);
+      if (res && typeof res === "object" && (res.ok === false || res.success === false)) {
+        const errMsg = String(res.error || res.message || "执行失败");
+        await showToast(Toast.Style.Failure, `调度失败: ${item.title}`, errMsg);
+        return { success: false, executed: false, message: errMsg };
+      }
       await showToast(Toast.Style.Success, `系统调度成功: ${item.title}`, item.technicalDetails);
       return { success: true, executed: true, message: res?.message ?? "执行完成" };
     }
@@ -464,19 +482,35 @@ export async function executeSystemAction(
     return { success: false, executed: false, message: err?.message ?? "执行失败" };
   }
 
-  // 2. 优先调用宿主真实 IPC system_execute_action（若未命中再走 system_lock / system_sleep / shell_exec）
-  if (options.hostOverride || isRealElectronHost()) {
+  // 2. 优先调用宿主真实 IPC system_execute_action 及 SystemActionsPlugin
+  if (options.hostOverride || isRealElectronHost(options.hostOverride)) {
     const ipcRes = await callHostTransport<any>(
       "system_execute_action",
       {
         actionKey: item.actionKey,
+        action: item.id,
         id: item.id,
         params: options
       },
       options.hostOverride
     );
-    if (ipcRes.ok) {
+    if (ipcRes.ok && ipcRes.data?.ok !== false && ipcRes.data?.success !== false) {
       const msg = ipcRes.data?.message || `已执行系统操作: ${item.title}`;
+      await showToast(Toast.Style.Success, msg, item.technicalDetails);
+      return { success: true, executed: true, message: msg };
+    }
+
+    const dllRes = await callHostTransport<any>(
+      "dllplugin_call",
+      {
+        plugin: "SystemActionsPlugin",
+        func: item.actionKey || item.id,
+        params: { id: item.id, actionKey: item.actionKey, ...options }
+      },
+      options.hostOverride
+    );
+    if (dllRes.ok && dllRes.data?.ok !== false && dllRes.data?.success !== false) {
+      const msg = dllRes.data?.message || `已执行系统操作: ${item.title}`;
       await showToast(Toast.Style.Success, msg, item.technicalDetails);
       return { success: true, executed: true, message: msg };
     }
@@ -494,6 +528,13 @@ export async function executeSystemAction(
         return { success: true, executed: true, message: "系统已进入睡眠" };
       }
     }
+
+    const errMsg =
+      ipcRes.error ||
+      dllRes.error ||
+      String(ipcRes.data?.error || ipcRes.data?.message || `系统指令执行失败: ${item.title}`);
+    await showToast(Toast.Style.Failure, `系统操作失败: ${item.title}`, errMsg);
+    return { success: false, executed: false, message: errMsg };
   }
 
   // 3. 尝试通过 window.ztools 宿主调度
@@ -520,7 +561,7 @@ export async function executeSystemAction(
     }
   }
 
-  // 4. 优雅降级模拟
+  // 4. 仅在无真实宿主的纯离线环境下返回预览结果
   await showToast(
     item.destructive ? Toast.Style.Animated : Toast.Style.Success,
     `系统动作: ${item.title}`,

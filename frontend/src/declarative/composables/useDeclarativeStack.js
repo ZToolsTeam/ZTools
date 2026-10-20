@@ -1,6 +1,7 @@
 import { ref, computed, shallowRef, onUnmounted, toRaw, h } from "vue";
 import { setDeclarativeBridge, renderDeclarativeRoot, getComponentFactory } from "@ztools/declarative-ui";
 import { Modal } from "ant-design-vue";
+import { getHostMethods } from "../hostMethods.js";
 
 
 /** 当前打开着的确认框，按打开顺序；最上面的才处理按键。插件页面卸载时一并关闭 */
@@ -221,8 +222,7 @@ export function useDeclarativeStack(initialRoot) {
   }
 
   // 注册全局 Bridge，使子组件无论直接调用 showToast、useNavigation 还是内置服务都能与宿主连通
-  const getElectronMethods = () =>
-    typeof window !== "undefined" ? window.__ztoolsElectron?.methods : null;
+  const getElectronMethods = () => getHostMethods();
 
   const unwrapIpc = async (callPromise, fallback) => {
     try {

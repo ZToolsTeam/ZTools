@@ -8,35 +8,35 @@ import {
   useEffect,
   showToast,
   Toast,
-  MetricGrid,
-  FilterBar,
-  SegmentedControl
+  FilterBar
 } from '../../index.js'
 import {
   COMPARE_ENGINE_MODES,
   INITIAL_COMPARE_PAIRS,
   CompareEnginePreset,
   FileComparePairItem,
+  executeDeepFileCompare,
   executeFileComparison,
   fetchFileCompareWorkspace,
   formatBytes,
   getDiffStatusLabel,
   openComparedFileLocation
 } from './logic.js'
+import { isRealElectronHost } from '../shared/native-ipc.js'
 
 export * from './logic.js'
+export { executeFileComparison }
 
 export function FileCompareCommand() {
+  const realHost = isRealElectronHost()
   const [searchText, setSearchText] = useState('')
-  const [tab, setTab] = useState<'pairs' | 'engines'>('pairs')
   const [engineModeId, setEngineModeId] = useState<string>(COMPARE_ENGINE_MODES[0].id)
   const [diffFilterView, setDiffFilterView] = useState<'all' | 'modified' | 'identical' | 'added'>('all')
   const [ignoreWhitespace, setIgnoreWhitespace] = useState<boolean>(true)
   const [ignoreCase, setIgnoreCase] = useState<boolean>(false)
-  const [pairs, setPairs] = useState<FileComparePairItem[]>(INITIAL_COMPARE_PAIRS)
-  const [checkedIds, setCheckedIds] = useState<string[]>(INITIAL_COMPARE_PAIRS.map(p => p.id))
+  const [pairs, setPairs] = useState<FileComparePairItem[]>(realHost ? [] : INITIAL_COMPARE_PAIRS)
+  const [checkedIds, setCheckedIds] = useState<string[]>(realHost ? [] : INITIAL_COMPARE_PAIRS.map(p => p.id))
   const [engines, setEngines] = useState<CompareEnginePreset[]>(COMPARE_ENGINE_MODES)
-  const [scannedDirs, setScannedDirs] = useState<string[]>(['C:\\Users\\Geek\\Documents', 'C:\\Users\\Geek\\Desktop'])
   const [isLoading, setIsLoading] = useState(false)
 
   async function refreshWorkspace(showIndicator = false) {
@@ -46,7 +46,6 @@ export function FileCompareCommand() {
       setPairs(ws.pairs)
       setCheckedIds(ws.pairs.map(p => p.id))
       setEngines(ws.engines)
-      setScannedDirs(ws.scannedDirs)
       if (showIndicator) {
         showToast({
           style: Toast.Style.Success,
@@ -67,7 +66,7 @@ export function FileCompareCommand() {
 
   async function handleRunCompareChecked() {
     const selected = pairs.filter(p => checkedIds.includes(p.id))
-    const res = await executeFileComparison(selected, {
+    const res = await executeDeepFileCompare(selected, {
       engineModeId,
       diffFilterView,
       ignoreWhitespace,
@@ -76,6 +75,10 @@ export function FileCompareCommand() {
     if (!res.ok) {
       showToast({ style: Toast.Style.Failure, title: '文件比对未执行', message: res.error || '请勾选待比对项' })
       return
+    }
+    if (Array.isArray(res.pairs) && res.pairs.length > 0) {
+      const updatedMap = new Map(res.pairs.map(p => [p.id, p]))
+      setPairs(pairs.map(p => updatedMap.get(p.id) || p))
     }
     await Clipboard.copy(res.reportMarkdown)
     showToast({
@@ -179,71 +182,18 @@ export function FileCompareCommand() {
     isShowingDetail: false,
     isLoading,
     searchBarAccessory: List.Dropdown({
-      tooltip: '选择 3 大比对引擎模式',
-      value: engineModeId,
-      onChange: val => setEngineModeId(val),
-      children: COMPARE_ENGINE_MODES.map(e =>
-        List.Dropdown.Item({
-          title: `模式: ${e.tag}`,
-          value: e.id
-        })
-      )
-    }),
-    metricGrid: MetricGrid({
-      columns: 4,
-      items: [
-        {
-          id: 'cmp-total',
-          label: '比对文件总对数',
-          value: `${pairs.length} 对`,
-          subValue: `${scannedDirs.length} 个目录树已对齐`,
-          status: 'normal'
-        },
-        {
-          id: 'cmp-modified',
-          label: '存在内容差异',
-          value: `${modifiedCount} 对`,
-          subValue: `新增文件 ${addedCount} 对`,
-          status: 'warning'
-        },
-        {
-          id: 'cmp-identical',
-          label: '哈希完全一致',
-          value: `${identicalCount} 对`,
-          subValue: 'SHA-256 字节级零偏差',
-          status: 'success'
-        },
-        {
-          id: 'cmp-elapsed',
-          label: '哈希校验耗时',
-          value: `${elapsedMs} ms`,
-          subValue: activeEngine.algorithm,
-          status: 'success'
-        }
+      tooltip: '按差异状态筛选比对结果队列',
+      value: diffFilterView,
+      onChange: val => setDiffFilterView(val as any),
+      children: [
+        List.Dropdown.Item({ title: '视图: 全部比对文件', value: 'all' }),
+        List.Dropdown.Item({ title: '视图: 仅看存在差异项', value: 'modified' }),
+        List.Dropdown.Item({ title: '视图: 仅看完全一致项', value: 'identical' }),
+        List.Dropdown.Item({ title: '视图: 仅看单侧独有项', value: 'added' })
       ]
     }),
     filterBar: FilterBar({
-      wizardSteps: [
-        { step: 1, label: '1. 扫描双侧目标目录', status: 'done' },
-        { step: 2, label: '2. 计算 SHA-256 哈希树', status: 'done' },
-        { step: 3, label: '3. 过滤差异与独有文件', status: 'active' },
-        { step: 4, label: '4. 导出比对审计报告', status: 'pending' }
-      ],
       summaryText: `共比对 ${pairs.length} 对文件 · 存在差异 ${modifiedCount} 对 · 完全一致 ${identicalCount} 对 · 新增文件 ${addedCount} 对 · 耗时 ${elapsedMs}ms`,
-      groups: [
-        {
-          id: 'cmp-view-filter',
-          label: '差异过滤视图',
-          value: diffFilterView,
-          onChange: v => setDiffFilterView(v as any),
-          options: [
-            { value: 'all', label: '全部比对文件' },
-            { value: 'modified', label: '仅看存在差异项' },
-            { value: 'identical', label: '仅看完全一致项' },
-            { value: 'added', label: '仅看单侧独有项' }
-          ]
-        }
-      ],
       actions: [
         {
           id: 'rescan-compare',
@@ -268,19 +218,6 @@ export function FileCompareCommand() {
             label: e.tag,
             value: e.id
           }))
-        },
-        {
-          id: 'wb-cmp-filter',
-          label: '差异过滤视图',
-          type: 'select',
-          value: diffFilterView,
-          onChange: val => setDiffFilterView(val as any),
-          options: [
-            { label: '全部比对文件 (All)', value: 'all' },
-            { label: '仅看存在差异项 (Modified)', value: 'modified' },
-            { label: '仅看哈希完全一致项 (Identical)', value: 'identical' },
-            { label: '仅看单侧独有项 (Added)', value: 'added' }
-          ]
         },
         {
           id: 'wb-cmp-ws',
@@ -331,14 +268,6 @@ export function FileCompareCommand() {
       emptyText: '当前过滤视图下暂无匹配文件对',
       items: rightQueueItems
     },
-    segmentedControl: SegmentedControl({
-      value: tab,
-      onChange: v => setTab(v as any),
-      options: [
-        { value: 'pairs', label: '文件比对结果队列', badge: pairs.length },
-        { value: 'engines', label: '3 大比对引擎', badge: engines.length }
-      ]
-    }),
     children: [
       List.Section({
         title: `双侧文件哈希与 Diff 比对队列 (${filteredPairs.length})`,
@@ -349,3 +278,4 @@ export function FileCompareCommand() {
 }
 
 export default FileCompareCommand
+

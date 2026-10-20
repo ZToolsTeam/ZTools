@@ -24,7 +24,8 @@ import {
   fetchQQCleanSnapshot,
   executeQQCleanup,
   openQQDirectory,
-  openQQFileDefault
+  openQQFileDefault,
+  isRealElectronHost
 } from './logic.js'
 
 type TimeRangeFilter = 'all' | '7d' | '30d' | '180d'
@@ -86,8 +87,9 @@ const INIT_QQ_FILES: QQScannedFileEntry[] = [
 ]
 
 function buildInitialQQCategories(): QQCleanCategoryItem[] {
+  const sourceFiles = isRealElectronHost() ? [] : INIT_QQ_FILES
   return OFFICIAL_QQ_GROUP_RULES.map(rule => {
-    const catFiles = INIT_QQ_FILES.filter(f => f.groupId === rule.groupId)
+    const catFiles = sourceFiles.filter(f => f.groupId === rule.groupId)
     const totalSizeBytes = catFiles.reduce((s, f) => s + f.sizeBytes, 0)
     const cleanName = rule.name.replace(/^[^\u4e00-\u9fa5A-Za-z0-9]+/, '').trim()
     return {
@@ -117,6 +119,7 @@ function buildInitialQQCategories(): QQCleanCategoryItem[] {
 }
 
 export default function QQCleanerCommand() {
+  const inRealHost = isRealElectronHost()
   const [searchText, setSearchText] = useState('')
   const [tab, setTab] = useState<ViewTab>('categories')
   const [selectedAccount, setSelectedAccount] = useState<string>('ALL')
@@ -124,25 +127,31 @@ export default function QQCleanerCommand() {
   const [selectedGroupId, setSelectedGroupId] = useState<number>(0)
 
   const [categories, setCategories] = useState<QQCleanCategoryItem[]>(() => buildInitialQQCategories())
-  const [allFiles, setAllFiles] = useState<QQScannedFileEntry[]>(() => INIT_QQ_FILES)
-  const [accounts, setAccounts] = useState<string[]>(() => ['19982507'])
-  const [accountStats, setAccountStats] = useState<QQAccountStat[]>(() => [
-    {
-      accountId: '19982507',
-      label: 'QQ 号 (UIN): 19982507',
-      clientType: 'ClassicQQ / TIM',
-      rootDir: 'C:\\Users\\Admin\\Documents\\Tencent Files\\19982507',
-      fileCount: 3,
-      totalBytes: 352 * 1024 * 1024
-    }
-  ])
-  const [protectedDbBytes, setProtectedDbBytes] = useState(120 * 1024 * 1024)
-  const [diskFree, setDiskFree] = useState(64 * 1024 * 1024 * 1024)
+  const [allFiles, setAllFiles] = useState<QQScannedFileEntry[]>(() =>
+    inRealHost ? [] : INIT_QQ_FILES
+  )
+  const [accounts, setAccounts] = useState<string[]>(() => (inRealHost ? [] : ['19982507']))
+  const [accountStats, setAccountStats] = useState<QQAccountStat[]>(() =>
+    inRealHost
+      ? []
+      : [
+          {
+            accountId: '19982507',
+            label: 'QQ 号 (UIN): 19982507',
+            clientType: 'ClassicQQ / TIM',
+            rootDir: 'C:\\Users\\Admin\\Documents\\Tencent Files\\19982507',
+            fileCount: 3,
+            totalBytes: 352 * 1024 * 1024
+          }
+        ]
+  )
+  const [protectedDbBytes, setProtectedDbBytes] = useState(inRealHost ? 0 : 120 * 1024 * 1024)
+  const [diskFree, setDiskFree] = useState(inRealHost ? 0 : 64 * 1024 * 1024 * 1024)
   const [isLoading, setIsLoading] = useState(true)
   const [wizardStep, setWizardStep] = useState<1 | 2 | 3 | 4>(2)
 
   const [checkedFilePaths, setCheckedFilePaths] = useState<string[]>(() =>
-    INIT_QQ_FILES.filter(f => !f.isProtected).map(f => f.path)
+    inRealHost ? [] : INIT_QQ_FILES.filter(f => !f.isProtected).map(f => f.path)
   )
 
   async function refreshScan(showIndicator = false) {
@@ -157,7 +166,7 @@ export default function QQCleanerCommand() {
     }
     try {
       const snap = await fetchQQCleanSnapshot()
-      if (snap.allFiles.length > 0) {
+      if (isRealElectronHost() || snap.allFiles.length > 0) {
         setCategories(
           snap.categories.map(c => ({
             ...c,
@@ -440,101 +449,8 @@ export default function QQCleanerCommand() {
         )
       ]
     }),
-    metricGrid: MetricGrid({
-      columns: 4,
-      items: [
-        {
-          id: 'qq-total',
-          label: '可清理 QQ/TIM 缓存',
-          value: formatBytes(totalScannable),
-          subValue: `${categories
-            .filter(c => c.groupId !== 999)
-            .reduce((s, c) => s + c.fileCount, 0)
-            .toLocaleString()} 个真实文件`,
-          status: 'normal'
-        },
-        {
-          id: 'qq-checked',
-          label: '已勾选待释放空间',
-          value: formatBytes(checkedCategoryBytes),
-          subValue: `${checkedFilePaths.length} 个采样项已选`,
-          status: 'success'
-        },
-        {
-          id: 'qq-accounts',
-          label: '识别登录 QQ 号 (UIN)',
-          value: `${accounts.length} 个账号`,
-          subValue: accounts.length > 0 ? accounts.slice(0, 3).join(', ') : '默认 Tencent Files',
-          status: 'normal'
-        },
-        {
-          id: 'qq-protected-db',
-          label: '聊天记录库保护 (Msg3.0)',
-          value: formatBytes(protectedDbBytes),
-          subValue: `硬件级防误删锁定 · C:余 ${formatBytes(diskFree)}`,
-          status: 'warning'
-        }
-      ]
-    }),
-    distributionBar: {
-      title: 'QQ / NTQQ / TIM 12 大官方专项空间分布',
-      totalLabel: `可清理总计 ${formatBytes(totalScannable)} · 聊天记录库保护 ${formatBytes(protectedDbBytes)}`,
-      segments: distributionSegments,
-      onSegmentClick: segId => {
-        const gid = Number(segId.replace('qq-seg-', ''))
-        setSelectedGroupId(selectedGroupId === gid ? 0 : gid)
-      }
-    },
     filterBar: {
-      wizardSteps: [
-        { step: 1, label: '1. 识别 QQ/TIM 路径', status: 'done' },
-        { step: 2, label: '2. 12大专项扫描', status: wizardStep >= 2 ? 'done' : 'active' },
-        { step: 3, label: '3. 账号/时间/文件勾选', status: wizardStep === 3 ? 'active' : wizardStep > 3 ? 'done' : 'pending' },
-        { step: 4, label: '4. 安全移入回收站', status: wizardStep === 4 ? 'active' : 'pending' }
-      ],
       summaryText: `QQ账号 [${selectedAccount === 'ALL' ? '全部UIN' : selectedAccount}] · 可清理 ${formatBytes(totalScannable)} · 已勾选 ${checkedFilePaths.length} 项 (${formatBytes(checkedCategoryBytes)}) · 聊天库已保护 ${formatBytes(protectedDbBytes)}`,
-      groups: [
-        {
-          id: 'qq-account-filter',
-          label: 'QQ号(UIN)',
-          value: selectedAccount,
-          onChange: val => setSelectedAccount(val),
-          options: [
-            { value: 'ALL', label: '全部账号', count: allFiles.length },
-            ...accountStats.map(a => ({
-              value: a.accountId,
-              label: a.accountId === '公共组件 (Shared)' ? '公共组件' : a.accountId,
-              count: a.fileCount
-            }))
-          ]
-        },
-        {
-          id: 'qq-time-filter',
-          label: '修改时间',
-          value: timeRange,
-          onChange: val => setTimeRange(val as TimeRangeFilter),
-          options: [
-            { value: 'all', label: '全部时间 (0)' },
-            { value: '7d', label: '7天前 (1)' },
-            { value: '30d', label: '30天前 (2)' },
-            { value: '180d', label: '180天前 (3)' }
-          ]
-        },
-        {
-          id: 'qq-group-filter',
-          label: '12大专项',
-          value: String(selectedGroupId),
-          onChange: val => setSelectedGroupId(Number(val)),
-          options: [
-            { value: '0', label: '全部 12 大分组', count: categories.length },
-            ...categories.map(c => ({
-              value: String(c.groupId),
-              label: c.shortName,
-              count: c.fileCount
-            }))
-          ]
-        }
-      ],
       actions: [
         {
           id: 'qq-act-rescan',
@@ -545,15 +461,6 @@ export default function QQCleanerCommand() {
         }
       ]
     },
-    segmentedControl: SegmentedControl({
-      value: tab,
-      onChange: (val: string) => setTab(val as ViewTab),
-      options: [
-        { value: 'categories', label: `12 大专项分组 (${categories.length})` },
-        { value: 'files', label: `真实文件明细 (${filteredFiles.length})` },
-        { value: 'accounts', label: `QQ 账号分布 (${accountStats.length})` }
-      ]
-    }),
     subList: {
       title: rightTitle,
       subtitle: `${filteredFiles.length} 项 · 已选 ${checkedFilePaths.length} 项 (${formatBytes(checkedCategoryBytes)})`,

@@ -52,7 +52,7 @@ export function ContextMenuCommand() {
 
   async function handleToggleEntry(item: ContextMenuEntry) {
     const nextState = !item.enabled
-    const res = await toggleContextMenuEntry(item.id, nextState)
+    const res = await toggleContextMenuEntry(item.id, nextState, undefined, item.registryKey)
     if (res.ok) {
       setEntries((prev) =>
         prev.map((cur) => (cur.id === item.id ? { ...cur, enabled: nextState } : cur))
@@ -64,6 +64,12 @@ export function ContextMenuCommand() {
         style: Toast.Style.Success,
         title: res.message,
         message: item.registryKey
+      })
+    } else {
+      showToast({
+        style: Toast.Style.Failure,
+        title: '修改注册表右键菜单失败',
+        message: res.message
       })
     }
   }
@@ -79,6 +85,12 @@ export function ContextMenuCommand() {
       showToast({
         style: Toast.Style.Success,
         title: res.message
+      })
+    } else {
+      showToast({
+        style: Toast.Style.Failure,
+        title: '切换 Windows 11 右键模式失败',
+        message: res.message
       })
     }
   }

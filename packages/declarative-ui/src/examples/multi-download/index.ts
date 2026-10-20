@@ -9,6 +9,7 @@
  */
 
 import { Action, ActionPanel, Icon, List, useEffect, useState } from "../../index.js";
+import { isRealElectronHost } from "../shared/native-ipc.js";
 import {
   DOWNLOAD_CATEGORIES,
   THREAD_SPLIT_PRESETS,
@@ -25,76 +26,79 @@ import {
 } from "./logic.js";
 
 function createInitialMultiDownloadSnapshot(): MultiDownloadSnapshot {
-  const defaultFiles: DownloadedFileItem[] = [
-    {
-      id: "dl_init_0",
-      name: "ZTools-Setup-2.0.0-x64.exe",
-      path: "C:\\Users\\Default\\Downloads\\ZTools-Setup-2.0.0-x64.exe",
-      ext: ".exe",
-      sizeBytes: 148 * 1024 * 1024,
-      mtimeMs: Date.now() - 3600_000,
-      category: "installer",
-      categoryName: "应用安装包",
-      categoryColor: "var(--rc-text-muted)",
-      categoryIcon: "box"
-    },
-    {
-      id: "dl_init_1",
-      name: "Windows11_24H2_Chinese_x64.iso",
-      path: "C:\\Users\\Default\\Downloads\\Windows11_24H2_Chinese_x64.iso",
-      ext: ".iso",
-      sizeBytes: 5420 * 1024 * 1024,
-      mtimeMs: Date.now() - 7200_000,
-      category: "iso_image",
-      categoryName: "系统镜像与模型",
-      categoryColor: "var(--rc-text-muted)",
-      categoryIcon: "disc"
-    },
-    {
-      id: "dl_init_2",
-      name: "project-release-bundle-v2.zip",
-      path: "C:\\Users\\Default\\Downloads\\project-release-bundle-v2.zip",
-      ext: ".zip",
-      sizeBytes: 320 * 1024 * 1024,
-      mtimeMs: Date.now() - 10800_000,
-      category: "archive",
-      categoryName: "压缩归档包",
-      categoryColor: "var(--rc-text-muted)",
-      categoryIcon: "archive"
-    },
-    {
-      id: "dl_init_3",
-      name: "keynote-recording-4k60.mp4",
-      path: "C:\\Users\\Default\\Downloads\\keynote-recording-4k60.mp4",
-      ext: ".mp4",
-      sizeBytes: 860 * 1024 * 1024,
-      mtimeMs: Date.now() - 14400_000,
-      category: "media",
-      categoryName: "音视频与图像",
-      categoryColor: "var(--rc-text-muted)",
-      categoryIcon: "video"
-    },
-    {
-      id: "dl_init_4",
-      name: "architecture-specification-2026.pdf",
-      path: "C:\\Users\\Default\\Downloads\\architecture-specification-2026.pdf",
-      ext: ".pdf",
-      sizeBytes: 24 * 1024 * 1024,
-      mtimeMs: Date.now() - 18000_000,
-      category: "document",
-      categoryName: "办公文档与脚本",
-      categoryColor: "var(--rc-text-muted)",
-      categoryIcon: "file-text"
-    }
-  ];
+  const inRealHost = isRealElectronHost();
+  const defaultFiles: DownloadedFileItem[] = inRealHost
+    ? []
+    : [
+        {
+          id: "dl_init_0",
+          name: "ZTools-Setup-2.0.0-x64.exe",
+          path: "C:\\Users\\Default\\Downloads\\ZTools-Setup-2.0.0-x64.exe",
+          ext: ".exe",
+          sizeBytes: 148 * 1024 * 1024,
+          mtimeMs: Date.now() - 3600_000,
+          category: "installer",
+          categoryName: "应用安装包",
+          categoryColor: "var(--rc-text-muted)",
+          categoryIcon: "box"
+        },
+        {
+          id: "dl_init_1",
+          name: "Windows11_24H2_Chinese_x64.iso",
+          path: "C:\\Users\\Default\\Downloads\\Windows11_24H2_Chinese_x64.iso",
+          ext: ".iso",
+          sizeBytes: 5420 * 1024 * 1024,
+          mtimeMs: Date.now() - 7200_000,
+          category: "iso_image",
+          categoryName: "系统镜像与模型",
+          categoryColor: "var(--rc-text-muted)",
+          categoryIcon: "disc"
+        },
+        {
+          id: "dl_init_2",
+          name: "project-release-bundle-v2.zip",
+          path: "C:\\Users\\Default\\Downloads\\project-release-bundle-v2.zip",
+          ext: ".zip",
+          sizeBytes: 320 * 1024 * 1024,
+          mtimeMs: Date.now() - 10800_000,
+          category: "archive",
+          categoryName: "压缩归档包",
+          categoryColor: "var(--rc-text-muted)",
+          categoryIcon: "archive"
+        },
+        {
+          id: "dl_init_3",
+          name: "keynote-recording-4k60.mp4",
+          path: "C:\\Users\\Default\\Downloads\\keynote-recording-4k60.mp4",
+          ext: ".mp4",
+          sizeBytes: 860 * 1024 * 1024,
+          mtimeMs: Date.now() - 14400_000,
+          category: "media",
+          categoryName: "音视频与图像",
+          categoryColor: "var(--rc-text-muted)",
+          categoryIcon: "video"
+        },
+        {
+          id: "dl_init_4",
+          name: "architecture-specification-2026.pdf",
+          path: "C:\\Users\\Default\\Downloads\\architecture-specification-2026.pdf",
+          ext: ".pdf",
+          sizeBytes: 24 * 1024 * 1024,
+          mtimeMs: Date.now() - 18000_000,
+          category: "document",
+          categoryName: "办公文档与脚本",
+          categoryColor: "var(--rc-text-muted)",
+          categoryIcon: "file-text"
+        }
+      ];
 
   const totalSizeBytes = defaultFiles.reduce((acc, item) => acc + item.sizeBytes, 0);
 
   return {
     downloadDir: "C:\\Users\\Default\\Downloads",
     driveLetter: "C:",
-    driveFreeBytes: 128 * 1024 * 1024 * 1024,
-    driveTotalBytes: 512 * 1024 * 1024 * 1024,
+    driveFreeBytes: inRealHost ? 0 : 128 * 1024 * 1024 * 1024,
+    driveTotalBytes: inRealHost ? 0 : 512 * 1024 * 1024 * 1024,
     aria2RpcOnline: false,
     aria2Endpoint: "http://127.0.0.1:6800/jsonrpc",
     sniffedClipboardUrl: "",
@@ -119,11 +123,9 @@ export function MultiDownloadCommand() {
   const [snapshot, setSnapshot] = useState<MultiDownloadSnapshot>(() => createInitialMultiDownloadSnapshot());
   const [selectedCategory, setSelectedCategory] = useState<DownloadFileCategory>("all");
   const [selectedPresetId, setSelectedPresetId] = useState<ThreadSplitPresetId>("threads_16");
-  const [checkedIds, setCheckedIds] = useState<string[]>([
-    "dl_init_0",
-    "dl_init_1",
-    "dl_init_2"
-  ]);
+  const [checkedIds, setCheckedIds] = useState<string[]>(() =>
+    isRealElectronHost() ? [] : ["dl_init_0", "dl_init_1", "dl_init_2"]
+  );
   const [searchText, setSearchText] = useState<string>("");
   const [customUrlInput, setCustomUrlInput] = useState<string>("");
   const [statusBanner, setStatusBanner] = useState<string>("");
@@ -133,7 +135,7 @@ export function MultiDownloadCommand() {
     setIsLoading(true);
     try {
       const data = await fetchMultiDownloadSnapshot();
-      if (data.files.length > 0) {
+      if (isRealElectronHost() || data.files.length > 0) {
         setSnapshot(data);
         setCheckedIds(data.files.slice(0, 6).map((item) => item.id));
         if (data.sniffedClipboardUrl && !customUrlInput) {
@@ -222,10 +224,10 @@ export function MultiDownloadCommand() {
     if (targetList.length === 0) return;
     setIsLoading(true);
     try {
-      const res = await deleteDownloadedFiles(targetList.map((f) => f.path));
+      const res = await deleteDownloadedFiles(targetList.map((f) => f.path), targetList);
       setStatusBanner(
         res.deletedCount > 0
-          ? `已将 ${res.deletedCount} 个下载文件移入回收站，释放 ${formatBytes(selectedTotalBytes)}`
+          ? `已将 ${res.deletedCount} 个下载文件移入回收站，释放 ${formatBytes(res.freedBytes)}`
           : "已完成所选下载文件清理操作"
       );
       await reloadDownloadSnapshot();
@@ -398,71 +400,8 @@ export function MultiDownloadCommand() {
         })
       )
     }),
-    metricGrid: {
-      columns: 4,
-      items: [
-        {
-          id: "dl-metric-total",
-          label: "已下载文件总体积",
-          value: formatBytes(snapshot.totalSizeBytes),
-          subValue: `共 ${snapshot.files.length} 个文件`
-        },
-        {
-          id: "dl-metric-free",
-          label: `下载盘 (${snapshot.driveLetter}) 剩余空间`,
-          value: formatBytes(snapshot.driveFreeBytes),
-          subValue: driveLowSpace ? "磁盘剩余空间不足 10%" : `总容量 ${formatBytes(snapshot.driveTotalBytes)}`,
-          status: driveLowSpace ? "danger" : "normal"
-        },
-        {
-          id: "dl-metric-threads",
-          label: "并发分块引擎档位",
-          value: `${currentPreset.threads} 线程`,
-          subValue: `最小分块 ${currentPreset.splitSize}`
-        },
-        {
-          id: "dl-metric-clip",
-          label: "剪贴板链接嗅探",
-          value: activeDownloadUrl ? snapshot.sniffedProtocol : "待粘贴链接",
-          subValue: activeDownloadUrl || "复制下载直链或磁力链后自动识别"
-        }
-      ]
-    },
-    distributionBar: {
-      title: "下载文件分类体积分布",
-      totalLabel: formatBytes(snapshot.totalSizeBytes),
-      segments: snapshot.categoryStats
-        .filter((c) => c.sizeBytes > 0)
-        .map((c) => ({
-          id: c.category,
-          label: `${c.name} (${formatBytes(c.sizeBytes)})`,
-          value: c.sizeBytes,
-          color: "var(--rc-text-muted)"
-        }))
-    },
     filterBar: {
       summaryText,
-      wizardSteps: [
-        { step: 1, label: `1. 选择并发线程 (${currentPreset.threads} 线程)`, status: "done" },
-        { step: 2, label: "2. 嗅探剪贴板链接或筛选分类", status: "done" },
-        { step: 3, label: `3. 勾选待管理下载文件 (${selectedFiles.length} 项)`, status: "active" },
-        { step: 4, label: "4. 按 Enter 高速下载或清理释放空间", status: "pending" }
-      ],
-      groups: [
-        {
-          id: "category-filter",
-          label: "文件分类",
-          value: selectedCategory,
-          options: [
-            { title: `全部 (${snapshot.files.length})`, value: "all" },
-            ...DOWNLOAD_CATEGORIES.map((c) => ({
-              title: c.name,
-              value: c.id
-            }))
-          ],
-          onChange: (val) => setSelectedCategory(val as DownloadFileCategory)
-        }
-      ],
       actions: [
         {
           id: "rescan",

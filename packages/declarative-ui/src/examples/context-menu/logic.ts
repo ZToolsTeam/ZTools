@@ -1,9 +1,9 @@
 /**
  * 系统右键菜单扩展管理中枢 (ContextMenu 2.0 Logic)
- * 支持一键切换 Windows 11 经典完整右键菜单，以及管理文件/文件夹/桌面背景右键 Shell 扩展项
+ * 支持一键切换 Windows 11 经典完整右键菜单，以及真实扫描与管理文件/文件夹/桌面背景右键 Shell 扩展项
  */
 
-import { callHostTransport, isRealElectronHost } from '../shared/native-ipc.js'
+import { callHostTransport, invokePluginService, isRealElectronHost, invokeDllPluginCapability } from '../shared/native-ipc.js'
 
 export interface CapabilityActionItem {
   id: string
@@ -35,6 +35,7 @@ export interface ContextMenuEntry {
   registryKey: string
   command: string
   enabled: boolean
+  isOrphaned?: boolean
   isWin11ClassicToggle?: boolean
 }
 
@@ -193,40 +194,97 @@ export async function invokeNativeCapability(
   if (!check.valid) {
     throw new Error(check.error || '参数校验失败')
   }
-  const ipcRes = await callHostTransport(
-    'dllplugin_call',
-    { plugin: DLL_PLUGIN_NAME, func: method.trim(), params },
-    hostBridge
-  )
-  if (ipcRes.ok && ipcRes.data) {
-    return { ok: true, pluginName: DLL_PLUGIN_NAME, method: method.trim(), data: ipcRes.data, fromFallback: false }
+  return invokeDllPluginCapability(DLL_PLUGIN_NAME, method.trim(), params, hostBridge)
+}
+
+function mapRawContextMenuEntry(raw: any, i: number): ContextMenuEntry {
+  const rawScope = String(raw.scope || raw.scopeLabel || '').toLowerCase()
+  let scope: ContextMenuScope = 'file'
+  if (raw.scope === 'system' || rawScope.includes('系统') || rawScope === 'system') {
+    scope = 'system'
+  } else if (
+    rawScope.includes('目录') ||
+    rawScope.includes('文件夹') ||
+    rawScope.includes('directory') ||
+    rawScope.includes('folder')
+  ) {
+    scope = 'directory'
+  } else if (
+    rawScope.includes('背景') ||
+    rawScope.includes('桌面') ||
+    rawScope.includes('background') ||
+    rawScope.includes('desktop')
+  ) {
+    scope = 'background'
+  } else {
+    scope = 'file'
   }
+
+  const scopeLabel =
+    raw.scopeLabel ||
+    (scope === 'system'
+      ? '系统模式'
+      : scope === 'directory'
+      ? '目录右键'
+      : scope === 'background'
+      ? '桌面背景'
+      : '文件右键')
   return {
-    ok: true,
-    pluginName: DLL_PLUGIN_NAME,
-    method: method.trim(),
-    data: { simulated: true, method: method.trim(), params },
-    fromFallback: true
+    id: String(raw.id || `ctx-entry-${i}`),
+    title: String(raw.title || raw.name || `右键菜单项 #${i + 1}`),
+    publisher: String(raw.publisher || 'Windows Shell'),
+    scope,
+    scopeLabel: String(scopeLabel),
+    registryKey: String(raw.registryKey || raw.regPath || ''),
+    command: String(raw.command || ''),
+    enabled: Boolean(raw.enabled ?? true),
+    isOrphaned: Boolean(raw.isOrphaned ?? false),
+    isWin11ClassicToggle: Boolean(raw.isWin11ClassicToggle ?? false)
   }
 }
 
 export async function fetchContextMenuEntries(hostOverride?: any): Promise<ContextMenuSnapshot> {
-  const entries = DEFAULT_CONTEXT_MENU_ENTRIES.map((e) => ({ ...e }))
+  const realHost = isRealElectronHost(hostOverride) || Boolean(hostOverride)
 
-  if (hostOverride || isRealElectronHost(hostOverride)) {
-    const res = await callHostTransport<any>('context_menu_list', {}, hostOverride)
-    if (res.ok && Array.isArray(res.data?.entries) && res.data.entries.length > 0) {
-      const remoteEntries: ContextMenuEntry[] = res.data.entries
-      const enabledCount = remoteEntries.filter((e) => e.enabled).length
+  if (realHost) {
+    const pluginRes = await invokePluginService<any>(DLL_PLUGIN_NAME, 'scanEntries', {}, hostOverride)
+    const rawData =
+      pluginRes.ok && pluginRes.data
+        ? pluginRes.data
+        : (await callHostTransport<any>('context_menu_list', {}, hostOverride)).data
+
+    if (rawData) {
+      const list = Array.isArray(rawData)
+        ? rawData
+        : Array.isArray(rawData?.entries)
+        ? rawData.entries
+        : Array.isArray(rawData?.items)
+        ? rawData.items
+        : null
+      if (list) {
+        const remoteEntries: ContextMenuEntry[] = list.map(mapRawContextMenuEntry)
+        const enabledCount = remoteEntries.filter((e: ContextMenuEntry) => e.enabled).length
+        const win11Item = remoteEntries.find((e: ContextMenuEntry) => e.isWin11ClassicToggle)
+        return {
+          entries: remoteEntries,
+          win11ClassicEnabled: Boolean(rawData.win11ClassicEnabled ?? win11Item?.enabled ?? false),
+          enabledCount,
+          disabledCount: remoteEntries.length - enabledCount
+        }
+      }
+    }
+
+    if (isRealElectronHost(hostOverride)) {
       return {
-        entries: remoteEntries,
-        win11ClassicEnabled: Boolean(res.data.win11ClassicEnabled ?? true),
-        enabledCount,
-        disabledCount: remoteEntries.length - enabledCount
+        entries: [],
+        win11ClassicEnabled: false,
+        enabledCount: 0,
+        disabledCount: 0
       }
     }
   }
 
+  const entries = DEFAULT_CONTEXT_MENU_ENTRIES.map((e) => ({ ...e }))
   const enabledCount = entries.filter((e) => e.enabled).length
   const win11Item = entries.find((e) => e.isWin11ClassicToggle)
 
@@ -247,7 +305,39 @@ export async function switchWin11ClassicMenu(
     : `reg delete "HKCU\\Software\\Classes\\CLSID\\{86ca1aa0-34aa-4e8b-a509-50c905bae2a2}" /f`
 
   if (hostOverride || isRealElectronHost(hostOverride)) {
-    await callHostTransport('shell_exec', { command: cmd }, hostOverride)
+    const svcRes = await invokePluginService<any>(
+      DLL_PLUGIN_NAME,
+      'switchWin11Classic',
+      { useClassic, command: cmd },
+      hostOverride
+    )
+    if (svcRes.ok && svcRes.data?.ok !== false) {
+      return {
+        ok: true,
+        classicMode: useClassic,
+        message:
+          svcRes.data?.message ||
+          (useClassic
+            ? '已切换为 Windows 11 经典完整右键菜单 (无需点击显示更多选项)'
+            : '已恢复为 Windows 11 默认折叠右键菜单')
+      }
+    }
+    if (svcRes.data?.ok === false) {
+      return {
+        ok: false,
+        classicMode: !useClassic,
+        message: String(svcRes.data.error || svcRes.data.message || '写入 HKCU CLSID 右键菜单模式注册表失败')
+      }
+    }
+
+    const shellRes = await callHostTransport('shell_exec', { command: cmd }, hostOverride)
+    if (!shellRes.ok) {
+      return {
+        ok: false,
+        classicMode: !useClassic,
+        message: svcRes.error || shellRes.error || '写入 HKCU CLSID 右键菜单模式注册表失败'
+      }
+    }
   }
 
   return {
@@ -262,12 +352,23 @@ export async function switchWin11ClassicMenu(
 export async function toggleContextMenuEntry(
   id: string,
   enabled?: boolean,
-  hostOverride?: any
+  hostOverride?: any,
+  regPath?: string
 ): Promise<{ ok: boolean; enabled: boolean; message: string }> {
-  const target = DEFAULT_CONTEXT_MENU_ENTRIES.find((e) => e.id === id)
-  const nextState = typeof enabled === 'boolean' ? enabled : !(target?.enabled ?? true)
+  const normalizedId = typeof id === 'string' ? id.trim() : ''
+  if (!normalizedId) {
+    return { ok: false, enabled: false, message: '右键菜单项 ID 不能为空' }
+  }
 
-  if (target?.isWin11ClassicToggle) {
+  const target = DEFAULT_CONTEXT_MENU_ENTRIES.find((e) => e.id === normalizedId)
+  const nextState = typeof enabled === 'boolean' ? enabled : !(target?.enabled ?? true)
+  const resolvedRegKey = (regPath || target?.registryKey || normalizedId).trim()
+
+  if (FORBIDDEN_TARGET_PATTERN.test(resolvedRegKey)) {
+    return { ok: false, enabled: !nextState, message: FORBIDDEN_REASON }
+  }
+
+  if (target?.isWin11ClassicToggle || normalizedId === 'ctx-win11-classic') {
     const classicRes = await switchWin11ClassicMenu(nextState, hostOverride)
     return {
       ok: classicRes.ok,
@@ -277,17 +378,92 @@ export async function toggleContextMenuEntry(
   }
 
   if (hostOverride || isRealElectronHost(hostOverride)) {
-    await callHostTransport(
-      'context_menu_toggle',
-      { id, registryKey: target?.registryKey, enabled: nextState },
+    const svcRes = await invokePluginService<any>(
+      DLL_PLUGIN_NAME,
+      'toggleEntry',
+      { id: normalizedId, regPath: resolvedRegKey, registryKey: resolvedRegKey, enabled: nextState },
       hostOverride
     )
+    if (svcRes.ok && svcRes.data?.ok !== false) {
+      return {
+        ok: true,
+        enabled: nextState,
+        message: String(svcRes.data?.message || `${nextState ? '已启用' : '已禁用'}右键菜单项: ${target?.title || normalizedId}`)
+      }
+    }
+    if (svcRes.data?.ok === false) {
+      return {
+        ok: false,
+        enabled: !nextState,
+        message: String(svcRes.data.error || svcRes.data.message || `修改注册表右键菜单项 [${resolvedRegKey}] 失败`)
+      }
+    }
+
+    const legacyRes = await callHostTransport<any>(
+      'context_menu_toggle',
+      { id: normalizedId, registryKey: resolvedRegKey, enabled: nextState },
+      hostOverride
+    )
+    if (!legacyRes.ok || legacyRes.data?.ok === false) {
+      return {
+        ok: false,
+        enabled: !nextState,
+        message:
+          legacyRes.data?.error ||
+          svcRes.error ||
+          legacyRes.error ||
+          `修改注册表右键菜单项 [${resolvedRegKey}] 失败（可能需要管理员权限）`
+      }
+    }
   }
 
   return {
     ok: true,
     enabled: nextState,
-    message: `${nextState ? '已启用' : '已禁用'}右键菜单项: ${target?.title || id}`
+    message: `${nextState ? '已启用' : '已禁用'}右键菜单项: ${target?.title || normalizedId}`
+  }
+}
+
+export async function cleanOrphanedContextMenuEntries(
+  regPaths?: string[],
+  hostOverride?: any
+): Promise<{ ok: boolean; cleanedCount: number; message: string }> {
+  const paths = Array.isArray(regPaths)
+    ? regPaths.map((p) => String(p || '').trim()).filter(Boolean)
+    : []
+
+  for (const p of paths) {
+    if (FORBIDDEN_TARGET_PATTERN.test(p)) {
+      return { ok: false, cleanedCount: 0, message: FORBIDDEN_REASON }
+    }
+  }
+
+  if (hostOverride || isRealElectronHost(hostOverride)) {
+    const svcRes = await invokePluginService<any>(
+      DLL_PLUGIN_NAME,
+      'cleanOrphans',
+      { regPaths: paths },
+      hostOverride
+    )
+    if (svcRes.ok && svcRes.data?.ok !== false) {
+      const cleanedCount = Number(svcRes.data?.cleanedCount ?? paths.length)
+      return {
+        ok: true,
+        cleanedCount,
+        message: String(svcRes.data?.message || `已清理 ${cleanedCount} 项失效残留右键菜单扩展`)
+      }
+    }
+    return {
+      ok: false,
+      cleanedCount: 0,
+      message: svcRes.data?.error || svcRes.error || '清理孤立右键菜单注册表项失败（需要管理员权限）'
+    }
+  }
+
+  return {
+    ok: true,
+    cleanedCount: paths.length,
+    message: `已清理 ${paths.length} 项失效右键菜单项`
   }
 }
 

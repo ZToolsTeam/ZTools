@@ -52,7 +52,7 @@ export function ProcessDetailView({
 
 ${
   isCritical
-    ? `> ⚠️ **系统关键高危进程**: 该进程属于系统核心守护子系统 (Windows Kernel / macOS launchd & WindowServer)。若强行终结可能导致系统假死、桌面崩溃重启或内核宕机！\n`
+    ? `> [高危警告] **系统关键高危进程**: 该进程属于系统核心守护子系统 (Windows Kernel / macOS launchd & WindowServer)。若强行终结可能导致系统假死、桌面崩溃重启或内核宕机！\n`
     : ""
 }
 
@@ -61,7 +61,7 @@ ${
 ### 资源占用规格
 - **工作集物理内存**: \`${process.memoryMB.toFixed(1)} MB\` (${(process.memoryMB / 1024).toFixed(2)} GB)
 - **CPU 即时占用率**: \`${process.cpuPercent.toFixed(1)}%\`
-- **系统核心保护**: ${isCritical ? "🛡️ 已开启防护 (禁止误杀)" : "普通应用进程"}
+- **系统核心保护**: ${isCritical ? "已开启防护 (禁止误杀)" : "普通应用进程"}
 
 ---
 
@@ -121,11 +121,11 @@ ${treeCmd}
             {isCritical ? (
               <Detail.Metadata.TagList.Item text="系统核心保护" color={Color.Red} />
             ) : (
-              <Detail.Metadata.TagList.Item text="常规应用进程" color={Color.Green} />
+              <Detail.Metadata.TagList.Item text="常规应用进程" color={Color.SecondaryText} />
             )}
             <Detail.Metadata.TagList.Item
               text={process.cpuPercent > 15 ? "高 CPU 负载" : "正常负载"}
-              color={process.cpuPercent > 15 ? Color.Red : Color.Blue}
+              color={process.cpuPercent > 15 ? Color.Red : Color.SecondaryText}
             />
           </Detail.Metadata.TagList>
         </Detail.Metadata>
@@ -357,8 +357,8 @@ export default function KillProcessCommand() {
               subtitle={`${proc.memoryMB.toFixed(1)} MB • CPU ${proc.cpuPercent.toFixed(1)}% • ${proc.threads} 线程 • ${proc.arch || "x64"}`}
               icon={isCritical ? Icon.Shield : isHighCpu ? Icon.ExclamationMark : Icon.Terminal}
               accessories={[
-                ...(isCritical ? [{ tag: { value: "系统关键", color: Color.Blue } }] : []),
-                ...(isHighMem ? [{ tag: { value: "高内存", color: Color.Orange } }] : []),
+                ...(isCritical ? [{ tag: { value: "系统关键" } }] : []),
+                ...(isHighMem ? [{ tag: { value: "高内存" } }] : []),
                 ...(isHighCpu ? [{ tag: { value: "高 CPU", color: Color.Red } }] : []),
                 { text: `${proc.memoryMB.toFixed(0)} MB` },
                 { text: `CPU ${proc.cpuPercent.toFixed(1)}%` }

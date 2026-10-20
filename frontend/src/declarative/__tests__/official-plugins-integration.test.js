@@ -1,5 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { mount } from '@vue/test-utils'
+import { mount, flushPromises } from '@vue/test-utils'
+import fs from 'node:fs'
+import path from 'node:path'
 import { createPinia, setActivePinia } from 'pinia'
 import { nextTick } from 'vue'
 
@@ -16,6 +18,28 @@ import DeclarativePage from '@/pages/DeclarativePage.vue'
 import * as apiServer from '@/api/apiserver'
 import { resolvePluginGlyph } from '@/utils/brandIcons'
 import { _resetKeymapForTesting } from '@/utils/keymap'
+import { BUNDLED_PLUGIN_IDS } from '@/utils/bundledPlugins'
+import { isPluginVisible } from '@/utils/pluginVisibility'
+
+/**
+ * 模拟客户端的静态资源服务：bundled-plugins/ 下的请求直接读取 public/bundled-plugins 里的真实插件产物，
+ * 其余请求一律视为断网，保证测试走真实的插件代码而不访问外网
+ */
+function bundledFetch(url) {
+  const m = String(url).match(/\/bundled-plugins\/(.+)$/)
+  if (!m) return Promise.reject(new Error('测试环境断网'))
+  const file = path.join(process.cwd(), 'public/bundled-plugins', ...m[1].split('/').map(decodeURIComponent))
+  if (!fs.existsSync(file)) return Promise.resolve({ ok: false, status: 404, text: async () => '' })
+  const body = fs.readFileSync(file, 'utf8')
+  return Promise.resolve({ ok: true, status: 200, text: async () => body, json: async () => JSON.parse(body) })
+}
+
+async function settle() {
+  for (let i = 0; i < 10; i++) {
+    await flushPromises()
+    await nextTick()
+  }
+}
 
 // 模拟 vue-router 与 @/router
 const { mockPush } = vi.hoisted(() => ({
@@ -72,7 +96,7 @@ describe('官方标杆声明式应用注册表与端到端集成测试', () => {
     setActivePinia(createPinia())
     vi.clearAllMocks()
     // 集成测试不访问外网：远端 catalog 不可达时走内置标杆应用兜底，这正是要验证的降级路径
-    vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new Error('测试环境断网')))
+    vi.stubGlobal('fetch', vi.fn(bundledFetch))
   })
 
   afterEach(() => {
@@ -81,12 +105,10 @@ describe('官方标杆声明式应用注册表与端到端集成测试', () => {
 
   describe('1. 注册表完整性与规范断言 (Registry Completeness)', () => {
     it('必须完整包含 10 款核心标杆应用定义，且字段完备合规', () => {
+      // json-format、qr-code、color-picker 已由 plugins 仓库的原版内置插件接管，见下一个用例
       const requiredBenchmarkIds = [
-        'json-format',
-        'qr-code',
         'github',
         'google-translate',
-        'color-picker',
         'obsidian',
         'speedtest',
         'winget',
@@ -115,56 +137,69 @@ describe('官方标杆声明式应用注册表与端到端集成测试', () => {
       }
     })
 
+    it('与内置原版插件同 ID（含别名）的旧实现必须让位，不再被识别为旧内置应用', () => {
+      for (const id of BUNDLED_PLUGIN_IDS) {
+        expect(isOfficialPlugin(id)).toBe(false)
+        expect(isOfficialPlugin(`  ${id.toUpperCase()}  `)).toBe(false)
+        expect(getOfficialPlugin(id)).toBeUndefined()
+      }
+      // screen-color-picker 是 color-picker 的别名，同样让位
+      expect(getOfficialPlugin('screen-color-picker')).toBeUndefined()
+      expect(getOfficialPluginsList().some((p) => BUNDLED_PLUGIN_IDS.includes(p.pluginId))).toBe(false)
+    })
+
     it('大小写不敏感与首尾空白容错', () => {
-      expect(isOfficialPlugin('  JSON-FORMAT  ')).toBe(true)
-      expect(isOfficialPlugin('Qr-Code')).toBe(true)
+      expect(isOfficialPlugin('  KILL-PROCESS  ')).toBe(true)
       expect(getOfficialPlugin('  KILL-PROCESS  ')).toBeDefined()
       expect(getOfficialPlugin('kill-process').name).toBe('进程管理急救箱')
     })
   })
 
   describe('2. Pinia Store 集成与已安装列表合并', () => {
-    it('fetchInstalledPlugins 必须自动将 10 款官方应用合并入 installedPlugins 与 installedSet', async () => {
-      // 模拟本地原生插件仅有 1 个历史旧插件
+    it('fetchInstalledPlugins：官方插件只展示内置原版，旧内置实现与未完成的官方插件隐藏，社区插件照常展示', async () => {
       vi.mocked(apiServer.getLocalPlugins).mockResolvedValue([
-        { pluginId: 'legacy-demo', name: '旧插件', lastUsedTime: 100 }
+        { pluginId: 'legacy-demo', name: '社区插件', lastUsedTime: 100 },
+        // 用户以前从市场装过的未完成官方插件：隐藏
+        { pluginId: 'cleaner', name: '垃圾清理', author: 'ZTools Team', lastUsedTime: 90 },
+        // 与内置插件同 ID 的已安装旧副本：合并为内置条目，只出现一次
+        { pluginId: 'json-format', name: '旧 JSON', lastUsedTime: 80 }
       ])
 
       const store = usePluginsStore()
-      const list = await store.fetchInstalledPlugins()
+      await store.fetchInstalledPlugins()
 
-      // 验证数量：本地 1 个 + 官方 11 个 = 12 个
-      expect(list.length).toBeGreaterThanOrEqual(11)
-      expect(store.installedSet.has('legacy-demo')).toBe(true)
-      expect(store.installedSet.has('json-format')).toBe(true)
-      expect(store.installedSet.has('qr-code')).toBe(true)
-      expect(store.installedSet.has('speedtest')).toBe(true)
+      const ids = store.installedPlugins.map((p) => p.pluginId)
+      expect(ids).toContain('legacy-demo')
+      for (const id of BUNDLED_PLUGIN_IDS) expect(ids).toContain(id)
+      expect(ids.filter((id) => id === 'json-format')).toHaveLength(1)
+      for (const hidden of ['cleaner', 'speedtest', 'kill-process', 'clipboard-history', 'notes']) {
+        expect(ids).not.toContain(hidden)
+      }
+      expect(store.installedPlugins.length).toBe(BUNDLED_PLUGIN_IDS.length + 1)
 
       const jsonFormat = store.installedPlugins.find((p) => p.pluginId === 'json-format')
-      expect(jsonFormat).toBeDefined()
-      expect(jsonFormat.name).toBe('JSON 格式化与类型推导')
-      expect(jsonFormat.badge).toBe('官方标杆')
+      expect(jsonFormat.isDeclarative).toBe(true)
+      expect(jsonFormat.bundled).toBe(true)
+      expect(typeof jsonFormat.category).toBe('string')
     })
 
-    it('当本地原生接口异常/网络不可用时，优雅降级保证官方标杆插件依然秒开可用', async () => {
+    it('当本地原生接口异常/网络不可用时，内置插件依然可用', async () => {
       vi.mocked(apiServer.getLocalPlugins).mockRejectedValue(new Error('Native IPC Connection Timeout'))
 
       const store = usePluginsStore()
-      const list = await store.fetchInstalledPlugins()
+      await store.fetchInstalledPlugins()
 
-      // 即使原生接口崩溃，官方应用必须坚挺可用
-      expect(list.length).toBeGreaterThanOrEqual(10)
+      expect(store.installedPlugins.map((p) => p.pluginId).sort()).toEqual([...BUNDLED_PLUGIN_IDS].sort())
       expect(store.installedSet.has('json-format')).toBe(true)
-      expect(store.installedSet.has('kill-process')).toBe(true)
     })
 
-    it('调用 openPlugin 打开官方应用时，应更新最近使用并直接路由到声明式页面', async () => {
+    it('列表尚未加载时打开内置插件，也直接路由到声明式页面，不走原生插件接口', async () => {
       const store = usePluginsStore()
       const result = await store.openPlugin('json-format')
 
       expect(result.success).toBe(true)
       expect(result.isDeclarative).toBe(true)
-      expect(result.pluginId).toBe('json-format')
+      expect(apiServer.openPlugin).not.toHaveBeenCalled()
       expect(store.recents).toContain('json-format')
       expect(mockPush).toHaveBeenCalledWith(expect.objectContaining({
         name: 'declarative',
@@ -172,35 +207,28 @@ describe('官方标杆声明式应用注册表与端到端集成测试', () => {
       }))
     })
 
-    it('严禁卸载官方内置核心扩展', async () => {
+    it('严禁卸载内置插件', async () => {
       const store = usePluginsStore()
       await expect(store.uninstallPlugin('json-format')).rejects.toThrow('官方内置核心扩展不可卸载')
-      
+
       // onUninstallComplete 事件静默保护
       store.installedSet.add('json-format')
       store.onUninstallComplete({ pluginId: 'json-format' })
       expect(store.installedSet.has('json-format')).toBe(true)
     })
 
-    it('所有插件市场列表 loadWithCache 自动包含官方标杆应用并支持分类与搜索', async () => {
+    it('插件市场（远端不可达时）只列出内置插件，并支持分类与搜索', async () => {
       const store = usePluginsStore()
 
-      // 1. 分类筛选：'办公效率'
-      const officeRes = await store.loadWithCache({ category: '办公效率' }, true)
-      expect(officeRes.list.some((p) => p.pluginId === 'json-format')).toBe(true)
-      expect(officeRes.list.some((p) => p.pluginId === 'notes')).toBe(true)
-      expect(officeRes.list.some((p) => p.pluginId === 'clipboard-history')).toBe(true)
-      expect(officeRes.list.some((p) => p.pluginId === 'snippets')).toBe(true)
-      // 只能展示示例数据的插件不进市场
-      expect(officeRes.list.some((p) => p.pluginId === 'github')).toBe(false)
+      const devRes = await store.loadWithCache({ category: '开发工具' }, true)
+      expect(devRes.list.some((p) => p.pluginId === 'json-format')).toBe(true)
+      expect(devRes.list.some((p) => p.pluginId === 'calculator')).toBe(false)
+      expect(devRes.list.some((p) => p.pluginId === 'kill-process')).toBe(false)
 
-      // 2. 分类筛选：'系统工具'
-      const sysRes = await store.loadWithCache({ category: '系统工具' }, true)
-      expect(sysRes.list.some((p) => p.pluginId === 'qr-code')).toBe(true)
-      expect(sysRes.list.some((p) => p.pluginId === 'kill-process')).toBe(true)
-      expect(sysRes.list.some((p) => p.pluginId === 'trial-nudges')).toBe(false)
+      const allRes = await store.loadWithCache({}, true)
+      for (const p of allRes.list) expect(isPluginVisible(p)).toBe(true)
+      expect(allRes.list.some((p) => p.pluginId === 'clipboard-history')).toBe(false)
 
-      // 3. 关键词检索：'json'
       const searchRes = await store.loadWithCache({ keyword: 'json' }, true)
       expect(searchRes.list.some((p) => p.pluginId === 'json-format')).toBe(true)
       expect(searchRes.list.some((p) => p.pluginId === 'qr-code')).toBe(false)
@@ -213,11 +241,12 @@ describe('官方标杆声明式应用注册表与端到端集成测试', () => {
         props: { pluginId: 'json-format' }
       })
 
-      await nextTick()
+      await settle()
 
-      expect(wrapper.text()).toContain('JSON 格式化与类型推导')
-      expect(wrapper.text()).toContain('官方标杆')
+      // 读取的是 public/bundled-plugins 下真实的插件产物
+      expect(wrapper.text()).toContain('JSON 格式化')
       expect(wrapper.findComponent({ name: 'DeclarativeView' }).exists()).toBe(true)
+      expect(fetch).toHaveBeenCalledWith(expect.stringContaining('bundled-plugins/json-format/dist/index.js'))
     })
 
     it('点击返回工作台按钮触发路由后退', async () => {
@@ -225,7 +254,7 @@ describe('官方标杆声明式应用注册表与端到端集成测试', () => {
         props: { pluginId: 'qr-code' }
       })
 
-      await nextTick()
+      await settle()
 
       const backBtn = wrapper.find('button[title*="返回我的插件"]')
       expect(backBtn.exists()).toBe(true)
@@ -236,10 +265,10 @@ describe('官方标杆声明式应用注册表与端到端集成测试', () => {
 
     it('点击【独立窗口】按钮时应携带状态弹出独立窗口，并在原生 IPC 异常时平滑降级至 /popout 路由', async () => {
       const wrapper = mount(DeclarativePage, {
-        props: { pluginId: 'software-manager' }
+        props: { pluginId: 'todo' }
       })
 
-      await nextTick()
+      await settle()
 
       const popoutBtn = wrapper.find('.declarative-popout-btn')
       expect(popoutBtn.exists()).toBe(true)
@@ -249,17 +278,17 @@ describe('官方标杆声明式应用注册表与端到端集成测试', () => {
       expect(mockPush).toHaveBeenCalledWith(
         expect.objectContaining({
           name: 'popout',
-          params: { pluginId: 'software-manager' }
+          params: { pluginId: 'todo' }
         })
       )
     })
 
     it('独立常驻窗口模式 (isPopout=true) 应展示置顶与收回控制，且根视图按 Esc 严禁误触发退出', async () => {
       const wrapper = mount(DeclarativePage, {
-        props: { pluginId: 'process-monitor', isPopout: true }
+        props: { pluginId: 'calculator', isPopout: true }
       })
 
-      await nextTick()
+      await settle()
 
       expect(wrapper.find('.declarative-pin-btn').exists()).toBe(true)
       expect(wrapper.find('.declarative-dock-btn').exists()).toBe(true)
@@ -275,16 +304,16 @@ describe('官方标杆声明式应用注册表与端到端集成测试', () => {
 
     it('列表项点击鼠标右键 (@contextmenu) 应自动高亮选中并就地呼出 ActionPanel', async () => {
       const wrapper = mount(DeclarativePage, {
-        props: { pluginId: 'software-manager' }
+        props: { pluginId: 'calculator' }
       })
 
-      await nextTick()
+      await settle()
 
       const view = wrapper.findComponent({ name: 'DeclarativeView' })
       expect(view.exists()).toBe(true)
 
       const itemEls = wrapper.findAll('.cursor-pointer')
-      const firstItem = itemEls.find(el => el.text().includes('微信') || el.text().includes('Chrome'))
+      const firstItem = itemEls.find(el => el.text().includes('sqrt'))
       expect(firstItem).toBeDefined()
 
       // 触发 contextmenu 右键事件
@@ -314,23 +343,24 @@ describe('官方标杆声明式应用注册表与端到端集成测试', () => {
       expect(getOfficialPlugin('unknown-non-exist')).toBeUndefined()
     })
 
-    it('[破坏性] 不可用的内置插件即使绕过列表直接打开也会被拒绝，且不跳转', async () => {
+    it('[破坏性] 未开放的插件即使绕过列表直接打开也会被拒绝，且不跳转', async () => {
       const store = usePluginsStore()
       mockPush.mockClear()
-      for (const id of ['github', ' SPEEDTEST ', 'trial-nudges']) {
-        await expect(store.openPlugin(id)).rejects.toThrow('当前系统上暂不可用')
+      for (const id of ['github', ' SPEEDTEST ', 'trial-nudges', 'cleaner', 'KILL-PROCESS', 'screen-color-picker']) {
+        await expect(store.openPlugin(id)).rejects.toThrow('暂未开放')
       }
       expect(mockPush).not.toHaveBeenCalled()
+      expect(apiServer.openPlugin).not.toHaveBeenCalled()
     })
 
-    it('[破坏性] 直接访问不可用插件的路由时显示「当前系统暂不可用」，不渲染插件', async () => {
+    it('[破坏性] 直接访问未开放插件的路由时显示「暂未开放」，不渲染插件', async () => {
       const wrapper = mount(DeclarativePage, {
         props: { pluginId: 'trial-nudges' },
         global: { stubs: { DeclarativeView: true } }
       })
-      await nextTick()
-      expect(wrapper.text()).toContain('当前系统暂不可用')
-      expect(wrapper.text()).toContain('核心特权与技术方案')
+      await settle()
+      expect(wrapper.text()).toContain('该插件暂未开放')
+      expect(wrapper.text()).not.toContain('核心特权与技术方案')
       expect(wrapper.text()).not.toContain('未找到指定的声明式应用')
       expect(wrapper.findComponent({ name: 'DeclarativeView' }).exists()).toBe(false)
       wrapper.unmount()
@@ -347,7 +377,7 @@ describe('官方标杆声明式应用注册表与端到端集成测试', () => {
         props: { pluginId: 'malicious-injected-id-9999' }
       })
 
-      await nextTick()
+      await settle()
 
       // 验证平滑容错提示
       expect(wrapper.text()).toContain('未找到指定的声明式应用')
@@ -365,7 +395,7 @@ describe('官方标杆声明式应用注册表与端到端集成测试', () => {
       vi.mocked(getMarketPlugins).mockRejectedValueOnce(new Error('Internal Server Error 500: Database connection pool exhausted'))
 
       const store = usePluginsStore()
-      const fallbackRes = await store.loadWithCache({ category: '办公效率' }, true)
+      const fallbackRes = await store.loadWithCache({ category: '开发工具' }, true)
 
       // 验证平滑降级：不抛出未捕获异常，且内置核心标杆应用依然正常就绪
       expect(fallbackRes.list.length).toBeGreaterThan(0)

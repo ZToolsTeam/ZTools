@@ -12,11 +12,17 @@
  */
 
 import {
+  callHostTransport,
+  getRealFileSize,
   invokeHostCapability,
   invokePluginService,
+  isRealElectronHost,
+  openRealPath,
   resolveRealSpecialPaths,
   scanRealDirectoryTree,
+  showRealItemInFolder,
   showRealToast,
+  trashRealItem,
   writeRealClipboardText,
   formatBytes,
   type NativeInvocationResult
@@ -52,42 +58,42 @@ export const DOWNLOAD_CATEGORIES: DownloadCategoryMeta[] = [
   {
     id: "installer",
     name: "应用安装包",
-    icon: "📦",
+    icon: "Icon.Box",
     color: "#3b82f6",
     exts: [".exe", ".msi", ".msix", ".appx", ".dmg", ".deb", ".rpm"]
   },
   {
     id: "archive",
     name: "压缩归档包",
-    icon: "🗜️",
+    icon: "Icon.Archive",
     color: "#f59e0b",
     exts: [".zip", ".7z", ".rar", ".tar", ".gz", ".bz2", ".xz", ".tgz"]
   },
   {
     id: "media",
     name: "音视频与图像",
-    icon: "🎬",
+    icon: "Icon.Video",
     color: "#ec4899",
     exts: [".mp4", ".mkv", ".mov", ".webm", ".avi", ".mp3", ".flac", ".wav", ".png", ".jpg", ".webp"]
   },
   {
     id: "iso_image",
     name: "系统镜像与模型",
-    icon: "💿",
+    icon: "Icon.Disc",
     color: "#8b5cf6",
     exts: [".iso", ".img", ".vhd", ".vhdx", ".gguf", ".safetensors", ".onnx", ".bin"]
   },
   {
     id: "document",
     name: "办公文档与脚本",
-    icon: "📄",
+    icon: "Icon.Document",
     color: "#10b981",
     exts: [".pdf", ".docx", ".doc", ".xlsx", ".xls", ".pptx", ".ppt", ".txt", ".md", ".csv", ".json", ".sql"]
   },
   {
     id: "other",
     name: "其他下载文件",
-    icon: "📁",
+    icon: "Icon.Folder",
     color: "#64748b",
     exts: []
   }
@@ -239,14 +245,13 @@ export async function probeAria2JsonRpc(endpoint = "http://127.0.0.1:6800/jsonrp
   }
 }
 
-export async function readClipboardDownloadUrl(): Promise<{
+export async function readClipboardDownloadUrl(hostBridge?: any): Promise<{
   url: string;
   protocol: string;
   suggestedFileName: string;
 }> {
   try {
-    const { callHostTransport } = await import("../shared/native-ipc.js");
-    const ipcClip = await callHostTransport<any>("clipboard_read_text", {});
+    const ipcClip = await callHostTransport<any>("clipboard_read_text", {}, hostBridge);
     if (ipcClip.ok && ipcClip.data) {
       const txt = typeof ipcClip.data === "string" ? ipcClip.data : String(ipcClip.data.text || "");
       return detectDownloadUrlFromText(txt);
@@ -257,21 +262,32 @@ export async function readClipboardDownloadUrl(): Promise<{
   return { url: "", protocol: "支持 HTTP/FTP/Magnet", suggestedFileName: "" };
 }
 
-export async function fetchMultiDownloadSnapshot(): Promise<MultiDownloadSnapshot> {
-  const paths = await resolveRealSpecialPaths();
+export async function fetchMultiDownloadSnapshot(hostBridge?: any): Promise<MultiDownloadSnapshot> {
+  const paths = await resolveRealSpecialPaths(hostBridge);
   const downloadDir = paths.downloads || `${paths.userProfile}\\Downloads`;
   const driveLetter = (downloadDir.match(/^[A-Za-z]:/) || ["C:"])[0].toUpperCase();
 
-  const [sysRes, rawEntries, aria2RpcOnline, clipInfo] = await Promise.all([
-    invokeHostCapability<Record<string, unknown>>("system.info", { includeStorage: true }),
-    scanRealDirectoryTree(downloadDir, { maxDepth: 2, maxFiles: 220 }),
+  const [diskRes, sysRes, rawEntries, aria2RpcOnline, clipInfo] = await Promise.all([
+    callHostTransport<{ total?: number; used?: number; available?: number; free?: number }>(
+      "system_get_disk_usage",
+      { drive: `${driveLetter}\\` },
+      hostBridge
+    ),
+    invokeHostCapability<Record<string, unknown>>("system.info", { includeStorage: true }, hostBridge),
+    scanRealDirectoryTree(downloadDir, { maxDepth: 2, maxFiles: 220, hostOverride: hostBridge }),
     probeAria2JsonRpc(),
-    readClipboardDownloadUrl()
+    readClipboardDownloadUrl(hostBridge)
   ]);
 
   let driveFreeBytes = 0;
   let driveTotalBytes = 0;
-  if (sysRes.ok && sysRes.data) {
+  if (diskRes.ok && diskRes.data) {
+    driveTotalBytes = Number(diskRes.data.total || 0);
+    const used = Number(diskRes.data.used || 0);
+    driveFreeBytes = Number(
+      diskRes.data.available ?? diskRes.data.free ?? Math.max(0, driveTotalBytes - used)
+    );
+  } else if (sysRes.ok && sysRes.data) {
     const storageArr = Array.isArray((sysRes.data as { storage?: unknown }).storage)
       ? ((sysRes.data as { storage: Array<Record<string, unknown>> }).storage)
       : [];
@@ -292,21 +308,25 @@ export async function fetchMultiDownloadSnapshot(): Promise<MultiDownloadSnapsho
     catMap.set(cat.id, { sizeBytes: 0, count: 0 });
   }
 
-  for (const entry of rawEntries) {
-    if (entry.isDirectory || entry.sizeBytes <= 0) continue;
-    const catMeta = classifyDownloadedExtension(entry.ext);
-    totalSizeBytes += entry.sizeBytes;
+  const fileList = Array.isArray(rawEntries) ? rawEntries : (rawEntries?.files || []);
+  for (const entry of fileList) {
+    const isDir = Boolean(entry.isDirectory || entry.isDir);
+    const sz = Number(entry.sizeBytes ?? entry.size ?? 0);
+    if (isDir || sz <= 0) continue;
+    const ext = String(entry.ext || "").toLowerCase() || ".bin";
+    const catMeta = classifyDownloadedExtension(ext);
+    totalSizeBytes += sz;
     const stat = catMap.get(catMeta.id)!;
-    stat.sizeBytes += entry.sizeBytes;
+    stat.sizeBytes += sz;
     stat.count += 1;
 
     files.push({
       id: entry.path,
       name: entry.name,
       path: entry.path,
-      ext: entry.ext || ".bin",
-      sizeBytes: entry.sizeBytes,
-      mtimeMs: entry.mtimeMs,
+      ext,
+      sizeBytes: sz,
+      mtimeMs: Number(entry.mtimeMs ?? entry.mtime ?? Date.now()),
       category: catMeta.id,
       categoryName: catMeta.name,
       categoryColor: catMeta.color,
@@ -346,10 +366,11 @@ export async function fetchMultiDownloadSnapshot(): Promise<MultiDownloadSnapsho
 export async function startMultiThreadDownloadTask(
   url: string,
   downloadDir: string,
-  preset: ThreadSplitPreset
+  preset: ThreadSplitPreset,
+  hostBridge?: any
 ): Promise<NativeInvocationResult> {
-  const cleanUrl = String(url || "").trim();
-  if (!cleanUrl || !/^(https?|ftp|magnet):/i.test(cleanUrl)) {
+  const trimmed = String(url || "").trim();
+  if (!trimmed || !/^(https?|ftp|magnet):/i.test(trimmed)) {
     return {
       ok: false,
       code: -1,
@@ -357,14 +378,19 @@ export async function startMultiThreadDownloadTask(
     };
   }
 
-  // 1. 优先尝试调用原生插件或 Aria2 JSON-RPC
-  const rpcRes = await invokePluginService(DLL_PLUGIN_NAME, "AddDownloadTask", {
-    url: cleanUrl,
-    dir: downloadDir,
-    threads: preset.threads,
-    split: preset.threads,
-    minSplitSize: preset.splitSize
-  });
+  // 1. 优先尝试调用原生插件
+  const rpcRes = await invokePluginService(
+    DLL_PLUGIN_NAME,
+    "AddDownloadTask",
+    {
+      url: trimmed,
+      dir: downloadDir,
+      threads: preset.threads,
+      split: preset.threads,
+      minSplitSize: preset.splitSize
+    },
+    hostBridge
+  );
   if (rpcRes.ok) {
     await showRealToast(`已启动 ${preset.threads} 线程高速分块下载任务`, "success");
     return rpcRes;
@@ -373,6 +399,8 @@ export async function startMultiThreadDownloadTask(
   // 2. 尝试直连本机 Aria2 JSON-RPC
   try {
     if (typeof fetch === "function") {
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), 500);
       const resp = await fetch("http://127.0.0.1:6800/jsonrpc", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -381,7 +409,7 @@ export async function startMultiThreadDownloadTask(
           id: `ztools-${Date.now()}`,
           method: "aria2.addUri",
           params: [
-            [cleanUrl],
+            [trimmed],
             {
               dir: downloadDir,
               "max-connection-per-server": String(preset.threads),
@@ -390,25 +418,72 @@ export async function startMultiThreadDownloadTask(
               continue: "true"
             }
           ]
-        })
+        }),
+        signal: controller.signal
       });
+      clearTimeout(timer);
       if (resp.ok) {
         await showRealToast(`已派发至本机 Aria2 引擎 (${preset.threads} 线程并发)`, "success");
         return { ok: true, code: 0, message: "Aria2 JSON-RPC 任务创建成功" };
       }
     }
   } catch {
-    // fallback to system browser / downloader
+    // fallback to host network_http_download
   }
 
-  // 3. 将完整 Aria2 多线程命令写入剪贴板并调用系统通道触发下载
-  const cliCommand = `aria2c ${preset.aria2Flags} -d "${downloadDir}" "${cleanUrl}"`;
-  await writeRealClipboardText(cliCommand);
-  const openRes = await invokeHostCapability("system.openUrl", { url: cleanUrl });
-  await showRealToast(
-    `已触发高速下载并复制 ${preset.threads} 线程命令到剪贴板`,
-    openRes.ok ? "success" : "info"
-  );
+  // 3. 调用宿主真实 HTTP 下载通道 network_http_download
+  const parsedUrl = detectDownloadUrlFromText(trimmed);
+  const fileName = parsedUrl.suggestedFileName || `download_${Date.now()}.bin`;
+  const sep = downloadDir.includes("/") ? "/" : "\\";
+  const targetPath = `${downloadDir.replace(/[\\/]+$/, "")}${sep}${fileName}`;
+
+  if (/^https?:/i.test(trimmed)) {
+    const httpRes = await callHostTransport(
+      "network_http_download",
+      { url: trimmed, destPath: targetPath },
+      hostBridge
+    );
+    if (httpRes.ok) {
+      await showRealToast(`已完成下载并保存至: ${targetPath}`, "success");
+      return {
+        ok: true,
+        code: 0,
+        message: `已通过宿主网络引擎真实下载至: ${targetPath}`,
+        data: { destPath: targetPath, ...(typeof httpRes.data === "object" ? httpRes.data : {}) }
+      };
+    }
+    if (isRealElectronHost(hostBridge) || hostBridge) {
+      return {
+        ok: false,
+        code: -1,
+        message: httpRes.error || "宿主网络下载失败",
+        error: httpRes.error || "宿主网络下载失败"
+      };
+    }
+  } else if (isRealElectronHost(hostBridge) || hostBridge) {
+    const openRes = await callHostTransport("shell_open_external", { url: trimmed }, hostBridge);
+    if (!openRes.ok) {
+      return {
+        ok: false,
+        code: -1,
+        message: openRes.error || "未检测到 Aria2 守护进程且无法打开协议链接",
+        error: openRes.error || "DOWNLOAD_FAILED"
+      };
+    }
+  }
+
+  // 4. 回退：将 Aria2 多线程命令写入剪贴板
+  const cliCommand = `aria2c ${preset.aria2Flags} -d "${downloadDir}" "${trimmed}"`;
+  await writeRealClipboardText(cliCommand, hostBridge);
+  if (isRealElectronHost(hostBridge) || isRealElectronHost()) {
+    return {
+      ok: false,
+      code: -1,
+      message: "本机未检测到 yt-dlp/aria2c 下载引擎，已将命令复制到剪贴板",
+      error: "ENGINE_NOT_FOUND"
+    };
+  }
+  await invokeHostCapability("system.openUrl", { url: trimmed }, hostBridge);
   return {
     ok: true,
     code: 0,
@@ -416,20 +491,30 @@ export async function startMultiThreadDownloadTask(
   };
 }
 
-export async function deleteDownloadedFiles(paths: string[]): Promise<{
+export async function deleteDownloadedFiles(
+  paths: string[],
+  knownFiles: DownloadedFileItem[] = [],
+  hostBridge?: any
+): Promise<{
   deletedCount: number;
   freedBytes: number;
 }> {
   let deletedCount = 0;
-  const freedBytes = 0;
+  let freedBytes = 0;
+  const sizeMap = new Map<string, number>();
+  for (const item of knownFiles) {
+    if (item && item.path) {
+      sizeMap.set(item.path, Number(item.sizeBytes || 0));
+    }
+  }
+
   for (const targetPath of paths) {
     if (!targetPath || FORBIDDEN_TARGET_PATTERN.test(targetPath)) continue;
-    const res = await invokeHostCapability("filesystem.deleteItem", {
-      path: targetPath,
-      useTrash: true
-    });
+    const knownSize = sizeMap.get(targetPath) ?? (await getRealFileSize(targetPath, hostBridge));
+    const res = await trashRealItem(targetPath, hostBridge);
     if (res.ok) {
       deletedCount += 1;
+      freedBytes += knownSize;
     }
   }
   if (deletedCount > 0) {
@@ -438,10 +523,26 @@ export async function deleteDownloadedFiles(paths: string[]): Promise<{
   return { deletedCount, freedBytes };
 }
 
-export async function openDownloadedFileLocation(targetPath: string): Promise<NativeInvocationResult> {
-  return invokeHostCapability("system.showItemInFolder", { path: targetPath });
+export async function openDownloadedFileLocation(
+  targetPath: string,
+  hostBridge?: any
+): Promise<NativeInvocationResult> {
+  const ok = await showRealItemInFolder(targetPath, hostBridge);
+  return {
+    ok,
+    code: ok ? 0 : -1,
+    message: ok ? "已在资源管理器中定位文件" : "定位文件失败"
+  };
 }
 
-export async function openDownloadedFile(targetPath: string): Promise<NativeInvocationResult> {
-  return invokeHostCapability("filesystem.openItem", { path: targetPath });
+export async function openDownloadedFile(
+  targetPath: string,
+  hostBridge?: any
+): Promise<NativeInvocationResult> {
+  const ok = await openRealPath(targetPath, hostBridge);
+  return {
+    ok,
+    code: ok ? 0 : -1,
+    message: ok ? "已打开文件" : "打开文件失败"
+  };
 }

@@ -4,16 +4,12 @@ import {
   Action,
   Icon,
   Color,
-  Clipboard,
   useState,
   useEffect,
   showToast,
   Toast,
   confirmAlert,
-  MetricGrid,
-  DistributionBar,
-  FilterBar,
-  SegmentedControl
+  FilterBar
 } from '../../index.js'
 import {
   CapabilityActionItem,
@@ -26,16 +22,17 @@ import {
   openPdfFileLocation,
   openPdfDocument
 } from './logic.js'
+import { isRealElectronHost } from '../shared/native-ipc.js'
 
 export * from './logic.js'
 
 const DOC_TYPE_META: Array<{ type: RealPdfDocItem['docType']; label: string; color: string }> = [
-  { type: 'pdf', label: 'PDF 文档', color: '#ef4444' },
-  { type: 'word', label: 'Word 文档', color: '#3b82f6' },
-  { type: 'excel', label: 'Excel 表格', color: '#10b981' },
-  { type: 'ppt', label: 'PPT 演示', color: '#f59e0b' },
-  { type: 'image', label: '扫描图/PNG', color: '#a855f7' },
-  { type: 'other', label: '文本/Markdown', color: '#64748b' }
+  { type: 'pdf', label: 'PDF 文档', color: '#94a3b8' },
+  { type: 'word', label: 'Word 文档', color: '#94a3b8' },
+  { type: 'excel', label: 'Excel 表格', color: '#94a3b8' },
+  { type: 'ppt', label: 'PPT 演示', color: '#94a3b8' },
+  { type: 'image', label: '扫描图/PNG', color: '#94a3b8' },
+  { type: 'other', label: '文本/Markdown', color: '#94a3b8' }
 ]
 
 const INITIAL_SAMPLE_PDFS: RealPdfDocItem[] = [
@@ -123,28 +120,31 @@ const INITIAL_SAMPLE_PDFS: RealPdfDocItem[] = [
 
 export function PdfCommand() {
   const [searchText, setSearchText] = useState('')
-  const [tab, setTab] = useState<'files' | 'presets' | 'all'>('files')
   const [toolCat, setToolCat] = useState<'all' | PdfToolCategory>('all')
   const [activeToolId, setActiveToolId] = useState<string>(PDF_TOOLBOX_MODES[0].id)
   const [pageRangeMode, setPageRangeMode] = useState<'all' | 'first5' | 'odd' | 'even' | 'single_split'>('all')
   const [renderDpi, setRenderDpi] = useState<'300' | '150' | '72'>('300')
   const [compressionLevel, setCompressionLevel] = useState<'lossless' | 'archive' | 'raw'>('lossless')
   const [keepBookmarks, setKeepBookmarks] = useState<boolean>(true)
-  const [files, setFiles] = useState<RealPdfDocItem[]>(INITIAL_SAMPLE_PDFS)
-  const [checkedIds, setCheckedIds] = useState<string[]>(INITIAL_SAMPLE_PDFS.map(f => f.id))
+  const isRealHost = isRealElectronHost()
+  const initialPdfs = isRealHost ? [] : INITIAL_SAMPLE_PDFS
+  const [files, setFiles] = useState<RealPdfDocItem[]>(initialPdfs)
+  const [checkedIds, setCheckedIds] = useState<string[]>(initialPdfs.map(f => f.id))
   const [presets, setPresets] = useState<CapabilityActionItem[]>(PDF_TOOLBOX_MODES)
-  const [scannedDirs, setScannedDirs] = useState<string[]>(['C:\\Users\\Geek\\Documents', 'C:\\Users\\Geek\\Downloads'])
   const [isLoading, setIsLoading] = useState(false)
 
   async function refreshWorkspace(showIndicator = false) {
     if (showIndicator) setIsLoading(true)
     try {
       const ws = await fetchRealPdfWorkspace()
-      const nextFiles = ws.files.length >= 4 ? ws.files : [...ws.files, ...INITIAL_SAMPLE_PDFS].slice(0, 12)
+      const nextFiles = isRealElectronHost()
+        ? ws.files
+        : ws.files.length > 0
+          ? ws.files
+          : INITIAL_SAMPLE_PDFS
       setFiles(nextFiles)
       setCheckedIds(nextFiles.slice(0, 12).map(f => f.id))
       setPresets(ws.presets)
-      if (ws.scannedDirs.length > 0) setScannedDirs(ws.scannedDirs)
       if (showIndicator) {
         showToast({
           style: Toast.Style.Success,
@@ -176,7 +176,36 @@ export function PdfCommand() {
     })
     if (!ok) return
 
+    const outputDir = selected[0]?.parentDir || ''
+    if (activeToolId === 'merge' || activeToolId === 'pdf-merge' || activeTool.method === 'MergePdf') {
+      const res = await invokeNativeCapability('MergePdf', {
+        ...activeTool.params,
+        paths: selected.map(f => f.path),
+        inputPath: selected[0].path,
+        outputDir,
+        pageRangeMode,
+        renderDpi: Number(renderDpi),
+        compressionLevel,
+        keepBookmarks
+      })
+      if (!res.ok) {
+        showToast({
+          style: Toast.Style.Failure,
+          title: '批量 PDF 合并未执行成功',
+          message: res.error || 'PDF 合并调用失败'
+        })
+        return
+      }
+      showToast({
+        style: Toast.Style.Success,
+        title: `已完成 ${selected.length} 份文档无损合并`,
+        message: activeTool.title
+      })
+      return
+    }
+
     let count = 0
+    let lastErr = ''
     for (const f of selected) {
       const res = await invokeNativeCapability(activeTool.method, {
         ...activeTool.params,
@@ -184,9 +213,22 @@ export function PdfCommand() {
         renderDpi: Number(renderDpi),
         compressionLevel,
         keepBookmarks,
+        outputDir: f.parentDir || outputDir,
         inputPath: f.path
       })
-      if (res.ok) count += 1
+      if (res.ok) {
+        count += 1
+      } else {
+        lastErr = res.error || 'PDF 转换调用失败'
+      }
+    }
+    if (count === 0) {
+      showToast({
+        style: Toast.Style.Failure,
+        title: '批量 PDF 任务未执行成功',
+        message: lastErr
+      })
+      return
     }
     showToast({
       style: Toast.Style.Success,
@@ -218,9 +260,6 @@ export function PdfCommand() {
   const selectedFiles = files.filter(f => checkedIds.includes(f.id))
   const selectedBytes = selectedFiles.reduce((s, f) => s + f.sizeBytes, 0)
   const selectedPages = selectedFiles.reduce((s, f) => s + f.estimatedPages, 0)
-  const totalBytes = files.reduce((s, f) => s + f.sizeBytes, 0)
-  const pdfCount = files.filter(f => f.docType === 'pdf').length
-  const officeImgCount = files.length - pdfCount
   const q = searchText.trim().toLowerCase()
   const filteredFiles = files.filter(
     f => !q || f.name.toLowerCase().includes(q) || f.path.toLowerCase().includes(q)
@@ -231,29 +270,16 @@ export function PdfCommand() {
     return p.title.toLowerCase().includes(q) || p.subtitle.toLowerCase().includes(q) || p.tag.toLowerCase().includes(q)
   })
 
-  const docSegments = DOC_TYPE_META.map(meta => {
-    const docs = files.filter(f => f.docType === meta.type)
-    const bytes = docs.reduce((s, f) => s + f.sizeBytes, 0)
-    return {
-      id: meta.type,
-      label: `${meta.label} (${docs.length}份)`,
-      valueBytes: bytes,
-      formattedSize: `${docs.length}份 · ${formatBytes(bytes)}`,
-      percentage: files.length > 0 ? Math.max(5, (docs.length / files.length) * 100) : 16,
-      color: meta.color,
-      active: true
-    }
-  }).filter(seg => !seg.label.includes('(0份)'))
-
   const maxDocBytes = Math.max(1, filteredFiles[0]?.sizeBytes || 1)
   const rightQueueItems = filteredFiles.map(f => {
     const isChecked = checkedIds.includes(f.id)
     const volRatio = Math.max(10, Math.min(100, Math.round((f.sizeBytes / maxDocBytes) * 100)))
+    const docMeta = DOC_TYPE_META.find(m => m.type === f.docType)
 
     return List.Item({
       id: f.id,
       title: f.name,
-      subtitle: `${f.parentDir} · 约 ${f.estimatedPages} 页 · 目标: ${activeTool.tag}`,
+      subtitle: `${f.parentDir} · 约 ${f.estimatedPages} 页 · ${docMeta?.label || 'PDF 文档'} → ${activeTool.tag}`,
       checkable: true,
       checked: isChecked,
       onCheckChange: c => {
@@ -327,89 +353,8 @@ export function PdfCommand() {
         })
       )
     }),
-    metricGrid: MetricGrid({
-      columns: 4,
-      items: [
-        {
-          id: 'pdf-files',
-          label: '本机扫描文档总数',
-          value: `${files.length} 份`,
-          subValue: `已勾选 ${checkedIds.length} 份待处理`,
-          status: 'normal'
-        },
-        {
-          id: 'pdf-count',
-          label: 'PDF / Office 与图片',
-          value: `${pdfCount} 份 PDF`,
-          subValue: `${officeImgCount} 份 Office/图片文档`,
-          status: 'normal'
-        },
-        {
-          id: 'pdf-size',
-          label: '文档合计体积',
-          value: formatBytes(totalBytes),
-          subValue: `${scannedDirs.length} 个真实目录已穿透`,
-          status: 'normal'
-        },
-        {
-          id: 'pdf-presets',
-          label: '当前激活 PDF 工具',
-          value: activeTool.tag,
-          subValue: '3 大类 12 项全功能就绪',
-          status: 'success'
-        }
-      ]
-    }),
-    distributionBar: DistributionBar({
-      title: '本机文档与扫描件格式分布 (Documents / Downloads / Desktop)',
-      totalLabel: `共 ${files.length} 份文档 · ${formatBytes(totalBytes)}`,
-      segments: docSegments
-    }),
     filterBar: FilterBar({
-      wizardSteps: [
-        { step: 1, label: '1. 扫描本机 PDF/Office 文档', status: 'done' },
-        { step: 2, label: '2. 选择 12 大转换/合并工具', status: 'done' },
-        { step: 3, label: '3. 配置页码范围与300DPI参数', status: 'active' },
-        { step: 4, label: '4. 批量转换/无损合并', status: 'pending' }
-      ],
       summaryText: `已选 ${checkedIds.length}/${files.length} 份文档 (共约 ${selectedPages} 页 / ${formatBytes(selectedBytes)}) · 当前工具: ${activeTool.tag} · ${renderDpi} DPI`,
-      groups: [
-        {
-          id: 'tool-cat',
-          label: '工具大类',
-          value: toolCat,
-          onChange: v => setToolCat(v as any),
-          options: [
-            { value: 'all', label: '全部 12 项工具', badge: PDF_TOOLBOX_MODES.length },
-            { value: 'pdf_to_other', label: 'PDF 转其他 (6项)', badge: 6 },
-            { value: 'other_to_pdf', label: '其他转 PDF (3项)', badge: 3 },
-            { value: 'pdf_ops', label: '合并/拆分/压缩 (3项)', badge: 3 }
-          ]
-        },
-        {
-          id: 'tool-mode',
-          label: '当前激活工具',
-          value: activeToolId,
-          onChange: v => setActiveToolId(v),
-          options: filteredPresets.map(m => ({
-            value: m.id,
-            label: m.tag
-          }))
-        },
-        {
-          id: 'page-range',
-          label: '页码范围与拆分策略',
-          value: pageRangeMode,
-          onChange: v => setPageRangeMode(v as any),
-          options: [
-            { value: 'all', label: '全部页面 (All Pages)' },
-            { value: 'first5', label: '仅前 5 页预览提取' },
-            { value: 'odd', label: '仅奇数页 (1, 3, 5...)' },
-            { value: 'even', label: '仅偶数页 (2, 4, 6...)' },
-            { value: 'single_split', label: '逐页拆分为独立文档' }
-          ]
-        }
-      ],
       actions: [
         {
           id: 'rescan-pdf',
@@ -425,15 +370,17 @@ export function PdfCommand() {
       subtitle: `${renderDpi} DPI 矢量版面还原引擎`,
       fields: [
         {
-          id: 'wb-pdf-mode',
-          label: 'PDF 工具模式',
+          id: 'wb-tool-cat',
+          label: '工具分类筛选',
           type: 'select',
-          value: activeToolId,
-          onChange: val => setActiveToolId(val),
-          options: PDF_TOOLBOX_MODES.map(m => ({
-            label: m.tag,
-            value: m.id
-          }))
+          value: toolCat,
+          onChange: val => setToolCat(val as any),
+          options: [
+            { label: '全部 12 项 PDF 工具', value: 'all' },
+            { label: 'PDF 转其他格式 (6项)', value: 'pdf_to_other' },
+            { label: 'Office/图片转 PDF (3项)', value: 'other_to_pdf' },
+            { label: '合并/拆分/压缩 (3项)', value: 'pdf_ops' }
+          ]
         },
         {
           id: 'wb-page-range',
@@ -515,15 +462,6 @@ export function PdfCommand() {
       emptyText: '当前队列暂无匹配文档',
       items: rightQueueItems
     },
-    segmentedControl: SegmentedControl({
-      value: tab,
-      onChange: v => setTab(v as any),
-      options: [
-        { value: 'files', label: '本机文档批处理队列 (三态勾选)', badge: files.length },
-        { value: 'presets', label: '12 大 PDF 工具箱矩阵', badge: filteredPresets.length },
-        { value: 'all', label: '完整混合工作台', badge: files.length + filteredPresets.length }
-      ]
-    }),
     children: [
       List.Section({
         title: `本机目录文档与扫描件清单 (${filteredFiles.length})`,
@@ -537,7 +475,8 @@ export function PdfCommand() {
             title: p.title,
             subtitle: p.subtitle,
             icon: {
-              source: Icon.Gear
+              source: Icon.Gear,
+              tintColor: Color.SecondaryText
             },
             accessories: [
               { tag: { value: p.tag } },
@@ -563,3 +502,4 @@ export function PdfCommand() {
 }
 
 export default PdfCommand
+

@@ -1,0 +1,39 @@
+{
+  "id": "color-picker",
+  "name": "颜色转换",
+  "version": "2.0.0",
+  "description": "HEX / RGB / HSL / OKLCH / CMYK 互转，显示无障碍对比度，可收藏常用颜色",
+  "author": "ZTools Team",
+  "entry": "dist/index.js",
+  "icon": "icon.svg",
+  "permissions": [
+    "clipboard"
+  ],
+  "targets": [
+    {
+      "id": "windows-electron-any",
+      "platform": "windows",
+      "runtime": "electron",
+      "arch": "any"
+    },
+    {
+      "id": "macos-electron-any",
+      "platform": "macos",
+      "runtime": "electron",
+      "arch": "any"
+    }
+  ],
+  "nativeComponents": [],
+  "keywords": [
+    "color",
+    "颜色",
+    "hex",
+    "rgb",
+    "hsl",
+    "oklch",
+    "调色板"
+  ],
+  "category": [
+    "设计工具"
+  ]
+}

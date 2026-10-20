@@ -79,25 +79,33 @@ export function NetworkRescueCommand() {
   }
 
   async function handleRepairAllWarnings() {
-    const warningIds = items.filter((i) => i.status === 'warning').map((i) => i.id)
+    const warningIds = items.filter((i) => i.status === 'warning' || i.status === 'error').map((i) => i.id)
     const res = await batchExecuteNetworkRepairs(warningIds)
-    setItems((prev) =>
-      prev.map((cur) =>
-        cur.status === 'warning'
-          ? { ...cur, status: 'repaired', statusText: '已自动修复', healthScore: 100 }
-          : cur
+    if (res.ok && res.repairedCount > 0) {
+      setItems((prev) =>
+        prev.map((cur) =>
+          cur.status === 'warning' || cur.status === 'error'
+            ? { ...cur, status: 'repaired', statusText: '已自动修复', healthScore: 100 }
+            : cur
+        )
       )
-    )
-    setHealthScore(99)
-    showToast({
-      style: Toast.Style.Success,
-      title: res.summary,
-      message: '已清理残留代理与异常域名劫持'
-    })
+      setHealthScore(99)
+      showToast({
+        style: Toast.Style.Success,
+        title: res.summary,
+        message: '已清理残留代理与异常域名劫持'
+      })
+    } else {
+      showToast({
+        style: Toast.Style.Failure,
+        title: '批量修复未完成',
+        message: res.summary
+      })
+    }
   }
 
   const filtered = filterNetworkRescueItems(items, searchText, filterMode)
-  const warningCount = items.filter((i) => i.status === 'warning').length
+  const warningCount = items.filter((i) => i.status === 'warning' || i.status === 'error').length
 
   return List({
     navigationTitle: '网络断网诊断与急救箱',
@@ -143,7 +151,7 @@ export function NetworkRescueCommand() {
       List.Section({
         title: `网络故障诊断与一键修复项 (${filtered.length})`,
         children: filtered.map((item) => {
-          const isWarning = item.status === 'warning'
+          const isWarning = item.status === 'warning' || item.status === 'error'
           return List.Item({
             id: item.id,
             title: item.title,

@@ -11,16 +11,27 @@
  */
 
 import * as DeclarativeUI from '@ztools/declarative-ui'
+import { isBundledPlugin, readBundledPluginFile, getBundledPluginIconUrl } from './bundledPlugins.js'
+import { createScopedLocalStorage } from './pluginStorage.js'
 
 export const V2_CATALOG_CDN_URL = 'https://cdn.ztools.cn/plugins-v2/catalog.json'
 
 /**
- * 轻量浏览器端纯 JS 哈希与 HMAC 垫片（用于渲染进程无 Node 原生 crypto 时的兼容回退）
+ * 渲染进程里提供给插件的 `crypto` 模块：只提供有真实实现的接口。
+ *
+ * - createHash / createHmac：仅支持 MD5、SHA-1、SHA-256（标准算法实现），其他算法抛 UNSUPPORTED_NODE_API；
+ * - createCipheriv / createDecipheriv：不提供，抛 UNSUPPORTED_NODE_API，请改用 WebCrypto（globalThis.crypto.subtle）；
+ * - randomBytes / randomUUID：使用 WebCrypto 安全随机数。
  */
-function createBrowserCryptoShim() {
-  // 纯 JS SHA-256 / SHA-1 / MD5 简易摘要兼容实现（当处于 Node 环境时优先使用 globalThis.__nodeCrypto）
-  function utf8Bytes(str) {
-    return new TextEncoder().encode(String(str ?? ''))
+function createRendererCryptoModule(pluginId) {
+  const unsupported = (name) => () => {
+    const err = new Error(`插件 [${pluginId}] 调用了 crypto.${name}：声明式插件运行在渲染进程，不提供 Node 摘要接口，请改用 WebCrypto 或自带实现`)
+    err.code = 'UNSUPPORTED_NODE_API'
+    throw err
+  }
+
+  function utf8Bytes(text) {
+    return new TextEncoder().encode(String(text))
   }
 
   function bytesToHex(bytes) {
@@ -29,22 +40,147 @@ function createBrowserCryptoShim() {
       .join('')
   }
 
-  function simpleDigestBytes(alg, dataBytes) {
-    const len = alg === 'md5' ? 16 : alg === 'sha1' ? 20 : alg === 'sha512' ? 64 : 32
-    const out = new Uint8Array(len)
-    let h1 = 0x811c9dc5
-    let h2 = 0x01000193
-    for (let i = 0; i < dataBytes.length; i++) {
-      h1 ^= dataBytes[i]
-      h1 = Math.imul(h1, 0x01000193) >>> 0
-      h2 = (Math.imul(h2 ^ dataBytes[i], 0x5bd1e995) + i) >>> 0
-      out[i % len] = (out[i % len] ^ (h1 & 0xff) ^ ((h2 >>> ((i % 4) * 8)) & 0xff)) & 0xff
+  const SHA256_K = new Uint32Array([
+    0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5, 0x3956c25b, 0x59f111f1, 0x923f82a4, 0xab1c5ed5,
+    0xd807aa98, 0x12835b01, 0x243185be, 0x550c7dc3, 0x72be5d74, 0x80deb1fe, 0x9bdc06a7, 0xc19bf174,
+    0xe49b69c1, 0xefbe4786, 0x0fc19dc6, 0x240ca1cc, 0x2de92c6f, 0x4a7484aa, 0x5cb0a9dc, 0x76f988da,
+    0x983e5152, 0xa831c66d, 0xb00327c8, 0xbf597fc7, 0xc6e00bf3, 0xd5a79147, 0x06ca6351, 0x14292967,
+    0x27b70a85, 0x2e1b2138, 0x4d2c6dfc, 0x53380d13, 0x650a7354, 0x766a0abb, 0x81c2c92e, 0x92722c85,
+    0xa2bfe8a1, 0xa81a664b, 0xc24b8b70, 0xc76c51a3, 0xd192e819, 0xd6990624, 0xf40e3585, 0x106aa070,
+    0x19a4c116, 0x1e376c08, 0x2748774c, 0x34b0bcb5, 0x391c0cb3, 0x4ed8aa4a, 0x5b9cca4f, 0x682e6ff3,
+    0x748f82ee, 0x78a5636f, 0x84c87814, 0x8cc70208, 0x90befffa, 0xa4506ceb, 0xbef9a3f7, 0xc67178f2
+  ])
+
+  function rotr32(x, n) {
+    return (x >>> n) | (x << (32 - n))
+  }
+
+  function rotl32(x, n) {
+    return (x << n) | (x >>> (32 - n))
+  }
+
+  function sha256Bytes(dataBytes) {
+    const bitLen = dataBytes.length * 8
+    const padLen = (dataBytes.length + 9 + 63) & ~63
+    const buf = new Uint8Array(padLen)
+    buf.set(dataBytes, 0)
+    buf[dataBytes.length] = 0x80
+    const view = new DataView(buf.buffer)
+    view.setUint32(padLen - 8, Math.floor(bitLen / 0x100000000), false)
+    view.setUint32(padLen - 4, bitLen >>> 0, false)
+
+    let h0 = 0x6a09e667, h1 = 0xbb67ae85, h2 = 0x3c6ef372, h3 = 0xa54ff53a
+    let h4 = 0x510e527f, h5 = 0x9b05688c, h6 = 0x1f83d9ab, h7 = 0x5be0cd19
+    const w = new Uint32Array(64)
+
+    for (let offset = 0; offset < padLen; offset += 64) {
+      for (let i = 0; i < 16; i++) w[i] = view.getUint32(offset + i * 4, false)
+      for (let i = 16; i < 64; i++) {
+        const s0 = rotr32(w[i - 15], 7) ^ rotr32(w[i - 15], 18) ^ (w[i - 15] >>> 3)
+        const s1 = rotr32(w[i - 2], 17) ^ rotr32(w[i - 2], 19) ^ (w[i - 2] >>> 10)
+        w[i] = (w[i - 16] + s0 + w[i - 7] + s1) >>> 0
+      }
+      let a = h0, b = h1, c = h2, d = h3, e = h4, f = h5, g = h6, h = h7
+      for (let i = 0; i < 64; i++) {
+        const S1 = rotr32(e, 6) ^ rotr32(e, 11) ^ rotr32(e, 25)
+        const ch = (e & f) ^ (~e & g)
+        const t1 = (h + S1 + ch + SHA256_K[i] + w[i]) >>> 0
+        const S0 = rotr32(a, 2) ^ rotr32(a, 13) ^ rotr32(a, 22)
+        const maj = (a & b) ^ (a & c) ^ (b & c)
+        const t2 = (S0 + maj) >>> 0
+        h = g; g = f; f = e; e = (d + t1) >>> 0; d = c; c = b; b = a; a = (t1 + t2) >>> 0
+      }
+      h0 = (h0 + a) >>> 0; h1 = (h1 + b) >>> 0; h2 = (h2 + c) >>> 0; h3 = (h3 + d) >>> 0
+      h4 = (h4 + e) >>> 0; h5 = (h5 + f) >>> 0; h6 = (h6 + g) >>> 0; h7 = (h7 + h) >>> 0
     }
-    for (let j = 0; j < len; j++) {
-      h1 = Math.imul(h1 ^ (j + len), 0x01000193) >>> 0
-      out[j] = (out[j] ^ ((h1 >>> ((j % 4) * 8)) & 0xff)) & 0xff
-    }
+
+    const out = new Uint8Array(32)
+    const outView = new DataView(out.buffer)
+    ;[h0, h1, h2, h3, h4, h5, h6, h7].forEach((v, idx) => outView.setUint32(idx * 4, v >>> 0, false))
     return out
+  }
+
+  function sha1Bytes(dataBytes) {
+    const bitLen = dataBytes.length * 8
+    const padLen = (dataBytes.length + 9 + 63) & ~63
+    const buf = new Uint8Array(padLen)
+    buf.set(dataBytes, 0)
+    buf[dataBytes.length] = 0x80
+    const view = new DataView(buf.buffer)
+    view.setUint32(padLen - 8, Math.floor(bitLen / 0x100000000), false)
+    view.setUint32(padLen - 4, bitLen >>> 0, false)
+
+    let h0 = 0x67452301, h1 = 0xefcdab89, h2 = 0x98badcfe, h3 = 0x10325476, h4 = 0xc3d2e1f0
+    const w = new Uint32Array(80)
+    for (let offset = 0; offset < padLen; offset += 64) {
+      for (let i = 0; i < 16; i++) w[i] = view.getUint32(offset + i * 4, false)
+      for (let i = 16; i < 80; i++) w[i] = rotl32(w[i - 3] ^ w[i - 8] ^ w[i - 14] ^ w[i - 16], 1) >>> 0
+      let a = h0, b = h1, c = h2, d = h3, e = h4
+      for (let i = 0; i < 80; i++) {
+        let f, k
+        if (i < 20) { f = (b & c) | (~b & d); k = 0x5a827999 }
+        else if (i < 40) { f = b ^ c ^ d; k = 0x6ed9eba1 }
+        else if (i < 60) { f = (b & c) | (b & d) | (c & d); k = 0x8f1bbcdc }
+        else { f = b ^ c ^ d; k = 0xca62c1d6 }
+        const temp = (rotl32(a, 5) + f + e + k + w[i]) >>> 0
+        e = d; d = c; c = rotl32(b, 30) >>> 0; b = a; a = temp
+      }
+      h0 = (h0 + a) >>> 0; h1 = (h1 + b) >>> 0; h2 = (h2 + c) >>> 0; h3 = (h3 + d) >>> 0; h4 = (h4 + e) >>> 0
+    }
+    const out = new Uint8Array(20)
+    const outView = new DataView(out.buffer)
+    ;[h0, h1, h2, h3, h4].forEach((v, idx) => outView.setUint32(idx * 4, v >>> 0, false))
+    return out
+  }
+
+  const MD5_S = [
+    7, 12, 17, 22, 7, 12, 17, 22, 7, 12, 17, 22, 7, 12, 17, 22,
+    5, 9, 14, 20, 5, 9, 14, 20, 5, 9, 14, 20, 5, 9, 14, 20,
+    4, 11, 16, 23, 4, 11, 16, 23, 4, 11, 16, 23, 4, 11, 16, 23,
+    6, 10, 15, 21, 6, 10, 15, 21, 6, 10, 15, 21, 6, 10, 15, 21
+  ]
+  const MD5_K = new Uint32Array(64)
+  for (let i = 0; i < 64; i++) MD5_K[i] = Math.floor(Math.abs(Math.sin(i + 1)) * 0x100000000) >>> 0
+
+  function md5Bytes(dataBytes) {
+    const bitLen = dataBytes.length * 8
+    const padLen = (dataBytes.length + 9 + 63) & ~63
+    const buf = new Uint8Array(padLen)
+    buf.set(dataBytes, 0)
+    buf[dataBytes.length] = 0x80
+    const view = new DataView(buf.buffer)
+    view.setUint32(padLen - 8, bitLen >>> 0, true)
+    view.setUint32(padLen - 4, Math.floor(bitLen / 0x100000000), true)
+
+    let a0 = 0x67452301, b0 = 0xefcdab89, c0 = 0x98badcfe, d0 = 0x10325476
+    const M = new Uint32Array(16)
+    for (let offset = 0; offset < padLen; offset += 64) {
+      for (let j = 0; j < 16; j++) M[j] = view.getUint32(offset + j * 4, true)
+      let A = a0, B = b0, C = c0, D = d0
+      for (let i = 0; i < 64; i++) {
+        let F, g
+        if (i < 16) { F = (B & C) | (~B & D); g = i }
+        else if (i < 32) { F = (D & B) | (~D & C); g = (5 * i + 1) % 16 }
+        else if (i < 48) { F = B ^ C ^ D; g = (3 * i + 5) % 16 }
+        else { F = C ^ (B | ~D); g = (7 * i) % 16 }
+        F = (F + A + MD5_K[i] + M[g]) >>> 0
+        A = D; D = C; C = B; B = (B + rotl32(F, MD5_S[i])) >>> 0
+      }
+      a0 = (a0 + A) >>> 0; b0 = (b0 + B) >>> 0; c0 = (c0 + C) >>> 0; d0 = (d0 + D) >>> 0
+    }
+    const out = new Uint8Array(16)
+    const outView = new DataView(out.buffer)
+    ;[a0, b0, c0, d0].forEach((v, idx) => outView.setUint32(idx * 4, v >>> 0, true))
+    return out
+  }
+
+  // 只登记有标准实现的算法；SHA-512 等其他算法直接报错，绝不返回看似正常的错误结果
+  const DIGESTS = { md5: md5Bytes, sha1: sha1Bytes, 'sha-1': sha1Bytes, sha256: sha256Bytes, 'sha-256': sha256Bytes }
+
+  function resolveDigest(algorithm, api) {
+    const alg = String(algorithm ?? '').trim().toLowerCase()
+    if (!Object.hasOwn(DIGESTS, alg)) unsupported(`${api}('${String(algorithm)}')`)()
+    return DIGESTS[alg]
   }
 
   function wrapBufferLike(uint8) {
@@ -72,7 +208,7 @@ function createBrowserCryptoShim() {
 
   return {
     createHash(algorithm) {
-      const alg = String(algorithm || 'sha256').toLowerCase()
+      const digest = resolveDigest(algorithm, 'createHash')
       const chunks = []
       return {
         update(data) {
@@ -88,15 +224,28 @@ function createBrowserCryptoShim() {
             merged.set(c, offset)
             offset += c.length
           }
-          const raw = wrapBufferLike(simpleDigestBytes(alg, merged))
+          const raw = wrapBufferLike(digest(merged))
           return encoding ? raw.toString(encoding) : raw
         }
       }
     },
     createHmac(algorithm, key) {
-      const alg = String(algorithm || 'sha256').toLowerCase()
-      const keyBytes = typeof key === 'string' ? utf8Bytes(key) : new Uint8Array(key || [])
-      const chunks = [keyBytes]
+      const digest = resolveDigest(algorithm, 'createHmac')
+      // MD5 / SHA-1 / SHA-256 的分组长度都是 64 字节
+      const blockSize = 64
+      let keyBytes = typeof key === 'string' ? utf8Bytes(key) : new Uint8Array(key || [])
+      if (keyBytes.length > blockSize) {
+        keyBytes = digest(keyBytes)
+      }
+      const paddedKey = new Uint8Array(blockSize)
+      paddedKey.set(keyBytes, 0)
+      const oKeyPad = new Uint8Array(blockSize)
+      const iKeyPad = new Uint8Array(blockSize)
+      for (let i = 0; i < blockSize; i++) {
+        oKeyPad[i] = paddedKey[i] ^ 0x5c
+        iKeyPad[i] = paddedKey[i] ^ 0x36
+      }
+      const chunks = [iKeyPad]
       return {
         update(data) {
           const bytes = typeof data === 'string' ? utf8Bytes(data) : new Uint8Array(data || [])
@@ -105,33 +254,32 @@ function createBrowserCryptoShim() {
         },
         digest(encoding) {
           const totalLen = chunks.reduce((s, c) => s + c.length, 0)
-          const merged = new Uint8Array(totalLen)
+          const innerMerged = new Uint8Array(totalLen)
           let offset = 0
           for (const c of chunks) {
-            merged.set(c, offset)
+            innerMerged.set(c, offset)
             offset += c.length
           }
-          const raw = wrapBufferLike(simpleDigestBytes(alg, merged))
+          const innerHash = digest(innerMerged)
+          const outerMerged = new Uint8Array(blockSize + innerHash.length)
+          outerMerged.set(oKeyPad, 0)
+          outerMerged.set(innerHash, blockSize)
+          const raw = wrapBufferLike(digest(outerMerged))
           return encoding ? raw.toString(encoding) : raw
         }
       }
     },
+    createCipheriv: unsupported('createCipheriv'),
+    createDecipheriv: unsupported('createDecipheriv'),
     randomBytes(size) {
-      const bytes = new Uint8Array(size)
-      if (globalThis.crypto && typeof globalThis.crypto.getRandomValues === 'function') {
-        globalThis.crypto.getRandomValues(bytes)
-      }
-      return wrapBufferLike(bytes)
+      const n = Number(size)
+      if (!Number.isInteger(n) || n < 0 || n > 65536) throw new RangeError('randomBytes 长度必须是 0–65536 的整数')
+      const bytes = new Uint8Array(n)
+      globalThis.crypto.getRandomValues(bytes)
+      return bytes
     },
     randomUUID() {
-      if (globalThis.crypto && typeof globalThis.crypto.randomUUID === 'function') {
-        return globalThis.crypto.randomUUID()
-      }
-      return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (c) => {
-        const r = (Math.random() * 16) | 0
-        const v = c === 'x' ? r : (r & 0x3) | 0x8
-        return v.toString(16)
-      })
+      return globalThis.crypto.randomUUID()
     }
   }
 }
@@ -362,7 +510,9 @@ export async function loadInstalledDeclarativePlugin(pluginId, options = {}) {
     throw err
   }
 
-  const readFile = options.readFile || defaultReadPluginFile
+  // 内置官方插件随客户端分发，从 bundled-plugins/ 读取；其余插件从已安装目录 ztools://plugins/ 读取
+  const bundled = !options.readFile && isBundledPlugin(pid)
+  const readFile = options.readFile || (bundled ? readBundledPluginFile : defaultReadPluginFile)
 
   // 1. 读取 plugin.json
   const manifestRaw = await readFile(pid, 'plugin.json')
@@ -406,13 +556,15 @@ export async function loadInstalledDeclarativePlugin(pluginId, options = {}) {
   const evaluatedModules = new Map()
   const evaluatingSet = new Set()
 
+  // 每个插件拿到自己的 LocalStorage：数据按插件 ID 隔离，写入宿主插件存储（落盘、重启不丢）
   const compatExports = {
     ...DeclarativeUI,
+    LocalStorage: options.localStorage || createScopedLocalStorage(manifest.id || pid),
     default: DeclarativeUI.default || DeclarativeUI,
     __esModule: true
   }
 
-  const cryptoShim = createBrowserCryptoShim()
+  const cryptoShim = createRendererCryptoModule(pid)
   const declaredPermissions = new Set(Array.isArray(manifest.permissions) ? manifest.permissions : [])
 
   function evaluateModule(relPath) {
@@ -553,7 +705,7 @@ export async function loadInstalledDeclarativePlugin(pluginId, options = {}) {
     description: manifest.description || '',
     version: manifest.version || '1.0.0',
     author: typeof manifest.author === 'string' ? manifest.author : (manifest.author?.name || 'ZTools Official'),
-    icon: `ztools://plugins/${encodeURIComponent(pid)}/${iconRel}`,
+    icon: bundled ? getBundledPluginIconUrl(pid, iconRel) : `ztools://plugins/${encodeURIComponent(pid)}/${iconRel}`,
     faIcon: 'fa-bolt',
     mode: effectiveMode,
     alias: matchedFeature?.alias || manifest.alias || '',

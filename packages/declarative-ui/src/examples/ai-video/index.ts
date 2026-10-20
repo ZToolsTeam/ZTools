@@ -9,9 +9,7 @@ import {
   showToast,
   Toast,
   confirmAlert,
-  MetricGrid,
-  FilterBar,
-  SegmentedControl
+  FilterBar
 } from '../../index.js'
 import {
   AI_VIDEO_MODELS,
@@ -23,6 +21,7 @@ import {
   openAiVideoLocation,
   runAiVideoBatch
 } from './logic.js'
+import { isRealElectronHost } from '../shared/native-ipc.js'
 
 export * from './logic.js'
 
@@ -40,16 +39,17 @@ const FPS_LABEL_MAP: Record<string, string> = {
 
 export function AiVideoCommand() {
   const [searchText, setSearchText] = useState('')
-  const [tab, setTab] = useState<'files' | 'models'>('files')
   const [activeModelId, setActiveModelId] = useState<string>(AI_VIDEO_MODELS[0].id)
   const [targetFps, setTargetFps] = useState<'60fps' | '120fps' | 'source'>('60fps')
   const [targetResolution, setTargetResolution] = useState<'4k_2160p' | '2k_1440p' | '1080p_fhd'>('4k_2160p')
   const [videoEncoder, setVideoEncoder] = useState<'hevc_nvenc' | 'h264' | 'av1'>('hevc_nvenc')
   const [sceneChangeProtection, setSceneChangeProtection] = useState<boolean>(true)
-  const [files, setFiles] = useState<AiVideoFileItem[]>(INITIAL_AI_VIDEO_FILES)
-  const [checkedIds, setCheckedIds] = useState<string[]>(INITIAL_AI_VIDEO_FILES.map(f => f.id))
+  const isRealHost = isRealElectronHost()
+  const initialFiles = isRealHost ? [] : INITIAL_AI_VIDEO_FILES
+  const [files, setFiles] = useState<AiVideoFileItem[]>(initialFiles)
+  const [checkedIds, setCheckedIds] = useState<string[]>(initialFiles.map(f => f.id))
   const [models, setModels] = useState<AiVideoModelPreset[]>(AI_VIDEO_MODELS)
-  const [scannedDirs, setScannedDirs] = useState<string[]>(['D:\\Videos', 'C:\\Users\\Geek\\Videos'])
+  const [, setScannedDirs] = useState<string[]>([])
   const [isLoading, setIsLoading] = useState(false)
 
   async function refreshWorkspace(showIndicator = false) {
@@ -178,13 +178,19 @@ export function AiVideoCommand() {
                 videoEncoder,
                 sceneChangeProtection
               })
-              if (res.ok) {
+              if (!res.ok) {
                 showToast({
-                  style: Toast.Style.Success,
-                  title: `已启动 ${f.name} AI 补帧与超分`,
-                  message: `${activeModel.tag} (${outResShort} ${outFpsStr})`
+                  style: Toast.Style.Failure,
+                  title: `增强 ${f.name} 失败`,
+                  message: res.error || '推理引擎返回异常'
                 })
+                return
               }
+              showToast({
+                style: Toast.Style.Success,
+                title: `已启动 ${f.name} AI 补帧与超分`,
+                message: `${activeModel.tag} (${outResShort} ${outFpsStr})`
+              })
             }
           }),
           Action({
@@ -217,59 +223,8 @@ export function AiVideoCommand() {
         })
       )
     }),
-    metricGrid: MetricGrid({
-      columns: 4,
-      items: [
-        {
-          id: 'ai-vid-count',
-          label: '已选 / 扫描视频数',
-          value: `${checkedIds.length} / ${files.length} 个`,
-          subValue: `${scannedDirs.length} 个视频目录已扫描`,
-          status: 'normal'
-        },
-        {
-          id: 'ai-vid-fps',
-          label: '目标补帧帧率',
-          value: FPS_LABEL_MAP[targetFps] || '60 FPS',
-          subValue: sceneChangeProtection ? '转场防伪影已开启' : '标准光流内插',
-          status: 'success'
-        },
-        {
-          id: 'ai-vid-res',
-          label: '目标超分画质',
-          value: RES_LABEL_MAP[targetResolution] || '4K UHD',
-          subValue: `编码器: ${videoEncoder.toUpperCase()}`,
-          status: 'success'
-        },
-        {
-          id: 'ai-vid-size',
-          label: '已选素材总大小',
-          value: formatBytes(totalBytes),
-          subValue: activeModel.modelEngine,
-          status: 'normal'
-        }
-      ]
-    }),
     filterBar: FilterBar({
-      wizardSteps: [
-        { step: 1, label: '1. 扫描本机视频队列', status: 'done' },
-        { step: 2, label: '2. 选择 RIFE/CUGAN 模型', status: 'done' },
-        { step: 3, label: '3. 配置帧率与4K分辨率', status: 'active' },
-        { step: 4, label: '4. 批量光流补帧导出', status: 'pending' }
-      ],
       summaryText: `队列已选 ${checkedIds.length}/${files.length} 个视频 (${formatBytes(totalBytes)}) · 模型: ${activeModel.tag} · 输出 ${RES_LABEL_MAP[targetResolution]} @ ${FPS_LABEL_MAP[targetFps]}`,
-      groups: [
-        {
-          id: 'ai-video-model',
-          label: 'AI 视频模型',
-          value: activeModelId,
-          onChange: v => setActiveModelId(v),
-          options: AI_VIDEO_MODELS.map(m => ({
-            value: m.id,
-            label: m.tag
-          }))
-        }
-      ],
       actions: [
         {
           id: 'rescan-ai-video',
@@ -284,17 +239,6 @@ export function AiVideoCommand() {
       title: 'AI 视频补帧与超分工作台',
       subtitle: `${activeModel.modelEngine} · ${videoEncoder.toUpperCase()}`,
       fields: [
-        {
-          id: 'wb-vid-model',
-          label: 'AI 视频模型',
-          type: 'select',
-          value: activeModelId,
-          onChange: val => setActiveModelId(val),
-          options: AI_VIDEO_MODELS.map(m => ({
-            label: m.tag,
-            value: m.id
-          }))
-        },
         {
           id: 'wb-target-fps',
           label: '目标帧率',
@@ -373,14 +317,6 @@ export function AiVideoCommand() {
       emptyText: '当前队列暂无匹配视频',
       items: rightQueueItems
     },
-    segmentedControl: SegmentedControl({
-      value: tab,
-      onChange: v => setTab(v as any),
-      options: [
-        { value: 'files', label: '待增强视频队列', badge: files.length },
-        { value: 'models', label: '4 大 AI 视频模型', badge: models.length }
-      ]
-    }),
     children: [
       List.Section({
         title: `本机待增强视频队列 (${filteredFiles.length})`,
@@ -391,3 +327,4 @@ export function AiVideoCommand() {
 }
 
 export default AiVideoCommand
+

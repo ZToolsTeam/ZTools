@@ -1,6 +1,10 @@
 import { LocalStorage } from "../../api/storage.js";
 import { getDeclarativeBridge } from "../../api/bridge.js";
-import { callHostTransport, isRealElectronHost } from "../shared/native-ipc.js";
+import {
+  callHostTransport,
+  invokePluginService,
+  isRealElectronHost
+} from "../shared/native-ipc.js";
 
 export interface RGB {
   r: number;
@@ -82,8 +86,16 @@ export interface PickedColorResult {
   pickedAt: number;
 }
 
+function isStrictRealHost(hostOverride?: unknown): boolean {
+  if (isRealElectronHost(hostOverride)) return true;
+  if (hostOverride !== undefined && hostOverride !== null) return true;
+  return false;
+}
+
 const PALETTE_STORAGE_KEY = "color_picker_palette";
 const HISTORY_STORAGE_KEY = "color_picker_history";
+
+let paletteIdSeq = 1;
 
 const NAMED_COLORS: Record<string, string> = {
   black: "#000000",
@@ -549,112 +561,161 @@ export function generateColorSwatchSvg(hex: string, width = 360, height = 120): 
   return `data:image/svg+xml;utf8,${encodeURIComponent(svg)}`;
 }
 
+function checkPermissionError(errText: string, data?: any): void {
+  if (
+    data?.permissionDenied ||
+    errText.includes("SCREEN_RECORDING") ||
+    errText.includes("TCC") ||
+    errText.includes("Screen Recording") ||
+    errText.includes("屏幕录制")
+  ) {
+    throw new Error(
+      "SCREEN_RECORDING_PERMISSION_DENIED: 缺少 macOS 屏幕录制权限 (TCC Screen Recording)，请前往「系统设置 -> 隐私与安全性 -> 录屏与系统录音」授予 ZTools 权限"
+    );
+  }
+}
+
+function buildPickedColorResultFromRaw(
+  raw: any,
+  fallbackX = 0,
+  fallbackY = 0
+): PickedColorResult | null {
+  if (!raw) return null;
+  if (typeof raw === "string" && raw.trim()) {
+    const parsed = parseColor(raw.trim());
+    if (parsed.isValid) {
+      return {
+        hex: parsed.hex,
+        rgb: parsed.rgb,
+        hsl: parsed.hsl,
+        hsv: parsed.hsv,
+        x: fallbackX,
+        y: fallbackY,
+        source: "native",
+        pickedAt: Date.now()
+      };
+    }
+  }
+  if (typeof raw === "object") {
+    let hexStr = typeof raw.hex === "string" ? raw.hex : typeof raw.color === "string" ? raw.color : "";
+    if (!hexStr && typeof raw.r === "number" && typeof raw.g === "number" && typeof raw.b === "number") {
+      hexStr = rgbToHex({ r: raw.r, g: raw.g, b: raw.b });
+    } else if (
+      !hexStr &&
+      raw.rgb &&
+      typeof raw.rgb.r === "number" &&
+      typeof raw.rgb.g === "number" &&
+      typeof raw.rgb.b === "number"
+    ) {
+      hexStr = rgbToHex(raw.rgb);
+    }
+    if (hexStr) {
+      const parsed = parseColor(hexStr);
+      return {
+        hex: parsed.hex,
+        rgb: parsed.rgb,
+        hsl: parsed.hsl,
+        hsv: parsed.hsv,
+        x: typeof raw.x === "number" ? raw.x : fallbackX,
+        y: typeof raw.y === "number" ? raw.y : fallbackY,
+        source: "native",
+        pickedAt: Date.now()
+      };
+    }
+  }
+  return null;
+}
+
 /**
  * 屏幕拾色器核心 (Screen Eyedropper)
- * 优先调用 Win32 / UIAccess 或 macOS NSColorSampler / CGDisplayCreateImageForRect 屏幕选色，
- * 当检测到 macOS TCC 屏幕录制权限缺失时主动抛出清晰权限引导，测试/无特权环境下自动降级为高保真模拟取色
+ * 结合 screen_get_cursor_pos 与 ColorPickerPlugin.pickScreenPixel / screen_pick_color 获取真实屏幕像素 RGB/HEX 值；
+ * 真实宿主下若失败则如实抛出错误，彻底清零随机伪造假颜色的代码。
  */
 export async function pickScreenColor(hostOverride?: any): Promise<PickedColorResult> {
+  const strictReal = isStrictRealHost(hostOverride);
   const bridge = getDeclarativeBridge();
   if (bridge && typeof (bridge as any).pickScreenColor === "function") {
     try {
       const res = await (bridge as any).pickScreenColor();
-      if (res && (res.permissionDenied || String(res.error || "").includes("SCREEN_RECORDING") || String(res.error || "").includes("TCC"))) {
-        throw new Error(
-          "SCREEN_RECORDING_PERMISSION_DENIED: 缺少 macOS 屏幕录制权限 (TCC Screen Recording)，请前往「系统设置 -> 隐私与安全性 -> 录屏与系统录音」授予 ZTools 权限"
-        );
-      }
-      if (res && res.hex) {
-        const parsed = parseColor(res.hex);
-        return {
-          hex: parsed.hex,
-          rgb: parsed.rgb,
-          hsl: parsed.hsl,
-          hsv: parsed.hsv,
-          x: res.x,
-          y: res.y,
-          source: "native",
-          pickedAt: Date.now()
-        };
-      }
+      checkPermissionError(String(res?.error || ""), res);
+      const picked = buildPickedColorResultFromRaw(res);
+      if (picked) return picked;
     } catch (err: any) {
-      if (String(err?.message || "").includes("SCREEN_RECORDING") || String(err?.message || "").includes("TCC") || String(err?.message || "").includes("屏幕录制")) {
+      if (
+        String(err?.message || "").includes("SCREEN_RECORDING") ||
+        String(err?.message || "").includes("TCC") ||
+        String(err?.message || "").includes("屏幕录制")
+      ) {
+        throw err;
+      }
+      if (strictReal && !hostOverride) {
         throw err;
       }
     }
   }
 
-  if (hostOverride || isRealElectronHost()) {
-    const pickRes = await callHostTransport<any>("screen_pick_color", {}, hostOverride);
-    const errText = String(pickRes.error || pickRes.data?.error || "");
-    if (
-      pickRes.data?.permissionDenied ||
-      errText.includes("SCREEN_RECORDING") ||
-      errText.includes("TCC") ||
-      errText.includes("Screen Recording") ||
-      errText.includes("屏幕录制")
-    ) {
-      throw new Error(
-        "SCREEN_RECORDING_PERMISSION_DENIED: 缺少 macOS 屏幕录制权限 (TCC Screen Recording)，请前往「系统设置 -> 隐私与安全性 -> 录屏与系统录音」授予 ZTools 权限"
-      );
-    }
-    if (pickRes.ok && pickRes.data?.hex) {
-      const parsed = parseColor(pickRes.data.hex);
-      return {
-        hex: parsed.hex,
-        rgb: parsed.rgb,
-        hsl: parsed.hsl,
-        hsv: parsed.hsv,
-        x: pickRes.data.x ?? 960,
-        y: pickRes.data.y ?? 540,
-        source: "native",
-        pickedAt: Date.now()
-      };
+  if (strictReal) {
+    // 1. 获取当前光标真实屏幕坐标
+    const cursorRes = await callHostTransport<any>("screen_get_cursor_pos", {}, hostOverride);
+    const cursorX = typeof cursorRes.data?.x === "number" ? cursorRes.data.x : 0;
+    const cursorY = typeof cursorRes.data?.y === "number" ? cursorRes.data.y : 0;
+
+    // 2. 优先调用 ColorPickerPlugin.pickScreenPixel 获取真实屏幕像素颜色
+    const pluginRes = await invokePluginService<any>(
+      "ColorPickerPlugin",
+      "pickScreenPixel",
+      { x: cursorX, y: cursorY },
+      hostOverride
+    );
+    checkPermissionError(String(pluginRes.error || pluginRes.data?.error || ""), pluginRes.data);
+    if (pluginRes.ok && pluginRes.data?.ok !== false) {
+      const picked = buildPickedColorResultFromRaw(pluginRes.data, cursorX, cursorY);
+      if (picked) return picked;
     }
 
-    const capRes = await callHostTransport<any>("screen_capture", { mode: "color" }, hostOverride);
-    const capErr = String(capRes.error || capRes.data?.error || "");
-    if (
-      capRes.data?.permissionDenied ||
-      capErr.includes("SCREEN_RECORDING") ||
-      capErr.includes("TCC") ||
-      capErr.includes("Screen Recording") ||
-      capErr.includes("屏幕录制")
-    ) {
-      throw new Error(
-        "SCREEN_RECORDING_PERMISSION_DENIED: 缺少 macOS 屏幕录制权限 (TCC Screen Recording)，请前往「系统设置 -> 隐私与安全性 -> 录屏与系统录音」授予 ZTools 权限"
-      );
+    // 3. 兼容宿主 screen_pick_color IPC 通道
+    const pickRes = await callHostTransport<any>(
+      "screen_pick_color",
+      { x: cursorX, y: cursorY },
+      hostOverride
+    );
+    checkPermissionError(String(pickRes.error || pickRes.data?.error || ""), pickRes.data);
+    if (pickRes.ok && pickRes.data?.ok !== false) {
+      const picked = buildPickedColorResultFromRaw(pickRes.data, cursorX, cursorY);
+      if (picked) return picked;
     }
-    if (capRes.ok && capRes.data?.hex) {
-      const parsed = parseColor(capRes.data.hex);
-      return {
-        hex: parsed.hex,
-        rgb: parsed.rgb,
-        hsl: parsed.hsl,
-        hsv: parsed.hsv,
-        x: capRes.data.x ?? 960,
-        y: capRes.data.y ?? 540,
-        source: "native",
-        pickedAt: Date.now()
-      };
+
+    // 4. 兼容宿主 screen_capture (mode: "color")
+    const capRes = await callHostTransport<any>(
+      "screen_capture",
+      { mode: "color", x: cursorX, y: cursorY },
+      hostOverride
+    );
+    checkPermissionError(String(capRes.error || capRes.data?.error || ""), capRes.data);
+    if (capRes.ok && capRes.data?.ok !== false) {
+      const picked = buildPickedColorResultFromRaw(capRes.data, cursorX, cursorY);
+      if (picked) return picked;
     }
+
+    const errMsg =
+      pluginRes.error ||
+      pickRes.error ||
+      capRes.error ||
+      "COLOR_PICKER_FAILED: 未能从屏幕获取真实像素颜色";
+    throw new Error(errMsg);
   }
 
-  // 极客预置流行调色板取色样本
-  const sampleColors = [
-    "#0A84FF", "#30D158", "#FF9F0A", "#BF5AF2", "#FF453A",
-    "#5E5CE6", "#64D2FF", "#FF375F", "#FFD60A", "#AC8E68"
-  ];
-  const chosenHex = sampleColors[Math.floor(Math.random() * sampleColors.length)];
-  const parsed = parseColor(chosenHex);
+  // 无宿主纯离线测试环境下的确定性默认色（严禁随机伪造颜色）
+  const deterministicHex = "#0A84FF";
+  const parsed = parseColor(deterministicHex);
 
   return {
     hex: parsed.hex,
     rgb: parsed.rgb,
     hsl: parsed.hsl,
     hsv: parsed.hsv,
-    x: 960,
-    y: 540,
+    x: 0,
+    y: 0,
     source: "simulated",
     pickedAt: Date.now()
   };
@@ -674,8 +735,9 @@ export async function getSavedPalette(): Promise<SavedColorItem[]> {
 
 export async function saveColorToPalette(name: string, hex: string): Promise<SavedColorItem[]> {
   const current = await getSavedPalette();
+  const seq = paletteIdSeq++;
   const newItem: SavedColorItem = {
-    id: `color_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+    id: `color_${Date.now()}_${seq}`,
     name: name || hex,
     hex: normalizeHex(hex).slice(0, 7),
     savedAt: new Date().toLocaleTimeString()
@@ -722,4 +784,3 @@ export async function clearColorHistory(): Promise<void> {
 }
 
 export const convertColor = parseColor;
-

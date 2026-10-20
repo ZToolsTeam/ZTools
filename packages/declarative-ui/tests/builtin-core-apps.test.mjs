@@ -527,8 +527,8 @@ describe("Raycast Compat: Official Built-in Core Applications Suite", () => {
       const root = renderDeclarativeRoot(WindowManagementCommand);
       const desc = root.getLatest();
 
-      // Check double-column detail prop
-      assert.equal(desc.props.isShowingDetail, true);
+      // Check Layout 1 full-width list prop
+      assert.equal(desc.props.isShowingDetail, false);
 
       const firstSec = desc.children[0];
       const firstItem = firstSec.children[0];

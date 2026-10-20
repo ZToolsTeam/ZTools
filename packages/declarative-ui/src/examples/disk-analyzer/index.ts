@@ -9,9 +9,7 @@ import {
   useEffect,
   showToast,
   Toast,
-  confirmAlert,
-  MetricGrid,
-  SegmentedControl
+  confirmAlert
 } from '../../index.js'
 import {
   DiskDriveItem,
@@ -28,7 +26,8 @@ import {
   deleteDiskFileItem,
   batchDeleteDiskFileItems,
   openDiskItemLocation,
-  openDiskFileDefault
+  openDiskFileDefault,
+  isRealElectronHost
 } from './logic.js'
 
 export default function DiskAnalyzerCommand() {
@@ -42,23 +41,27 @@ export default function DiskAnalyzerCommand() {
   const [pageSize, setPageSize] = useState<number>(60)
 
   const [drives, setDrives] = useState<DiskDriveItem[]>([])
-  const [files, setFiles] = useState<DiskFileEntry[]>(() => [
-    {
-      id: 'init-disk-sample-1',
-      name: 'Windows11_x64_zh-cn.iso',
-      path: 'D:\\Downloads\\Windows11_x64_zh-cn.iso',
-      parentDir: 'D:\\Downloads',
-      drive: 'D:',
-      extension: '.iso',
-      category: 'archive',
-      groupId: 5,
-      groupName: '压缩包与镜像',
-      groupColor: '#f59e0b',
-      sizeBytes: 5.4 * 1024 ** 3,
-      mtime: 1710000000,
-      isProtected: false
-    }
-  ])
+  const [files, setFiles] = useState<DiskFileEntry[]>(() =>
+    isRealElectronHost()
+      ? []
+      : [
+          {
+            id: 'init-disk-sample-1',
+            name: 'Windows11_x64_zh-cn.iso',
+            path: 'D:\\Downloads\\Windows11_x64_zh-cn.iso',
+            parentDir: 'D:\\Downloads',
+            drive: 'D:',
+            extension: '.iso',
+            category: 'archive',
+            groupId: 5,
+            groupName: '压缩包与镜像',
+            groupColor: '#f59e0b',
+            sizeBytes: 5.4 * 1024 ** 3,
+            mtime: 1710000000,
+            isProtected: false
+          }
+        ]
+  )
   const [topDirectories, setTopDirectories] = useState<
     Array<{ name: string; path: string; drive: string; sizeBytes: number; fileCount: number }>
   >([])
@@ -201,7 +204,7 @@ export default function DiskAnalyzerCommand() {
   async function handleTrashFile(entry: DiskFileEntry) {
     if (entry.isProtected || FORBIDDEN_TARGET_PATTERN.test(entry.path)) {
       await confirmAlert({
-        title: '⚠️ 系统保护目录拦截',
+        title: '系统保护目录拦截',
         message: `${entry.path}\n\n${FORBIDDEN_REASON}`,
         primaryAction: { title: '我知道了', style: 'default' }
       })
@@ -244,7 +247,7 @@ export default function DiskAnalyzerCommand() {
       selectedEntries.length > 8 ? `\n...以及另外 ${selectedEntries.length - 8} 个文件` : ''
 
     const confirmed = await confirmAlert({
-      title: `🗑️ 确认批量清理已勾选的 ${selectedEntries.length} 个文件？`,
+      title: `确认批量清理已勾选的 ${selectedEntries.length} 个文件？`,
       message: `预计释放总空间: ${formatBytes(selectedBytes)}\n\n清理清单预览:\n${previewLines}${moreLine}\n\n所有文件均安全移入 Windows 系统回收站，原目录与分类占比将立即实时重算。`,
       primaryAction: { title: `确认移入回收站 (${formatBytes(selectedBytes)})`, style: 'destructive' }
     })
@@ -311,13 +314,13 @@ export default function DiskAnalyzerCommand() {
             .join('\n')
         : '- 暂无采样文件'
 
-    return `# 💽 ${d.label}
+    return `# ${d.label}
 
 **挂载盘符**: \`${d.drive}\\ \` · **文件系统**: \`${d.fileSystem}\`
 
 ---
 
-### 📊 容量热力分布
+### 容量热力分布
 \`[${bar}] ${d.usagePercent}%\`
 
 - **分区总容量**: \`${formatBytes(d.totalBytes)}\`
@@ -326,7 +329,7 @@ export default function DiskAnalyzerCommand() {
 
 ---
 
-### 🗂️ 本分区 10 大分类空间采样 (${driveFiles.length} 项 · ${formatBytes(driveFiles.reduce((a, b) => a + b.sizeBytes, 0))})
+### 本分区 10 大分类空间采样 (${driveFiles.length} 项 · ${formatBytes(driveFiles.reduce((a, b) => a + b.sizeBytes, 0))})
 
 ${groupLines}
 
@@ -353,14 +356,14 @@ ${g.description}
 
 ---
 
-### 📊 分类空间画像 (${selectedDrive === 'ALL' ? '全盘汇总' : `${selectedDrive} 分区`})
+### 分类空间画像 (${selectedDrive === 'ALL' ? '全盘汇总' : `${selectedDrive} 分区`})
 - **分类总占用**: \`${formatBytes(g.totalSizeBytes)}\` (占采样总量 \`${g.sharePercent}%\`)
 - **包含文件数**: \`${g.fileCount} 个真实文件\`
 - **二级扩展名种类**: \`${g.topExtensions.length} 种后缀\`
 
 ---
 
-### 🏷️ 分类内二级扩展名排行榜
+### 分类内二级扩展名排行榜
 
 ${extRows}
 `
@@ -368,20 +371,20 @@ ${extRows}
 
   function renderFileMarkdown(f: DiskFileEntry): string {
     const isChecked = selectedSet.has(f.path)
-    return `# 📄 ${f.name}
+    return `# ${f.name}
 
 **完整路径**: \`${f.path}\`
 
 ---
 
-### 📊 文件空间与分类画像
+### 文件空间与分类画像
 - **实际占用大小**: \`${formatBytes(f.sizeBytes)}\` (\`${f.sizeBytes.toLocaleString()} Bytes\`)
 - **官方 10 大分类**: **${f.groupName}** (\`Group #${f.groupId}\`)
 - **文件扩展名**: \`${f.extension}\`
 - **所在物理分区**: \`${f.drive}\\ \`
 - **所属父目录**: \`${f.parentDir}\`
 - **最后修改时间**: \`${formatDateTime(f.mtime)}\`
-- **清理勾选状态**: ${f.isProtected ? '🔒 系统保护目录文件 (禁止清理)' : isChecked ? '☑️ 已加入待清理队列' : '⬜ 未勾选'}
+- **清理勾选状态**: ${f.isProtected ? '系统保护目录文件 (禁止清理)' : isChecked ? '已加入待清理队列' : '未勾选'}
 
 ---
 
@@ -544,7 +547,7 @@ ${extRows}
   return List({
     searchBarPlaceholder: '搜索大文件、后缀 (.mp4/.iso/.zip/.dll) 或路径...',
     onSearchTextChange: setSearchText,
-    isShowingDetail: true,
+    isShowingDetail: false,
     isLoading,
     searchBarAccessory: List.Dropdown({
       tooltip: '切换目标磁盘分区',
@@ -567,132 +570,9 @@ ${extRows}
         )
       ]
     }),
-    metricGrid: MetricGrid({
-      columns: 4,
-      items: [
-        {
-          id: 'metric-total-cap',
-          label: selectedDrive === 'ALL' ? '本机挂载总容量' : `${selectedDrive} 分区总容量`,
-          value: formatBytes(metricCap),
-          subValue:
-            selectedDrive === 'ALL'
-              ? `${drives.length} 个物理分区汇总`
-              : activeDriveObj?.label || `${selectedDrive} 本地卷`,
-          status: 'normal'
-        },
-        {
-          id: 'metric-used-cap',
-          label: '已用物理空间',
-          value: formatBytes(metricUsed),
-          subValue: `空间占用率 ${overallPercent}%`,
-          progress: overallPercent,
-          status: overallPercent >= 88 ? 'danger' : overallPercent >= 75 ? 'warning' : 'normal'
-        },
-        {
-          id: 'metric-avail-cap',
-          label: '剩余可用空间',
-          value: formatBytes(metricAvail),
-          subValue: `已分类采样 ${ formatBytes(scopedTotalBytes) }`,
-          status: 'success'
-        },
-        {
-          id: 'metric-scanned-files',
-          label: selectedEntries.length > 0 ? '已勾选待清理' : '已归类热点文件',
-          value:
-            selectedEntries.length > 0
-              ? `${formatBytes(selectedBytes)}`
-              : `${driveScopedFiles.length} 项`,
-          subValue:
-            selectedEntries.length > 0
-              ? `已选 ${selectedEntries.length} 个文件 · 可一键移入回收站`
-              : `覆盖 10 大官方分类 · ${scopedExtStats.length} 种后缀`,
-          status: selectedEntries.length > 0 ? 'warning' : 'normal'
-        }
-      ]
-    }),
-    distributionBar: {
-      title:
-        selectedDrive === 'ALL'
-          ? '📊 全盘 10 大类型空间占比'
-          : `📊 ${selectedDrive} 分区 10 大类型占比`,
-      totalLabel: `已采样 ${driveScopedFiles.length} 项 · ${formatBytes(scopedTotalBytes)}`,
-      activeSegmentId: selectedGroupId === 'ALL' ? undefined : selectedGroupId,
-      onSelectSegment: segId => {
-        setSelectedGroupId(segId || 'ALL')
-        setSelectedDirPath('ALL')
-        setSelectedExt('ALL')
-      },
-      segments: distributionSegments
-    },
     filterBar: {
       summaryText: `全盘总容量 ${formatBytes(metricCap)} / 已用 ${formatBytes(metricUsed)} (${overallPercent}%) / 剩余 ${formatBytes(metricAvail)} · 右侧共 ${finalFilteredFiles.length} 个大文件${selectedEntries.length > 0 ? ` · 已勾选 ${selectedEntries.length} 项 (${formatBytes(selectedBytes)})` : ''}`,
-      groups: [
-        {
-          id: 'drive-filter',
-          label: '目标盘符',
-          value: selectedDrive,
-          onChange: val => {
-            setSelectedDrive(val)
-            setSelectedDirPath('ALL')
-            setSelectedExt('ALL')
-          },
-          options: [
-            { value: 'ALL', label: '全盘汇总', badge: files.length },
-            ...drives.map(d => ({
-              value: d.drive,
-              label: `${d.drive} (${d.usagePercent}%)`,
-              badge: files.filter(f => f.drive.toUpperCase() === d.drive.toUpperCase()).length
-            }))
-          ]
-        },
-        {
-          id: 'group-filter',
-          label: '10大类型',
-          value: selectedGroupId,
-          onChange: val => {
-            setSelectedGroupId(val)
-            setSelectedDirPath('ALL')
-            setSelectedExt('ALL')
-          },
-          options: [
-            { value: 'ALL', label: '全部 10 大分类', badge: driveScopedFiles.length },
-            ...scopedGroupStats
-              .filter(g => g.fileCount > 0)
-              .map(g => ({
-                value: String(g.groupId),
-                label: g.name.replace(/^[^\s]+\s*/, ''),
-                badge: `${g.fileCount} · ${formatBytes(g.totalSizeBytes)}`
-              }))
-          ]
-        },
-        {
-          id: 'ext-filter',
-          label: '二级后缀',
-          value: selectedExt,
-          onChange: val => setSelectedExt(val),
-          options: [
-            { value: 'ALL', label: '全部后缀', badge: groupScopedFiles.length },
-            ...activeGroupExtensions.map(ext => ({
-              value: ext.extension,
-              label: `${ext.extension}`,
-              badge: `${ext.fileCount} · ${formatBytes(ext.totalSizeBytes)}`
-            }))
-          ]
-        }
-      ],
       actions: [
-        ...(selectedEntries.length > 0
-          ? [
-              {
-                id: 'act-batch-trash',
-                label: `批量清理已选 (${selectedEntries.length}项 · ${formatBytes(selectedBytes)})`,
-                style: 'danger' as const,
-                onAction: () => {
-                  handleBatchTrashSelected()
-                }
-              }
-            ]
-          : []),
         {
           id: 'act-rescan',
           label: '重新扫描',

@@ -51,7 +51,7 @@ export function LanShareCommand() {
   const [searchText, setSearchText] = useState('')
   const [filterMode, setFilterMode] = useState<LanShareFilterMode>('all')
   const [items, setItems] = useState<LanShareItem[]>([])
-  const [portalUrl, setPortalUrl] = useState('http://192.168.1.108:18580')
+  const [portalUrl, setPortalUrl] = useState('http://127.0.0.1:18580')
   const [totalSharedBytes, setTotalSharedBytes] = useState(0)
   const [isLoading, setIsLoading] = useState(true)
 
@@ -83,12 +83,20 @@ export function LanShareCommand() {
     const res = await toggleFileShare(item.id, nextState)
     if (res.ok) {
       setItems((prev) =>
-        prev.map((cur) => (cur.id === item.id ? { ...cur, isShared: nextState } : cur))
+        prev.map((cur) =>
+          cur.id === item.id ? { ...cur, isShared: nextState, shareUrl: res.shareUrl || cur.shareUrl } : cur
+        )
       )
       showToast({
         style: Toast.Style.Success,
         title: res.message,
-        message: item.shareUrl
+        message: res.shareUrl || item.shareUrl
+      })
+    } else {
+      showToast({
+        style: Toast.Style.Failure,
+        title: '切换共享状态失败',
+        message: res.message
       })
     }
   }

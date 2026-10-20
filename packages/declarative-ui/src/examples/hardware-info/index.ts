@@ -3,15 +3,11 @@ import {
   ActionPanel,
   Action,
   Icon,
-  Color,
   Clipboard,
   useState,
   useEffect,
   showToast,
-  Toast,
-  MetricGrid,
-  FilterBar,
-  SegmentedControl
+  Toast
 } from '../../index.js'
 import {
   HardwareSpecEntry,
@@ -107,68 +103,10 @@ export default function HardwareInfoCommand() {
         List.Dropdown.Item({ title: '导出硬件报告 (Export Report)', value: 'report' })
       ]
     }),
-    metricGrid: MetricGrid({
-      columns: 4,
-      items: [
-        {
-          id: 'hw-m-cpu',
-          label: '处理器实时利用率',
-          value: `${cpuPct}%`,
-          subValue: snapshot ? `${snapshot.logicalCpuCount} 逻辑线程 · 评分 ${snapshot.healthScore}` : '采集中...',
-          progress: cpuPct,
-          status: cpuPct > 85 ? 'danger' : cpuPct > 60 ? 'warning' : 'success'
-        },
-        {
-          id: 'hw-m-mem',
-          label: '物理内存工作集',
-          value: `${memPct}%`,
-          subValue: `${formatBytes(usedMem)} / ${formatBytes(totalMem)}`,
-          progress: memPct,
-          status: memPct > 85 ? 'danger' : memPct > 70 ? 'warning' : 'normal'
-        },
-        {
-          id: 'hw-m-drives',
-          label: '全盘存储池汇总',
-          value: formatBytes(totalDisk),
-          subValue: `${drives.length} 个分区 · 可用 ${formatBytes(availDisk)}`,
-          status: 'normal'
-        },
-        {
-          id: 'hw-m-disp',
-          label: '多屏显示与供电',
-          value: `${snapshot?.displayCount || 1} 台显示器`,
-          subValue: snapshot?.isCharging
-            ? `AC 交流供电 (${snapshot.batteryPercent}%)`
-            : `电池供电 (${snapshot?.batteryPercent || 100}%)`,
-          status: 'success'
-        }
-      ]
-    }),
-    filterBar: FilterBar({
-      wizardSteps: [
-        { step: 1, label: '1. CPU/RAM 内核遥测', status: 'done' },
-        { step: 2, label: '2. 全盘分区与多屏测绘', status: 'done' },
-        { step: 3, label: '3. 生产力与AI战力评估', status: 'active' },
-        { step: 4, label: '4. 多格式资产报告导出', status: 'pending' }
-      ],
+    filterBar: {
       summaryText: snapshot
-        ? `整机健康度 ${snapshot.healthScore} 分 · 处理器 ${snapshot.logicalCpuCount} 线程 · 物理内存 ${formatBytes(totalMem)} · 存储池 ${formatBytes(totalDisk)}`
+        ? `整机健康度 ${snapshot.healthScore} 分 · CPU ${snapshot.logicalCpuCount} 线程 (${cpuPct}%) · 物理内存 ${formatBytes(usedMem)} / ${formatBytes(totalMem)} (${memPct}%) · 存储池 ${formatBytes(totalDisk)} (${drives.length} 个分区，可用 ${formatBytes(availDisk)})`
         : '硬件传感器采集中...',
-      groups: [
-        {
-          id: 'hw-module',
-          label: '硬件模块',
-          value: dropdownFilter,
-          onChange: (v) => setDropdownFilter(v as HardwareDropdownFilter),
-          options: [
-            { value: 'all', label: '全部模块', badge: entries.length },
-            { value: 'cpu-mem', label: '处理器与内存' },
-            { value: 'storage', label: '磁盘存储卷' },
-            { value: 'display', label: '显示器与显卡' },
-            { value: 'benchmark', label: '4大场景性能评测' }
-          ]
-        }
-      ],
       actions: [
         {
           id: 'refresh-hw',
@@ -185,17 +123,7 @@ export default function HardwareInfoCommand() {
           onAction: () => void handleCopyReport('markdown')
         }
       ]
-    }),
-    segmentedControl: SegmentedControl({
-      value: dropdownFilter,
-      onChange: (v) => setDropdownFilter(v as HardwareDropdownFilter),
-      options: [
-        { value: 'all', label: '整机硬件全景', badge: entries.length },
-        { value: 'storage', label: '磁盘存储卷', badge: drives.length },
-        { value: 'benchmark', label: '4大场景性能评测', badge: 4 },
-        { value: 'report', label: '导出硬件报告', badge: 3 }
-      ]
-    }),
+    },
     children:
       dropdownFilter === 'report' && snapshot
         ? [

@@ -1,0 +1,38 @@
+{
+  "id": "base64image",
+  "name": "Base64 图片转换",
+  "version": "1.0.0",
+  "description": "图片文件或截图转 Base64 / Data URL，也能把 Base64 还原成图片预览",
+  "author": "ZTools Team",
+  "entry": "dist/index.js",
+  "icon": "icon.svg",
+  "permissions": [
+    "clipboard"
+  ],
+  "targets": [
+    {
+      "id": "windows-electron-any",
+      "platform": "windows",
+      "runtime": "electron",
+      "arch": "any"
+    },
+    {
+      "id": "macos-electron-any",
+      "platform": "macos",
+      "runtime": "electron",
+      "arch": "any"
+    }
+  ],
+  "nativeComponents": [],
+  "keywords": [
+    "base64",
+    "图片",
+    "image",
+    "datauri",
+    "编码",
+    "解码"
+  ],
+  "category": [
+    "开发工具"
+  ]
+}

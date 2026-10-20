@@ -1,0 +1,39 @@
+{
+  "id": "google-auth",
+  "name": "2FA 验证码",
+  "version": "1.0.0",
+  "description": "两步验证动态口令（TOTP），支持粘贴 otpauth 链接添加，密钥保存在本机",
+  "author": "ZTools Team",
+  "entry": "dist/index.js",
+  "icon": "icon.svg",
+  "permissions": [
+    "clipboard",
+    "crypto"
+  ],
+  "targets": [
+    {
+      "id": "windows-electron-any",
+      "platform": "windows",
+      "runtime": "electron",
+      "arch": "any"
+    },
+    {
+      "id": "macos-electron-any",
+      "platform": "macos",
+      "runtime": "electron",
+      "arch": "any"
+    }
+  ],
+  "nativeComponents": [],
+  "keywords": [
+    "2fa",
+    "totp",
+    "otp",
+    "验证码",
+    "动态口令",
+    "authenticator"
+  ],
+  "category": [
+    "效率工具"
+  ]
+}

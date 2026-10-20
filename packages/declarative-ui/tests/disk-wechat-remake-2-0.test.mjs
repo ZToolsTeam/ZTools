@@ -107,15 +107,17 @@ describe('Declarative UI 2.0 深度复刻集成与破坏性异常测试: DiskAna
       assert.equal(videoGroup.topExtensions[0].extension, '.mp4')
     })
 
-    it('1.3 [Declarative UI 2.0 复合描述符] DiskAnalyzerCommand 渲染 MetricGrid + DistributionBar + FilterBar + 左导航树 + 右可勾选文件列表 (subList)', () => {
+    it('1.3 [Declarative UI 布局二范式] DiskAnalyzerCommand 渲染极简顶栏 + 左导航树 + 右可勾选文件列表 (subList)，严禁 MetricGrid / DistributionBar / 重复筛选胶囊', () => {
       const root = renderDeclarativeRoot(DiskAnalyzerCommand)
       const desc = root.getLatest()
       assert.equal(desc.type, 'List')
-      assert.ok(desc.props.metricGrid, '应包含顶部 4 宫格 MetricGrid')
-      assert.ok(desc.props.distributionBar, '应包含 10 大官方分类彩色分段条 distributionBar')
-      assert.equal(desc.props.distributionBar.segments.length > 0, true)
-      assert.ok(desc.props.filterBar, '应包含多维筛选与批量操作栏 filterBar')
-      assert.equal(desc.props.filterBar.groups.length, 3, '应包含 盘符 / 10大类型 / 二级后缀 3 组筛选器')
+      assert.equal(desc.props.isShowingDetail, false, '布局二必须设置 isShowingDetail: false')
+      assert.equal(desc.props.metricGrid, undefined, '严禁挂载顶部 MetricGrid')
+      assert.equal(desc.props.distributionBar, undefined, '严禁挂载顶部彩色分段条 distributionBar')
+      assert.ok(desc.props.filterBar, '应包含极简单行状态栏 filterBar')
+      const fb = desc.props.filterBar.props || desc.props.filterBar
+      assert.ok(fb.summaryText && fb.summaryText.length > 0, '应包含单行统计摘要 summaryText')
+      assert.equal(fb.groups, undefined, '严禁重复渲染 filterBar.groups 胶囊行')
       assert.ok(desc.props.subList, '应包含方案 2 右侧可勾选大文件列表 subList')
       assert.equal(desc.props.subList.items.length > 0, true, '右侧大文件列表应包含可清理大文件条目')
       const firstSubItem = desc.props.subList.items[0]
@@ -285,14 +287,20 @@ describe('Declarative UI 2.0 深度复刻集成与破坏性异常测试: DiskAna
       assert.equal(dbCat.safetyLevel, 'protected')
     })
 
-    it('2.3 [Declarative UI 2.0 复合描述符] WechatCleanerCommand 渲染 4 步向导 + 9 大专项分布条 + 账号/时间筛选器', () => {
+    it('2.3 [Declarative UI 布局二范式] WechatCleanerCommand 渲染极简顶栏 + 左导航树 + 右可勾选文件列表，严禁 MetricGrid / WizardSteps / 重复筛选胶囊', () => {
       const root = renderDeclarativeRoot(WechatCleanerCommand)
       const desc = root.getLatest()
       assert.equal(desc.type, 'List')
-      assert.ok(desc.props.metricGrid, '应包含顶部 4 宫格 MetricGrid')
-      assert.ok(desc.props.filterBar, '应包含向导步骤与筛选工具栏 filterBar')
-      assert.equal(desc.props.filterBar.wizardSteps.length, 4, '应包含 4 步清理向导状态条')
-      assert.equal(desc.props.filterBar.groups.length, 3, '应包含 微信账号 / 时间范围 / 9大专项 3 组筛选器')
+      assert.equal(desc.props.isShowingDetail, false)
+      assert.equal(desc.props.metricGrid, undefined, '严禁挂载顶部 MetricGrid')
+      assert.equal(desc.props.distributionBar, undefined, '严禁挂载顶部 distributionBar')
+      assert.equal(desc.props.segmentedControl, undefined, '严禁挂载顶部 segmentedControl')
+      assert.ok(desc.props.filterBar, '应包含单行状态栏 filterBar')
+      const fb = desc.props.filterBar.props || desc.props.filterBar
+      assert.ok(fb.summaryText && fb.summaryText.length > 0)
+      assert.equal(fb.wizardSteps, undefined, '严禁堆叠 wizardSteps')
+      assert.equal(fb.groups, undefined, '严禁重复渲染 filterBar.groups')
+      assert.ok(desc.props.subList, '应包含右侧可勾选 subList')
       root.unmount()
     })
 
@@ -436,15 +444,20 @@ describe('Declarative UI 2.0 深度复刻集成与破坏性异常测试: DiskAna
       assert.equal(snap.totalScannableBytes, 125 * 1024 * 1024)
     })
 
-    it('3.3 [Declarative UI 2.0 复合描述符] QQCleanerCommand 渲染 4 步向导 + 12 大分组分布条 + UIN/时间筛选器', () => {
+    it('3.3 [Declarative UI 布局二范式] QQCleanerCommand 渲染极简顶栏 + 左导航树 + 右可勾选列表，严禁 MetricGrid / DistributionBar / WizardSteps', () => {
       const root = renderDeclarativeRoot(QQCleanerCommand)
       const desc = root.getLatest()
       assert.equal(desc.type, 'List')
-      assert.ok(desc.props.metricGrid, '应包含顶部 4 宫格 MetricGrid')
-      assert.ok(desc.props.distributionBar, '应包含 12 大专项分布条 distributionBar')
-      assert.ok(desc.props.filterBar, '应包含向导步骤与筛选工具栏 filterBar')
-      assert.equal(desc.props.filterBar.wizardSteps.length, 4)
-      assert.equal(desc.props.filterBar.groups.length, 3)
+      assert.equal(desc.props.isShowingDetail, false)
+      assert.equal(desc.props.metricGrid, undefined)
+      assert.equal(desc.props.distributionBar, undefined)
+      assert.equal(desc.props.segmentedControl, undefined)
+      assert.ok(desc.props.filterBar, '应包含单行状态栏 filterBar')
+      const fb = desc.props.filterBar.props || desc.props.filterBar
+      assert.ok(fb.summaryText && fb.summaryText.length > 0)
+      assert.equal(fb.wizardSteps, undefined)
+      assert.equal(fb.groups, undefined)
+      assert.ok(desc.props.subList)
       root.unmount()
     })
 

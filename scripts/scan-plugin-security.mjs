@@ -658,6 +658,35 @@ export async function scanCodeSnippet(code, declaredPermissions = []) {
  *   scannedFiles: string[]
  * }>}
  */
+/**
+ * 声明式 UI 规范检查（AGENTS.md「三大标准布局范式」与 6 条红线）
+ *
+ * 目前只产出 warning，不影响 passed：先摸清存量插件的违规情况，存量改完后再升级为 error。
+ * 只检查源码（存在 src/ 时跳过 dist/ 构建产物，避免同一问题报两次）。
+ */
+const COLORFUL_EMOJI_PATTERN = /[\u{1F300}-\u{1FAFF}\u{2600}-\u{27BF}]/u
+const RAINBOW_COLOR_PATTERN = /\b(?:tintColor|color)\s*:\s*Color\.(Blue|Green|Orange|Purple|Yellow|Magenta)\b/
+
+export function lintDeclarativeLayout(content, relPath) {
+  const warnings = []
+  const lines = content.split('\n')
+  const push = (rule, line, message) => warnings.push({ rule, severity: 'warning', file: relPath, line, column: 0, message })
+  lines.forEach((text, idx) => {
+    const trimmed = text.trim()
+    if (trimmed.startsWith('//') || trimmed.startsWith('*') || trimmed.startsWith('/*')) return
+    const line = idx + 1
+    if (COLORFUL_EMOJI_PATTERN.test(text)) push('UI_COLORFUL_EMOJI', line, '界面文案中出现彩色 Emoji，请改用单色图标（Icon.*）')
+    if (/\bMetricGrid\b|\bmetricGrid\s*[:=]/.test(text)) push('UI_METRIC_GRID', line, '列表上方禁止堆叠统计卡片（MetricGrid），请把关键指标并入 filterBar.summaryText')
+    if (/\bDistributionBar\b|\bdistributionBar\s*[:=]/.test(text)) push('UI_DISTRIBUTION_BAR', line, '禁止使用彩色比例条（distributionBar）')
+    const rainbow = RAINBOW_COLOR_PATTERN.exec(text)
+    if (rainbow) push('UI_RAINBOW_COLOR', line, `普通图标或标签不应使用彩色 Color.${rainbow[1]}，请保持灰阶（仅高危告警可用红色）`)
+  })
+  if (/searchBarAccessory/.test(content) && /filterBar[\s\S]{0,400}groups\s*:/.test(content)) {
+    push('UI_DUPLICATE_FILTER', 1, '已有搜索框右侧下拉筛选时，不应再传 filterBar.groups 胶囊筛选行')
+  }
+  return warnings
+}
+
 export async function scanPluginSecurity(pluginDir, options = {}) {
   const absPluginDir = path.resolve(pluginDir)
   const manifestPath = path.join(absPluginDir, 'plugin.json')
@@ -748,11 +777,15 @@ export async function scanPluginSecurity(pluginDir, options = {}) {
     })
   }
 
+  const hasSourceDir = fs.existsSync(path.join(absPluginDir, 'src'))
   for (const file of scriptFiles) {
     const relPath = path.relative(absPluginDir, file).replace(/\\/g, '/')
     scannedFiles.push(relPath)
     const content = fs.readFileSync(file, 'utf8')
     const ext = path.extname(file).toLowerCase()
+    if (!(hasSourceDir && relPath.startsWith('dist/')) && ['.ts', '.tsx', '.js', '.jsx', '.mjs'].includes(ext)) {
+      violations.push(...lintDeclarativeLayout(content, relPath))
+    }
 
     if (['.html', '.htm'].includes(ext)) {
       // 检查 HTML 中内嵌的 <style> 标签
@@ -908,8 +941,13 @@ async function runCli() {
     console.log(`\n📦 插件 ID: ${res.pluginId}`)
     console.log(`📁 扫描文件数: ${res.scannedFiles.length} (${res.scannedFiles.join(', ') || '无脚本文件'})`)
 
+    const layoutWarnings = res.violations.filter(v => v.severity === 'warning' && v.rule.startsWith('UI_'))
     if (res.passed) {
       console.log('✅ AST 安全静态分析: 全部通过 (PASS)')
+      if (layoutWarnings.length > 0) {
+        console.log(`⚠️ 声明式 UI 规范提示 ${layoutWarnings.length} 项（暂不拦截）:`)
+        for (const v of layoutWarnings) console.log(`   - [${v.rule}] ${v.file}:${v.line} -> ${v.message}`)
+      }
     } else {
       console.log(`❌ AST 安全静态分析: 未通过 (FAILED) - 发现 ${res.violations.length} 项违规:`)
       for (const v of res.violations) {

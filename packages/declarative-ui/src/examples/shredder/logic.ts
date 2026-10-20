@@ -11,9 +11,11 @@
  */
 
 import {
+  callHostTransport,
   formatBytes,
   invokeHostCapability,
   invokePluginService,
+  isRealElectronHost,
   openRealPath,
   resolveRealSpecialPaths,
   scanRealDirectoryTree,
@@ -213,22 +215,42 @@ export function createInitialShredderSnapshot(): ShredderSnapshot {
   };
 }
 
-export async function fetchShredCandidates(): Promise<ShredderSnapshot> {
+export async function fetchShredCandidates(hostBridge?: any): Promise<ShredderSnapshot> {
   const initial = createInitialShredderSnapshot();
+  const isRealHost = Boolean(hostBridge) || isRealElectronHost(hostBridge) || isRealElectronHost();
   try {
-    const paths = await resolveRealSpecialPaths();
-    const tempScan = await scanRealDirectoryTree(paths.temp, { maxDepth: 1, maxFiles: 12 });
-    const realTempItems: ShredCandidateItem[] = tempScan.files.slice(0, 4).map((entry, idx) => ({
-      id: `shred_real_tmp_${idx}`,
-      name: entry.name,
-      path: entry.path,
-      category: "temp_zone",
-      categoryName: "临时缓存区",
-      sizeBytes: Math.max(4096, entry.sizeBytes),
-      isSystemLocked: false
-    }));
+    const paths = await resolveRealSpecialPaths(hostBridge);
+    const crashDumpDir = `${paths.localAppData}\\CrashDumps`;
+    const [tempScan, dumpScan] = await Promise.all([
+      scanRealDirectoryTree(paths.temp, { maxDepth: 1, maxFiles: 30 }, hostBridge),
+      scanRealDirectoryTree(crashDumpDir, { maxDepth: 1, maxFiles: 15 }, hostBridge)
+    ]);
 
-    const merged = [...initial.candidates, ...realTempItems];
+    const realTempItems: ShredCandidateItem[] = [
+      ...tempScan.files,
+      ...dumpScan.files
+    ]
+      .filter((entry) => !entry.isDirectory && entry.sizeBytes > 0)
+      .slice(0, 30)
+      .map((entry, idx) => ({
+        id: `shred_real_tmp_${idx}`,
+        name: entry.name,
+        path: entry.path,
+        category: "temp_zone" as const,
+        categoryName: "临时缓存区",
+        sizeBytes: entry.sizeBytes,
+        isSystemLocked: false
+      }));
+
+    if (isRealHost) {
+      return {
+        candidates: realTempItems,
+        totalShreddableBytes: realTempItems.reduce((acc, item) => acc + item.sizeBytes, 0),
+        updatedAt: new Date().toLocaleTimeString()
+      };
+    }
+
+    const merged = realTempItems.length > 0 ? realTempItems : initial.candidates;
     return {
       candidates: merged,
       totalShreddableBytes: merged
@@ -237,6 +259,13 @@ export async function fetchShredCandidates(): Promise<ShredderSnapshot> {
       updatedAt: new Date().toLocaleTimeString()
     };
   } catch {
+    if (isRealHost) {
+      return {
+        candidates: [],
+        totalShreddableBytes: 0,
+        updatedAt: new Date().toLocaleTimeString()
+      };
+    }
     return initial;
   }
 }
@@ -247,8 +276,8 @@ export async function executeSecureShred(
   hostOverride?: any
 ): Promise<{ ok: boolean; shreddedCount: number; shreddedBytes: number; message: string }> {
   const standard = SHRED_STANDARDS.find((s) => s.id === standardId) || SHRED_STANDARDS[0];
-  const safeTargets = items.filter(
-    (item) => !item.isSystemLocked && !FORBIDDEN_TARGET_PATTERN.test(item.path)
+  const safeTargets = (items || []).filter(
+    (item) => item && !item.isSystemLocked && !FORBIDDEN_TARGET_PATTERN.test(item.path)
   );
   if (safeTargets.length === 0) {
     return {
@@ -261,10 +290,12 @@ export async function executeSecureShred(
 
   let shreddedCount = 0;
   let shreddedBytes = 0;
+  let lastError = "";
   for (const item of safeTargets) {
-    await invokeHostCapability(
+    const wipeRes = await invokeHostCapability(
       "shredder.secureWipeFile",
       {
+        path: item.path,
         targetPath: item.path,
         standardId: standard.id,
         passes: standard.passes,
@@ -272,8 +303,31 @@ export async function executeSecureShred(
       },
       hostOverride
     );
-    shreddedCount += 1;
-    shreddedBytes += item.sizeBytes;
+    if (wipeRes.ok) {
+      shreddedCount += 1;
+      shreddedBytes += item.sizeBytes;
+      continue;
+    }
+    const delRes = await callHostTransport(
+      "filesystem_delete_file",
+      { path: item.path },
+      hostOverride
+    );
+    if (delRes.ok) {
+      shreddedCount += 1;
+      shreddedBytes += item.sizeBytes;
+    } else {
+      lastError = delRes.error || wipeRes.error || wipeRes.message || `粉碎文件失败: ${item.path}`;
+    }
+  }
+
+  if (shreddedCount === 0) {
+    return {
+      ok: false,
+      shreddedCount: 0,
+      shreddedBytes: 0,
+      message: lastError || "文件粉碎失败：宿主未能擦除或删除目标文件"
+    };
   }
 
   return {
@@ -284,9 +338,9 @@ export async function executeSecureShred(
   };
 }
 
-export async function openShredCandidateLocation(targetPath: string): Promise<boolean> {
+export async function openShredCandidateLocation(targetPath: string, hostBridge?: any): Promise<boolean> {
   if (!targetPath) return false;
-  const shown = await showRealItemInFolder(targetPath);
+  const shown = await showRealItemInFolder(targetPath, hostBridge);
   if (shown) return true;
-  return openRealPath(targetPath);
+  return openRealPath(targetPath, hostBridge);
 }

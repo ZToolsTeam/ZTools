@@ -5,8 +5,10 @@
  */
 
 import {
+  formatBytes,
   getRealFileSize,
   getRealSystemPath,
+  invokeDllPluginCapability,
   isRealElectronHost,
   listRealDirectoryContents,
   probeRealDiskDrives,
@@ -16,6 +18,8 @@ import {
   trashRealItem,
   openRealPath
 } from '../shared/native-ipc.js'
+
+export { formatBytes, isRealElectronHost } from '../shared/native-ipc.js'
 
 export interface CapabilityActionItem {
   id: string
@@ -64,7 +68,7 @@ export interface OfficialFileTypeGroupMeta {
 export const OFFICIAL_FILE_TYPE_GROUPS: OfficialFileTypeGroupMeta[] = [
   {
     groupId: 1,
-    name: '🎬 视频文件',
+    name: '视频文件',
     shortName: '视频文件',
     color: '#a855f7',
     legacyCategory: 'video',
@@ -73,7 +77,7 @@ export const OFFICIAL_FILE_TYPE_GROUPS: OfficialFileTypeGroupMeta[] = [
   },
   {
     groupId: 2,
-    name: '🎵 音频文件',
+    name: '音频文件',
     shortName: '音频文件',
     color: '#ec4899',
     legacyCategory: 'video',
@@ -82,7 +86,7 @@ export const OFFICIAL_FILE_TYPE_GROUPS: OfficialFileTypeGroupMeta[] = [
   },
   {
     groupId: 3,
-    name: '🖼️ 图片文件',
+    name: '图片文件',
     shortName: '图片文件',
     color: '#10b981',
     legacyCategory: 'other',
@@ -91,7 +95,7 @@ export const OFFICIAL_FILE_TYPE_GROUPS: OfficialFileTypeGroupMeta[] = [
   },
   {
     groupId: 4,
-    name: '📄 文档文件',
+    name: '文档文件',
     shortName: '文档文件',
     color: '#3b82f6',
     legacyCategory: 'document',
@@ -100,7 +104,7 @@ export const OFFICIAL_FILE_TYPE_GROUPS: OfficialFileTypeGroupMeta[] = [
   },
   {
     groupId: 5,
-    name: '📦 压缩包与镜像',
+    name: '压缩包与镜像',
     shortName: '压缩包',
     color: '#f59e0b',
     legacyCategory: 'archive',
@@ -109,7 +113,7 @@ export const OFFICIAL_FILE_TYPE_GROUPS: OfficialFileTypeGroupMeta[] = [
   },
   {
     groupId: 6,
-    name: '💿 安装包与程序',
+    name: '安装包与程序',
     shortName: '安装包',
     color: '#f97316',
     legacyCategory: 'installer',
@@ -118,7 +122,7 @@ export const OFFICIAL_FILE_TYPE_GROUPS: OfficialFileTypeGroupMeta[] = [
   },
   {
     groupId: 7,
-    name: '💻 代码与工程文件',
+    name: '代码与工程文件',
     shortName: '代码文件',
     color: '#06b6d4',
     legacyCategory: 'other',
@@ -127,7 +131,7 @@ export const OFFICIAL_FILE_TYPE_GROUPS: OfficialFileTypeGroupMeta[] = [
   },
   {
     groupId: 8,
-    name: '⚙️ 系统与运行库',
+    name: '系统与运行库',
     shortName: '系统文件',
     color: '#ef4444',
     legacyCategory: 'temp',
@@ -136,7 +140,7 @@ export const OFFICIAL_FILE_TYPE_GROUPS: OfficialFileTypeGroupMeta[] = [
   },
   {
     groupId: 9,
-    name: '🗄️ 数据库与资源包',
+    name: '数据库与资源包',
     shortName: '数据库/资源',
     color: '#6366f1',
     legacyCategory: 'document',
@@ -145,7 +149,7 @@ export const OFFICIAL_FILE_TYPE_GROUPS: OfficialFileTypeGroupMeta[] = [
   },
   {
     groupId: 99,
-    name: '📁 其他文件',
+    name: '其他文件',
     shortName: '其他文件',
     color: '#64748b',
     legacyCategory: 'other',
@@ -272,15 +276,6 @@ export function filterCapabilityItems(items: CapabilityActionItem[], query: stri
   })
 }
 
-export function formatBytes(bytes: number): string {
-  if (!Number.isFinite(bytes) || bytes <= 0) return '0 B'
-  const units = ['B', 'KB', 'MB', 'GB', 'TB']
-  const k = 1024
-  const idx = Math.min(units.length - 1, Math.max(0, Math.floor(Math.log(bytes) / Math.log(k))))
-  const val = bytes / Math.pow(k, idx)
-  return `${val >= 100 || idx === 0 ? val.toFixed(0) : val.toFixed(1)} ${units[idx]}`
-}
-
 export function formatDateTime(mtimeSeconds: number): string {
   if (!mtimeSeconds || !Number.isFinite(mtimeSeconds) || mtimeSeconds <= 0) return '未知时间'
   const ms = mtimeSeconds > 1e12 ? mtimeSeconds : mtimeSeconds * 1000
@@ -325,63 +320,20 @@ export function validateInvocationPayload(method: string, params: unknown): { va
 export async function invokeNativeCapability(
   method: string,
   params: Record<string, unknown>,
-  hostBridge?: { dllplugin?: { call?: (plugin: string, fn: string, payload: unknown) => Promise<unknown> } }
+  hostBridge?: { dllplugin?: { call?: (plugin: string, fn: string, payload: unknown) => Promise<unknown> }; __isRealHost?: boolean }
 ): Promise<NativeInvocationResult> {
   const check = validateInvocationPayload(method, params)
   if (!check.valid) {
     throw new Error(check.error || '参数校验失败')
   }
-
-  const runtimeHost = hostBridge ?? (typeof (globalThis as any).ztools !== 'undefined' ? (globalThis as any).ztools : undefined)
-  const callFn = runtimeHost?.dllplugin?.call
-
-  if (typeof callFn === 'function') {
-    try {
-      const raw = await callFn(DLL_PLUGIN_NAME, method.trim(), params)
-      let parsed: unknown = raw
-      if (typeof raw === 'string') {
-        try {
-          parsed = JSON.parse(raw)
-        } catch {
-          throw new Error('MALFORMED_DLL_RESPONSE: 原生组件返回了损坏的 JSON 数据')
-        }
-      }
-      if (parsed && typeof parsed === 'object' && 'error' in (parsed as Record<string, unknown>)) {
-        const errMsg = String((parsed as Record<string, unknown>).error || '原生组件返回未知错误')
-        return {
-          ok: false,
-          pluginName: DLL_PLUGIN_NAME,
-          method: method.trim(),
-          error: `DLL_ERROR: ${errMsg}`
-        }
-      }
-      return {
-        ok: true,
-        pluginName: DLL_PLUGIN_NAME,
-        method: method.trim(),
-        data: parsed,
-        fromFallback: false
-      }
-    } catch (err: any) {
-      const message = err instanceof Error ? err.message : String(err)
-      if (message.startsWith('MALFORMED_DLL_RESPONSE:')) {
-        throw err
-      }
-      return {
-        ok: false,
-        pluginName: DLL_PLUGIN_NAME,
-        method: method.trim(),
-        error: `NATIVE_CALL_FAILED: ${message}`
-      }
-    }
-  }
-
+  const res = await invokeDllPluginCapability(DLL_PLUGIN_NAME, method, params, hostBridge)
   return {
-    ok: true,
+    ok: res.ok,
     pluginName: DLL_PLUGIN_NAME,
     method: method.trim(),
-    data: { simulated: true, method: method.trim(), params },
-    fromFallback: true
+    data: res.data ?? undefined,
+    error: res.error,
+    fromFallback: res.fromFallback
   }
 }
 

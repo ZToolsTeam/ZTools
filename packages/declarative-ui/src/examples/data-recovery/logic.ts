@@ -8,9 +8,11 @@
  */
 
 import {
+  callHostTransport,
   formatBytes,
   invokeHostCapability,
   invokePluginService,
+  isRealElectronHost,
   openRealPath,
   resolveRealSpecialPaths,
   scanRealDirectoryTree,
@@ -23,7 +25,7 @@ export type { NativeInvocationResult };
 
 export const DLL_PLUGIN_NAME = "DataRecoveryPlugin";
 export const FORBIDDEN_TARGET_PATTERN =
-  /(^|[\\/])(Windows|System32|SysWOW64|\.\.)($|[\\/])/i;
+  /(^|[\\/])(Windows|System32|SysWOW64|Program Files|Program Files \(x86\)|\.\.)($|[\\/])/i;
 export const FORBIDDEN_REASON = "禁止向系统核心保护目录写入恢复文件或包含路径穿越字符";
 
 export type RecoveryCategory = "all" | "documents" | "images" | "media" | "archives_code";
@@ -223,41 +225,87 @@ function classifyRecoveryExt(extRaw: string): RecoveryCategoryMeta {
 }
 
 export async function fetchRecoverableFiles(
-  scanMode: ScanDepthMode = "quick_recycle"
+  scanMode: ScanDepthMode = "quick_recycle",
+  hostBridge?: any
 ): Promise<DataRecoverySnapshot> {
   const initial = createInitialRecoverySnapshot();
+  const isRealHost = Boolean(hostBridge) || isRealElectronHost(hostBridge) || isRealElectronHost();
   try {
-    const paths = await resolveRealSpecialPaths();
+    const paths = await resolveRealSpecialPaths(hostBridge);
     const restoreTargetDir = `${paths.desktop || "C:\\Users\\Default\\Desktop"}\\ZToolsRecovered`;
-    const tempScan = await scanRealDirectoryTree(paths.temp, { maxDepth: 2, maxFiles: 30 });
 
-    const discovered: RecoverableFileItem[] = tempScan.files.slice(0, 8).map((entry, idx) => {
+    const [hostScanRes, tempScan] = await Promise.all([
+      invokeHostCapability<any>("recovery.scanDeletedFiles", { scanMode }, hostBridge),
+      scanRealDirectoryTree(paths.temp, { maxDepth: 2, maxFiles: 30 }, hostBridge)
+    ]);
+
+    const recycleItems: RecoverableFileItem[] = [];
+    if (hostScanRes.ok && hostScanRes.data) {
+      const rawItems = Array.isArray(hostScanRes.data)
+        ? hostScanRes.data
+        : Array.isArray(hostScanRes.data.items)
+          ? hostScanRes.data.items
+          : Array.isArray(hostScanRes.data.files)
+            ? hostScanRes.data.files
+            : [];
+      rawItems.forEach((raw: any, idx: number) => {
+        const name = String(raw.name || raw.fileName || `recovered_${idx}`);
+        const extMatch = name.match(/\.[^.]+$/);
+        const cat = classifyRecoveryExt(extMatch ? extMatch[0] : "");
+        const score = Number(raw.integrityScore ?? 1);
+        recycleItems.push({
+          id: String(raw.id || `rec_recycle_${idx}`),
+          name,
+          originalPath: String(raw.originalPath || `${paths.documents}\\${name}`),
+          cachePath: String(raw.cachePath || raw.path || ""),
+          category: (raw.category as RecoveryCategory) || cat.id,
+          categoryName: String(raw.categoryName || cat.name),
+          sizeBytes: Math.max(0, Number(raw.sizeBytes ?? raw.size ?? 0)),
+          deletedAt: String(raw.deletedAt || "回收站残留"),
+          integrityScore: score,
+          integrityLabel: `完整度 ${Math.round(score * 100)}% (可恢复)`
+        });
+      });
+    }
+
+    const discovered: RecoverableFileItem[] = tempScan.files.slice(0, 20).map((entry, idx) => {
       const cat = classifyRecoveryExt(entry.ext);
-      const score = Math.max(0.82, 1 - idx * 0.02);
       return {
         id: `rec_real_${idx}`,
         name: entry.name,
-        originalPath: `${paths.documents}\\${entry.name}`,
+        originalPath: entry.path,
         cachePath: entry.path,
         category: cat.id,
         categoryName: cat.name,
-        sizeBytes: Math.max(1024, entry.sizeBytes),
+        sizeBytes: Math.max(1, entry.sizeBytes),
         deletedAt: entry.mtimeMs > 0 ? new Date(entry.mtimeMs).toLocaleTimeString() : "近期缓存",
-        integrityScore: score,
-        integrityLabel: `完整度 ${Math.round(score * 100)}% (可恢复)`
+        integrityScore: 1,
+        integrityLabel: "完整度 100% (可恢复)"
       };
     });
 
-    const merged = [...initial.items, ...discovered];
+    const realMerged = [...recycleItems, ...discovered];
+    const items = isRealHost ? realMerged : realMerged.length > 0 ? realMerged : initial.items;
+
     return {
       restoreTargetDir,
       scanMode,
-      items: merged,
-      totalSizeBytes: merged.reduce((s, i) => s + i.sizeBytes, 0),
-      highIntegrityCount: merged.filter((i) => i.integrityScore >= 0.9).length,
+      items,
+      totalSizeBytes: items.reduce((s, i) => s + i.sizeBytes, 0),
+      highIntegrityCount: items.filter((i) => i.integrityScore >= 0.9).length,
       updatedAt: new Date().toLocaleTimeString()
     };
   } catch {
+    if (isRealHost) {
+      return {
+        restoreTargetDir: "C:\\Users\\Default\\Desktop\\ZToolsRecovered",
+        scanMode,
+        items: [],
+        totalSizeBytes: 0,
+        highIntegrityCount: 0,
+        updatedAt: new Date().toLocaleTimeString()
+      };
+    }
     return { ...initial, scanMode };
   }
 }
@@ -267,7 +315,8 @@ export async function restoreSelectedFiles(
   restoreDir: string,
   hostOverride?: any
 ): Promise<{ ok: boolean; restoredCount: number; restoredBytes: number; message: string }> {
-  if (!restoreDir || FORBIDDEN_TARGET_PATTERN.test(restoreDir)) {
+  const destDir = String(restoreDir || "").trim();
+  if (!destDir || FORBIDDEN_TARGET_PATTERN.test(destDir)) {
     return { ok: false, restoredCount: 0, restoredBytes: 0, message: FORBIDDEN_REASON };
   }
   if (!items || items.length === 0) {
@@ -276,18 +325,61 @@ export async function restoreSelectedFiles(
 
   let restoredCount = 0;
   let restoredBytes = 0;
+  let lastError = "";
   for (const item of items) {
-    await invokeHostCapability(
+    const src = String(item?.cachePath || "").trim();
+    if (!src) continue;
+    if (FORBIDDEN_TARGET_PATTERN.test(src)) {
+      lastError = FORBIDDEN_REASON;
+      continue;
+    }
+    const dest = `${destDir.replace(/[\\/]+$/, "")}\\${item.name}`;
+    if (FORBIDDEN_TARGET_PATTERN.test(dest)) {
+      lastError = FORBIDDEN_REASON;
+      continue;
+    }
+    const res = await invokeHostCapability(
       "recovery.restoreFile",
       {
-        sourceCachePath: item.cachePath,
+        sourcePath: src,
+        sourceCachePath: src,
         originalPath: item.originalPath,
-        restoreDir
+        restoreDir: destDir,
+        targetDir: destDir,
+        targetPath: dest
       },
       hostOverride
     );
-    restoredCount += 1;
-    restoredBytes += item.sizeBytes;
+    if (res.ok) {
+      restoredCount += 1;
+      restoredBytes += item.sizeBytes;
+      continue;
+    }
+    const copyRes = await callHostTransport(
+      "filesystem_copy_file",
+      {
+        sourcePath: src,
+        destinationPath: dest,
+        source: src,
+        destination: dest
+      },
+      hostOverride
+    );
+    if (copyRes.ok) {
+      restoredCount += 1;
+      restoredBytes += item.sizeBytes;
+    } else {
+      lastError = copyRes.error || res.error || res.message || `恢复文件失败: ${item.name}`;
+    }
+  }
+
+  if (restoredCount === 0) {
+    return {
+      ok: false,
+      restoredCount: 0,
+      restoredBytes: 0,
+      message: lastError || "文件恢复失败：源缓存文件不存在或宿主无法写入恢复目录"
+    };
   }
 
   return {
@@ -298,9 +390,9 @@ export async function restoreSelectedFiles(
   };
 }
 
-export async function openRecoveryLocation(targetPath: string): Promise<boolean> {
+export async function openRecoveryLocation(targetPath: string, hostBridge?: any): Promise<boolean> {
   if (!targetPath) return false;
-  const shown = await showRealItemInFolder(targetPath);
+  const shown = await showRealItemInFolder(targetPath, hostBridge);
   if (shown) return true;
-  return openRealPath(targetPath);
+  return openRealPath(targetPath, hostBridge);
 }

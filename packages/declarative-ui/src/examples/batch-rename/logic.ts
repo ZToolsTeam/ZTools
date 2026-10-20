@@ -6,10 +6,15 @@
 
 import {
   callHostTransport,
+  formatBytes,
   getRealSystemPath,
+  invokeDllPluginCapability,
+  isRealElectronHost,
   readRealDirectory,
   showRealItemInFolder
 } from '../shared/native-ipc.js'
+
+export { formatBytes } from '../shared/native-ipc.js'
 
 export type RenameRuleType =
   | 'replace'
@@ -72,20 +77,21 @@ export interface NativeInvocationResult {
 }
 
 export const DLL_PLUGIN_NAME = 'BatchRenamePlugin'
-export const FORBIDDEN_TARGET_PATTERN = new RegExp('\\\\Windows\\\\System32|\\.\\.\\\\|\\.\\./', 'i')
+export const FORBIDDEN_TARGET_PATTERN =
+  /(?:^|[\\/])(?:Windows|System32|SysWOW64|Program Files|Program Files \(x86\)|\.\.)(?:$|[\\/])/i
 export const FORBIDDEN_REASON = '严禁对 Windows 系统核心目录执行批量重命名或包含路径穿越字符'
 
 export const RENAME_RULE_PRESETS: Array<{ id: RenameRuleType; label: string; desc: string }> = [
-  { id: 'number', label: '🔢 阿拉伯序号 (_01, _02)', desc: '按补零数字序列自动追加后缀 (PRD 2.3.4)' },
-  { id: 'number_cn', label: '🇨🇳 中文序号 (_一, _二)', desc: '按中文数字序列追加后缀 (PRD 2.3.4)' },
-  { id: 'number_roman', label: '🏛️ 罗马序号 (_I, _II)', desc: '按罗马数字序列追加后缀 (PRD 2.3.4)' },
-  { id: 'prefix', label: '⬅️ 前缀注入 (Prefix_)', desc: '在文件名首部插入自定义前缀或工程标识 (PRD 2.3.1)' },
-  { id: 'date_prefix', label: '📅 日期归档前缀 (YYYYMMDD_)', desc: '自动注入当前日期归档头' },
-  { id: 'suffix', label: '➡️ 后缀追加 (_Suffix)', desc: '在扩展名前追加版本或状态后缀 (PRD 2.3.2)' },
-  { id: 'trim_head3', label: '✂️ 裁剪前3字符 (前N位删除)', desc: '移除文件名前 3 位冗余编号字符 (PRD 2.2.2)' },
-  { id: 'clean_brackets', label: '🧹 清洗括号与冗余符号', desc: '清除 () [] 【】 及其内部广告/副本标记 (PRD 2.2.5)' },
-  { id: 'snake_case', label: '🐍 下划线规范化 (snake_case)', desc: '将空格与连字符统一替换为下划线' },
-  { id: 'case', label: '🔡 全小写规范 (lowercase)', desc: '文件名与扩展名统一转为全小写 (PRD 2.2.6)' }
+  { id: 'number', label: '阿拉伯序号 (_01, _02)', desc: '按补零数字序列自动追加后缀 (PRD 2.3.4)' },
+  { id: 'number_cn', label: '中文序号 (_一, _二)', desc: '按中文数字序列追加后缀 (PRD 2.3.4)' },
+  { id: 'number_roman', label: '罗马序号 (_I, _II)', desc: '按罗马数字序列追加后缀 (PRD 2.3.4)' },
+  { id: 'prefix', label: '前缀注入 (Prefix_)', desc: '在文件名首部插入自定义前缀或工程标识 (PRD 2.3.1)' },
+  { id: 'date_prefix', label: '日期归档前缀 (YYYYMMDD_)', desc: '自动注入当前日期归档头' },
+  { id: 'suffix', label: '后缀追加 (_Suffix)', desc: '在扩展名前追加版本或状态后缀 (PRD 2.3.2)' },
+  { id: 'trim_head3', label: '裁剪前3字符 (前N位删除)', desc: '移除文件名前 3 位冗余编号字符 (PRD 2.2.2)' },
+  { id: 'clean_brackets', label: '清洗括号与冗余符号', desc: '清除 () [] 【】 及其内部广告/副本标记 (PRD 2.2.5)' },
+  { id: 'snake_case', label: '下划线规范化 (snake_case)', desc: '将空格与连字符统一替换为下划线' },
+  { id: 'case', label: '全小写规范 (lowercase)', desc: '文件名与扩展名统一转为全小写 (PRD 2.2.6)' }
 ]
 
 const PRESET_ITEMS: CapabilityActionItem[] = [
@@ -137,15 +143,6 @@ export function filterCapabilityItems(items: CapabilityActionItem[], query: stri
   })
 }
 
-export function formatBytes(bytes: number): string {
-  if (!Number.isFinite(bytes) || bytes <= 0) return '0 B'
-  const units = ['B', 'KB', 'MB', 'GB', 'TB']
-  const k = 1024
-  const idx = Math.min(units.length - 1, Math.max(0, Math.floor(Math.log(bytes) / Math.log(k))))
-  const val = bytes / Math.pow(k, idx)
-  return `${val >= 100 || idx === 0 ? val.toFixed(0) : val.toFixed(1)} ${units[idx]}`
-}
-
 export function validateInvocationPayload(method: string, params: unknown): { valid: boolean; error?: string } {
   if (typeof method !== 'string' || method.trim().length === 0) {
     return { valid: false, error: 'INVALID_METHOD: 调用方法名不能为空' }
@@ -179,63 +176,20 @@ export function validateInvocationPayload(method: string, params: unknown): { va
 export async function invokeNativeCapability(
   method: string,
   params: Record<string, unknown>,
-  hostBridge?: { dllplugin?: { call?: (plugin: string, fn: string, payload: unknown) => Promise<unknown> } }
+  hostBridge?: { dllplugin?: { call?: (plugin: string, fn: string, payload: unknown) => Promise<unknown> }; __isRealHost?: boolean }
 ): Promise<NativeInvocationResult> {
   const check = validateInvocationPayload(method, params)
   if (!check.valid) {
     throw new Error(check.error || '参数校验失败')
   }
-
-  const runtimeHost = hostBridge ?? (typeof (globalThis as any).ztools !== 'undefined' ? (globalThis as any).ztools : undefined)
-  const callFn = runtimeHost?.dllplugin?.call
-
-  if (typeof callFn === 'function') {
-    try {
-      const raw = await callFn(DLL_PLUGIN_NAME, method.trim(), params)
-      let parsed: unknown = raw
-      if (typeof raw === 'string') {
-        try {
-          parsed = JSON.parse(raw)
-        } catch {
-          throw new Error('MALFORMED_DLL_RESPONSE: 原生组件返回了损坏的 JSON 数据')
-        }
-      }
-      if (parsed && typeof parsed === 'object' && 'error' in (parsed as Record<string, unknown>)) {
-        const errMsg = String((parsed as Record<string, unknown>).error || '原生组件返回未知错误')
-        return {
-          ok: false,
-          pluginName: DLL_PLUGIN_NAME,
-          method: method.trim(),
-          error: `DLL_ERROR: ${errMsg}`
-        }
-      }
-      return {
-        ok: true,
-        pluginName: DLL_PLUGIN_NAME,
-        method: method.trim(),
-        data: parsed,
-        fromFallback: false
-      }
-    } catch (err: any) {
-      const message = err instanceof Error ? err.message : String(err)
-      if (message.startsWith('MALFORMED_DLL_RESPONSE:')) {
-        throw err
-      }
-      return {
-        ok: false,
-        pluginName: DLL_PLUGIN_NAME,
-        method: method.trim(),
-        error: `NATIVE_CALL_FAILED: ${message}`
-      }
-    }
-  }
-
+  const res = await invokeDllPluginCapability(DLL_PLUGIN_NAME, method, params, hostBridge)
   return {
-    ok: true,
+    ok: res.ok,
     pluginName: DLL_PLUGIN_NAME,
     method: method.trim(),
-    data: { simulated: true, method: method.trim(), params },
-    fromFallback: true
+    data: res.data ?? undefined,
+    error: res.error,
+    fromFallback: res.fromFallback
   }
 }
 

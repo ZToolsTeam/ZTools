@@ -24,7 +24,7 @@ import {
   openBoostItemLocation
 } from './logic.js'
 
-import { trashRealItem } from '../shared/native-ipc.js'
+import { isRealElectronHost, trashRealItem } from '../shared/native-ipc.js'
 
 const INIT_BOOST_SNAPSHOT: BoostSnapshot = {
   totalMemoryBytes: 32 * 1024 * 1024 * 1024,
@@ -89,9 +89,22 @@ export default function BoostCommand() {
   const [searchText, setSearchText] = useState('')
   const [tab, setTab] = useState<'all' | 'process' | 'startup_item' | 'temp_cache'>('all')
   const [impactFilter, setImpactFilter] = useState<'all' | 'high' | 'cleanable'>('all')
-  const [snapshot, setSnapshot] = useState<BoostSnapshot>(() => INIT_BOOST_SNAPSHOT)
+  const [snapshot, setSnapshot] = useState<BoostSnapshot>(() =>
+    isRealElectronHost()
+      ? {
+          totalMemoryBytes: 0,
+          usedMemoryBytes: 0,
+          availableMemoryBytes: 0,
+          memoryUsagePercent: 0,
+          cpuUsagePercent: 0,
+          reclaimableEstimateBytes: 0,
+          startupItemCount: 0,
+          candidates: []
+        }
+      : INIT_BOOST_SNAPSHOT
+  )
   const [checkedIds, setCheckedIds] = useState<string[]>(() =>
-    INIT_BOOST_SNAPSHOT.candidates.filter(c => !c.isProtected).map(c => c.id)
+    isRealElectronHost() ? [] : INIT_BOOST_SNAPSHOT.candidates.filter(c => !c.isProtected).map(c => c.id)
   )
   const [isLoading, setIsLoading] = useState(true)
 
@@ -99,7 +112,7 @@ export default function BoostCommand() {
     if (showIndicator) setIsLoading(true)
     try {
       const snap = await fetchBoostSnapshot()
-      if (snap.candidates.length > 0) {
+      if (isRealElectronHost() || snap.candidates.length > 0) {
         setSnapshot(snap)
         setCheckedIds(
           snap.candidates
@@ -370,75 +383,8 @@ export default function BoostCommand() {
         })
       ]
     }),
-    metricGrid: MetricGrid({
-      columns: 4,
-      items: [
-        {
-          id: 'boost-mem',
-          label: '物理内存负载',
-          value: `${memPct}%`,
-          subValue: `${formatBytes(usedMem)} / ${formatBytes(totalMem)}`,
-          progress: memPct,
-          status: memPct > 85 ? 'danger' : memPct > 70 ? 'warning' : 'success'
-        },
-        {
-          id: 'boost-reclaim',
-          label: '预计可释放内存/缓存',
-          value: formatBytes(snapshot.reclaimableEstimateBytes || 0),
-          subValue: `已勾选 ${checkedIds.length} 项待加速`,
-          status: 'success'
-        },
-        {
-          id: 'boost-startup',
-          label: '开机启动与自启常驻',
-          value: `${snapshot.startupItemCount || 0} 项`,
-          subValue: 'Startup 目录 + 自启服务',
-          status: (snapshot.startupItemCount || 0) > 10 ? 'warning' : 'normal'
-        },
-        {
-          id: 'boost-cpu',
-          label: 'CPU 瞬时负载',
-          value: `${cpuPct}%`,
-          subValue: `空闲内存 ${formatBytes(availMem)}`,
-          progress: cpuPct,
-          status: cpuPct > 80 ? 'danger' : 'normal'
-        }
-      ]
-    }),
-    distributionBar: DistributionBar({
-      title: '本机物理内存工作集构成分布',
-      totalLabel: `总物理内存 ${formatBytes(totalMem)} · 已用 ${memPct}%`,
-      segments: memSegments
-    }),
     filterBar: FilterBar({
-      wizardSteps: [
-        { step: 1, label: '1. 内存与CPU压力采样', status: 'done' },
-        { step: 2, label: '2. 开机启动项与大内存扫描', status: 'done' },
-        { step: 3, label: '3. 三态勾选优化项', status: 'active' },
-        { step: 4, label: '4. 一键极速加速', status: 'pending' }
-      ],
       summaryText: `物理内存已用 ${memPct}% (${formatBytes(usedMem)}/${formatBytes(totalMem)}) · 已勾选 ${checkedInFiltered.length} 项待加速 (预计释放 ${formatBytes(selectedBytes)})`,
-      groups: [
-        {
-          id: 'boost-impact',
-          label: '优化筛选',
-          value: impactFilter,
-          onChange: v => setImpactFilter(v as any),
-          options: [
-            { value: 'all', label: '全部项目', badge: candidates.length },
-            {
-              value: 'high',
-              label: '高内存/高耗时影响',
-              badge: candidates.filter(c => c.impactLevel === '高耗时影响').length
-            },
-            {
-              value: 'cleanable',
-              label: '可安全加速项',
-              badge: candidates.filter(c => !c.isProtected).length
-            }
-          ]
-        }
-      ],
       actions: [
         {
           id: 'rescan-boost',
@@ -447,16 +393,6 @@ export default function BoostCommand() {
           style: 'secondary',
           onAction: () => refreshBoost(true)
         }
-      ]
-    }),
-    segmentedControl: SegmentedControl({
-      value: tab,
-      onChange: v => setTab(v as any),
-      options: [
-        { value: 'all', label: '全部加速项', badge: candidates.length },
-        { value: 'process', label: '内存大户进程', badge: candidates.filter(c => c.type === 'process').length },
-        { value: 'startup_item', label: '开机启动与自启常驻', badge: candidates.filter(c => c.type === 'startup_item').length },
-        { value: 'temp_cache', label: '%TEMP% 热点缓存', badge: candidates.filter(c => c.type === 'temp_cache').length }
       ]
     }),
     subList: {

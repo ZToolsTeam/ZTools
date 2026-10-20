@@ -1,12 +1,15 @@
 /**
  * AI 视频补帧 (RIFE 60/120fps) 与画质超分增强业务逻辑层 (AiVideo Logic)
- * 真实扫描本机 Videos / Downloads / Desktop 目录下的视频媒体文件，对接 RIFE / Real-CUGAN 本地管线
+ * 真实扫描本机 Videos / Downloads / Desktop 目录下的视频媒体文件，对接 AiVideoPlugin 引擎
  */
 
 import {
   callHostTransport,
   formatBytes,
+  getRealFileSize,
   getRealSystemPath,
+  invokePluginService,
+  isRealElectronHost,
   scanRealDirectoryTree,
   showRealItemInFolder
 } from '../shared/native-ipc.js'
@@ -31,6 +34,8 @@ export interface AiVideoFileItem {
   sizeBytes: number
   sourceFps: number
   sourceResolution: string
+  outputSizeBytes?: number
+  outputPath?: string
 }
 
 export interface AiVideoBatchConfig {
@@ -42,6 +47,14 @@ export interface AiVideoBatchConfig {
   outputDir?: string
 }
 
+export interface AiVideoProcessedItemResult {
+  inputPath: string
+  outputPath: string
+  sizeBytes: number
+  ok: boolean
+  error?: string
+}
+
 export interface AiVideoBatchResult {
   ok: boolean
   processedCount: number
@@ -49,8 +62,16 @@ export interface AiVideoBatchResult {
   targetFps: string
   targetResolution: string
   videoEncoder: string
+  totalOutputBytes: number
+  outputs: AiVideoProcessedItemResult[]
   error?: string
   fromFallback?: boolean
+}
+
+function isStrictRealHost(hostOverride?: unknown): boolean {
+  if (isRealElectronHost(hostOverride)) return true
+  if (hostOverride !== undefined && hostOverride !== null) return true
+  return false
 }
 
 export const FORBIDDEN_VIDEO_PATH = new RegExp('\\\\Windows\\\\System32|\\.\\.\\\\|\\.\\./', 'i')
@@ -168,11 +189,15 @@ export function validateAiVideoPayload(config: Partial<AiVideoBatchConfig>): { v
   return { valid: true }
 }
 
-export async function fetchAiVideoWorkspace(hostOverride?: any): Promise<{
+export type AiVideoQueueSnapshot = AiVideoFileItem[] & {
   scannedDirs: string[]
   files: AiVideoFileItem[]
+  items: AiVideoFileItem[]
   models: AiVideoModelPreset[]
-}> {
+}
+
+export async function fetchAiVideoQueue(hostOverride?: any): Promise<AiVideoQueueSnapshot> {
+  const strictReal = isStrictRealHost(hostOverride)
   const [videosDir, downloadsDir, desktopDir] = await Promise.all([
     getRealSystemPath('videos', hostOverride),
     getRealSystemPath('downloads', hostOverride),
@@ -181,17 +206,21 @@ export async function fetchAiVideoWorkspace(hostOverride?: any): Promise<{
 
   const scannedDirs = [videosDir, downloadsDir, desktopDir].filter(Boolean)
   const discovered: AiVideoFileItem[] = []
+  const seenPaths = new Set<string>()
 
   for (const dir of scannedDirs) {
     const scanRes = await scanRealDirectoryTree(dir, {
       maxDepth: 2,
       maxFiles: 200,
-      collectTopN: 25,
+      collectTopN: 40,
       filterExt: VIDEO_EXT_REGEX,
       hostOverride
     })
     for (const f of scanRes.files) {
       if (f.sizeBytes <= 0) continue
+      const normPath = f.path.toLowerCase()
+      if (seenPaths.has(normPath)) continue
+      seenPaths.add(normPath)
       const dot = f.name.lastIndexOf('.')
       const ext = dot > 0 ? f.name.slice(dot).toLowerCase() : '.mp4'
       discovered.push({
@@ -207,19 +236,26 @@ export async function fetchAiVideoWorkspace(hostOverride?: any): Promise<{
     }
   }
 
-  const files =
-    discovered.length >= 4
-      ? discovered.sort((a, b) => b.sizeBytes - a.sizeBytes)
-      : [...discovered, ...INITIAL_AI_VIDEO_FILES].slice(0, 10)
+  discovered.sort((a, b) => b.sizeBytes - a.sizeBytes)
 
-  return {
-    scannedDirs: scannedDirs.length > 0 ? scannedDirs : ['D:\\Videos', 'C:\\Users\\Geek\\Videos'],
+  // 真实宿主下只展示真实扫描到的视频文件，严禁在 < 4 时拼接 INITIAL_AI_VIDEO_FILES
+  const files = strictReal
+    ? discovered
+    : discovered.length > 0
+      ? discovered
+      : [...INITIAL_AI_VIDEO_FILES]
+
+  return Object.assign([...files], {
+    scannedDirs,
     files,
+    items: files,
     models: [...AI_VIDEO_MODELS]
-  }
+  })
 }
 
-export async function runAiVideoBatch(
+export const fetchAiVideoWorkspace = fetchAiVideoQueue
+
+export async function executeAiVideoBatch(
   files: AiVideoFileItem[],
   config: AiVideoBatchConfig,
   hostOverride?: any
@@ -232,6 +268,8 @@ export async function runAiVideoBatch(
       targetFps: config?.targetFps || '60fps',
       targetResolution: config?.targetResolution || '4k_2160p',
       videoEncoder: config?.videoEncoder || 'hevc_nvenc',
+      totalOutputBytes: 0,
+      outputs: [],
       error: 'EMPTY_QUEUE: 待增强视频队列不能为空'
     }
   }
@@ -245,6 +283,8 @@ export async function runAiVideoBatch(
       targetFps: config.targetFps,
       targetResolution: config.targetResolution,
       videoEncoder: config.videoEncoder,
+      totalOutputBytes: 0,
+      outputs: [],
       error: check.error
     }
   }
@@ -258,8 +298,89 @@ export async function runAiVideoBatch(
         targetFps: config.targetFps,
         targetResolution: config.targetResolution,
         videoEncoder: config.videoEncoder,
+        totalOutputBytes: 0,
+        outputs: [],
         error: 'SECURITY_INTERCEPTED: 视频路径不可包含系统受保护路径或路径穿越'
       }
+    }
+  }
+
+  const strictReal = isStrictRealHost(hostOverride)
+  const outputs: AiVideoProcessedItemResult[] = []
+  let totalOutputBytes = 0
+  let lastError = ''
+
+  for (const f of files) {
+    const outputDir = config.outputDir || f.parentDir || ''
+    const defaultOutputPath = f.path.replace(
+      /(\.[^.\\/]+)?$/,
+      `_${config.targetFps}_${config.targetResolution}.mp4`
+    )
+
+    const pluginRes = await invokePluginService<any>(
+      'AiVideoPlugin',
+      'enhanceVideo',
+      {
+        inputPath: f.path,
+        outputDir,
+        modelId: config.modelId,
+        targetFps: config.targetFps,
+        targetResolution: config.targetResolution,
+        videoEncoder: config.videoEncoder,
+        sceneChangeProtection: config.sceneChangeProtection
+      },
+      hostOverride
+    )
+
+    if (pluginRes.ok && pluginRes.data?.ok !== false) {
+      const data = pluginRes.data
+      const itemRes =
+        typeof data === 'object' && data !== null && Array.isArray(data.results) && data.results.length > 0
+          ? data.results[0]
+          : data
+      const outPath =
+        (typeof itemRes === 'object' && itemRes !== null
+          ? itemRes.outputPath || itemRes.path || itemRes.filePath
+          : '') ||
+        (typeof data === 'object' && data !== null ? data.outputPath || data.path || data.filePath : '') ||
+        defaultOutputPath
+      let realSize = Number(
+        typeof itemRes === 'object' && itemRes !== null
+          ? itemRes.outputBytes ?? itemRes.sizeBytes ?? itemRes.outputSizeBytes ?? itemRes.size ?? 0
+          : 0
+      )
+      if (!Number.isFinite(realSize) || realSize <= 0) {
+        realSize = await getRealFileSize(outPath, hostOverride)
+      }
+      // 必须有真实的产出文件大小或明确的成功产物校验，绝不在无文件产出时假报成功
+      if (realSize > 0) {
+        f.outputSizeBytes = realSize
+        f.outputPath = outPath
+        totalOutputBytes += realSize
+        outputs.push({
+          inputPath: f.path,
+          outputPath: outPath,
+          sizeBytes: realSize,
+          ok: true
+        })
+        continue
+      }
+    }
+
+    lastError = pluginRes.error || (pluginRes.data && pluginRes.data.error) || ''
+  }
+
+  if (outputs.length > 0) {
+    return {
+      ok: true,
+      processedCount: outputs.length,
+      modelId: config.modelId,
+      targetFps: config.targetFps,
+      targetResolution: config.targetResolution,
+      videoEncoder: config.videoEncoder,
+      totalOutputBytes,
+      outputs,
+      fromFallback: false
     }
   }
 
@@ -272,16 +393,82 @@ export async function runAiVideoBatch(
     hostOverride
   )
 
-  if (ipcRes.ok) {
+  if (ipcRes.ok && ipcRes.data?.ok !== false) {
+    for (let i = 0; i < files.length; i++) {
+      const f = files[i]
+      const itemRes = Array.isArray(ipcRes.data?.results)
+        ? ipcRes.data.results[i] ?? ipcRes.data.results[0]
+        : ipcRes.data
+      const outPath =
+        itemRes?.outputPath ||
+        ipcRes.data?.outputPath ||
+        f.path.replace(/(\.[^.\\/]+)?$/, `_${config.targetFps}_${config.targetResolution}.mp4`)
+      const realSize =
+        Number(
+          itemRes?.outputBytes ??
+            itemRes?.sizeBytes ??
+            itemRes?.outputSizeBytes ??
+            ipcRes.data?.sizeBytes ??
+            ipcRes.data?.outputSizeBytes ??
+            0
+        ) || (await getRealFileSize(outPath, hostOverride))
+      if (!strictReal || realSize > 0) {
+        const finalSize = realSize > 0 ? realSize : f.sizeBytes
+        totalOutputBytes += finalSize
+        outputs.push({
+          inputPath: f.path,
+          outputPath: outPath,
+          sizeBytes: finalSize,
+          ok: true
+        })
+      }
+    }
+    if (outputs.length > 0) {
+      return {
+        ok: true,
+        processedCount: outputs.length,
+        modelId: config.modelId,
+        targetFps: config.targetFps,
+        targetResolution: config.targetResolution,
+        videoEncoder: config.videoEncoder,
+        totalOutputBytes,
+        outputs,
+        fromFallback: false
+      }
+    }
+  }
+
+  if (strictReal) {
+    const errMsg =
+      lastError ||
+      ipcRes.error ||
+      'AI_VIDEO_ENHANCE_FAILED: AI 视频补帧/超分引擎未能生成有效输出文件'
     return {
-      ok: true,
-      processedCount: files.length,
+      ok: false,
+      processedCount: 0,
       modelId: config.modelId,
       targetFps: config.targetFps,
       targetResolution: config.targetResolution,
       videoEncoder: config.videoEncoder,
+      totalOutputBytes: 0,
+      outputs: [],
+      error: errMsg,
       fromFallback: false
     }
+  }
+
+  for (const f of files) {
+    const outPath = f.path.replace(
+      /(\.[^.\\/]+)?$/,
+      `_${config.targetFps}_${config.targetResolution}.mp4`
+    )
+    totalOutputBytes += f.sizeBytes
+    outputs.push({
+      inputPath: f.path,
+      outputPath: outPath,
+      sizeBytes: f.sizeBytes,
+      ok: true
+    })
   }
 
   return {
@@ -291,9 +478,13 @@ export async function runAiVideoBatch(
     targetFps: config.targetFps,
     targetResolution: config.targetResolution,
     videoEncoder: config.videoEncoder,
+    totalOutputBytes,
+    outputs,
     fromFallback: true
   }
 }
+
+export const runAiVideoBatch = executeAiVideoBatch
 
 export async function openAiVideoLocation(fullPath: string, hostOverride?: any): Promise<boolean> {
   if (!fullPath) return false

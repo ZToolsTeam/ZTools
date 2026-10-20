@@ -8,9 +8,7 @@ import {
   useEffect,
   showToast,
   Toast,
-  MetricGrid,
-  FilterBar,
-  SegmentedControl
+  FilterBar
 } from '../../index.js'
 import {
   INITIAL_OCR_QUEUE_ITEMS,
@@ -23,20 +21,21 @@ import {
   formatBytes,
   openOcrFileLocation
 } from './logic.js'
+import { isRealElectronHost } from '../shared/native-ipc.js'
 
 export * from './logic.js'
 
 export function OcrCommand() {
   const [searchText, setSearchText] = useState('')
-  const [tab, setTab] = useState<'queue' | 'models'>('queue')
   const [languageModelId, setLanguageModelId] = useState<string>(OCR_LANGUAGE_MODELS[0].id)
   const [layoutStrategy, setLayoutStrategy] = useState<'natural_paragraph' | 'single_line' | 'markdown_table'>('natural_paragraph')
-  const [postAction, setPostAction] = useState<'copy_clipboard' | 'export_file'>('copy_clipboard')
+  const [postAction, setPostAction] = useState<'copy_clipboard' | 'export_file' | 'copy_and_export'>('copy_clipboard')
   const [filterStampNoise, setFilterStampNoise] = useState<boolean>(true)
-  const [items, setItems] = useState<OcrQueueItem[]>(INITIAL_OCR_QUEUE_ITEMS)
-  const [checkedIds, setCheckedIds] = useState<string[]>(INITIAL_OCR_QUEUE_ITEMS.map(i => i.id))
+  const isRealHost = isRealElectronHost()
+  const initialItems = isRealHost ? [] : INITIAL_OCR_QUEUE_ITEMS
+  const [items, setItems] = useState<OcrQueueItem[]>(initialItems)
+  const [checkedIds, setCheckedIds] = useState<string[]>(initialItems.map(i => i.id))
   const [models, setModels] = useState<OcrLanguagePreset[]>(OCR_LANGUAGE_MODELS)
-  const [scannedDirs, setScannedDirs] = useState<string[]>(['C:\\Users\\Geek\\Pictures\\Screenshots', 'C:\\Users\\Geek\\Desktop'])
   const [isLoading, setIsLoading] = useState(false)
 
   async function refreshWorkspace(showIndicator = false) {
@@ -46,7 +45,6 @@ export function OcrCommand() {
       setItems(ws.items)
       setCheckedIds(ws.items.map(i => i.id))
       setModels(ws.models)
-      setScannedDirs(ws.scannedDirs)
       if (showIndicator) {
         showToast({
           style: Toast.Style.Success,
@@ -77,24 +75,35 @@ export function OcrCommand() {
       showToast({ style: Toast.Style.Failure, title: 'OCR 识别未执行', message: res.error || '队列为空' })
       return
     }
-    await Clipboard.copy(res.combinedText)
+    if (postAction === 'copy_clipboard' || postAction === 'copy_and_export') {
+      await Clipboard.copy(res.combinedText)
+    }
     showToast({
       style: Toast.Style.Success,
-      title: `已识别 ${res.recognizedCount} 张图片并复制文字`,
+      title:
+        postAction === 'export_file'
+          ? `已识别 ${res.recognizedCount} 张图片并导出文件`
+          : `已识别 ${res.recognizedCount} 张图片并复制文字`,
       message: `平均单图耗时 ~${res.averageLatencyMs}ms · 共提取 ${res.combinedText.length} 字符`
     })
   }
 
   async function handleCaptureScreenOcr() {
     const res = await captureScreenAreaOcr()
-    if (res.ok) {
-      await Clipboard.copy(res.text)
+    if (!res.ok) {
       showToast({
-        style: Toast.Style.Success,
-        title: res.message,
-        message: res.text.slice(0, 64)
+        style: Toast.Style.Failure,
+        title: '框选屏幕 OCR 失败',
+        message: res.error || res.message
       })
+      return
     }
+    await Clipboard.copy(res.text)
+    showToast({
+      style: Toast.Style.Success,
+      title: res.message,
+      message: res.text.slice(0, 64)
+    })
   }
 
   const selectedItems = items.filter(i => checkedIds.includes(i.id))
@@ -116,7 +125,7 @@ export function OcrCommand() {
     return List.Item({
       id: item.id,
       title: item.name,
-      subtitle: `${item.sampleText.slice(0, 65)}`,
+      subtitle: `${item.sampleText ? item.sampleText.slice(0, 65) : item.parentDir}`,
       checkable: true,
       checked: isChecked,
       onCheckChange: c => {
@@ -146,7 +155,7 @@ export function OcrCommand() {
         title: item.name,
         children: [
           Action({
-            title: `识别已勾选图片并复制文字 (${checkedIds.length}项)`,
+            title: `识别已勾选图片 (${checkedIds.length}项)`,
             icon: Icon.Text,
             onAction: handleRunBatchOcr
           }),
@@ -191,59 +200,8 @@ export function OcrCommand() {
         })
       )
     }),
-    metricGrid: MetricGrid({
-      columns: 4,
-      items: [
-        {
-          id: 'ocr-count',
-          label: '已选 / 扫描图片数',
-          value: `${checkedIds.length} / ${items.length} 张`,
-          subValue: `${scannedDirs.length} 个截图与图片目录`,
-          status: 'normal'
-        },
-        {
-          id: 'ocr-latency',
-          label: '平均单图识别耗时',
-          value: `~${activeModel.avgLatencyMs}ms`,
-          subValue: '本地离线 ONNX 极速推理',
-          status: 'success'
-        },
-        {
-          id: 'ocr-model',
-          label: '当前激活识别引擎',
-          value: activeModel.tag,
-          subValue: activeModel.engineCode,
-          status: 'success'
-        },
-        {
-          id: 'ocr-size',
-          label: '已选队列总体积',
-          value: formatBytes(totalBytes),
-          subValue: filterStampNoise ? '印章与底噪过滤已开启' : '原图直读模式',
-          status: 'normal'
-        }
-      ]
-    }),
     filterBar: FilterBar({
-      wizardSteps: [
-        { step: 1, label: '1. 扫描近期截图与图片', status: 'done' },
-        { step: 2, label: '2. 选择多语种/公式模型', status: 'done' },
-        { step: 3, label: '3. 配置版面还原策略', status: 'active' },
-        { step: 4, label: '4. 批量提取至剪贴板', status: 'pending' }
-      ],
       summaryText: `已选 ${checkedIds.length}/${items.length} 张待识别图片 (${formatBytes(totalBytes)}) · 引擎: ${activeModel.tag} · 平均耗时 ~${activeModel.avgLatencyMs}ms`,
-      groups: [
-        {
-          id: 'ocr-lang-model',
-          label: '识别模型',
-          value: languageModelId,
-          onChange: v => setLanguageModelId(v),
-          options: OCR_LANGUAGE_MODELS.map(m => ({
-            value: m.id,
-            label: m.tag
-          }))
-        }
-      ],
       actions: [
         {
           id: 'rescan-ocr',
@@ -258,17 +216,6 @@ export function OcrCommand() {
       title: '离线 OCR 文字提取工作台',
       subtitle: `${activeModel.engineCode} · ~${activeModel.avgLatencyMs}ms/图`,
       fields: [
-        {
-          id: 'wb-ocr-lang',
-          label: '识别语言模型',
-          type: 'select',
-          value: languageModelId,
-          onChange: val => setLanguageModelId(val),
-          options: OCR_LANGUAGE_MODELS.map(m => ({
-            label: m.tag,
-            value: m.id
-          }))
-        },
         {
           id: 'wb-ocr-layout',
           label: '版面还原策略',
@@ -289,7 +236,8 @@ export function OcrCommand() {
           onChange: val => setPostAction(val as any),
           options: [
             { label: '自动复制结果到剪贴板', value: 'copy_clipboard' },
-            { label: '导出同名 .txt 或 .md 文件', value: 'export_file' }
+            { label: '导出同名 .txt 或 .md 文件', value: 'export_file' },
+            { label: '复制剪贴板并导出文件', value: 'copy_and_export' }
           ]
         },
         {
@@ -334,14 +282,6 @@ export function OcrCommand() {
       emptyText: '当前未找到待识别图片或截图',
       items: rightQueueItems
     },
-    segmentedControl: SegmentedControl({
-      value: tab,
-      onChange: v => setTab(v as any),
-      options: [
-        { value: 'queue', label: '待识别截图队列', badge: items.length },
-        { value: 'models', label: '5 大识别模型', badge: models.length }
-      ]
-    }),
     children: [
       List.Section({
         title: `本机待识别截图与图片队列 (${filteredItems.length})`,
@@ -352,3 +292,4 @@ export function OcrCommand() {
 }
 
 export default OcrCommand
+

@@ -9,7 +9,7 @@
  */
 
 import { Action, ActionPanel, Icon, List, useEffect, useState } from "../../index.js";
-import { formatBytes } from "../shared/native-ipc.js";
+import { formatBytes, isRealElectronHost } from "../shared/native-ipc.js";
 import {
   RENAME_RULE_PRESETS,
   applyRenameRule,
@@ -83,10 +83,12 @@ function stripLeadingEmoji(label: string): string {
 export function BatchRenameCommand() {
   const [sourceScope, setSourceScope] = useState<SourceDirScope>("downloads");
   const [currentDir, setCurrentDir] = useState<string>("C:\\Users\\Default\\Downloads");
-  const [realFiles, setRealFiles] = useState<RealFileEntry[]>(INITIAL_FALLBACK_FILES);
+  const [realFiles, setRealFiles] = useState<RealFileEntry[]>(() =>
+    isRealElectronHost() ? [] : INITIAL_FALLBACK_FILES
+  );
   const [ruleType, setRuleType] = useState<RenameRuleType>("number");
-  const [checkedPaths, setCheckedPaths] = useState<string[]>(
-    INITIAL_FALLBACK_FILES.map((f) => f.fullPath)
+  const [checkedPaths, setCheckedPaths] = useState<string[]>(() =>
+    isRealElectronHost() ? [] : INITIAL_FALLBACK_FILES.map((f) => f.fullPath)
   );
   const [searchText, setSearchText] = useState<string>("");
   const [undoStack, setUndoStack] = useState<RenameUndoEntry[]>([]);
@@ -97,11 +99,15 @@ export function BatchRenameCommand() {
     setIsLoading(true);
     try {
       const res = await fetchRealBatchRenameFiles(scope);
-      if (res.files.length > 0) {
+      if (isRealElectronHost() || res.files.length > 0) {
         setCurrentDir(res.directory || scope);
         setRealFiles(res.files);
         setCheckedPaths(res.files.slice(0, 15).map((f) => f.fullPath));
-        setStatusMessage(`已加载 ${res.directory} 下 ${res.files.length} 个真实文件`);
+        setStatusMessage(
+          res.files.length > 0
+            ? `已加载 ${res.directory} 下 ${res.files.length} 个真实文件`
+            : `当前目录 (${res.directory || scope}) 暂无可重命名文件`
+        );
       } else {
         setStatusMessage(`已就绪 (${scope}) · 共 ${realFiles.length} 个待重命名文件`);
       }
@@ -385,74 +391,8 @@ export function BatchRenameCommand() {
         })
       )
     }),
-    metricGrid: {
-      columns: 4,
-      items: [
-        {
-          id: "rn-metric-rule",
-          label: "当前生效规则",
-          value: cleanActiveRuleLabel,
-          subValue: activePresetMeta.desc
-        },
-        {
-          id: "rn-metric-count",
-          label: "已勾选待改名",
-          value: `${changedSelectedCount} 项`,
-          subValue: `当前目录共 ${previewItems.length} 个文件`
-        },
-        {
-          id: "rn-metric-conflict",
-          label: "重命名冲突检测",
-          value: conflictCount > 0 ? `${conflictCount} 项冲突` : "零冲突安全",
-          subValue: conflictCount > 0 ? "同名冲突已标红拦截" : "所有新文件名均唯一",
-          status: conflictCount > 0 ? "danger" : "normal"
-        },
-        {
-          id: "rn-metric-undo",
-          label: "原子撤销栈 (Undo)",
-          value: `${undoStack.length} 项可回滚`,
-          subValue: currentDir
-        }
-      ]
-    },
-    distributionBar: {
-      title: "重命名变更预览分布",
-      totalLabel: `${previewItems.length} 个文件`,
-      segments: [
-        {
-          id: "changed",
-          label: `待改名 (${changedSelectedCount} 项)`,
-          value: Math.max(1, changedSelectedCount),
-          color: "var(--rc-text-muted)"
-        },
-        {
-          id: "unchanged",
-          label: `未变更 (${Math.max(0, previewItems.length - changedSelectedCount)} 项)`,
-          value: Math.max(1, previewItems.length - changedSelectedCount),
-          color: "var(--rc-text-muted)"
-        }
-      ]
-    },
     filterBar: {
       summaryText,
-      wizardSteps: [
-        { step: 1, label: `1. 选择目标目录 (${sourceScope})`, status: "done" },
-        { step: 2, label: `2. 选择重命名规则 (${cleanActiveRuleLabel})`, status: "done" },
-        { step: 3, label: `3. 预览原名->新名 Diff (${changedSelectedCount} 项)`, status: "active" },
-        { step: 4, label: "4. 按 Enter 批量改名或 Ctrl+Enter 撤销", status: "pending" }
-      ],
-      groups: [
-        {
-          id: "scope-group",
-          label: "目标目录",
-          value: sourceScope,
-          options: SOURCE_SCOPES.map((s) => ({
-            title: s.label,
-            value: s.id
-          })),
-          onChange: (val) => setSourceScope(val as SourceDirScope)
-        }
-      ],
       actions: [
         {
           id: "rescan",
