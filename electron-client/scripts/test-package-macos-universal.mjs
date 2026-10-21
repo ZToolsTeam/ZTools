@@ -3,10 +3,13 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import test from 'node:test'
+import { spawnSync } from 'node:child_process'
 import {
   assertMacApplicationIcon,
+  assertMacRuntimeIcon,
   createMacUniversalPackagerOptions,
   macApplicationIconPath,
+  macRuntimeIconPath,
   main,
   stageMacUniversal,
   verifyPackagedIcon
@@ -14,11 +17,21 @@ import {
 
 // 最小 ICNS 夹具：魔数 icns + 长度，足以通过格式检查
 const FIXTURE_ICNS = Buffer.concat([Buffer.from('icns', 'latin1'), Buffer.from([0, 0, 0, 8])])
+// 最小 PNG 夹具：8 字节签名 + 1 字节内容，足以通过格式检查
+const FIXTURE_PNG = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00])
+
+function seedRuntimeIcon(sourceRoot, bytes = FIXTURE_PNG) {
+  const iconPath = macRuntimeIconPath(sourceRoot)
+  fs.mkdirSync(path.dirname(iconPath), { recursive: true })
+  fs.writeFileSync(iconPath, bytes)
+  return iconPath
+}
 
 function seedIcon(sourceRoot, bytes = FIXTURE_ICNS) {
   const iconPath = macApplicationIconPath(sourceRoot)
   fs.mkdirSync(path.dirname(iconPath), { recursive: true })
   fs.writeFileSync(iconPath, bytes)
+  seedRuntimeIcon(sourceRoot)
   return iconPath
 }
 
@@ -386,6 +399,42 @@ test('[破坏性] 图标缺失或不是 ICNS 时在构建之前就失败', async
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ztools-macos-icon-'))
     let buildCalled = false
     try {
+      prepare(root)
+      await assert.rejects(stageMacUniversal({
+        appBundleId: 'org.example.ztools', shortVersion: '1.1.7', buildVersion: '1171',
+        platform: 'darwin', sourceRoot: root, sourcePackage, minimumOs: '13.0',
+        buildNative: fixtureNative, buildPathAccessNative: fixturePathAccess, buildVisionNative: fixtureVision,
+        build: async () => { buildCalled = true }, packageApp: async () => []
+      }), pattern, label)
+      assert.equal(buildCalled, false, label)
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true })
+    }
+  }
+})
+
+test('仓库内提交的 app-icon.png 是有效 PNG，且不会被 .gitignore 忽略', () => {
+  const sourceRoot = path.resolve(path.dirname(new URL(import.meta.url).pathname), '..')
+  const iconPath = macRuntimeIconPath(sourceRoot)
+  assert.doesNotThrow(() => assertMacRuntimeIcon(fs, iconPath))
+  // 退出码 1 表示没有任何忽略规则命中；--no-index 只看规则本身，不受文件是否已被跟踪影响
+  const result = spawnSync('git', ['check-ignore', '--no-index', '-q', path.relative(sourceRoot, iconPath)], { cwd: sourceRoot })
+  assert.equal(result.status, 1)
+})
+
+test('[破坏性] 运行时 PNG 图标缺失或格式不对时在构建之前就失败', async () => {
+  for (const [label, prepare, pattern] of [
+    ['缺失', () => {}, /缺少 macOS 运行时图标/],
+    ['ICO 冒充', (root) => seedRuntimeIcon(root, Buffer.from([0, 0, 1, 0, 1, 0, 16, 16, 0])), /不是 PNG 格式/],
+    ['空文件', (root) => seedRuntimeIcon(root, Buffer.alloc(0)), /不是有效的普通文件/],
+    ['只有签名', (root) => seedRuntimeIcon(root, FIXTURE_PNG.subarray(0, 8)), /不是有效的普通文件/]
+  ]) {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ztools-macos-runtime-icon-'))
+    let buildCalled = false
+    try {
+      const iconsPath = macApplicationIconPath(root)
+      fs.mkdirSync(path.dirname(iconsPath), { recursive: true })
+      fs.writeFileSync(iconsPath, FIXTURE_ICNS)
       prepare(root)
       await assert.rejects(stageMacUniversal({
         appBundleId: 'org.example.ztools', shortVersion: '1.1.7', buildVersion: '1171',

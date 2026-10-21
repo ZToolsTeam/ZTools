@@ -19,8 +19,16 @@ const APPLICATION_NAME = 'ZTools'
 // 应用图标：由 resources/app/brand/app-icon.svg 生成的 macOS iconset（16–512 及 @2x）
 const MAC_APPLICATION_ICON = ['resources', 'app', 'ZTools.icns']
 
+// 主进程运行时读取的窗口/托盘图标（application-icon.ts），macOS 的 nativeImage 不支持 ICO，只能用 PNG
+const MAC_RUNTIME_ICON = ['resources', 'app', 'app-icon.png']
+const PNG_SIGNATURE = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])
+
 export function macApplicationIconPath(sourceRoot) {
   return path.join(sourceRoot, ...MAC_APPLICATION_ICON)
+}
+
+export function macRuntimeIconPath(sourceRoot) {
+  return path.join(sourceRoot, ...MAC_RUNTIME_ICON)
 }
 const MAC_NATIVE_LOAD_PROOF_UNAVAILABLE = 'MAC_NATIVE_SAME_OBJECT_PROOF_UNAVAILABLE'
 const RUNTIME_TARGET_MANIFEST_FILE = 'ztools-runtime-target.json'
@@ -214,6 +222,20 @@ export function assertMacApplicationIcon(fsApi, iconPath) {
   if (header !== 'icns') throw new Error(`macOS 应用图标不是 ICNS 格式: ${iconPath}`)
 }
 
+export function assertMacRuntimeIcon(fsApi, iconPath) {
+  let stats
+  try {
+    stats = fsApi.lstatSync(iconPath)
+  } catch {
+    throw new Error(`缺少 macOS 运行时图标: ${iconPath}`)
+  }
+  if (!stats.isFile() || stats.isSymbolicLink() || stats.size <= PNG_SIGNATURE.length) {
+    throw new Error(`macOS 运行时图标不是有效的普通文件: ${iconPath}`)
+  }
+  const header = Buffer.from(fsApi.readFileSync(iconPath)).subarray(0, PNG_SIGNATURE.length)
+  if (!header.equals(PNG_SIGNATURE)) throw new Error(`macOS 运行时图标不是 PNG 格式: ${iconPath}`)
+}
+
 /** 打包器会把图标复制为 Contents/Resources/electron.icns；逐字节比对，防止静默回退为 Electron 默认图标 */
 export function verifyPackagedIcon(fsApi, appBundlePath, iconPath) {
   const packaged = path.join(appBundlePath, 'Contents', 'Resources', 'electron.icns')
@@ -328,6 +350,7 @@ export async function stageMacUniversal({
   assertBuildDependencies(sourcePackage)
   // 在耗时的构建与 Universal 合并之前先确认图标可用
   assertMacApplicationIcon(fsApi, macApplicationIconPath(sourceRoot))
+  assertMacRuntimeIcon(fsApi, macRuntimeIconPath(sourceRoot))
   const outputRoot = resolveOutputRoot({ sourceRoot, sourcePackage, buildQualifier })
   if (fsApi.existsSync(outputRoot)) {
     throw new Error(`macOS staging 输出目录已存在，请先归档后重试: ${outputRoot}`)

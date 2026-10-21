@@ -32,6 +32,8 @@ out-test*/
 !assets/screenshots/*.png
 !assets/screenshots/*.jpg
 !assets/screenshots/*.jpeg
+# macOS 主进程启动时读取的运行时图标，缺失会导致打包后的应用启动即退出
+!electron-client/resources/app/app-icon.png
 .env
 .env.*
 !.env.example
