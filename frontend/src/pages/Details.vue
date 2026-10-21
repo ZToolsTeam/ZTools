@@ -35,6 +35,8 @@ import { getPluginFeatureHotkeyItemByTrigger } from '@/utils/pluginFeatureHotkey
 import { isPluginSupportedOnCurrentPlatform } from '@/utils/platform'
 import { isOnline } from '@/config/runtime-mode'
 import { getOfficialPlugin, isOfficialPlugin } from '@/utils/officialPlugins'
+import { getBundledPluginEntry, isBundledPlugin } from '@/utils/bundledPlugins'
+import { loadInstalledDeclarativePlugin } from '@/utils/declarativePluginLoader'
 
 const route = useRoute()
 const router = useRouter()
@@ -91,9 +93,11 @@ const subtitle = computed(() => {
   return `v${p.version || ''} · ${p.category || ''} · ${p.size || '未知'}`
 })
 
-// 使用 Store 中的安装状态
+// 使用 Store 中的安装状态（官方内置插件始终视为已安装，避免异步同步前按钮从“安装”跳变到“打开”）
 const isInstalled = computed(() =>
-  pluginsStore.installedSet.has(pluginId.value)
+  pluginsStore.installedSet.has(pluginId.value) ||
+  isOfficialPlugin(pluginId.value) ||
+  isBundledPlugin(pluginId.value)
 )
 
 // 详情页会缓存“有更新/快捷键”等仅对已安装插件有效的本地状态；
@@ -166,7 +170,6 @@ const load = async () => {
   const pid = routePluginId.value
   const requestId = ++loadRequestId
   resetDetailsState()
-  loading.value = true
 
   if (!pid) {
     loading.value = false
@@ -174,28 +177,42 @@ const load = async () => {
     return
   }
 
+  // 官方内置应用与随包内置插件（bundledPlugins）直接在首帧同步就绪，无需骨架屏闪烁或远程 API 请求
+  const localBuiltin = getOfficialPlugin(pid) || getBundledPluginEntry(pid)
+  if (localBuiltin) {
+    plugin.value = {
+      ...localBuiltin,
+      features: Array.isArray(localBuiltin.features) ? localBuiltin.features : [],
+      comments: [],
+      screenshots: [],
+      rating: 5,
+      downloads: '内置'
+    }
+    isFavorite.value = pluginsStore.isFavorite(pid)
+    loading.value = false
+
+    // 后台静默预热内置声明式插件脚本，使随后点击“打开”进入具体插件页时零延迟直出
+    if (isBundledPlugin(pid)) {
+      loadInstalledDeclarativePlugin(pid).catch((prewarmErr) => {
+        console.debug('[Details] 预热内置声明式插件未命中:', prewarmErr)
+      })
+    }
+    if (pluginsStore.installedSet.size === 0) {
+      pluginsStore.fetchInstalledPlugins().catch((fetchErr) => {
+        console.warn('[Details] 同步本地已安装插件列表失败:', fetchErr)
+      })
+    }
+    return
+  }
+
+  loading.value = true
+
   try {
     // 确保 Store 中有最新的本地插件列表
     // 只在首次访问时加载（installedSet 为空）
     // 从列表页跳转或安装完成后，信任 eventsStore 维护的 installedSet 状态
     if (pluginsStore.installedSet.size === 0) {
       await pluginsStore.fetchInstalledPlugins()
-    }
-
-    // 官方内置标杆应用无需请求远程市场 API
-    if (isOfficialPlugin(pid)) {
-      const official = getOfficialPlugin(pid)
-      plugin.value = {
-        ...official,
-        features: [],
-        comments: [],
-        screenshots: [],
-        rating: 5,
-        downloads: '内置'
-      }
-      isFavorite.value = pluginsStore.isFavorite(pid)
-      loading.value = false
-      return
     }
 
     // 并行请求：详情

@@ -42,6 +42,16 @@ test('Argon2id: throws error if salt is shorter than 8 bytes', () => {
   )
 })
 
+test('Argon2id: full 128-word block permutation and RFC 9106 quadratic reference mapping produce high entropy', () => {
+  const k1 = argon2id('password-1', 'salt-12345678', { memoryCost: 32, timeCost: 2, outputLength: 64 })
+  const k2 = argon2id('password-1', 'salt-12345678', { memoryCost: 64, timeCost: 2, outputLength: 64 })
+  assert.equal(k1.length, 64)
+  assert.equal(k2.length, 64)
+  assert.notEqual(k1.toString('hex'), k2.toString('hex'))
+  // 验证前 32 字节与后 32 字节均非全零且互不相同
+  assert.notEqual(k1.subarray(0, 32).toString('hex'), k1.subarray(32, 64).toString('hex'))
+})
+
 test('deriveMasterKey: generates 256-bit AES master key', () => {
   const key = deriveMasterKey('MasterPassword', 'SystemDeviceSalt123456', { memoryCost: 64, timeCost: 2 })
   assert.equal(key.length, 32)

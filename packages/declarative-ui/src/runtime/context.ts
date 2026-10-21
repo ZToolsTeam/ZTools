@@ -111,6 +111,8 @@ export class DeclarativeRenderInstance {
 
       const newDescriptor = rawResult as ViewDescriptor;
       const isUnchanged = this.latestDescriptor !== null && areViewTreesEqual(this.latestDescriptor, newDescriptor);
+      // 始终更新 latestDescriptor，防止因 JSON.stringify 忽略函数引用导致事件回调闭包陈旧
+      this.latestDescriptor = newDescriptor;
 
       if (isUnchanged) {
         this.emptyRenderCount++;
@@ -126,7 +128,6 @@ export class DeclarativeRenderInstance {
       } else {
         this.emptyRenderCount = 0;
         this.hasWarnedInfiniteLoop = false;
-        this.latestDescriptor = newDescriptor;
         this.onUpdateCallback?.(this.latestDescriptor);
         this.onRenderEventCallback?.({ type: "renderTree", descriptor: this.latestDescriptor });
       }

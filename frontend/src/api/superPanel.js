@@ -63,7 +63,8 @@ function getDefaultConfig() {
     enabled: true,
     keyboardHotkey: {
       enabled: true,
-      modifiers: ['Alt'],
+      // Alt+Space 留给全局唤醒（悬浮条），两者默认值不能相同
+      modifiers: ['Alt', 'Shift'],
       key: 'Space'
     },
     mouseHotkey: {

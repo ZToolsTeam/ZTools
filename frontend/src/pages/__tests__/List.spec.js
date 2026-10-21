@@ -4,6 +4,7 @@ import { createPinia, setActivePinia } from 'pinia'
 import { createRouter, createMemoryHistory } from 'vue-router'
 
 import List from '../List.vue'
+import { getBundledPluginEntries } from '@/utils/bundledPlugins'
 import { usePluginsStore } from '@/stores/plugins'
 import { useUIStore } from '@/stores/ui'
 
@@ -59,6 +60,9 @@ function createTestRouter() {
     ]
   })
 }
+
+const LOCAL_CATEGORY_NAMES = [...new Set(getBundledPluginEntries().map((e) => e.category).filter(Boolean))]
+  .filter((name) => !['系统工具', '办公效率'].includes(name))
 
 describe('List page', () => {
   let wrapper
@@ -274,7 +278,8 @@ describe('List page', () => {
     })
     await flushPromises()
 
-    expect(apiMocks.getMarketPlugins).toHaveBeenCalledTimes(2)
+    // 远端 2 个分类 + 内置插件补上的分类，各取一次预览
+    expect(apiMocks.getMarketPlugins).toHaveBeenCalledTimes(2 + LOCAL_CATEGORY_NAMES.length)
     expect(apiMocks.getMarketPlugins).toHaveBeenCalledWith({
       category: '系统工具',
       page: 1,
@@ -451,7 +456,8 @@ describe('List page', () => {
 
     expect(wrapper.find('.market-title').text()).toBe('插件市场')
     const chips = wrapper.findAll('.market-chip')
-    expect(chips.map((c) => c.text())).toEqual(['全部', '系统工具', '办公效率'])
+    // 远端分类在前，随后是内置插件用到、远端没有的分类
+    expect(chips.map((c) => c.text())).toEqual(['全部', '系统工具', '办公效率', ...LOCAL_CATEGORY_NAMES])
     expect(chips[0].classes()).toContain('is-on')
 
     await chips[1].trigger('click')

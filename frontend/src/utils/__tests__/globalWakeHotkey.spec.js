@@ -1,5 +1,10 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
-import { DEFAULT_GLOBAL_WAKE_HOTKEY, syncGlobalWakeHotkey } from '../globalWakeHotkey'
+import {
+  DEFAULT_GLOBAL_WAKE_HOTKEY,
+  syncGlobalWakeHotkey,
+  currentGlobalWakeHotkey,
+  refreshCurrentGlobalWakeHotkey
+} from '../globalWakeHotkey'
 
 // mock getHotkey
 const hotkeyMock = vi.hoisted(() => ({ getHotkey: vi.fn() }))
@@ -214,5 +219,57 @@ describe('syncGlobalWakeHotkey', () => {
   it('normalizeHotkey 处理非字符串和空白', async () => {
     const result = await syncGlobalWakeHotkey({ hotkey: '  Ctrl+Q  ' })
     expect(result.hotkey).toBe('Ctrl+Q')
+  })
+})
+
+describe('当前唤醒快捷键（界面提示用）', () => {
+  let triggerMock
+
+  beforeEach(() => {
+    triggerMock = {
+      list: vi.fn().mockResolvedValue({ data: [] }),
+      register: vi.fn().mockResolvedValue(true),
+      unregister: vi.fn().mockResolvedValue(true)
+    }
+    window.ztools = { trigger: triggerMock }
+    hotkeyMock.getHotkey.mockReset()
+    currentGlobalWakeHotkey.value = DEFAULT_GLOBAL_WAKE_HOTKEY
+  })
+
+  afterEach(() => {
+    delete window.ztools
+  })
+
+  it('注册成功后提示跟着换成新快捷键', async () => {
+    await syncGlobalWakeHotkey({ hotkey: 'Ctrl+Shift+Z' })
+    expect(currentGlobalWakeHotkey.value).toBe('Ctrl+Shift+Z')
+  })
+
+  it('[破坏性] 注册被拒（例如已被超级面板占用）时提示保持原样，不显示没生效的键', async () => {
+    triggerMock.register.mockResolvedValueOnce({ success: false, error: { message: '快捷键 Alt+Space 已被「超级面板」占用，请换一个组合键' } })
+    const result = await syncGlobalWakeHotkey({ hotkey: 'Alt+Space' })
+    expect(result.success).toBe(false)
+    expect(result.message).toContain('超级面板')
+    expect(currentGlobalWakeHotkey.value).toBe(DEFAULT_GLOBAL_WAKE_HOTKEY)
+    currentGlobalWakeHotkey.value = 'Ctrl+Q'
+    triggerMock.register.mockRejectedValueOnce(new Error('IPC 断开'))
+    await syncGlobalWakeHotkey({ hotkey: 'Alt+Space' })
+    expect(currentGlobalWakeHotkey.value).toBe('Ctrl+Q')
+  })
+
+  it('关闭全局唤醒后提示清空', async () => {
+    triggerMock.list.mockResolvedValue({ data: [{ id: 'global_wake_hotkey', config: { key: 'Ctrl+Q' } }] })
+    await syncGlobalWakeHotkey({ hotkey: '' })
+    expect(currentGlobalWakeHotkey.value).toBe('')
+  })
+
+  it('从配置刷新：未设置按默认值显示；读取失败保留当前值', async () => {
+    hotkeyMock.getHotkey.mockResolvedValueOnce('  Ctrl+Shift+Z ')
+    expect(await refreshCurrentGlobalWakeHotkey()).toBe('Ctrl+Shift+Z')
+    hotkeyMock.getHotkey.mockResolvedValueOnce('')
+    expect(await refreshCurrentGlobalWakeHotkey()).toBe(DEFAULT_GLOBAL_WAKE_HOTKEY)
+    currentGlobalWakeHotkey.value = 'Ctrl+Q'
+    hotkeyMock.getHotkey.mockRejectedValueOnce(new Error('IPC 超时'))
+    expect(await refreshCurrentGlobalWakeHotkey()).toBe('Ctrl+Q')
   })
 })

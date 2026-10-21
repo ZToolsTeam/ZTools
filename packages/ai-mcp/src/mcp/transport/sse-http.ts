@@ -55,27 +55,34 @@ export class HttpSseTransport implements McpTransport {
       const decoder = new TextDecoder('utf-8');
       let buffer = '';
 
-      while (this.connected) {
-        const { done, value } = await reader.read();
-        if (done) break;
+      try {
+        while (this.connected) {
+          const { done, value } = await reader.read();
+          if (done) break;
 
-        buffer += decoder.decode(value, { stream: true });
-        const lines = buffer.split('\n');
-        buffer = lines.pop() || '';
+          buffer += decoder.decode(value, { stream: true });
+          const lines = buffer.split('\n');
+          buffer = lines.pop() || '';
 
-        for (const line of lines) {
-          const trimmed = line.trim();
-          if (trimmed.startsWith('data: ')) {
-            try {
-              const parsed = JSON.parse(trimmed.slice(6));
-              this.emitMessage(parsed);
-            } catch {}
+          for (const line of lines) {
+            const trimmed = line.trim();
+            if (trimmed.startsWith('data: ')) {
+              try {
+                const parsed = JSON.parse(trimmed.slice(6)) as JsonRpcMessage;
+                this.emitMessage(parsed);
+              } catch {
+                // 忽略残缺或非 JSON 的 SSE 心跳数据帧
+              }
+            }
           }
         }
+      } finally {
+        reader.releaseLock();
       }
-    } catch (err: any) {
-      if (this.connected && err.name !== 'AbortError') {
-        this.emitError(err);
+    } catch (err: unknown) {
+      const errorObj = err instanceof Error ? err : new Error(String(err));
+      if (this.connected && errorObj.name !== 'AbortError') {
+        this.emitError(errorObj);
       }
     }
   }
@@ -111,10 +118,11 @@ export class HttpSseTransport implements McpTransport {
         const data = await res.json() as JsonRpcMessage;
         this.emitMessage(data);
       }
-    } catch (err: any) {
+    } catch (err: unknown) {
       clearTimeout(timer);
-      this.emitError(err);
-      throw err;
+      const errorObj = err instanceof Error ? err : new Error(String(err));
+      this.emitError(errorObj);
+      throw errorObj;
     }
   }
 
@@ -127,7 +135,9 @@ export class HttpSseTransport implements McpTransport {
     for (const handler of this.closeHandlers) {
       try {
         handler();
-      } catch {}
+      } catch {
+        // 忽略关闭回调异常
+      }
     }
   }
 
@@ -147,8 +157,8 @@ export class HttpSseTransport implements McpTransport {
     for (const handler of this.messageHandlers) {
       try {
         handler(msg);
-      } catch (err: any) {
-        this.emitError(err);
+      } catch (err: unknown) {
+        this.emitError(err instanceof Error ? err : new Error(String(err)));
       }
     }
   }
@@ -157,7 +167,9 @@ export class HttpSseTransport implements McpTransport {
     for (const handler of this.errorHandlers) {
       try {
         handler(err);
-      } catch {}
+      } catch {
+        // 忽略错误监听器自身抛出的异常
+      }
     }
   }
 }

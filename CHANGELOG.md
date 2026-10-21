@@ -5,14 +5,40 @@
 日志格式遵循业界通用的 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 规范，版本号遵循 [语义化版本 (Semantic Versioning)](https://semver.org/lang/zh-CN/) 标准，每次代码同步与版本发布均在顶部持续追加最新记录。
 
 <!-- changelog-auto-append-start -->
-<!-- last-synced-commit: 9dadc58 -->
+<!-- last-synced-commit: f87b301 -->
+
+## [Unreleased / 2026-10-21] - 持续迭代更新
+
+### 🐛 问题修复 (Bug Fixes)
+- 更新悬浮条文件打开修复的子模块引用 (`7f292d5`)
+
+### 📝 文档与工程基建 (Chores & Docs)
+- 在 GitHub 主页补充产品主图与极简悬浮搜索条实机截图 (`f87b301`)
+- 同步严谨版双仓说明与导出模板 (`a684cb3`)
+- GitHub 仓库地址改为 ZToolsTeam 组织（含 winget 包名）并同步子模块 (`4d0d1be`)
+
+---
 
 ## [Unreleased / 2026-10-20] - 持续迭代更新
 
+### ⚡ 体验优化与重构 (Improvements)
+- 删除与内置插件重复的 6 个示例插件（json-format、calculator、qr-code、file-compare、notes、color-picker） (`8e9b668`)
+
+### 🐛 问题修复 (Bug Fixes)
+- 关闭设备号登录后门（后端默认关闭，按钮仅开发版显示） (`080aa3b`)
+- 插件分发改为实际使用的阿里云 OSS + CDN，去掉虚构的腾讯云 COS / EdgeOne / R2 (`5609813`)
+
 ### ✨ 新增特性 (Features)
+- 重构声明式UI核心与代码审查门禁并同步所有子模块 (`9e97f86`)
+- 公开插件仓库的合并前检查与自动发布，插件分跨平台/仅 macOS/仅 Windows 三类 (`d34b4e6`)
+- **bootstrap**：支持启动脚本增量构建水位线跳过、Windows沙盒桌面穿透拉起及更新frontend子模块 (`495eca4`)
+- 插件提交与打包强制声明支持平台（跨平台 / 仅 Windows / 仅 macOS） (`0297ca6`)
 - **declarative-ui**：完成35款声明式插件真实现、三端目录同步与rex-code-review提交门禁 (`09c1632`)
 
 ### 📝 文档与工程基建 (Chores & Docs)
+- 校正开源说明并同步插件仓导出模板 (`584ca75`)
+- 补充插件 CDN 缓存规则（目录 5 分钟、安装包 30 天，禁止对整个 plugins-v2 目录设短缓存） (`5b6f6a8`)
+- 更新 frontend 子模块引用（新插件改用 CDN 静态索引检查更新） (`57e65c0`)
 - 合并远端分支并更新electron-client与plugins子模块最新提交 (`9dadc58`)
 - 合并同事的 35 款插件真实化改造，并更新 electron-client、frontend、plugins 子模块引用 (`ff073f6`)
 

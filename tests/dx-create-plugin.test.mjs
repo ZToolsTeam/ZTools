@@ -6,7 +6,8 @@ import { spawnSync, fork } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
 import { validatePluginManifest } from '../packages/ztools-plugins-spec/src/index.js'
 import { scanPluginSecurity } from '../scripts/scan-plugin-security.mjs'
-import { createPlugin, validatePluginId } from '../scripts/create-plugin.mjs'
+import { createPlugin, validatePluginId, parsePlatformOption } from '../scripts/create-plugin.mjs'
+import { getManifestPlatforms } from '../packages/ztools-plugins-spec/src/index.js'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const rootDir = path.resolve(__dirname, '..')
@@ -280,6 +281,37 @@ describe('DX 基线与插件脚手架自动化集成测试 (create-plugin.mjs)',
         fs.readFileSync(path.join(TEST_BASE_DIR, conflictId, 'plugin.json'), 'utf8')
       )
       assert.equal(manifest.name, '强制覆盖后的新标题')
+    })
+  })
+
+  describe('平台声明', () => {
+    test('默认生成跨平台插件；--platform windows / macos 只声明对应平台，生成的插件能通过规范校验与安全扫描', async () => {
+      for (const [option, expected] of [[undefined, ['windows', 'macos']], ['windows', ['windows']], ['mac', ['macos']], ['cross', ['windows', 'macos']]]) {
+        const pluginId = `platform-${option || 'default'}`
+        const { pluginDir } = await createPlugin({ pluginId, targetDir: TEST_BASE_DIR, platforms: parsePlatformOption(option) })
+        const manifest = JSON.parse(fs.readFileSync(path.join(pluginDir, 'plugin.json'), 'utf8'))
+        assert.deepEqual(getManifestPlatforms(manifest), expected, String(option))
+        assert.deepEqual(manifest.nativeComponents, [])
+        assert.deepEqual(validatePluginManifest(manifest, { baseDir: pluginDir }).errors.filter((e) => /targets|nativeComponents/.test(e)), [])
+      }
+    })
+
+    test('[破坏性] 非法平台选项直接报错，不生成目录', async () => {
+      assert.throws(() => parsePlatformOption('linux'), /无法识别的平台选项/)
+      assert.throws(() => parsePlatformOption('windows,linux'), /无法识别的平台选项/)
+      await assert.rejects(createPlugin({ pluginId: 'platform-bad', targetDir: TEST_BASE_DIR, platforms: ['linux'] }), /非空组合/)
+      assert.equal(fs.existsSync(path.join(TEST_BASE_DIR, 'platform-bad')), false)
+    })
+
+    test('[集成] 命令行 --platform windows 生成仅 Windows 插件；缺少取值时退出并提示', () => {
+      const ok = spawnSync(process.execPath, [createScriptPath, 'platform-cli', '--platform', 'windows', '--target-dir', TEST_BASE_DIR], { encoding: 'utf8' })
+      assert.equal(ok.status, 0, ok.stderr)
+      assert.match(ok.stdout, /仅 Windows/)
+      const manifest = JSON.parse(fs.readFileSync(path.join(TEST_BASE_DIR, 'platform-cli', 'plugin.json'), 'utf8'))
+      assert.deepEqual(getManifestPlatforms(manifest), ['windows'])
+      const bad = spawnSync(process.execPath, [createScriptPath, 'platform-cli2', '--target-dir', TEST_BASE_DIR, '--platform'], { encoding: 'utf8' })
+      assert.notEqual(bad.status, 0)
+      assert.match(bad.stderr, /--platform 需要指定/)
     })
   })
 })

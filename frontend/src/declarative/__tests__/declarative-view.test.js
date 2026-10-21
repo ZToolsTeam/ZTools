@@ -8,10 +8,7 @@ import {
   Form,
   ActionPanel,
   Action,
-  Icon,
-  Color,
-  JsonFormatCommand,
-  QrCodeCommand
+  Icon
 } from "@ztools/declarative-ui";
 
 describe("DeclarativeView 统一宿主渲染器与纯键盘流", () => {
@@ -243,61 +240,6 @@ describe("DeclarativeView 统一宿主渲染器与纯键盘流", () => {
 });
 
 describe("端到端移植应用集成渲染验证", () => {
-  it("集成验证 1: json-format 应用能正常在 DeclarativeView 中挂载并执行交互", async () => {
-    const wrapper = mount(DeclarativeView, {
-      props: {
-        rootComponent: JsonFormatCommand
-      }
-    });
-
-    await nextTick();
-
-    // 验证 json-format 界面渲染
-    expect(wrapper.text()).toContain("JSON 格式化与类型转换");
-    expect(wrapper.text()).toContain("JSON 输入");
-    expect(wrapper.text()).toContain("缩进风格");
-
-    // 验证 Form.TextArea 中预置的示例 JSON
-    const textarea = wrapper.find("textarea");
-    expect(textarea.exists()).toBe(true);
-    expect(textarea.element.value).toContain("ZTools Platform");
-
-    // 触发首要动作 (SubmitForm: 格式化并查看详情)
-    await wrapper.trigger("keydown", { key: "Enter" });
-    await nextTick();
-
-    // 验证二级页面入栈，展示 JSON 格式化详情与 TypeScript 接口推导结果
-    expect(wrapper.text()).toContain("JSON 格式化详情");
-    expect(wrapper.text()).toContain("自动生成的 TypeScript Interface");
-    expect(wrapper.text()).toContain("语法合法");
-  });
-
-  it("集成验证 2: qr-code 应用能正常在 DeclarativeView 中挂载并展示二维码与详情", async () => {
-    const wrapper = mount(DeclarativeView, {
-      props: {
-        rootComponent: QrCodeCommand
-      }
-    });
-
-    await nextTick();
-
-    // 验证二维码列表与历史
-    expect(wrapper.text()).toContain("二维码生成器");
-    expect(wrapper.text()).toContain("二维码历史");
-    expect(wrapper.text()).toContain("ZTools 官方主页");
-    expect(wrapper.text()).toContain("https://ztools.dev");
-
-    // 按 Enter 进入首项详情
-    await wrapper.trigger("keydown", { key: "Enter" });
-    await nextTick();
-
-    // 验证详情页呈现与二维码图片渲染
-    expect(wrapper.text()).toContain("ZTools 官方主页");
-    expect(wrapper.text()).toContain("Web URL");
-    expect(wrapper.text()).toContain("纠错级别");
-    expect(wrapper.find("img").exists()).toBe(true);
-    expect(wrapper.find("img").attributes("src")).toContain("data:image/svg+xml");
-  });
 
   it("集成验证 3: GoogleTranslateCommand 首屏为空，输入后显示联网译文；断网时如实报错", async () => {
     const { GoogleTranslateCommand } = await import("@ztools/declarative-ui");

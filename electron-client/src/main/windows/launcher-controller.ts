@@ -204,7 +204,7 @@ export class LauncherController {
 
     window.on('blur', () => {
       if (!window.isDestroyed() && window.isVisible()) {
-        window.hide()
+        this.hide()
       }
     })
 
@@ -256,6 +256,10 @@ export class LauncherController {
 
   stop(): void {
     this.#detachScreenListeners()
+    if (this.#registered) {
+      ipcMain.removeHandler(LAUNCHER_CALL_CHANNEL)
+      this.#registered = false
+    }
     if (this.#frameSyncManager) {
       this.#frameSyncManager.dispose()
       this.#frameSyncManager = null

@@ -1,4 +1,4 @@
-name: ZTools GitOps Plugins Release & CDN Distribution
+name: ZTools Plugins Release (Aliyun OSS + CDN)
 
 on:
   push:
@@ -47,35 +47,36 @@ jobs:
           echo "🔒 执行正式发布前的 AST 安全终审门禁..."
           node scripts/scan-plugin-security.mjs plugins/
 
-      - name: Package Plugins & Generate Static Index (plugins.json)
+      - name: Package Plugins & Generate Catalog
         id: build-release
         run: |
-          echo "📦 打包所有通过审查的插件并生成全网索引 plugins.json..."
+          echo "📦 打包所有通过审查的插件并生成插件目录 catalog.json / plugins.json..."
           node scripts/build-plugins-release.mjs \
             --plugins-dir plugins \
             --output-dir dist/plugins \
-            --cdn-base-url "https://plugins.ztools.cn"
+            --cdn-base-url "https://cdn.ztools.cn" \
+            --url-prefix plugins-v2
 
-      - name: Deploy to Cloud Object Storage & EdgeOne CDN
+      - name: Upload to Aliyun OSS & Refresh Aliyun CDN
         env:
-          TENCENT_COS_SECRET_ID: ${{ secrets.TENCENT_COS_SECRET_ID }}
-          TENCENT_COS_SECRET_KEY: ${{ secrets.TENCENT_COS_SECRET_KEY }}
-          TENCENT_COS_BUCKET: ${{ secrets.TENCENT_COS_BUCKET }}
-          TENCENT_COS_REGION: ${{ secrets.TENCENT_COS_REGION }}
-          R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
-          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
-          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
-          R2_BUCKET_NAME: ${{ secrets.R2_BUCKET_NAME }}
-          EDGEONE_SECRET_ID: ${{ secrets.EDGEONE_SECRET_ID }}
-          EDGEONE_SECRET_KEY: ${{ secrets.EDGEONE_SECRET_KEY }}
-          EDGEONE_ZONE_ID: ${{ secrets.EDGEONE_ZONE_ID }}
+          OSS_ACCESS_KEY_ID: ${{ secrets.OSS_ACCESS_KEY_ID }}
+          OSS_ACCESS_KEY_SECRET: ${{ secrets.OSS_ACCESS_KEY_SECRET }}
+          OSS_BUCKET: ${{ secrets.OSS_BUCKET }}
+          OSS_REGION: ${{ secrets.OSS_REGION }}
+          CDN_ACCESS_KEY_ID: ${{ secrets.CDN_ACCESS_KEY_ID }}
+          CDN_ACCESS_KEY_SECRET: ${{ secrets.CDN_ACCESS_KEY_SECRET }}
         run: |
           DRY_RUN_FLAG=""
-          if [ "${{ github.event.inputs.dry_run }}" = "true" ] || [ -z "$TENCENT_COS_SECRET_ID" ]; then
-            echo "💡 提示: 检测到演练模式或未注入真实云端秘钥，将以 --dry-run 仿真模式执行对象存储与 CDN 同步验证"
+          if [ "${{ github.event.inputs.dry_run }}" = "true" ]; then
+            echo "💡 手动选择了演练模式，只打印上传计划，不实际上传"
             DRY_RUN_FLAG="--dry-run"
           fi
-          node scripts/deploy-plugins-storage.mjs --dir dist/plugins $DRY_RUN_FLAG
+          # 没配阿里云密钥时脚本会直接报错，不会假装上传成功
+          node scripts/deploy-plugins-storage.mjs \
+            --dir dist/plugins \
+            --cdn-base-url "https://cdn.ztools.cn" \
+            --oss-prefix plugins-v2 \
+            $DRY_RUN_FLAG
 
       - name: Archive Artifacts
         uses: actions/upload-artifact@v4
@@ -88,12 +89,12 @@ jobs:
         run: |
           node -e "
           import fs from 'node:fs';
-          const indexPath = 'dist/plugins/plugins.json';
+          const indexPath = 'dist/plugins/catalog.json';
           if (!fs.existsSync(indexPath)) process.exit(0);
           const index = JSON.parse(fs.readFileSync(indexPath, 'utf8'));
 
           let summary = '### 🚀 ZTools GitOps 插件分发流水线发布成功！\n\n';
-          summary += '- **全网静态索引**: \`' + index.cdnBaseUrl + '/plugins.json\`\n';
+          summary += '- **插件目录**: \`' + index.cdnBaseUrl + '/plugins-v2/catalog.json\`\n';
           summary += '- **全网插件总数**: ' + index.total + '\n';
           summary += '- **更新时间**: ' + index.generatedAt + '\n\n';
           summary += '| 插件名称 | 插件 ID | 版本 | 大小 | SHA256 校验和 | 下载直链 |\n';

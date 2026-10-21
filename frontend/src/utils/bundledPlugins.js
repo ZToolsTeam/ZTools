@@ -24,8 +24,31 @@ function normalizeId(value) {
   return String(value).trim().toLowerCase()
 }
 
+/**
+ * 与内置插件功能重复、已合并进去的旧插件 → 保留的内置插件。
+ * 旧快捷方式、历史记录、搜索结果打开旧插件时直接打开保留的那个，不再提示「暂未开放」。
+ * （同 id 的重复插件，如 json-format、calculator，本来就只保留内置版本，不需要在这里登记）
+ */
+export const BUNDLED_PLUGIN_REPLACEMENTS = Object.freeze({
+  notes: 'memo'
+})
+
+/** 旧插件 id 解析到保留的内置插件 id；不在映射里时原样返回 */
+export function resolveBundledReplacement(pluginId) {
+  const raw = typeof pluginId === 'string' ? pluginId.trim() : ''
+  const id = raw.toLowerCase()
+  return Object.hasOwn(BUNDLED_PLUGIN_REPLACEMENTS, id) ? BUNDLED_PLUGIN_REPLACEMENTS[id] : raw
+}
+
 export function isBundledPlugin(value) {
   return BUNDLED_ID_SET.has(normalizeId(value))
+}
+
+/** 通过插件市场分发的官方插件（plugins 仓库里非草稿、不随客户端内置的那批），安装后从安装目录加载 */
+const STORE_OFFICIAL_ID_SET = new Set((bundledConfig.storeOfficialIds || []).map((id) => String(id).toLowerCase()))
+
+export function isStoreOfficialPlugin(value) {
+  return STORE_OFFICIAL_ID_SET.has(normalizeId(value))
 }
 
 /**
@@ -75,6 +98,8 @@ function toEntry(p) {
     // 页面按字符串展示分类
     category: Array.isArray(p.category) ? p.category.join(' / ') : String(p.category || ''),
     keywords: Array.isArray(p.keywords) ? p.keywords : [],
+    // 平台声明（plugin.json 的 targets），用于展示「跨平台 / 仅 Windows / 仅 macOS」并过滤当前系统不支持的插件
+    targets: Array.isArray(p.targets) ? p.targets : [],
     icon,
     logo: icon,
     entry: 'dist/index.js',
@@ -92,9 +117,21 @@ function toEntry(p) {
 }
 
 /**
+ * 按插件 ID 同步获取单个内置插件条目（不存在时返回 null）
+ */
+export function getBundledPluginEntry(value) {
+  const id = normalizeId(value)
+  if (!BUNDLED_ID_SET.has(id)) return null
+  const list = Array.isArray(bundledConfig.plugins) ? bundledConfig.plugins : []
+  const found = list.find((p) => p && normalizeId(p.id) === id)
+  return found ? toEntry(found) : null
+}
+
+/**
  * 内置插件条目（每次返回新数组，调用方可以随意修改）
  */
 export function getBundledPluginEntries() {
   const list = Array.isArray(bundledConfig.plugins) ? bundledConfig.plugins : []
   return list.filter((p) => p && BUNDLED_ID_SET.has(normalizeId(p.id))).map(toEntry)
 }
+

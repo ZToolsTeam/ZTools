@@ -1,6 +1,23 @@
+import { ref } from 'vue'
 import { getHotkey } from '@/api/apiserver'
 
 export const DEFAULT_GLOBAL_WAKE_HOTKEY = 'Alt+Space'
+
+/**
+ * 当前生效的全局唤醒快捷键，供界面提示使用（空字符串表示用户已关闭全局唤醒）。
+ * 界面不能写死默认值：用户改过快捷键后，提示的键按下去可能打开的是别的功能。
+ */
+export const currentGlobalWakeHotkey = ref(DEFAULT_GLOBAL_WAKE_HOTKEY)
+
+/** 从配置读取当前唤醒快捷键；未设置时与启动注册逻辑一致，按默认值显示 */
+export async function refreshCurrentGlobalWakeHotkey() {
+  try {
+    currentGlobalWakeHotkey.value = normalizeHotkey(await getHotkey()) || DEFAULT_GLOBAL_WAKE_HOTKEY
+  } catch {
+    // 读取失败时保留当前显示
+  }
+  return currentGlobalWakeHotkey.value
+}
 
 const GLOBAL_WAKE_TRIGGER_ID = 'global_wake_hotkey'
 
@@ -152,14 +169,20 @@ export async function syncGlobalWakeHotkey({
   }
 
   if (!targetHotkey) {
-    if (!existing) return { success: true, hotkey: '' }
+    if (!existing) {
+      currentGlobalWakeHotkey.value = ''
+      return { success: true, hotkey: '' }
+    }
     if (typeof triggerApi.unregister !== 'function') {
       return failureResult('trigger_unavailable', '', '注销快捷键 API 不可用')
     }
 
     try {
       const result = await triggerApi.unregister(GLOBAL_WAKE_TRIGGER_ID)
-      if (isSuccessfulResponse(result)) return { success: true, hotkey: '' }
+      if (isSuccessfulResponse(result)) {
+        currentGlobalWakeHotkey.value = ''
+        return { success: true, hotkey: '' }
+      }
       const restored = await restoreExistingTrigger(triggerApi, existing)
       return failureResult(
         'trigger_unregister_failed',
@@ -184,6 +207,7 @@ export async function syncGlobalWakeHotkey({
     existing.effectiveEnabled !== false
 
   if (alreadyActive && existingKey === targetHotkey) {
+    currentGlobalWakeHotkey.value = targetHotkey
     return { success: true, hotkey: targetHotkey }
   }
 
@@ -212,5 +236,6 @@ export async function syncGlobalWakeHotkey({
     )
   }
 
+  currentGlobalWakeHotkey.value = targetHotkey
   return { success: true, hotkey: targetHotkey }
 }

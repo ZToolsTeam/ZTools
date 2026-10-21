@@ -133,4 +133,30 @@ describe('LoginModal 组件与设备号登录', () => {
     // 弹窗未被强制关闭
     expect(uiStore.showLoginModal).toBe(true)
   })
+
+  it('正式包（非开发版）不显示设备号模拟登录按钮，只保留扫码登录', async () => {
+    vi.stubEnv('DEV', false)
+    try {
+      const uiStore = useUIStore()
+      uiStore.showLoginModal = true
+
+      const wrapper = mount(LoginModal, {
+        global: {
+          plugins: [pinia],
+          stubs: {
+            'a-modal': {
+              template: '<div class="ant-modal-stub"><slot /></div>'
+            }
+          }
+        }
+      })
+
+      await flushPromises()
+      expect(wrapper.find('.device-login-link').exists()).toBe(false)
+      expect(wrapper.text()).not.toContain('设备号一键模拟登录')
+      expect(authMocks.deviceLogin).not.toHaveBeenCalled()
+    } finally {
+      vi.unstubAllEnvs()
+    }
+  })
 })

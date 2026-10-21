@@ -9,6 +9,7 @@ export interface GistSyncFile {
   content: string
   truncated?: boolean
   size?: number
+  rawUrl?: string
 }
 
 export interface GistReadResult {
@@ -99,7 +100,7 @@ export class GistSyncAdapter {
     }
 
     const data = await response.json() as Record<string, unknown>
-    return this.#parseGistResponse(data, response.headers.get('etag') ?? undefined)
+    return await this.#parseGistResponse(data, response.headers.get('etag') ?? undefined)
   }
 
   /**
@@ -133,7 +134,7 @@ export class GistSyncAdapter {
     }
 
     const data = await response.json() as Record<string, unknown>
-    const result = this.#parseGistResponse(data, response.headers.get('etag') ?? undefined)
+    const result = await this.#parseGistResponse(data, response.headers.get('etag') ?? undefined)
     this.#gistId = result.id
     return result
   }
@@ -188,7 +189,7 @@ export class GistSyncAdapter {
     }
 
     const data = await response.json() as Record<string, unknown>
-    return this.#parseGistResponse(data, response.headers.get('etag') ?? undefined)
+    return await this.#parseGistResponse(data, response.headers.get('etag') ?? undefined)
   }
 
   #buildHeaders(extra: Record<string, string> = {}): Record<string, string> {
@@ -201,16 +202,43 @@ export class GistSyncAdapter {
     }
   }
 
-  #parseGistResponse(data: Record<string, unknown>, etag?: string): GistReadResult {
+  async #parseGistResponse(data: Record<string, unknown>, etag?: string): Promise<GistReadResult> {
     const rawFiles = (data.files ?? {}) as Record<string, Record<string, unknown>>
     const files: Record<string, GistSyncFile> = {}
 
     for (const [key, fileObj] of Object.entries(rawFiles)) {
+      const truncated = Boolean(fileObj.truncated)
+      const rawUrl =
+        typeof fileObj.raw_url === 'string'
+          ? fileObj.raw_url
+          : typeof fileObj.rawUrl === 'string'
+            ? fileObj.rawUrl
+            : undefined
+      let content = String(fileObj.content ?? '')
+
+      if (truncated && rawUrl) {
+        const rawResponse = await this.#fetch(rawUrl, {
+          method: 'GET',
+          headers: this.#buildHeaders()
+        })
+        if (!rawResponse.ok) {
+          const text = await rawResponse.text().catch(() => '')
+          throw new GistError(
+            `拉取截断 Gist 原始文件失败 [${rawResponse.status} ${rawResponse.statusText}]: ${rawUrl}`,
+            rawResponse.status,
+            rawResponse.statusText,
+            text
+          )
+        }
+        content = await rawResponse.text()
+      }
+
       files[key] = {
         filename: String(fileObj.filename ?? key),
-        content: String(fileObj.content ?? ''),
-        truncated: Boolean(fileObj.truncated),
-        size: typeof fileObj.size === 'number' ? fileObj.size : undefined
+        content,
+        truncated: false,
+        size: typeof fileObj.size === 'number' ? fileObj.size : undefined,
+        ...(rawUrl ? { rawUrl } : {})
       }
     }
 

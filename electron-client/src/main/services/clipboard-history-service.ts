@@ -152,7 +152,8 @@ export class ClipboardHistoryService {
   }
 
   /**
-   * 首次从真实宿主查询时，若持久化库为空，自动同步当前系统剪贴板文本与工作区信息
+   * 首次从真实宿主查询时，若持久化库为空，把当前系统剪贴板里的文本记为第一条历史
+   * （旧版本还会写入一条客户端工作目录，标记为 ZTools Host，那不是用户复制的内容，已去掉）
    */
   public ensureInitialHostClipboardSeed(systemClipboardText?: string): void {
     if (this.initialSeedDone || !this.db) return
@@ -174,14 +175,6 @@ export class ClipboardHistoryService {
           now
         )
       }
-      this.recordItem(
-        {
-          content: process.cwd(),
-          format_type: 'text',
-          source_app_name: 'ZTools Host'
-        },
-        now - 1000
-      )
     } catch {
       // ignore seed errors
     }

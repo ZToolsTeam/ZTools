@@ -1,6 +1,9 @@
 import { describe, it, expect, afterEach, vi } from 'vitest'
 import { mount } from '@vue/test-utils'
-import { isPluginSupportedOnCurrentPlatform, WINDOWS_EXCLUSIVE_PLUGIN_IDS, UNAVAILABLE_PLUGIN_IDS, shortcutKeys, isSymbolKey } from '@/utils/platform'
+import { isPluginSupportedOnCurrentPlatform, WINDOWS_EXCLUSIVE_PLUGIN_IDS, UNAVAILABLE_PLUGIN_IDS, shortcutKeys, isSymbolKey, getPluginPlatforms, getPluginPlatformLabel } from '@/utils/platform'
+import { getBundledPluginEntries } from '@/utils/bundledPlugins'
+import fs from 'node:fs'
+import path from 'node:path'
 import { OFFICIAL_PLUGINS_LIST } from '@/utils/officialPlugins'
 import ShortcutKeys from '@/components/base/ShortcutKeys.vue'
 
@@ -57,14 +60,11 @@ describe('isPluginSupportedOnCurrentPlatform', () => {
     const mac = OFFICIAL_PLUGINS_LIST.filter(isPluginSupportedOnCurrentPlatform).map((p) => p.pluginId).sort()
     expect(mac).toEqual(
       expect.arrayContaining([
-        'calculator',
         'clipboard-history',
         'emoji-picker',
         'everything-file-search',
         'google-translate',
-        'json-format',
         'kill-process',
-        'notes',
         'password-vault',
         'quicklinks',
         'snippets',
@@ -72,13 +72,17 @@ describe('isPluginSupportedOnCurrentPlatform', () => {
         'window-management'
       ])
     )
+    // 与内置插件重复的旧实现已从官方列表移除，只保留内置版本
+    for (const id of ['calculator', 'json-format', 'qr-code', 'color-picker', 'notes', 'file-compare']) {
+      expect(OFFICIAL_PLUGINS_LIST.some((p) => p.pluginId === id), id).toBe(false)
+    }
     for (const id of WINDOWS_EXCLUSIVE_PLUGIN_IDS) expect(mac).not.toContain(id)
     for (const id of UNAVAILABLE_PLUGIN_IDS) expect(mac).not.toContain(id)
     vi.restoreAllMocks()
     asPlatform('win')
     const win = OFFICIAL_PLUGINS_LIST.filter(isPluginSupportedOnCurrentPlatform).map((p) => p.pluginId)
     expect(win.length).toBeGreaterThan(mac.length)
-    expect(win).toEqual(expect.arrayContaining(['calculator', 'clipboard-history', 'system', 'winget', 'cleaner', 'pdf']))
+    expect(win).toEqual(expect.arrayContaining(['clipboard-history', 'system', 'winget', 'cleaner', 'pdf']))
     for (const id of UNAVAILABLE_PLUGIN_IDS) expect(win).not.toContain(id)
   })
 
@@ -172,3 +176,62 @@ describe('ShortcutKeys 组件', () => {
   })
 })
 
+
+describe('插件平台声明（plugin.json 的 targets）', () => {
+  afterEach(() => {
+    vi.restoreAllMocks()
+  })
+
+  const target = (platform, runtime = 'electron') => ({ id: `${platform}-${runtime}-any`, platform, runtime, arch: 'any' })
+  const both = { pluginId: 'demo-both', targets: [target('windows'), target('macos')] }
+  const winOnly = { pluginId: 'demo-win', targets: [target('windows')] }
+  const macOnly = { pluginId: 'demo-mac', targets: [target('macos')] }
+
+  it('读出平台并给出「跨平台 / 仅 Windows / 仅 macOS」标签；未声明时不显示标签', () => {
+    expect(getPluginPlatforms(both)).toEqual(['windows', 'macos'])
+    expect(getPluginPlatformLabel(both)).toBe('跨平台')
+    expect(getPluginPlatformLabel(winOnly)).toBe('仅 Windows')
+    expect(getPluginPlatformLabel(macOnly)).toBe('仅 macOS')
+    expect(getPluginPlatforms({ pluginId: 'legacy' })).toBeNull()
+    expect(getPluginPlatformLabel({ pluginId: 'legacy' })).toBe('')
+    // 兼容旧的 platforms 字符串写法
+    expect(getPluginPlatformLabel({ platforms: ['darwin'] })).toBe('仅 macOS')
+  })
+
+  it('按声明过滤：Mac 上不显示仅 Windows 的插件，Windows 上不显示仅 macOS 的插件', () => {
+    asPlatform('mac')
+    expect(isPluginSupportedOnCurrentPlatform(both)).toBe(true)
+    expect(isPluginSupportedOnCurrentPlatform(macOnly)).toBe(true)
+    expect(isPluginSupportedOnCurrentPlatform(winOnly)).toBe(false)
+    vi.restoreAllMocks()
+    asPlatform('win')
+    expect(isPluginSupportedOnCurrentPlatform(both)).toBe(true)
+    expect(isPluginSupportedOnCurrentPlatform(winOnly)).toBe(true)
+    expect(isPluginSupportedOnCurrentPlatform(macOnly)).toBe(false)
+  })
+
+  it('[破坏性] 只有旧版 Delphi 目标、平台名无效或条目损坏时，两端都视为不支持，不会因此报错', () => {
+    const broken = [
+      { pluginId: 'old', targets: [target('windows', 'legacy-delphi')] },
+      { pluginId: 'bad', targets: [{ platform: 'linux', runtime: 'electron' }] },
+      { pluginId: 'junk', targets: [null, 'windows', 42] }
+    ]
+    for (const os of ['mac', 'win']) {
+      vi.restoreAllMocks()
+      asPlatform(os)
+      for (const plugin of broken) {
+        expect(isPluginSupportedOnCurrentPlatform(plugin), `${os}:${plugin.pluginId}`).toBe(false)
+        expect(getPluginPlatformLabel(plugin)).toBe('')
+      }
+    }
+  })
+
+  it('[集成] 内置插件条目带上 plugin.json 里的平台声明', () => {
+    const pluginsRoot = path.resolve(__dirname, '../../../../plugins')
+    for (const entry of getBundledPluginEntries()) {
+      const manifest = JSON.parse(fs.readFileSync(path.join(pluginsRoot, entry.pluginId, 'plugin.json'), 'utf8'))
+      expect(entry.targets, entry.pluginId).toEqual(manifest.targets)
+      expect(getPluginPlatformLabel(entry)).toBe('跨平台')
+    }
+  })
+})

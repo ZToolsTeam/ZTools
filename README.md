@@ -15,6 +15,18 @@
 
 ZTools 将应用搜索、快捷启动和插件工具放在同一个桌面入口中，提供工作台与悬浮搜索条两种界面，支持键盘操作和明暗主题。
 
+<p align="center">
+  <img src="assets/screenshots/01-dashboard-workspace.png" width="860" alt="ZTools 工作台主界面">
+  <br>
+  <sub>工作台主界面：分类管理已安装工具、插件市场与最近使用记录</sub>
+</p>
+
+<p align="center">
+  <img src="assets/screenshots/02-geek-launcher-mode.png" width="680" alt="ZTools 极简悬浮搜索条">
+  <br>
+  <sub>极简悬浮搜索条（Alt + Space）：全键盘即时检索并启动插件、命令与本地文件</sub>
+</p>
+
 本仓库包含 Electron / TypeScript 客户端、Vue 界面层、声明式插件 SDK 及共享包。独立插件的源码、构建工具与投稿指南位于 [ZTools Extensions](https://github.com/ZToolsTeam/ZTools-extensions)。客户端与插件分别维护版本，使用时应核对各自的版本和运行条件。
 
 ## 下载与使用

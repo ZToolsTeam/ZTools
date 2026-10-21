@@ -1,4 +1,19 @@
 {
+  "targets": [
+    {
+      "id": "windows-electron-any",
+      "platform": "windows",
+      "runtime": "electron",
+      "arch": "any"
+    },
+    {
+      "id": "macos-electron-any",
+      "platform": "macos",
+      "runtime": "electron",
+      "arch": "any"
+    }
+  ],
+  "nativeComponents": [],
   "id": "malicious-hex-obfuscated",
   "name": "恶意混淆插件",
   "version": "1.0.0",

@@ -37,11 +37,11 @@
         <span class="text-[var(--rc-text-faint)]">/</span>
 
         <!-- 应用标题与语义图标 -->
-        <div v-if="plugin" class="flex items-center gap-2 min-w-0">
-          <RcSquircle :glyph="resolvePluginGlyph(plugin.pluginId || plugin.id || targetPluginId)" :icon="plugin.faIcon || 'fa-cube'" :size="22" />
-          <span class="text-sm font-semibold text-[var(--rc-text-primary)] truncate">{{ plugin.name }}</span>
+        <div v-if="headerPluginMeta" class="flex items-center gap-2 min-w-0">
+          <RcSquircle :glyph="resolvePluginGlyph(headerPluginMeta.pluginId || headerPluginMeta.id || targetPluginId)" :icon="headerPluginMeta.faIcon || 'fa-cube'" :size="22" />
+          <span class="text-sm font-semibold text-[var(--rc-text-primary)] truncate">{{ headerPluginMeta.name }}</span>
           <span class="px-1.5 py-0.5 rounded text-[10px] font-mono bg-[var(--rc-surface-hover)] text-[var(--rc-text-muted)] border border-[var(--rc-border)] flex-shrink-0">
-            {{ plugin.isInstalledDeclarative ? 'V2 声明式扩展' : '官方标杆' }}
+            {{ headerPluginMeta.isInstalledDeclarative ? 'V2 声明式扩展' : '官方标杆' }}
           </span>
         </div>
       </div>
@@ -49,7 +49,7 @@
       <div class="flex items-center gap-2 flex-shrink-0" style="-webkit-app-region: no-drag">
         <!-- 主窗口模式：提供【独立窗口弹出】按钮 (携带当前搜索/筛选状态无缝接力) -->
         <button
-          v-if="!effectiveIsPopout && plugin"
+          v-if="!effectiveIsPopout && headerPluginMeta"
           type="button"
           class="declarative-popout-btn flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-medium text-[var(--rc-text-secondary)] hover:text-[var(--rc-text-primary)] hover:bg-[var(--rc-surface-hover)] border border-[var(--rc-border)] transition-all cursor-pointer"
           title="弹出为独立常驻窗口，自动携带当前搜索与选中状态 (Ctrl+Shift+O)"
@@ -104,18 +104,18 @@
         />
       </template>
 
-      <!-- 动态加载中或异常状态处理 (Beyond Happy Path: 非法或不存在的插件ID) -->
+      <!-- 异步加载过渡占位：保持与画布同底色，杜绝在加载期间闪出警告图标或未找到报错卡片 -->
+      <div
+        v-else-if="loadingDynamic"
+        data-test="declarative-loading-placeholder"
+        class="h-full w-full bg-[var(--rc-canvas)]"
+      />
+
+      <!-- 异常状态处理 (Beyond Happy Path: 非法或不存在的插件ID) -->
       <div
         v-else
         class="h-full flex flex-col items-center justify-center text-center p-8 bg-[var(--rc-surface)] rounded-2xl border border-[var(--rc-border)]"
       >
-        <div
-          v-if="loadingDynamic"
-          class="mb-4 flex items-center gap-2 text-xs text-[var(--rc-accent-text)] font-mono"
-        >
-          <i class="fa fa-spinner fa-spin"></i>
-          <span>正在加载声明式插件组件...</span>
-        </div>
         <div class="w-14 h-14 rounded-2xl bg-[var(--rc-warning-subtle)] text-[var(--rc-warning)] border border-[var(--rc-border)] flex items-center justify-center text-2xl mb-4">
           <i class="fa fa-exclamation-triangle"></i>
         </div>
@@ -157,12 +157,13 @@ import { getOfficialPlugin } from '@/utils/officialPlugins'
 import { isPluginVisible } from '@/utils/pluginVisibility'
 import { isPluginSupportedOnCurrentPlatform, isMacOS, isWindows } from '@/utils/platform'
 import { isModalOpen } from '@/utils/keymap'
-import { loadInstalledDeclarativePlugin } from '@/utils/declarativePluginLoader'
+import { getCachedDeclarativePlugin, loadInstalledDeclarativePlugin } from '@/utils/declarativePluginLoader'
 import DeclarativeView from '@/declarative/DeclarativeView.vue'
 import { RcSquircle } from '@/components/base'
 import { resolvePluginGlyph } from '@/utils/brandIcons'
 import { ROUTES, routeUtils } from '@/router/routes'
 import { win as nativeWin } from '@/api/apiserver'
+import { getBundledPluginEntry, resolveBundledReplacement } from '@/utils/bundledPlugins'
 
 const props = defineProps({
   pluginId: {
@@ -236,7 +237,8 @@ onUnmounted(() => {
 })
 
 const targetPluginId = computed(() => {
-  return String(props.pluginId || route?.params?.pluginId || '').trim()
+  // 已合并进内置插件的旧插件（如 notes → memo）直接显示保留的那个
+  return resolveBundledReplacement(String(props.pluginId || route?.params?.pluginId || '').trim())
 })
 
 const targetFeatureCode = computed(() => {
@@ -256,27 +258,41 @@ const plugin = computed(() => {
   return getOfficialPlugin(targetPluginId.value) || dynamicPlugin.value
 })
 
+const headerPluginMeta = computed(() => {
+  if (unsupportedOfficial.value || hiddenPlugin.value) return null
+  return plugin.value || getBundledPluginEntry(targetPluginId.value)
+})
+
 let currentLoadToken = 0
 
 watch(
   [targetPluginId, targetFeatureCode],
   async ([id, featureCode]) => {
     const token = ++currentLoadToken
-    dynamicPlugin.value = null
     loadError.value = ''
 
     if (id && !isPluginVisible(id)) {
+      dynamicPlugin.value = null
       loadingDynamic.value = false
       loadError.value = '该插件暂未开放'
       return
     }
 
     if (!id || getOfficialPlugin(id)) {
+      dynamicPlugin.value = null
       loadingDynamic.value = false
       if (unsupportedOfficial.value) loadError.value = `「${getOfficialPlugin(id).name}」在当前系统上暂不可用`
       return
     }
 
+    const cached = getCachedDeclarativePlugin(id, { featureCode })
+    if (cached) {
+      dynamicPlugin.value = cached
+      loadingDynamic.value = false
+      return
+    }
+
+    dynamicPlugin.value = null
     loadingDynamic.value = true
     try {
       const loaded = await loadInstalledDeclarativePlugin(id, { featureCode })

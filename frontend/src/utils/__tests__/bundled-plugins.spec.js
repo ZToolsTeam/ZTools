@@ -8,9 +8,12 @@ import {
   BUNDLED_PLUGIN_IDS,
   isBundledPlugin,
   readBundledPluginFile,
-  getBundledPluginEntries
+  getBundledPluginEntries,
+  resolveBundledReplacement,
+  BUNDLED_PLUGIN_REPLACEMENTS
 } from '@/utils/bundledPlugins'
 import { isPluginVisible } from '@/utils/pluginVisibility'
+import { getOfficialPlugin, getOfficialPluginsList } from '@/utils/officialPlugins'
 import { resolvePluginGlyph, isGlyph } from '@/utils/brandIcons'
 import { loadInstalledDeclarativePlugin } from '@/utils/declarativePluginLoader'
 import bundledConfig from '@/config/bundledPlugins.generated.js'
@@ -172,27 +175,137 @@ describe('宿主 IPC 调用 hostMethods', () => {
 })
 
 describe('内置插件与可见性', () => {
-  it('内置插件清单与 public/bundled-plugins 一致，每个插件的入口文件都存在', () => {
+  it('内置插件清单与 public/bundled-plugins 一致，每个插件的入口文件与子模块都存在且未被 .gitignore 忽略', () => {
     const entries = getBundledPluginEntries()
     expect(entries.map((e) => e.pluginId).sort()).toEqual([...BUNDLED_PLUGIN_IDS].sort())
+    const indexJson = JSON.parse(
+      fs.readFileSync(path.join(process.cwd(), 'public/bundled-plugins/index.json'), 'utf8')
+    )
     for (const id of BUNDLED_PLUGIN_IDS) {
       expect(fs.existsSync(path.join(process.cwd(), 'public/bundled-plugins', id, 'dist/index.js'))).toBe(true)
+      const indexed = indexJson.plugins.find((p) => p.id === id)
+      expect(indexed, `index.json 缺少 ${id}`).toBeTruthy()
+      for (const rel of indexed.files) {
+        const filePath = path.join(process.cwd(), 'public/bundled-plugins', id, rel)
+        expect(fs.existsSync(filePath), `缺少内置插件文件 ${id}/${rel}`).toBe(true)
+        expect(fs.statSync(filePath).size, `内置插件文件为空 ${id}/${rel}`).toBeGreaterThan(0)
+      }
     }
+    // 防回归：.gitignore 不能再用无前导斜杠的裸 dist/ 把 public/bundled-plugins/*/dist/ 吞掉
+    const gitignore = fs.readFileSync(path.join(process.cwd(), '.gitignore'), 'utf8')
+    expect(gitignore).toMatch(/^\/dist\/$/m)
+    expect(gitignore).not.toMatch(/^dist\/$/m)
+
     // 每次返回新数组，调用方修改不会污染清单
     entries[0].name = '被改掉'
     expect(getBundledPluginEntries()[0].name).not.toBe('被改掉')
   })
 
-  it('可见性：内置插件可见；旧内置实现、未完成官方插件、官方作者的其他插件隐藏；社区插件可见', () => {
+  it('[集成] 全部 11 款内置插件（含 json-format）通过真实 readBundledPluginFile 链路完整加载入口与相对子模块', async () => {
+    vi.stubGlobal('fetch', async (url) => {
+      const match = String(url).match(/bundled-plugins\/([^?#]+)$/)
+      if (!match) return { ok: false, status: 404, text: async () => 'Not Found' }
+      const rel = match[1].split('/').map(decodeURIComponent).join('/')
+      const diskPath = path.join(process.cwd(), 'public/bundled-plugins', rel)
+      if (!fs.existsSync(diskPath)) {
+        return { ok: false, status: 404, text: async () => 'Not Found' }
+      }
+      const content = fs.readFileSync(diskPath, 'utf8')
+      return { ok: true, status: 200, text: async () => content }
+    })
+    try {
+      for (const id of BUNDLED_PLUGIN_IDS) {
+        const loaded = await loadInstalledDeclarativePlugin(id)
+        expect(loaded.id).toBe(id)
+        expect(typeof loaded.command).toBe('function')
+      }
+    } finally {
+      vi.unstubAllGlobals()
+    }
+  })
+
+  it('[异常与故障注入] 内置插件入口或子模块返回 HTTP 404 / 500 时，抛出带状态码与 PLUGIN_RESOURCE_NOT_FOUND 的明确错误', async () => {
+    // 场景 1: plugin.json 正常，但 dist/index.js 返回 404（复现截图故障）
+    vi.stubGlobal('fetch', async (url) => {
+      if (String(url).endsWith('/plugin.json')) {
+        return {
+          ok: true,
+          status: 200,
+          text: async () => JSON.stringify({ id: 'json-format', name: 'JSON 格式化', entry: 'dist/index.js' })
+        }
+      }
+      return { ok: false, status: 404, text: async () => 'Not Found' }
+    })
+    try {
+      await expect(loadInstalledDeclarativePlugin('json-format')).rejects.toMatchObject({
+        code: 'PLUGIN_RESOURCE_NOT_FOUND',
+        status: 404,
+        message: '无法加载内置插件资源 [json-format/dist/index.js]: HTTP 404'
+      })
+    } finally {
+      vi.unstubAllGlobals()
+    }
+
+    // 场景 2: 入口 dist/index.js 正常，但依赖的相对子模块 ./logic.js 返回 500
+    vi.stubGlobal('fetch', async (url) => {
+      if (String(url).endsWith('/plugin.json')) {
+        return {
+          ok: true,
+          status: 200,
+          text: async () => JSON.stringify({ id: 'json-format', name: 'JSON 格式化', entry: 'dist/index.js' })
+        }
+      }
+      if (String(url).endsWith('/dist/index.js')) {
+        return {
+          ok: true,
+          status: 200,
+          text: async () => 'import { format } from "./logic.js"; export default function Cmd() { return format(); }'
+        }
+      }
+      return { ok: false, status: 500, text: async () => 'Internal Error' }
+    })
+    try {
+      await expect(loadInstalledDeclarativePlugin('json-format')).rejects.toMatchObject({
+        code: 'PLUGIN_RESOURCE_NOT_FOUND',
+        status: 500,
+        message: '无法加载内置插件资源 [json-format/dist/logic.js]: HTTP 500'
+      })
+    } finally {
+      vi.unstubAllGlobals()
+    }
+  })
+
+  it('可见性：内置插件与插件市场分发的官方插件可见；草稿、旧内置实现、官方作者的其他插件隐藏；社区插件可见', () => {
     for (const id of BUNDLED_PLUGIN_IDS) expect(isPluginVisible(id)).toBe(true)
     expect(isPluginVisible({ pluginId: 'JSON-FORMAT' })).toBe(true)
-    for (const id of ['kill-process', 'clipboard-history', 'screen-color-picker', 'cleaner', 'wechat-multi']) {
-      expect(isPluginVisible(id)).toBe(false)
+    // plugins 仓库里非草稿的官方插件走插件市场分发，安装后要能看到（同名的旧示例实现不再挡住它们）
+    expect(bundledConfig.storeOfficialIds.length).toBeGreaterThan(0)
+    for (const id of bundledConfig.storeOfficialIds) {
+      expect(isPluginVisible(id)).toBe(true)
+      expect(isPluginVisible({ pluginId: id, author: 'ZTools Team' })).toBe(true)
     }
-    for (const id of bundledConfig.unreleasedOfficialIds) expect(isPluginVisible(id)).toBe(false)
+    for (const id of ['kill-process', 'screen-color-picker', 'cleaner', 'wechat-multi']) expect(isPluginVisible(id)).toBe(true)
+    // 只存在于旧示例实现里的插件继续隐藏
+    expect(isPluginVisible('clipboard-history')).toBe(false)
+    // 草稿（plugin.json 写了 draft）一律隐藏，且草稿与插件市场分发两份名单不能重叠
+    for (const id of bundledConfig.unreleasedOfficialIds) {
+      expect(isPluginVisible(id)).toBe(false)
+      expect(bundledConfig.storeOfficialIds).not.toContain(id)
+    }
     expect(isPluginVisible({ pluginId: 'new-official-thing', author: 'ZTools Team' })).toBe(false)
     expect(isPluginVisible({ pluginId: 'community-tool', author: 'Indie Dev' })).toBe(true)
     for (const bad of [null, undefined, '', '   ', {}]) expect(isPluginVisible(bad)).toBe(false)
+  })
+
+  it('插件市场分发的官方插件不再落到同名的旧示例实现：打开时从安装目录加载，也不会被当成预装插件列出', () => {
+    const listed = new Set(getOfficialPluginsList().map((p) => String(p.pluginId).toLowerCase()))
+    for (const id of bundledConfig.storeOfficialIds) {
+      expect(getOfficialPlugin(id)).toBeUndefined()
+      expect(getOfficialPlugin(id.toUpperCase())).toBeUndefined()
+      expect(listed.has(id)).toBe(false)
+    }
+    // 别名指向旧实现的插件（clipboard-manager → 旧 clipboard-history）同样以真实插件为准
+    expect(getOfficialPlugin('clipboard-manager')).toBeUndefined()
   })
 
   it('[对抗] 读取内置插件文件时拒绝路径穿越与非内置插件 ID，且不发起请求', async () => {
@@ -336,3 +449,24 @@ describe('内置插件图标', () => {
     }
   })
 })
+
+describe('重复插件只保留一个', () => {
+  it('合并进来的旧插件解析到保留的内置插件，保留的一方必须是内置插件', () => {
+    expect(resolveBundledReplacement('notes')).toBe('memo')
+    expect(resolveBundledReplacement(' Notes ')).toBe('memo')
+    for (const target of Object.values(BUNDLED_PLUGIN_REPLACEMENTS)) expect(isBundledPlugin(target)).toBe(true)
+    // 被合并的旧插件 id 自身不能也是内置插件，否则两个都会显示
+    for (const legacy of Object.keys(BUNDLED_PLUGIN_REPLACEMENTS)) expect(isBundledPlugin(legacy)).toBe(false)
+  })
+
+  it('[破坏性] 不在映射里的 id、空值、原型链属性原样返回，不会被误导到别的插件', () => {
+    expect(resolveBundledReplacement('json-format')).toBe('json-format')
+    expect(resolveBundledReplacement('')).toBe('')
+    expect(resolveBundledReplacement(null)).toBe('')
+    expect(resolveBundledReplacement(undefined)).toBe('')
+    for (const key of ['__proto__', 'constructor', 'toString', 'hasOwnProperty']) {
+      expect(resolveBundledReplacement(key)).toBe(key)
+    }
+  })
+})
+

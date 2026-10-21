@@ -318,6 +318,15 @@ export class FileSystemService {
     return stats.isFile() ? this.#issueFileCapability(target, caller, true) : undefined
   }
 
+  /** Search results belong only to the requesting host window, without directory recursion or write access. */
+  async grantSearchResult(value: string, caller: CallerIdentity): Promise<void> {
+    if (caller.type !== 'main') {
+      throw new ZToolsError(errorCodes.permissionDenied, '仅宿主窗口可以接收搜索结果授权')
+    }
+    const target = await this.#canonical(value, false)
+    await this.#grant(caller, target, false, true, false)
+  }
+
   async grantSavePath(value: string, caller: CallerIdentity): Promise<string> {
     const target = await this.#canonical(value, true)
     await this.#grant(caller, target, false, false, true)

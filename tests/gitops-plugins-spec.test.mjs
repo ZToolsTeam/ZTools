@@ -8,7 +8,10 @@ import {
   validatePluginManifest,
   pluginSchema,
   PERMISSIONS,
-  HIGH_RISK_PERMISSIONS
+  HIGH_RISK_PERMISSIONS,
+  buildPlatformTargets,
+  getManifestPlatforms,
+  describePlatforms
 } from '../packages/ztools-plugins-spec/src/index.js'
 import { scanPluginSecurity, scanCodeSnippet } from '../scripts/scan-plugin-security.mjs'
 import { buildPluginsRelease } from '../scripts/build-plugins-release.mjs'
@@ -41,7 +44,9 @@ describe('ZTools GitOps 规范与安全扫描自测套件', () => {
         author: 'developer',
         entry: 'index.html',
         icon: 'icon.png',
-        permissions: ['clipboard', 'dialog']
+        permissions: ['clipboard', 'dialog'],
+        targets: buildPlatformTargets(['windows', 'macos']),
+        nativeComponents: []
       }
       const res = validatePluginManifest(valid)
       assert.equal(res.valid, true)
@@ -177,7 +182,9 @@ describe('ZTools GitOps 规范与安全扫描自测套件', () => {
         author: 'dev',
         entry: 'index.js',
         icon: 'icon.png',
-        permissions: []
+        permissions: [],
+        targets: buildPlatformTargets(['windows', 'macos']),
+        nativeComponents: []
       }, null, 2))
       fs.writeFileSync(path.join(tempPluginDir, 'index.js'), 'console.log("hello");')
       fs.writeFileSync(path.join(tempPluginDir, 'theme.css'), 'body { background: #000; }')
@@ -206,7 +213,9 @@ describe('ZTools GitOps 规范与安全扫描自测套件', () => {
         author: 'dev',
         entry: 'index.html',
         icon: 'icon.png',
-        permissions: []
+        permissions: [],
+        targets: buildPlatformTargets(['windows', 'macos']),
+        nativeComponents: []
       }, null, 2))
       fs.writeFileSync(
         path.join(tempPluginDir, 'index.html'),
@@ -281,6 +290,9 @@ describe('ZTools GitOps 规范与安全扫描自测套件', () => {
       assert.equal(typeof textCounter.sha256, 'string')
       assert.equal(textCounter.sha256.length, 64)
       assert.ok(textCounter.size > 0)
+      // 平台声明原样写入索引，并附带便于展示的 platforms
+      assert.deepEqual(textCounter.platforms, ['windows', 'macos'])
+      assert.deepEqual(textCounter.targets.map((t) => t.platform), ['windows', 'macos'])
 
       const sensitiveNet = index.plugins.find(p => p.id === 'sensitive-network')
       assert.ok(sensitiveNet, 'sensitive-network 插件必须包含在索引中')
@@ -295,15 +307,109 @@ describe('ZTools GitOps 规范与安全扫描自测套件', () => {
       const actualHash = crypto.createHash('sha256').update(fileBuffer).digest('hex')
       assert.equal(actualHash, textCounter.sha256, '索引中的 SHA256 必须与实际生成的 ZIP 完全吻合')
     })
+
+    function makeTempPlugins(name, plugins) {
+      const base = path.join(rootDir, 'dist', name)
+      fs.rmSync(base, { recursive: true, force: true })
+      for (const [dir, manifest, code] of plugins) {
+        fs.mkdirSync(path.join(base, dir, 'dist'), { recursive: true })
+        fs.writeFileSync(path.join(base, dir, 'plugin.json'), JSON.stringify(manifest))
+        fs.writeFileSync(path.join(base, dir, 'dist', 'index.js'), code || 'export default function C() {}')
+      }
+      return base
+    }
+
+    it('下架开关：plugin.json 写 revoked 后只输出下架记录，即使代码违规也不打包、不拦截', async () => {
+      const base = makeTempPlugins('test-revoked-src', [
+        ['bad-tool', { id: 'bad-tool', name: '坏插件', version: '1.2.0', revoked: true, revokedReason: '发现窃取剪贴板' }, 'eval("steal()")']
+      ])
+      const out = path.join(rootDir, 'dist/test-revoked-out')
+      try {
+        const res = await buildPluginsRelease({ pluginsDir: base, outputDir: out, cdnBaseUrl: 'https://cdn.example.com' })
+        assert.equal(res.success, true)
+        assert.equal(res.rejectedCount, 0)
+        assert.equal(res.publishedPackages.length, 0, '下架插件不能产出安装包')
+        const catalog = JSON.parse(fs.readFileSync(path.join(out, 'catalog.json'), 'utf8'))
+        const item = catalog.plugins.find((p) => p.id === 'bad-tool')
+        assert.equal(item.revoked, true)
+        assert.equal(item.revokedReason, '发现窃取剪贴板')
+        assert.equal(item.downloadUrl, undefined)
+        assert.equal(item.sha256, undefined)
+        assert.ok(!fs.existsSync(path.join(out, 'community', 'bad-tool')), '不能生成下载目录')
+      } finally {
+        fs.rmSync(base, { recursive: true, force: true })
+        fs.rmSync(out, { recursive: true, force: true })
+      }
+    })
+
+    it('草稿：plugin.json 写 draft 后不打包、不进插件目录，也不算拦截失败', async () => {
+      const base = makeTempPlugins('test-draft-src', [
+        ['demo-only', { id: 'demo-only', name: '示例数据插件', version: '1.0.0', draft: true, draftReason: '只有示例数据' }, 'eval("x")'],
+        ['gone', { id: 'gone', name: '已下架', version: '1.0.0', revoked: true, revokedReason: '安全问题' }]
+      ])
+      const out = path.join(rootDir, 'dist/test-draft-out')
+      try {
+        const res = await buildPluginsRelease({ pluginsDir: base, outputDir: out, cdnBaseUrl: 'https://cdn.example.com' })
+        assert.equal(res.success, true, '草稿不应让整次发布失败')
+        assert.equal(res.rejectedCount, 0)
+        assert.deepEqual(res.draftIds, ['demo-only'])
+        assert.equal(res.publishedPackages.length, 0)
+        const catalog = JSON.parse(fs.readFileSync(path.join(out, 'catalog.json'), 'utf8'))
+        assert.deepEqual(catalog.plugins.map((p) => p.id), ['gone'], '插件目录里只能有下架记录，不能出现草稿')
+      } finally {
+        fs.rmSync(base, { recursive: true, force: true })
+        fs.rmSync(out, { recursive: true, force: true })
+      }
+    })
+
+    it('[破坏性] 草稿与下架字段类型错误或没写原因时清单校验不通过', () => {
+      const base = { id: 'flag-check', name: '字段检查', version: '1.0.0', description: 'x', author: 'a', entry: 'dist/index.js', icon: 'icon.svg', permissions: [], nativeComponents: [],
+        targets: [{ id: 'windows-electron-any', platform: 'windows', runtime: 'electron', arch: 'any' }] }
+      assert.equal(validatePluginManifest(base).valid, true)
+      const cases = [
+        [{ draft: 'yes', draftReason: 'r' }, /draft 字段必须为布尔值/],
+        [{ draft: true }, /draft 为 true 时必须用 draftReason 写明原因/],
+        [{ draft: true, draftReason: '   ' }, /draft 为 true 时必须用 draftReason 写明原因/],
+        [{ revoked: 1, revokedReason: 'r' }, /revoked 字段必须为布尔值/],
+        [{ revoked: true }, /revoked 为 true 时必须用 revokedReason 写明原因/],
+        [{ draftReason: 42 }, /draftReason 字段必须为字符串/]
+      ]
+      for (const [extra, pattern] of cases) {
+        const result = validatePluginManifest({ ...base, ...extra })
+        assert.equal(result.valid, false, JSON.stringify(extra))
+        assert.ok(result.errors.some((e) => pattern.test(e)), `${JSON.stringify(extra)} -> ${result.errors.join('; ')}`)
+      }
+      assert.equal(validatePluginManifest({ ...base, draft: false }).valid, true, 'draft: false 等同于正式发布')
+    })
+
+    it('[破坏性] 两个目录声明了同一个插件 ID 时拒绝生成目录，旧目录保持不变', async () => {
+      const base = makeTempPlugins('test-dup-src', [
+        ['a', { id: 'same-id', name: 'A', version: '1.0.0', revoked: true }],
+        ['b', { id: 'same-id', name: 'B', version: '1.0.0', revoked: true }]
+      ])
+      const out = path.join(rootDir, 'dist/test-dup-out')
+      fs.mkdirSync(out, { recursive: true })
+      fs.writeFileSync(path.join(out, 'catalog.json'), '{"old":true}')
+      try {
+        await assert.rejects(
+          () => buildPluginsRelease({ pluginsDir: base, outputDir: out, cdnBaseUrl: 'https://cdn.example.com' }),
+          /重复的插件 ID: "same-id"/
+        )
+        assert.equal(fs.readFileSync(path.join(out, 'catalog.json'), 'utf8'), '{"old":true}')
+      } finally {
+        fs.rmSync(base, { recursive: true, force: true })
+        fs.rmSync(out, { recursive: true, force: true })
+      }
+    })
   })
 
-  describe('4. 对象存储与 EdgeOne CDN 部署 (scripts/deploy-plugins-storage.mjs)', () => {
-    it('在 --dry-run 模式下应完成 COS、R2 与 EdgeOne CDN 预热仿真', async () => {
+  describe('4. 阿里云 OSS 上传与 CDN 刷新 (scripts/deploy-plugins-storage.mjs)', () => {
+    it('在 --dry-run 模式下应完成 OSS 上传与 CDN 刷新的演练', async () => {
       const testOutputDir = path.join(rootDir, 'dist/test-plugins-release')
       const deployRes = await deployPluginsStorage({
         dir: testOutputDir,
         dryRun: true,
-        cdnBaseUrl: 'https://plugins.ztools.cn'
+        cdnBaseUrl: 'https://cdn.ztools.cn'
       })
 
       assert.equal(deployRes.success, true)
@@ -398,6 +504,74 @@ describe('ZTools GitOps 规范与安全扫描自测套件', () => {
       const res2 = await scanCodeSnippet(snippet2)
       assert.equal(res2.passed, false)
       assert.ok(res2.violations.some(v => v.rule === 'BANNED_DYNAMIC_REQUIRE'))
+    })
+  })
+
+  describe('4. 插件平台声明（targets：跨平台 / 仅 Windows / 仅 macOS）', () => {
+    const base = () => ({
+      id: 'platform-demo', name: '平台示例', version: '1.0.0', description: '平台声明测试',
+      author: 'dev', entry: 'dist/index.js', icon: 'icon.svg', permissions: [], nativeComponents: []
+    })
+
+    it('跨平台、仅 Windows、仅 macOS 三种声明都能通过，并能读出平台与说明文字', () => {
+      for (const [platforms, label] of [[['windows', 'macos'], '跨平台'], [['windows'], '仅 Windows'], [['macos'], '仅 macOS']]) {
+        const manifest = { ...base(), targets: buildPlatformTargets(platforms) }
+        const res = validatePluginManifest(manifest)
+        assert.deepEqual(res.errors, [], label)
+        assert.deepEqual(getManifestPlatforms(manifest), platforms)
+        assert.equal(describePlatforms(getManifestPlatforms(manifest)), label)
+      }
+      // 顺序与重复无关
+      assert.deepEqual(buildPlatformTargets(['macos', 'windows', 'macos']).map((t) => t.platform), ['windows', 'macos'])
+    })
+
+    it('[破坏性] 缺少 targets、空数组、非法平台、重复 id、未知字段、没有 electron 目标、缺 nativeComponents 都被拦截', () => {
+      const cases = [
+        [{ ...base(), targets: undefined }, /缺少必填字段: targets/],
+        [{ ...base(), targets: [] }, /targets 必须为非空数组/],
+        [{ ...base(), targets: ['windows'] }, /必须为对象/],
+        [{ ...base(), targets: [{ id: 'linux-electron-any', platform: 'linux', runtime: 'electron', arch: 'any' }] }, /platform 必须为/],
+        [{ ...base(), targets: [...buildPlatformTargets(['windows']), ...buildPlatformTargets(['windows'])] }, /id 重复/],
+        [{ ...base(), targets: [{ ...buildPlatformTargets(['windows'])[0], hack: true }] }, /未知字段: hack/],
+        [{ ...base(), targets: [{ id: 'legacy', platform: 'windows', runtime: 'legacy-delphi', arch: 'ia32' }] }, /至少要有一个 runtime 为 electron/],
+        [{ ...base(), targets: [{ id: 'mac-old', platform: 'macos', runtime: 'electron', arch: 'ia32' }] }, /macOS 不支持 ia32/],
+        [{ ...base(), targets: buildPlatformTargets(['windows']), nativeComponents: undefined }, /nativeComponents 必须为数组/]
+      ]
+      for (const [manifest, pattern] of cases) {
+        const res = validatePluginManifest(manifest)
+        assert.equal(res.valid, false, String(pattern))
+        assert.ok(res.errors.some((e) => pattern.test(e)), `${pattern} -> ${res.errors.join(' | ')}`)
+      }
+      assert.throws(() => buildPlatformTargets([]), /非空组合/)
+      assert.throws(() => buildPlatformTargets(['linux']), /非空组合/)
+      assert.deepEqual(getManifestPlatforms(null), [])
+      assert.equal(describePlatforms([]), '未声明平台')
+    })
+
+    it('[集成] 安全扫描对缺少平台声明的插件不放行', async () => {
+      const dir = path.join(rootDir, 'tests/fixtures/plugins/temp-missing-targets')
+      fs.mkdirSync(dir, { recursive: true })
+      fs.writeFileSync(path.join(dir, 'plugin.json'), JSON.stringify({ ...base(), entry: 'index.js', icon: 'icon.png' }, null, 2))
+      fs.writeFileSync(path.join(dir, 'index.js'), 'export default function Command() { return null }')
+      fs.writeFileSync(path.join(dir, 'icon.png'), '')
+      try {
+        const result = await scanPluginSecurity(dir)
+        assert.equal(result.passed, false)
+        assert.ok(result.violations.some((v) => /targets/.test(v.message)))
+      } finally {
+        fs.rmSync(dir, { recursive: true, force: true })
+      }
+    })
+
+    it('[集成] 官方插件仓库里每个 plugin.json 都声明了合法平台', () => {
+      const pluginsRoot = path.join(rootDir, 'plugins')
+      const ids = fs.readdirSync(pluginsRoot).filter((d) => fs.existsSync(path.join(pluginsRoot, d, 'plugin.json')))
+      assert.ok(ids.length >= 50, `插件数量异常: ${ids.length}`)
+      for (const id of ids) {
+        const manifest = JSON.parse(fs.readFileSync(path.join(pluginsRoot, id, 'plugin.json'), 'utf8'))
+        assert.ok(getManifestPlatforms(manifest).length > 0, `${id} 未声明平台`)
+        assert.ok(Array.isArray(manifest.nativeComponents), `${id} 缺 nativeComponents`)
+      }
     })
   })
 })

@@ -20,7 +20,7 @@
  *   --version <ver>    指定发布版本号（默认读取 electron-client/package.json）
  *   --package          若 GitHub 尚无对应 Release 资产，自动执行全量打包并上传至 GitHub Releases
  *   --dry-run          演练模式：仅生成并校验清单，不实际向微软提交 PR
- *   --repo <repo>      GitHub 仓库标识（默认: codingmuse/ZTools）
+ *   --repo <repo>      GitHub 仓库标识（默认: ZToolsTeam/ZTools）
  *   --token <token>    指定 GitHub Personal Access Token（默认自动通过 gh auth token 获取）
  */
 
@@ -38,8 +38,8 @@ import {
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 export const ROOT_DIR = path.resolve(__dirname, '..')
 export const ELECTRON_CLIENT_DIR = path.join(ROOT_DIR, 'electron-client')
-export const DEFAULT_GITHUB_REPO = 'codingmuse/ZTools'
-export const DEFAULT_PACKAGE_ID = 'codingmuse.ZTools'
+export const DEFAULT_GITHUB_REPO = 'ZToolsTeam/ZTools'
+export const DEFAULT_PACKAGE_ID = 'ZToolsTeam.ZTools'
 
 export function parseWingetCliArgs(argv = process.argv.slice(2)) {
   const options = {
@@ -235,13 +235,13 @@ export function buildWingetManifests({
     `PackageIdentifier: ${packageId}`,
     `PackageVersion: ${version}`,
     'PackageLocale: zh-CN',
-    'Publisher: codingmuse',
-    'PublisherUrl: https://github.com/codingmuse',
-    'PublisherSupportUrl: https://github.com/codingmuse/ZTools/issues',
+    'Publisher: ZToolsTeam',
+    'PublisherUrl: https://github.com/ZToolsTeam',
+    'PublisherSupportUrl: https://github.com/ZToolsTeam/ZTools/issues',
     'PackageName: ZTools',
-    'PackageUrl: https://github.com/codingmuse/ZTools',
+    'PackageUrl: https://github.com/ZToolsTeam/ZTools',
     'License: GPL-3.0',
-    'LicenseUrl: https://github.com/codingmuse/ZTools/blob/main/LICENSE',
+    'LicenseUrl: https://github.com/ZToolsTeam/ZTools/blob/main/LICENSE',
     'ShortDescription: 纯粹开源、免费极客、轻量宿主、极致性能的现代化双端效率中枢平台',
     'Description: ZTools 是一款纯粹开源、免费极客、轻量宿主、极致性能的现代化效率中枢平台，基于轻量化纯 TypeScript 宿主与预编译 Native 侧车，提供毫秒级文件秒搜、全键盘启动器与统一声明式扩展生态。',
     'Moniker: ztools',
@@ -261,13 +261,13 @@ export function buildWingetManifests({
     `PackageIdentifier: ${packageId}`,
     `PackageVersion: ${version}`,
     'PackageLocale: en-US',
-    'Publisher: codingmuse',
-    'PublisherUrl: https://github.com/codingmuse',
-    'PublisherSupportUrl: https://github.com/codingmuse/ZTools/issues',
+    'Publisher: ZToolsTeam',
+    'PublisherUrl: https://github.com/ZToolsTeam',
+    'PublisherSupportUrl: https://github.com/ZToolsTeam/ZTools/issues',
     'PackageName: ZTools',
-    'PackageUrl: https://github.com/codingmuse/ZTools',
+    'PackageUrl: https://github.com/ZToolsTeam/ZTools',
     'License: GPL-3.0',
-    'LicenseUrl: https://github.com/codingmuse/ZTools/blob/main/LICENSE',
+    'LicenseUrl: https://github.com/ZToolsTeam/ZTools/blob/main/LICENSE',
     'ShortDescription: Modern, lightweight, open-source productivity launcher and toolkit',
     'Description: ZTools is a pure open-source, geek-oriented, ultra-fast productivity hub built with TypeScript and precompiled native sidecars, featuring sub-millisecond file search, keyboard-first launcher, and declarative extensions.',
     'Tags:',
@@ -327,7 +327,7 @@ export function runWingetPublishPipeline(rawArgs = process.argv.slice(2)) {
   const version = resolveVersion(options.version)
   const tag = `v${version}`
   const installerName = getWindowsInstallerFileName(version)
-  const expectedUrl = `https://github.com/codingmuse/ZTools/releases/download/${tag}/${installerName}`
+  const expectedUrl = `https://github.com/ZToolsTeam/ZTools/releases/download/${tag}/${installerName}`
 
   console.log('========================================================')
   console.log(`🌐 ZTools 微软官方 WinGet 自动化发布流水线 (v${version})`)

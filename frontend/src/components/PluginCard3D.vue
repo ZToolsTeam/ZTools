@@ -4,6 +4,7 @@ import { downloadPluginUpdate } from '@/api/apiserver'
 import { usePluginsStore } from '@/stores/plugins'
 import { isOfficialPluginItem } from '@/utils/storeCatalogManager'
 import { isOfficialPlugin } from '@/utils/officialPlugins'
+import { getPluginPlatformLabel } from '@/utils/platform'
 
 const props = defineProps({
   plugin: { type: Object, required: true },
@@ -34,6 +35,7 @@ const revokedReason = computed(() =>
 const isOfficial = computed(() =>
   isOfficialPluginItem(props.plugin) || isOfficialPlugin(props.plugin.pluginId || props.plugin.id)
 )
+const platformLabel = computed(() => getPluginPlatformLabel(props.plugin))
 const officialBadge = computed(() =>
   props.plugin.official_badge || props.plugin.officialBadge || '官方自营'
 )
@@ -135,6 +137,7 @@ const { pluginIcon, pluginGlyph, displayIconUrl, iconFailed, showImgOverlay, onI
             >
               {{ officialBadge }}
             </span>
+            <span v-if="platformLabel" class="card-badge-platform" :title="`支持平台：${platformLabel}`">{{ platformLabel }}</span>
             <span v-if="isRevoked" class="card-badge-revoked" :title="revokedReason">已下架</span>
             <span v-else-if="hasUpdate" class="card-badge-update">更新</span>
             <span v-else-if="isIncompatible" class="card-badge-incompat" :title="incompatReason">需升级</span>
@@ -295,6 +298,17 @@ const { pluginIcon, pluginGlyph, displayIconUrl, iconFailed, showImgOverlay, onI
 }
 
 /* 更新标签 */
+.card-badge-platform {
+  flex-shrink: 0;
+  padding: 1px 5px;
+  border-radius: 4px;
+  font-size: 10px;
+  font-weight: 500;
+  background: var(--rc-surface);
+  color: var(--rc-text-muted);
+  border: 1px solid var(--rc-border);
+}
+
 .card-badge-update {
   flex-shrink: 0;
   padding: 1px 5px;

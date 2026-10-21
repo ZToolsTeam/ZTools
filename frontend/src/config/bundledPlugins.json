@@ -1,5 +1,5 @@
 {
-  "comment": "随客户端内置的官方插件（来自 plugins/ 仓库的构建产物）。客户端只显示这里列出的插件；改动后运行 node scripts/sync-bundled-plugins.mjs 同步产物。",
+  "comment": "随客户端内置的官方插件（来自 plugins/ 仓库的构建产物）。客户端只显示这里列出的内置插件，以及从插件市场安装的非草稿官方插件；unreleasedOfficialIds（草稿，隐藏）与 storeOfficialIds（插件市场分发）由脚本按 plugin.json 的 draft 字段生成。改动后运行 node scripts/sync-bundled-plugins.mjs 同步产物。",
   "ids": [
     "json-format",
     "timestamp",
@@ -13,7 +13,8 @@
     "memo",
     "todo"
   ],
-  "unreleasedOfficialIds": [
+  "unreleasedOfficialIds": [],
+  "storeOfficialIds": [
     "ai-image",
     "ai-video",
     "batch-audio",
@@ -21,8 +22,6 @@
     "batch-text-convert",
     "batch-video",
     "boost",
-    "browser-bookmarks",
-    "browser-history",
     "calendar",
     "chinese-number-converter",
     "cleaner",
@@ -33,9 +32,6 @@
     "everything-file-search",
     "flow-guard",
     "hardware-info",
-    "hosts",
-    "image-editor",
-    "image-tool",
     "kill-process",
     "lan-share",
     "mover",
@@ -55,11 +51,9 @@
     "shutdown-timer",
     "software-manager",
     "sqlite-plugin",
-    "super-markdown",
     "system-backup",
     "system-tools",
     "text-formatter",
-    "translator",
     "unit-converter",
     "uuid-generator",
     "video-downloader",

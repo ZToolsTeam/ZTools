@@ -3,16 +3,63 @@ import {
   ChatResponse,
   ChatStreamChunk,
   ModelProviderConfig,
-  TokenUsage
+  TokenUsage,
+  ToolCall
 } from '../../types/ai.js';
-import {
-  BaseProvider,
-  ModelAuthError,
-  ModelProviderError,
-  ModelRateLimitError,
-  ModelTimeoutError
-} from './base.js';
+import { BaseProvider } from './base.js';
 import { TokenTracker } from '../token-tracker.js';
+
+interface AnthropicContentBlock {
+  type: 'text' | 'tool_use' | 'tool_result';
+  text?: string;
+  id?: string;
+  name?: string;
+  input?: Record<string, unknown>;
+  tool_use_id?: string;
+  content?: string;
+}
+
+interface AnthropicMessageItem {
+  role: 'user' | 'assistant';
+  content: string | AnthropicContentBlock[];
+}
+
+interface AnthropicResponsePayload {
+  id?: string;
+  model?: string;
+  stop_reason?: string;
+  content?: AnthropicContentBlock[];
+  usage?: {
+    input_tokens?: number;
+    output_tokens?: number;
+  };
+}
+
+interface AnthropicStreamEvent {
+  type?: string;
+  index?: number;
+  message?: {
+    id?: string;
+    usage?: {
+      input_tokens?: number;
+    };
+  };
+  content_block?: {
+    type?: string;
+    id?: string;
+    name?: string;
+    input?: Record<string, unknown>;
+  };
+  delta?: {
+    type?: string;
+    text?: string;
+    partial_json?: string;
+    stop_reason?: string;
+  };
+  usage?: {
+    output_tokens?: number;
+  };
+}
 
 export class ClaudeProvider extends BaseProvider {
   constructor(config: ModelProviderConfig) {
@@ -37,37 +84,77 @@ export class ClaudeProvider extends BaseProvider {
     return headers;
   }
 
-  private formatRequestBody(request: ChatRequest, stream: boolean): any {
+  private formatRequestBody(request: ChatRequest, stream: boolean): Record<string, unknown> {
     const model = request.model || this.config.defaultModel || 'claude-3-5-sonnet-20241022';
 
     // 提取系统提示词
     let systemPrompt = request.system || '';
-    const messages: Array<{ role: 'user' | 'assistant'; content: any }> = [];
+    const messages: AnthropicMessageItem[] = [];
 
     for (const msg of request.messages) {
       if (msg.role === 'system') {
         systemPrompt = systemPrompt ? `${systemPrompt}\n${msg.content}` : msg.content;
-      } else if (msg.role === 'user' || msg.role === 'assistant') {
+      } else if (msg.role === 'assistant') {
+        if (msg.toolCalls && msg.toolCalls.length > 0) {
+          const blocks: AnthropicContentBlock[] = [];
+          if (msg.content) {
+            blocks.push({ type: 'text', text: msg.content });
+          }
+          for (const tc of msg.toolCalls) {
+            let parsedInput: Record<string, unknown> = {};
+            if (typeof tc.function?.arguments === 'string' && tc.function.arguments.trim()) {
+              try {
+                parsedInput = JSON.parse(tc.function.arguments) as Record<string, unknown>;
+              } catch {
+                parsedInput = {};
+              }
+            }
+            blocks.push({
+              type: 'tool_use',
+              id: tc.id,
+              name: tc.function.name,
+              input: parsedInput
+            });
+          }
+          messages.push({
+            role: 'assistant',
+            content: blocks
+          });
+        } else {
+          messages.push({
+            role: 'assistant',
+            content: msg.content
+          });
+        }
+      } else if (msg.role === 'user') {
         messages.push({
-          role: msg.role,
+          role: 'user',
           content: msg.content
         });
       } else if (msg.role === 'tool') {
-        // Claude 工具返回格式：tool_result block
-        messages.push({
-          role: 'user',
-          content: [
-            {
-              type: 'tool_result',
-              tool_use_id: msg.toolCallId || 'call_0',
-              content: msg.content
-            }
-          ]
-        });
+        const toolResultBlock: AnthropicContentBlock = {
+          type: 'tool_result',
+          tool_use_id: msg.toolCallId || 'call_0',
+          content: msg.content
+        };
+        const prev = messages[messages.length - 1];
+        if (
+          prev &&
+          prev.role === 'user' &&
+          Array.isArray(prev.content) &&
+          prev.content.every(b => b.type === 'tool_result')
+        ) {
+          prev.content.push(toolResultBlock);
+        } else {
+          messages.push({
+            role: 'user',
+            content: [toolResultBlock]
+          });
+        }
       }
     }
 
-    const body: Record<string, any> = {
+    const body: Record<string, unknown> = {
       model,
       messages,
       max_tokens: request.maxTokens || 4096,
@@ -98,125 +185,81 @@ export class ClaudeProvider extends BaseProvider {
 
   public async chat(request: ChatRequest): Promise<ChatResponse> {
     const timeoutMs = this.getTimeout(request.timeoutMs);
-    const { signal, cleanup } = this.createAbortSignal(timeoutMs);
-    const startTime = Date.now();
-
     const baseUrl = this.config.baseUrl!.replace(/\/+$/, '');
     const url = `${baseUrl}/messages`;
     const payload = this.formatRequestBody(request, false);
 
-    try {
-      const response = await fetch(url, {
-        method: 'POST',
-        headers: this.getHeaders(),
-        body: JSON.stringify(payload),
-        signal
-      });
+    const { data, latencyMs } = await this.postJsonRequest<AnthropicResponsePayload>(
+      url,
+      this.getHeaders(),
+      payload,
+      timeoutMs
+    );
 
-      cleanup();
-      const latencyMs = Date.now() - startTime;
+    let textContent = '';
+    const toolCalls: ToolCall[] = [];
 
-      if (!response.ok) {
-        await this.handleErrorResponse(response);
-      }
-
-      const data = await response.json() as any;
-
-      let textContent = '';
-      const toolCalls: any[] = [];
-
-      if (Array.isArray(data.content)) {
-        for (const block of data.content) {
-          if (block.type === 'text') {
-            textContent += block.text;
-          } else if (block.type === 'tool_use') {
-            toolCalls.push({
-              id: block.id,
-              type: 'function',
-              function: {
-                name: block.name,
-                arguments: JSON.stringify(block.input || {})
-              }
-            });
-          }
+    if (Array.isArray(data.content)) {
+      for (const block of data.content) {
+        if (block.type === 'text' && block.text) {
+          textContent += block.text;
+        } else if (block.type === 'tool_use' && block.id && block.name) {
+          toolCalls.push({
+            id: block.id,
+            type: 'function',
+            function: {
+              name: block.name,
+              arguments: JSON.stringify(block.input || {})
+            }
+          });
         }
       }
-
-      const usage: TokenUsage = data.usage
-        ? {
-            promptTokens: data.usage.input_tokens || 0,
-            completionTokens: data.usage.output_tokens || 0,
-            totalTokens: (data.usage.input_tokens || 0) + (data.usage.output_tokens || 0)
-          }
-        : {
-            promptTokens: TokenTracker.estimateTokens(request.messages.map(m => m.content).join('\n')),
-            completionTokens: TokenTracker.estimateTokens(textContent),
-            totalTokens: 0
-          };
-      if (!data.usage) {
-        usage.totalTokens = usage.promptTokens + usage.completionTokens;
-      }
-
-      return {
-        id: data.id || `resp-${Date.now()}`,
-        model: data.model || payload.model,
-        provider: this.id,
-        message: {
-          role: 'assistant',
-          content: textContent,
-          toolCalls: toolCalls.length > 0 ? toolCalls : undefined
-        },
-        finishReason: data.stop_reason === 'tool_use' ? 'tool_calls' : data.stop_reason || 'stop',
-        usage,
-        latencyMs
-      };
-    } catch (err: any) {
-      cleanup();
-      if (err.name === 'AbortError') {
-        throw new ModelTimeoutError(this.id, timeoutMs);
-      }
-      if (err instanceof ModelProviderError) {
-        throw err;
-      }
-      throw new ModelProviderError(err.message || String(err), this.id, undefined, true);
     }
+
+    const usage: TokenUsage = data.usage
+      ? {
+          promptTokens: data.usage.input_tokens || 0,
+          completionTokens: data.usage.output_tokens || 0,
+          totalTokens: (data.usage.input_tokens || 0) + (data.usage.output_tokens || 0)
+        }
+      : {
+          promptTokens: TokenTracker.estimateTokens(request.messages.map(m => m.content).join('\n')),
+          completionTokens: TokenTracker.estimateTokens(textContent),
+          totalTokens: 0
+        };
+    if (!data.usage) {
+      usage.totalTokens = usage.promptTokens + usage.completionTokens;
+    }
+
+    return {
+      id: data.id || `resp-${Date.now()}`,
+      model: data.model || String(payload.model),
+      provider: this.id,
+      message: {
+        role: 'assistant',
+        content: textContent,
+        toolCalls: toolCalls.length > 0 ? toolCalls : undefined
+      },
+      finishReason: data.stop_reason === 'tool_use' ? 'tool_calls' : data.stop_reason || 'stop',
+      usage,
+      latencyMs
+    };
   }
 
   public async *chatStream(request: ChatRequest): AsyncGenerator<ChatStreamChunk> {
     const timeoutMs = this.getTimeout(request.timeoutMs);
-    const { signal, cleanup } = this.createAbortSignal(timeoutMs);
-
     const baseUrl = this.config.baseUrl!.replace(/\/+$/, '');
     const url = `${baseUrl}/messages`;
     const payload = this.formatRequestBody(request, true);
+    const modelName = String(payload.model);
 
-    let response: Response;
-    try {
-      response = await fetch(url, {
-        method: 'POST',
-        headers: this.getHeaders(),
-        body: JSON.stringify(payload),
-        signal
-      });
-    } catch (err: any) {
-      cleanup();
-      if (err.name === 'AbortError') {
-        throw new ModelTimeoutError(this.id, timeoutMs);
-      }
-      throw new ModelProviderError(err.message || String(err), this.id, undefined, true);
-    }
+    const { reader, cleanup } = await this.openStreamResponse(
+      url,
+      this.getHeaders(),
+      payload,
+      timeoutMs
+    );
 
-    if (!response.ok) {
-      cleanup();
-      await this.handleErrorResponse(response);
-    }
-
-    if (!response.body) {
-      cleanup();
-      throw new ModelProviderError('Response body is empty', this.id, response.status, false);
-    }
-
-    const reader = response.body.getReader();
     const decoder = new TextDecoder('utf-8');
     let buffer = '';
     let currentInputTokens = 0;
@@ -237,21 +280,66 @@ export class ClaudeProvider extends BaseProvider {
           if (trimmed.startsWith('data: ')) {
             const jsonStr = trimmed.slice(6);
             try {
-              const event = JSON.parse(jsonStr);
+              const event = JSON.parse(jsonStr) as AnthropicStreamEvent;
 
               if (event.type === 'message_start' && event.message?.usage) {
                 currentInputTokens = event.message.usage.input_tokens || 0;
+              }
+
+              if (event.type === 'content_block_start' && event.content_block?.type === 'tool_use') {
+                const block = event.content_block;
+                const initialArgs =
+                  block.input && typeof block.input === 'object' && Object.keys(block.input).length > 0
+                    ? JSON.stringify(block.input)
+                    : '';
+                yield {
+                  id: event.message?.id || `chunk-${Date.now()}`,
+                  model: modelName,
+                  provider: this.id,
+                  delta: {
+                    role: 'assistant',
+                    toolCalls: [
+                      {
+                        index: typeof event.index === 'number' ? event.index : 0,
+                        id: block.id,
+                        type: 'function',
+                        function: {
+                          name: block.name,
+                          arguments: initialArgs
+                        }
+                      }
+                    ]
+                  },
+                  finishReason: null
+                };
               }
 
               if (event.type === 'content_block_delta') {
                 if (event.delta?.type === 'text_delta') {
                   yield {
                     id: event.message?.id || `chunk-${Date.now()}`,
-                    model: payload.model,
+                    model: modelName,
                     provider: this.id,
                     delta: {
                       role: 'assistant',
                       content: event.delta.text
+                    },
+                    finishReason: null
+                  };
+                } else if (event.delta?.type === 'input_json_delta') {
+                  yield {
+                    id: event.message?.id || `chunk-${Date.now()}`,
+                    model: modelName,
+                    provider: this.id,
+                    delta: {
+                      toolCalls: [
+                        {
+                          index: typeof event.index === 'number' ? event.index : 0,
+                          function: {
+                            arguments: event.delta.partial_json || ''
+                          }
+                        }
+                      ]
                     },
                     finishReason: null
                   };
@@ -264,7 +352,7 @@ export class ClaudeProvider extends BaseProvider {
 
                 yield {
                   id: `chunk-${Date.now()}`,
-                  model: payload.model,
+                  model: modelName,
                   provider: this.id,
                   delta: {},
                   finishReason: stopReason === 'tool_use' ? 'tool_calls' : stopReason || 'stop',
@@ -281,32 +369,11 @@ export class ClaudeProvider extends BaseProvider {
           }
         }
       }
+    } catch (err: unknown) {
+      this.mapRequestError(err, timeoutMs);
     } finally {
       cleanup();
       reader.releaseLock();
     }
-  }
-
-  private async handleErrorResponse(response: Response): Promise<never> {
-    let errorText = '';
-    try {
-      errorText = await response.text();
-    } catch {
-      errorText = response.statusText;
-    }
-
-    if (response.status === 401 || response.status === 403) {
-      throw new ModelAuthError(this.id, `Authentication error (${response.status}): ${errorText}`);
-    }
-    if (response.status === 429) {
-      throw new ModelRateLimitError(this.id, `Rate limit exceeded (429): ${errorText}`);
-    }
-
-    throw new ModelProviderError(
-      `API error (${response.status}): ${errorText}`,
-      this.id,
-      response.status,
-      response.status >= 500
-    );
   }
 }

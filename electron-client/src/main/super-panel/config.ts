@@ -22,9 +22,16 @@ export interface SuperPanelConfig {
   pinnedLocalApps: string[]
 }
 
+/**
+ * Alt+Space 留给全局唤醒（悬浮条，界面上也按它提示），超级面板默认改用 Alt+Shift+Space，
+ * 两者默认值不能相同，否则开箱就有一个快捷键注册失败。
+ */
+export const LEGACY_SUPER_PANEL_ACCELERATOR = 'Alt+Space'
+export const DEFAULT_SUPER_PANEL_MODIFIERS = ['Alt', 'Shift'] as const
+
 export const DEFAULT_SUPER_PANEL_CONFIG: SuperPanelConfig = {
   enabled: true,
-  keyboard: { enabled: true, accelerator: 'Alt+Space' },
+  keyboard: { enabled: true, accelerator: 'Alt+Shift+Space' },
   mouse: {
     enabled: true,
     trigger: { button: 'middle', action: 'long', longPressMs: 300 }
@@ -49,7 +56,7 @@ function parseKeyboard(value: unknown): SuperPanelConfig['keyboard'] {
   if (!isRecord(value)) return { ...DEFAULT_SUPER_PANEL_CONFIG.keyboard }
   const modifiers = Array.isArray(value.modifiers)
     ? value.modifiers.filter((item): item is string => typeof item === 'string')
-    : ['Alt']
+    : [...DEFAULT_SUPER_PANEL_MODIFIERS]
   const normalizedModifiers: string[] = []
   for (const modifier of modifiers.slice(0, 4)) {
     const normalized = modifier.trim().toLowerCase()

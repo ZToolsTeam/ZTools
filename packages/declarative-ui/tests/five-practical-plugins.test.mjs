@@ -84,7 +84,7 @@ describe("5 款高频实用插件端到端集成与全异常抗毁测试套件",
       const rootLocked = renderDeclarativeRoot(PasswordVaultCommand);
       const descLocked = rootLocked.getLatest();
       assert.equal(descLocked.type, "List");
-      assert.equal(descLocked.children[0].props.title, "🔒 密码箱已锁定");
+      assert.equal(descLocked.children[0].props.title, "密码箱已锁定");
       rootLocked.unmount();
 
       // 验证详情视图与子表单渲染

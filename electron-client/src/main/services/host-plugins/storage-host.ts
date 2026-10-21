@@ -126,16 +126,30 @@ export class StorageHostPluginHandler {
       }
       await fs.mkdir(resolvedTargetRoot, { recursive: true })
       await fs.cp(resolvedSource, destDir, { recursive: true, force: true })
-      await fs.rm(resolvedSource, { recursive: true, force: true })
+      const backupSourcePath = `${resolvedSource}.ztools-mover-bak-${Date.now()}`
+      await fs.rename(resolvedSource, backupSourcePath)
 
-      if (process.platform === 'win32') {
-        const mklink = await runCommand('cmd.exe', ['/c', 'mklink', '/J', resolvedSource, destDir], 15_000, signal)
-        if (mklink.exitCode !== 0) {
-          await fs.symlink(destDir, resolvedSource, 'junction')
+      try {
+        if (process.platform === 'win32') {
+          const mklink = await runCommand('cmd.exe', ['/c', 'mklink', '/J', resolvedSource, destDir], 15_000, signal)
+          if (mklink.exitCode !== 0) {
+            await fs.symlink(destDir, resolvedSource, 'junction')
+          }
+        } else {
+          await fs.symlink(destDir, resolvedSource, 'dir')
         }
-      } else {
-        await fs.symlink(destDir, resolvedSource, 'dir')
+      } catch (linkErr) {
+        // 联接建立失败时立即回滚源目录，绝不丢失用户源文件
+        await fs.rm(resolvedSource, { recursive: true, force: true }).catch(() => undefined)
+        await fs.rename(backupSourcePath, resolvedSource).catch(async () => {
+          await fs.cp(backupSourcePath, resolvedSource, { recursive: true, force: true })
+          await fs.rm(backupSourcePath, { recursive: true, force: true })
+        })
+        await fs.rm(destDir, { recursive: true, force: true }).catch(() => undefined)
+        throw linkErr
       }
+
+      await fs.rm(backupSourcePath, { recursive: true, force: true })
 
       return {
         ok: true,
@@ -158,8 +172,20 @@ export class StorageHostPluginHandler {
         return { ok: false, success: false, error: '该路径不是符号链接或目录联接 (Junction)' }
       }
       const realTarget = await fs.readlink(resolvedSource)
-      await fs.unlink(resolvedSource)
-      await fs.cp(realTarget, resolvedSource, { recursive: true, force: true })
+      const stagingRestorePath = `${resolvedSource}.ztools-restore-tmp-${Date.now()}`
+      await fs.cp(realTarget, stagingRestorePath, { recursive: true, force: true })
+      try {
+        await fs.unlink(resolvedSource)
+        await fs.rename(stagingRestorePath, resolvedSource)
+      } catch (restoreErr) {
+        if (!fsSync.existsSync(resolvedSource)) {
+          await fs
+            .symlink(realTarget, resolvedSource, process.platform === 'win32' ? 'junction' : 'dir')
+            .catch(() => undefined)
+        }
+        await fs.rm(stagingRestorePath, { recursive: true, force: true }).catch(() => undefined)
+        throw restoreErr
+      }
       await fs.rm(realTarget, { recursive: true, force: true })
       return {
         ok: true,

@@ -9,6 +9,7 @@ import path from 'node:path'
 import type { CallerIdentity } from '../../../contracts/capabilities.js'
 import {
   calculateDirectorySize,
+  escapeHtml,
   formatBytes,
   guessMimeType,
   runCommand,
@@ -19,10 +20,11 @@ import {
 
 export class NetworkHostPluginHandler {
   readonly #ctx: HostPluginContext
+  #lanShareStarting: Promise<void> | null = null
   readonly #lanShare: LanShareServerState = {
     server: null,
     port: 0,
-    pin: String(Math.floor(1000 + Math.random() * 9000)),
+    pin: String(crypto.randomInt(1000, 10000)),
     requirePin: false,
     sharedFiles: new Map(),
     activeTransfers: 0,
@@ -280,120 +282,142 @@ export class NetworkHostPluginHandler {
 
   async #startLanHttpServer(preferredPort: number): Promise<void> {
     if (this.#lanShare.server) return
+    if (this.#lanShareStarting) {
+      await this.#lanShareStarting
+      return
+    }
 
-    const server = http.createServer(async (req, res) => {
-      this.#lanShare.totalClientRequests = (this.#lanShare.totalClientRequests ?? 0) + 1
-      try {
-        const reqUrl = new URL(req.url ?? '/', `http://${req.headers.host ?? '127.0.0.1'}`)
-        if (this.#lanShare.requirePin) {
-          const pinParam = reqUrl.searchParams.get('pin') ?? req.headers['x-ztools-pin']
-          if (pinParam !== this.#lanShare.pin) {
-            res.writeHead(401, { 'Content-Type': 'text/plain; charset=utf-8' })
-            res.end('需要有效的 PIN 验证码 (?pin=XXXX)')
+    this.#lanShareStarting = (async () => {
+      if (this.#lanShare.server) return
+
+      const server = http.createServer(async (req, res) => {
+        this.#lanShare.totalClientRequests = (this.#lanShare.totalClientRequests ?? 0) + 1
+        try {
+          const reqUrl = new URL(req.url ?? '/', `http://${req.headers.host ?? '127.0.0.1'}`)
+          if (this.#lanShare.requirePin) {
+            const pinParam = reqUrl.searchParams.get('pin') ?? req.headers['x-ztools-pin']
+            if (pinParam !== this.#lanShare.pin) {
+              res.writeHead(401, { 'Content-Type': 'text/plain; charset=utf-8' })
+              res.end('需要有效的 PIN 验证码 (?pin=XXXX)')
+              return
+            }
+          }
+
+          if (reqUrl.pathname === '/api/files') {
+            const files = Array.from(this.#lanShare.sharedFiles.values())
+              .filter((f) => f.shared !== false)
+              .map((f) => ({
+                id: f.id,
+                name: f.name,
+                size: f.size,
+                sizeBytes: f.size,
+                sizeText: formatBytes(f.size),
+                shared: f.shared !== false,
+                isDirectory: f.isDirectory,
+                downloadUrl: `/download/${encodeURIComponent(f.id)}/${encodeURIComponent(f.name)}`
+              }))
+            res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' })
+            res.end(JSON.stringify({ ok: true, files }))
             return
           }
-        }
 
-        if (reqUrl.pathname === '/api/files') {
-          const files = Array.from(this.#lanShare.sharedFiles.values())
+          if (reqUrl.pathname.startsWith('/download/') || reqUrl.pathname.startsWith('/dl/')) {
+            const parts = reqUrl.pathname.split('/').filter(Boolean)
+            const fileIdOrIdx = decodeURIComponent(parts[1] ?? '')
+            const fileNameParam = decodeURIComponent(parts[2] ?? '')
+            let descriptor = this.#lanShare.sharedFiles.get(fileIdOrIdx)
+            if (!descriptor) {
+              const allEntries = Array.from(this.#lanShare.sharedFiles.values())
+              if (/^\d+$/.test(fileIdOrIdx)) {
+                const idx = Number(fileIdOrIdx)
+                descriptor = allEntries[idx] ?? allEntries[idx - 1]
+              }
+              if (!descriptor && fileNameParam) {
+                descriptor = allEntries.find((f) => f.id === fileIdOrIdx || f.name === fileNameParam)
+              }
+            }
+
+            if (descriptor && descriptor.shared === false) {
+              res.writeHead(403, { 'Content-Type': 'text/plain; charset=utf-8' })
+              res.end('403 Forbidden: File sharing is disabled')
+              return
+            }
+
+            if (!descriptor || descriptor.isDirectory || !fsSync.existsSync(descriptor.path)) {
+              res.writeHead(404, { 'Content-Type': 'text/plain; charset=utf-8' })
+              res.end('File not found or is a directory')
+              return
+            }
+            const stat = await fs.stat(descriptor.path)
+            const ext = path.extname(descriptor.name).toLowerCase()
+            const mime = guessMimeType(ext)
+            res.writeHead(200, {
+              'Content-Type': mime,
+              'Content-Length': String(stat.size),
+              'Content-Disposition': `attachment; filename*=UTF-8''${encodeURIComponent(descriptor.name)}`
+            })
+            this.#lanShare.activeTransfers += 1
+            let transferSettled = false
+            const finalizeTransfer = () => {
+              if (transferSettled) return
+              transferSettled = true
+              this.#lanShare.activeTransfers = Math.max(0, this.#lanShare.activeTransfers - 1)
+            }
+            const stream = fsSync.createReadStream(descriptor.path)
+            stream.on('close', finalizeTransfer)
+            stream.on('error', (streamErr) => {
+              finalizeTransfer()
+              if (!res.headersSent) {
+                res.writeHead(500, { 'Content-Type': 'text/plain; charset=utf-8' })
+                res.end(streamErr.message || 'File read error')
+              } else {
+                res.destroy(streamErr)
+              }
+            })
+            stream.pipe(res)
+            return
+          }
+
+          const fileRows = Array.from(this.#lanShare.sharedFiles.values())
             .filter((f) => f.shared !== false)
-            .map((f) => ({
-              id: f.id,
-              name: f.name,
-              size: f.size,
-              sizeBytes: f.size,
-              sizeText: formatBytes(f.size),
-              shared: f.shared !== false,
-              isDirectory: f.isDirectory,
-              downloadUrl: `/download/${encodeURIComponent(f.id)}/${encodeURIComponent(f.name)}`
-            }))
-          res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' })
-          res.end(JSON.stringify({ ok: true, files }))
-          return
+            .map(
+              (f) =>
+                `<li><a href="/download/${encodeURIComponent(f.id)}/${encodeURIComponent(f.name)}">${escapeHtml(f.name)}</a> (${formatBytes(f.size)})</li>`
+            )
+            .join('')
+          const html = `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>ZTools 局域网快传</title><style>body{font-family:system-ui,sans-serif;background:#111;color:#eee;padding:24px;max-width:720px;margin:0 auto}a{color:#60a5fa;text-decoration:none}li{padding:10px 0;border-bottom:1px solid #27272a}</style></head><body><h2>ZTools 局域网文件共享</h2><ul>${fileRows || '<li>暂无共享文件</li>'}</ul></body></html>`
+          res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' })
+          res.end(html)
+        } catch (err) {
+          res.writeHead(500, { 'Content-Type': 'text/plain; charset=utf-8' })
+          res.end(err instanceof Error ? err.message : 'Internal Server Error')
         }
-
-        if (reqUrl.pathname.startsWith('/download/') || reqUrl.pathname.startsWith('/dl/')) {
-          const parts = reqUrl.pathname.split('/').filter(Boolean)
-          const fileIdOrIdx = decodeURIComponent(parts[1] ?? '')
-          const fileNameParam = decodeURIComponent(parts[2] ?? '')
-          let descriptor = this.#lanShare.sharedFiles.get(fileIdOrIdx)
-          if (!descriptor) {
-            const allEntries = Array.from(this.#lanShare.sharedFiles.values())
-            if (/^\d+$/.test(fileIdOrIdx)) {
-              const idx = Number(fileIdOrIdx)
-              descriptor = allEntries[idx] ?? allEntries[idx - 1]
-            }
-            if (!descriptor && fileNameParam) {
-              descriptor = allEntries.find((f) => f.id === fileIdOrIdx || f.name === fileNameParam)
-            }
-          }
-
-          if (descriptor && descriptor.shared === false) {
-            res.writeHead(403, { 'Content-Type': 'text/plain; charset=utf-8' })
-            res.end('403 Forbidden: File sharing is disabled')
-            return
-          }
-
-          if (!descriptor || descriptor.isDirectory || !fsSync.existsSync(descriptor.path)) {
-            res.writeHead(404, { 'Content-Type': 'text/plain; charset=utf-8' })
-            res.end('File not found or is a directory')
-            return
-          }
-          const stat = await fs.stat(descriptor.path)
-          const ext = path.extname(descriptor.name).toLowerCase()
-          const mime = guessMimeType(ext)
-          res.writeHead(200, {
-            'Content-Type': mime,
-            'Content-Length': String(stat.size),
-            'Content-Disposition': `attachment; filename*=UTF-8''${encodeURIComponent(descriptor.name)}`
-          })
-          this.#lanShare.activeTransfers += 1
-          let transferSettled = false
-          const finalizeTransfer = () => {
-            if (transferSettled) return
-            transferSettled = true
-            this.#lanShare.activeTransfers = Math.max(0, this.#lanShare.activeTransfers - 1)
-          }
-          const stream = fsSync.createReadStream(descriptor.path)
-          stream.on('close', finalizeTransfer)
-          stream.on('error', (streamErr) => {
-            finalizeTransfer()
-            if (!res.headersSent) {
-              res.writeHead(500, { 'Content-Type': 'text/plain; charset=utf-8' })
-              res.end(streamErr.message || 'File read error')
-            } else {
-              res.destroy(streamErr)
-            }
-          })
-          stream.pipe(res)
-          return
-        }
-
-        const fileRows = Array.from(this.#lanShare.sharedFiles.values())
-          .filter((f) => f.shared !== false)
-          .map(
-            (f) =>
-              `<li><a href="/download/${encodeURIComponent(f.id)}/${encodeURIComponent(f.name)}">${f.name}</a> (${formatBytes(f.size)})</li>`
-          )
-          .join('')
-        const html = `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>ZTools 局域网快传</title><style>body{font-family:system-ui,sans-serif;background:#111;color:#eee;padding:24px;max-width:720px;margin:0 auto}a{color:#60a5fa;text-decoration:none}li{padding:10px 0;border-bottom:1px solid #27272a}</style></head><body><h2>ZTools 局域网文件共享</h2><ul>${fileRows || '<li>暂无共享文件</li>'}</ul></body></html>`
-        res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' })
-        res.end(html)
-      } catch (err) {
-        res.writeHead(500, { 'Content-Type': 'text/plain; charset=utf-8' })
-        res.end(err instanceof Error ? err.message : 'Internal Server Error')
-      }
-    })
-
-    await new Promise<void>((resolve) => {
-      server.once('error', () => {
-        server.listen(0, '0.0.0.0', () => resolve())
       })
-      server.listen(preferredPort, '0.0.0.0', () => resolve())
-    })
-    const addr = server.address()
-    this.#lanShare.server = server
-    this.#lanShare.port = typeof addr === 'object' && addr ? addr.port : preferredPort
+
+      await new Promise<void>((resolve, reject) => {
+        const onPreferredError = () => {
+          server.once('error', (fallbackErr) => reject(fallbackErr))
+          server.listen(0, '0.0.0.0', () => resolve())
+        }
+        server.once('error', onPreferredError)
+        server.listen(preferredPort, '0.0.0.0', () => {
+          server.removeListener('error', onPreferredError)
+          resolve()
+        })
+      })
+      server.on('error', () => {
+        // Prevent unhandled error event after server has started listening
+      })
+      const addr = server.address()
+      this.#lanShare.server = server
+      this.#lanShare.port = typeof addr === 'object' && addr ? addr.port : preferredPort
+    })()
+
+    try {
+      await this.#lanShareStarting
+    } finally {
+      this.#lanShareStarting = null
+    }
   }
 
   static #parseLinkSpeedMbps(linkSpeed: unknown): number {
@@ -849,15 +873,15 @@ export class NetworkHostPluginHandler {
 
       if (targetId === 'reset-firewall') {
         if (process.platform === 'win32') {
-          const res = await runCommand('netsh', ['advfirewall', 'show', 'allprofiles'], 10_000, signal)
+          const res = await runCommand('netsh', ['advfirewall', 'reset'], 10_000, signal)
           const ok = res.exitCode === 0
           return {
             ok,
             success: ok,
             checkId: targetId,
             output: res.stdout || res.stderr,
-            message: ok ? '已核验防火墙全部配置文件状态' : undefined,
-            ...(ok ? {} : { error: res.stderr || res.stdout || '查询防火墙配置失败' })
+            message: ok ? '已恢复 Windows 防火墙默认策略' : undefined,
+            ...(ok ? {} : { error: res.stderr || res.stdout || '恢复防火墙默认策略失败（通常需要管理员权限）' })
           }
         }
         return { ok: false, success: false, checkId: targetId, error: '仅 Windows 支持 netsh advfirewall' }
@@ -865,18 +889,23 @@ export class NetworkHostPluginHandler {
 
       if (targetId === 'restart-nla') {
         if (process.platform === 'win32') {
-          const res = await runCommand('sc', ['query', 'NlaSvc'], 10_000, signal)
+          const res = await runCommand(
+            'powershell.exe',
+            ['-NoProfile', '-NonInteractive', '-Command', 'Restart-Service -Name NlaSvc -Force -ErrorAction Stop'],
+            15_000,
+            signal
+          )
           const ok = res.exitCode === 0
           return {
             ok,
             success: ok,
             checkId: targetId,
             output: res.stdout || res.stderr,
-            message: ok ? '已查询 NlaSvc 网络位置感知服务状态' : undefined,
-            ...(ok ? {} : { error: res.stderr || res.stdout || '查询 NlaSvc 服务状态失败' })
+            message: ok ? '已重启 NlaSvc 网络位置感知服务' : undefined,
+            ...(ok ? {} : { error: res.stderr || res.stdout || '重启 NlaSvc 服务失败（通常需要管理员权限）' })
           }
         }
-        return { ok: false, success: false, checkId: targetId, error: '仅 Windows 支持 NlaSvc 服务查询' }
+        return { ok: false, success: false, checkId: targetId, error: '仅 Windows 支持重启 NlaSvc 服务' }
       }
 
       return {
@@ -923,15 +952,21 @@ export class NetworkHostPluginHandler {
       if (!url) {
         return { ok: false, success: false, error: '未提供有效的下载 URL' }
       }
-      const rawOutputDir = String(params.outputDir ?? params.saveDir ?? path.join(os.homedir(), 'Downloads'))
-      const outputDir = await this.#ctx.authorizeOutputPath(rawOutputDir, caller)
-      await fs.mkdir(outputDir, { recursive: true })
-      const defaultName = path.basename(new URL(url, 'http://localhost').pathname) || `download-${Date.now()}.bin`
-      const fileName = String(params.fileName ?? params.name ?? defaultName)
-      const savePath = path.join(outputDir, fileName)
-      const id = String(params.id ?? params.taskId ?? `dl-${Date.now()}`)
-
       try {
+        const rawOutputDir = String(params.outputDir ?? params.saveDir ?? path.join(os.homedir(), 'Downloads'))
+        const outputDir = await this.#ctx.authorizeOutputPath(rawOutputDir, caller)
+        await fs.mkdir(outputDir, { recursive: true })
+        const defaultName = path.basename(new URL(url, 'http://localhost').pathname) || `download-${Date.now()}.bin`
+        const rawFileName = String(params.fileName ?? params.name ?? defaultName).trim()
+        const fileName =
+          path.basename(rawFileName).replace(/[<>:"/\\|?*\x00-\x1f]/g, '_') || `download-${Date.now()}.bin`
+        const candidateSavePath = path.resolve(outputDir, fileName)
+        const relCheck = path.relative(outputDir, candidateSavePath)
+        if (!relCheck || relCheck.startsWith('..') || path.isAbsolute(relCheck)) {
+          return { ok: false, success: false, error: '非法下载文件名，拒绝路径越界' }
+        }
+        const savePath = await this.#ctx.authorizeOutputPath(candidateSavePath, caller)
+        const id = String(params.id ?? params.taskId ?? `dl-${Date.now()}`)
         if (url.startsWith('file://')) {
           const srcPath = await this.#ctx.authorizeExistingPath(new URL(url).pathname, caller, 'read')
           await fs.copyFile(srcPath, savePath)

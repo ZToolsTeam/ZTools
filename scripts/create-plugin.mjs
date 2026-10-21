@@ -15,6 +15,7 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import readline from 'node:readline/promises'
+import { buildPlatformTargets, describePlatforms, SUPPORTED_PLATFORMS } from '../packages/ztools-plugins-spec/src/validator.js'
 import { fileURLToPath } from 'node:url'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
@@ -48,6 +49,23 @@ export function validatePluginId(pluginId) {
 }
 
 /**
+ * 解析平台选项：cross / both / all（跨平台，默认）、windows / win、macos / mac，也接受逗号分隔的组合
+ * @param {string | undefined} value
+ * @returns {string[]} 'windows' / 'macos' 的子集
+ */
+export function parsePlatformOption(value) {
+  const raw = String(value ?? '').trim().toLowerCase()
+  if (raw === '' || raw === 'cross' || raw === 'both' || raw === 'all' || raw === '1') return [...SUPPORTED_PLATFORMS]
+  const aliases = { windows: 'windows', win: 'windows', '2': 'windows', macos: 'macos', mac: 'macos', '3': 'macos' }
+  const parts = raw.split(',').map((part) => part.trim()).filter(Boolean)
+  const platforms = parts.map((part) => aliases[part])
+  if (platforms.length === 0 || platforms.some((p) => !p)) {
+    throw new Error(`无法识别的平台选项: "${value}"（可选 cross / windows / macos）`)
+  }
+  return [...new Set(platforms)]
+}
+
+/**
  * 核心创建插件工程函数
  * @param {object} options
  * @param {string} options.pluginId - 插件唯一 ID
@@ -55,6 +73,7 @@ export function validatePluginId(pluginId) {
  * @param {string} [options.description] - 插件功能描述
  * @param {string} [options.targetDir] - 插件放置根目录（默认 'plugins'）
  * @param {boolean} [options.force] - 是否覆盖已存在的目录
+ * @param {string[]} [options.platforms] - 支持的平台（'windows' / 'macos' 的子集），默认跨平台
  * @returns {Promise<{ success: boolean, pluginDir: string, createdFiles: string[] }>}
  */
 export async function createPlugin({
@@ -62,8 +81,11 @@ export async function createPlugin({
   title,
   description,
   targetDir = 'plugins',
-  force = false
+  force = false,
+  platforms = [...SUPPORTED_PLATFORMS]
 }) {
+  // 平台声明非法时直接报错，不生成半成品目录
+  const targets = buildPlatformTargets(platforms)
   // 1. 校验 ID
   const idCheck = validatePluginId(pluginId)
   if (!idCheck.valid) {
@@ -112,6 +134,9 @@ export async function createPlugin({
     entry: 'dist/index.js',
     icon: 'icon.svg',
     permissions: ['clipboard'],
+    // 支持的平台：客户端安装时据此判断当前系统能否运行，市场显示「跨平台 / 仅 Windows / 仅 macOS」
+    targets,
+    nativeComponents: [],
     commands: [
       {
         name: 'index',
@@ -391,6 +416,7 @@ describe("插件自动化验证: ${pluginId}", () => {
     assert.equal(manifest.entry, "dist/index.js");
     assert.equal(manifest.icon, "icon.svg");
     assert.ok(Array.isArray(manifest.permissions), "permissions 必须为数组");
+    assert.ok(Array.isArray(manifest.targets) && manifest.targets.length > 0, "targets 必须声明支持的平台");
 
     assert.ok(fs.existsSync(path.join(pluginDir, manifest.icon)), "声明的 icon 文件必须存在");
     assert.ok(fs.existsSync(path.join(pluginDir, manifest.entry)), "声明的 entry 入口文件必须存在");
@@ -513,11 +539,13 @@ async function runCli() {
 选项:
   --force, -f       若目标插件目录已存在，强制覆盖
   --target-dir <dir> 指定生成的父级目录 (默认: "plugins")
+  --platform <p>    支持的平台：cross（跨平台，默认）/ windows / macos
   --help, -h        显示此帮助信息
 
 示例:
   node scripts/create-plugin.mjs quick-notes "极速便签" "随时记录灵感的极简便签"
   npm run create-plugin timestamp-tool "时间转换"
+  npm run create-plugin wifi-tool "Wi-Fi 工具" --platform windows
     `.trim())
     process.exit(0)
   }
@@ -530,10 +558,18 @@ async function runCli() {
     targetDir = args[targetDirIndex + 1]
   }
 
+  const platformIndex = args.indexOf('--platform')
+  let platformOption = platformIndex !== -1 ? args[platformIndex + 1] : undefined
+  if (platformIndex !== -1 && (!platformOption || platformOption.startsWith('-'))) {
+    console.error('❌ 错误: --platform 需要指定 cross / windows / macos')
+    process.exit(1)
+  }
+
   const positionalArgs = args.filter(
     (arg, i) =>
       !arg.startsWith('-') &&
-      (targetDirIndex === -1 || (i !== targetDirIndex && i !== targetDirIndex + 1))
+      (targetDirIndex === -1 || (i !== targetDirIndex && i !== targetDirIndex + 1)) &&
+      (platformIndex === -1 || (i !== platformIndex && i !== platformIndex + 1))
   )
 
   let pluginId = positionalArgs[0]
@@ -558,6 +594,11 @@ async function runCli() {
 
         const descInput = await rl.question('? 请输入插件描述 (留空则使用默认): ')
         description = descInput.trim()
+
+        if (platformOption === undefined) {
+          const platformInput = await rl.question('? 支持哪些平台？[1] 跨平台（默认）[2] 仅 Windows [3] 仅 macOS: ')
+          platformOption = platformInput.trim()
+        }
       } finally {
         rl.close()
       }
@@ -570,13 +611,15 @@ async function runCli() {
   }
 
   try {
-    console.log(`\n⏳ 正在生成插件工程: "${pluginId}"...`)
+    const platforms = parsePlatformOption(platformOption)
+    console.log(`\n⏳ 正在生成插件工程: "${pluginId}"（${describePlatforms(platforms)}）...`)
     const result = await createPlugin({
       pluginId,
       title,
       description,
       targetDir,
-      force
+      force,
+      platforms
     })
 
     console.log(`\n🎉 插件工程创建成功！`)

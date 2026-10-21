@@ -91,7 +91,8 @@ const settings = reactive({
     enabled: true,
     keyboardHotkey: {
       enabled: true,
-      modifiers: ['Alt'],
+      // Alt+Space 留给全局唤醒（悬浮条），两者默认值不能相同
+      modifiers: ['Alt', 'Shift'],
       key: 'Space'
     },
     mouseHotkey: {
@@ -1066,7 +1067,7 @@ onBeforeUnmount(() => {
                   >
                 </div>
               </div>
-              <button class="open-btn" @click="openExternalUrl('https://github.com/codingmuse/ZTools-extensions')">
+              <button class="open-btn" @click="openExternalUrl('https://github.com/ZToolsTeam/ZTools-extensions')">
                 <i class="fa fa-external-link"></i>
                 访问
               </button>
@@ -1082,7 +1083,7 @@ onBeforeUnmount(() => {
                   >
                 </div>
               </div>
-              <button class="open-btn" @click="openExternalUrl('https://github.com/codingmuse/ZTools-extensions#5-%E5%88%86%E9%92%9F%E8%B4%A1%E7%8C%AE%E4%BD%A0%E7%9A%84%E9%A6%96%E6%AC%BE%E6%8F%92%E4%BB%B6')">
+              <button class="open-btn" @click="openExternalUrl('https://github.com/ZToolsTeam/ZTools-extensions#5-%E5%88%86%E9%92%9F%E8%B4%A1%E7%8C%AE%E4%BD%A0%E7%9A%84%E9%A6%96%E6%AC%BE%E6%8F%92%E4%BB%B6')">
                 <i class="fa fa-external-link"></i>
                 阅读
               </button>

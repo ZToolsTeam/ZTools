@@ -1,18 +1,46 @@
 import {
+  ChatRole,
   ChatRequest,
   ChatResponse,
   ChatStreamChunk,
   ModelProviderConfig,
-  TokenUsage
+  StreamDelta,
+  TokenUsage,
+  ToolCall
 } from '../../types/ai.js';
 import {
   BaseProvider,
-  ModelAuthError,
-  ModelProviderError,
-  ModelRateLimitError,
-  ModelTimeoutError
+  ModelProviderError
 } from './base.js';
 import { TokenTracker } from '../token-tracker.js';
+
+interface OpenAiResponsePayload {
+  id?: string;
+  model?: string;
+  choices?: Array<{
+    finish_reason?: string;
+    message?: {
+      role?: ChatRole;
+      content?: string;
+      reasoning_content?: string;
+      tool_calls?: ToolCall[];
+    };
+    delta?: {
+      role?: string;
+      content?: string;
+      reasoning_content?: string;
+      tool_calls?: StreamDelta['toolCalls'];
+    };
+  }>;
+  usage?: {
+    prompt_tokens?: number;
+    completion_tokens?: number;
+    total_tokens?: number;
+    completion_tokens_details?: {
+      reasoning_tokens?: number;
+    };
+  };
+}
 
 export class OpenAiCompatibleProvider extends BaseProvider {
   constructor(config: ModelProviderConfig) {
@@ -69,7 +97,7 @@ export class OpenAiCompatibleProvider extends BaseProvider {
     return headers;
   }
 
-  private formatRequestBody(request: ChatRequest, stream: boolean): any {
+  private formatRequestBody(request: ChatRequest, stream: boolean): Record<string, unknown> {
     const model = request.model || this.config.defaultModel || 'gpt-4o';
     const messages = [...request.messages];
 
@@ -81,10 +109,10 @@ export class OpenAiCompatibleProvider extends BaseProvider {
       });
     }
 
-    const body: Record<string, any> = {
+    const body: Record<string, unknown> = {
       model,
       messages: messages.map(m => {
-        const item: any = {
+        const item: Record<string, unknown> = {
           role: m.role,
           content: m.content
         };
@@ -107,114 +135,69 @@ export class OpenAiCompatibleProvider extends BaseProvider {
 
   public async chat(request: ChatRequest): Promise<ChatResponse> {
     const timeoutMs = this.getTimeout(request.timeoutMs);
-    const { signal, cleanup } = this.createAbortSignal(timeoutMs);
-    const startTime = Date.now();
-
     const baseUrl = this.config.baseUrl!.replace(/\/+$/, '');
     const url = `${baseUrl}/chat/completions`;
     const payload = this.formatRequestBody(request, false);
 
-    try {
-      const response = await fetch(url, {
-        method: 'POST',
-        headers: this.getHeaders(),
-        body: JSON.stringify(payload),
-        signal
-      });
+    const { data, status, latencyMs } = await this.postJsonRequest<OpenAiResponsePayload>(
+      url,
+      this.getHeaders(),
+      payload,
+      timeoutMs
+    );
 
-      cleanup();
-      const latencyMs = Date.now() - startTime;
-
-      if (!response.ok) {
-        await this.handleErrorResponse(response);
-      }
-
-      const data = await response.json() as any;
-      const choice = data.choices?.[0];
-
-      if (!choice) {
-        throw new ModelProviderError('No choice returned from model provider', this.id, response.status, false);
-      }
-
-      const rawMsg = choice.message || {};
-      const reasoning = rawMsg.reasoning_content || undefined;
-
-      const usage: TokenUsage = data.usage
-        ? {
-            promptTokens: data.usage.prompt_tokens || 0,
-            completionTokens: data.usage.completion_tokens || 0,
-            reasoningTokens: data.usage.completion_tokens_details?.reasoning_tokens || 0,
-            totalTokens: data.usage.total_tokens || 0
-          }
-        : {
-            promptTokens: TokenTracker.estimateTokens(request.messages.map(m => m.content).join('\n')),
-            completionTokens: TokenTracker.estimateTokens(rawMsg.content || ''),
-            totalTokens: 0
-          };
-      if (!data.usage) {
-        usage.totalTokens = usage.promptTokens + usage.completionTokens;
-      }
-
-      return {
-        id: data.id || `resp-${Date.now()}`,
-        model: data.model || payload.model,
-        provider: this.id,
-        message: {
-          role: rawMsg.role || 'assistant',
-          content: rawMsg.content || '',
-          toolCalls: rawMsg.tool_calls
-        },
-        finishReason: choice.finish_reason || 'stop',
-        usage,
-        latencyMs
-      };
-    } catch (err: any) {
-      cleanup();
-      if (err.name === 'AbortError') {
-        throw new ModelTimeoutError(this.id, timeoutMs);
-      }
-      if (err instanceof ModelProviderError) {
-        throw err;
-      }
-      throw new ModelProviderError(err.message || String(err), this.id, undefined, true);
+    const choice = data.choices?.[0];
+    if (!choice) {
+      throw new ModelProviderError('No choice returned from model provider', this.id, status, false);
     }
+
+    const rawMsg = choice.message || {};
+
+    const usage: TokenUsage = data.usage
+      ? {
+          promptTokens: data.usage.prompt_tokens || 0,
+          completionTokens: data.usage.completion_tokens || 0,
+          reasoningTokens: data.usage.completion_tokens_details?.reasoning_tokens || 0,
+          totalTokens: data.usage.total_tokens || 0
+        }
+      : {
+          promptTokens: TokenTracker.estimateTokens(request.messages.map(m => m.content).join('\n')),
+          completionTokens: TokenTracker.estimateTokens(rawMsg.content || ''),
+          totalTokens: 0
+        };
+    if (!data.usage) {
+      usage.totalTokens = usage.promptTokens + usage.completionTokens;
+    }
+
+    return {
+      id: data.id || `resp-${Date.now()}`,
+      model: data.model || String(payload.model),
+      provider: this.id,
+      message: {
+        role: rawMsg.role || 'assistant',
+        content: rawMsg.content || '',
+        toolCalls: rawMsg.tool_calls
+      },
+      finishReason: choice.finish_reason || 'stop',
+      usage,
+      latencyMs
+    };
   }
 
   public async *chatStream(request: ChatRequest): AsyncGenerator<ChatStreamChunk> {
     const timeoutMs = this.getTimeout(request.timeoutMs);
-    const { signal, cleanup } = this.createAbortSignal(timeoutMs);
-
     const baseUrl = this.config.baseUrl!.replace(/\/+$/, '');
     const url = `${baseUrl}/chat/completions`;
     const payload = this.formatRequestBody(request, true);
+    const modelName = String(payload.model);
 
-    let response: Response;
-    try {
-      response = await fetch(url, {
-        method: 'POST',
-        headers: this.getHeaders(),
-        body: JSON.stringify(payload),
-        signal
-      });
-    } catch (err: any) {
-      cleanup();
-      if (err.name === 'AbortError') {
-        throw new ModelTimeoutError(this.id, timeoutMs);
-      }
-      throw new ModelProviderError(err.message || String(err), this.id, undefined, true);
-    }
+    const { reader, cleanup } = await this.openStreamResponse(
+      url,
+      this.getHeaders(),
+      payload,
+      timeoutMs
+    );
 
-    if (!response.ok) {
-      cleanup();
-      await this.handleErrorResponse(response);
-    }
-
-    if (!response.body) {
-      cleanup();
-      throw new ModelProviderError('Response body is empty', this.id, response.status, false);
-    }
-
-    const reader = response.body.getReader();
     const decoder = new TextDecoder('utf-8');
     let buffer = '';
 
@@ -238,14 +221,14 @@ export class OpenAiCompatibleProvider extends BaseProvider {
           if (trimmed.startsWith('data: ')) {
             const jsonStr = trimmed.slice(6);
             try {
-              const data = JSON.parse(jsonStr);
+              const data = JSON.parse(jsonStr) as OpenAiResponsePayload;
               const choice = data.choices?.[0];
               if (!choice) continue;
 
               const delta = choice.delta || {};
               const chunk: ChatStreamChunk = {
                 id: data.id || `chunk-${Date.now()}`,
-                model: data.model || payload.model,
+                model: data.model || modelName,
                 provider: this.id,
                 delta: {
                   role: delta.role,
@@ -272,32 +255,11 @@ export class OpenAiCompatibleProvider extends BaseProvider {
           }
         }
       }
+    } catch (err: unknown) {
+      this.mapRequestError(err, timeoutMs);
     } finally {
       cleanup();
       reader.releaseLock();
     }
-  }
-
-  private async handleErrorResponse(response: Response): Promise<never> {
-    let errorText = '';
-    try {
-      errorText = await response.text();
-    } catch {
-      errorText = response.statusText;
-    }
-
-    if (response.status === 401 || response.status === 403) {
-      throw new ModelAuthError(this.id, `Authentication error (${response.status}): ${errorText}`);
-    }
-    if (response.status === 429) {
-      throw new ModelRateLimitError(this.id, `Rate limit exceeded (429): ${errorText}`);
-    }
-
-    throw new ModelProviderError(
-      `API error (${response.status}): ${errorText}`,
-      this.id,
-      response.status,
-      response.status >= 500
-    );
   }
 }

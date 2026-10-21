@@ -95,13 +95,12 @@ test('Gate-1: macOS 平台可见内置插件数量达到 32+ 款，且三批次�
       'web-searches',
       // Core shared built-ins
       'quicklinks',
-      'emoji-picker',
-      'notes'
+      'emoji-picker'
     ]
 
-    // color-picker、qr-code、calculator、json-format 等已改由 plugins 仓库的原版插件随客户端内置提供，
-    // 旧注册表里的同名实现必须让位（见 frontend/src/config/bundledPlugins.json）
-    for (const id of ['color-picker', 'qr-code', 'calculator', 'json-format']) {
+    // 与内置插件重复的旧实现已删除，由 plugins 仓库的插件随客户端内置提供（见 frontend/src/config/bundledPlugins.json）；
+    // notes 已并入便签（memo）
+    for (const id of ['color-picker', 'qr-code', 'calculator', 'json-format', 'file-compare', 'notes']) {
       assert.equal(isOfficialPlugin(id), false, `${id} 应由内置原版插件提供`)
       assert.equal(getOfficialPlugin(id), undefined)
     }
@@ -664,21 +663,9 @@ test('P2-8 & P3-1: downloads-manager 与 shared/native-ipc.ts 完整支持 macOS
   assert.equal(syncedFiles[0].category, 'installer')
 })
 
-test('P3-2: qr-code (Reed-Solomon + Alignment) 与 password-vault (AES-256-GCM AEAD + 1-bit 篡改拦截)', () => {
-  // 1. QR Code ISO/IEC 18004 structure & roundtrip
-  const ecc = DeclarativeUI.computeReedSolomonEcc(new Uint8Array([0x40, 0xd2, 0x75, 0x47]), 10)
-  assert.equal(ecc.length, 10)
-  assert.ok(ecc.some((b) => b !== 0), 'Reed-Solomon ECC bytes must be non-trivial')
-
-  const qr = DeclarativeUI.generateQrSvg('WIFI:T:WPA;S:ZTools-Mac;P:SuperSecret;;', {
-    errorCorrectionLevel: 'Q'
-  })
-  assert.equal(qr.contentType, 'wifi')
-  const decoded = DeclarativeUI.decodeQrCode(qr.dataUrl)
-  assert.equal(decoded.success, true)
-  assert.equal(decoded.text, 'WIFI:T:WPA;S:ZTools-Mac;P:SuperSecret;;')
-
-  // 2. Password Vault AEAD Encryption & Destructive 1-bit Tamper Rejection
+// 二维码由客户端内置插件 plugins/qr-code 提供（其测试用 macOS 系统识别逐个验证可扫），这里只保留密码保险箱
+test('P3-2: password-vault (AES-256-GCM AEAD + 1-bit 篡改拦截)', () => {
+  // Password Vault AEAD Encryption & Destructive 1-bit Tamper Rejection
   const token = DeclarativeUI.encryptSecret('MyBankPassword#2026', 'MasterKey!99')
   assert.ok(token.startsWith('enc:v1:'), 'Ciphertext must use enc:v1:<iv>:<tag>:<cipher> format')
   assert.ok(!token.includes('MyBankPassword#2026'), 'Ciphertext must never contain plaintext')

@@ -5,10 +5,17 @@ import { createRouter, createMemoryHistory } from 'vue-router'
 import { createPinia, setActivePinia } from 'pinia'
 
 const items = ref([])
-vi.mock('@/composables/useCommandSearch', () => ({
+const searching = ref(false)
+const searchError = ref('')
+const searchQuery = ref('')
+vi.mock('@/composables/useCommandSearch', async importOriginal => ({
+  ...await importOriginal(),
   normalizePluginFeatures: () => [],
   useCommandSearch: () => ({
-    query: ref(''),
+    query: searchQuery,
+    isSearching: searching,
+    fileSearchError: searchError,
+    fileSearchDegraded: ref(false),
     fileResults: ref([]),
     filteredItems: computed(() => items.value),
     search: vi.fn(),
@@ -16,8 +23,9 @@ vi.mock('@/composables/useCommandSearch', () => ({
     recordUsage: vi.fn()
   })
 }))
+const openPlugin = vi.fn().mockResolvedValue()
 vi.mock('@/stores/plugins', () => ({
-  usePluginsStore: () => ({ init: vi.fn().mockResolvedValue(), openPlugin: vi.fn() })
+  usePluginsStore: () => ({ init: vi.fn().mockResolvedValue(), openPlugin })
 }))
 const switchWindowMode = vi.fn()
 vi.mock('@/utils/windowMode', () => ({
@@ -28,6 +36,7 @@ vi.mock('@/utils/windowMode', () => ({
 
 import LauncherBar from '../LauncherBar.vue'
 import ActionPanelModal from '@/declarative/components/ActionPanelModal.vue'
+import ShellAPI from '../../../public/js/cef-ipc/src/api/shell.js'
 
 const Empty = { template: '<div />' }
 
@@ -64,6 +73,9 @@ describe('LauncherBar 悬浮条动作面板', () => {
     setActivePinia(createPinia())
     items.value = [{ key: 'json', pluginId: 'json-format', name: 'JSON 格式化', actionLabel: '启动' }]
     switchWindowMode.mockReset()
+    searching.value = false
+    searchError.value = ''
+    searchQuery.value = ''
   })
   afterEach(() => {
     delete window.__ztoolsLauncher
@@ -122,5 +134,255 @@ describe('LauncherBar 悬浮条动作面板', () => {
     expect(switchWindowMode).toHaveBeenCalledWith('dashboard')
     expect(router.currentRoute.value.path).toBe('/details/json-format')
     wrapper.unmount()
+  })
+})
+
+describe('LauncherBar 文件搜索结果执行', () => {
+  beforeEach(() => {
+    setActivePinia(createPinia())
+    items.value = [{ key: 'file:sample', type: 'file', name: 'sample.txt', path: '/search/sample.txt' }]
+  })
+  afterEach(() => {
+    delete window.__ztoolsLauncher
+    vi.restoreAllMocks()
+    document.body.innerHTML = ''
+  })
+
+  it('等待打开成功才隐藏，并阻止重复点击', async () => {
+    let complete
+    const openPath = vi.fn(() => new Promise(resolve => { complete = resolve }))
+    const hide = vi.fn().mockResolvedValue()
+    window.__ztoolsLauncher = { openPath, hide }
+    const { wrapper } = await mountLauncher()
+    await wrapper.find('.launcher-row').trigger('click')
+    await wrapper.find('.launcher-row').trigger('click')
+    expect(openPath).toHaveBeenCalledTimes(1)
+    expect(hide).not.toHaveBeenCalled()
+    complete({ success: true, data: { success: true } })
+    await flushPromises()
+    expect(hide).toHaveBeenCalledOnce()
+    wrapper.unmount()
+  })
+
+  it.each(['resolved-error', 'rejected-error'])('打开失败保持窗口并显示错误：%s', async mode => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const error = { code: 'PERMISSION_DENIED', message: '路径未由当前窗口授权' }
+    const openPath = mode === 'resolved-error'
+      ? vi.fn().mockResolvedValue({ success: false, error })
+      : vi.fn().mockRejectedValue(new Error(error.message))
+    const hide = vi.fn().mockResolvedValue()
+    window.__ztoolsLauncher = { openPath, hide }
+    const { wrapper } = await mountLauncher()
+    await wrapper.find('.launcher-row').trigger('click')
+    await flushPromises()
+    expect(hide).not.toHaveBeenCalled()
+    expect(wrapper.text()).toContain(error.message)
+    openPath.mockResolvedValue({ success: true })
+    await wrapper.find('.launcher-row').trigger('click')
+    await flushPromises()
+    expect(hide).toHaveBeenCalledOnce()
+    wrapper.unmount()
+  })
+
+  it('定位失败和接口缺失都显示错误而不隐藏', async () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const hide = vi.fn().mockResolvedValue()
+    window.__ztoolsLauncher = {
+      hide,
+      showItemInFolder: vi.fn().mockResolvedValue({ success: false, error: { message: '文件已移走' } })
+    }
+    const { wrapper } = await mountLauncher()
+    const panel = await openPanel(wrapper)
+    panel.vm.$emit('trigger', panel.props('actions').find(a => /资源管理器|访达/.test(a.props.title)))
+    await flushPromises()
+    expect(wrapper.text()).toContain('文件已移走')
+    expect(hide).not.toHaveBeenCalled()
+    await wrapper.find('.launcher-row').trigger('click')
+    await flushPromises()
+    expect(wrapper.text()).toContain('文件操作接口不可用')
+    expect(hide).not.toHaveBeenCalled()
+    wrapper.unmount()
+  })
+})
+
+describe('LauncherBar 文件操作返回值契约', () => {
+  beforeEach(() => {
+    setActivePinia(createPinia())
+    items.value = [{ key: 'file:sample', type: 'file', name: 'sample.txt', path: '/search/sample.txt' }]
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+  })
+  afterEach(() => {
+    delete window.__ztoolsLauncher
+    vi.unstubAllGlobals()
+    vi.restoreAllMocks()
+    document.body.innerHTML = ''
+  })
+
+  it.each(['shell_open_path', 'shell_show_item_in_folder'])('兼容真实 SDK 的布尔结果并允许失败后重试：%s', async method => {
+    const call = vi.fn().mockResolvedValue({ success: false })
+    const hide = vi.fn().mockResolvedValue()
+    vi.stubGlobal('ztools', { shell: new ShellAPI({ call }), window: { hide } })
+    const { wrapper } = await mountLauncher()
+    const trigger = async () => {
+      if (method === 'shell_open_path') await wrapper.find('.launcher-row').trigger('click')
+      else {
+        const panel = await openPanel(wrapper)
+        panel.vm.$emit('trigger', panel.props('actions').find(a => /资源管理器|访达/.test(a.props.title)))
+      }
+      await flushPromises()
+    }
+    await trigger()
+    expect(call).toHaveBeenCalledWith(method, { fullPath: '/search/sample.txt' })
+    expect(hide).not.toHaveBeenCalled()
+    expect(wrapper.text()).toContain(method === 'shell_open_path' ? '打开文件失败' : '定位文件失败')
+    call.mockResolvedValue({ success: true })
+    await trigger()
+    expect(hide).toHaveBeenCalledOnce()
+    wrapper.unmount()
+  })
+
+  it.each([undefined, null, {}, false])('不把空或畸形的宿主响应误报为成功：%j', async result => {
+    const hide = vi.fn().mockResolvedValue()
+    window.__ztoolsLauncher = { openPath: vi.fn().mockResolvedValue(result), hide }
+    const { wrapper } = await mountLauncher()
+    await wrapper.find('.launcher-row').trigger('click')
+    await flushPromises()
+    expect(hide).not.toHaveBeenCalled()
+    expect(wrapper.text()).toContain('打开文件失败')
+    wrapper.unmount()
+  })
+})
+
+
+describe('LauncherBar 搜索结果语义与等待状态', () => {
+  beforeEach(() => {
+    setActivePinia(createPinia())
+    items.value = []; searching.value = false; searchError.value = ''; searchQuery.value = ''
+  })
+  afterEach(() => {
+    delete window.__ztoolsLauncher
+    vi.unstubAllGlobals()
+    vi.restoreAllMocks()
+    document.body.innerHTML = ''
+  })
+
+  it('等待文件搜索时按回车不会误跳插件市场', async () => {
+    setActivePinia(createPinia())
+    items.value = []; searching.value = true; searchQuery.value = '图片'
+    const expandToDashboard = vi.fn()
+    window.__ztoolsLauncher = { expandToDashboard }
+    const { wrapper } = await mountLauncher()
+    expect(wrapper.text()).toContain('正在搜索文件与应用')
+    await wrapper.find('#launcherQuery').trigger('keydown', { key: 'Enter' })
+    expect(expandToDashboard).not.toHaveBeenCalled()
+    wrapper.unmount(); searching.value = false; delete window.__ztoolsLauncher
+  })
+
+  it('应用显示本地名称和真实图标，动作不再称为打开文件夹', async () => {
+    setActivePinia(createPinia())
+    items.value = [{ key: 'file:/System/Applications/Notes.app', type: 'file', name: '备忘录',
+      path: '/System/Applications/Notes.app', isDir: true, isApplication: true, badge: '应用',
+      description: '/System/Applications', icon: 'data:image/png;base64,aWNvbg==' }]
+    const { wrapper } = await mountLauncher()
+    expect(wrapper.find('.launcher-row-title').text()).toBe('备忘录')
+    expect(wrapper.find('.launcher-row-desc').attributes('title')).toBe('/System/Applications/Notes.app')
+    expect(wrapper.find('.launcher-row img').attributes('src')).toBe('data:image/png;base64,aWNvbg==')
+    const panel = await openPanel(wrapper)
+    expect(pick(panel, '打开应用')).toBeTruthy()
+    expect(pick(panel, '打开文件夹')).toBeUndefined()
+    wrapper.unmount()
+  })
+
+  it('搜索失败时不展示无效的市场快捷键，回车也不会跳转', async () => {
+    searchError.value = '文件搜索暂不可用，请重试'; searchQuery.value = '备忘录'
+    const expandToDashboard = vi.fn()
+    window.__ztoolsLauncher = { expandToDashboard }
+    const { wrapper } = await mountLauncher()
+    expect(wrapper.text()).toContain(searchError.value)
+    expect(wrapper.find('.launcher-primary-btn').exists()).toBe(false)
+    await wrapper.find('#launcherQuery').trigger('keydown', { key: 'Enter' })
+    expect(expandToDashboard).not.toHaveBeenCalled()
+    wrapper.unmount()
+  })
+
+  it.each([
+    ['复制文件名', 'Notes.app', '文件名'],
+    ['复制文件绝对路径', '/System/Applications/Notes.app', '文件路径']
+  ])('%s 使用真实文件信息并反馈复制失败和重试结果', async (action, value, label) => {
+    const writeText = vi.fn().mockRejectedValue(new Error('clipboard unavailable'))
+    vi.stubGlobal('ztools', { clipboard: { writeText } })
+    items.value = [{ key: 'file:notes', type: 'file', name: '备忘录', fileName: 'Notes.app',
+      path: '/System/Applications/Notes.app', isApplication: true }]
+    const { wrapper } = await mountLauncher()
+    const trigger = async () => {
+      const panel = await openPanel(wrapper)
+      panel.vm.$emit('trigger', pick(panel, action))
+      await flushPromises()
+    }
+    await trigger()
+    expect(writeText).toHaveBeenCalledWith(value)
+    expect(wrapper.text()).toContain(`复制${label}失败`)
+    writeText.mockResolvedValue(undefined)
+    await trigger()
+    expect(wrapper.text()).toContain(`已复制${label}`)
+    wrapper.unmount()
+  })
+})
+
+describe('LauncherBar 拼音确认与快捷键隔离', () => {
+  beforeEach(() => {
+    setActivePinia(createPinia())
+    openPlugin.mockClear()
+    searching.value = false; searchError.value = ''; searchQuery.value = '备忘录'
+  })
+  afterEach(() => {
+    delete window.__ztoolsLauncher
+    vi.restoreAllMocks()
+    document.body.innerHTML = ''
+  })
+
+  it.each(['file', 'application', 'plugin'])('输入法确认不打开 %s，结束输入后的独立 Enter 才打开', async kind => {
+    const path = kind === 'application' ? '/System/Applications/Notes.app' : '/search/备忘录.txt'
+    items.value = kind === 'plugin'
+      ? [{ key: 'ime-test-plugin', pluginId: 'ime-test-plugin', name: '输入法测试插件' }]
+      : [{ key: `file:${path}`, type: 'file', name: '备忘录', path, isApplication: kind === 'application' }]
+    const openPath = vi.fn().mockResolvedValue({ success: true })
+    const hide = vi.fn().mockResolvedValue()
+    window.__ztoolsLauncher = { openPath, hide }
+    const { wrapper } = await mountLauncher()
+    try {
+      const input = wrapper.find('#launcherQuery')
+      await input.trigger('compositionstart')
+      input.element.value = 'bei wang lu'
+      await input.trigger('input', { isComposing: true })
+      for (const key of ['ArrowDown', 'Escape', 'Enter']) {
+        const event = new KeyboardEvent('keydown', { key, bubbles: true, cancelable: true, isComposing: false })
+        input.element.dispatchEvent(event)
+        await flushPromises()
+        expect(event.defaultPrevented).toBe(false)
+        expect(wrapper.find('#launcherQuery').exists()).toBe(true)
+        expect(searchQuery.value).toBe('备忘录')
+      }
+      expect(openPath).not.toHaveBeenCalled()
+      expect(openPlugin).not.toHaveBeenCalled()
+      expect(hide).not.toHaveBeenCalled()
+      input.element.value = '备忘录'
+      await input.trigger('compositionend')
+      // 部分输入法在 compositionend 后仍用 229 标记本次确认按键。
+      await input.trigger('keydown', { key: 'Enter', keyCode: 229 })
+      expect(openPath).not.toHaveBeenCalled()
+      expect(wrapper.find('#launcherQuery').exists()).toBe(true)
+      await input.trigger('keyup', { key: 'Enter', keyCode: 13 })
+      await input.trigger('keydown', { key: 'Enter', keyCode: 13 })
+      await flushPromises()
+      if (kind === 'plugin') {
+        expect(openPlugin).toHaveBeenCalledExactlyOnceWith('ime-test-plugin')
+      } else {
+        expect(openPath).toHaveBeenCalledExactlyOnceWith(path)
+        expect(hide).toHaveBeenCalledOnce()
+      }
+    } finally {
+      wrapper.unmount()
+    }
   })
 })

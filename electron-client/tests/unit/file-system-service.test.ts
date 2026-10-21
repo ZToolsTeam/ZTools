@@ -683,3 +683,22 @@ test('cleans cancelled, expired, zero-byte and renderer-destroyed write sessions
     await dispose(context)
   }
 })
+
+test('search-result grants expire and cannot be restored after the requesting window closes', async () => {
+  let now = 0
+  const context = await createContext(() => now)
+  const denied = (error: unknown) => error instanceof ZToolsError && error.code === errorCodes.permissionDenied
+  try {
+    const found = path.join(context.root, 'found.txt')
+    await fs.writeFile(found, 'found')
+    await context.service.grantSearchResult(found, mainCaller)
+    now = 60 * 60 * 1000 + 1
+    await assert.rejects(context.service.resolveAuthorizedPath(found, mainCaller, 'read', false), denied)
+    await context.service.grantSearchResult(found, mainCaller)
+    context.remove(mainCaller.webContentsId)
+    await assert.rejects(context.service.resolveAuthorizedPath(found, mainCaller, 'read', false), denied)
+    await assert.rejects(context.service.grantSearchResult(found, mainCaller), denied)
+  } finally {
+    await dispose(context)
+  }
+})

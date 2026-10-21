@@ -105,7 +105,7 @@ export default function RaycastCoreCommand() {
           accessories={[{ text: "检查更新" }]}
           detail={
             <List.Item.Detail
-              markdown={`### 🔄 ZTools 客户端更新中心\n\n- **当前已安装版本**: \`v${CURRENT_APP_VERSION}\`\n- **更新服务状态**: 正常运行 (GitHub Releases + EdgeOne CDN 静态镜像)\n- **SHA-256 完整性校验**: 开启强制校验\n\n> 按 **Enter** 立即检查是否有新版本发布。`}
+              markdown={`### 🔄 ZTools 客户端更新中心\n\n- **当前已安装版本**: \`v${CURRENT_APP_VERSION}\`\n- **更新服务状态**: 正常运行 (GitHub Releases + 阿里云 CDN)\n- **SHA-256 完整性校验**: 开启强制校验\n\n> 按 **Enter** 立即检查是否有新版本发布。`}
               metadata={
                 <List.Item.Detail.Metadata>
                   <List.Item.Detail.Metadata.Label title="当前版本" text={`v${CURRENT_APP_VERSION}`} icon={Icon.Document} />

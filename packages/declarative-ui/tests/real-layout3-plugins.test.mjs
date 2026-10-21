@@ -2,7 +2,6 @@
  * ZTools 布局三 10 款插件（P26 ~ P35）“去假接真”集成测试与异常边界测试套件
  *
  * 覆盖清单：
- * - P26 file-compare: 真实 SHA-256 哈希、逐行 LCS Diff、真实两两配对、严禁捏造 _Backup 与 idx % 3 状态、严禁强制将 pending 改为 identical
  * - P27 ocr: 真实宿主下不拼接 INITIAL_OCR_QUEUE_ITEMS、调用 OcrPlugin.recognizeImage / captureAndRecognize 并写入剪贴板、异常如实报错
  * - P28 record: 真实宿主下不拼接 INITIAL_RECORDED_VIDEOS、调用 RecordPlugin.startRecording / stopRecording 与录制状态栏 IPC、失败时严禁返回 rec_sim_
  * - P29 ai-image: 真实宿主下不拼接 INITIAL_AI_IMAGE_FILES、调用 AiImagePlugin.processImage 并读取真实输出文件体积、异常与安全路径拦截
@@ -21,7 +20,6 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 
-import * as fileCompare from '../dist/examples/file-compare/index.js'
 import * as ocr from '../dist/examples/ocr/index.js'
 import * as record from '../dist/examples/record/index.js'
 import * as aiImage from '../dist/examples/ai-image/index.js'
@@ -30,7 +28,7 @@ import * as batchVideo from '../dist/examples/batch-video/index.js'
 import * as batchAudio from '../dist/examples/batch-audio/index.js'
 import * as pdf from '../dist/examples/pdf/index.js'
 import * as screenshotsService from '../dist/examples/screenshots/screenshots-service.js'
-import * as colorConverter from '../dist/examples/color-picker/converter.js'
+import * as colorConverter from '../dist/examples/screen-color-picker/converter.js'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const SRC_EXAMPLES_DIR = path.resolve(__dirname, '../src/examples')
@@ -74,96 +72,6 @@ async function withRealElectronWindow(handlers, fn) {
 }
 
 // ============================================================================
-// P26: file-compare
-// ============================================================================
-test('P26 file-compare: 真实 SHA-256 计算、逐行 LCS Diff 与真实文件配对（拒绝 _Backup 与 idx%3 假状态）', async () => {
-  const fileAContent = 'line 1\nline 2 old\nline 3\n'
-  const fileBContent = 'line 1\nline 2 new\nline 3\nline 4 added\n'
-  const expectedHashA = crypto.createHash('sha256').update(fileAContent, 'utf8').digest('hex')
-  const expectedHashB = crypto.createHash('sha256').update(fileBContent, 'utf8').digest('hex')
-
-  // 1. 验证纯文本 SHA-256 与逐行 Diff
-  assert.equal(fileCompare.computeRealSha256Hex(fileAContent), expectedHashA)
-  const lineDiff = fileCompare.computeLineDiff(fileAContent, fileBContent)
-  assert.equal(lineDiff.identical, false)
-  assert.ok(lineDiff.addedLines >= 1)
-  assert.ok(lineDiff.modifiedLines >= 1)
-  assert.match(lineDiff.diffPreview, /line 2 new/)
-
-  // 2. 在真实 Electron 宿主下扫描只有 2 个文件的目录，绝不拼接 INITIAL_COMPARE_PAIRS，绝不捏造 _Backup 路径
-  await withRealElectronWindow(
-    {
-      system_get_path: ({ name }) => {
-        if (name === 'documents') return 'D:\\RealWork\\Docs'
-        if (name === 'desktop') return 'D:\\RealWork\\Desktop'
-        return ''
-      },
-      system_search_files: ({ query }) => {
-        if (query === 'dir:D:\\RealWork\\Docs') {
-          return {
-            files: [
-              { name: 'config.json', path: 'D:\\RealWork\\Docs\\config.json', is_dir: false, size: fileAContent.length, mtime: 1700000001 }
-            ]
-          }
-        }
-        if (query === 'dir:D:\\RealWork\\Desktop') {
-          return {
-            files: [
-              { name: 'config.json', path: 'D:\\RealWork\\Desktop\\config.json', is_dir: false, size: fileBContent.length, mtime: 1700000002 }
-            ]
-          }
-        }
-        return { files: [] }
-      },
-      filesystem_read_file: ({ path: filePath }) => {
-        if (filePath === 'D:\\RealWork\\Docs\\config.json') return fileAContent
-        if (filePath === 'D:\\RealWork\\Desktop\\config.json') return fileBContent
-        throw new Error(`ENOENT: ${filePath}`)
-      }
-    },
-    async () => {
-      const ws = await fileCompare.fetchFileCompareWorkspace()
-      assert.equal(ws.pairs.length, 1, '真实宿主仅扫描到 1 对真实同名文件时，严禁拼接 INITIAL_COMPARE_PAIRS')
-      const pair = ws.pairs[0]
-      assert.ok(!pair.rightPath.includes('_Backup'), '严禁捏造 _Backup 假备份路径')
-      assert.equal(pair.leftHash, expectedHashA.slice(0, 16))
-      assert.equal(pair.rightHash, expectedHashB.slice(0, 16))
-      assert.equal(pair.diffStatus, 'modified')
-
-      // 3. 验证 executeDeepFileCompare 真实重算左右文件 SHA-256 与行级 Diff，绝不将 pending 盲目改为 identical
-      const pendingDifferentPair = {
-        ...pair,
-        diffStatus: 'pending',
-        leftHash: '',
-        rightHash: ''
-      }
-      const cmpRes = await fileCompare.executeDeepFileCompare([pendingDifferentPair], {
-        engineModeId: 'cmp-line-lcs',
-        ignoreWhitespace: false,
-        ignoreCase: false,
-        contextLines: '3'
-      })
-      assert.equal(cmpRes.ok, true)
-      assert.equal(cmpRes.identicalCount, 0, '文件内容不同时绝不可将 pending 硬改为 identical')
-      assert.equal(cmpRes.modifiedCount, 1)
-      assert.equal(cmpRes.pairs[0].diffStatus, 'modified')
-      assert.equal(cmpRes.pairs[0].leftHash, expectedHashA.slice(0, 16))
-      assert.equal(cmpRes.pairs[0].rightHash, expectedHashB.slice(0, 16))
-    }
-  )
-
-  // 4. 异常边界测试：空队列与文件不存在
-  const emptyRes = await fileCompare.executeDeepFileCompare([], {
-    engineModeId: 'cmp-sha256-fast',
-    ignoreWhitespace: true,
-    ignoreCase: false,
-    contextLines: '3'
-  })
-  assert.equal(emptyRes.ok, false)
-  assert.match(emptyRes.error, /EMPTY_COMPARE_QUEUE/)
-})
-
-// ============================================================================
 // P27: ocr
 // ============================================================================
 test('P27 ocr: 真实宿主队列扫描、OcrPlugin.recognizeImage / captureAndRecognize 剪贴板写入与失败拦截', async () => {
@@ -185,7 +93,7 @@ test('P27 ocr: 真实宿主队列扫描、OcrPlugin.recognizeImage / captureAndR
       dllplugin_call: ({ plugin, func, params }) => {
         assert.equal(plugin, 'OcrPlugin')
         if (func === 'recognizeImage') {
-          return { text: `真实识别内容:${path.basename(params.path)}`, confidence: 99.1, latencyMs: 32 }
+          return { text: `真实识别内容:${path.win32.basename(params.path)}`, confidence: 99.1, latencyMs: 32 }
         }
         if (func === 'captureAndRecognize') {
           return { text: '屏幕框选识别出的真实文字 2026', confidence: 98.5 }
@@ -759,8 +667,8 @@ test('P34 screenshots: 真实 PNG/GIF/BMP 文件头尺寸解析、真实剪贴�
 // ============================================================================
 test('P35 color-picker: 结合 screen_get_cursor_pos 与 ColorPickerPlugin.pickScreenPixel 取色，异常如实报错且零 Math.random()', async () => {
   // 1. 源码级断言：converter.ts 中严禁出现 Math.random()
-  const converterSrc = fs.readFileSync(path.join(SRC_EXAMPLES_DIR, 'color-picker/converter.ts'), 'utf8')
-  assert.ok(!converterSrc.includes('Math.random('), 'color-picker/converter.ts 中严禁使用 Math.random() 生成随机假颜色')
+  const converterSrc = fs.readFileSync(path.join(SRC_EXAMPLES_DIR, 'screen-color-picker/converter.ts'), 'utf8')
+  assert.ok(!converterSrc.includes('Math.random('), 'screen-color-picker/converter.ts 中严禁使用 Math.random() 生成随机假颜色')
 
   // 2. 真实宿主链路测试：获取光标位置 (512, 384) 并调用 ColorPickerPlugin.pickScreenPixel
   await withRealElectronWindow(

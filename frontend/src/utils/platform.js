@@ -79,6 +79,53 @@ export const UNAVAILABLE_PLUGIN_IDS = new Set([
  * @param {string|object} plugin - Plugin ID string or plugin object
  * @returns {boolean}
  */
+const PLATFORM_ALIASES = Object.freeze({
+  windows: 'windows', win: 'windows', win32: 'windows',
+  macos: 'macos', mac: 'macos', darwin: 'macos', osx: 'macos'
+})
+const PLATFORM_ORDER = ['windows', 'macos']
+
+/**
+ * 插件声明支持的平台（'windows' / 'macos' 的子集）。
+ * 以 plugin.json 的 targets 为准（只看 electron 运行时目标，与主进程安装校验一致），兼容旧的 platforms 字符串数组。
+ * 未声明时返回 null；声明了但没有可用的 electron 目标时返回 []。
+ * @param {object} plugin
+ * @returns {string[] | null}
+ */
+export function getPluginPlatforms(plugin) {
+  if (!plugin || typeof plugin !== 'object') return null
+  const found = new Set()
+  let declared = false
+  if (Array.isArray(plugin.targets) && plugin.targets.length > 0) {
+    declared = true
+    for (const target of plugin.targets) {
+      if (!target || typeof target !== 'object' || target.runtime !== 'electron') continue
+      const platform = PLATFORM_ALIASES[String(target.platform || '').trim().toLowerCase()]
+      if (platform) found.add(platform)
+    }
+  }
+  if (Array.isArray(plugin.platforms) && plugin.platforms.length > 0) {
+    declared = true
+    for (const item of plugin.platforms) {
+      const platform = PLATFORM_ALIASES[String(item || '').trim().toLowerCase()]
+      if (platform) found.add(platform)
+    }
+  }
+  if (!declared) return null
+  return PLATFORM_ORDER.filter((p) => found.has(p))
+}
+
+/**
+ * 平台标签文字：跨平台 / 仅 Windows / 仅 macOS；未声明时返回空字符串（不显示标签）
+ * @param {object} plugin
+ */
+export function getPluginPlatformLabel(plugin) {
+  const platforms = getPluginPlatforms(plugin)
+  if (!platforms || platforms.length === 0) return ''
+  if (platforms.length === PLATFORM_ORDER.length) return '跨平台'
+  return platforms[0] === 'windows' ? '仅 Windows' : '仅 macOS'
+}
+
 export function isPluginSupportedOnCurrentPlatform(plugin) {
   if (!plugin) return false
   const pluginId = typeof plugin === 'string'
@@ -98,15 +145,15 @@ export function isPluginSupportedOnCurrentPlatform(plugin) {
     return false
   }
 
-  // If plugin manifest/data explicitly defines platforms, check current platform
-  if (typeof plugin === 'object' && Array.isArray(plugin.platforms) && plugin.platforms.length > 0) {
-    const matches = plugin.platforms.some((p) => {
-      const norm = String(p).trim().toLowerCase()
-      if (norm === 'darwin' || norm === 'macos' || norm === 'mac') return isMacOS()
-      if (norm === 'win32' || norm === 'windows' || norm === 'win') return isWindows()
-      return false
-    })
-    if (!matches) return false
+  // 插件在 plugin.json（targets）里声明了支持的平台时，按声明判断当前系统能否运行
+  const platforms = typeof plugin === 'object' ? getPluginPlatforms(plugin) : null
+  if (platforms) {
+    // 声明了目标、但没有任何可用的 electron 目标：哪个客户端都跑不了
+    if (platforms.length === 0) return false
+    if (isMacOS()) return platforms.includes('macos')
+    if (isWindows()) return platforms.includes('windows')
+    // 识别不出当前系统（如网页预览、测试环境）时不按平台过滤，交给主进程安装校验把关
+    return true
   }
 
   return true

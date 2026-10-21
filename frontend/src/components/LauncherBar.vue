@@ -92,7 +92,15 @@
               @click="executeItem(item)"
             >
               <span class="launcher-marker" aria-hidden="true"></span>
+              <img
+                v-if="item.isApplication && isImageIcon(item.icon)"
+                :src="item.icon"
+                class="launcher-app-icon"
+                alt=""
+                @error="item.icon = ''"
+              />
               <RcSquircle
+                v-else
                 :glyph="resolveItemGlyph(item)"
                 :src="isImageIcon(item.icon) ? item.icon : ''"
                 :icon="item.faIcon || 'fa-cube'"
@@ -100,8 +108,8 @@
               />
               <div class="launcher-row-text">
                 <!-- 片段写在同一行，避免模板换行产生多余空格 -->
-                <span class="launcher-row-title"><template v-for="(part, partIndex) in highlightParts(item.name || item.title)" :key="partIndex"><mark v-if="part.hit">{{ part.text }}</mark><template v-else>{{ part.text }}</template></template></span>
-                <span v-if="item.description || item.subtitle" class="launcher-row-desc">
+                <span class="launcher-row-title" :title="item.name || item.title"><template v-for="(part, partIndex) in highlightParts(item.name || item.title)" :key="partIndex"><mark v-if="part.hit">{{ part.text }}</mark><template v-else>{{ part.text }}</template></template></span>
+                <span v-if="item.description || item.subtitle" class="launcher-row-desc" :title="item.path || item.description || item.subtitle">
                   {{ item.description || item.subtitle }}
                 </span>
               </div>
@@ -112,11 +120,14 @@
             </div>
           </template>
 
-          <!-- 无结果：引导去插件市场 -->
-          <div v-else class="launcher-empty">
-            <p class="launcher-empty-title">已安装的插件里没有「{{ query }}」</p>
-            <p class="launcher-empty-desc">按 Enter 去插件市场搜索并安装</p>
-            <button type="button" class="launcher-primary-btn" @click="searchInMarket">
+          <div v-else class="launcher-empty" role="status">
+            <p v-if="isSearching" class="launcher-empty-title">正在搜索文件与应用…</p>
+            <p v-else-if="fileSearchError" class="launcher-empty-title">{{ fileSearchError }}</p>
+            <p v-else class="launcher-empty-title">未找到与「{{ query }}」匹配的结果</p>
+            <p v-if="!isSearching && !fileSearchError" class="launcher-empty-desc">
+              {{ fileSearchDegraded ? '系统索引暂不可用，当前结果可能不完整' : '试试文件名、应用名或扩展名；也可以到插件市场查找工具' }}
+            </p>
+            <button v-if="!isSearching && !fileSearchError" type="button" class="launcher-primary-btn" @click="searchInMarket">
               在插件市场搜索
               <ShortcutKeys combo="Enter" tone="onAccent" />
             </button>
@@ -128,6 +139,9 @@
           <span v-if="noViewStatus" :class="noViewStatus.isError ? 'text-[var(--rc-error)]' : 'text-[var(--rc-accent-text)]'">
             {{ noViewStatus.text }}
           </span>
+          <span v-else-if="isSearching" role="status">正在搜索…</span>
+          <span v-else-if="fileSearchError" role="status">{{ fileSearchError }}</span>
+          <span v-else-if="fileSearchDegraded" role="status">{{ filteredItems.length }} 个结果 · 系统索引暂不可用，结果可能不完整</span>
           <span v-else>{{ filteredItems.length }} 个结果</span>
           <div class="flex items-center gap-4">
             <span class="launcher-foot-hint is-primary">打开 <ShortcutKeys combo="Enter" /></span>
@@ -158,7 +172,7 @@ import { useRouter } from 'vue-router'
 import { usePluginsStore } from '@/stores/plugins'
 import { switchWindowMode, WINDOW_MODES, windowModeState } from '@/utils/windowMode'
 import { getOfficialPlugin } from '@/utils/officialPlugins'
-import { isBundledPlugin } from '@/utils/bundledPlugins'
+import { isBundledPlugin, resolveBundledReplacement } from '@/utils/bundledPlugins'
 import { isPluginVisible } from '@/utils/pluginVisibility'
 import {
   loadInstalledDeclarativePlugin,
@@ -214,6 +228,9 @@ const {
   query,
   fileResults,
   filteredItems,
+  isSearching,
+  fileSearchError,
+  fileSearchDegraded,
   search,
   clearSearch,
   recordUsage
@@ -342,7 +359,7 @@ const activeItemActions = computed(() => {
       {
         type: 'Action',
         props: {
-          title: item.isDir ? '打开文件夹' : '打开文件',
+          title: item.isApplication ? '打开应用' : item.isDir ? '打开文件夹' : '打开文件',
           onAction: () => {
             actionPanelVisible.value = false
             openFile(item.path)
@@ -367,7 +384,7 @@ const activeItemActions = computed(() => {
           shortcut: { modifiers: ['Ctrl', 'Shift'], key: 'C' },
           onAction: () => {
             actionPanelVisible.value = false
-            navigator.clipboard.writeText(item.path).catch(() => {})
+            copyFileText(item.path, '文件路径')
           }
         }
       },
@@ -378,7 +395,7 @@ const activeItemActions = computed(() => {
           shortcut: { modifiers: ['Ctrl'], key: 'C' },
           onAction: () => {
             actionPanelVisible.value = false
-            navigator.clipboard.writeText(item.name).catch(() => {})
+            copyFileText(item.fileName || item.name, '文件名')
           }
         }
       },
@@ -536,7 +553,7 @@ useKeymap(KEYMAP_SCOPES.PAGE, {
     if (filteredItems.value.length > 0) {
       executeItem(filteredItems.value[activeIndex.value])
       return true
-    } else if (query.value.trim()) {
+    } else if (query.value.trim() && !isSearching.value && !fileSearchError.value) {
       searchInMarket()
       return true
     }
@@ -602,22 +619,39 @@ function handleKeyDown(e) {
   dispatchKeyEvent(e)
 }
 
-async function openFile(filePath) {
-  hideLauncher()
-  if (window.__ztoolsLauncher?.openPath) {
-    await window.__ztoolsLauncher.openPath(filePath).catch(() => {})
-  } else if (window.ztools?.shell?.openPath) {
-    await window.ztools.shell.openPath(filePath).catch(() => {})
+let fileActionPending = false
+
+async function copyFileText(text, label) {
+  const copied = await copyInlineAnswerToClipboard(text)
+  showNoViewFeedback(copied ? `已复制${label}` : `复制${label}失败，请重试`, !copied)
+}
+
+async function runFileAction(filePath, action, failureMessage) {
+  if (fileActionPending) return
+  fileActionPending = true
+  try {
+    const bridge = typeof window.__ztoolsLauncher?.[action] === 'function'
+      ? window.__ztoolsLauncher : window.ztools?.shell
+    if (typeof bridge?.[action] !== 'function') throw new Error('文件操作接口不可用')
+    const result = await bridge[action](filePath)
+    if (result !== true && result?.success !== true) {
+      throw new Error(result?.error?.message || result?.error || failureMessage)
+    }
+    hideLauncher()
+  } catch (error) {
+    console.warn('[LauncherBar] 文件操作失败:', error)
+    showNoViewFeedback(error?.message || failureMessage, true)
+  } finally {
+    fileActionPending = false
   }
 }
 
-async function showInFolder(filePath) {
-  hideLauncher()
-  if (window.__ztoolsLauncher?.showItemInFolder) {
-    await window.__ztoolsLauncher.showItemInFolder(filePath).catch(() => {})
-  } else if (window.ztools?.shell?.showItemInFolder) {
-    await window.ztools.shell.showItemInFolder(filePath).catch(() => {})
-  }
+function openFile(filePath) {
+  return runFileAction(filePath, 'openPath', '打开文件失败')
+}
+
+function showInFolder(filePath) {
+  return runFileAction(filePath, 'showItemInFolder', '定位文件失败')
 }
 
 function executeItem(item) {
@@ -667,7 +701,8 @@ async function runNoViewCommand(item) {
 }
 
 async function launchPlugin(pluginId, options = {}) {
-  const pid = String(pluginId || '').trim()
+  // 已合并进内置插件的旧插件（如 notes → memo）直接打开保留的那个
+  const pid = resolveBundledReplacement(String(pluginId || '').trim())
   if (!pid) return
 
   const featureCode = typeof options.featureCode === 'string' ? options.featureCode.trim() : ''
@@ -962,15 +997,27 @@ watch(
   box-shadow: var(--rc-marker-glow);
 }
 
+.launcher-app-icon {
+  width: 28px;
+  height: 28px;
+  flex-shrink: 0;
+  object-fit: contain;
+}
+
 .launcher-row-text {
   flex: 1;
   min-width: 0;
   display: flex;
-  align-items: baseline;
-  gap: 10px;
+  flex-direction: column;
+  justify-content: center;
+  gap: 2px;
 }
 
 .launcher-row-title {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  line-height: 18px;
   font-size: 14px;
   font-weight: 500;
   color: var(--rc-text-primary);
@@ -983,7 +1030,9 @@ watch(
 }
 
 .launcher-row-desc {
-  font-size: 13px;
+  max-width: 100%;
+  line-height: 15px;
+  font-size: 11px;
   color: var(--rc-text-muted);
   white-space: nowrap;
   overflow: hidden;

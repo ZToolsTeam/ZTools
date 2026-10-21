@@ -1,11 +1,3 @@
-// 1. JSON 格式化与类型转换
-export { default as JsonFormatCommand, JsonDetailView } from "./json-format/index.js";
-export * from "./json-format/logic.js";
-
-// 2. 二维码生成与管理
-export { default as QrCodeCommand, QrDetailView, CreateQrForm, DecodeQrView } from "./qr-code/index.js";
-export * from "./qr-code/qr-generator.js";
-
 // 3. GitHub 仪表盘
 export { default as GithubDashboardCommand, GithubDetailView } from "./github/index.js";
 export * from "./github/types.js";
@@ -16,9 +8,9 @@ export { default as GoogleTranslateCommand, TranslateDetailView } from "./google
 export * from "./google-translate/languages.js";
 export * from "./google-translate/translate.js";
 
-// 5. 调色板与色彩转换器
-export { default as ColorPickerCommand, ColorDetailView } from "./color-picker/index.js";
-export * from "./color-picker/converter.js";
+// 5. 屏幕取色（Windows），颜色格式转换由内置插件 color-picker 提供
+export { default as ColorPickerCommand, ColorDetailView } from "./screen-color-picker/index.js";
+export * from "./screen-color-picker/converter.js";
 
 // 6. Obsidian 知识库管理
 export { default as ObsidianCommand, ObsidianNoteDetailView, ObsidianQuickNoteForm } from "./obsidian/index.js";
@@ -67,10 +59,6 @@ export { default as WindowManagementCommand, WindowActionDetailView, WindowPrefe
 export * from "./window-management/types.js";
 export * from "./window-management/window-actions.js";
 
-// 15. 官方内置核心能力: 计算器与色彩速查 (Calculator & Color Inspector)
-export { default as CalculatorCommand } from "./calculator/index.js";
-export * from "./calculator/calculator-engine.js";
-
 // 16. 官方内置核心能力: Windows 原生运维动作 (System Actions)
 export { default as SystemCommand } from "./system/index.js";
 export * from "./system/system-actions.js";
@@ -115,11 +103,6 @@ export * from "./emoji-picker/storage.js";
 
 // 23. M1.5 第二组高频应用: Translator (多语言即时翻译)
 export { default as TranslatorCommand } from "./translator/index.js";
-
-// 24. M1.5 第二组高频应用: Notes (极简便签记事)
-export { default as NotesCommand, NoteDetailView, NoteCreateForm, NoteEditForm } from "./notes/index.js";
-export * from "./notes/types.js";
-export * from "./notes/notes-storage.js";
 
 // 25. M1.5 第二组高频应用: Windows Run (Windows 运行中枢)
 export { default as WindowsRunCommand } from "./windows-run/index.js";
@@ -673,18 +656,3 @@ export {
   startScreenRecording,
   formatBytes as formatRecordBytes
 } from "./record/logic.js";
-
-// 70. 双文件/目录 SHA-256 哈希与 Diff 比对工作台 (File Compare - 布局三)
-export { default as FileCompareCommand } from "./file-compare/index.js";
-export {
-  type CompareEnginePreset,
-  type FileComparePairItem,
-  COMPARE_ENGINE_MODES,
-  INITIAL_COMPARE_PAIRS,
-  executeFileComparison,
-  fetchFileCompareWorkspace,
-  getDiffStatusLabel,
-  openComparedFileLocation,
-  formatBytes as formatFileCompareBytes
-} from "./file-compare/logic.js";
-

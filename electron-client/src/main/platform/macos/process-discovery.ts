@@ -8,6 +8,7 @@ const PROCESS_LIST_MAX_BUFFER_BYTES = 4 * 1024 * 1024
 const PROCESS_LIST_TIMEOUT_MS = 10_000
 const MAX_PROCESS_COUNT = 10_000
 const MAX_PROCESS_NAME_LENGTH = 512
+const MAX_PROCESS_PATH_LENGTH = 4096
 
 export type MacosProcessListRunner = (signal: AbortSignal) => Promise<string>
 
@@ -52,22 +53,27 @@ export function parseMacosProcessList(output: string): ProcessSummary[] {
     const pid = Number(fields[1])
     if (!isValidPositiveInteger(pid) || seenPids.has(pid)) continue
 
-    const name = (fields[4] ?? '')
+    // comm 列是可执行文件完整路径（ucomm 会被内核截断成 16 个字符，例如「Google Chrome He」）；
+    // 少数进程（内核驱动、改写了进程标题的进程）给的不是路径，原样作为名称
+    const command = (fields[4] ?? '')
       .replace(/[\u0000-\u001f\u007f]/g, '')
       .trim()
-      .slice(0, MAX_PROCESS_NAME_LENGTH)
+      .slice(0, MAX_PROCESS_PATH_LENGTH)
+    const isPath = command.startsWith('/') && !command.endsWith('/')
+    const name = (isPath ? command.slice(command.lastIndexOf('/') + 1) : command).slice(0, MAX_PROCESS_NAME_LENGTH)
     if (!name) continue
+    const executablePath = isPath ? command : ''
 
     const cpuUsage = parseCpuUsage(fields[2] ?? '')
     const memoryUsage = parseMemoryUsageKiB(fields[3] ?? '')
     result.push({
       pid,
       name,
-      path: '',
+      path: executablePath,
       cpuUsage: cpuUsage ?? 0,
       memoryUsage: memoryUsage ?? 0,
       fieldAvailability: {
-        path: false,
+        path: executablePath !== '',
         cpuUsage: cpuUsage !== undefined,
         memoryUsage: memoryUsage !== undefined
       }
@@ -84,7 +90,7 @@ export function createMacosProcessListRunner(
 ): MacosProcessListRunner {
   return async (signal) => {
     // pcpu is ps's decaying average (up to one minute), not an instantaneous sample.
-    const { stdout } = await execute('/bin/ps', ['-axo', 'pid=,pcpu=,rss=,ucomm='], {
+    const { stdout } = await execute('/bin/ps', ['-axo', 'pid=,pcpu=,rss=,comm='], {
       encoding: 'utf8',
       maxBuffer: PROCESS_LIST_MAX_BUFFER_BYTES,
       shell: false,

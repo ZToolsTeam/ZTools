@@ -2,9 +2,11 @@
 /**
  * ZTools 35+ 本地声明式插件三端目录强制同步脚本 (ZTOOLS-STD-8)
  *
- * 将权威信源 `packages/declarative-ui/src/examples/<dir>` 同步至：
- * 1. `plugins/<pluginDir>/src`
- * 2. `plugins/create-plugin/src/plugins/<templateDir>`
+ * 将 `packages/declarative-ui/src/examples/<dir>` 同步至脚手架模板 `plugins/create-plugin/src/plugins/<templateDir>`。
+ *
+ * 注意：插件源码已改为以 `plugins/<pluginDir>/src` 为准（可在插件目录内独立编译、由 CI 从源码构建发布），
+ * 本脚本不再覆盖 `plugins/<pluginDir>/src`。修改插件请直接改 `plugins/<pluginDir>/src`，
+ * 然后在插件仓库运行 `node scripts/build-declarative.mjs <pluginDir>` 重新生成 dist/。
  */
 
 import fs from 'node:fs';
@@ -21,7 +23,7 @@ const CREATE_PLUGIN_ROOT = path.join(ROOT_DIR, 'plugins', 'create-plugin', 'src'
 
 // 移除源码目录中历史遗留的编译产物 .js 文件
 const STALE_JS_FILES = [
-  path.join(EXAMPLES_ROOT, 'color-picker', 'converter.js'),
+  path.join(EXAMPLES_ROOT, 'screen-color-picker', 'converter.js'),
   path.join(EXAMPLES_ROOT, 'kill-process', 'process-manager.js'),
   path.join(PLUGINS_ROOT, 'color-picker', 'src', 'converter.js'),
   path.join(PLUGINS_ROOT, 'screen-color-picker', 'src', 'converter.js'),
@@ -69,8 +71,8 @@ const PLUGIN_SYNC_MAP = [
   { example: 'cleaner', plugins: ['cleaner'], createPlugins: ['cleaner'] },
   { example: 'batch-rename', plugins: ['batch-rename'], createPlugins: ['batch-rename'] },
 
-  // 布局三 (10 款；其中 plugins/file-compare 与 plugins/color-picker 保留独立内置重写版，仅同步 screen-color-picker 与 create-plugin 模板)
-  { example: 'file-compare', plugins: [], createPlugins: ['file-compare'] },
+  // 布局三 (9 款)。文本对比、颜色转换、JSON、计算器、二维码、便签由客户端内置插件（plugins/<id>）提供，
+  // 不再在 examples 里保留重复实现，也不从这里同步。
   { example: 'ocr', plugins: ['ocr'], createPlugins: ['ocr'] },
   { example: 'record', plugins: ['record'], createPlugins: ['record'] },
   { example: 'ai-image', plugins: ['ai-image'], createPlugins: ['ai-image'] },
@@ -79,11 +81,8 @@ const PLUGIN_SYNC_MAP = [
   { example: 'batch-audio', plugins: ['batch-audio'], createPlugins: ['batch-audio'] },
   { example: 'pdf', plugins: ['pdf'], createPlugins: ['pdf'] },
   { example: 'screenshots', plugins: ['screenshot'], createPlugins: ['screenshot'] },
-  { example: 'color-picker', plugins: ['screen-color-picker'], createPlugins: ['color-picker', 'screen-color-picker'] },
+  { example: 'screen-color-picker', plugins: ['screen-color-picker'], createPlugins: ['screen-color-picker'] },
 ];
-
-const sharedNativeIpcPath = path.join(EXAMPLES_ROOT, 'shared', 'native-ipc.ts');
-const sharedNativeIpcContent = fs.readFileSync(sharedNativeIpcPath, 'utf8');
 
 let syncedFileCount = 0;
 
@@ -96,30 +95,7 @@ for (const item of PLUGIN_SYNC_MAP) {
 
   const tsFiles = fs.readdirSync(srcDir).filter((f) => f.endsWith('.ts') || f.endsWith('.tsx'));
 
-  // 1. 同步到 plugins/<dir>/src (shared 同步到 plugins/shared)
-  for (const pluginName of item.plugins) {
-    const destDir = item.isShared
-      ? path.join(PLUGINS_ROOT, pluginName)
-      : path.join(PLUGINS_ROOT, pluginName, 'src');
-
-    fs.mkdirSync(destDir, { recursive: true });
-    for (const file of tsFiles) {
-      const content = fs.readFileSync(path.join(srcDir, file), 'utf8');
-      fs.writeFileSync(path.join(destDir, file), content, 'utf8');
-      syncedFileCount++;
-    }
-
-    // 如果 plugins/<dir>/src 下存在 native-ipc.ts 副本，一并更新为最新 shared/native-ipc.ts
-    if (!item.isShared) {
-      const localNativeIpc = path.join(destDir, 'native-ipc.ts');
-      if (fs.existsSync(localNativeIpc)) {
-        fs.writeFileSync(localNativeIpc, sharedNativeIpcContent, 'utf8');
-        syncedFileCount++;
-      }
-    }
-  }
-
-  // 2. 同步到 plugins/create-plugin/src/plugins/<dir>
+  // 同步到 plugins/create-plugin/src/plugins/<dir>
   for (const templateName of item.createPlugins) {
     const destDir = path.join(CREATE_PLUGIN_ROOT, templateName);
     fs.mkdirSync(destDir, { recursive: true });
@@ -131,5 +107,5 @@ for (const item of PLUGIN_SYNC_MAP) {
   }
 }
 
-console.log(`[sync-35-plugins] ✅ 已成功完成 ${PLUGIN_SYNC_MAP.length} 组插件目录三端同步（共写入 ${syncedFileCount} 个文件）`);
+console.log(`[sync-35-plugins] ✅ 已同步 ${PLUGIN_SYNC_MAP.length} 组脚手架模板（共写入 ${syncedFileCount} 个文件；plugins/<id>/src 不再被覆盖）`);
 

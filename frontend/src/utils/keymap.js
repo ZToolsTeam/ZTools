@@ -98,6 +98,9 @@ export function isModalOpen() {
 
 export function dispatchKeyEvent(event) {
   if (!event) return false
+  // 捕获阶段先让出输入法选字按键；不能 preventDefault，否则会打断文字确认。
+  // 229 覆盖确认阶段的兼容事件，composing 复用 Vue v-model 的组合输入状态。
+  if (event.isComposing || event.keyCode === 229 || event.target?.composing === true) return false
   // 有对话框打开时按键归对话框（Esc 关对话框、回车点按钮），页面快捷键一律不响应
   if (isModalOpen()) return false
 

@@ -9,7 +9,7 @@
  * 2. 对每个插件执行 Schema 强校验与安全 AST 扫描门禁；
  * 3. 校验合规的插件打包为 {plugin-id}-{version}.zip；
  * 4. 计算并记录每个发布包的 SHA-256 校验和与文件大小；
- * 5. 自动生成包含全量插件元数据的静态全网索引 plugins.json（供客户端与 EdgeOne CDN 缓存）；
+ * 5. 自动生成包含全量插件元数据的静态全网索引 plugins.json（经阿里云 CDN 分发给客户端）；
  * 6. 支持模块化导出与独立 CLI 执行。
  */
 
@@ -19,6 +19,7 @@ import crypto from 'node:crypto'
 import zlib from 'node:zlib'
 import { fileURLToPath } from 'node:url'
 import { scanPluginSecurity } from './scan-plugin-security.mjs'
+import { getManifestPlatforms, validateStoreCatalog } from '../packages/ztools-plugins-spec/src/validator.js'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const rootDir = path.resolve(__dirname, '..')
@@ -202,6 +203,7 @@ export function discoverPluginDirectories(basePluginsDir) {
  *   total: number,
  *   passedCount: number,
  *   rejectedCount: number,
+ *   draftIds: string[],
  *   pluginsIndex: object,
  *   publishedPackages: Array<{ pluginId: string, version: string, zipPath: string, sha256: string, size: number }>
  * }>}
@@ -209,8 +211,8 @@ export function discoverPluginDirectories(basePluginsDir) {
 export async function buildPluginsRelease(options = {}) {
   const pluginsDir = path.resolve(options.pluginsDir || path.join(rootDir, 'plugins'))
   const outputDir = path.resolve(options.outputDir || path.join(rootDir, 'dist/plugins'))
-  const cdnBaseUrl = (options.cdnBaseUrl || process.env.CDN_BASE_URL || 'https://plugins.ztools.cn').replace(/\/$/, '')
-  const urlPrefix = (options.urlPrefix !== undefined ? String(options.urlPrefix) : (process.env.PLUGIN_URL_PREFIX || 'plugins')).replace(/^\/+|\/+$/g, '')
+  const cdnBaseUrl = (options.cdnBaseUrl || process.env.CDN_BASE_URL || 'https://cdn.ztools.cn').replace(/\/$/, '')
+  const urlPrefix = (options.urlPrefix !== undefined ? String(options.urlPrefix) : (process.env.PLUGIN_URL_PREFIX || 'plugins-v2')).replace(/^\/+|\/+$/g, '')
   const failFast = !!options.failFast
   const skipScan = !!options.skipScan
 
@@ -239,6 +241,7 @@ export async function buildPluginsRelease(options = {}) {
       total: 0,
       passedCount: 0,
       rejectedCount: 0,
+      draftIds: [],
       pluginsIndex: emptyIndex,
       publishedPackages: []
     }
@@ -246,6 +249,7 @@ export async function buildPluginsRelease(options = {}) {
 
   const publishedPackages = []
   const catalogList = []
+  const draftIds = []
   let rejectedCount = 0
 
   for (const entry of pluginEntries) {
@@ -261,6 +265,37 @@ export async function buildPluginsRelease(options = {}) {
     const manifestPath = path.join(dir, 'plugin.json')
     const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'))
     const version = manifest.version || '1.0.0'
+
+    // 下架开关：plugin.json 写 "revoked": true 后，目录里只保留下架记录（不扫描、不打包、不提供下载），
+    // 客户端刷新目录时据此禁用已安装的该插件。有问题的插件也能立刻下架，不会被扫描失败挡住。
+    if (manifest.revoked === true) {
+      const reason = typeof manifest.revokedReason === 'string' && manifest.revokedReason.trim()
+        ? manifest.revokedReason.trim()
+        : '该插件已被官方下架禁用'
+      console.warn(`⛔ [${pluginId}] 已下架，只写入下架记录: ${reason}`)
+      catalogList.push({
+        id: manifest.id || pluginId,
+        pluginId: manifest.id || pluginId,
+        name: manifest.name || pluginId,
+        version,
+        description: manifest.description || '',
+        author: manifest.author,
+        revoked: true,
+        revokedReason: reason,
+        revoked_reason: reason,
+        publishedAt: new Date().toISOString()
+      })
+      continue
+    }
+
+    // 草稿：plugin.json 写 "draft": true 表示功能还没做完（例如只有示例数据），仓库里照常编译、扫描、跑测试，
+    // 但不打包、不进插件目录，用户在插件市场里看不到。做完后删掉 draft 字段，合并即上架。
+    if (manifest.draft === true) {
+      const reason = typeof manifest.draftReason === 'string' && manifest.draftReason.trim() ? manifest.draftReason.trim() : '未说明'
+      console.warn(`📝 [${pluginId}] 是草稿，本次不发布: ${reason}`)
+      draftIds.push(manifest.id || pluginId)
+      continue
+    }
 
     // 1. 安全 AST 扫描与 Schema 门禁
     let scanResult = null
@@ -340,9 +375,10 @@ export async function buildPluginsRelease(options = {}) {
       entry: manifest.entry,
       minZToolsVersion: manifest.minZToolsVersion || '2.0.0',
       requireAdmin: !!manifest.requireAdmin,
-      targets: Array.isArray(manifest.targets) && manifest.targets.length > 0
-        ? manifest.targets
-        : ['windows-electron-any', 'macos-electron-any'],
+      // 平台声明由 plugin.json 的 targets 决定（安全扫描已校验必填与格式），不再默认填「双端」
+      targets: manifest.targets,
+      // 便于客户端与市场直接展示：'windows' / 'macos' 的子集
+      platforms: getManifestPlatforms(manifest),
       nativeComponents: Array.isArray(manifest.nativeComponents) ? manifest.nativeComponents : [],
       is_official: isOfficial,
       official_badge: isOfficial ? '官方自营' : '',
@@ -380,6 +416,12 @@ export async function buildPluginsRelease(options = {}) {
     plugins: catalogList
   }
 
+  // 写出前整体校验：插件 ID 重复、版本号或下载信息不合法时不生成目录
+  const catalogCheck = validateStoreCatalog(pluginsIndex)
+  if (!catalogCheck.valid) {
+    throw new Error(`插件目录校验失败，已停止生成:\n  - ${catalogCheck.errors.join('\n  - ')}`)
+  }
+
   const indexPath = path.join(outputDir, 'plugins.json')
   fs.writeFileSync(indexPath, JSON.stringify(pluginsIndex, null, 2), 'utf8')
 
@@ -388,7 +430,7 @@ export async function buildPluginsRelease(options = {}) {
 
   console.log(`\n============================================================`)
   console.log(`📄 静态全网索引 plugins.json & catalog.json 已生成: ${indexPath}`)
-  console.log(`📊 统计: 共发现 ${pluginEntries.length} 个插件，成功打包 ${catalogList.length} 个，拦截拒绝 ${rejectedCount} 个`)
+  console.log(`📊 统计: 共发现 ${pluginEntries.length} 个插件，成功打包 ${catalogList.length} 个，拦截拒绝 ${rejectedCount} 个，草稿未发布 ${draftIds.length} 个`)
   console.log(`============================================================\n`)
 
   return {
@@ -396,6 +438,7 @@ export async function buildPluginsRelease(options = {}) {
     total: pluginEntries.length,
     passedCount: catalogList.length,
     rejectedCount,
+    draftIds,
     pluginsIndex,
     publishedPackages
   }
@@ -411,8 +454,8 @@ async function runCli() {
 选项:
   --plugins-dir <path>    插件源码根目录 (默认: plugins)
   --output-dir <path>     产物输出目录 (默认: dist/plugins)
-  --cdn-base-url <url>    静态分发 CDN 域名 (默认: https://plugins.ztools.cn)
-  --url-prefix <prefix>   CDN 相对路径前缀 (默认: plugins, V2 通道传 plugins-v2)
+  --cdn-base-url <url>    静态分发 CDN 域名 (默认: https://cdn.ztools.cn)
+  --url-prefix <prefix>   CDN 相对路径前缀 (默认: plugins-v2，即阿里云 OSS 上的目录)
   --fail-fast             遇错立即退出
   --skip-scan             跳过安全扫描 (仅限调试)
   --help, -h              显示帮助信息
@@ -428,8 +471,8 @@ async function runCli() {
 
   const pluginsDir = getArg('--plugins-dir', path.join(rootDir, 'plugins'))
   const outputDir = getArg('--output-dir', path.join(rootDir, 'dist/plugins'))
-  const cdnBaseUrl = getArg('--cdn-base-url', process.env.CDN_BASE_URL || 'https://plugins.ztools.cn')
-  const urlPrefix = getArg('--url-prefix', process.env.PLUGIN_URL_PREFIX || 'plugins')
+  const cdnBaseUrl = getArg('--cdn-base-url', process.env.CDN_BASE_URL || 'https://cdn.ztools.cn')
+  const urlPrefix = getArg('--url-prefix', process.env.PLUGIN_URL_PREFIX || 'plugins-v2')
   const failFast = args.includes('--fail-fast')
   const skipScan = args.includes('--skip-scan')
 

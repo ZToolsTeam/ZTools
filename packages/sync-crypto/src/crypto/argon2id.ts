@@ -59,15 +59,49 @@ function gb(v: BigUint64Array, a: number, b: number, c: number, d: number): void
   v[b] = rotr64(v[b]! ^ v[c]!, 63n)
 }
 
+function p16(
+  v: BigUint64Array,
+  i0: number, i1: number, i2: number, i3: number,
+  i4: number, i5: number, i6: number, i7: number,
+  i8: number, i9: number, i10: number, i11: number,
+  i12: number, i13: number, i14: number, i15: number
+): void {
+  gb(v, i0, i4, i8, i12)
+  gb(v, i1, i5, i9, i13)
+  gb(v, i2, i6, i10, i14)
+  gb(v, i3, i7, i11, i15)
+  gb(v, i0, i5, i10, i15)
+  gb(v, i1, i6, i11, i12)
+  gb(v, i2, i7, i8, i13)
+  gb(v, i3, i4, i9, i14)
+}
+
 function permuteP(block: BigUint64Array): void {
-  // 列混淆
+  // 行混淆：8 行 × 每行 16 个 64-bit word，覆盖全部 128 个 word
   for (let i = 0; i < 8; i++) {
-    gb(block, 2 * i, 2 * i + 1, 16 + 2 * i, 16 + 2 * i + 1)
+    const rowOffset = i * 16
+    p16(
+      block,
+      rowOffset, rowOffset + 1, rowOffset + 2, rowOffset + 3,
+      rowOffset + 4, rowOffset + 5, rowOffset + 6, rowOffset + 7,
+      rowOffset + 8, rowOffset + 9, rowOffset + 10, rowOffset + 11,
+      rowOffset + 12, rowOffset + 13, rowOffset + 14, rowOffset + 15
+    )
   }
-  // 行混淆
+  // 列混淆：8 列 × 跨 8 行每行 2 个 word，覆盖全部 128 个 word
   for (let i = 0; i < 8; i++) {
-    const rowOffset = (i % 4) * 4
-    gb(block, rowOffset, rowOffset + 1, 32 + rowOffset, 32 + rowOffset + 1)
+    const colOffset = 2 * i
+    p16(
+      block,
+      colOffset, colOffset + 1,
+      colOffset + 16, colOffset + 17,
+      colOffset + 32, colOffset + 33,
+      colOffset + 48, colOffset + 49,
+      colOffset + 64, colOffset + 65,
+      colOffset + 80, colOffset + 81,
+      colOffset + 96, colOffset + 97,
+      colOffset + 112, colOffset + 113
+    )
   }
 }
 
@@ -179,15 +213,18 @@ export function argon2id(
 
           // Argon2id 索引规则：pass 0 的前两切片为数据无关寻址，其余为数据依赖寻址
           const isDataIndependent = pass === 0 && slice < 2
-          let refCol: number
+          const referenceAreaSize = Math.max(1, pass === 0 ? col - 1 : q - 2)
+          let j1: bigint
           if (isDataIndependent) {
             // Pseudo-random address generation
-            const pseudo = (BigInt(pass) * 1048576n + BigInt(slice) * 262144n + BigInt(col) * 1024n) & 0xffffffffn
-            refCol = Number(pseudo % BigInt(col === 0 ? q - 1 : col))
+            j1 = (BigInt(pass) * 1048576n + BigInt(slice) * 262144n + BigInt(col) * 1024n + 0x9e3779b9n) & 0xffffffffn
           } else {
-            const j1 = Number(memory[prevIdx]![0]! & 0xffffffffn)
-            refCol = j1 % (col === 0 ? q - 1 : col)
+            j1 = memory[prevIdx]![0]! & 0xffffffffn
           }
+          const x = (j1 * j1) >> 32n
+          const y = (BigInt(referenceAreaSize) * x) >> 32n
+          const relPos = BigInt(referenceAreaSize) - 1n - y
+          const refCol = pass === 0 ? Number(relPos) : (col + 1 + Number(relPos)) % q
 
           const refIdx = lane * q + refCol
           const curBlock = memory[currIdx]!
@@ -196,16 +233,19 @@ export function argon2id(
 
           // R = prevBlock ^ refBlock
           const r = new BigUint64Array(128)
+          const z = new BigUint64Array(128)
           for (let w = 0; w < 128; w++) {
-            r[w] = prevBlock[w]! ^ refBlock[w]!
+            const xorVal = prevBlock[w]! ^ refBlock[w]!
+            r[w] = xorVal
+            z[w] = xorVal
           }
 
-          // G 混淆
-          permuteP(r)
+          // G 混淆: Z = P(R), G(X, Y) = Z ^ R
+          permuteP(z)
 
           // 结果累加
           for (let w = 0; w < 128; w++) {
-            curBlock[w] = (pass > 0 ? curBlock[w]! : 0n) ^ r[w]!
+            curBlock[w] = (pass > 0 ? curBlock[w]! : 0n) ^ z[w]! ^ r[w]!
           }
         }
       }

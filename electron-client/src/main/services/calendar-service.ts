@@ -79,11 +79,9 @@ export function detectConference(text: string): { url?: string; type?: CalendarE
 
 export class CalendarService {
   private readonly db: DatabaseSync
-  private readonly isPersistentDb: boolean
 
   constructor(options: CalendarServiceOptions = {}) {
     const dbPath = options.dbPath || ':memory:'
-    this.isPersistentDb = dbPath !== ':memory:' && !dbPath.includes('test')
     if (dbPath !== ':memory:') {
       const dir = path.dirname(dbPath)
       if (!fs.existsSync(dir)) {
@@ -111,29 +109,7 @@ export class CalendarService {
         updated_at INTEGER NOT NULL
       );
     `)
-    if (this.isPersistentDb) {
-      const row = this.db.prepare('SELECT COUNT(*) as cnt FROM calendar_events').get() as { cnt?: number } | undefined
-      if (!row || Number(row.cnt ?? 0) === 0) {
-        const now = Date.now()
-        const hourMs = 3600 * 1000
-        this.createEvent({
-          title: 'ZTools 架构评审与插件验收会',
-          description: '本地 SQLite (calendar_events) 持久化日程记录，支持一键入会与 ICS 导出',
-          location: 'Feishu / 飞书会议',
-          startTime: now + hourMs,
-          endTime: now + 2 * hourMs,
-          conferenceUrl: 'https://vc.feishu.cn/j/123456789'
-        })
-        this.createEvent({
-          title: 'macOS & Windows 双端性能巡检',
-          description: '检查 MFT 索引侧车与声明式 UI 内存占用指标 (< 200MB)',
-          location: '腾讯会议',
-          startTime: now + 3 * hourMs,
-          endTime: now + 4 * hourMs,
-          conferenceUrl: 'https://meeting.tencent.com/dm/987654321'
-        })
-      }
-    }
+    // 不再往空库里预置演示日程（旧版本写过两条带假会议链接的，已写入的不自动删，用户可在日历里自行删除）
   }
 
   private normalizeTimeInput(val: number | string | undefined, fallbackOffsetMs: number): number {

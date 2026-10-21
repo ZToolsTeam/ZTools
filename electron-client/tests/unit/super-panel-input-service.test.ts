@@ -101,7 +101,7 @@ test('reloads keyboard and mouse triggers and ignores stale native events', asyn
 
   source = JSON.stringify({ enabled: false })
   await service.reload()
-  assert.deepEqual(keyboard.at(-1), { enabled: false, accelerator: 'Alt+Space' })
+  assert.deepEqual(keyboard.at(-1), { enabled: false, accelerator: 'Alt+Shift+Space' })
   assert.equal(native.configurations.at(-1), null)
   await service.stop()
 })
@@ -248,4 +248,139 @@ test('removes the first native listener when the second constructor subscription
     toggle: () => undefined
   }), (error: unknown) => error === failure)
   assert.equal(inputListeners.size, 0)
+})
+
+function migrationConfig(store: Record<string, unknown>, options: { failSet?: boolean; failWakeRead?: boolean } = {}) {
+  const writes: Array<{ path: string; value: string; sync: boolean }> = []
+  return {
+    writes,
+    config: {
+      async get(_file: string, path: string, defaultValue: unknown): Promise<string> {
+        if (path === 'hotkey.global' && options.failWakeRead) throw new Error('读取失败')
+        const value = path === 'super_panel' ? store.super_panel : path === 'hotkey.global' ? store.wake : undefined
+        if (value === undefined) return typeof defaultValue === 'string' ? defaultValue : JSON.stringify(defaultValue)
+        return typeof value === 'string' ? value : JSON.stringify(value)
+      },
+      async set(_file: string, path: string, value: string, sync: boolean): Promise<void> {
+        if (options.failSet) throw new Error('磁盘已满')
+        writes.push({ path, value, sync })
+        if (path === 'super_panel') store.super_panel = JSON.parse(value)
+      }
+    }
+  }
+}
+
+const legacyPanel = () => ({
+  enabled: true,
+  keyboardHotkey: { enabled: true, modifiers: ['Alt'], key: 'Space' },
+  mouseHotkey: { enabled: true, button: 'middle_long', longPressMs: 300 },
+  panelSize: 'large'
+})
+
+function keyboardRecorder() {
+  const calls: Array<{ enabled: boolean; accelerator: string }> = []
+  return { calls, triggers: { async syncSuperPanelHotkey(enabled: boolean, accelerator: string) { calls.push({ enabled, accelerator }) } } }
+}
+
+test('[迁移] 旧默认 Alt+Space 且全局唤醒也是 Alt+Space（未设置时按默认）时，超级面板改为 Alt+Shift+Space 并写回', async () => {
+  for (const wake of [undefined, '', 'Alt+Space', 'option + space']) {
+    const store: Record<string, unknown> = { super_panel: legacyPanel(), ...(wake === undefined ? {} : { wake }) }
+    const { config, writes } = migrationConfig(store)
+    const rec = keyboardRecorder()
+    const service = new SuperPanelInputService({ config, triggers: rec.triggers, nativeInput: null, toggle: () => undefined })
+    await service.ready
+    assert.deepEqual(rec.calls, [{ enabled: true, accelerator: 'Alt+Shift+Space' }], String(wake))
+    assert.equal(writes.length, 1)
+    assert.equal(writes[0]?.sync, false)
+    const saved = store.super_panel as Record<string, any>
+    assert.deepEqual(saved.keyboardHotkey.modifiers, ['Alt', 'Shift'])
+    // 其他设置原样保留
+    assert.equal(saved.panelSize, 'large')
+    assert.equal(saved.mouseHotkey.button, 'middle_long')
+    // 再次加载不会重复写
+    await service.reload()
+    assert.equal(writes.length, 1)
+    await service.stop()
+  }
+})
+
+test('[迁移] 用户已把全局唤醒改成别的键时，保留超级面板的 Alt+Space 不动', async () => {
+  const store: Record<string, unknown> = { super_panel: legacyPanel(), wake: 'Ctrl+Shift+Z' }
+  const { config, writes } = migrationConfig(store)
+  const rec = keyboardRecorder()
+  const service = new SuperPanelInputService({ config, triggers: rec.triggers, nativeInput: null, toggle: () => undefined })
+  await service.ready
+  assert.deepEqual(rec.calls, [{ enabled: true, accelerator: 'Alt+Space' }])
+  assert.equal(writes.length, 0)
+  await service.stop()
+})
+
+test('[故障注入] 写回配置失败时本次仍使用新键；读不到全局唤醒设置时不做迁移', async () => {
+  {
+    const store: Record<string, unknown> = { super_panel: legacyPanel() }
+    const { config } = migrationConfig(store, { failSet: true })
+    const rec = keyboardRecorder()
+    const service = new SuperPanelInputService({ config, triggers: rec.triggers, nativeInput: null, toggle: () => undefined })
+    await service.ready
+    assert.deepEqual(rec.calls, [{ enabled: true, accelerator: 'Alt+Shift+Space' }])
+    await service.stop()
+  }
+  {
+    const store: Record<string, unknown> = { super_panel: legacyPanel() }
+    const { config, writes } = migrationConfig(store, { failWakeRead: true })
+    const rec = keyboardRecorder()
+    const service = new SuperPanelInputService({ config, triggers: rec.triggers, nativeInput: null, toggle: () => undefined })
+    await service.ready
+    assert.deepEqual(rec.calls, [{ enabled: true, accelerator: 'Alt+Space' }])
+    assert.equal(writes.length, 0)
+    await service.stop()
+  }
+  {
+    // 超级面板配置损坏：按新默认值使用，不写回、不崩溃
+    const store: Record<string, unknown> = { super_panel: '{broken' }
+    const { config, writes } = migrationConfig(store)
+    const rec = keyboardRecorder()
+    const service = new SuperPanelInputService({ config, triggers: rec.triggers, nativeInput: null, toggle: () => undefined })
+    await service.ready
+    assert.deepEqual(rec.calls, [{ enabled: true, accelerator: 'Alt+Shift+Space' }])
+    assert.equal(writes.length, 0)
+    await service.stop()
+  }
+})
+
+test('[集成] 新装客户端：超级面板先注册，全局唤醒随后用默认 Alt+Space 也能注册成功，两个键各自生效', async () => {
+  const store = new MemoryTriggerStore()
+  const registered = new Map<string, () => void>()
+  let panelToggles = 0
+  let mainToggles = 0
+  const triggers = new TriggerService({
+    dataRoot: 'unused',
+    store,
+    shortcuts: {
+      register(accelerator, callback) {
+        const key = accelerator.toLowerCase()
+        if (registered.has(key)) return false
+        registered.set(key, callback)
+        return true
+      },
+      unregister(accelerator) { registered.delete(accelerator.toLowerCase()) }
+    },
+    events: { publishHost: () => ({ success: true, delivered: 0 }) },
+    toggleMainWindow: () => { mainToggles += 1 },
+    toggleSuperPanel: () => { panelToggles += 1 },
+    openPlugin: async () => undefined
+  })
+  const { config } = migrationConfig({})
+  const panel = new SuperPanelInputService({ config, triggers, nativeInput: null, toggle: () => undefined })
+  await panel.ready
+  await triggers.register({
+    id: 'global_wake_hotkey', pluginId: 'system', type: 'hotkey', enabled: true,
+    config: { key: 'Alt+Space' }, actionMode: 'builtin', actionTarget: 'toggle_main_window', actionParams: {}
+  } as never, { type: 'main', webContentsId: 1 })
+  registered.get('alt+space')?.()
+  registered.get('alt+shift+space')?.()
+  assert.equal(mainToggles, 1)
+  assert.equal(panelToggles, 1)
+  await panel.stop()
+  await triggers.stop()
 })

@@ -23,6 +23,7 @@ import { useUIStore } from '@/stores/ui'
 import { routeUtils, ROUTES } from '@/router/routes'
 import { isPluginSupportedOnCurrentPlatform } from '@/utils/platform'
 import { isOfficialPlugin } from '@/utils/officialPlugins'
+import { isBundledPlugin } from '@/utils/bundledPlugins'
 import { useKeymap, KEYMAP_SCOPES } from '@/utils/keymap'
 
 const nav = useNavStore()
@@ -100,7 +101,10 @@ const CATEGORY_ICON_MAP = {
   '系统工具': 'fa-wrench',
   '办公效率': 'fa-briefcase',
   '媒体处理': 'fa-file-image-o',
-  '安全工具': 'fa-shield'
+  '安全工具': 'fa-shield',
+  '开发工具': 'fa-code',
+  '效率工具': 'fa-bolt',
+  '设计工具': 'fa-paint-brush'
 }
 
 const categoriesReady = computed(() => categoriesStore.loaded || categoriesStore.error)
@@ -340,7 +344,7 @@ const openApp = async (id) => {
     return
   }
 
-  if (isOfficialPlugin(pluginId)) {
+  if (isBundledPlugin(pluginId) || isOfficialPlugin(pluginId)) {
     try {
       await pluginsStore.openPlugin(pluginId)
     } catch (e) {
@@ -369,7 +373,7 @@ const openApp = async (id) => {
 }
 
 const openExtensionsRepo = () => {
-  const url = 'https://github.com/codingmuse/ZTools-extensions'
+  const url = 'https://github.com/ZToolsTeam/ZTools-extensions'
   if (window.ztools?.shell?.openExternal) {
     window.ztools.shell.openExternal(url)
   } else {
@@ -378,7 +382,7 @@ const openExtensionsRepo = () => {
 }
 
 const openDevGuide = () => {
-  const url = 'https://github.com/codingmuse/ZTools-extensions#5-%E5%88%86%E9%92%9F%E8%B4%A1%E7%8C%AE%E4%BD%A0%E7%9A%84%E9%A6%96%E6%AC%BE%E6%8F%92%E4%BB%B6'
+  const url = 'https://github.com/ZToolsTeam/ZTools-extensions#5-%E5%88%86%E9%92%9F%E8%B4%A1%E7%8C%AE%E4%BD%A0%E7%9A%84%E9%A6%96%E6%AC%BE%E6%8F%92%E4%BB%B6'
   if (window.ztools?.shell?.openExternal) {
     window.ztools.shell.openExternal(url)
   } else {

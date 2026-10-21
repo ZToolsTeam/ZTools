@@ -886,9 +886,12 @@ export class SystemRegistryHostPluginHandler {
         return { ok: false, success: false, error: '未提供待清理的软件残余目录或卸载程序路径' }
       }
       const cleanCandidate = targetPath.replace(/^"([^"]+)".*$/, '$1').trim()
+      if (isProtectedSystemPath(path.resolve(cleanCandidate))) {
+        return { ok: false, success: false, error: '系统核心路径或用户主目录受保护，禁止移除' }
+      }
       const resolved = await this.#ctx.authorizeExistingPath(cleanCandidate, caller, 'write')
       if (isProtectedSystemPath(resolved)) {
-        return { ok: false, success: false, error: '系统核心路径受保护，禁止移除' }
+        return { ok: false, success: false, error: '系统核心路径或用户主目录受保护，禁止移除' }
       }
       await fs.rm(resolved, { recursive: true, force: true })
       return { ok: true, success: true, removedPath: resolved }
@@ -973,7 +976,7 @@ export class SystemRegistryHostPluginHandler {
               id: crypto.createHash('md5').update(full).digest('hex').slice(0, 10),
               name: path.basename(entry.name, ext),
               path: full,
-              installLocation: path.dirname(full),
+              installLocation: full,
               uninstallString: full,
               sizeBytes: st.size,
               sizeText: formatBytes(st.size),
@@ -1345,12 +1348,19 @@ export class SystemRegistryHostPluginHandler {
       const text = this.#ctx.clipboard ? await this.#ctx.clipboard.getText() : ''
       return { ok: true, success: true, text }
     }
-    if (lowerFn === 'settext' || lowerFn === 'writetext' || lowerFn === 'copy') {
+    if (
+      lowerFn === 'settext' ||
+      lowerFn === 'setclipboardtext' ||
+      lowerFn === 'writetext' ||
+      lowerFn === 'copy' ||
+      lowerFn === 'copytext'
+    ) {
       const text = String(params.text ?? params.content ?? '')
-      if (this.#ctx.clipboard) {
-        await this.#ctx.clipboard.setText(text)
+      if (!this.#ctx.clipboard) {
+        return { ok: false, success: false, copied: false, error: '宿主剪贴板服务未注入，无法写入剪贴板' }
       }
-      return { ok: true, success: true, text }
+      await this.#ctx.clipboard.setText(text)
+      return { ok: true, success: true, copied: true, text }
     }
     const text = this.#ctx.clipboard ? await this.#ctx.clipboard.getText().catch(() => '') : ''
     return {

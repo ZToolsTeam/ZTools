@@ -34,7 +34,8 @@ const ignoredMacPackagingPaths = [
   /^\/out-test(?:\/|$)/,
   /^\/tests(?:\/|$)/,
   /^\/native(?:\/|$)/,
-  /^\/resources(?:\/|$)/,
+  // 主进程启动时读取 resources/app/app-icon.png 作为托盘与窗口图标（macOS 的 nativeImage 不支持 ICO），只放行这一个文件
+  /^\/resources\/(?!app$|app\/app-icon\.png$)/,
   /^\/src(?:\/|$)/,
   /^\/scripts(?:\/|$)/,
   /^\/tsconfig(?:\.|$)/,

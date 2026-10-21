@@ -4,10 +4,10 @@
   "version": "1.1.8.1",
   "type": "module",
   "scripts": {
-    "predev": "node ../packages/declarative-ui/scripts/ensure-dist.mjs && node ./public/js/cef-ipc/build.cjs",
+    "predev": "node ../packages/declarative-ui/scripts/ensure-dist.mjs && node ./scripts/sync-bundled-plugins.mjs --ensure && node ./public/js/cef-ipc/build.cjs",
     "dev": "vite",
     "build:sdk": "node ./public/js/cef-ipc/build.cjs && node ./scripts/verify-sdk-sync.mjs",
-    "prebuild": "node ../packages/declarative-ui/scripts/ensure-dist.mjs && node ./public/js/cef-ipc/build.cjs && node scripts/generate-version.cjs && node ./scripts/verify-sdk-sync.mjs",
+    "prebuild": "node ../packages/declarative-ui/scripts/ensure-dist.mjs && node ./scripts/sync-bundled-plugins.mjs --ensure && node ./public/js/cef-ipc/build.cjs && node scripts/generate-version.cjs && node ./scripts/verify-sdk-sync.mjs",
     "build": "vite build",
     "postbuild": "node scripts/pack-dist.cjs",
     "preview": "vite preview",
@@ -18,8 +18,8 @@
     "test:ui": "vitest --ui",
     "test:e2e": "node scripts/e2e-test/index.cjs",
     "test:all": "vitest run && node scripts/e2e-test/index.cjs",
-    "pretest": "node ../packages/declarative-ui/scripts/ensure-dist.mjs",
-    "pretest:all": "node ../packages/declarative-ui/scripts/ensure-dist.mjs"
+    "pretest": "node ../packages/declarative-ui/scripts/ensure-dist.mjs && node ./scripts/sync-bundled-plugins.mjs --ensure",
+    "pretest:all": "node ../packages/declarative-ui/scripts/ensure-dist.mjs && node ./scripts/sync-bundled-plugins.mjs --ensure"
   },
   "dependencies": {
     "ant-design-vue": "^4.2.6",

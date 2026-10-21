@@ -12,6 +12,8 @@ const { toastSuccess, toastError } = useToast()
 
 const loading = ref(false)
 const deviceLoading = ref(false)
+// 设备号模拟登录只在开发版出现，正式包里不显示（后台正式环境也已关闭该接口）
+const showDeviceLogin = import.meta.env.DEV
 const error = ref('')
 const qrcodeUrl = ref('')
 const sceneId = ref('')
@@ -102,7 +104,7 @@ const resetState = () => {
 
 // 开发测试：设备号一键模拟登录（免手机扫码）
 const handleDeviceLogin = async () => {
-  if (deviceLoading.value) return
+  if (!showDeviceLogin || deviceLoading.value) return
   deviceLoading.value = true
   stopPolling()
 
@@ -235,7 +237,7 @@ watch(dialogVisible, (newVal) => {
         </div>
 
         <!-- 开发测试 / AI 免扫码快速登录 -->
-        <div class="device-login-box">
+        <div v-if="showDeviceLogin" class="device-login-box">
           <button
             type="button"
             class="device-login-link"
@@ -557,30 +559,28 @@ watch(dialogVisible, (newVal) => {
     gap: 6px;
   }
 }
-</style>
 
-<style>
-/* 全局样式覆盖 Modal */
-.login-modal .ant-modal-content {
+/* 弹窗容器样式覆盖（限定在 .login-modal 命名空间内） */
+:global(.login-modal .ant-modal-content) {
   border-radius: 20px;
   overflow: hidden;
   background: var(--color-surface);
 }
 
-.login-modal .ant-modal-header {
+:global(.login-modal .ant-modal-header) {
   display: none;
 }
 
-.login-modal .ant-modal-body {
+:global(.login-modal .ant-modal-body) {
   padding: 14px;
 }
 
-.login-modal .ant-modal-close {
+:global(.login-modal .ant-modal-close) {
   top: 16px;
   right: 16px;
 }
 
-.login-modal .ant-modal-close-x {
+:global(.login-modal .ant-modal-close-x) {
   width: 32px;
   height: 32px;
   line-height: 32px;
@@ -591,7 +591,7 @@ watch(dialogVisible, (newVal) => {
   transition: all 0.2s ease;
 }
 
-.login-modal .ant-modal-close-x:hover {
+:global(.login-modal .ant-modal-close-x:hover) {
   background: var(--color-gray-200);
   color: var(--zt-text);
 }

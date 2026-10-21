@@ -52,6 +52,8 @@ export interface BrowserUrlInfo {
 }
 
 export interface FileRecord {
+  display_name?: string
+  kind?: 'application'
   name: string
   path: string
   is_dir: boolean
@@ -128,6 +130,7 @@ export class ManagedSidecarProcess {
   }>()
 
   private heartbeatTimer: NodeJS.Timeout | null = null
+  private restartTimer: NodeJS.Timeout | null = null
   private restartTimestamps: number[] = []
   private intentionallyStopped = false
   private rl: readline.Interface | null = null
@@ -254,6 +257,15 @@ export class ManagedSidecarProcess {
               resolve()
             }
           } catch (handshakeErr) {
+            if (this.rl) {
+              this.rl.close()
+              this.rl = null
+            }
+            if (this.child && !this.child.killed) {
+              this.child.kill('SIGTERM')
+              this.child = null
+              this.pid = null
+            }
             if (!settled) {
               settled = true
               reject(handshakeErr)
@@ -261,6 +273,15 @@ export class ManagedSidecarProcess {
           }
         }, 100)
       } catch (err) {
+        if (this.rl) {
+          this.rl.close()
+          this.rl = null
+        }
+        if (this.child && !this.child.killed) {
+          this.child.kill('SIGTERM')
+          this.child = null
+          this.pid = null
+        }
         if (!settled) {
           settled = true
           reject(err)
@@ -272,6 +293,10 @@ export class ManagedSidecarProcess {
   public async stop(): Promise<void> {
     this.intentionallyStopped = true
     this.stopHeartbeat()
+    if (this.restartTimer) {
+      clearTimeout(this.restartTimer)
+      this.restartTimer = null
+    }
     this.clearPendingRequests(new Error('Sidecar stopped'))
 
     if (this.child && !this.child.killed) {
@@ -356,6 +381,10 @@ export class ManagedSidecarProcess {
 
   private handleExit(_code: number | null, _signal: NodeJS.Signals | null) {
     this.stopHeartbeat()
+    if (this.rl) {
+      this.rl.close()
+      this.rl = null
+    }
     this.pid = null
     this.child = null
 
@@ -369,6 +398,15 @@ export class ManagedSidecarProcess {
 
   private handleUnexpectedExit() {
     this.clearPendingRequests(new Error('Sidecar process exited unexpectedly'))
+    if (this.rl) {
+      this.rl.close()
+      this.rl = null
+    }
+    if (this.child && !this.child.killed) {
+      this.child.kill('SIGTERM')
+      this.child = null
+      this.pid = null
+    }
 
     const now = Date.now()
     const windowMs = this.options.restartWindowMs || 60000
@@ -388,7 +426,11 @@ export class ManagedSidecarProcess {
     console.info(`[Sidecar:${this.options.name}] Process crashed. Restarting in ${backoffMs}ms (attempt ${this.restartTimestamps.length}/${maxRestarts})...`)
     this.state = 'restarting'
 
-    setTimeout(() => {
+    if (this.restartTimer) {
+      clearTimeout(this.restartTimer)
+    }
+    this.restartTimer = setTimeout(() => {
+      this.restartTimer = null
       if (!this.intentionallyStopped) {
         this.start().catch(err => {
           console.error(`[Sidecar:${this.options.name}] Failed to auto-restart:`, err)

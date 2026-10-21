@@ -63,4 +63,21 @@ describe('PluginCard3D', () => {
 
     expect(wrapper.emitted('toggle-favorite')).toEqual([['plugin-2']])
   })
+
+  it('插件卡片显示平台标签；未声明平台时不显示', () => {
+    const t = (platform) => ({ id: `${platform}-electron-any`, platform, runtime: 'electron', arch: 'any' })
+    const cases = [
+      [[t('windows'), t('macos')], '跨平台'],
+      [[t('windows')], '仅 Windows'],
+      [[t('macos')], '仅 macOS']
+    ]
+    for (const [targets, label] of cases) {
+      const wrapper = mount(PluginCard3D, { props: { plugin: { pluginId: 'p', name: 'P', targets } } })
+      expect(wrapper.find('.card-badge-platform').text()).toBe(label)
+      wrapper.unmount()
+    }
+    const legacy = mount(PluginCard3D, { props: { plugin: { pluginId: 'p', name: 'P' } } })
+    expect(legacy.find('.card-badge-platform').exists()).toBe(false)
+  })
 })
+

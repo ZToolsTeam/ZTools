@@ -27,8 +27,15 @@ export interface ConnectedServerInfo {
   name: string;
   transport: McpTransport;
   serverInfo?: McpImplementationInfo;
-  capabilities?: any;
+  capabilities?: Record<string, unknown>;
   tools: Map<string, McpTool>;
+}
+
+interface PendingRequestEntry {
+  serverName: string;
+  resolve: (val: unknown) => void;
+  reject: (err: Error) => void;
+  timer: ReturnType<typeof setTimeout>;
 }
 
 export class McpHost {
@@ -36,10 +43,7 @@ export class McpHost {
   private capabilities: McpClientCapabilities;
   private requestTimeoutMs: number;
   private servers: Map<string, ConnectedServerInfo> = new Map();
-  private pendingRequests: Map<
-    string | number,
-    { resolve: (val: any) => void; reject: (err: any) => void; timer: any }
-  > = new Map();
+  private pendingRequests: Map<string | number, PendingRequestEntry> = new Map();
   private nextRequestId: number = 1;
 
   constructor(options: McpHostOptions = {}) {
@@ -52,6 +56,16 @@ export class McpHost {
       ...options.capabilities
     };
     this.requestTimeoutMs = options.requestTimeoutMs || 30000;
+  }
+
+  private rejectPendingRequestsForServer(serverName: string): void {
+    for (const [reqId, pending] of this.pendingRequests.entries()) {
+      if (pending.serverName === serverName) {
+        clearTimeout(pending.timer);
+        this.pendingRequests.delete(reqId);
+        pending.reject(new Error(`MCP Server "${serverName}" disconnected`));
+      }
+    }
   }
 
   /**
@@ -76,30 +90,46 @@ export class McpHost {
 
     transport.onClose(() => {
       this.servers.delete(serverName);
+      this.rejectPendingRequestsForServer(serverName);
     });
 
-    if (!transport.isConnected) {
-      await transport.connect();
+    try {
+      if (!transport.isConnected) {
+        await transport.connect();
+      }
+
+      // 执行 initialize 握手
+      const initParams: McpInitializeParams = {
+        protocolVersion: MCP_PROTOCOL_VERSION,
+        clientInfo: this.info,
+        capabilities: this.capabilities
+      };
+
+      const initResult = (await this.sendRequest(
+        serverName,
+        'initialize',
+        initParams as unknown as Record<string, unknown>
+      )) as McpInitializeResult;
+      serverEntry.serverInfo = initResult.serverInfo;
+      serverEntry.capabilities = initResult.capabilities as Record<string, unknown>;
+
+      // 发送 notifications/initialized
+      await transport.send(createJsonRpcNotification('notifications/initialized'));
+
+      // 拉取初始工具列表
+      await this.refreshServerTools(serverName);
+
+      return serverEntry;
+    } catch (err) {
+      this.servers.delete(serverName);
+      this.rejectPendingRequestsForServer(serverName);
+      try {
+        await transport.close();
+      } catch {
+        // 忽略握手失败时的底层关闭清理异常
+      }
+      throw err;
     }
-
-    // 执行 initialize 握手
-    const initParams: McpInitializeParams = {
-      protocolVersion: MCP_PROTOCOL_VERSION,
-      clientInfo: this.info,
-      capabilities: this.capabilities
-    };
-
-    const initResult = (await this.sendRequest(serverName, 'initialize', initParams)) as McpInitializeResult;
-    serverEntry.serverInfo = initResult.serverInfo;
-    serverEntry.capabilities = initResult.capabilities;
-
-    // 发送 notifications/initialized
-    await transport.send(createJsonRpcNotification('notifications/initialized'));
-
-    // 拉取初始工具列表
-    await this.refreshServerTools(serverName);
-
-    return serverEntry;
   }
 
   /**
@@ -110,9 +140,12 @@ export class McpHost {
     if (!entry) return false;
 
     this.servers.delete(serverName);
+    this.rejectPendingRequestsForServer(serverName);
     try {
       await entry.transport.close();
-    } catch {}
+    } catch {
+      // 忽略断开连接时的底层通道关闭异常
+    }
     return true;
   }
 
@@ -194,7 +227,7 @@ export class McpHost {
    */
   public async callTool(
     toolName: string,
-    args: Record<string, any> = {},
+    args: Record<string, unknown> = {},
     serverName?: string
   ): Promise<McpToolResult> {
     const server = this.findServerForTool(toolName, serverName);
@@ -209,7 +242,7 @@ export class McpHost {
   /**
    * 向指定 Server 发送 JSON-RPC 请求
    */
-  public async sendRequest(serverName: string, method: string, params?: Record<string, any>): Promise<any> {
+  public async sendRequest(serverName: string, method: string, params?: Record<string, unknown>): Promise<unknown> {
     const server = this.servers.get(serverName);
     if (!server) {
       throw new Error(`Server "${serverName}" is not connected`);
@@ -224,12 +257,12 @@ export class McpHost {
         reject(new Error(`MCP Request ${method} (id=${id}) timed out after ${this.requestTimeoutMs}ms`));
       }, this.requestTimeoutMs);
 
-      this.pendingRequests.set(id, { resolve, reject, timer });
+      this.pendingRequests.set(id, { serverName, resolve, reject, timer });
 
-      server.transport.send(req).catch((err) => {
+      server.transport.send(req).catch((err: unknown) => {
         clearTimeout(timer);
         this.pendingRequests.delete(id);
-        reject(err);
+        reject(err instanceof Error ? err : new Error(String(err)));
       });
     });
   }

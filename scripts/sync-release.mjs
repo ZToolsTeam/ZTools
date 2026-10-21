@@ -5,7 +5,10 @@
  * ZTools 开源双仓自动化同步与发布执行器 (Zero-Command AI Release Pipeline)
  *
  * 用法：
- *   node scripts/sync-release.mjs [oss|extensions|all] [--msg "自定义提交信息"]
+ *   node scripts/sync-release.mjs [oss|extensions|all] [--msg "自定义提交信息"] [--overwrite-public]
+ *
+ * 插件大仓（extensions）以公开仓库为准，社区 PR 在那里合并；从内部仓库重新生成会冲掉这些改动，
+ * 所以同步插件大仓必须显式加 --overwrite-public（导出脚本会拒绝无此参数的覆盖）。
  */
 
 import { execSync } from 'node:child_process'
@@ -21,6 +24,7 @@ const args = process.argv.slice(2)
 let target = 'all'
 let customMsg = ''
 let pushOnly = false
+let overwritePublic = false
 
 for (let i = 0; i < args.length; i++) {
   const arg = args[i]
@@ -30,6 +34,8 @@ for (let i = 0; i < args.length; i++) {
     customMsg = args[++i]
   } else if (arg === '--push-only') {
     pushOnly = true
+  } else if (arg === '--overwrite-public') {
+    overwritePublic = true
   }
 }
 
@@ -110,7 +116,7 @@ function pushToRemotes(repoDir, name, githubUrl, giteeUrl) {
   }
 }
 
-function syncRepo({ name, repoDir, prepareScript, commitPrefix, githubUrl, giteeUrl, isOss = false }) {
+function syncRepo({ name, repoDir, prepareScript, prepareArgs = [], commitPrefix, githubUrl, giteeUrl, isOss = false }) {
   console.log(`\n========================================================`)
   console.log(`🚀 开始同步: ${name}`)
   console.log(`   目标目录: ${repoDir}`)
@@ -143,7 +149,7 @@ function syncRepo({ name, repoDir, prepareScript, commitPrefix, githubUrl, gitee
   // 1. 执行脱敏抽取
   console.log(`[步骤 1/3] 正在抽取最新纯净源码...`)
   try {
-    execSync(`node "${prepareScript}"`, { cwd: rootDir, stdio: 'inherit' })
+    execSync(`node "${prepareScript}" ${prepareArgs.join(' ')}`.trim(), { cwd: rootDir, stdio: 'inherit' })
   } catch (err) {
     console.error(`❌ [失败] 源码抽取中断: ${err.message}`)
     process.exit(1)
@@ -200,7 +206,7 @@ const TASKS = {
     repoDir: path.resolve(rootDir, '..', 'ZTools-opensource'),
     prepareScript: path.join(rootDir, 'scripts', 'prepare-opensource-release.mjs'),
     commitPrefix: 'chore(release)',
-    githubUrl: 'https://github.com/codingmuse/ZTools',
+    githubUrl: 'https://github.com/ZToolsTeam/ZTools',
     giteeUrl: 'https://gitee.com/hoposky/ZTools.git',
     isOss: true
   },
@@ -208,8 +214,9 @@ const TASKS = {
     name: 'ZTools 插件生态大仓 (MIT)',
     repoDir: path.resolve(rootDir, '..', 'ZTools-extensions'),
     prepareScript: path.join(rootDir, 'scripts', 'prepare-extensions-repo.mjs'),
+    prepareArgs: overwritePublic ? ['--overwrite-public'] : [],
     commitPrefix: 'feat(ecosystem)',
-    githubUrl: 'https://github.com/codingmuse/ZTools-extensions'
+    githubUrl: 'https://github.com/ZToolsTeam/ZTools-extensions'
   }
 }
 

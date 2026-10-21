@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import {
+  DEFAULT_SUPER_PANEL_CONFIG,
   decodeSuperPanelConfig,
   panelDimensions,
   parseSuperPanelConfig
@@ -56,8 +57,17 @@ test('preserves physical Control separately from portable Ctrl accelerators', ()
 test('falls back safely for damaged or out-of-range configuration', () => {
   const config = decodeSuperPanelConfig('{broken')
   assert.equal(config.enabled, true)
-  assert.equal(config.keyboard.accelerator, 'Alt+Space')
+  // Alt+Space 留给全局唤醒，超级面板默认改为 Alt+Shift+Space
+  assert.equal(config.keyboard.accelerator, 'Alt+Shift+Space')
   assert.deepEqual(config.mouse.trigger, { button: 'middle', action: 'long', longPressMs: 300 })
   assert.deepEqual(panelDimensions('medium'), { width: 400, height: 600 })
   assert.deepEqual(panelDimensions('small'), { width: 400, height: 300 })
+})
+
+test('超级面板默认快捷键与全局唤醒默认值不同；只缺修饰键时也按新默认补齐', () => {
+  assert.equal(DEFAULT_SUPER_PANEL_CONFIG.keyboard.accelerator, 'Alt+Shift+Space')
+  assert.equal(decodeSuperPanelConfig('{}').keyboard.accelerator, 'Alt+Shift+Space')
+  assert.equal(decodeSuperPanelConfig(JSON.stringify({ keyboardHotkey: { enabled: true, key: 'Space' } })).keyboard.accelerator, 'Alt+Shift+Space')
+  // 用户明确保存的组合键原样保留
+  assert.equal(decodeSuperPanelConfig(JSON.stringify({ keyboardHotkey: { enabled: true, modifiers: ['Alt'], key: 'Space' } })).keyboard.accelerator, 'Alt+Space')
 })

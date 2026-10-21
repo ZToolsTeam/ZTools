@@ -8,6 +8,7 @@
     "postinstall": "node scripts/dev-bootstrap.mjs --install-only",
     "dev": "node scripts/dev-bootstrap.mjs",
     "start": "node scripts/dev-bootstrap.mjs",
+    "start:rebuild": "node scripts/dev-bootstrap.mjs --force-build",
     "pretest": "node packages/declarative-ui/scripts/ensure-dist.mjs",
     "test": "node --test tests/e2e-cross-module-resilience.test.mjs",
     "test:anti-reverse": "node --test tests/anti-reverse-resilience.test.mjs",
@@ -29,7 +30,13 @@
     "package:mac:dmg": "npm --prefix electron-client run package:dmg:darwin --",
     "release:mac": "node scripts/build-macos-remote.mjs",
     "release:mac:download": "node scripts/build-macos-remote.mjs --download",
-    "release:mac:dry-run": "node scripts/build-macos-remote.mjs --dry-run"
+    "release:mac:dry-run": "node scripts/build-macos-remote.mjs --dry-run",
+    "prepare": "node scripts/install-git-hooks.mjs",
+    "quality:fast": "node scripts/quality-gate.mjs --fast",
+    "quality:gate": "node scripts/quality-gate.mjs",
+    "quality:staged": "node scripts/quality-gate.mjs --staged",
+    "quality:push": "node scripts/quality-gate.mjs --push",
+    "test:quality-gate": "node --test scripts/quality-gate.test.mjs"
   },
   "workspaces": [
     "packages/*"

@@ -101,7 +101,9 @@ export async function searchFiles(args: SearchFilesArgs): Promise<SearchFilesRes
                 snippet = content.slice(start, end).replace(/\r?\n/g, ' ');
               }
             }
-          } catch {}
+          } catch {
+            // 忽略单文件权限受限或编码读取异常
+          }
         }
 
         if (isMatch) {
@@ -116,7 +118,9 @@ export async function searchFiles(args: SearchFilesArgs): Promise<SearchFilesRes
               isDirectory: false,
               snippet
             });
-          } catch {}
+          } catch {
+            // 忽略并发删除或无权读取元数据的文件
+          }
         }
       } else if (entry.isDirectory()) {
         if (nameToMatch.includes(normalizedQuery)) {
@@ -130,7 +134,9 @@ export async function searchFiles(args: SearchFilesArgs): Promise<SearchFilesRes
               modifiedTime: stat.mtime.toISOString(),
               isDirectory: true
             });
-          } catch {}
+          } catch {
+            // 忽略无法获取 stat 的目录
+          }
         }
 
         traverse(fullPath, depth + 1);

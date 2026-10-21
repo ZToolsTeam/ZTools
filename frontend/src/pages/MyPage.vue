@@ -37,6 +37,7 @@ import {
 import { routeUtils } from '@/router/routes'
 import { getHotkeyHostPlatform } from '@/utils/hotkeyRecorder'
 import { isOfficialPlugin } from '@/utils/officialPlugins'
+import { isBundledPlugin } from '@/utils/bundledPlugins'
 import { useKeymap, KEYMAP_SCOPES, dispatchKeyEvent, isModalOpen } from '@/utils/keymap'
 
 // Stores
@@ -615,7 +616,7 @@ async function openApp(id) {
     return
   }
 
-  if (isOfficialPlugin(pluginId)) {
+  if (isBundledPlugin(pluginId) || isOfficialPlugin(pluginId)) {
     try {
       await pluginsStore.openPlugin(pluginId)
     } catch (e) {

@@ -15,45 +15,53 @@ let _v2CatalogCache = null
 let _v2CatalogCacheTime = 0
 const V2_CATALOG_CACHE_TTL_MS = 60 * 1000
 
-async function findInV2StaticCatalog(pluginId) {
-  const pid = String(pluginId || '').trim().toLowerCase()
-  if (!pid || typeof fetch !== 'function') return null
+/**
+ * 读取 V2 静态插件索引（CDN plugins-v2/catalog.json）的插件列表，60 秒内存缓存。
+ * 拉取失败或格式不对时返回 null，由调用方回退到后台接口。
+ * @returns {Promise<Array<object> | null>}
+ */
+export async function loadV2StaticCatalogList() {
+  if (typeof fetch !== 'function') return null
 
   const now = Date.now()
-  let list = null
   if (_v2CatalogCache && now - _v2CatalogCacheTime < V2_CATALOG_CACHE_TTL_MS) {
-    list = _v2CatalogCache
-  } else {
-    try {
-      const controller = typeof AbortController !== 'undefined' ? new AbortController() : null
-      const timer = controller ? setTimeout(() => controller.abort(), 2500) : null
-      try {
-        const res = await fetch(V2_CATALOG_CDN_URL, {
-          headers: { Accept: 'application/json' },
-          signal: controller ? controller.signal : undefined
-        })
-        if (res.ok) {
-          const raw = await res.json()
-          list = Array.isArray(raw)
-            ? raw
-            : Array.isArray(raw?.plugins)
-              ? raw.plugins
-              : Array.isArray(raw?.list)
-                ? raw.list
-                : null
-          if (list) {
-            _v2CatalogCache = list
-            _v2CatalogCacheTime = Date.now()
-          }
-        }
-      } finally {
-        if (timer) clearTimeout(timer)
-      }
-    } catch {
-      return null
-    }
+    return _v2CatalogCache
   }
+  try {
+    const controller = typeof AbortController !== 'undefined' ? new AbortController() : null
+    const timer = controller ? setTimeout(() => controller.abort(), 2500) : null
+    try {
+      const res = await fetch(V2_CATALOG_CDN_URL, {
+        headers: { Accept: 'application/json' },
+        signal: controller ? controller.signal : undefined
+      })
+      if (!res.ok) return null
+      const raw = await res.json()
+      const list = Array.isArray(raw)
+        ? raw
+        : Array.isArray(raw?.plugins)
+          ? raw.plugins
+          : Array.isArray(raw?.list)
+            ? raw.list
+            : null
+      if (list) {
+        _v2CatalogCache = list
+        _v2CatalogCacheTime = Date.now()
+      }
+      return list
+    } finally {
+      if (timer) clearTimeout(timer)
+    }
+  } catch {
+    return null
+  }
+}
 
+async function findInV2StaticCatalog(pluginId) {
+  const pid = String(pluginId || '').trim().toLowerCase()
+  if (!pid) return null
+
+  const list = await loadV2StaticCatalogList()
   if (!Array.isArray(list)) return null
   const found = list.find(
     (item) => String(item?.id || item?.pluginId || '').trim().toLowerCase() === pid

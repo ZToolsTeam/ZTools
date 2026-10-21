@@ -169,7 +169,7 @@
                   v-for="opt in field.options"
                   :key="opt.value"
                   :value="opt.value"
-                  class="bg-[#18181b] text-zinc-100"
+                  class="bg-[var(--rc-surface)] text-[var(--rc-text-primary)]"
                 >
                   {{ cleanUiText(opt.label) }}
                 </option>
@@ -712,12 +712,12 @@ function cleanUiText(str) {
 
 function getTagStyle(tag) {
   const rawColor = typeof tag === "object" && tag?.color ? String(tag.color).toLowerCase() : "";
-  const isDanger = rawColor === "#ef4444" || rawColor === "red" || rawColor.includes("ef4444");
+  const isDanger = rawColor === "red" || rawColor.includes("danger") || rawColor.includes("ef4444");
   if (isDanger) {
     return {
       backgroundColor: "rgba(239, 68, 68, 0.12)",
       borderColor: "rgba(239, 68, 68, 0.25)",
-      color: "#f87171"
+      color: "var(--rc-error)"
     };
   }
   return {

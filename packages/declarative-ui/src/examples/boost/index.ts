@@ -7,11 +7,7 @@ import {
   useEffect,
   showToast,
   Toast,
-  confirmAlert,
-  MetricGrid,
-  DistributionBar,
-  FilterBar,
-  SegmentedControl
+  confirmAlert
 } from '../../index.js'
 import {
   BoostCandidateItem,
@@ -383,7 +379,7 @@ export default function BoostCommand() {
         })
       ]
     }),
-    filterBar: FilterBar({
+    filterBar: {
       summaryText: `物理内存已用 ${memPct}% (${formatBytes(usedMem)}/${formatBytes(totalMem)}) · 已勾选 ${checkedInFiltered.length} 项待加速 (预计释放 ${formatBytes(selectedBytes)})`,
       actions: [
         {
@@ -394,7 +390,7 @@ export default function BoostCommand() {
           onAction: () => refreshBoost(true)
         }
       ]
-    }),
+    },
     subList: {
       title: '系统内存释放、启动项与临时缓存明细 (按占用降序，直接勾选或按 ↵ 加速)',
       subtitle: `${filtered.length} 项 · 已选 ${checkedInFiltered.length} 项 (${formatBytes(selectedBytes)})`,

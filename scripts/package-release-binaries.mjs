@@ -19,7 +19,7 @@
  *   --skip-mac            仅上传 Windows 双包，跳过自动触发云端 macOS Universal DMG 构建
  *   --upload, --publish   打包校验完成后，自动上传 Windows 双包至 GitHub Releases 并联动触发云端 macOS DMG 编译挂载
  *   --tag <tag>           指定 GitHub Release 标签（默认: v<version>）
- *   --repo <owner/repo>   指定目标 GitHub 仓库（默认: codingmuse/ZTools）
+ *   --repo <owner/repo>   指定目标 GitHub 仓库（默认: ZToolsTeam/ZTools）
  *   --notes <text>        指定 GitHub Release 发布说明
  *   --dry-run             演练模式：执行校验并打印将要执行的打包/上传动作，不实际发起远端上传
  */
@@ -41,7 +41,7 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url))
 export const ROOT_DIR = path.resolve(__dirname, '..')
 export const ELECTRON_CLIENT_DIR = path.join(ROOT_DIR, 'electron-client')
 export const INSTALLER_DIR = path.join(ROOT_DIR, 'installer')
-export const DEFAULT_GITHUB_REPO = 'codingmuse/ZTools'
+export const DEFAULT_GITHUB_REPO = 'ZToolsTeam/ZTools'
 
 export function assertFourPartVersion(version) {
   const str = String(version ?? '').trim()

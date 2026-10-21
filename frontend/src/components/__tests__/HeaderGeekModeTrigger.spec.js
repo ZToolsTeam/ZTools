@@ -3,6 +3,11 @@ import { mount } from '@vue/test-utils'
 import { createPinia, setActivePinia } from 'pinia'
 import HeaderGeekModeTrigger from '../HeaderGeekModeTrigger.vue'
 import * as windowMode from '@/utils/windowMode'
+import ShortcutKeys from '@/components/base/ShortcutKeys.vue'
+import { currentGlobalWakeHotkey } from '@/utils/globalWakeHotkey'
+
+const apiMock = vi.hoisted(() => ({ getHotkey: vi.fn().mockResolvedValue('') }))
+vi.mock('@/api/apiserver', () => apiMock)
 
 describe('HeaderGeekModeTrigger 交互与全异常覆盖测试套件', () => {
   beforeEach(() => {
@@ -126,5 +131,30 @@ describe('HeaderGeekModeTrigger 交互与全异常覆盖测试套件', () => {
     expect(() => {
       vi.advanceTimersByTime(500)
     }).not.toThrow()
+  })
+
+  it('[回归] 显示用户实际设置的唤醒键，而不是写死的默认 Alt+Space', async () => {
+    apiMock.getHotkey.mockResolvedValueOnce('Ctrl+Shift+Z')
+    const wrapper = mount(HeaderGeekModeTrigger)
+    await vi.waitFor(() => expect(currentGlobalWakeHotkey.value).toBe('Ctrl+Shift+Z'))
+    await wrapper.vm.$nextTick()
+    const keys = wrapper.findAllComponents(ShortcutKeys).map((c) => c.props('combo'))
+    expect(keys).toContain('Ctrl+Shift+Z')
+    expect(keys).not.toContain('Alt+Space')
+    wrapper.unmount()
+  })
+
+  it('全局唤醒关闭时不显示快捷键，引导文案提示去设置里开启', async () => {
+    const wrapper = mount(HeaderGeekModeTrigger)
+    await vi.waitFor(() => expect(apiMock.getHotkey).toHaveBeenCalled())
+    currentGlobalWakeHotkey.value = ''
+    await wrapper.vm.$nextTick()
+    expect(wrapper.find('.launcher-trigger').findAllComponents(ShortcutKeys)).toHaveLength(0)
+    await wrapper.trigger('mouseenter')
+    vi.advanceTimersByTime(150)
+    await wrapper.vm.$nextTick()
+    expect(wrapper.find('.guide-card').text()).toContain('全局唤醒快捷键已关闭')
+    wrapper.unmount()
+    currentGlobalWakeHotkey.value = 'Alt+Space'
   })
 })

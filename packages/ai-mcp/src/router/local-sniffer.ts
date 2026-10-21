@@ -1,5 +1,18 @@
 import { SniffedLocalProvider, SniffResult, ModelProviderConfig, SniffOptions } from '../types/ai.js';
 
+async function fetchWithTimeout(url: string, timeoutMs: number): Promise<Response> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    return await fetch(url, {
+      method: 'GET',
+      signal: controller.signal
+    });
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 /**
  * 自动嗅探本地运行的 Ollama 服务
  */
@@ -11,15 +24,7 @@ export async function sniffOllama(
   const startTime = Date.now();
 
   try {
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), timeoutMs);
-
-    const res = await fetch(`${normalizedUrl}/api/tags`, {
-      method: 'GET',
-      signal: controller.signal
-    });
-    clearTimeout(timer);
-
+    const res = await fetchWithTimeout(`${normalizedUrl}/api/tags`, timeoutMs);
     const latencyMs = Date.now() - startTime;
 
     if (!res.ok) {
@@ -42,10 +47,10 @@ export async function sniffOllama(
       }
     }
 
-    // 尝试获取版本信息
+    // 尝试获取版本信息（统一使用带超时保护的请求避免挂起）
     let version: string | undefined;
     try {
-      const vRes = await fetch(`${normalizedUrl}/api/version`, { method: 'GET' });
+      const vRes = await fetchWithTimeout(`${normalizedUrl}/api/version`, timeoutMs);
       if (vRes.ok) {
         const vData = await vRes.json() as { version?: string };
         version = vData.version;
@@ -87,15 +92,7 @@ export async function sniffLMStudio(
   const startTime = Date.now();
 
   try {
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), timeoutMs);
-
-    const res = await fetch(`${normalizedUrl}/v1/models`, {
-      method: 'GET',
-      signal: controller.signal
-    });
-    clearTimeout(timer);
-
+    const res = await fetchWithTimeout(`${normalizedUrl}/v1/models`, timeoutMs);
     const latencyMs = Date.now() - startTime;
 
     if (!res.ok) {

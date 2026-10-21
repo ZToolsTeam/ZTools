@@ -4,24 +4,10 @@ import {
   renderDeclarativeRoot,
   LocalStorage,
   Clipboard,
-  // 1. json-format
-  JsonFormatCommand,
-  JsonDetailView,
-  validateJson,
-  formatJson,
-  minifyJson,
-  jsonToTsInterface,
-  // 2. qr-code
-  QrCodeCommand,
-  QrDetailView,
-  CreateQrForm,
-  generateQrSvg,
-  // 3. github
   GithubDashboardCommand,
   GithubDetailView,
   filterGithubItems,
   SAMPLE_GITHUB_ITEMS,
-  // 4. google-translate
   GoogleTranslateCommand,
   TranslateDetailView,
   translateText,
@@ -29,8 +15,6 @@ import {
   getTranslateHistory,
   saveTranslateHistory,
   clearTranslateHistory,
-  SUPPORTED_LANGUAGES,
-  // 5. color-picker
   ColorPickerCommand,
   ColorDetailView,
   parseColor,
@@ -46,7 +30,6 @@ import {
   getSavedPalette,
   saveColorToPalette,
   clearPalette,
-  // 6. obsidian
   ObsidianCommand,
   ObsidianNoteDetailView,
   ObsidianQuickNoteForm,
@@ -55,24 +38,19 @@ import {
   deleteVaultNote,
   searchVaultNotes,
   SAMPLE_OBSIDIAN_NOTES,
-  // 7. speedtest
   SpeedtestCommand,
   SpeedtestDetailView,
   runNetworkDiagnostics,
   generateAsciiBar,
-  // 8. winget
   WingetCommand,
   WingetDetailView,
   filterWingetPackages,
   SAMPLE_WINGET_PACKAGES,
-  // 9. currency-exchange
   CurrencyExchangeCommand,
   CurrencyDetailView,
   convertCurrency,
   calculateAllConversions,
   parseAmountAndCurrency,
-  USD_RATES,
-  // 10. kill-process
   KillProcessCommand,
   ProcessDetailView,
   filterAndSortProcesses,
@@ -83,79 +61,6 @@ describe("Raycast Compat: 10 Classic Open-Source Applications Suite", () => {
   beforeEach(async () => {
     await LocalStorage.clear();
     await Clipboard.clear();
-  });
-
-  // --------------------------------------------------------------------------
-  // 1. JSON Format
-  // --------------------------------------------------------------------------
-  describe("App 1: json-format", () => {
-    test("JsonFormatCommand mounts and renders Form correctly", () => {
-      const root = renderDeclarativeRoot(JsonFormatCommand);
-      const desc = root.getLatest();
-      assert.equal(desc.type, "Form");
-      assert.equal(desc.props.navigationTitle, "JSON 格式化与类型转换");
-      assert.equal(desc.props.actions.type, "ActionPanel");
-      assert.ok(desc.children.length >= 2);
-      root.unmount();
-    });
-
-    test("JsonDetailView renders formatted JSON, TypeScript and metadata", () => {
-      const formatted = '{\n  "status": "ok"\n}';
-      const ts = "export interface Status { status: string; }";
-      const view = JsonDetailView({
-        formatted,
-        tsInterface: ts,
-        stats: { keys: 1, depth: 1, byteSize: 22 }
-      });
-      assert.equal(view.type, "Detail");
-      assert.equal(view.props.navigationTitle, "JSON 格式化详情");
-      assert.match(view.props.markdown, /export interface Status/);
-      assert.equal(view.props.metadata.type, "Detail.Metadata");
-      assert.equal(view.props.actions.type, "ActionPanel");
-    });
-  });
-
-  // --------------------------------------------------------------------------
-  // 2. QR Code
-  // --------------------------------------------------------------------------
-  describe("App 2: qr-code", () => {
-    test("QrCodeCommand mounts and renders List with items", () => {
-      const root = renderDeclarativeRoot(QrCodeCommand);
-      const desc = root.getLatest();
-      assert.equal(desc.type, "List");
-      assert.equal(desc.props.navigationTitle, "二维码生成器");
-      assert.ok(desc.children.length >= 1);
-      const section = desc.children[0];
-      assert.equal(section.type, "List.Section");
-      assert.ok(section.children.length >= 2);
-      root.unmount();
-    });
-
-    test("QrDetailView renders QR SVG and actions", () => {
-      const item = {
-        id: "qr-test",
-        title: "Test QR",
-        content: "https://ztools.dev",
-        level: "M",
-        createdAt: "12:00:00"
-      };
-      const view = QrDetailView({ item });
-      assert.equal(view.type, "Detail");
-      assert.match(view.props.markdown, /data:image\/svg\+xml;utf8/);
-      assert.equal(view.props.actions.type, "ActionPanel");
-    });
-
-    test("CreateQrForm mounts and renders form fields", () => {
-      let created = null;
-      const root = renderDeclarativeRoot(() =>
-        CreateQrForm({ onCreated: (it) => (created = it) })
-      );
-      const desc = root.getLatest();
-      assert.equal(desc.type, "Form");
-      assert.equal(desc.props.navigationTitle, "新建二维码");
-      assert.ok(desc.children.length >= 3);
-      root.unmount();
-    });
   });
 
   // --------------------------------------------------------------------------

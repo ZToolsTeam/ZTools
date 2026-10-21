@@ -4,11 +4,12 @@ import type { ProcessService } from './process-service.js'
 import type { ShellService } from './shell-service.js'
 import { MediaOcrHostPluginHandler } from './host-plugins/media-ocr-host.js'
 import { NetworkHostPluginHandler } from './host-plugins/network-host.js'
-import type {
-  HostClipboardPort,
-  HostPathAuthorityPort,
-  HostPluginContext,
-  HostWindowControlPort
+import {
+  isProtectedSystemPath,
+  type HostClipboardPort,
+  type HostPathAuthorityPort,
+  type HostPluginContext,
+  type HostWindowControlPort
 } from './host-plugins/shared-utils.js'
 import { StorageHostPluginHandler } from './host-plugins/storage-host.js'
 import { SystemRegistryHostPluginHandler } from './host-plugins/system-registry-host.js'
@@ -139,10 +140,17 @@ export class BuiltinPluginHostService {
     if (!trimmed) {
       throw new Error('文件路径不能为空')
     }
+    if (trimmed.includes('\0')) {
+      throw new Error('文件路径包含非法空字节')
+    }
     if (this.#pathAuthority && caller) {
       return this.#pathAuthority.resolveAuthorizedPath(trimmed, caller, access, false)
     }
-    return path.resolve(trimmed)
+    const resolved = path.resolve(trimmed)
+    if (access === 'write' && isProtectedSystemPath(resolved)) {
+      throw new Error(`系统核心受保护路径禁止修改或移除: ${resolved}`)
+    }
+    return resolved
   }
 
   async #authorizeOutputPath(
@@ -153,10 +161,17 @@ export class BuiltinPluginHostService {
     if (!trimmed) {
       throw new Error('输出路径不能为空')
     }
+    if (trimmed.includes('\0')) {
+      throw new Error('输出路径包含非法空字节')
+    }
     if (this.#pathAuthority && caller) {
       return this.#pathAuthority.resolveAuthorizedPath(trimmed, caller, 'write', true)
     }
-    return path.resolve(trimmed)
+    const resolved = path.resolve(trimmed)
+    if (isProtectedSystemPath(resolved)) {
+      throw new Error(`系统核心受保护路径禁止作为输出目录: ${resolved}`)
+    }
+    return resolved
   }
 
   supportsPlugin(pluginName: string): boolean {

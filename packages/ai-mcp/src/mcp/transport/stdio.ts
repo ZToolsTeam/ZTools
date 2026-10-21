@@ -24,6 +24,7 @@ export class StdioTransport implements McpTransport {
   private errorHandlers: Array<(err: Error) => void> = [];
   private closeHandlers: Array<() => void> = [];
   private connected: boolean = false;
+  private closedEmitted: boolean = false;
   private options?: StdioClientOptions;
 
   constructor(optionsOrStreams: StdioClientOptions | StdioProcessStreams) {
@@ -51,7 +52,7 @@ export class StdioTransport implements McpTransport {
       this.inStream = child.stdin!;
       this.outStream = child.stdout!;
 
-      child.on('error', (err: any) => {
+      child.on('error', (err: Error) => {
         this.emitError(err);
       });
 
@@ -66,12 +67,13 @@ export class StdioTransport implements McpTransport {
     }
 
     this.connected = true;
+    this.closedEmitted = false;
 
     this.outStream.on('data', (chunk: Buffer) => {
       this.handleData(chunk.toString('utf-8'));
     });
 
-    this.outStream.on('error', (err: any) => {
+    this.outStream.on('error', (err: Error) => {
       this.emitError(err);
     });
 
@@ -95,12 +97,13 @@ export class StdioTransport implements McpTransport {
         for (const handler of this.messageHandlers) {
           try {
             handler(parsed);
-          } catch (err: any) {
-            this.emitError(err);
+          } catch (err: unknown) {
+            this.emitError(err instanceof Error ? err : new Error(String(err)));
           }
         }
-      } catch (err: any) {
-        this.emitError(new Error(`Failed to parse incoming JSON-RPC line: ${trimmed} (${err.message})`));
+      } catch (err: unknown) {
+        const errMsg = err instanceof Error ? err.message : String(err);
+        this.emitError(new Error(`Failed to parse incoming JSON-RPC line: ${trimmed} (${errMsg})`));
       }
     }
   }
@@ -112,7 +115,7 @@ export class StdioTransport implements McpTransport {
 
     const json = JSON.stringify(message) + '\n';
     return new Promise((resolve, reject) => {
-      this.inStream!.write(json, 'utf-8', (err: any) => {
+      this.inStream!.write(json, 'utf-8', (err?: Error | null) => {
         if (err) reject(err);
         else resolve();
       });
@@ -126,7 +129,9 @@ export class StdioTransport implements McpTransport {
     if (this.childProcess) {
       try {
         this.childProcess.kill();
-      } catch {}
+      } catch {
+        // 忽略已退出子进程的 kill 异常
+      }
     }
 
     this.emitClose();
@@ -148,15 +153,21 @@ export class StdioTransport implements McpTransport {
     for (const handler of this.errorHandlers) {
       try {
         handler(err);
-      } catch {}
+      } catch {
+        // 忽略错误监听器自身抛出的异常
+      }
     }
   }
 
   private emitClose(): void {
+    if (this.closedEmitted) return;
+    this.closedEmitted = true;
     for (const handler of this.closeHandlers) {
       try {
         handler();
-      } catch {}
+      } catch {
+        // 忽略关闭监听器自身抛出的异常
+      }
     }
   }
 }

@@ -13,7 +13,8 @@ export default {
     "memo",
     "todo"
   ],
-  "unreleasedOfficialIds": [
+  "unreleasedOfficialIds": [],
+  "storeOfficialIds": [
     "ai-image",
     "ai-video",
     "batch-audio",
@@ -21,8 +22,6 @@ export default {
     "batch-text-convert",
     "batch-video",
     "boost",
-    "browser-bookmarks",
-    "browser-history",
     "calendar",
     "chinese-number-converter",
     "cleaner",
@@ -33,9 +32,6 @@ export default {
     "everything-file-search",
     "flow-guard",
     "hardware-info",
-    "hosts",
-    "image-editor",
-    "image-tool",
     "kill-process",
     "lan-share",
     "mover",
@@ -55,11 +51,9 @@ export default {
     "shutdown-timer",
     "software-manager",
     "sqlite-plugin",
-    "super-markdown",
     "system-backup",
     "system-tools",
     "text-formatter",
-    "translator",
     "unit-converter",
     "uuid-generator",
     "video-downloader",
@@ -86,6 +80,20 @@ export default {
         "minify",
         "压缩",
         "校验"
+      ],
+      "targets": [
+        {
+          "id": "windows-electron-any",
+          "platform": "windows",
+          "runtime": "electron",
+          "arch": "any"
+        },
+        {
+          "id": "macos-electron-any",
+          "platform": "macos",
+          "runtime": "electron",
+          "arch": "any"
+        }
       ]
     },
     {
@@ -105,6 +113,20 @@ export default {
         "date",
         "日期",
         "时间"
+      ],
+      "targets": [
+        {
+          "id": "windows-electron-any",
+          "platform": "windows",
+          "runtime": "electron",
+          "arch": "any"
+        },
+        {
+          "id": "macos-electron-any",
+          "platform": "macos",
+          "runtime": "electron",
+          "arch": "any"
+        }
       ]
     },
     {
@@ -123,6 +145,20 @@ export default {
         "计算器",
         "换算",
         "单位"
+      ],
+      "targets": [
+        {
+          "id": "windows-electron-any",
+          "platform": "windows",
+          "runtime": "electron",
+          "arch": "any"
+        },
+        {
+          "id": "macos-electron-any",
+          "platform": "macos",
+          "runtime": "electron",
+          "arch": "any"
+        }
       ]
     },
     {
@@ -140,6 +176,20 @@ export default {
         "qrcode",
         "二维码",
         "wifi"
+      ],
+      "targets": [
+        {
+          "id": "windows-electron-any",
+          "platform": "windows",
+          "runtime": "electron",
+          "arch": "any"
+        },
+        {
+          "id": "macos-electron-any",
+          "platform": "macos",
+          "runtime": "electron",
+          "arch": "any"
+        }
       ]
     },
     {
@@ -159,6 +209,20 @@ export default {
         "datauri",
         "编码",
         "解码"
+      ],
+      "targets": [
+        {
+          "id": "windows-electron-any",
+          "platform": "windows",
+          "runtime": "electron",
+          "arch": "any"
+        },
+        {
+          "id": "macos-electron-any",
+          "platform": "macos",
+          "runtime": "electron",
+          "arch": "any"
+        }
       ]
     },
     {
@@ -177,6 +241,20 @@ export default {
         "比较",
         "compare",
         "差异"
+      ],
+      "targets": [
+        {
+          "id": "windows-electron-any",
+          "platform": "windows",
+          "runtime": "electron",
+          "arch": "any"
+        },
+        {
+          "id": "macos-electron-any",
+          "platform": "macos",
+          "runtime": "electron",
+          "arch": "any"
+        }
       ]
     },
     {
@@ -200,6 +278,20 @@ export default {
         "加密",
         "解密",
         "base64"
+      ],
+      "targets": [
+        {
+          "id": "windows-electron-any",
+          "platform": "windows",
+          "runtime": "electron",
+          "arch": "any"
+        },
+        {
+          "id": "macos-electron-any",
+          "platform": "macos",
+          "runtime": "electron",
+          "arch": "any"
+        }
       ]
     },
     {
@@ -219,6 +311,20 @@ export default {
         "验证码",
         "动态口令",
         "authenticator"
+      ],
+      "targets": [
+        {
+          "id": "windows-electron-any",
+          "platform": "windows",
+          "runtime": "electron",
+          "arch": "any"
+        },
+        {
+          "id": "macos-electron-any",
+          "platform": "macos",
+          "runtime": "electron",
+          "arch": "any"
+        }
       ]
     },
     {
@@ -239,6 +345,20 @@ export default {
         "hsl",
         "oklch",
         "调色板"
+      ],
+      "targets": [
+        {
+          "id": "windows-electron-any",
+          "platform": "windows",
+          "runtime": "electron",
+          "arch": "any"
+        },
+        {
+          "id": "macos-electron-any",
+          "platform": "macos",
+          "runtime": "electron",
+          "arch": "any"
+        }
       ]
     },
     {
@@ -257,6 +377,20 @@ export default {
         "便签",
         "笔记",
         "备忘"
+      ],
+      "targets": [
+        {
+          "id": "windows-electron-any",
+          "platform": "windows",
+          "runtime": "electron",
+          "arch": "any"
+        },
+        {
+          "id": "macos-electron-any",
+          "platform": "macos",
+          "runtime": "electron",
+          "arch": "any"
+        }
       ]
     },
     {
@@ -274,6 +408,20 @@ export default {
         "待办",
         "任务",
         "清单"
+      ],
+      "targets": [
+        {
+          "id": "windows-electron-any",
+          "platform": "windows",
+          "runtime": "electron",
+          "arch": "any"
+        },
+        {
+          "id": "macos-electron-any",
+          "platform": "macos",
+          "runtime": "electron",
+          "arch": "any"
+        }
       ]
     }
   ]

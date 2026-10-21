@@ -832,3 +832,50 @@ test('isolates a corrupt trigger record and preserves it across a later write', 
   assert.equal((store.document.triggers as Array<Record<string, unknown>>)[1]?.enabled, false)
   await service.stop()
 })
+
+test('[回归] 超级面板与全局唤醒同属 system，用同一组合键时报出明确冲突，而不是「操作系统拒绝注册」', async () => {
+  const { service, shortcuts } = createService()
+  await service.syncSuperPanelHotkey(true, 'Alt+Space')
+  await assert.rejects(
+    service.register(flatTrigger({ config: { key: 'Alt+Space' } }) as never, mainCaller),
+    (error) => error instanceof ZToolsError &&
+      error.code === errorCodes.triggerConflict &&
+      /已被「超级面板」占用/.test(error.message)
+  )
+  // 已注册的超级面板不受影响
+  assert.equal(shortcuts.callbacks.has('alt+space'), true)
+  // 反过来：全局唤醒先占用，超级面板再用同一组合键也明确报出占用者
+  const other = createService()
+  await other.service.register(flatTrigger({ config: { key: 'Alt+Space' } }) as never, mainCaller)
+  await assert.rejects(
+    other.service.syncSuperPanelHotkey(true, 'Alt+Space'),
+    (error) => error instanceof ZToolsError && /已被「全局唤醒」占用/.test(error.message)
+  )
+  await service.stop()
+  await other.service.stop()
+})
+
+test('[回归] 同一插件的两个不同触发器也不能共用一个组合键（同一组合键系统里只能注册一次）', async () => {
+  const { service } = createService()
+  await service.register(flatTrigger({ id: 'a', pluginId: 'demo', config: { key: 'Ctrl+Alt+K' } }) as never, mainCaller)
+  await assert.rejects(
+    service.register(flatTrigger({ id: 'b', pluginId: 'demo', config: { key: 'Ctrl+Alt+K' } }) as never, mainCaller),
+    (error) => error instanceof ZToolsError && error.code === errorCodes.triggerConflict && /插件 demo/.test(error.message)
+  )
+  // 同一个触发器原地更新（同 ID）不算冲突
+  await service.register(flatTrigger({ id: 'a', pluginId: 'demo', config: { key: 'Ctrl+Alt+K' } }) as never, mainCaller)
+  await service.stop()
+})
+
+test('[边界] 修饰键顺序、大小写、空白与别名（Option = Alt）不同也识别为同一组合键', async () => {
+  const { service } = createService()
+  await service.syncSuperPanelHotkey(true, 'Alt+Shift+Space')
+  for (const key of ['Shift+Alt+Space', ' alt + shift + space ', 'Option+Shift+Space']) {
+    const conflict = await service.checkConflict({ key, pluginId: 'another' }, mainCaller)
+    assert.equal(conflict.data.hasConflict, true, key)
+    assert.equal(conflict.data.conflicts[0]?.pluginName, '超级面板')
+  }
+  const free = await service.checkConflict({ key: 'Alt+Space', pluginId: 'another' }, mainCaller)
+  assert.equal(free.data.hasConflict, false)
+  await service.stop()
+})

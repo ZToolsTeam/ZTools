@@ -28,10 +28,11 @@ import {
   normalizeCdnCatalogPayload
 } from '@/utils/storeCatalogManager'
 import {
+  clearDeclarativePluginCache,
   loadInstalledDeclarativePlugin,
   V2_CATALOG_CDN_URL
 } from '@/utils/declarativePluginLoader'
-import { getBundledPluginEntries, isBundledPlugin } from '@/utils/bundledPlugins'
+import { getBundledPluginEntries, isBundledPlugin, resolveBundledReplacement } from '@/utils/bundledPlugins'
 import { isPluginVisible } from '@/utils/pluginVisibility'
 
 /**
@@ -987,6 +988,7 @@ export const usePluginsStore = defineStore('plugins', {
         this.installingSet = nextInstalling
 
         if (payload.success) {
+          clearDeclarativePluginCache(pluginId)
           // 安装成功：立即更新 installedSet
           const next = new Set(this.installedSet)
           next.add(pluginId)
@@ -1046,6 +1048,7 @@ export const usePluginsStore = defineStore('plugins', {
           // 官方内置标杆应用不可卸载
           return
         }
+        clearDeclarativePluginCache(payload.pluginId)
         const next = new Set(this.installedSet)
         next.delete(String(payload.pluginId))
         this.installedSet = next
@@ -1065,7 +1068,8 @@ export const usePluginsStore = defineStore('plugins', {
      */
     async openPlugin(pluginId) {
       try {
-        const normalizedId = normalizePluginId(pluginId)
+        // 已合并进内置插件的旧插件（如 notes → memo）直接打开保留的那个
+        const normalizedId = normalizePluginId(resolveBundledReplacement(normalizePluginId(pluginId)))
         if (!normalizedId) {
           throw new Error('插件标识符不存在')
         }
@@ -1121,6 +1125,13 @@ export const usePluginsStore = defineStore('plugins', {
           ) {
             window.__ztoolsOpenLauncherDeclarative(normalizedId)
             return { success: true, isDeclarative: true, pluginId: normalizedId }
+          }
+
+          // 路由切换前先将声明式插件预热进内存缓存，确保进入 DeclarativePage 首帧同步直出无闪烁
+          if (!getOfficialPlugin(normalizedId)) {
+            await loadInstalledDeclarativePlugin(normalizedId).catch((prewarmErr) => {
+              console.debug('[plugins.openPlugin] 预热声明式插件未命中，交由页面视图处理:', formatLogArg(prewarmErr))
+            })
           }
 
           // 正常工作台模式直接路由到声明式应用页

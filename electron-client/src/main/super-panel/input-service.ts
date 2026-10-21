@@ -5,7 +5,18 @@ import type {
   NativeInputEvent,
   NativeMouseTriggerConfig
 } from '../native-host/native-host-client.js'
-import { decodeSuperPanelConfig } from './config.js'
+import {
+  decodeSuperPanelConfig,
+  DEFAULT_SUPER_PANEL_CONFIG,
+  DEFAULT_SUPER_PANEL_MODIFIERS,
+  LEGACY_SUPER_PANEL_ACCELERATOR,
+  type SuperPanelConfig
+} from './config.js'
+import { normalizedAccelerator } from '../services/trigger-service.js'
+
+const USER_SETTINGS_FILE = 'user_settings.json'
+/** 全局唤醒（悬浮条）未设置时，渲染进程启动会按这个默认值注册 */
+export const DEFAULT_GLOBAL_WAKE_ACCELERATOR = 'Alt+Space'
 
 export interface NativeInputAdapter {
   readonly state: string
@@ -25,7 +36,7 @@ function isNativeInputAdapter(
 }
 
 export interface SuperPanelInputServiceOptions {
-  config: Pick<ConfigService, 'get'>
+  config: Pick<ConfigService, 'get'> & Partial<Pick<ConfigService, 'set'>>
   triggers: Pick<TriggerService, 'syncSuperPanelHotkey'>
   nativeInput: NativeInputAdapter | null
   toggle(trigger: 'mouse_hotkey'): void
@@ -91,8 +102,8 @@ export class SuperPanelInputService {
 
   reload(): Promise<void> {
     return this.#serialize(async () => {
-      const encoded = await this.options.config.get('user_settings.json', 'super_panel', {})
-      const config = decodeSuperPanelConfig(encoded)
+      const encoded = await this.options.config.get(USER_SETTINGS_FILE, 'super_panel', {})
+      const config = await this.#migrateLegacyKeyboard(encoded, decodeSuperPanelConfig(encoded))
       const desiredMouse = config.enabled && config.mouse.enabled ? config.mouse.trigger : null
       const errors: unknown[] = []
       try {
@@ -123,6 +134,52 @@ export class SuperPanelInputService {
       }
       this.#lastError = ''
     })
+  }
+
+  /**
+   * 旧版本超级面板与全局唤醒默认都是 Alt+Space，两者同时启用时总有一个注册失败。
+   * 仅当超级面板仍是旧默认值、且全局唤醒实际也在用 Alt+Space 时，把超级面板改为新默认值并写回配置；
+   * 用户已把全局唤醒改成别的键时，保留超级面板的 Alt+Space 不动。
+   */
+  async #migrateLegacyKeyboard(encoded: string, config: SuperPanelConfig): Promise<SuperPanelConfig> {
+    const legacy = normalizedAccelerator(LEGACY_SUPER_PANEL_ACCELERATOR)
+    if (!config.enabled || !config.keyboard.enabled || normalizedAccelerator(config.keyboard.accelerator) !== legacy) {
+      return config
+    }
+    let wake = ''
+    try {
+      wake = String(await this.options.config.get(USER_SETTINGS_FILE, 'hotkey.global', '')).trim()
+    } catch {
+      // 读不到全局唤醒设置时不做迁移，维持原状
+      return config
+    }
+    if (normalizedAccelerator(wake || DEFAULT_GLOBAL_WAKE_ACCELERATOR) !== legacy) return config
+
+    const migrated: SuperPanelConfig = {
+      ...config,
+      keyboard: { ...config.keyboard, accelerator: DEFAULT_SUPER_PANEL_CONFIG.keyboard.accelerator }
+    }
+    if (typeof this.options.config.set === 'function') {
+      try {
+        const stored: Record<string, unknown> = (() => {
+          try {
+            const parsed: unknown = JSON.parse(encoded)
+            return typeof parsed === 'object' && parsed !== null && !Array.isArray(parsed) ? parsed as Record<string, unknown> : {}
+          } catch {
+            return {}
+          }
+        })()
+        const keyboard = typeof stored.keyboardHotkey === 'object' && stored.keyboardHotkey !== null && !Array.isArray(stored.keyboardHotkey)
+          ? stored.keyboardHotkey as Record<string, unknown>
+          : {}
+        stored.keyboardHotkey = { ...keyboard, enabled: true, modifiers: [...DEFAULT_SUPER_PANEL_MODIFIERS], key: 'Space' }
+        await this.options.config.set(USER_SETTINGS_FILE, 'super_panel', JSON.stringify(stored), false)
+      } catch (error) {
+        // 写回失败不影响本次使用新键，下次启动会再次迁移
+        console.warn('超级面板快捷键迁移写回配置失败', error)
+      }
+    }
+    return migrated
   }
 
   stop(): Promise<void> {
@@ -162,7 +219,7 @@ export class SuperPanelInputService {
 }
 
 export function createSuperPanelInputService(
-  config: Pick<ConfigService, 'get'>,
+  config: Pick<ConfigService, 'get'> & Partial<Pick<ConfigService, 'set'>>,
   triggers: Pick<TriggerService, 'syncSuperPanelHotkey'>,
   nativeInput: NativeInputAdapter | null,
   toggle: (trigger: 'mouse_hotkey') => void

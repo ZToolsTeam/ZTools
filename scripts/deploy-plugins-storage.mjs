@@ -2,19 +2,20 @@
 
 /**
  * deploy-plugins-storage.mjs
- * ZTools GitOps 对象存储部署与 EdgeOne CDN 缓存预热脚本
+ * 把插件发布产物上传到阿里云 OSS，并刷新阿里云 CDN 上的插件目录缓存。
  *
- * 功能：
- * 1. 同步全网静态索引 plugins.json 与插件包 (*.zip) 至腾讯云 COS (国内主力分发源)；
- * 2. 同步镜像至 Cloudflare R2 (海外与多云灾备源，零出网流量费)；
- * 3. 触发腾讯云 EdgeOne 边缘 CDN 全网节点缓存刷新与预热，确保终端秒级生效；
- * 4. 支持 --dry-run 仿真测试模式与无外部依赖的原生 AWS SigV4 认证协议。
+ * 线上实际使用：阿里云 OSS 存储桶 ztools-data，目录 plugins-v2/，经阿里云 CDN 域名 cdn.ztools.cn 分发。
+ * 1. 先上传插件包与图标（带版本号，长缓存），最后上传插件目录 catalog.json / plugins.json（短缓存），
+ *    保证目录里引用的安装包一定已经在线；
+ * 2. 刷新 CDN 上插件目录的缓存，让更新与下架尽快生效；
+ * 3. 支持 --dry-run 演练模式；非演练模式缺少凭证时直接报错，不会假装成功。
  */
 
 import fs from 'node:fs'
 import path from 'node:path'
 import crypto from 'node:crypto'
 import https from 'node:https'
+import http from 'node:http'
 import { fileURLToPath } from 'node:url'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
@@ -48,6 +49,20 @@ export function loadEnvFile(envPath) {
 
 // 自动预加载本地环境变量
 loadEnvFile()
+
+// 线上实际配置：阿里云 OSS 存储桶 ztools-data 的 plugins-v2/ 目录，经 cdn.ztools.cn 分发
+export const DEFAULT_CDN_BASE_URL = 'https://cdn.ztools.cn'
+export const DEFAULT_OSS_BUCKET = 'ztools-data'
+export const DEFAULT_OSS_REGION = 'oss-cn-shenzhen'
+export const DEFAULT_OSS_PREFIX = 'plugins-v2'
+
+function normalizePrefix(prefix) {
+  return String(prefix || '').replace(/^\/+|\/+$/g, '')
+}
+
+function encodeOssPath(objectPath) {
+  return objectPath.split('/').map((seg) => encodeURIComponent(seg)).join('/')
+}
 
 /**
  * 阿里云 OSS 签名生成工具 (HMAC-SHA1 REST API 标准，零外部依赖)
@@ -102,74 +117,6 @@ export function createOssHeaders({
 }
 
 /**
- * AWS Signature Version 4 签名生成工具（兼容腾讯云 COS S3 协议与 Cloudflare R2）
- */
-function createAwsV4Headers({
-  method,
-  host,
-  canonicalUri,
-  payload,
-  accessKeyId,
-  secretAccessKey,
-  region,
-  service = 's3',
-  extraHeaders = {}
-}) {
-  const now = new Date()
-  const amzDate = now.toISOString().replace(/[:-]|\.\d{3}/g, '')
-  const dateStamp = amzDate.substring(0, 8)
-
-  const payloadHash = crypto.createHash('sha256').update(payload).digest('hex')
-
-  const headers = {
-    host,
-    'x-amz-date': amzDate,
-    'x-amz-content-sha256': payloadHash,
-    ...extraHeaders
-  }
-
-  const sortedHeaderKeys = Object.keys(headers).map(k => k.toLowerCase()).sort()
-  const canonicalHeaders = sortedHeaderKeys.map(k => `${k}:${headers[k].trim()}\n`).join('')
-  const signedHeaders = sortedHeaderKeys.join(';')
-
-  const canonicalRequest = [
-    method,
-    canonicalUri,
-    '', // query string
-    canonicalHeaders,
-    signedHeaders,
-    payloadHash
-  ].join('\n')
-
-  const credentialScope = `${dateStamp}/${region}/${service}/aws4_request`
-  const canonicalRequestHash = crypto.createHash('sha256').update(canonicalRequest).digest('hex')
-
-  const stringToSign = [
-    'AWS4-HMAC-SHA256',
-    amzDate,
-    credentialScope,
-    canonicalRequestHash
-  ].join('\n')
-
-  function hmac(key, string) {
-    return crypto.createHmac('sha256', key).update(string).digest()
-  }
-
-  const kDate = hmac('AWS4' + secretAccessKey, dateStamp)
-  const kRegion = hmac(kDate, region)
-  const kService = hmac(kRegion, service)
-  const kSigning = hmac(kService, 'aws4_request')
-  const signature = crypto.createHmac('sha256', kSigning).update(stringToSign).digest('hex')
-
-  const authorization = `AWS4-HMAC-SHA256 Credential=${accessKeyId}/${credentialScope}, SignedHeaders=${signedHeaders}, Signature=${signature}`
-
-  return {
-    ...headers,
-    Authorization: authorization
-  }
-}
-
-/**
  * 收集待上传的发布文件列表
  */
 function collectReleaseFiles(distDir) {
@@ -216,7 +163,7 @@ function getMimeType(filePath) {
 /**
  * 根据文件类型固化静态分发缓存策略
  * 1. 带版本号的发布包 (*.zip): 强缓存 30 天 (2592000s) + immutable
- * 2. 全网静态索引 plugins.json: 短缓存 5 分钟 (300s)，确保下架或更新秒级生效
+ * 2. 插件目录 catalog.json / plugins.json: 短缓存 5 分钟 (300s)，确保更新与下架尽快生效
  * 3. 其它静态资源 (如 icon 图标): 默认 7 天
  */
 export function getCacheControl(relPath) {
@@ -234,8 +181,10 @@ export function getCacheControl(relPath) {
  * 发送 HTTP/S 请求 (支持 Promise)
  */
 function makeHttpRequest(options, body) {
+  const { protocol = 'https:', ...requestOptions } = options
+  const client = protocol === 'http:' ? http : https
   return new Promise((resolve, reject) => {
-    const req = https.request(options, (res) => {
+    const req = client.request(requestOptions, (res) => {
       let data = ''
       res.on('data', chunk => { data += chunk })
       res.on('end', () => {
@@ -256,110 +205,6 @@ function makeHttpRequest(options, body) {
 }
 
 /**
- * 上传文件至腾讯云 COS
- */
-async function uploadToCos({
-  file,
-  secretId,
-  secretKey,
-  bucket,
-  region,
-  dryRun = false
-}) {
-  const host = `${bucket}.cos.${region}.myqcloud.com`
-  const canonicalUri = '/' + file.relPath
-  const fileBuffer = fs.readFileSync(file.fullPath)
-  const contentType = getMimeType(file.relPath)
-  const cacheControl = getCacheControl(file.relPath)
-
-  if (dryRun) {
-    console.log(`   [COS 仿真] PUT https://${host}${canonicalUri} (${(file.size / 1024).toFixed(2)} KB, ${contentType}, Cache-Control: ${cacheControl})`)
-    return { success: true, simulated: true }
-  }
-
-  const headers = createAwsV4Headers({
-    method: 'PUT',
-    host,
-    canonicalUri,
-    payload: fileBuffer,
-    accessKeyId: secretId,
-    secretAccessKey: secretKey,
-    region,
-    service: 's3',
-    extraHeaders: {
-      'content-type': contentType,
-      'content-length': String(file.size),
-      'cache-control': cacheControl
-    }
-  })
-
-  const res = await makeHttpRequest({
-    method: 'PUT',
-    host,
-    path: canonicalUri,
-    headers
-  }, fileBuffer)
-
-  if (res.statusCode >= 200 && res.statusCode < 300) {
-    return { success: true, statusCode: res.statusCode }
-  } else {
-    throw new Error(`COS 上传失败 [HTTP ${res.statusCode}]: ${res.data}`)
-  }
-}
-
-/**
- * 上传文件至 Cloudflare R2
- */
-async function uploadToR2({
-  file,
-  accountId,
-  accessKeyId,
-  secretAccessKey,
-  bucket,
-  dryRun = false
-}) {
-  const host = `${accountId}.r2.cloudflarestorage.com`
-  const canonicalUri = `/${bucket}/${file.relPath}`
-  const fileBuffer = fs.readFileSync(file.fullPath)
-  const contentType = getMimeType(file.relPath)
-  const cacheControl = getCacheControl(file.relPath)
-
-  if (dryRun) {
-    console.log(`   [R2 仿真] PUT https://${host}${canonicalUri} (${(file.size / 1024).toFixed(2)} KB, ${contentType}, Cache-Control: ${cacheControl})`)
-    return { success: true, simulated: true }
-  }
-
-  const headers = createAwsV4Headers({
-    method: 'PUT',
-    host,
-    canonicalUri,
-    payload: fileBuffer,
-    accessKeyId,
-    secretAccessKey,
-    region: 'auto',
-    service: 's3',
-    extraHeaders: {
-      'content-type': contentType,
-      'content-length': String(file.size),
-      'cache-control': cacheControl
-    }
-  })
-
-  const res = await makeHttpRequest({
-    method: 'PUT',
-    host,
-    path: canonicalUri,
-    headers
-  }, fileBuffer)
-
-  if (res.statusCode >= 200 && res.statusCode < 300) {
-    return { success: true, statusCode: res.statusCode }
-  } else {
-    throw new Error(`R2 上传失败 [HTTP ${res.statusCode}]: ${res.data}`)
-  }
-}
-
-/**
  * 上传文件至阿里云 OSS
  */
 export async function uploadToOss({
@@ -368,11 +213,14 @@ export async function uploadToOss({
   accessKeySecret,
   bucket,
   region,
-  prefix = 'plugins/',
+  prefix = DEFAULT_OSS_PREFIX,
+  endpoint,
   dryRun = false
 }) {
-  const host = `${bucket}.${region}.aliyuncs.com`
-  const cleanPrefix = prefix ? prefix.replace(/^\/+/, '').replace(/\/+$/, '') : ''
+  // endpoint 仅供测试指向本地模拟服务，例如 http://127.0.0.1:8080
+  const target = endpoint ? new URL(endpoint) : null
+  const host = target ? target.host : `${bucket}.${region}.aliyuncs.com`
+  const cleanPrefix = normalizePrefix(prefix)
   const objectKey = cleanPrefix ? `${cleanPrefix}/${file.relPath}` : file.relPath
   const canonicalUri = `/${objectKey}`
   const fileBuffer = fs.readFileSync(file.fullPath)
@@ -396,9 +244,11 @@ export async function uploadToOss({
   })
 
   const res = await makeHttpRequest({
+    protocol: target ? target.protocol : 'https:',
     method: 'PUT',
-    host,
-    path: canonicalUri,
+    hostname: target ? target.hostname : host,
+    port: target ? target.port : undefined,
+    path: encodeOssPath(canonicalUri),
     headers
   }, fileBuffer)
 
@@ -410,94 +260,144 @@ export async function uploadToOss({
 }
 
 /**
- * 刷新腾讯云 EdgeOne 边缘 CDN 缓存
+ * 从阿里云 OSS 读取对象（直接读源站，不经过 CDN 缓存）；对象不存在时返回 null
  */
-async function purgeEdgeOneCache({
-  secretId,
-  secretKey,
-  zoneId,
+export async function readOssObject({ objectKey, accessKeyId, accessKeySecret, bucket, region, endpoint }) {
+  const target = endpoint ? new URL(endpoint) : null
+  const host = target ? target.host : `${bucket}.${region}.aliyuncs.com`
+  const headers = createOssHeaders({ method: 'GET', bucket, objectKey, accessKeyId, accessKeySecret })
+  const res = await makeHttpRequest({
+    protocol: target ? target.protocol : 'https:',
+    method: 'GET',
+    hostname: target ? target.hostname : host,
+    port: target ? target.port : undefined,
+    path: encodeOssPath(`/${objectKey}`),
+    headers
+  })
+  if (res.statusCode === 404) return null
+  if (res.statusCode < 200 || res.statusCode >= 300) {
+    throw new Error(`OSS 读取失败 [HTTP ${res.statusCode}]: ${res.data}`)
+  }
+  return res.data
+}
+
+function catalogEntries(catalog) {
+  const list = catalog?.plugins || catalog?.list
+  return Array.isArray(list) ? list : []
+}
+
+/**
+ * 找出「同一个下载地址、内容却变了」的安装包。
+ * 安装包按带版本号的文件名强缓存 30 天，改了代码没升版本号时 CDN 仍会返回旧包，
+ * 客户端校验 SHA-256 不通过就装不上，所以这些地址必须刷新。
+ * 读不到上一版目录（previousCatalog 为 null）时无法判断，保守地全部刷新。
+ */
+export function findChangedPackageUrls(nextCatalog, previousCatalog, cdnBaseUrl) {
+  const urls = catalogEntries(nextCatalog)
+    .map((p) => ({ url: String(p?.downloadUrl || ''), sha256: String(p?.sha256 || '') }))
+    .filter((p) => p.url.startsWith(`${cdnBaseUrl}/`))
+  if (!previousCatalog) return urls.map((p) => p.url)
+  const before = new Map(catalogEntries(previousCatalog).map((p) => [String(p?.downloadUrl || ''), String(p?.sha256 || '')]))
+  return urls.filter((p) => before.has(p.url) && before.get(p.url) !== p.sha256).map((p) => p.url)
+}
+
+/**
+ * 阿里云 RPC 接口要求的百分号编码（RFC 3986，空格编为 %20，! ' ( ) * 也要编码）
+ */
+export function aliyunPercentEncode(value) {
+  return encodeURIComponent(String(value)).replace(
+    /[!'()*]/g,
+    (c) => '%' + c.charCodeAt(0).toString(16).toUpperCase()
+  )
+}
+
+/**
+ * 生成阿里云 RPC 风格接口（如 CDN）的签名查询串（SignatureVersion 1.0，HMAC-SHA1）
+ */
+export function signAliyunRpcQuery(params, accessKeySecret, method = 'GET') {
+  const canonical = Object.keys(params)
+    .sort()
+    .map((k) => `${aliyunPercentEncode(k)}=${aliyunPercentEncode(params[k])}`)
+    .join('&')
+  const stringToSign = `${method}&${aliyunPercentEncode('/')}&${aliyunPercentEncode(canonical)}`
+  const signature = crypto
+    .createHmac('sha1', `${accessKeySecret}&`)
+    .update(stringToSign)
+    .digest('base64')
+  return `${canonical}&Signature=${aliyunPercentEncode(signature)}`
+}
+
+/**
+ * 刷新阿里云 CDN 上指定文件的缓存（RefreshObjectCaches）
+ */
+export async function refreshAliyunCdnCache({
+  accessKeyId,
+  accessKeySecret,
   urls = [],
+  endpoint,
   dryRun = false
 }) {
-  console.log('\n🌐 正在触发腾讯云 EdgeOne 边缘节点缓存刷新...')
-  console.log(`   刷新目标 URL 数量: ${urls.length}`)
-
+  if (urls.length === 0) return { success: true, skipped: true }
   if (dryRun) {
     for (const url of urls) {
-      console.log(`   [EdgeOne 仿真刷新] URL: ${url}`)
+      console.log(`   [CDN 仿真刷新] ${url}`)
     }
     return { success: true, simulated: true }
   }
 
-  // 腾讯云 API 3.0 调用准备 (EdgeOne PurgeUrlsCache)
-  // 此处实现标准腾讯云 TC3-HMAC-SHA256 签名调用
-  const endpoint = 'edgeone.tencentcloudapi.com'
-  const service = 'edgeone'
-  const action = 'PurgeUrlsCache'
-  const version = '2022-09-01'
-  const timestamp = Math.floor(Date.now() / 1000)
-  const date = new Date(timestamp * 1000).toISOString().slice(0, 10)
-
-  const payload = JSON.stringify({
-    ZoneId: zoneId,
-    Type: 'purge_all',
-    Urls: urls
+  const params = {
+    Action: 'RefreshObjectCaches',
+    Version: '2018-05-10',
+    Format: 'JSON',
+    AccessKeyId: accessKeyId,
+    SignatureMethod: 'HMAC-SHA1',
+    SignatureVersion: '1.0',
+    SignatureNonce: crypto.randomUUID(),
+    Timestamp: new Date().toISOString().replace(/\.\d{3}Z$/, 'Z'),
+    ObjectPath: urls.join('\n'),
+    ObjectType: 'File'
+  }
+  const target = new URL(endpoint || 'https://cdn.aliyuncs.com')
+  const res = await makeHttpRequest({
+    protocol: target.protocol,
+    method: 'GET',
+    hostname: target.hostname,
+    port: target.port || undefined,
+    path: `/?${signAliyunRpcQuery(params, accessKeySecret)}`
   })
 
-  const canonicalHeaders = `content-type:application/json; charset=utf-8\nhost:${endpoint}\n`
-  const signedHeaders = 'content-type;host'
-  const hashedPayload = crypto.createHash('sha256').update(payload).digest('hex')
-  const canonicalRequest = `POST\n/\n\n${canonicalHeaders}\n${signedHeaders}\n${hashedPayload}`
-
-  const credentialScope = `${date}/${service}/tc3_request`
-  const hashedCanonicalRequest = crypto.createHash('sha256').update(canonicalRequest).digest('hex')
-  const stringToSign = `TC3-HMAC-SHA256\n${timestamp}\n${credentialScope}\n${hashedCanonicalRequest}`
-
-  function tc3Hmac(key, str) {
-    return crypto.createHmac('sha256', key).update(str).digest()
+  let body = null
+  try {
+    body = JSON.parse(res.data)
+  } catch {
+    // 非 JSON 响应按失败处理
   }
-
-  const secretDate = tc3Hmac('TC3' + secretKey, date)
-  const secretService = tc3Hmac(secretDate, service)
-  const secretSigning = tc3Hmac(secretService, 'tc3_request')
-  const signature = crypto.createHmac('sha256', secretSigning).update(stringToSign).digest('hex')
-
-  const authorization = `TC3-HMAC-SHA256 Credential=${secretId}/${credentialScope}, SignedHeaders=${signedHeaders}, Signature=${signature}`
-
-  const res = await makeHttpRequest({
-    method: 'POST',
-    host: endpoint,
-    path: '/',
-    headers: {
-      Authorization: authorization,
-      'Content-Type': 'application/json; charset=utf-8',
-      Host: endpoint,
-      'X-TC-Action': action,
-      'X-TC-Timestamp': String(timestamp),
-      'X-TC-Version': version
-    }
-  }, payload)
-
-  const resultData = JSON.parse(res.data)
-  if (resultData.Response?.Error) {
-    throw new Error(`EdgeOne CDN 刷新失败: ${resultData.Response.Error.Message}`)
+  if (res.statusCode < 200 || res.statusCode >= 300 || !body || body.Code) {
+    const reason = body?.Message || body?.Code || res.data || `HTTP ${res.statusCode}`
+    throw new Error(`阿里云 CDN 缓存刷新失败 [HTTP ${res.statusCode}]: ${reason}`)
   }
-
-  console.log(`✅ EdgeOne 边缘 CDN 缓存刷新请求已成功提交！JobID: ${resultData.Response?.JobId || 'OK'}`)
-  return { success: true, response: resultData }
+  return { success: true, refreshTaskId: body.RefreshTaskId || null }
 }
 
 /**
- * 核心部署流程控制
+ * 插件目录文件（catalog.json / plugins.json）必须最后上传，避免目录先引用到还没上传的安装包
+ */
+function isIndexFile(relPath) {
+  return relPath.toLowerCase().endsWith('.json')
+}
+
+/**
+ * 核心部署流程
  */
 export async function deployPluginsStorage(options = {}) {
   const distDir = path.resolve(options.dir || path.join(rootDir, 'dist/plugins'))
   const dryRun = !!options.dryRun
-  const cdnBaseUrl = (options.cdnBaseUrl || process.env.CDN_BASE_URL || 'https://plugins.ztools.cn').replace(/\/$/, '')
+  const cdnBaseUrl = (options.cdnBaseUrl || process.env.CDN_BASE_URL || DEFAULT_CDN_BASE_URL).replace(/\/$/, '')
+  const prefix = normalizePrefix(options.ossPrefix ?? process.env.OSS_PREFIX ?? DEFAULT_OSS_PREFIX)
 
-  console.log('☁️  开始执行 ZTools GitOps 对象存储与 CDN 部署流程...')
-  console.log(`📂 本地资源目录: ${distDir}`)
-  console.log(`🚀 运行模式: ${dryRun ? '仿真演练模式 (--dry-run)' : '生产同步模式'}`)
+  console.log('☁️  开始上传插件发布产物到阿里云 OSS')
+  console.log(`📂 本地产物目录: ${distDir}`)
+  console.log(`🚀 运行模式: ${dryRun ? '演练模式 (--dry-run)' : '正式上传'}`)
 
   if (!fs.existsSync(distDir)) {
     throw new Error(`发布产物目录不存在: ${distDir}`)
@@ -509,122 +409,83 @@ export async function deployPluginsStorage(options = {}) {
     return { success: true, uploadedCount: 0 }
   }
 
-  console.log(`📦 扫描到待分发产物 ${files.length} 个文件:\n`)
-  for (const f of files) {
-    console.log(`   - ${f.relPath} (${(f.size / 1024).toFixed(2)} KB)`)
-  }
-
-  // 1. 同步至腾讯云 COS (国内 EdgeOne 源站)
-  const cosConfig = {
-    secretId: options.cosSecretId || process.env.TENCENT_COS_SECRET_ID || (dryRun ? 'simulated_secret_id' : null),
-    secretKey: options.cosSecretKey || process.env.TENCENT_COS_SECRET_KEY || (dryRun ? 'simulated_secret_key' : null),
-    bucket: options.cosBucket || process.env.TENCENT_COS_BUCKET || 'ztools-plugins-1250000000',
-    region: options.cosRegion || process.env.TENCENT_COS_REGION || 'ap-guangzhou'
-  }
-
-  const hasCosConfig = cosConfig.secretId && cosConfig.secretKey
-  if (hasCosConfig) {
-    console.log(`\n📤 [1/4] 开始同步至腾讯云 COS 存储桶: ${cosConfig.bucket} (${cosConfig.region})...`)
-    for (const file of files) {
-      await uploadToCos({
-        file,
-        secretId: cosConfig.secretId,
-        secretKey: cosConfig.secretKey,
-        bucket: cosConfig.bucket,
-        region: cosConfig.region,
-        dryRun
-      })
-    }
-    console.log('✅ 腾讯云 COS 对象存储全量同步完成！')
-  } else {
-    console.log('\n⏩ 未配置腾讯云 COS 凭证 (TENCENT_COS_SECRET_ID/KEY)，跳过 COS 上传')
-  }
-
-  // 2. 同步至 Cloudflare R2 (海外与多云容灾)
-  const r2Config = {
-    accountId: options.r2AccountId || process.env.R2_ACCOUNT_ID || (dryRun ? 'simulated_r2_account' : null),
-    accessKeyId: options.r2AccessKeyId || process.env.R2_ACCESS_KEY_ID || (dryRun ? 'simulated_r2_key' : null),
-    secretAccessKey: options.r2SecretAccessKey || process.env.R2_SECRET_ACCESS_KEY || (dryRun ? 'simulated_r2_secret' : null),
-    bucket: options.r2Bucket || process.env.R2_BUCKET_NAME || 'ztools-plugins-r2'
-  }
-
-  const hasR2Config = r2Config.accountId && r2Config.accessKeyId && r2Config.secretAccessKey
-  if (hasR2Config) {
-    console.log(`\n📤 [2/4] 开始同步至 Cloudflare R2 存储桶: ${r2Config.bucket}...`)
-    for (const file of files) {
-      await uploadToR2({
-        file,
-        accountId: r2Config.accountId,
-        accessKeyId: r2Config.accessKeyId,
-        secretAccessKey: r2Config.secretAccessKey,
-        bucket: r2Config.bucket,
-        dryRun
-      })
-    }
-    console.log('✅ Cloudflare R2 多云灾备同步完成！')
-  } else {
-    console.log('\n⏩ 未配置 Cloudflare R2 凭证 (R2_ACCOUNT_ID/ACCESS_KEY)，跳过 R2 上传')
-  }
-
-  // 3. 同步至阿里云 OSS (主力/灾备对象存储)
   const ossConfig = {
     accessKeyId: options.ossAccessKeyId || process.env.OSS_ACCESS_KEY_ID || (dryRun ? 'simulated_oss_key' : null),
     accessKeySecret: options.ossAccessKeySecret || process.env.OSS_ACCESS_KEY_SECRET || (dryRun ? 'simulated_oss_secret' : null),
-    bucket: options.ossBucket || process.env.OSS_BUCKET || 'ztools-data',
-    region: options.ossRegion || process.env.OSS_REGION || 'oss-cn-shenzhen',
-    prefix: options.ossPrefix || process.env.OSS_PREFIX || 'plugins/'
+    bucket: options.ossBucket || process.env.OSS_BUCKET || DEFAULT_OSS_BUCKET,
+    region: options.ossRegion || process.env.OSS_REGION || DEFAULT_OSS_REGION,
+    endpoint: options.ossEndpoint
+  }
+  if (!ossConfig.accessKeyId || !ossConfig.accessKeySecret) {
+    throw new Error('缺少阿里云 OSS 凭证 (OSS_ACCESS_KEY_ID / OSS_ACCESS_KEY_SECRET)，已停止上传。仅想演练请加 --dry-run')
   }
 
-  const hasOssConfig = ossConfig.accessKeyId && ossConfig.accessKeySecret
-  if (hasOssConfig) {
-    console.log(`\n📤 [3/4] 开始同步至阿里云 OSS 存储桶: ${ossConfig.bucket} (${ossConfig.region}, 目录: ${ossConfig.prefix})...`)
-    for (const file of files) {
-      await uploadToOss({
-        file,
-        accessKeyId: ossConfig.accessKeyId,
-        accessKeySecret: ossConfig.accessKeySecret,
-        bucket: ossConfig.bucket,
-        region: ossConfig.region,
-        prefix: ossConfig.prefix,
-        dryRun
-      })
+  const cdnConfig = {
+    accessKeyId: options.cdnAccessKeyId || process.env.CDN_ACCESS_KEY_ID || ossConfig.accessKeyId,
+    accessKeySecret: options.cdnAccessKeySecret || process.env.CDN_ACCESS_KEY_SECRET || ossConfig.accessKeySecret
+  }
+  const packages = files.filter((f) => !isIndexFile(f.relPath))
+  const indexes = files.filter((f) => isIndexFile(f.relPath))
+
+  // 上传前先从源站读出线上正在用的目录，用来判断哪些安装包内容变了
+  let previousCatalog
+  if (options.previousCatalog !== undefined) {
+    previousCatalog = options.previousCatalog
+  } else if (dryRun) {
+    previousCatalog = null
+  } else {
+    try {
+      const raw = await readOssObject({ ...ossConfig, objectKey: prefix ? `${prefix}/catalog.json` : 'catalog.json' })
+      previousCatalog = raw ? JSON.parse(raw) : null
+    } catch (err) {
+      console.warn(`⚠️ 读取线上插件目录失败，将刷新全部安装包的 CDN 缓存: ${err.message}`)
+      previousCatalog = null
     }
-    console.log('✅ 阿里云 OSS 对象存储全量同步完成！')
-  } else {
-    console.log('\n⏩ 未配置阿里云 OSS 凭证 (OSS_ACCESS_KEY_ID/SECRET)，跳过 OSS 上传')
+  }
+  const nextCatalogFile = indexes.find((f) => f.relPath === 'catalog.json')
+  const nextCatalog = nextCatalogFile ? JSON.parse(fs.readFileSync(nextCatalogFile.fullPath, 'utf8')) : null
+  const changedPackageUrls = findChangedPackageUrls(nextCatalog, previousCatalog, cdnBaseUrl)
+
+  // 顺序：安装包与图标 → 刷新内容变了的安装包 → 插件目录 → 刷新插件目录
+  console.log(`\n📤 上传到 OSS 存储桶 ${ossConfig.bucket} (${ossConfig.region})，目录 ${prefix || '/'}，共 ${files.length} 个文件`)
+  for (const file of packages) {
+    await uploadToOss({ file, ...ossConfig, prefix, dryRun })
   }
 
-  // 4. 腾讯云 EdgeOne 边缘 CDN 缓存刷新
-  const edgeOneConfig = {
-    secretId: options.edgeOneSecretId || process.env.EDGEONE_SECRET_ID || cosConfig.secretId,
-    secretKey: options.edgeOneSecretKey || process.env.EDGEONE_SECRET_KEY || cosConfig.secretKey,
-    zoneId: options.edgeOneZoneId || process.env.EDGEONE_ZONE_ID || (dryRun ? 'zone-simulated' : null)
+  const refreshTaskIds = []
+  if (changedPackageUrls.length > 0) {
+    console.log(`\n🔄 刷新内容有变化的安装包缓存（${changedPackageUrls.length} 个${previousCatalog ? '' : '，读不到上一版目录，全部刷新'}）`)
+    // 阿里云单次最多提交 100 个地址
+    for (let i = 0; i < changedPackageUrls.length; i += 100) {
+      const r = await refreshAliyunCdnCache({ ...cdnConfig, urls: changedPackageUrls.slice(i, i + 100), endpoint: options.cdnEndpoint, dryRun })
+      if (r.refreshTaskId) refreshTaskIds.push(r.refreshTaskId)
+    }
   }
 
-  if (edgeOneConfig.secretId && edgeOneConfig.secretKey && edgeOneConfig.zoneId) {
-    const purgeUrls = [
-      `${cdnBaseUrl}/plugins.json`,
-      ...files.filter(f => f.relPath.endsWith('.zip') || f.relPath.endsWith('.json')).map(f => `${cdnBaseUrl}/${f.relPath}`)
-    ]
-    console.log(`\n🔄 [4/4] 开始触发 EdgeOne 边缘 CDN 缓存清理...`)
-    await purgeEdgeOneCache({
-      secretId: edgeOneConfig.secretId,
-      secretKey: edgeOneConfig.secretKey,
-      zoneId: edgeOneConfig.zoneId,
-      urls: purgeUrls,
-      dryRun
-    })
-  } else {
-    console.log('\n⏩ 未配置 EdgeOne 凭证或 ZoneId，跳过 CDN 缓存主动刷新')
+  for (const file of indexes) {
+    await uploadToOss({ file, ...ossConfig, prefix, dryRun })
   }
+  console.log('✅ OSS 上传完成')
 
-  console.log('\n🎉 ============================================================')
-  console.log('✨ 全网分发同步流程执行成功！客户端可通过 EdgeOne CDN 稳定加速拉取最新插件。')
-  console.log('============================================================\n')
+  const indexUrls = indexes.map((f) => `${cdnBaseUrl}/${prefix ? prefix + '/' : ''}${f.relPath}`)
+  console.log(`\n🔄 刷新阿里云 CDN 上的插件目录缓存（${indexUrls.length} 个文件）`)
+  const refresh = await refreshAliyunCdnCache({
+    ...cdnConfig,
+    urls: indexUrls,
+    endpoint: options.cdnEndpoint,
+    dryRun
+  })
+  if (refresh.refreshTaskId) refreshTaskIds.push(refresh.refreshTaskId)
+  console.log(`✅ CDN 刷新已提交${refreshTaskIds.length ? `，任务 ID: ${refreshTaskIds.join(', ')}` : ''}`)
+  const refreshUrls = [...changedPackageUrls, ...indexUrls]
+  const ordered = [...packages, ...indexes]
 
   return {
     success: true,
     filesCount: files.length,
+    uploadedKeys: ordered.map((f) => (prefix ? `${prefix}/${f.relPath}` : f.relPath)),
+    refreshedUrls: refreshUrls,
+    changedPackageUrls,
     dryRun
   }
 }
@@ -638,15 +499,15 @@ async function runCli() {
 
 选项:
   --dir <path>          待上传的产物目录 (默认: dist/plugins)
-  --cdn-base-url <url>  CDN 域名 (默认: https://plugins.ztools.cn)
-  --dry-run             演练模式，仅打印计划而不发起实际云端请求
+  --cdn-base-url <url>  CDN 域名 (默认: ${DEFAULT_CDN_BASE_URL})
+  --oss-prefix <dir>    OSS 目录 (默认: ${DEFAULT_OSS_PREFIX})
+  --dry-run             演练模式，只打印计划，不发起任何网络请求
   --help, -h            显示帮助信息
 
-环境变量配置说明:
-  - 阿里云 OSS: OSS_ACCESS_KEY_ID, OSS_ACCESS_KEY_SECRET, OSS_BUCKET, OSS_REGION, OSS_PREFIX (默认 plugins/)
-  - 腾讯云 COS: TENCENT_COS_SECRET_ID, TENCENT_COS_SECRET_KEY, TENCENT_COS_BUCKET, TENCENT_COS_REGION
-  - Cloudflare R2: R2_ACCOUNT_ID, R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY, R2_BUCKET_NAME
-  - 腾讯云 EdgeOne: EDGEONE_SECRET_ID, EDGEONE_SECRET_KEY, EDGEONE_ZONE_ID
+环境变量:
+  OSS_ACCESS_KEY_ID, OSS_ACCESS_KEY_SECRET  阿里云 OSS 凭证（必填）
+  OSS_BUCKET (默认 ${DEFAULT_OSS_BUCKET}), OSS_REGION (默认 ${DEFAULT_OSS_REGION}), OSS_PREFIX
+  CDN_ACCESS_KEY_ID, CDN_ACCESS_KEY_SECRET  阿里云 CDN 刷新凭证（不填则沿用 OSS 凭证）
     `.trim())
     process.exit(0)
   }
@@ -657,16 +518,11 @@ async function runCli() {
     return fallback
   }
 
-  const dir = getArg('--dir', path.join(rootDir, 'dist/plugins'))
-  const cdnBaseUrl = getArg('--cdn-base-url', process.env.CDN_BASE_URL || 'https://plugins.ztools.cn')
-  const ossPrefix = getArg('--oss-prefix', process.env.OSS_PREFIX || 'plugins/')
-  const dryRun = args.includes('--dry-run')
-
   await deployPluginsStorage({
-    dir,
-    cdnBaseUrl,
-    ossPrefix,
-    dryRun
+    dir: getArg('--dir', path.join(rootDir, 'dist/plugins')),
+    cdnBaseUrl: getArg('--cdn-base-url', process.env.CDN_BASE_URL || DEFAULT_CDN_BASE_URL),
+    ossPrefix: getArg('--oss-prefix', process.env.OSS_PREFIX ?? DEFAULT_OSS_PREFIX),
+    dryRun: args.includes('--dry-run')
   })
 }
 

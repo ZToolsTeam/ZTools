@@ -401,70 +401,7 @@ export default function EverythingFileSearchCommand() {
       onSearchTextChange={handleSearchTextChange}
       onSelectionChange={setSelectedId}
       filterBar={{
-        summaryText: `当前匹配 ${displayedFiles.length} 个文件/目录 • 总大小 ${formatBytes(totalSizeBytes)}${query ? ` • 检索词 "${query}"` : ""}`,
-        groups: [
-          {
-            id: "type",
-            label: "文件类型",
-            value: typeFilter,
-            onChange: (val: string) => setTypeFilter(val as TypeFilter),
-            options: [
-              { value: "all", label: "全部" },
-              { value: "document", label: "文档" },
-              { value: "image", label: "图片" },
-              { value: "video", label: "音视频" },
-              { value: "code", label: "代码" },
-              { value: "archive", label: "压缩包" }
-            ]
-          }
-        ],
-        actions: [
-          {
-            id: "open",
-            label: "🚀 打开选中项",
-            title: "🚀 打开选中项",
-            style: "primary",
-            onAction: () => {
-              if (activeFile) void handleOpenFile(activeFile);
-            }
-          },
-          {
-            id: "reveal",
-            label: "📂 定位所在目录",
-            title: "📂 定位所在目录",
-            style: "secondary",
-            onAction: () => {
-              if (activeFile) void handleShowInFolder(activeFile);
-            }
-          },
-          {
-            id: "quicklook",
-            label: "👁️ Quick Look 预览",
-            title: "👁️ Quick Look 预览",
-            style: "secondary",
-            onAction: () => {
-              if (activeFile) push(<FileQuickLookDetailView file={activeFile} />);
-            }
-          },
-          {
-            id: "sha256",
-            label: "🔐 复制 SHA-256",
-            title: "🔐 复制 SHA-256",
-            style: "secondary",
-            onAction: () => {
-              if (activeFile) void handleCalculateSha256(activeFile);
-            }
-          },
-          {
-            id: "trash",
-            label: "🗑️ 移入回收站",
-            title: "🗑️ 移入回收站",
-            style: "danger",
-            onAction: () => {
-              if (activeFile) void handleMoveToTrash(activeFile);
-            }
-          }
-        ]
+        summaryText: `当前匹配 ${displayedFiles.length} 个文件/目录 · 总大小 ${formatBytes(totalSizeBytes)}${query ? ` · 检索词 "${query}"` : ""}`
       }}
       searchBarAccessory={
         <List.Dropdown

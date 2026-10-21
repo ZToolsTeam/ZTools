@@ -136,4 +136,28 @@ describe('Native MCP (Model Context Protocol) Protocol Stack', () => {
 
     await host.disconnectAll();
   });
+
+  test('McpHost rejects pending requests immediately when server disconnects', async () => {
+    const [clientTransport, serverTransport] = InMemoryTransport.createPair();
+    const server = new McpServer({ name: 'slow-server', version: '1.0.0' });
+    server.registerTool(
+      {
+        name: 'slow_task',
+        description: 'Task that hangs until disconnect',
+        inputSchema: { type: 'object', properties: {} }
+      },
+      () => new Promise(() => {})
+    );
+
+    await server.connect(serverTransport);
+    const host = new McpHost({ name: 'test-host', version: '1.0.0' });
+    await host.connectServer('slow-srv', clientTransport);
+
+    const callPromise = host.callTool('slow_task', {});
+    await new Promise((r) => setTimeout(r, 20));
+    await host.disconnectServer('slow-srv');
+    await server.close();
+
+    await assert.rejects(callPromise, /MCP Server "slow-srv" disconnected/);
+  });
 });

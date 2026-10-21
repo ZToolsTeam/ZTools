@@ -151,6 +151,7 @@ import type { CoreServices } from '../services/core-services.js'
 import type { FeatureFlagKey, FeatureFlags } from '../services/config-service.js'
 import { EventService } from '../services/event-service.js'
 import { FileSystemService } from '../services/file-system-service.js'
+import { readMacosApplicationIcon } from '../platform/macos/application-icon.js'
 import { ClipboardService } from '../services/clipboard-service.js'
 import { DatabaseService } from '../services/database-service.js'
 import { electronCredentialProtection } from '../platform/electron-credential-protection.js'
@@ -163,6 +164,7 @@ import { NetworkRequestCancellationEndpoint } from './network-request-cancellati
 import { PluginInstallService } from '../services/plugin-install-service.js'
 import { resolvePluginRuntimeTarget } from '../services/plugin-runtime-target-resolver.js'
 import { BuiltinPluginHostService } from '../services/builtin-plugin-host-service.js'
+import { isProtectedSystemPath } from '../services/host-plugins/shared-utils.js'
 import { ProcessService, type ProcessDiscoveryAdapter } from '../services/process-service.js'
 import { PluginIconService } from '../services/plugin-icon-service.js'
 import { PluginShortcutService } from '../services/plugin-shortcut-service.js'
@@ -214,6 +216,27 @@ import { PluginSessionManager } from '../windows/plugin-session-manager.js'
 import type { UpdateProgress } from '../services/update-service.js'
 import type { ResourceRoot } from '../protocol/ztools-protocol.js'
 
+/** Authorize actual search results before returning them to the requesting host window. */
+export async function searchFilesForCaller(
+  params: SystemSearchFilesParams,
+  caller: CallerIdentity,
+  sidecars: CoreServices['sidecars'],
+  files: FileSystemService
+) {
+  const result = await sidecars.searchFiles(params.query, params.limit ?? 20)
+  if (caller.type === 'main') {
+    await Promise.all(result.files.map(async (file) => {
+      try {
+        await files.grantSearchResult(file.path, caller)
+      } catch (error) {
+        // An indexed file can disappear while a search is in flight.
+        console.warn('搜索结果路径授权失败', error instanceof Error ? error.message : String(error))
+      }
+    }))
+  }
+  return result
+}
+
 type Handler = (params: unknown, caller: CallerIdentity, signal: AbortSignal) => Promise<unknown>
 interface PendingLegacyCall {
   readonly method: string
@@ -251,6 +274,7 @@ export interface IpcRouterOptions {
   reloadMainWindow?: () => Promise<void>
   pluginState?: PluginStateService
   onDarkModeChanged?: (enabled: boolean) => void
+  onTrayStatePossiblyChanged?: () => void
 }
 
 const credentialV1Methods = new Set([
@@ -474,6 +498,10 @@ export class IpcRouter {
     return this.#superPanelInput?.ready ?? Promise.resolve()
   }
 
+  reloadSuperPanelInput(): Promise<void> {
+    return this.#superPanelInput?.reload() ?? Promise.resolve()
+  }
+
   listInstalledPlugins(): Promise<{ success: true; data: Record<string, unknown>[] }> {
     return this.#plugins.list()
   }
@@ -572,6 +600,32 @@ export class IpcRouter {
       new BuiltinPluginHostService({
         processService: processes,
         shellService: shell,
+        clipboard: {
+          getText: async () => electronClipboard.readText(),
+          setText: async (text: string) => {
+            electronClipboard.writeText(text)
+          }
+        },
+        pathAuthority: {
+          resolveAuthorizedPath: async (rawPath, caller, access, allowMissing) => {
+            if (
+              caller.type === 'main' ||
+              (caller.type === 'plugin' &&
+                (isInternalPlugin(caller.pluginId) ||
+                  this.#builtinPluginHost?.supportsPlugin(caller.pluginId ?? '')))
+            ) {
+              if (rawPath.includes('\0')) {
+                throw new ZToolsError(errorCodes.invalidRequest, '路径包含非法空字节')
+              }
+              const resolved = path.resolve(rawPath)
+              if (access === 'write' && isProtectedSystemPath(resolved)) {
+                throw new ZToolsError(errorCodes.permissionDenied, '系统受保护核心路径禁止写入或移除')
+              }
+              return resolved
+            }
+            return files.resolveAuthorizedPath(rawPath, caller, access, allowMissing)
+          }
+        },
         platform: process.platform
       }),
       (host) => host.stop()
@@ -856,7 +910,10 @@ export class IpcRouter {
         new Notification({ title: params.title || 'ZTools', body: params.message }).show()
       },
       async getFileIcon(filePath) {
-        return (await mainApp.getFileIcon(filePath, { size: 'large' })).toDataURL()
+        if (nativePlatform === 'darwin' && filePath.toLowerCase().endsWith('.app')) {
+          return readMacosApplicationIcon(filePath)
+        }
+        return (await mainApp.getFileIcon(filePath, { size: nativePlatform === 'darwin' ? 'normal' : 'large' })).toDataURL()
       },
       getNativeId: () => options.systemPlatformAdapter.getNativeId(),
       startPreventSleep: () => powerSaveBlocker.start('prevent-display-sleep'),
@@ -913,6 +970,7 @@ export class IpcRouter {
       async config_set(params) {
         const input = params as ConfigSetParams
         await config.set(input.file, input.path, input.value, input.sync_enabled)
+        options.onTrayStatePossiblyChanged?.()
         return { success: true }
       },
       async settings_get(params) {
@@ -923,6 +981,7 @@ export class IpcRouter {
       async settings_set(params) {
         const input = params as SettingsSetParams
         const value = await config.setSetting(input.key, input.value)
+        options.onTrayStatePossiblyChanged?.()
         return { success: true, key: input.key, value }
       },
       async features_get(params) {
@@ -1168,10 +1227,8 @@ export class IpcRouter {
       async system_get_file_icon(params, caller) {
         return system.getFileIcon(params as SystemFileIconParams, caller)
       },
-      async system_search_files(params) {
-        const p = params as SystemSearchFilesParams
-        const limit = p.limit ?? 20
-        return services.sidecars.searchFiles(p.query, limit)
+      async system_search_files(params, caller) {
+        return searchFilesForCaller(params as SystemSearchFilesParams, caller, services.sidecars, files)
       },
       async system_read_current_folder(_params, caller) {
         return system.readCurrentFolder(caller)
@@ -1309,6 +1366,7 @@ export class IpcRouter {
       async system_reload_hotkeys() {
         if (!superPanelInput) return deferredCapability('超级面板热键重载', 'M5')
         await superPanelInput.reload()
+        options.onTrayStatePossiblyChanged?.()
         return { success: true }
       },
       async system_get_panel_local_apps() {

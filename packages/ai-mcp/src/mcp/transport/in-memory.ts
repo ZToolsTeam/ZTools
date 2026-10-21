@@ -49,8 +49,8 @@ export class InMemoryTransport implements McpTransport {
     for (const handler of this.messageHandlers) {
       try {
         handler(message);
-      } catch (err: any) {
-        this.emitError(err);
+      } catch (err: unknown) {
+        this.emitError(err instanceof Error ? err : new Error(String(err)));
       }
     }
   }
@@ -61,7 +61,9 @@ export class InMemoryTransport implements McpTransport {
     for (const handler of this.closeHandlers) {
       try {
         handler();
-      } catch {}
+      } catch {
+        // 忽略关闭回调内部异常
+      }
     }
   }
 
@@ -81,7 +83,9 @@ export class InMemoryTransport implements McpTransport {
     for (const handler of this.errorHandlers) {
       try {
         handler(err);
-      } catch {}
+      } catch {
+        // 忽略错误回调内部异常
+      }
     }
   }
 }

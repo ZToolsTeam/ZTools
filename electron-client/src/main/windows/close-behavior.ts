@@ -32,7 +32,7 @@ export function decideCloseAction(
   preferences: ClosePreferences,
   origin: CloseRequestOrigin
 ): CloseDecision {
-  if (preferences.closeConfirm) return 'confirm'
   if (origin === 'trayMenu') return 'quit'
+  if (preferences.closeConfirm) return 'confirm'
   return preferences.minimizeToTray ? 'hide' : 'quit'
 }

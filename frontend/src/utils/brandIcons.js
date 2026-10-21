@@ -236,6 +236,11 @@ export function resolveItemGlyph(item) {
   const key = typeof item.key === 'string' ? item.key : ''
   if (Object.hasOwn(COMMAND_GLYPHS, key)) return COMMAND_GLYPHS[key]
   // 文件结果：文件夹 / 通用文档（pdf 图形即带折角的文档轮廓）
-  if (item.type === 'file') return item.isDir ? 'folder' : 'pdf'
+  if (item.type === 'file') {
+    if (item.isApplication) return item.icon?.startsWith('data:image/') ? '' : 'apps'
+    if (item.isDir) return 'folder'
+    const fileGlyphs = { 'fa-file-image-o': 'image', 'fa-file-audio-o': 'audio', 'fa-file-video-o': 'video', 'fa-file-code-o': 'terminal' }
+    return fileGlyphs[item.faIcon] || 'pdf'
+  }
   return ''
 }

@@ -9,7 +9,7 @@
       ref="triggerBtnRef"
       type="button"
       class="launcher-trigger"
-      :title="`切到悬浮条 ${wakeLabel}`"
+      :title="wakeLabel ? `切到悬浮条 ${wakeLabel}` : '切到悬浮条'"
       aria-label="切到悬浮条"
       @click="triggerGeekMode"
     >
@@ -18,7 +18,7 @@
         <path d="M7 12h6" />
       </svg>
       <span class="launcher-trigger-text">悬浮条</span>
-      <ShortcutKeys :combo="DEFAULT_GLOBAL_WAKE_HOTKEY" />
+      <ShortcutKeys v-if="wakeHotkey" :combo="wakeHotkey" />
     </button>
 
     <!-- 悬停引导浮层 -->
@@ -52,8 +52,8 @@
           </div>
 
           <p class="guide-text">
-            收起工作台，换成屏幕中央的悬浮搜索条。在任何地方按
-            <ShortcutKeys :combo="DEFAULT_GLOBAL_WAKE_HOTKEY" /> 都能唤起。
+            收起工作台，换成屏幕中央的悬浮搜索条。<template v-if="wakeHotkey">在任何地方按
+            <ShortcutKeys :combo="wakeHotkey" /> 都能唤起。</template><template v-else>全局唤醒快捷键已关闭，可在设置中开启。</template>
           </p>
 
           <div class="guide-foot">
@@ -67,14 +67,17 @@
 </template>
 
 <script setup>
-import { ref, onBeforeUnmount } from 'vue'
+import { ref, computed, onMounted, onBeforeUnmount } from 'vue'
 import ShortcutKeys from '@/components/base/ShortcutKeys.vue'
 import BrandMark from './BrandMark.vue'
 import { switchWindowMode, WINDOW_MODES } from '@/utils/windowMode'
 import { shortcutLabel } from '@/utils/platform'
-import { DEFAULT_GLOBAL_WAKE_HOTKEY } from '@/utils/globalWakeHotkey'
+import { currentGlobalWakeHotkey, refreshCurrentGlobalWakeHotkey } from '@/utils/globalWakeHotkey'
 
-const wakeLabel = shortcutLabel(DEFAULT_GLOBAL_WAKE_HOTKEY)
+// 显示用户实际设置的唤醒键，而不是写死的默认值
+const wakeHotkey = currentGlobalWakeHotkey
+const wakeLabel = computed(() => (wakeHotkey.value ? shortcutLabel(wakeHotkey.value) : ''))
+onMounted(() => { refreshCurrentGlobalWakeHotkey() })
 
 const triggerBtnRef = ref(null)
 const showGuidePopover = ref(false)

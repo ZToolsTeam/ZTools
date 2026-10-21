@@ -36,6 +36,7 @@ import { TrayController } from './windows/tray-controller.js'
 import { LauncherController } from './windows/launcher-controller.js'
 import { WindowRegistry } from './windows/window-registry.js'
 import { SuperPanelController } from './super-panel/controller.js'
+import { decodeSuperPanelConfig } from './super-panel/config.js'
 import { createPlatformNativeRuntime } from './platform/native-runtime.js'
 import { createMacosNativeRuntime } from './platform/macos/native-runtime.js'
 import { createWindowsNativeRuntime } from './platform/windows/native-runtime.js'
@@ -527,6 +528,68 @@ function showMainWindow(): void {
   }, 300)
 }
 
+function navigateMainWindow(route: string): void {
+  const target = mainWindow
+  if (!target || target.isDestroyed()) return
+  const deliver = (): void => {
+    if (!target.isDestroyed()) {
+      target.webContents.send(IPC_EVENT_CHANNEL, { msgType: 'navigation.open', msgData: { route } })
+    }
+  }
+  if (target.webContents.isLoading()) target.webContents.once('did-finish-load', deliver)
+  else deliver()
+}
+
+function openMainWindowAt(route: string): void {
+  showMainWindow()
+  navigateMainWindow(route)
+}
+
+function openLauncherWindow(): void {
+  if (applicationLifecycle.cancellationRequested) return
+  if (launcher) {
+    if (mainWindow && !mainWindow.isDestroyed() && mainWindow.isVisible()) {
+      mainWindow.hide()
+    }
+    launcher.show()
+    return
+  }
+  showMainWindow()
+}
+
+async function readTrayState(): Promise<{ isSuperPanelEnabled: boolean; wakeAccelerator: string }> {
+  if (!services) {
+    return { isSuperPanelEnabled: true, wakeAccelerator: 'Alt+Space' }
+  }
+  const [rawSuperPanel, rawWakeHotkey] = await Promise.all([
+    services.config.get('user_settings.json', 'super_panel', {}).catch(() => '{}'),
+    services.config.get('user_settings.json', 'hotkey.global', 'Alt+Space').catch(() => 'Alt+Space')
+  ])
+  const superPanelConfig = decodeSuperPanelConfig(rawSuperPanel)
+  return {
+    isSuperPanelEnabled: superPanelConfig.enabled,
+    wakeAccelerator: String(rawWakeHotkey || 'Alt+Space').trim() || 'Alt+Space'
+  }
+}
+
+function syncTrayState(): void {
+  if (!tray || applicationLifecycle.cancellationRequested) return
+  void readTrayState().then((state) => {
+    tray?.updateState(state)
+  }).catch(() => undefined)
+}
+
+async function setSuperPanelEnabledFromTray(enabled: boolean): Promise<void> {
+  if (applicationLifecycle.cancellationRequested || !services) return
+  await services.config.set('user_settings.json', 'super_panel.enabled', String(enabled), false)
+  if (!enabled) {
+    superPanel?.hide('tray_disabled')
+  }
+  if (router) {
+    await router.reloadSuperPanelInput()
+  }
+}
+
 function createMainWindowInstance(): BrowserWindow {
   if (applicationLifecycle.cancellationRequested) {
     throw new Error('Application startup has been cancelled')
@@ -844,7 +907,7 @@ if (!app.requestSingleInstanceLock()) {
     }
     if (!applicationLifecycle.canContinueStartup()) return
     if (process.platform === 'darwin') {
-      installMacosApplicationMenu({ onOpenPreferences: () => showMainWindow() })
+      installMacosApplicationMenu({ onOpenPreferences: () => openMainWindowAt('/advanced-settings') })
     }
     const screenClipboardAdapters = createPlatformScreenClipboardAdapters(process.platform, {
       windows: () => createWindowsScreenClipboardAdapters({ screen, desktopCapturer, nativeImage }),
@@ -950,6 +1013,7 @@ if (!app.requestSingleInstanceLock()) {
     router = await IpcRouter.create(registry, services, {
       pluginResources: { webRoot: () => activeWebRoot(), pluginRoot },
       pluginState, onDarkModeChanged: applyDarkMode,
+      onTrayStatePossiblyChanged: syncTrayState,
       reloadMainWindow: async () => {
         if (!mainWindow || mainWindow.isDestroyed()) throw new Error('主窗口不可用')
         await mainWindow.loadURL('ztools://web/index.html')
@@ -1029,15 +1093,7 @@ if (!app.requestSingleInstanceLock()) {
       icon: mainApplicationIcon,
       registry,
       showMainWindow,
-      navigateMainWindow: (route) => {
-        const target = mainWindow
-        if (!target || target.isDestroyed()) return
-        const deliver = (): void => {
-          if (!target.isDestroyed()) target.webContents.send(IPC_EVENT_CHANNEL, { msgType: 'navigation.open', msgData: { route } })
-        }
-        if (target.webContents.isLoading()) target.webContents.once('did-finish-load', deliver)
-        else deliver()
-      },
+      navigateMainWindow,
       hideMainWindow: () => {
         if (mainWindow && !mainWindow.isDestroyed() && mainWindow.isVisible()) {
           mainWindow.hide()
@@ -1047,9 +1103,21 @@ if (!app.requestSingleInstanceLock()) {
     })
     launcher.register()
     if (lifecyclePolicy.useSystemTray) {
+      const initialTrayState = await readTrayState()
       tray = new TrayController({
         icon: mainApplicationIcon,
+        ...initialTrayState,
         showMainWindow,
+        togglePrimaryWindow: toggleMainWindow,
+        openLauncher: openLauncherWindow,
+        openSettings: () => openMainWindowAt('/advanced-settings'),
+        openAbout: () => openMainWindowAt('/about'),
+        onToggleSuperPanel: setSuperPanelEnabledFromTray,
+        relaunchApp: () => {
+          if (applicationLifecycle.cancellationRequested) return
+          app.relaunch()
+          app.quit()
+        },
         requestExit: () => { void requestMainWindowClose('trayMenu') }
       })
       await tray.start()

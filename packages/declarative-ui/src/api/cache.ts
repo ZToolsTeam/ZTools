@@ -33,7 +33,9 @@ export class Cache {
     for (const sub of this.subscribers) {
       try {
         sub(key, data);
-      } catch {}
+      } catch {
+        // Ignore subscriber error to avoid breaking other listeners
+      }
     }
   }
 
@@ -47,7 +49,9 @@ export class Cache {
       for (const sub of this.subscribers) {
         try {
           sub(key, undefined);
-        } catch {}
+        } catch {
+          // Ignore subscriber error to avoid breaking other listeners
+        }
       }
     }
     return existed;
@@ -59,7 +63,9 @@ export class Cache {
       for (const sub of this.subscribers) {
         try {
           sub(undefined, undefined);
-        } catch {}
+        } catch {
+          // Ignore subscriber error to avoid breaking other listeners
+        }
       }
     }
   }

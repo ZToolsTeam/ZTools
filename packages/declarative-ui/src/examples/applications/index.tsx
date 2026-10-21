@@ -380,66 +380,12 @@ export default function ApplicationsCommand({
       onSearchTextChange={setSearchText}
       onSelectionChange={setSelectedId}
       filterBar={{
-        summaryText: `已安装应用 ${filteredApps.length} 款 • 当前筛选状态: ${category.toUpperCase()}`,
-        groups: [
-          {
-            id: "category",
-            label: "应用分类",
-            value: category,
-            onChange: (val: string) => setCategory(val as ApplicationCategory),
-            options: [
-              { value: "all", label: "全部" },
-              { value: "installed", label: "自装应用" },
-              { value: "developer", label: "开发者工具" },
-              { value: "system", label: "系统工具" },
-              { value: "running", label: "正在运行" }
-            ]
-          }
-        ],
+        summaryText: `已安装应用 ${filteredApps.length} 款 · 当前筛选状态: ${category.toUpperCase()}`,
         actions: [
           {
-            id: "launch-app",
-            label: "🚀 启动选中应用",
-            title: "🚀 启动选中应用",
-            style: "primary",
-            onAction: () => {
-              if (activeApp) void handleOpenApp(activeApp, false);
-            }
-          },
-          {
-            id: "run-admin",
-            label: "🛡️ 管理员运行",
-            title: "🛡️ 管理员运行",
-            style: "secondary",
-            onAction: () => {
-              if (activeApp) void handleOpenApp(activeApp, true);
-            }
-          },
-          {
-            id: "open-dir",
-            label: "📂 打开安装目录",
-            title: "📂 打开安装目录",
-            style: "secondary",
-            onAction: async () => {
-              if (activeApp) {
-                const res = await manager.revealApplication(activeApp);
-                await showToast(res.success ? Toast.Style.Success : Toast.Style.Failure, res.message);
-              }
-            }
-          },
-          {
-            id: "uninstall-app",
-            label: "🗑️ 卸载应用",
-            title: "🗑️ 卸载应用",
-            style: "danger",
-            onAction: () => {
-              if (activeApp) void handleUninstallApp(activeApp);
-            }
-          },
-          {
             id: "rescan-apps",
-            label: "🔄 重新扫描",
-            title: "🔄 重新扫描",
+            label: "重新扫描",
+            title: "重新扫描",
             style: "secondary",
             onAction: () => {
               void handleRescan();

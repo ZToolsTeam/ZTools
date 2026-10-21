@@ -495,6 +495,49 @@ async function defaultReadPluginFile(pluginId, relPath) {
   return await response.text()
 }
 
+const loadedPluginCache = new Map()
+let lastCachedFetchRef = null
+
+function ensureCacheFreshForCurrentFetch() {
+  const currentFetch = typeof globalThis !== 'undefined' ? globalThis.fetch : null
+  if (currentFetch !== lastCachedFetchRef) {
+    loadedPluginCache.clear()
+    lastCachedFetchRef = currentFetch
+  }
+}
+
+function buildPluginCacheKey(pluginId, featureCode = '') {
+  return `${String(pluginId || '').trim().toLowerCase()}::${String(featureCode || '').trim()}`
+}
+
+/**
+ * 同步读取内存中已缓存的声明式插件实例（用于路由切换零延迟首帧直出）
+ */
+export function getCachedDeclarativePlugin(pluginId, options = {}) {
+  if (options?.readFile || options?.localStorage || options?.forceReload) return null
+  ensureCacheFreshForCurrentFetch()
+  const pid = String(pluginId || '').trim()
+  if (!pid) return null
+  const key = buildPluginCacheKey(pid, options?.featureCode)
+  return loadedPluginCache.get(key) || null
+}
+
+/**
+ * 清理指定或全部声明式插件的内存缓存（插件安装/更新/卸载后调用）
+ */
+export function clearDeclarativePluginCache(pluginId) {
+  if (!pluginId) {
+    loadedPluginCache.clear()
+    return
+  }
+  const prefix = `${String(pluginId).trim().toLowerCase()}::`
+  for (const key of loadedPluginCache.keys()) {
+    if (key.startsWith(prefix)) {
+      loadedPluginCache.delete(key)
+    }
+  }
+}
+
 /**
  * 动态加载并求值已安装的声明式插件
  *
@@ -508,6 +551,11 @@ export async function loadInstalledDeclarativePlugin(pluginId, options = {}) {
     const err = new Error(`非法的插件标识符: ${pid}`)
     err.code = 'INVALID_PLUGIN_ID'
     throw err
+  }
+
+  const cached = getCachedDeclarativePlugin(pid, options)
+  if (cached) {
+    return cached
   }
 
   // 内置官方插件随客户端分发，从 bundled-plugins/ 读取；其余插件从已安装目录 ztools://plugins/ 读取
@@ -696,7 +744,7 @@ export async function loadInstalledDeclarativePlugin(pluginId, options = {}) {
   const effectiveMode = matchedFeature?.mode || manifest.mode || 'view'
   const effectiveTitle = matchedFeature?.explain || manifest.name || pid
 
-  return {
+  const loadedPlugin = {
     id: manifest.id || pid,
     pluginId: manifest.id || pid,
     featureCode: requestedFeatureCode || '',
@@ -715,6 +763,16 @@ export async function loadInstalledDeclarativePlugin(pluginId, options = {}) {
     command: rootCommand,
     manifest
   }
+
+  if (!options?.readFile && !options?.localStorage) {
+    ensureCacheFreshForCurrentFetch()
+    loadedPluginCache.set(buildPluginCacheKey(pid, requestedFeatureCode), loadedPlugin)
+    if (manifest.id && String(manifest.id).trim().toLowerCase() !== pid.toLowerCase()) {
+      loadedPluginCache.set(buildPluginCacheKey(manifest.id, requestedFeatureCode), loadedPlugin)
+    }
+  }
+
+  return loadedPlugin
 }
 
 /**

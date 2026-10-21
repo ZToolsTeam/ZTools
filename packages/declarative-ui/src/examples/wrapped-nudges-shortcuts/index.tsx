@@ -377,60 +377,11 @@ export function WindowsShortcutsCommand() {
       onSelectionChange={setSelectedId}
       filterBar={{
         summaryText: `已加载 ${filteredShortcuts.length} 个自动化快捷指令`,
-        groups: [
-          {
-            id: "category",
-            label: "指令分类",
-            value: filterCategory,
-            onChange: (val: string) => setFilterCategory(val),
-            options: [
-              { value: "all", label: "全部" },
-              { value: "apps", label: "常用应用" },
-              { value: "dev", label: "开发调试" },
-              { value: "system", label: "系统运维" },
-              { value: "network", label: "网络诊断" },
-              { value: "productivity", label: "办公效能" }
-            ]
-          }
-        ],
         actions: [
           {
-            id: "run-now",
-            label: "▶️ 立即运行指令",
-            title: "▶️ 立即运行指令",
-            style: "primary",
-            onAction: () => {
-              if (activeWinShortcut) void handleRun(activeWinShortcut, false);
-            }
-          },
-          {
-            id: "run-with-input",
-            label: "⌨️ 带参数运行...",
-            title: "⌨️ 带参数运行...",
-            style: "secondary",
-            onAction: () => {
-              if (activeWinShortcut) {
-                push(<RunShortcutWithInputForm shortcutName={activeWinShortcut.name} />);
-              }
-            }
-          },
-          {
-            id: "copy-script",
-            label: "📋 复制指令脚本/名称",
-            title: "📋 复制指令脚本/名称",
-            style: "secondary",
-            onAction: async () => {
-              if (activeWinShortcut) {
-                const text = activeWinShortcut.commandScript || activeWinShortcut.targetPath || activeWinShortcut.name;
-                await Clipboard.copy(text);
-                await showToast(Toast.Style.Success, `已复制: ${activeWinShortcut.name}`);
-              }
-            }
-          },
-          {
             id: "refresh-list",
-            label: "🔄 刷新列表",
-            title: "🔄 刷新列表",
+            label: "刷新列表",
+            title: "刷新列表",
             style: "secondary",
             onAction: () => {
               void reloadWindowsShortcuts();
@@ -667,48 +618,9 @@ export function AppleShortcutsCommand() {
         summaryText: `已加载 ${filtered.length} 个自动化快捷指令`,
         actions: [
           {
-            id: "run-now",
-            label: "▶️ 立即运行指令",
-            title: "▶️ 立即运行指令",
-            style: "primary",
-            onAction: () => {
-              if (activeAppleShortcut) void handleRun(activeAppleShortcut);
-            }
-          },
-          {
-            id: "run-with-input",
-            label: "⌨️ 带参数运行...",
-            title: "⌨️ 带参数运行...",
-            style: "secondary",
-            onAction: () => {
-              if (activeAppleShortcut) {
-                push(
-                  <RunShortcutWithInputForm
-                    shortcutName={activeAppleShortcut.name}
-                    onCompleted={(out) => {
-                      if (out) setLastOutputMap((prev) => ({ ...prev, [activeAppleShortcut.id]: out }));
-                    }}
-                  />
-                );
-              }
-            }
-          },
-          {
-            id: "copy-name",
-            label: "📋 复制指令脚本/名称",
-            title: "📋 复制指令脚本/名称",
-            style: "secondary",
-            onAction: async () => {
-              if (activeAppleShortcut) {
-                await Clipboard.copy(activeAppleShortcut.name);
-                await showToast(Toast.Style.Success, `已复制指令名称: ${activeAppleShortcut.name}`);
-              }
-            }
-          },
-          {
             id: "refresh-list",
-            label: "🔄 刷新列表",
-            title: "🔄 刷新列表",
+            label: "刷新列表",
+            title: "刷新列表",
             style: "secondary",
             onAction: () => {
               void reloadAppleShortcuts();

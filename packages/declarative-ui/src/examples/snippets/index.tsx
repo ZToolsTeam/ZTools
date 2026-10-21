@@ -530,54 +530,20 @@ export default function SnippetsCommand() {
       onSelectionChange={(id) => setSelectedId(id || "")}
       filterBar={{
         summaryText: `快捷短语共 ${snippets.length} 个 · 已启用 ${enabledCount} 个 · 本次累计展开 ${expandCount} 次`,
-        groups: [
-          {
-            id: "snippets-status-filter",
-            label: "短语筛选",
-            value: filterEnabled,
-            onChange: (val) => setFilterEnabled(val),
-            options: [
-              { value: "all", label: "全部短语", badge: snippets.length },
-              { value: "enabled", label: "仅看已启用", badge: enabledCount }
-            ]
-          }
-        ],
         actions: [
           {
-            id: "snip-act-paste",
-            label: "⚡ 展开并粘贴选中短语",
-            title: "⚡ 展开并粘贴选中短语",
-            style: "primary",
-            onAction: () => {
-              void handleExpandAndPasteSelected();
-            }
-          },
-          {
             id: "snip-act-create",
-            label: "➕ 新建快捷短语",
-            title: "➕ 新建快捷短语",
+            label: "新建快捷短语",
+            title: "新建快捷短语",
             style: "primary",
             onAction: () => {
               push(<CreateSnippetForm onSaved={handleSaveSnippet} />);
             }
           },
           {
-            id: "snip-act-edit",
-            label: "✏️ 编辑选中短语",
-            title: "✏️ 编辑选中短语",
-            style: "secondary",
-            onAction: async () => {
-              if (!activeSnippet) {
-                await showToast(Toast.Style.Failure, "请先选择一条快捷短语");
-                return;
-              }
-              push(<CreateSnippetForm initialSnippet={activeSnippet} onSaved={handleSaveSnippet} />);
-            }
-          },
-          {
             id: "snip-act-import",
-            label: "📥 批量导入 JSON",
-            title: "📥 批量导入 JSON",
+            label: "批量导入 JSON",
+            title: "批量导入 JSON",
             style: "secondary",
             onAction: () => {
               push(
@@ -588,15 +554,6 @@ export default function SnippetsCommand() {
                   }}
                 />
               );
-            }
-          },
-          {
-            id: "snip-act-export",
-            label: "📤 导出全部短语",
-            title: "📤 导出全部短语",
-            style: "secondary",
-            onAction: () => {
-              void handleExportAll();
             }
           }
         ]

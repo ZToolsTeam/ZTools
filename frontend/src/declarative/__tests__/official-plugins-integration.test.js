@@ -112,9 +112,7 @@ describe('官方标杆声明式应用注册表与端到端集成测试', () => {
         'obsidian',
         'speedtest',
         'winget',
-        'currency-exchange',
-        'kill-process',
-        'cleaner'
+        'currency-exchange'
       ]
 
       expect(OFFICIAL_PLUGINS_LIST.length).toBeGreaterThanOrEqual(10)
@@ -150,13 +148,15 @@ describe('官方标杆声明式应用注册表与端到端集成测试', () => {
 
     it('大小写不敏感与首尾空白容错', () => {
       expect(isOfficialPlugin('  KILL-PROCESS  ')).toBe(true)
-      expect(getOfficialPlugin('  KILL-PROCESS  ')).toBeDefined()
-      expect(getOfficialPlugin('kill-process').name).toBe('进程管理急救箱')
+      expect(getOfficialPlugin('  GITHUB  ')).toBeDefined()
+      expect(getOfficialPlugin('  GITHUB  ').pluginId).toBe('github')
+      // 插件市场分发的真实插件（kill-process、cleaner）不再返回同名的旧示例实现，大小写与空白同样处理
+      for (const id of ['kill-process', '  KILL-PROCESS  ', 'cleaner']) expect(getOfficialPlugin(id)).toBeUndefined()
     })
   })
 
   describe('2. Pinia Store 集成与已安装列表合并', () => {
-    it('fetchInstalledPlugins：官方插件只展示内置原版，旧内置实现与未完成的官方插件隐藏，社区插件照常展示', async () => {
+    it('fetchInstalledPlugins：官方插件展示内置原版与插件市场安装的，旧内置实现与草稿隐藏，社区插件照常展示', async () => {
       vi.mocked(apiServer.getLocalPlugins).mockResolvedValue([
         { pluginId: 'legacy-demo', name: '社区插件', lastUsedTime: 100 },
         // 用户以前从市场装过的未完成官方插件：隐藏
@@ -172,10 +172,13 @@ describe('官方标杆声明式应用注册表与端到端集成测试', () => {
       expect(ids).toContain('legacy-demo')
       for (const id of BUNDLED_PLUGIN_IDS) expect(ids).toContain(id)
       expect(ids.filter((id) => id === 'json-format')).toHaveLength(1)
-      for (const hidden of ['cleaner', 'speedtest', 'kill-process', 'clipboard-history', 'notes']) {
+      // 插件市场分发的官方插件安装后正常展示；草稿、旧示例实现与已合并的旧插件仍隐藏
+      expect(ids).toContain('cleaner')
+      for (const hidden of ['speedtest', 'kill-process', 'clipboard-history', 'notes']) {
         expect(ids).not.toContain(hidden)
       }
-      expect(store.installedPlugins.length).toBe(BUNDLED_PLUGIN_IDS.length + 1)
+      // 内置插件 + 社区插件 legacy-demo + 插件市场安装的 cleaner
+      expect(store.installedPlugins.length).toBe(BUNDLED_PLUGIN_IDS.length + 2)
 
       const jsonFormat = store.installedPlugins.find((p) => p.pluginId === 'json-format')
       expect(jsonFormat.isDeclarative).toBe(true)
@@ -247,6 +250,74 @@ describe('官方标杆声明式应用注册表与端到端集成测试', () => {
       expect(wrapper.text()).toContain('JSON 格式化')
       expect(wrapper.findComponent({ name: 'DeclarativeView' }).exists()).toBe(true)
       expect(fetch).toHaveBeenCalledWith(expect.stringContaining('bundled-plugins/json-format/dist/index.js'))
+    })
+
+    it('冷启动异步加载内置声明式插件期间：顶栏标题首帧直出，且严禁在加载完成前闪现“未找到指定的声明式应用”报错卡片', async () => {
+      let resolvePendingFetch
+      vi.stubGlobal(
+        'fetch',
+        vi.fn((url) => new Promise((resolve) => {
+          resolvePendingFetch = () => resolve(bundledFetch(url))
+        }))
+      )
+
+      const wrapper = mount(DeclarativePage, {
+        props: { pluginId: 'json-format' }
+      })
+
+      // 首帧（异步 fetch 尚未返回）：顶栏标题与独立窗口按钮已就绪，主体仅展示静默背景占位，绝不闪现报错图标或文案
+      expect(wrapper.text()).toContain('JSON 格式化')
+      expect(wrapper.find('.declarative-popout-btn').exists()).toBe(true)
+      expect(wrapper.find('[data-test="declarative-loading-placeholder"]').exists()).toBe(true)
+      expect(wrapper.text()).not.toContain('未找到指定的声明式应用')
+      expect(wrapper.find('.declarative-error-back-btn').exists()).toBe(false)
+
+      // 推进所有挂起的请求直至插件加载完成
+      while (resolvePendingFetch) {
+        const fn = resolvePendingFetch
+        resolvePendingFetch = null
+        fn()
+        await flushPromises()
+      }
+      await settle()
+
+      expect(wrapper.find('[data-test="declarative-loading-placeholder"]').exists()).toBe(false)
+      expect(wrapper.findComponent({ name: 'DeclarativeView' }).exists()).toBe(true)
+    })
+
+    it('通过 store.openPlugin 预热后进入 DeclarativePage 时：首帧即同步挂载 DeclarativeView（零异步等待帧）', async () => {
+      const store = usePluginsStore()
+      await store.openPlugin('json-format')
+
+      const wrapper = mount(DeclarativePage, {
+        props: { pluginId: 'json-format' }
+      })
+
+      // 无需等待 flushPromises，首帧同步命中内存缓存并挂载 DeclarativeView
+      expect(wrapper.find('[data-test="declarative-loading-placeholder"]').exists()).toBe(false)
+      expect(wrapper.findComponent({ name: 'DeclarativeView' }).exists()).toBe(true)
+    })
+
+    it('[Beyond Happy Path] 当插件资源加载失败 (HTTP 500) 时：加载结束后准确呈现错误提示与返回按钮', async () => {
+      vi.stubGlobal(
+        'fetch',
+        vi.fn().mockResolvedValue({
+          ok: false,
+          status: 500,
+          text: async () => 'Internal Server Error'
+        })
+      )
+
+      const wrapper = mount(DeclarativePage, {
+        props: { pluginId: 'json-format' }
+      })
+
+      await settle()
+
+      expect(wrapper.find('[data-test="declarative-loading-placeholder"]').exists()).toBe(false)
+      expect(wrapper.text()).toContain('未找到指定的声明式应用')
+      expect(wrapper.text()).toContain('HTTP 500')
+      expect(wrapper.find('.declarative-error-back-btn').exists()).toBe(true)
     })
 
     it('点击返回工作台按钮触发路由后退', async () => {
@@ -346,7 +417,7 @@ describe('官方标杆声明式应用注册表与端到端集成测试', () => {
     it('[破坏性] 未开放的插件即使绕过列表直接打开也会被拒绝，且不跳转', async () => {
       const store = usePluginsStore()
       mockPush.mockClear()
-      for (const id of ['github', ' SPEEDTEST ', 'trial-nudges', 'cleaner', 'KILL-PROCESS', 'screen-color-picker']) {
+      for (const id of ['github', ' SPEEDTEST ', 'trial-nudges', 'clipboard-history']) {
         await expect(store.openPlugin(id)).rejects.toThrow('暂未开放')
       }
       expect(mockPush).not.toHaveBeenCalled()
@@ -363,6 +434,30 @@ describe('官方标杆声明式应用注册表与端到端集成测试', () => {
       expect(wrapper.text()).not.toContain('核心特权与技术方案')
       expect(wrapper.text()).not.toContain('未找到指定的声明式应用')
       expect(wrapper.findComponent({ name: 'DeclarativeView' }).exists()).toBe(false)
+      wrapper.unmount()
+    })
+
+    it('[集成] 与内置插件重复的旧插件 notes 已合并进便签：从旧入口打开直接进入便签', async () => {
+      const store = usePluginsStore()
+      mockPush.mockClear()
+      for (const id of ['notes', ' NOTES ']) {
+        const result = await store.openPlugin(id)
+        expect(result.success).toBe(true)
+      }
+      expect(mockPush).toHaveBeenCalledWith(expect.objectContaining({ name: 'declarative', params: { pluginId: 'memo' } }))
+      expect(mockPush.mock.calls.every(([arg]) => arg?.params?.pluginId === 'memo')).toBe(true)
+      expect(store.recents).toContain('memo')
+      expect(store.recents).not.toContain('notes')
+      expect(apiServer.openPlugin).not.toHaveBeenCalled()
+    })
+
+    it('[集成] 直接访问旧 notes 插件的路由时渲染便签，不提示暂未开放', async () => {
+      const wrapper = mount(DeclarativePage, {
+        props: { pluginId: 'notes' },
+        global: { stubs: { DeclarativeView: true } }
+      })
+      await settle()
+      expect(wrapper.text()).not.toContain('该插件暂未开放')
       wrapper.unmount()
     })
 

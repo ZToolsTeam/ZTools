@@ -365,4 +365,35 @@ describe('Details Page', () => {
       'plugin-1'
     )
   })
+
+  it('打开随包内置插件 (bundledPlugin 如 json-format) 详情页时首帧同步直出，不闪骨架屏且不请求远程详情接口', async () => {
+    pluginsStore.installedSet = new Set()
+    await router.push('/details/json-format')
+
+    wrapper = mount(Details, {
+      global: {
+        plugins: [router],
+        stubs: {
+          PluginDetailHeader: {
+            props: ['plugin', 'isInstalled'],
+            template:
+              '<div data-test="bundled-detail-header">{{ plugin?.name }}|{{ isInstalled ? "installed" : "not-installed" }}</div>'
+          },
+          PluginScreenshots: true,
+          PluginDescription: true,
+          PluginComments: true,
+          PluginRating: true,
+          PluginVersions: true
+        }
+      }
+    })
+
+    // 首帧（无需等待 flushPromises）即已渲染详情头部，不闪现 .skeleton-container
+    expect(wrapper.find('.skeleton-container').exists()).toBe(false)
+    expect(wrapper.get('[data-test="bundled-detail-header"]').text()).toBe(
+      'JSON 格式化|installed'
+    )
+    expect(apiMocks.getPluginDetails).not.toHaveBeenCalled()
+  })
 })
+

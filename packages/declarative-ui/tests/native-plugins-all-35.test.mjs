@@ -6,7 +6,6 @@ import assert from 'node:assert/strict'
 
 import {
   renderDeclarativeRoot,
-  // 布局一 (11 款)
   ProcessMonitorCommand,
   FlowGuardCommand,
   ClipboardHistoryCommand,
@@ -18,7 +17,6 @@ import {
   WechatMultiCommand,
   SystemCommand,
   LanShareCommand,
-  // 布局二 (14 款)
   DiskAnalyzerCommand,
   CleanerCommand,
   WechatCleanerCommand,
@@ -33,7 +31,6 @@ import {
   VideoDownloaderCommand,
   SqlitePluginCommand,
   BatchRenameCommand,
-  // 布局三 (10 款)
   BatchVideoCommand,
   BatchAudioCommand,
   PdfCommand,
@@ -43,17 +40,13 @@ import {
   RecordCommand,
   ScreenshotsCommand,
   ColorPickerCommand,
-  FileCompareCommand,
-  // 15 款新增插件底层逻辑与异常边界函数
   fetchNetworkAdapters,
   filterNetworkAdapters,
   runNetworkRescueDiagnostics,
   executeNetworkRepair,
   batchExecuteNetworkRepairs,
   fetchContextMenuEntries,
-  toggleContextMenuEntry,
   fetchWechatInstances,
-  launchNewWechatInstance,
   fetchLanShareSnapshot,
   generateQrCodeSvgDataUri,
   fetchMoverSnapshot,
@@ -65,7 +58,6 @@ import {
   fetchSystemBackupSnapshot,
   createBackupArchive,
   fetchSqliteWorkspace,
-  exportTableRecords,
   executeSqliteQuery,
   fetchAiImageWorkspace,
   runAiImageBatch,
@@ -73,11 +65,8 @@ import {
   runAiVideoBatch,
   fetchOcrWorkspace,
   executeBatchOcr,
-  fetchRecordWorkspace,
-  startScreenRecording,
-  fetchFileCompareWorkspace,
-  executeFileComparison
-} from '../dist/index.js'
+  fetchRecordWorkspace
+} from '../dist/index.js';
 
 const COLORFUL_EMOJI_RE = /[\u{1F300}-\u{1FAFF}]/u
 
@@ -161,7 +150,7 @@ test.describe('35 款本地原生插件全集 —— 三大标准布局范式与
     }
   })
 
-  test('3. 【布局三：Parameter & Queue Workbench】全部 10 款插件符合左 34% workbenchPanel + 右 66% subList 规范', async () => {
+  test('3. 【布局三：Parameter & Queue Workbench】全部 9 款插件符合左 34% workbenchPanel + 右 66% subList 规范', async () => {
     const layout3Specs = [
       { id: '26-batch-video', fn: BatchVideoCommand },
       { id: '27-batch-audio', fn: BatchAudioCommand },
@@ -171,8 +160,8 @@ test.describe('35 款本地原生插件全集 —— 三大标准布局范式与
       { id: '31-ocr', fn: OcrCommand },
       { id: '32-record', fn: RecordCommand },
       { id: '33-screenshot', fn: ScreenshotsCommand },
-      { id: '34-screen-color-picker', fn: ColorPickerCommand },
-      { id: '35-file-compare', fn: FileCompareCommand }
+      { id: '34-screen-color-picker', fn: ColorPickerCommand }
+      // 文本对比（file-compare）已由客户端内置插件提供，这里不再保留重复实现
     ]
 
     for (const spec of layout3Specs) {
@@ -281,10 +270,5 @@ test.describe('35 款本地原生插件全集 —— 三大标准布局范式与
     const recWs = await fetchRecordWorkspace()
     assert.ok(recWs.recordings.length > 0)
 
-    const cmpWs = await fetchFileCompareWorkspace()
-    assert.ok(cmpWs.pairs.length > 0)
-    const emptyCmp = await executeFileComparison([], { engineModeId: 'sha256_binary', diffFilterView: 'all', ignoreWhitespace: true, ignoreCase: false })
-    assert.equal(emptyCmp.totalPairs, 0)
-    assert.equal(emptyCmp.ok, false)
   })
 })

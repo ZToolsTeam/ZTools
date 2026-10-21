@@ -12,6 +12,38 @@ import {
 declare const process: any;
 declare const Buffer: any;
 
+interface NodeFsPromisesLike {
+  readdir(dirPath: string, options: { withFileTypes: true }): Promise<Array<{ name: string; isDirectory?: () => boolean }>>;
+  open(filePath: string, flags: string): Promise<{
+    read(buffer: Uint8Array, offset: number, length: number, position: number): Promise<{ bytesRead: number }>;
+    close(): Promise<void>;
+  }>;
+}
+
+interface NodeFsLike {
+  existsSync(filePath: string): boolean;
+  createReadStream(
+    filePath: string,
+    options?: { highWaterMark?: number }
+  ): {
+    on(event: "data", listener: (chunk: unknown) => void): void;
+    on(event: "end", listener: () => void): void;
+    on(event: "error", listener: (err: Error) => void): void;
+  };
+}
+
+interface NodeCryptoLike {
+  createHash(algorithm: string): {
+    update(data: unknown): void;
+    digest(encoding: "hex"): string;
+  };
+}
+
+async function loadNodeBuiltin<T = Record<string, unknown>>(modName: string): Promise<T> {
+  const specifier = `node:${modName}`;
+  return import(/* @vite-ignore */ specifier) as Promise<T>;
+}
+
 export function formatBytes(bytes: number): string {
   if (bytes <= 0 || !Number.isFinite(bytes)) return "0 B";
   const units = ["B", "KB", "MB", "GB", "TB"];
@@ -448,9 +480,9 @@ export async function getFileQuickLook(
         }
       }
       if (typeof process !== "undefined" && process.versions?.node) {
-        const fs: any = await (new Function('return import("node:fs/promises")')());
+        const fs = await loadNodeBuiltin<NodeFsPromisesLike>("fs/promises");
         const entries = await fs.readdir(file.path, { withFileTypes: true });
-        const dirEntries = entries.slice(0, 25).map((e: any) => ({
+        const dirEntries = entries.slice(0, 25).map((e) => ({
           name: e.name,
           isDir: typeof e.isDirectory === "function" ? e.isDirectory() : false
         }));
@@ -556,7 +588,7 @@ export async function getFileQuickLook(
         }
       }
       if (typeof process !== "undefined" && process.versions?.node) {
-        const fs: any = await (new Function('return import("node:fs/promises")')());
+        const fs = await loadNodeBuiltin<NodeFsPromisesLike>("fs/promises");
         const fileHandle = await fs.open(file.path, "r");
         try {
           const maxReadBytes = 64 * 1024; // 64KB
@@ -615,7 +647,7 @@ export async function getFileQuickLook(
 /**
  * 计算文件 SHA-256 哈希值
  */
-function resolveLocalTestOrRealPath(fs: any, filePath: string): string {
+function resolveLocalTestOrRealPath(fs: NodeFsLike, filePath: string): string {
   if (fs.existsSync(filePath)) return filePath;
   const stripped = filePath.replace(/^packages[\\/]+declarative-ui[\\/]+/i, "");
   if (stripped !== filePath && fs.existsSync(stripped)) return stripped;
@@ -629,7 +661,9 @@ export async function calculateFileSha256(filePath: string): Promise<string> {
 
   // 1. 若宿主提供底层快速哈希 IPC，优先调用
   try {
-    const ztools = (globalThis as any).ztools;
+    const ztools = (globalThis as Record<string, unknown>).ztools as
+      | { fileSearch?: { calculateSha256?: (arg: { path: string }) => Promise<{ sha256?: string }> } }
+      | undefined;
     if (ztools?.fileSearch?.calculateSha256) {
       const res = await ztools.fileSearch.calculateSha256({ path: filePath });
       if (res?.sha256) return res.sha256;
@@ -640,8 +674,8 @@ export async function calculateFileSha256(filePath: string): Promise<string> {
 
   // 2. 本地 Node.js 流式计算
   if (typeof process !== "undefined" && process.versions?.node) {
-    const fs: any = await (new Function('return import("node:fs")')());
-    const crypto: any = await (new Function('return import("node:crypto")')());
+    const fs = await loadNodeBuiltin<NodeFsLike>("fs");
+    const crypto = await loadNodeBuiltin<NodeCryptoLike>("crypto");
     const resolvedPath = resolveLocalTestOrRealPath(fs, filePath);
 
     // 检查文件存在性
@@ -653,9 +687,9 @@ export async function calculateFileSha256(filePath: string): Promise<string> {
       try {
         const hash = crypto.createHash("sha256");
         const stream = fs.createReadStream(resolvedPath, { highWaterMark: 64 * 1024 });
-        stream.on("data", (chunk: any) => hash.update(chunk));
+        stream.on("data", (chunk) => hash.update(chunk));
         stream.on("end", () => resolve(hash.digest("hex")));
-        stream.on("error", (err: any) => reject(err));
+        stream.on("error", (err) => reject(err));
       } catch (err) {
         reject(err);
       }
@@ -677,8 +711,8 @@ export async function calculateFileMd5(filePath: string): Promise<string> {
   }
 
   if (typeof process !== "undefined" && process.versions?.node) {
-    const fs: any = await (new Function('return import("node:fs")')());
-    const crypto: any = await (new Function('return import("node:crypto")')());
+    const fs = await loadNodeBuiltin<NodeFsLike>("fs");
+    const crypto = await loadNodeBuiltin<NodeCryptoLike>("crypto");
     const resolvedPath = resolveLocalTestOrRealPath(fs, filePath);
 
     if (!fs.existsSync(resolvedPath)) {
@@ -689,9 +723,9 @@ export async function calculateFileMd5(filePath: string): Promise<string> {
       try {
         const hash = crypto.createHash("md5");
         const stream = fs.createReadStream(resolvedPath, { highWaterMark: 64 * 1024 });
-        stream.on("data", (chunk: any) => hash.update(chunk));
+        stream.on("data", (chunk) => hash.update(chunk));
         stream.on("end", () => resolve(hash.digest("hex")));
-        stream.on("error", (err: any) => reject(err));
+        stream.on("error", (err) => reject(err));
       } catch (err) {
         reject(err);
       }
@@ -736,7 +770,7 @@ export async function openFile(filePath: string): Promise<FileActionResult> {
     }
 
     if (typeof process !== "undefined" && process.versions?.node) {
-      const fs: any = await (new Function('return import("node:fs")')());
+      const fs = await loadNodeBuiltin<NodeFsLike>("fs");
       const resolvedPath = resolveLocalTestOrRealPath(fs, filePath);
       if (!fs.existsSync(resolvedPath)) {
         return { success: false, message: `文件不存在: ${filePath}`, path: filePath, error: "FILE_NOT_FOUND" };
@@ -801,7 +835,7 @@ export async function revealFile(filePath: string): Promise<FileActionResult> {
     }
 
     if (typeof process !== "undefined" && process.versions?.node) {
-      const fs: any = await (new Function('return import("node:fs")')());
+      const fs = await loadNodeBuiltin<NodeFsLike>("fs");
       const resolvedPath = resolveLocalTestOrRealPath(fs, filePath);
       if (!fs.existsSync(resolvedPath)) {
         return { success: false, message: `定位失败，文件不存在: ${filePath}`, path: filePath, error: "FILE_NOT_FOUND" };
@@ -848,7 +882,7 @@ export async function moveToTrash(filePath: string): Promise<FileActionResult> {
     }
 
     if (typeof process !== "undefined" && process.versions?.node) {
-      const fs: any = await (new Function('return import("node:fs")')());
+      const fs = await loadNodeBuiltin<NodeFsLike>("fs");
       if (!fs.existsSync(filePath)) {
         return { success: false, message: `目标文件不存在，无法移入回收站: ${filePath}`, path: filePath, error: "FILE_NOT_FOUND" };
       }

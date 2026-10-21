@@ -18,6 +18,20 @@
         "压缩",
         "校验"
       ],
+      "targets": [
+        {
+          "id": "windows-electron-any",
+          "platform": "windows",
+          "runtime": "electron",
+          "arch": "any"
+        },
+        {
+          "id": "macos-electron-any",
+          "platform": "macos",
+          "runtime": "electron",
+          "arch": "any"
+        }
+      ],
       "files": [
         "plugin.json",
         "icon.svg",
@@ -43,6 +57,20 @@
         "日期",
         "时间"
       ],
+      "targets": [
+        {
+          "id": "windows-electron-any",
+          "platform": "windows",
+          "runtime": "electron",
+          "arch": "any"
+        },
+        {
+          "id": "macos-electron-any",
+          "platform": "macos",
+          "runtime": "electron",
+          "arch": "any"
+        }
+      ],
       "files": [
         "plugin.json",
         "icon.svg",
@@ -67,6 +95,20 @@
         "换算",
         "单位"
       ],
+      "targets": [
+        {
+          "id": "windows-electron-any",
+          "platform": "windows",
+          "runtime": "electron",
+          "arch": "any"
+        },
+        {
+          "id": "macos-electron-any",
+          "platform": "macos",
+          "runtime": "electron",
+          "arch": "any"
+        }
+      ],
       "files": [
         "plugin.json",
         "icon.svg",
@@ -89,6 +131,20 @@
         "qrcode",
         "二维码",
         "wifi"
+      ],
+      "targets": [
+        {
+          "id": "windows-electron-any",
+          "platform": "windows",
+          "runtime": "electron",
+          "arch": "any"
+        },
+        {
+          "id": "macos-electron-any",
+          "platform": "macos",
+          "runtime": "electron",
+          "arch": "any"
+        }
       ],
       "files": [
         "plugin.json",
@@ -117,6 +173,20 @@
         "编码",
         "解码"
       ],
+      "targets": [
+        {
+          "id": "windows-electron-any",
+          "platform": "windows",
+          "runtime": "electron",
+          "arch": "any"
+        },
+        {
+          "id": "macos-electron-any",
+          "platform": "macos",
+          "runtime": "electron",
+          "arch": "any"
+        }
+      ],
       "files": [
         "plugin.json",
         "icon.svg",
@@ -141,6 +211,20 @@
         "比较",
         "compare",
         "差异"
+      ],
+      "targets": [
+        {
+          "id": "windows-electron-any",
+          "platform": "windows",
+          "runtime": "electron",
+          "arch": "any"
+        },
+        {
+          "id": "macos-electron-any",
+          "platform": "macos",
+          "runtime": "electron",
+          "arch": "any"
+        }
       ],
       "files": [
         "plugin.json",
@@ -172,6 +256,20 @@
         "解密",
         "base64"
       ],
+      "targets": [
+        {
+          "id": "windows-electron-any",
+          "platform": "windows",
+          "runtime": "electron",
+          "arch": "any"
+        },
+        {
+          "id": "macos-electron-any",
+          "platform": "macos",
+          "runtime": "electron",
+          "arch": "any"
+        }
+      ],
       "files": [
         "plugin.json",
         "icon.svg",
@@ -197,6 +295,20 @@
         "验证码",
         "动态口令",
         "authenticator"
+      ],
+      "targets": [
+        {
+          "id": "windows-electron-any",
+          "platform": "windows",
+          "runtime": "electron",
+          "arch": "any"
+        },
+        {
+          "id": "macos-electron-any",
+          "platform": "macos",
+          "runtime": "electron",
+          "arch": "any"
+        }
       ],
       "files": [
         "plugin.json",
@@ -225,6 +337,20 @@
         "oklch",
         "调色板"
       ],
+      "targets": [
+        {
+          "id": "windows-electron-any",
+          "platform": "windows",
+          "runtime": "electron",
+          "arch": "any"
+        },
+        {
+          "id": "macos-electron-any",
+          "platform": "macos",
+          "runtime": "electron",
+          "arch": "any"
+        }
+      ],
       "files": [
         "plugin.json",
         "icon.svg",
@@ -249,6 +375,20 @@
         "笔记",
         "备忘"
       ],
+      "targets": [
+        {
+          "id": "windows-electron-any",
+          "platform": "windows",
+          "runtime": "electron",
+          "arch": "any"
+        },
+        {
+          "id": "macos-electron-any",
+          "platform": "macos",
+          "runtime": "electron",
+          "arch": "any"
+        }
+      ],
       "files": [
         "plugin.json",
         "icon.svg",
@@ -271,6 +411,20 @@
         "待办",
         "任务",
         "清单"
+      ],
+      "targets": [
+        {
+          "id": "windows-electron-any",
+          "platform": "windows",
+          "runtime": "electron",
+          "arch": "any"
+        },
+        {
+          "id": "macos-electron-any",
+          "platform": "macos",
+          "runtime": "electron",
+          "arch": "any"
+        }
       ],
       "files": [
         "plugin.json",

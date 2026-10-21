@@ -209,7 +209,7 @@ ZTools 通过统一的 `PlatformAdapter` 接口将平台差异全部下沉至底
 - **原生级 API 与组件**：提供一套完整的声明式组件与 Hooks（`<List>`, `<Detail>`, `<Form>`, `<Grid>`, `<ActionPanel>`, `useFetch`, `useCachedPromise`, `useSQL`, `LocalStorage`, `Clipboard`, `showToast`, `showHUD`）。
 - **视图树 Diff 与防抖**：在运行时出口内置 `onPromoteTree` 增量视图树对比，状态未发生实质变化时仅发送轻量 `renderEmpty` 帧，连续 20 次无意义空渲染自动输出性能诊断告警。
 - **双仓开源飞轮与极简脚手架**：
-  - 社区开发者可在 [`codingmuse/ZTools-extensions`](https://github.com/codingmuse/ZTools-extensions) 仓库通过 `npm run create-plugin` 10 分钟编写新插件并提交 PR；
+  - 社区开发者可在 [`ZToolsTeam/ZTools-extensions`](https://github.com/ZToolsTeam/ZTools-extensions) 仓库通过 `npm run create-plugin` 10 分钟编写新插件并提交 PR；
   - 依托统一的纯声明式组件规范，生态插件完全解耦于宿主实现，免受底层技术栈迁移影响。
 
 ### 3. 开放投稿与 4 项必要安全门禁（对齐审核制）
@@ -266,7 +266,7 @@ flowchart LR
 - [x] `Script Commands` 本地脚本命令引擎（支持 `@ztools.*` 元数据注释规范、进程树级超时清理、UTF-8/GBK 双编码容错）；
 - [x] 社区扩展 `tool` 入口自动桥接注册为 `@ztools/ai-mcp` 工具；
 - [x] 插件市场一键静默安装、AST 静态安全扫描门禁（25+ 对抗用例）、SHA-256 强校验与 `revoked` 远程下架开关；
-- [ ] 持续扩充 [`ZTools-extensions`](https://github.com/codingmuse/ZTools-extensions) 官方与社区精选扩展库规模。
+- [ ] 持续扩充 [`ZTools-extensions`](https://github.com/ZToolsTeam/ZTools-extensions) 官方与社区精选扩展库规模。
 
 ### 📍 Stage 3：macOS 原生体验与系统级能力全量交付
 - [x] macOS 应用生命周期、`NSMenu` 原生顶栏菜单、Dock 激活联动与 Universal (`arm64` + `x86_64`) 构建管线；
@@ -290,8 +290,8 @@ flowchart LR
 
 ZTools 坚信开源社区的力量，无论你是前端开发者、Rust/C++ 系统极客，还是效率工具重度用户，都非常欢迎加入我们：
 
-1. **体验与反馈**：遇到任何 Bug 或有功能建议，欢迎直接在 [GitHub Issues](https://github.com/codingmuse/ZTools/issues) 中提交。
-2. **开发与投稿插件**：前往插件生态大仓 **[codingmuse/ZTools-extensions](https://github.com/codingmuse/ZTools-extensions)**，使用 `@ztools/declarative-ui` 声明式组件库编写插件并提交 PR，审核合并后即可向全网用户分发。
+1. **体验与反馈**：遇到任何 Bug 或有功能建议，欢迎直接在 [GitHub Issues](https://github.com/ZToolsTeam/ZTools/issues) 中提交。
+2. **开发与投稿插件**：前往插件生态大仓 **[ZToolsTeam/ZTools-extensions](https://github.com/ZToolsTeam/ZTools-extensions)**，使用 `@ztools/declarative-ui` 声明式组件库编写插件并提交 PR，审核合并后即可向全网用户分发。
 3. **参与跨平台底层攻坚**：非常欢迎熟悉 **macOS (AppKit / Accessibility / ScreenCaptureKit)** 或 **Linux (Wayland / XDG Portal / AT-SPI2 / Hyprland / KWin)** 的开发者提交 PR 共建平台适配层（[`electron-client/src/main/platform/`](electron-client/src/main/platform)）。
 4. **工程质量红线**：所有 PR 必须包含跨模块集成测试与破坏性异常边界测试（拒绝纯 Happy Path），并通过 `npm run test:quick` 与 `npm test` 全量门禁。
 
@@ -299,6 +299,6 @@ ZTools 坚信开源社区的力量，无论你是前端开发者、Rust/C++ 系�
 
 ## 📄 开源协议与商业准则 (License & Philosophy)
 
-- **核心宿主仓库（`codingmuse/ZTools`）**：基于 **[GNU GPL-3.0](LICENSE)** 协议开源，确保客户端核心代码永久公开透明，严禁任何第三方闭源套壳商业化。
-- **插件生态与 SDK（`codingmuse/ZTools-extensions` & `@ztools/declarative-ui`）**：基于宽松的 **[MIT License](https://opensource.org/licenses/MIT)** 授权，给予插件作者最大的创作与分发自由。
+- **核心宿主仓库（`ZToolsTeam/ZTools`）**：基于 **[GNU GPL-3.0](LICENSE)** 协议开源，确保客户端核心代码永久公开透明，严禁任何第三方闭源套壳商业化。
+- **插件生态与 SDK（`ZToolsTeam/ZTools-extensions` & `@ztools/declarative-ui`）**：基于宽松的 **[MIT License](https://opensource.org/licenses/MIT)** 授权，给予插件作者最大的创作与分发自由。
 - **纯粹极客承诺**：个人端全部核心能力、38 款内置套件、无限制社区插件、BYOK 自定义大模型与自建 WebDAV/Gist 端到端加密同步 **100% 永久免费、零广告、不作恶**。

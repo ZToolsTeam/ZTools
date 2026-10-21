@@ -34,6 +34,8 @@ import { ScriptCommandsService, parseAnsiOutput, stripAnsiCodes, extractUrlsFrom
 import { findPinyinMatchInText, getHighlightPartsWithPinyin, getPinyinFull } from '../frontend/src/utils/pinyinSearch.js';
 import { getFileQuickLook, calculateFileSha256 } from '../packages/declarative-ui/dist/examples/everything-file-search/search-service.js';
 import { detectClipboardContentType, parseColorDetails } from '../packages/declarative-ui/dist/examples/clipboard-history/clipboard-storage.js';
+// 主搜索框内联计算与内置计算器插件共用同一份引擎
+import { evaluateCalculatorQuery } from '../plugins/calculator/dist/calculator-engine.js';
 
 // 导入各大核心模块
 import {
@@ -42,7 +44,6 @@ import {
   Form,
   ActionPanel,
   Action,
-  evaluateCalculatorQuery,
   Icon,
   Color,
   Toast,

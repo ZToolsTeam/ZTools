@@ -240,69 +240,21 @@ export default function WifiPasswordRevealCommand() {
       onSearchTextChange={setSearchText}
       onSelectionChange={setSelectedId}
       filterBar={{
-        summaryText: `已识别网络配置 ${profiles.length} 个 • 当前连接状态: ${connectedProfile ? `🟢 已连接 ${connectedProfile.ssid}` : "未连接/已保存配置"}`,
-        groups: [
-          {
-            id: "security",
-            label: "安全认证",
-            value: securityFilter,
-            onChange: (val: string) => setSecurityFilter(val as WifiSecurityFilter),
-            options: [
-              { value: "all", label: "全部网络" },
-              { value: "wpa3", label: "WPA3" },
-              { value: "wpa2", label: "WPA2" },
-              { value: "open", label: "开放无密" },
-              { value: "enterprise", label: "802.1X 企业" }
-            ]
-          }
-        ],
+        summaryText: `已识别网络配置 ${profiles.length} 个 · 当前连接状态: ${connectedProfile ? `已连接 ${connectedProfile.ssid}` : "未连接/已保存配置"}`,
         actions: [
           {
-            id: "copy-pwd",
-            label: "📋 复制选中网络密码",
-            title: "📋 复制选中网络密码",
-            style: "primary",
-            onAction: async () => {
-              if (!activeProfile) return;
-              let pwd = activeProfile.password;
-              if (!pwd && !activeProfile.isOpenNetwork && !activeProfile.isEnterprise && isRealElectronHost()) {
-                pwd = await revealWifiPasswordFromHost(activeProfile.ssid);
-                if (pwd) {
-                  setAllProfiles((prev) =>
-                    prev.map((p) => (p.id === activeProfile.id ? { ...p, password: pwd } : p))
-                  );
-                }
-              }
-              if (pwd) {
-                await Clipboard.copy(pwd);
-                await showToast(Toast.Style.Success, `已复制 "${activeProfile.ssid}" 的密码`);
-              } else {
-                await showToast(Toast.Style.Failure, `未能读取 "${activeProfile.ssid}" 的明文密码`);
-              }
-            }
-          },
-          {
             id: "toggle-reveal",
-            label: "👁️ 显示/隐藏明文密码",
-            title: "👁️ 显示/隐藏明文密码",
+            label: "显示/隐藏明文密码",
+            title: "显示/隐藏明文密码",
             style: "secondary",
             onAction: () => {
               setRevealInList((prev) => !prev);
             }
           },
           {
-            id: "view-qr",
-            label: "📱 查看扫码连网二维码",
-            title: "📱 查看扫码连网二维码",
-            style: "secondary",
-            onAction: () => {
-              if (activeProfile) push(<WifiDetailView profile={activeProfile} />);
-            }
-          },
-          {
             id: "refresh-wifi",
-            label: "🔄 刷新网络配置",
-            title: "🔄 刷新网络配置",
+            label: "刷新网络配置",
+            title: "刷新网络配置",
             style: "secondary",
             onAction: () => {
               void reloadWifiProfiles();

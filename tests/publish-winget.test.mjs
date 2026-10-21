@@ -19,13 +19,13 @@ test('Winget发布工具套件 - CLI 参数解析与异常边界测试', () => {
     '--version', 'v2.0.0',
     '--dry-run',
     '--package',
-    '--repo', 'codingmuse/ZTools',
+    '--repo', 'ZToolsTeam/ZTools',
     '--token', 'ghp_testtoken123'
   ])
   assert.equal(opts.version, '2.0.0', '应当自动剥除开头的 v 前缀')
   assert.equal(opts.dryRun, true)
   assert.equal(opts.packageIfMissing, true)
-  assert.equal(opts.repo, 'codingmuse/ZTools')
+  assert.equal(opts.repo, 'ZToolsTeam/ZTools')
   assert.equal(opts.token, 'ghp_testtoken123')
 
   // 2. 异常边界：非法 repo 格式拦截
@@ -57,14 +57,14 @@ test('Winget发布工具套件 - CLI 参数解析与异常边界测试', () => {
 
 test('Winget发布工具套件 - Manifest 清单构建与严格模式契约测试', () => {
   const manifests = buildWingetManifests({
-    packageId: 'codingmuse.ZTools',
+    packageId: 'ZToolsTeam.ZTools',
     version: '1.2.3.4',
-    installerUrl: 'https://github.com/codingmuse/ZTools/releases/download/v1.2.3.4/ZTools-1.2.3.4-win32-x64.exe',
+    installerUrl: 'https://github.com/ZToolsTeam/ZTools/releases/download/v1.2.3.4/ZTools-1.2.3.4-win32-x64.exe',
     installerSha256: 'abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890'
   })
 
   // 1. 校验版本清单
-  assert.match(manifests.versionYaml, /PackageIdentifier: codingmuse\.ZTools/)
+  assert.match(manifests.versionYaml, /PackageIdentifier: ZToolsTeam\.ZTools/)
   assert.match(manifests.versionYaml, /PackageVersion: 1\.2\.3\.4/)
   assert.match(manifests.versionYaml, /DefaultLocale: zh-CN/)
   assert.match(manifests.versionYaml, /ManifestType: version/)
@@ -99,18 +99,18 @@ test('Winget发布工具套件 - 端到端清单写入与本地 winget validate 
   const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'winget-e2e-test-'))
   try {
     const manifests = buildWingetManifests({
-      packageId: 'codingmuse.ZTools',
+      packageId: 'ZToolsTeam.ZTools',
       version: '1.1.7.1',
-      installerUrl: 'https://github.com/codingmuse/ZTools/releases/download/v1.1.7.1/ZTools-1.1.7.1-win32-x64.exe',
+      installerUrl: 'https://github.com/ZToolsTeam/ZTools/releases/download/v1.1.7.1/ZTools-1.1.7.1-win32-x64.exe',
       installerSha256: '1AE921AB53885DE54CDBD310F80B4D4F3156D30365AC95CEBB1D5F6D1AD8B249'
     })
 
-    writeManifestsToDirectory(manifests, tempDir, 'codingmuse.ZTools')
+    writeManifestsToDirectory(manifests, tempDir, 'ZToolsTeam.ZTools')
 
-    assert.ok(fs.existsSync(path.join(tempDir, 'codingmuse.ZTools.yaml')))
-    assert.ok(fs.existsSync(path.join(tempDir, 'codingmuse.ZTools.installer.yaml')))
-    assert.ok(fs.existsSync(path.join(tempDir, 'codingmuse.ZTools.locale.zh-CN.yaml')))
-    assert.ok(fs.existsSync(path.join(tempDir, 'codingmuse.ZTools.locale.en-US.yaml')))
+    assert.ok(fs.existsSync(path.join(tempDir, 'ZToolsTeam.ZTools.yaml')))
+    assert.ok(fs.existsSync(path.join(tempDir, 'ZToolsTeam.ZTools.installer.yaml')))
+    assert.ok(fs.existsSync(path.join(tempDir, 'ZToolsTeam.ZTools.locale.zh-CN.yaml')))
+    assert.ok(fs.existsSync(path.join(tempDir, 'ZToolsTeam.ZTools.locale.en-US.yaml')))
 
     // 调用真实本地 winget validate 执行校验
     const isValid = validateManifests(tempDir)
@@ -126,7 +126,7 @@ test('Winget发布工具套件 - 破坏性混沌测试（注入畸形清单必�
     // 注入非法的 InstallerType
     const brokenInstallerYaml = [
       '# yaml-language-server: $schema=https://aka.ms/winget-manifest.installer.1.6.0.schema.json',
-      'PackageIdentifier: codingmuse.ZTools',
+      'PackageIdentifier: ZToolsTeam.ZTools',
       'PackageVersion: 1.1.7.1',
       'InstallerLocale: zh-CN',
       'Platform:',
@@ -135,13 +135,13 @@ test('Winget发布工具套件 - 破坏性混沌测试（注入畸形清单必�
       'InstallerType: completely-invalid-installer-type-xyz',
       'Installers:',
       '  - Architecture: x64',
-      '    InstallerUrl: https://github.com/codingmuse/ZTools/releases/download/v1.1.7.1/ZTools-1.1.7.1-win32-x64.exe',
+      '    InstallerUrl: https://github.com/ZToolsTeam/ZTools/releases/download/v1.1.7.1/ZTools-1.1.7.1-win32-x64.exe',
       '    InstallerSha256: 1AE921AB53885DE54CDBD310F80B4D4F3156D30365AC95CEBB1D5F6D1AD8B249',
       'ManifestType: installer',
       'ManifestVersion: 1.6.0'
     ].join('\n')
 
-    fs.writeFileSync(path.join(chaosDir, 'codingmuse.ZTools.installer.yaml'), brokenInstallerYaml, 'utf8')
+    fs.writeFileSync(path.join(chaosDir, 'ZToolsTeam.ZTools.installer.yaml'), brokenInstallerYaml, 'utf8')
 
     assert.throws(
       () => validateManifests(chaosDir),

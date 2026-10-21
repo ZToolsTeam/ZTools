@@ -48,4 +48,13 @@ test('close decisions keep confirmation, tray hiding, and explicit exit exclusiv
     { closeConfirm: false, minimizeToTray: true },
     'trayMenu'
   ), 'quit')
+  assert.equal(decideCloseAction(
+    { closeConfirm: true, minimizeToTray: true },
+    'trayMenu'
+  ), 'quit')
+  assert.equal(decideCloseAction(
+    { closeConfirm: true, minimizeToTray: false },
+    'trayMenu'
+  ), 'quit')
 })
+

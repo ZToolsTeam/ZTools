@@ -12,7 +12,7 @@ export * from "./api/index.js";
 // 响应式微运行时
 export * from "./runtime/index.js";
 
-// 经典移植示例应用 (json-format, qr-code)
+// 官方示例应用（JSON、二维码等已由客户端内置插件提供，不在此重复）
 export * from "./examples/index.js";
 
 // @raycast/utils 实用工具兼容层

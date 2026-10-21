@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, vi } from 'vitest'
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import {
   KEYMAP_SCOPES,
   registerKeyHandler,
@@ -12,6 +12,28 @@ import {
 describe('keymap 统一快捷键分发器测试套件', () => {
   beforeEach(() => {
     _resetKeymapForTesting()
+  })
+  afterEach(() => _resetKeymapForTesting())
+
+  it.each([
+    ['原生组合输入标记', { isComposing: true }],
+    ['输入法兼容键码', { keyCode: 229 }],
+    ['Vue 输入框组合状态', { target: { tagName: 'INPUT', composing: true } }]
+  ])('%s 期间所有快捷键作用域均让出按键且不阻止选字', (_label, state) => {
+    const handlers = Object.values(KEYMAP_SCOPES).map(scope => {
+      const handler = vi.fn(() => true)
+      registerKeyHandler(scope, handler)
+      return handler
+    })
+    for (const key of ['Enter', 'ArrowDown', 'ArrowUp', 'Escape', ' ']) {
+      const event = { key, ...state, preventDefault: vi.fn(), stopPropagation: vi.fn() }
+      expect(dispatchKeyEvent(event)).toBe(false)
+      expect(event.preventDefault).not.toHaveBeenCalled()
+      expect(event.stopPropagation).not.toHaveBeenCalled()
+    }
+    handlers.forEach(handler => expect(handler).not.toHaveBeenCalled())
+    expect(dispatchKeyEvent({ key: 'Enter', isComposing: false, keyCode: 13 })).toBe(true)
+    expect(handlers[0]).toHaveBeenCalledOnce()
   })
 
   it('1. [优先级集成链路] 动作面板 > 声明式舞台 > 页面 > 全局分发层级', () => {

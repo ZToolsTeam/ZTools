@@ -2,6 +2,11 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 
+const CROSS_PLATFORM_TARGETS = [
+  { id: 'windows-electron-any', platform: 'windows', runtime: 'electron', arch: 'any' },
+  { id: 'macos-electron-any', platform: 'macos', runtime: 'electron', arch: 'any' }
+]
+
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const rootDir = path.resolve(__dirname, '..')
 
@@ -106,7 +111,9 @@ const fixtures = [
 export function generateFixtures() {
   for (const fix of fixtures) {
     fs.mkdirSync(fix.dir, { recursive: true })
-    fs.writeFileSync(path.join(fix.dir, 'plugin.json'), JSON.stringify(fix.manifest, null, 2), 'utf8')
+    // 夹具默认声明跨平台（targets 为必填），个别夹具可自行覆盖
+    const manifest = { targets: CROSS_PLATFORM_TARGETS, nativeComponents: [], ...fix.manifest }
+    fs.writeFileSync(path.join(fix.dir, 'plugin.json'), JSON.stringify(manifest, null, 2), 'utf8')
     fs.writeFileSync(path.join(fix.dir, 'icon.png'), iconBuffer)
     fs.writeFileSync(path.join(fix.dir, 'index.html'), '<!DOCTYPE html><html><body><script src="app.js"></script></body></html>', 'utf8')
     fs.writeFileSync(path.join(fix.dir, 'app.js'), fix.code, 'utf8')

@@ -11,16 +11,12 @@
  */
 
 import {
-  JsonFormatCommand,
-  QrCodeCommand,
   GoogleTranslateCommand,
-  ColorPickerCommand,
   KillProcessCommand,
   EverythingFileSearchCommand,
   ClipboardHistoryCommand,
   SnippetsCommand,
   WindowManagementCommand,
-  CalculatorCommand,
   SystemCommand,
   QuicklinksCommand,
   SettingsCommand,
@@ -37,7 +33,6 @@ import {
   CurrencyExchangeCommand,
   EmojiPickerCommand,
   TranslatorCommand,
-  NotesCommand,
   WindowsRunCommand,
   WindowsTaskbarCommand,
   ScreenshotsCommand,
@@ -83,10 +78,9 @@ import {
   AiImageCommand,
   AiVideoCommand,
   OcrCommand,
-  RecordCommand,
-  FileCompareCommand
+  RecordCommand
 } from '@ztools/declarative-ui'
-import { isBundledPlugin } from './bundledPlugins.js'
+import { isBundledPlugin, isStoreOfficialPlugin } from './bundledPlugins.js'
 
 /**
  * 官方标杆应用唯一标识清单
@@ -97,13 +91,9 @@ export const OFFICIAL_PLUGIN_IDS = Object.freeze({
   SNIPPETS: 'snippets',
   WINDOW_MANAGEMENT: 'window-management',
   EVERYTHING_SEARCH: 'everything-file-search',
-  CALCULATOR: 'calculator',
   SYSTEM: 'system',
   QUICKLINKS: 'quicklinks',
   KILL_PROCESS: 'kill-process',
-  JSON_FORMAT: 'json-format',
-  QR_CODE: 'qr-code',
-  COLOR_PICKER: 'color-picker',
   GOOGLE_TRANSLATE: 'google-translate',
 
   // 原生插件声明式 2.0 升级标杆 (Native Plugin Declarative 2.0 Benchmark)
@@ -136,12 +126,10 @@ export const OFFICIAL_PLUGIN_IDS = Object.freeze({
   AI_VIDEO: 'ai-video',
   OCR: 'ocr',
   RECORD: 'record',
-  FILE_COMPARE: 'file-compare',
 
   // M1.5 第二组: 高频核心内置应用 (Group 2 Built-in Apps)
   EMOJI_PICKER: 'emoji-picker',
   TRANSLATOR: 'translator',
-  NOTES: 'notes',
   WINDOWS_RUN: 'windows-run',
   WINDOWS_TASKBAR: 'windows-taskbar',
   SCREENSHOTS: 'screenshots',
@@ -258,24 +246,6 @@ export const OFFICIAL_PLUGINS_MAP = Object.freeze({
     command: EverythingFileSearchCommand
   }),
 
-  [OFFICIAL_PLUGIN_IDS.CALCULATOR]: Object.freeze({
-    id: 'calculator',
-    pluginId: 'calculator',
-    name: '综合计算器与色彩速查',
-    title: '综合计算器与色彩速查',
-    description: '输入算式直接出结果，支持单位换算和颜色值换算',
-    category: '办公效率',
-    keyword: 'calculator math color 计算器 算术 颜色 换算 估值 calculator',
-    faIcon: 'fa-calculator',
-    version: '1.0.0',
-    author: 'ZTools Official',
-    badge: '内置核心',
-    isBuiltin: true,
-    isDeclarative: true,
-    enabled: true,
-    command: CalculatorCommand
-  }),
-
   [OFFICIAL_PLUGIN_IDS.SYSTEM]: Object.freeze({
     id: 'system',
     pluginId: 'system',
@@ -328,60 +298,6 @@ export const OFFICIAL_PLUGINS_MAP = Object.freeze({
     isDeclarative: true,
     enabled: true,
     command: KillProcessCommand
-  }),
-
-  [OFFICIAL_PLUGIN_IDS.JSON_FORMAT]: Object.freeze({
-    id: 'json-format',
-    pluginId: 'json-format',
-    name: 'JSON 格式化与类型推导',
-    title: 'JSON 格式化与类型推导',
-    description: '检查 JSON 是否有错，一键美化或压缩，还能生成 TypeScript 类型',
-    category: '办公效率',
-    keyword: 'json format ts typescript 格式化 校验 压缩 接口推导 json-format',
-    faIcon: 'fa-code',
-    version: '1.0.0',
-    author: 'ZTools Official',
-    badge: '官方标杆',
-    isBuiltin: true,
-    isDeclarative: true,
-    enabled: true,
-    command: JsonFormatCommand
-  }),
-
-  [OFFICIAL_PLUGIN_IDS.QR_CODE]: Object.freeze({
-    id: 'qr-code',
-    pluginId: 'qr-code',
-    name: '二维码生成与识别',
-    title: '二维码生成与识别',
-    description: '纯前端无依赖二维码生成（SVG/DataURL 预览）、历史管理与扫描解析',
-    category: '系统工具',
-    keyword: 'qr qrcode 二维码 生成 识别 条形码 scan qr-code',
-    faIcon: 'fa-qrcode',
-    version: '1.0.0',
-    author: 'ZTools Official',
-    badge: '官方标杆',
-    isBuiltin: true,
-    isDeclarative: true,
-    enabled: true,
-    command: QrCodeCommand
-  }),
-
-  [OFFICIAL_PLUGIN_IDS.COLOR_PICKER]: Object.freeze({
-    id: 'color-picker',
-    pluginId: 'color-picker',
-    name: '色彩拾取与转换',
-    title: '色彩拾取与转换',
-    description: '拾取屏幕颜色，在 Hex、RGB、HSL、CMYK 之间换算，查看文字对比度',
-    category: '媒体处理',
-    keyword: 'color picker 色彩 调色板 拾色器 hex rgb hsl cmyk 颜色',
-    faIcon: 'fa-eyedropper',
-    version: '1.0.0',
-    author: 'ZTools Official',
-    badge: '官方标杆',
-    isBuiltin: true,
-    isDeclarative: true,
-    enabled: true,
-    command: ColorPickerCommand
   }),
 
   [OFFICIAL_PLUGIN_IDS.GOOGLE_TRANSLATE]: Object.freeze({
@@ -564,24 +480,6 @@ export const OFFICIAL_PLUGINS_MAP = Object.freeze({
     isDeclarative: true,
     enabled: true,
     command: TranslatorCommand
-  }),
-
-  [OFFICIAL_PLUGIN_IDS.NOTES]: Object.freeze({
-    id: 'notes',
-    pluginId: 'notes',
-    name: '轻量便签记事',
-    title: '轻量便签记事',
-    description: '随手记的 Markdown 便签，可置顶，只保存在本机',
-    category: '办公效率',
-    keyword: 'notes note 便签 记事 备忘 草稿 bianqian notes',
-    faIcon: 'fa-sticky-note-o',
-    version: '1.0.0',
-    author: 'ZTools Official',
-    badge: '内置核心',
-    isBuiltin: true,
-    isDeclarative: true,
-    enabled: true,
-    command: NotesCommand
   }),
 
   [OFFICIAL_PLUGIN_IDS.WINDOWS_RUN]: Object.freeze({
@@ -1510,24 +1408,6 @@ export const OFFICIAL_PLUGINS_MAP = Object.freeze({
     enabled: true,
     command: RecordCommand
   }),
-
-  [OFFICIAL_PLUGIN_IDS.FILE_COMPARE]: Object.freeze({
-    id: 'file-compare',
-    pluginId: 'file-compare',
-    name: '双文件哈希与 Diff 比对工作台',
-    title: '双文件哈希与 Diff 比对工作台',
-    description: '双目录/双文件 SHA-256 字节级哈希校验与代码文本逐行 Diff 差异对比工作台',
-    category: '开发工具',
-    keyword: 'file compare diff sha256 hash 文件比对 文件夹对比 差异对比 哈希校验 file-compare',
-    faIcon: 'fa-columns',
-    version: '2.0.0',
-    author: 'ZTools Official',
-    badge: '2.0标杆',
-    isBuiltin: true,
-    isDeclarative: true,
-    enabled: true,
-    command: FileCompareCommand
-  })
 })
 
 /**
@@ -1538,8 +1418,7 @@ export const OFFICIAL_PLUGIN_ALIASES = Object.freeze({
   'everything-search': OFFICIAL_PLUGIN_IDS.EVERYTHING_SEARCH,
   'window-manager': OFFICIAL_PLUGIN_IDS.WINDOW_MANAGEMENT,
   'system-tools': OFFICIAL_PLUGIN_IDS.SYSTEM,
-  screenshot: OFFICIAL_PLUGIN_IDS.SCREENSHOTS,
-  'screen-color-picker': OFFICIAL_PLUGIN_IDS.COLOR_PICKER
+  screenshot: OFFICIAL_PLUGIN_IDS.SCREENSHOTS
 })
 
 /**
@@ -1573,7 +1452,9 @@ export function getOfficialPlugin(pluginId) {
   if (!pluginId || typeof pluginId !== 'string') return undefined
   const normalized = pluginId.trim().toLowerCase()
   const resolved = OFFICIAL_PLUGIN_ALIASES[normalized] || normalized
+  // 内置插件与插件市场分发的官方插件都以 plugins 仓库的真实实现为准，不再返回同名的旧示例实现
   if (isBundledPlugin(normalized) || isBundledPlugin(resolved)) return undefined
+  if (isStoreOfficialPlugin(normalized) || isStoreOfficialPlugin(resolved)) return undefined
   return OFFICIAL_PLUGINS_MAP[resolved] || OFFICIAL_PLUGINS_MAP[pluginId.trim()]
 }
 
@@ -1582,7 +1463,7 @@ export function getOfficialPlugin(pluginId) {
  * @returns {Array<typeof OFFICIAL_PLUGINS_MAP[string]>}
  */
 export function getOfficialPluginsList() {
-  return OFFICIAL_PLUGINS_LIST.filter((p) => !isBundledPlugin(p.pluginId))
+  return OFFICIAL_PLUGINS_LIST.filter((p) => !isBundledPlugin(p.pluginId) && !isStoreOfficialPlugin(p.pluginId))
 }
 
 

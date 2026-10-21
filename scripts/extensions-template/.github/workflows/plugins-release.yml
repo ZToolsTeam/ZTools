@@ -1,0 +1,115 @@
+# 插件发布：main 分支有合并就从源码重新构建全部插件，上传阿里云 OSS 并刷新 CDN
+# 产物：plugins-v2/<作者>/<id>/<id>-<版本>.zip、icon，以及插件目录 catalog.json / plugins.json
+# 任一插件构建或安全扫描失败时整次发布中止，线上目录保持上一版不变
+name: 插件发布
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'extensions/**'
+      - 'scripts/**'
+      - 'packages/**'
+      - 'package.json'
+      - 'package-lock.json'
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: '只演练，不实际上传'
+        required: false
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+# 连续合并时排队依次发布，避免两次发布交错覆盖插件目录
+concurrency:
+  group: plugins-release
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    name: 构建并发布到 CDN
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    environment: plugins-cdn
+    steps:
+      - name: 拉取代码
+        uses: actions/checkout@v4
+
+      - name: 安装 Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: 安装依赖（不执行依赖包的安装脚本）
+        run: npm ci --ignore-scripts
+
+      - name: 从源码编译全部插件
+        run: node scripts/build-declarative.mjs --all
+
+      - name: 安全扫描、打包并生成插件目录
+        run: |
+          node scripts/build-plugins-release.mjs \
+            --plugins-dir extensions \
+            --output-dir dist/plugins \
+            --cdn-base-url "https://cdn.ztools.cn" \
+            --url-prefix plugins-v2
+
+      - name: 上传阿里云 OSS 并刷新 CDN
+        env:
+          OSS_ACCESS_KEY_ID: ${{ secrets.OSS_ACCESS_KEY_ID }}
+          OSS_ACCESS_KEY_SECRET: ${{ secrets.OSS_ACCESS_KEY_SECRET }}
+          OSS_BUCKET: ${{ secrets.OSS_BUCKET }}
+          OSS_REGION: ${{ secrets.OSS_REGION }}
+          CDN_ACCESS_KEY_ID: ${{ secrets.CDN_ACCESS_KEY_ID }}
+          CDN_ACCESS_KEY_SECRET: ${{ secrets.CDN_ACCESS_KEY_SECRET }}
+          DRY_RUN: ${{ github.event.inputs.dry_run }}
+        run: |
+          DRY_RUN_FLAG=""
+          if [ "$DRY_RUN" = "true" ]; then
+            echo "手动选择了演练模式，只打印上传计划，不实际上传"
+            DRY_RUN_FLAG="--dry-run"
+          fi
+          # 没配阿里云密钥时脚本直接报错，不会假装上传成功
+          node scripts/deploy-plugins-storage.mjs \
+            --dir dist/plugins \
+            --cdn-base-url "https://cdn.ztools.cn" \
+            --oss-prefix plugins-v2 \
+            $DRY_RUN_FLAG
+
+      - name: 保存发布产物
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: plugins-release-${{ github.sha }}
+          path: dist/plugins/**
+          retention-days: 30
+          if-no-files-found: ignore
+
+      - name: 发布摘要
+        if: success()
+        run: |
+          node -e "
+          const fs = require('node:fs');
+          const index = JSON.parse(fs.readFileSync('dist/plugins/catalog.json', 'utf8'));
+          const platformOf = (p) => {
+            const list = Array.isArray(p.platforms) ? p.platforms : [];
+            if (list.includes('windows') && list.includes('macos')) return '跨平台';
+            if (list.includes('macos')) return '仅 macOS';
+            if (list.includes('windows')) return '仅 Windows';
+            return '-';
+          };
+          const rows = index.plugins.map((p) => p.revoked
+            ? '| ' + p.name + ' | ' + p.id + ' | ' + p.version + ' | - | 已下架 | - |'
+            : '| ' + p.name + ' | ' + p.id + ' | ' + p.version + ' | ' + platformOf(p) + ' | ' + (p.size / 1024).toFixed(1) + ' KB | ' + p.sha256.slice(0, 12) + ' |');
+          const summary = ['### 插件发布完成', '',
+            '- 插件目录：' + index.cdnBaseUrl + '/plugins-v2/catalog.json',
+            '- 插件数：' + index.total,
+            '- 生成时间：' + index.generatedAt, '',
+            '| 名称 | ID | 版本 | 平台 | 大小 | SHA-256 |', '| --- | --- | --- | --- | --- | --- |', ...rows].join('\n');
+          fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY, summary + '\n');
+          "

@@ -640,10 +640,10 @@ pub fn parse_mft_record(raw: &[u8], record_id: u64) -> Option<ParsedFileEntry> {
     r_desc = p_op.add_run(
         "ZTools 致力于打造 Windows & macOS 双端顶尖效率中枢，全面拥抱声明式 UI、纯键盘操作流、AI 原生 MCP 协议栈与 Local-First 极致隐私理念。\n\n"
         "• 核心宿主开源仓库 (GNU GPL-3.0)：\n"
-        "  GitHub: https://github.com/codingmuse/ZTools\n"
+        "  GitHub: https://github.com/ZToolsTeam/ZTools\n"
         "  Gitee 镜像: https://gitee.com/hoposky/ZTools\n\n"
         "• 扩展生态大仓 (MIT 协议，欢迎提交插件 PR)：\n"
-        "  GitHub: https://github.com/codingmuse/ZTools-extensions\n\n"
+        "  GitHub: https://github.com/ZToolsTeam/ZTools-extensions\n\n"
         "• ZTools 官方网站与文档中心：\n"
         "  官网: https://ztools.cn\n\n"
         "如果你也受够了臃肿卡顿、广告弹窗满天飞的桌面工具，欢迎来 GitHub 给我们点个 Star ⭐，或者向生态大仓提交你专属的极客插件！\n"

@@ -8,13 +8,14 @@
  * 4. 连续快速输入高频防乱序机制 (Cancellation Token / RequestId 机制)。
  */
 
-import { ref, computed } from 'vue'
+import { ref, computed, getCurrentScope, onScopeDispose } from 'vue'
 import { usePluginsStore } from '@/stores/plugins'
 import { matchItemWithQuery } from '@/utils/pinyinSearch'
 import { openSettings } from '@/utils/internalPlugins'
 import { getOfficialPlugin } from '@/utils/officialPlugins'
 import { switchWindowMode, WINDOW_MODES } from '@/utils/windowMode'
-import { evaluateCalculatorQuery, addCalculatorHistory } from '@ztools/declarative-ui'
+// 与内置计算器插件同一份计算引擎（由 scripts/sync-bundled-plugins.mjs 同步）
+import { evaluateCalculatorQuery, addCalculatorHistory } from '@/vendor/calculator-engine.js'
 
 const STORAGE_KEY_FRECENCY = 'ztools_command_frecency'
 
@@ -136,9 +137,9 @@ export const BUILTIN_COMMAND_ITEMS = Object.freeze([
     faIcon: 'fa-code',
     action: () => {
       if (window.ztools?.shell?.openExternal) {
-        window.ztools.shell.openExternal('https://github.com/codingmuse/ZTools-extensions')
+        window.ztools.shell.openExternal('https://github.com/ZToolsTeam/ZTools-extensions')
       } else {
-        window.open('https://github.com/codingmuse/ZTools-extensions', '_blank')
+        window.open('https://github.com/ZToolsTeam/ZTools-extensions', '_blank')
       }
     }
   },
@@ -151,9 +152,9 @@ export const BUILTIN_COMMAND_ITEMS = Object.freeze([
     faIcon: 'fa-github',
     action: () => {
       if (window.ztools?.shell?.openExternal) {
-        window.ztools.shell.openExternal('https://github.com/codingmuse/ZTools-extensions')
+        window.ztools.shell.openExternal('https://github.com/ZToolsTeam/ZTools-extensions')
       } else {
-        window.open('https://github.com/codingmuse/ZTools-extensions', '_blank')
+        window.open('https://github.com/ZToolsTeam/ZTools-extensions', '_blank')
       }
     }
   }
@@ -197,9 +198,10 @@ export function resolveFileFaIcon(fileName, isDir) {
 export function truncatePath(fullPath) {
   if (!fullPath) return ''
   if (fullPath.length <= 48) return fullPath
+  const separator = fullPath.includes('\\') ? '\\' : '/'
   const parts = fullPath.split(/[\\/]/)
   if (parts.length <= 3) return fullPath
-  return `${parts[0]}\\...\\${parts.slice(-2).join('\\')}`
+  return `${parts[0]}${separator}…${separator}${parts.slice(-2).join(separator)}`
 }
 
 /**
@@ -337,6 +339,9 @@ export function useCommandSearch(options = {}) {
   const query = ref('')
   const fileResults = ref([])
   const isSearching = ref(false)
+  const fileSearchError = ref('')
+  const fileSearchDegraded = ref(false)
+  const applicationIcons = new Map()
 
   let searchRequestId = 0
   let fileSearchDebounceTimer = null
@@ -351,15 +356,12 @@ export function useCommandSearch(options = {}) {
   /**
    * 执行防乱序本地文件秒搜
    */
-  async function searchFilesLocally(text) {
+  async function searchFilesLocally(text, currentReq) {
     const trimmed = text.trim()
     if (!trimmed || !enableFileSearch) {
       fileResults.value = []
       return
     }
-
-    const currentReq = ++searchRequestId
-    isSearching.value = true
 
     try {
       let res = null
@@ -374,32 +376,42 @@ export function useCommandSearch(options = {}) {
       // 防乱序检查：如果当前请求已过时，坚决丢弃结果
       if (currentReq !== searchRequestId) return
 
-      const rawFiles = Array.isArray(res?.files)
-        ? res.files
-        : Array.isArray(res?.data?.files)
-          ? res.data.files
-          : []
-
-      if (rawFiles.length > 0) {
-        fileResults.value = rawFiles.map((f) => ({
-          key: 'file:' + f.path,
-          type: 'file',
-          name: f.name,
-          title: f.name,
-          path: f.path,
-          isDir: f.is_dir,
-          size: f.size,
-          mtime: f.mtime,
-          badge: f.is_dir ? '文件夹' : '文件',
-          faIcon: resolveFileFaIcon(f.name, f.is_dir),
-          description: truncatePath(f.path),
-          subtitle: truncatePath(f.path),
-          actionLabel: '打开'
-        }))
-      } else {
-        fileResults.value = []
-      }
+      if (res === null) throw new Error('当前客户端没有可用的文件搜索接口')
+      if (res?.success === false) throw new Error(res.error?.message || '本地文件搜索失败')
+      const data = res?.data ?? res
+      const rawFiles = Array.isArray(data?.files) ? data.files : []
+      fileSearchDegraded.value = data?.degraded === true
+      fileResults.value = rawFiles
+        .filter(f => f && typeof f.path === 'string' && typeof f.name === 'string')
+        .map(f => {
+          const isApplication = f.kind === 'application'
+          const name = f.display_name || f.name
+          const parentPath = f.path.replace(/[\\/][^\\/]+$/, '')
+          return {
+            key: 'file:' + f.path,
+            type: 'file',
+            name,
+            title: name,
+            fileName: f.name,
+            path: f.path,
+            isDir: f.is_dir,
+            isApplication,
+            size: f.size,
+            mtime: f.mtime,
+            badge: isApplication ? '应用' : f.is_dir ? '文件夹' : '文件',
+            faIcon: isApplication ? 'fa-th-large' : resolveFileFaIcon(f.name, f.is_dir),
+            description: truncatePath(parentPath),
+            subtitle: truncatePath(parentPath),
+            actionLabel: '打开',
+            icon: ''
+          }
+        })
+      void loadApplicationIcons(fileResults.value, currentReq)
     } catch (err) {
+      if (currentReq === searchRequestId) {
+        fileResults.value = []
+        fileSearchError.value = '文件搜索暂不可用，请重试'
+      }
       console.warn('[useCommandSearch] 本地文件检索异常:', err)
     } finally {
       if (currentReq === searchRequestId) {
@@ -408,11 +420,37 @@ export function useCommandSearch(options = {}) {
     }
   }
 
+  async function loadApplicationIcons(items, requestId) {
+    const api = typeof window !== 'undefined' ? window.ztools?.sys : null
+    if (!api?.getFileIcon) return
+    await Promise.all(items.filter(item => item.isApplication).map(async item => {
+      try {
+        let pending = applicationIcons.get(item.path)
+        if (!pending) {
+          pending = Promise.resolve(api.getFileIcon(item.path))
+          if (applicationIcons.size >= 64) applicationIcons.delete(applicationIcons.keys().next().value)
+          applicationIcons.set(item.path, pending)
+        }
+        const icon = await pending
+        if (requestId === searchRequestId && typeof icon === 'string' && icon.startsWith('data:image/')) {
+          item.icon = icon
+        }
+      } catch (error) {
+        applicationIcons.delete(item.path)
+        console.warn('[useCommandSearch] 应用图标读取失败:', error)
+      }
+    }))
+  }
+
   /**
    * 触发搜索更新
    */
   function search(text) {
     query.value = typeof text === 'string' ? text : ''
+    const requestId = ++searchRequestId
+    fileResults.value = []
+    fileSearchError.value = ''
+    fileSearchDegraded.value = false
 
     if (fileSearchDebounceTimer) {
       clearTimeout(fileSearchDebounceTimer)
@@ -426,8 +464,9 @@ export function useCommandSearch(options = {}) {
     }
 
     if (enableFileSearch) {
+      isSearching.value = true
       fileSearchDebounceTimer = setTimeout(() => {
-        searchFilesLocally(query.value)
+        searchFilesLocally(query.value, requestId)
       }, 40)
     }
   }
@@ -437,7 +476,17 @@ export function useCommandSearch(options = {}) {
     if (fileSearchDebounceTimer) clearTimeout(fileSearchDebounceTimer)
     query.value = ''
     fileResults.value = []
+    fileSearchError.value = ''
+    fileSearchDegraded.value = false
     isSearching.value = false
+  }
+
+  if (getCurrentScope()) {
+    onScopeDispose(() => {
+      searchRequestId++
+      if (fileSearchDebounceTimer) clearTimeout(fileSearchDebounceTimer)
+      applicationIcons.clear()
+    })
   }
 
   /**
@@ -552,6 +601,8 @@ export function useCommandSearch(options = {}) {
     fileResults,
     filteredItems,
     isSearching,
+    fileSearchError,
+    fileSearchDegraded,
     search,
     clearSearch,
     recordUsage,

@@ -1,11 +1,9 @@
-import { execFile } from 'node:child_process'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { promisify } from 'node:util'
 import type { FileRecord, SearchFilesResult, SubdirStatRecord } from '../../services/sidecar-manager.js'
 
-const execFileAsync = promisify(execFile)
+import { collectSpotlightPaths, macosApplicationName } from './spotlight-search.js'
 
 function expandHomeDir(inputPath: string): string {
   const trimmed = inputPath.trim()
@@ -18,9 +16,11 @@ function expandHomeDir(inputPath: string): string {
 
 function buildFileRecord(filePath: string, name: string, stat: fs.Stats): FileRecord {
   const isDir = stat.isDirectory()
+  const isApplication = process.platform === 'darwin' && isDir && filePath.toLowerCase().endsWith('.app')
   const size = isDir ? 0 : Number(stat.size || 0)
   const mtime = Math.round(Number(stat.mtimeMs || Date.now()))
   return {
+    ...(isApplication ? { kind: 'application', display_name: name.replace(/\.app$/i, '') } : {}),
     name,
     path: filePath,
     is_dir: isDir,
@@ -186,51 +186,41 @@ export async function searchFilesOnMacos(
     }
   }
 
-  // 2. 若在 darwin 环境且数量未满，调用 /usr/bin/mdfind -name <cleanQuery>
+  let degraded = process.platform !== 'darwin'
+  let source = 'macos-fs'
   if (process.platform === 'darwin' && resultsMap.size < safeLimit) {
-    let mdfindSucceeded = false
-    try {
-      const { stdout } = await execFileAsync('/usr/bin/mdfind', ['-name', cleanQuery], {
-        timeout: 3000,
-        maxBuffer: 4 * 1024 * 1024,
-        encoding: 'utf8'
-      })
-      const lines = String(stdout || '')
-        .split(/\r?\n/)
-        .map((line) => line.trim())
-        .filter(Boolean)
-
-      if (lines.length > 0) {
-        mdfindSucceeded = true
-        for (const candidatePath of lines) {
-          if (resultsMap.size >= safeLimit) break
-          if (resultsMap.has(candidatePath)) continue
-          try {
-            const stat = await fs.promises.stat(candidatePath)
-            const name = path.basename(candidatePath)
-            resultsMap.set(candidatePath, buildFileRecord(candidatePath, name, stat))
-          } catch {
-            // 忽略已被删除或无权读取的路径
+    const spotlight = await collectSpotlightPaths(cleanQuery, Math.max(safeLimit, Math.min(128, safeLimit * 4)))
+    degraded = spotlight.degraded
+    if (spotlight.paths.length > 0) source = 'macos-spotlight'
+    // Small batches bound filesystem and metadata subprocess concurrency.
+    for (let offset = 0; offset < spotlight.paths.length; offset += 8) {
+      await Promise.all(spotlight.paths.slice(offset, offset + 8).map(async candidatePath => {
+        if (resultsMap.has(candidatePath)) return
+        try {
+          const stat = await fs.promises.stat(candidatePath)
+          const record = buildFileRecord(candidatePath, path.basename(candidatePath), stat)
+          resultsMap.set(candidatePath, record)
+        } catch (error) {
+          // Index entries can disappear or become inaccessible while a query is running.
+          if (!['ENOENT', 'EACCES', 'EPERM'].includes((error as NodeJS.ErrnoException).code ?? '')) {
+            console.warn('[Spotlight] 搜索结果读取失败:', error)
           }
         }
-      }
-    } catch {
-      // mdfind 超时或 Spotlight 被禁用，继续走主目录回退扫描
+      }))
     }
-
-    // 3. 若 mdfind 失败或为空，回退扫描用户主目录下的 Desktop, Documents, Downloads 一级文件
-    if (!mdfindSucceeded && resultsMap.size < safeLimit) {
-      const local = await scanLocalRecentFiles(cleanQuery, safeLimit - resultsMap.size)
-      for (const f of local.files) {
-        if (resultsMap.size >= safeLimit) break
-        if (!resultsMap.has(f.path)) {
-          resultsMap.set(f.path, f)
-        }
+    // Preserve partial Spotlight results and fill gaps from accessible local folders.
+    if (resultsMap.size < safeLimit) {
+      const local = await scanLocalRecentFiles(cleanQuery, safeLimit)
+      for (const file of local.files) {
+        if (!resultsMap.has(file.path)) resultsMap.set(file.path, file)
       }
     }
   }
 
-  const files = Array.from(resultsMap.values()).slice(0, safeLimit)
+  // Include applications found by the local fallback; resolve at most one page concurrently.
+  const applications = [...resultsMap.values()].filter(file => file.kind === 'application').slice(0, 12)
+  await Promise.all(applications.map(async file => { file.display_name = await macosApplicationName(file.path) }))
+  const files = rankSearchFiles([...resultsMap.values()], cleanQuery).slice(0, safeLimit)
   const totalBytes = files.reduce((acc, f) => acc + (f.size || 0), 0)
   const elapsedMs = performance.now() - t0
 
@@ -244,9 +234,24 @@ export async function searchFilesOnMacos(
     elapsed_us: Math.round(elapsedMs * 1000),
     elapsed_ms: elapsedMs,
     total_indexed: Math.max(fallbackFiles.length, files.length),
-    degraded: process.platform !== 'darwin',
-    source: 'macos-fs'
+    degraded,
+    source
   }
+}
+
+/** Exact localized names precede prefix and substring matches. */
+export function rankSearchFiles(files: readonly FileRecord[], query: string): FileRecord[] {
+  const normalized = query.trim().toLocaleLowerCase()
+  const score = (file: FileRecord): number => {
+    const names = [file.display_name ?? file.name, file.name.replace(/\.app$/i, '')]
+      .map(name => name.toLocaleLowerCase())
+    if (names.some(name => name === normalized)) return 3
+    if (names.some(name => name.startsWith(normalized))) return 2
+    if (names.some(name => name.includes(normalized))) return 1
+    return 0
+  }
+  return [...files].sort((a, b) => score(b) - score(a) ||
+    (a.display_name ?? a.name).localeCompare(b.display_name ?? b.name))
 }
 
 /**

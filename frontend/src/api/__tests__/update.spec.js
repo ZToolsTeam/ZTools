@@ -26,10 +26,13 @@ describe('update API', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     delete window.ztools
+    // 静态索引不可用：这里只测后台接口这条路，静态索引的用例见 pluginUpdateCatalog.spec.js
+    vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new Error('offline')))
   })
 
   afterEach(() => {
     delete window.ztools
+    vi.unstubAllGlobals()
   })
 
   describe('checkAppUpdate', () => {

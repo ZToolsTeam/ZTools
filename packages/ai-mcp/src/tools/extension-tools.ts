@@ -40,7 +40,7 @@ export interface ExtensionToolDefinition {
 export interface ToolConfirmationRequest {
   pluginId: string;
   toolName: string;
-  args: Record<string, any>;
+  args: Record<string, unknown>;
   confirmationPrompt?: string;
 }
 
@@ -105,7 +105,7 @@ interface ExtensionInternalRecord {
 /**
  * 序列化工具输出结果，具备循环引用与 BigInt 熔断防护
  */
-export function serializeToolOutput(rawResult: any): McpToolResult {
+export function serializeToolOutput(rawResult: unknown): McpToolResult {
   if (rawResult === undefined || rawResult === null) {
     return {
       isError: false,
@@ -135,7 +135,8 @@ export function serializeToolOutput(rawResult: any): McpToolResult {
   }
 
   if (typeof rawResult === 'object') {
-    if ('content' in rawResult && Array.isArray((rawResult as any).content)) {
+    const objResult = rawResult as Record<string, unknown>;
+    if ('content' in objResult && Array.isArray(objResult.content)) {
       return rawResult as McpToolResult;
     }
 
@@ -151,8 +152,8 @@ export function serializeToolOutput(rawResult: any): McpToolResult {
         isError: false,
         content: [{ type: 'text', text }]
       };
-    } catch (err: any) {
-      const msg = err?.message || String(err);
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
       if (msg.includes('circular') || msg.includes('cyclic')) {
         return {
           isError: true,
@@ -184,7 +185,7 @@ export function serializeToolOutput(rawResult: any): McpToolResult {
  */
 export async function executeToolEntryPoint(options: ToolEntryPointOptions): Promise<McpToolResult> {
   // 1. 校验与解析 arguments
-  let parsedArgs: Record<string, any>;
+  let parsedArgs: Record<string, unknown>;
   const rawArgs = options.args;
 
   if (rawArgs === undefined || rawArgs === null) {
@@ -195,7 +196,7 @@ export async function executeToolEntryPoint(options: ToolEntryPointOptions): Pro
       parsedArgs = {};
     } else {
       try {
-        const parsed = JSON.parse(trimmed);
+        const parsed = JSON.parse(trimmed) as unknown;
         if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
           return {
             isError: true,
@@ -205,11 +206,12 @@ export async function executeToolEntryPoint(options: ToolEntryPointOptions): Pro
             }]
           };
         }
-        parsedArgs = parsed;
-      } catch (err: any) {
+        parsedArgs = parsed as Record<string, unknown>;
+      } catch (err: unknown) {
+        const errMsg = err instanceof Error ? err.message : String(err);
         return {
           isError: true,
-          content: [{ type: 'text', text: `Invalid JSON input arguments: ${err.message}` }]
+          content: [{ type: 'text', text: `Invalid JSON input arguments: ${errMsg}` }]
         };
       }
     }
@@ -220,7 +222,7 @@ export async function executeToolEntryPoint(options: ToolEntryPointOptions): Pro
         content: [{ type: 'text', text: 'Tool arguments must be an object, not an array' }]
       };
     }
-    parsedArgs = rawArgs as Record<string, any>;
+    parsedArgs = rawArgs as Record<string, unknown>;
   } else {
     return {
       isError: true,
@@ -241,34 +243,37 @@ export async function executeToolEntryPoint(options: ToolEntryPointOptions): Pro
   }
 
   // 3. 动态加载模块
-  let mod: any;
+  let mod: Record<string, unknown>;
   try {
+    const stat = fs.statSync(resolvedPath);
     const fileUrl = pathToFileURL(resolvedPath);
-    fileUrl.searchParams.set('ztools_t', `${Date.now()}_${Math.random().toString(36).slice(2, 6)}`);
-    mod = await import(fileUrl.href);
-  } catch (err: any) {
+    fileUrl.searchParams.set('v', String(Math.trunc(stat.mtimeMs)));
+    mod = (await import(fileUrl.href)) as Record<string, unknown>;
+  } catch (err: unknown) {
+    const errMsg = err instanceof Error ? err.message : String(err);
     return {
       isError: true,
-      content: [{ type: 'text', text: `Failed to load tool module "${resolvedPath}": ${err?.message || String(err)}` }]
+      content: [{ type: 'text', text: `Failed to load tool module "${resolvedPath}": ${errMsg}` }]
     };
   }
 
   // 4. 定位目标导出函数
   const exportName = options.exportName || 'default';
-  let targetFn: any;
+  let targetFn: ((args: Record<string, unknown>) => unknown) | undefined;
+  const modDefault = mod?.default as Record<string, unknown> | ((args: Record<string, unknown>) => unknown) | undefined;
 
   if (mod && typeof mod[exportName] === 'function') {
-    targetFn = mod[exportName];
-  } else if (exportName === 'default' && typeof mod?.default === 'function') {
-    targetFn = mod.default;
+    targetFn = mod[exportName] as (args: Record<string, unknown>) => unknown;
+  } else if (exportName === 'default' && typeof modDefault === 'function') {
+    targetFn = modDefault;
   } else if (exportName === 'default' && typeof mod === 'function') {
-    targetFn = mod;
-  } else if (mod?.default && typeof mod.default === 'object' && typeof mod.default[exportName] === 'function') {
-    targetFn = mod.default[exportName];
+    targetFn = mod as unknown as (args: Record<string, unknown>) => unknown;
+  } else if (modDefault && typeof modDefault === 'object' && typeof modDefault[exportName] === 'function') {
+    targetFn = modDefault[exportName] as (args: Record<string, unknown>) => unknown;
   } else {
     const actualType = mod && mod[exportName] !== undefined
       ? typeof mod[exportName]
-      : (exportName === 'default' && mod?.default !== undefined ? typeof mod.default : typeof mod);
+      : (exportName === 'default' && modDefault !== undefined ? typeof modDefault : typeof mod);
     return {
       isError: true,
       content: [{
@@ -289,15 +294,17 @@ export async function executeToolEntryPoint(options: ToolEntryPointOptions): Pro
   });
 
   try {
-    const execPromise = Promise.resolve().then(() => targetFn(parsedArgs));
+    const fnToCall = targetFn!;
+    const execPromise = Promise.resolve().then(() => fnToCall(parsedArgs));
     const rawResult = await Promise.race([execPromise, timeoutPromise]);
     if (timer) clearTimeout(timer);
     return serializeToolOutput(rawResult);
-  } catch (err: any) {
+  } catch (err: unknown) {
     if (timer) clearTimeout(timer);
+    const errMsg = err instanceof Error ? err.message : String(err);
     return {
       isError: true,
-      content: [{ type: 'text', text: `Tool execution failed: ${err?.message || String(err)}` }]
+      content: [{ type: 'text', text: `Tool execution failed: ${errMsg}` }]
     };
   }
 }
@@ -402,26 +409,32 @@ export class ExtensionToolManager {
       }
     }
 
-    // 3. 构建/更新记录
-    let record = this.extensions.get(pluginId);
-    if (!record) {
-      record = {
-        id: pluginId,
-        name: manifest.name || pluginId,
-        version: manifest.version || '1.0.0',
-        enabled: manifest.enabled !== false,
-        revoked: manifest.revoked === true,
-        revokedReason: manifest.revokedReason,
-        tools: new Map(),
-        registeredToolNames: new Set()
-      };
-      this.extensions.set(pluginId, record);
-    } else {
+    // 3. 构建/更新记录（若已存在同一 pluginId，先卸载清理旧工具避免残留）
+    const existingRecord = this.extensions.get(pluginId);
+    if (existingRecord) {
+      this.unmountExtensionTools(existingRecord);
+      existingRecord.tools.clear();
+    }
+
+    const record: ExtensionInternalRecord = existingRecord ?? {
+      id: pluginId,
+      name: manifest.name || pluginId,
+      version: manifest.version || '1.0.0',
+      enabled: manifest.enabled !== false,
+      revoked: manifest.revoked === true,
+      revokedReason: manifest.revokedReason,
+      tools: new Map(),
+      registeredToolNames: new Set()
+    };
+
+    if (existingRecord) {
       record.name = manifest.name || record.name;
       record.version = manifest.version || record.version;
       record.enabled = manifest.enabled !== false;
       record.revoked = manifest.revoked === true;
       record.revokedReason = manifest.revokedReason;
+    } else {
+      this.extensions.set(pluginId, record);
     }
 
     for (const tool of toolsToRegister) {
@@ -442,7 +455,7 @@ export class ExtensionToolManager {
    */
   private mountExtensionTools(record: ExtensionInternalRecord): void {
     for (const tool of record.tools.values()) {
-      const toolHandler = async (args: Record<string, any>) => {
+      const toolHandler = async (args: Record<string, unknown>) => {
         // 门禁 1: 检查插件是否被禁用
         if (!record.enabled) {
           return {
@@ -476,10 +489,11 @@ export class ExtensionToolManager {
                   content: [{ type: 'text', text: `Tool execution cancelled by user: User denied confirmation for "${tool.name}"` }]
                 };
               }
-            } catch (confirmErr: any) {
+            } catch (confirmErr: unknown) {
+              const errMsg = confirmErr instanceof Error ? confirmErr.message : String(confirmErr);
               return {
                 isError: true,
-                content: [{ type: 'text', text: `Tool execution cancelled: Confirmation error (${confirmErr.message})` }]
+                content: [{ type: 'text', text: `Tool execution cancelled: Confirmation error (${errMsg})` }]
               };
             }
           } else if (!this.allowUnconfirmedIfNoHandler) {
@@ -630,7 +644,7 @@ export class ExtensionToolManager {
         await this.host.refreshServerTools(this.serverName);
       }
     } catch {
-      // 容错处理
+      // Host 尚未挂载或连接已断开时静默降级，不阻断本地注册表变更
     }
   }
 }

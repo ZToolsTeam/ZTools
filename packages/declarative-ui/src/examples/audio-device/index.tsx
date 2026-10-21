@@ -357,83 +357,12 @@ export default function AudioDeviceCommand() {
       onSearchTextChange={setSearchText}
       onSelectionChange={setSelectedId}
       filterBar={{
-        summaryText: `默认输出: ${defaultOut ? `${defaultOut.name} (${defaultOut.isMuted ? "静音" : `${defaultOut.volume}%`})` : "无"} • 默认输入: ${defaultIn ? defaultIn.name : "无"}`,
-        groups: [
-          {
-            id: "ioFilter",
-            label: "声道方向",
-            value: ioFilter,
-            onChange: (val: string) => setIoFilter(val as IOType | "all" | "favourites"),
-            options: [
-              { value: "all", label: "全部设备" },
-              { value: "output", label: "输出设备 (扬声器/耳机)" },
-              { value: "input", label: "输入设备 (麦克风)" }
-            ]
-          }
-        ],
+        summaryText: `默认输出: ${defaultOut ? `${defaultOut.name} (${defaultOut.isMuted ? "静音" : `${defaultOut.volume}%`})` : "无"} · 默认输入: ${defaultIn ? defaultIn.name : "无"}`,
         actions: [
           {
-            id: "set-default",
-            label: "✅ 设为默认设备",
-            title: "✅ 设为默认设备",
-            style: "primary",
-            onAction: async () => {
-              if (activeDevice) {
-                const res = defaultAudioDeviceManager.setDefaultDevice(activeDevice.id);
-                await showToast(
-                  res.success ? Toast.Style.Success : Toast.Style.Failure,
-                  res.success ? `已切换至: ${activeDevice.name}` : res.error || "切换失败"
-                );
-                refresh();
-              }
-            }
-          },
-          {
-            id: "toggle-mute",
-            label: "🔇 静音/取消静音",
-            title: "🔇 静音/取消静音",
-            style: "secondary",
-            onAction: async () => {
-              if (activeDevice) {
-                const res = defaultAudioDeviceManager.toggleDeviceMute(activeDevice.id);
-                await showToast(
-                  Toast.Style.Success,
-                  `${res.device?.isMuted ? "已静音" : "已恢复声音"}: ${activeDevice.name}`
-                );
-                refresh();
-              }
-            }
-          },
-          {
-            id: "vol-up",
-            label: "🔊 音量 +10%",
-            title: "🔊 音量 +10%",
-            style: "secondary",
-            onAction: async () => {
-              if (activeDevice) {
-                const res = defaultAudioDeviceManager.stepDeviceVolume(activeDevice.id, 10);
-                await showToast(Toast.Style.Success, `${activeDevice.name} 音量: ${res.device?.volume}%`);
-                refresh();
-              }
-            }
-          },
-          {
-            id: "vol-down",
-            label: "🔉 音量 -10%",
-            title: "🔉 音量 -10%",
-            style: "secondary",
-            onAction: async () => {
-              if (activeDevice) {
-                const res = defaultAudioDeviceManager.stepDeviceVolume(activeDevice.id, -10);
-                await showToast(Toast.Style.Success, `${activeDevice.name} 音量: ${res.device?.volume}%`);
-                refresh();
-              }
-            }
-          },
-          {
             id: "refresh-audio",
-            label: "🔄 刷新声卡",
-            title: "🔄 刷新声卡",
+            label: "刷新声卡",
+            title: "刷新声卡",
             style: "secondary",
             onAction: async () => {
               const list = await defaultAudioDeviceManager.syncDevicesFromHost();

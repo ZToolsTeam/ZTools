@@ -1,0 +1,43 @@
+# 插件 PR 合并前检查（合并即发布，这里没通过就不能合并）
+# 只检查本次改动涉及的插件：目录与 id、从源码编译、清单规范 + AST 安全扫描、插件自带测试、版本号必须升高
+# 需要在仓库 Settings → Branches 把 main 的「verify-plugins」设为必须通过的检查
+name: 插件合并前检查
+
+on:
+  pull_request:
+    branches:
+      - main
+
+# 外部贡献者的 PR 只有只读权限、拿不到任何密钥；严禁改成 pull_request_target
+permissions:
+  contents: read
+
+concurrency:
+  group: plugins-pr-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  verify-plugins:
+    name: verify-plugins
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: 拉取代码
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: 安装 Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: 安装依赖（不执行依赖包的安装脚本）
+        run: npm ci --ignore-scripts
+
+      - name: 规范包自测
+        run: node --test packages/ztools-plugins-spec/tests/*.test.mjs
+
+      - name: 检查本次改动涉及的插件
+        run: node scripts/verify-changed-plugins.mjs --base "origin/${{ github.base_ref }}"

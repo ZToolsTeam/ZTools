@@ -7,7 +7,7 @@
  * 核心能力：
  * 1. 自动探测本机 GitHub CLI (`gh`) 路径并校验登录状态；
  * 2. 自动解析 package.json 版本号并派生符合 Apple CFBundleShortVersionString / CFBundleVersion 规范的三段式版本；
- * 3. 一键触发 `codingmuse/ZTools` 仓库上的 `build-macos-dmg.yml` 云端 Apple Silicon 构建节点；
+ * 3. 一键触发 `ZToolsTeam/ZTools` 仓库上的 `build-macos-dmg.yml` 云端 Apple Silicon 构建节点；
  * 4. 支持 `--watch` 实时流式查看云端 Mac 编译进度，支持 `--download` 在编译完成后自动把 `.dmg` 与 `.sha256` 拉回本地 `dist/macos/` 目录。
  */
 
@@ -18,7 +18,7 @@ import { fileURLToPath } from 'node:url'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 export const ROOT_DIR = path.resolve(__dirname, '..')
-export const DEFAULT_REPO = 'codingmuse/ZTools'
+export const DEFAULT_REPO = 'ZToolsTeam/ZTools'
 export const DEFAULT_WORKFLOW = 'build-macos-dmg.yml'
 export const DEFAULT_BUNDLE_ID = 'cn.ztools.app'
 export const DEFAULT_MINIMUM_OS = '13.0'

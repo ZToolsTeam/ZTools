@@ -12,7 +12,9 @@
     "author",
     "entry",
     "icon",
-    "permissions"
+    "permissions",
+    "targets",
+    "nativeComponents"
   ],
   "properties": {
     "id": {
@@ -138,6 +140,24 @@
       "default": false,
       "description": "是否需要管理员提升权限执行"
     },
+    "draft": {
+      "type": "boolean",
+      "default": false,
+      "description": "草稿：功能还没做完（例如只有示例数据）。仓库里照常编译、扫描与测试，但不打包、不进插件目录"
+    },
+    "draftReason": {
+      "type": "string",
+      "description": "草稿原因（draft 为 true 时必填），说明还差什么"
+    },
+    "revoked": {
+      "type": "boolean",
+      "default": false,
+      "description": "下架开关：已发布的插件写 true 后，插件目录只保留下架记录，客户端刷新目录时禁用已安装的该插件"
+    },
+    "revokedReason": {
+      "type": "string",
+      "description": "下架原因（revoked 为 true 时必填），会显示给已安装的用户"
+    },
     "window": {
       "type": "object",
       "properties": {
@@ -207,11 +227,31 @@
     },
     "targets": {
       "type": "array",
-      "description": "平台目标兼容性声明"
+      "minItems": 1,
+      "description": "插件支持的平台（客户端安装时据此判断当前系统能否运行）。跨平台插件同时声明 windows 与 macos 两个目标，单平台插件只声明一个。",
+      "items": {
+        "type": "object",
+        "required": ["id", "platform", "runtime", "arch"],
+        "properties": {
+          "id": { "type": "string", "pattern": "^[a-z][a-z0-9-]*$" },
+          "platform": { "type": "string", "enum": ["windows", "macos"] },
+          "runtime": { "type": "string", "enum": ["electron", "legacy-delphi"] },
+          "arch": { "type": "string", "enum": ["any", "ia32", "x64", "arm64", "universal"] },
+          "abi": { "type": "string" },
+          "minSdkContractVersion": { "type": "integer", "minimum": 1 }
+        },
+        "additionalProperties": false
+      },
+      "examples": [
+        [
+          { "id": "windows-electron-any", "platform": "windows", "runtime": "electron", "arch": "any" },
+          { "id": "macos-electron-any", "platform": "macos", "runtime": "electron", "arch": "any" }
+        ]
+      ]
     },
     "nativeComponents": {
       "type": "array",
-      "description": "关联的原生动态库及组件声明"
+      "description": "关联的原生动态库及组件声明；纯 JS 插件写 []"
     }
   },
   "additionalProperties": true

@@ -88,6 +88,32 @@ test('macOS ps parsing reports truthful field availability and converts RSS KiB 
   })
 })
 
+test('macOS ps parsing takes the full name from the executable path instead of the 16-character kernel name', () => {
+  const chrome = '/Applications/Google Chrome.app/Contents/Frameworks/Google Chrome Framework.framework/Helpers/Google Chrome Helper (Renderer).app/Contents/MacOS/Google Chrome Helper (Renderer)'
+  const data = parseMacosProcessList([
+    `2288 3.2 108128 ${chrome}`,
+    '  1  0.1  22128 /sbin/launchd',
+    ' 159 0.0   6704 Core Audio Driver (ParrotAudioPlugin.driver)',
+    '1328 0.0    512 npm exec vite --host 127.0.0.1',
+    '1400 0.0    512 /',
+    '1401 0.0    512 /usr/local/bin/'
+  ].join('\n'))
+
+  assert.equal(data[0]?.name, 'Google Chrome Helper (Renderer)')
+  assert.equal(data[0]?.path, chrome)
+  assert.equal(data[0]?.fieldAvailability.path, true)
+  assert.equal(data[1]?.name, 'launchd')
+  assert.equal(data[1]?.path, '/sbin/launchd')
+  assert.equal(data[2]?.name, 'Core Audio Driver (ParrotAudioPlugin.driver)')
+  assert.equal(data[2]?.path, '', 'non-path names stay names, no invented path')
+  assert.equal(data[2]?.fieldAvailability.path, false)
+  assert.equal(data[3]?.name, 'npm exec vite --host 127.0.0.1')
+  // A bare "/" or a trailing slash is not an executable path; keep it as a name instead of an empty basename
+  assert.equal(data[4]?.name, '/')
+  assert.equal(data[4]?.path, '')
+  assert.equal(data[5]?.name, '/usr/local/bin/')
+})
+
 test('macOS ps parsing rejects duplicate pids, sanitizes control characters and stops at the process bound', () => {
   assert.equal(
     parseMacosProcessList(' 10 1.0 10 first\n 10 2.0 20 duplicate').length,
@@ -149,7 +175,7 @@ test('macOS process runner calls the fixed ps command with bounded non-shell opt
 
   assert.equal(await run(controller.signal), ' 17 0.5 256 sample process')
   assert.equal(invocation?.file, '/bin/ps')
-  assert.deepEqual(invocation?.args, ['-axo', 'pid=,pcpu=,rss=,ucomm='])
+  assert.deepEqual(invocation?.args, ['-axo', 'pid=,pcpu=,rss=,comm='])
   assert.deepEqual(Object.keys(invocation?.options ?? {}).sort(), [
     'encoding',
     'maxBuffer',

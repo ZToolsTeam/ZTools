@@ -3,9 +3,11 @@ node_modules/
 .codegraph/
 
 # 构建输出
-dist/
-dist.zip
-dist-ssr/
+/dist/
+/dist.zip
+/dist-ssr/
+!public/bundled-plugins/**/dist/
+!public/bundled-plugins/**/dist/**
 *.local
 
 # 日志

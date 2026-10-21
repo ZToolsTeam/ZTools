@@ -595,90 +595,11 @@ export function NavigationCommand() {
       onSelectionChange={(id) => setSelectedId(id || "")}
       filterBar={{
         summaryText: `当前本机活动窗口 ${windows.length} 个 · 应用顶部菜单命令 ${menuItems.length} 项`,
-        groups: [
-          {
-            id: "nav-view-mode",
-            label: "视图模式",
-            value: filterMode,
-            onChange: (val) => setFilterMode(val as NavigationFilterMode),
-            options: [
-              {
-                value: "all",
-                label: "全部视图",
-                badge: filteredWindows.length + filteredMenus.length
-              },
-              {
-                value: "windows",
-                label: "活动窗口 Switch Windows",
-                badge: filteredWindows.length
-              },
-              {
-                value: "menus",
-                label: "菜单栏命令 Search Menus",
-                badge: filteredMenus.length
-              }
-            ]
-          }
-        ],
         actions: [
           {
-            id: "nav-act-trigger",
-            label: "🎯 激活窗口 / 触发菜单",
-            title: "🎯 激活窗口 / 触发菜单",
-            style: "primary",
-            onAction: () => {
-              if (activeMenu) {
-                void handleClickMenu(activeMenu);
-              } else if (activeWindow) {
-                void handleActivateWindow(activeWindow);
-              } else {
-                void showToast(Toast.Style.Failure, "当前无可用窗口或菜单项");
-              }
-            }
-          },
-          {
-            id: "nav-act-left-half",
-            label: "⬅️ 窗口左半屏",
-            title: "⬅️ 窗口左半屏",
-            style: "secondary",
-            onAction: () => {
-              if (!activeWindow) {
-                void showToast(Toast.Style.Failure, "请先选择一个活动窗口");
-                return;
-              }
-              void handleManageWindow(activeWindow, "left_half");
-            }
-          },
-          {
-            id: "nav-act-right-half",
-            label: "➡️ 窗口右半屏",
-            title: "➡️ 窗口右半屏",
-            style: "secondary",
-            onAction: () => {
-              if (!activeWindow) {
-                void showToast(Toast.Style.Failure, "请先选择一个活动窗口");
-                return;
-              }
-              void handleManageWindow(activeWindow, "right_half");
-            }
-          },
-          {
-            id: "nav-act-close-win",
-            label: "✖️ 关闭选中窗口",
-            title: "✖️ 关闭选中窗口",
-            style: "danger",
-            onAction: () => {
-              if (!activeWindow) {
-                void showToast(Toast.Style.Failure, "请先选择要关闭的窗口");
-                return;
-              }
-              void handleCloseWindow(activeWindow);
-            }
-          },
-          {
             id: "nav-act-refresh",
-            label: "🔄 刷新列表",
-            title: "🔄 刷新列表",
+            label: "刷新列表",
+            title: "刷新列表",
             style: "secondary",
             onAction: () => {
               setRefreshTick((t) => t + 1);

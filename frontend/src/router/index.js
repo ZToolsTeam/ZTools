@@ -2,6 +2,8 @@ import { createRouter, createWebHashHistory } from 'vue-router'
 
 import MainLayout from '../layouts/MainLayout.vue'
 import MyPage from '../pages/MyPage.vue'
+import Details from '../pages/Details.vue'
+import DeclarativePage from '../pages/DeclarativePage.vue'
 import { isOnline } from '../config/runtime-mode'
 
 // 标记是否为首次进入应用（仅首次导航时判断跳转）
@@ -27,7 +29,7 @@ const router = createRouter({
     {
       path: '/popout/:pluginId',
       name: 'popout',
-      component: () => import('../pages/DeclarativePage.vue'),
+      component: DeclarativePage,
       props: (route) => ({
         pluginId: route.params.pluginId,
         isPopout: true
@@ -78,7 +80,7 @@ const router = createRouter({
         {
           path: 'details/:pluginId',
           name: 'details',
-          component: () => import('../pages/Details.vue'),
+          component: Details,
           props: true
         },
         {
@@ -123,7 +125,7 @@ const router = createRouter({
         {
           path: 'declarative/:pluginId',
           name: 'declarative',
-          component: () => import('../pages/DeclarativePage.vue'),
+          component: DeclarativePage,
           props: true
         },
         {

@@ -109,6 +109,11 @@ const syncGlobalWakeHotkeyOnStartup = async () => {
       if (result.success) {
         return
       }
+      // 只有快捷键服务还没就绪才值得重试；被占用等失败重试也没用，直接报出真实原因
+      if (result.reason !== 'trigger_unavailable') {
+        console.warn('全局唤醒快捷键注册失败:', result.message || result.reason, result.hotkey)
+        return
+      }
     } catch (error) {
       console.error('Failed to sync global wake hotkey on startup:', error)
       return

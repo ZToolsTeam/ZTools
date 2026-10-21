@@ -189,8 +189,47 @@ function acceleratorOf(trigger: StoredTrigger): string | undefined {
     : undefined
 }
 
-function normalizedAccelerator(key: string): string {
-  return key.replace(/\s+/g, '').toLowerCase()
+const MODIFIER_ALIASES: Record<string, string> = {
+  ctrl: 'ctrl', control: 'ctrl',
+  alt: 'alt', option: 'alt',
+  shift: 'shift',
+  cmd: 'meta', command: 'meta', meta: 'meta', super: 'meta', win: 'meta'
+}
+const MODIFIER_ORDER = ['ctrl', 'alt', 'shift', 'meta']
+
+/**
+ * 快捷键比较用的规范形式：忽略大小写与空白、统一修饰键别名（Option = Alt 等）并按固定顺序排列，
+ * 这样 `Shift+Alt+Space` 与 `alt + shift + space` 会被识别为同一个组合键。
+ */
+export function normalizedAccelerator(key: string): string {
+  const parts = key.replace(/\s+/g, '').toLowerCase().split('+').filter(Boolean)
+  if (parts.length === 0) return ''
+  const mainKey = parts[parts.length - 1] as string
+  const modifiers = new Set<string>()
+  for (const part of parts.slice(0, -1)) {
+    if (part === 'commandorcontrol' || part === 'cmdorctrl') {
+      modifiers.add(process.platform === 'darwin' ? 'meta' : 'ctrl')
+    } else {
+      modifiers.add(MODIFIER_ALIASES[part] ?? part)
+    }
+  }
+  const ordered = [...modifiers].sort((a, b) => {
+    const ia = MODIFIER_ORDER.indexOf(a)
+    const ib = MODIFIER_ORDER.indexOf(b)
+    return (ia === -1 ? 99 : ia) - (ib === -1 ? 99 : ib) || a.localeCompare(b)
+  })
+  return [...ordered, mainKey].join('+')
+}
+
+/** 冲突提示里展示占用者：系统内置触发器用功能名，其余显示插件 ID */
+const SYSTEM_TRIGGER_NAMES: Record<string, string> = {
+  super_panel_keyboard_hotkey: '超级面板',
+  global_wake_hotkey: '全局唤醒'
+}
+
+function triggerOwnerName(trigger: StoredTrigger): string {
+  if (Object.hasOwn(SYSTEM_TRIGGER_NAMES, trigger.id)) return SYSTEM_TRIGGER_NAMES[trigger.id] as string
+  return trigger.pluginId.toLowerCase() === 'system' ? '系统快捷键' : `插件 ${trigger.pluginId}`
 }
 
 function localAppIdOf(trigger: StoredTrigger): string | undefined {
@@ -539,7 +578,7 @@ export class TriggerService {
       }
       const result = activeConflicts.map((trigger) => ({
           pluginId: trigger.pluginId,
-          pluginName: trigger.pluginId,
+          pluginName: triggerOwnerName(trigger),
           triggerId: trigger.id,
           key: acceleratorOf(trigger) as string
         }))
@@ -728,6 +767,8 @@ export class TriggerService {
     if (!accelerator) return
     const candidateModifier = doubleModifierOf(accelerator)
     const normalized = normalizedAccelerator(accelerator)
+    // 同一个组合键在系统里只能注册一次：只要不是同一个触发器（无论是否属于同一插件）就算冲突，
+    // 否则会落到系统注册失败，只能报出误导性的「操作系统拒绝注册」。
     for (const trigger of this.#triggers.values()) {
       const key = acceleratorOf(trigger)
       if (
@@ -736,11 +777,13 @@ export class TriggerService {
         key !== undefined &&
         (candidateModifier !== undefined
           ? doubleModifierOf(key) === candidateModifier
-          : trigger.pluginId.toLowerCase() !== candidate.pluginId.toLowerCase() &&
-            normalizedAccelerator(key) === normalized) &&
+          : normalizedAccelerator(key) === normalized) &&
         await this.#isPluginEnabled(trigger.pluginId)
       ) {
-        throw new ZToolsError(errorCodes.triggerConflict, '快捷键已被其他触发器占用')
+        throw new ZToolsError(
+          errorCodes.triggerConflict,
+          `快捷键 ${accelerator} 已被「${triggerOwnerName(trigger)}」占用，请换一个组合键`
+        )
       }
     }
   }

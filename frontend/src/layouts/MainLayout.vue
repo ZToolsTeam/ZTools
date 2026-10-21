@@ -117,9 +117,7 @@ useKeymap(KEYMAP_SCOPES.GLOBAL, {
         }"
       >
         <router-view v-slot="{ Component }">
-          <transition name="fade" mode="out-in">
-            <component :is="Component" :key="$route.fullPath" />
-          </transition>
+          <component :is="Component" :key="$route.fullPath" />
         </router-view>
       </main>
     </div>

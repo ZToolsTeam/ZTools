@@ -9,11 +9,7 @@ import {
   useEffect,
   showToast,
   Toast,
-  confirmAlert,
-  MetricGrid,
-  DistributionBar,
-  FilterBar,
-  SegmentedControl
+  confirmAlert
 } from '../../index.js'
 import {
   CLEAN_CLASSES,
@@ -511,7 +507,7 @@ ${sampleTable}
         })
       ]
     }),
-    filterBar: FilterBar({
+    filterBar: {
       summaryText: `共发现 ${formatBytes(summary.totalSizeBytes)} 系统垃圾 · 已勾选 ${checkedGroupsCount} 组规则 (${formatBytes(summary.checkedSizeBytes)}) · C盘可用 ${formatBytes(summary.diskFreeSizeBytes)}`,
       actions: [
         {
@@ -522,7 +518,7 @@ ${sampleTable}
           onAction: () => refreshData(true)
         }
       ]
-    }),
+    },
     subList: {
       title: rightTitle,
       subtitle:

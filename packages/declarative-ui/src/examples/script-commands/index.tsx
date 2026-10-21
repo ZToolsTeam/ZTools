@@ -757,69 +757,12 @@ export function ScriptCommandsCommand() {
       onSearchTextChange={setSearchText}
       onSelectionChange={setSelectedId}
       filterBar={{
-        summaryText: `📜 脚本工作台 • 已加载 ${scripts.length} 个脚本 | 当前显示 ${displayedScripts.length} 个 | 本次已运行 ${executedCount} 次`,
-        groups: [
-          {
-            id: "mode-filter",
-            value: filterMode,
-            onChange: setFilterMode,
-            options: [
-              { title: "全部脚本", value: "all", count: scripts.length },
-              {
-                title: "Compact",
-                value: "compact",
-                count: scripts.filter((s) => s.mode === "compact").length
-              },
-              {
-                title: "Full Output",
-                value: "fullOutput",
-                count: scripts.filter((s) => s.mode === "fullOutput").length
-              },
-              {
-                title: "Inline",
-                value: "inline",
-                count: scripts.filter((s) => s.mode === "inline").length
-              },
-              {
-                title: "PowerShell",
-                value: "powershell",
-                count: scripts.filter((s) => s.language === "powershell").length
-              }
-            ]
-          }
-        ],
+        summaryText: `脚本工作台 · 已加载 ${scripts.length} 个脚本 | 当前显示 ${displayedScripts.length} 个 | 本次已运行 ${executedCount} 次`,
         actions: [
           {
-            id: "run-selected-script",
-            label: "▶️ 立即运行选中脚本",
-            title: "▶️ 立即运行选中脚本",
-            style: "primary",
-            onAction: async () => {
-              if (activeScript) {
-                await handleRunScript(activeScript);
-              }
-            }
-          },
-          {
-            id: "run-with-args",
-            label: "⌨️ 传入参数运行...",
-            title: "⌨️ 传入参数运行...",
-            style: "secondary",
-            onAction: () => {
-              if (activeScript) {
-                push(
-                  <RunScriptWithArgsForm
-                    script={activeScript}
-                    onExecuted={(res) => recordExecutionResult(activeScript, res)}
-                  />
-                );
-              }
-            }
-          },
-          {
             id: "create-script-command",
-            label: "➕ 新建脚本命令",
-            title: "➕ 新建脚本命令",
+            label: "新建脚本命令",
+            title: "新建脚本命令",
             style: "primary",
             onAction: () => {
               push(
@@ -830,21 +773,9 @@ export function ScriptCommandsCommand() {
             }
           },
           {
-            id: "copy-script-output",
-            label: "📋 复制执行输出",
-            title: "📋 复制执行输出",
-            style: "secondary",
-            onAction: async () => {
-              if (!activeScript) return;
-              const out = lastOutputs[activeScript.id]?.output || activeScript.lastOutput || activeScript.sourceCode;
-              await Clipboard.copy(out);
-              await showToast(Toast.Style.Success, "已复制脚本输出/源码");
-            }
-          },
-          {
             id: "reload-scripts-dir",
-            label: "🔄 重新加载脚本目录",
-            title: "🔄 重新加载脚本目录",
+            label: "重新加载脚本目录",
+            title: "重新加载脚本目录",
             style: "secondary",
             onAction: handleReload
           }

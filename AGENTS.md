@@ -181,12 +181,22 @@ ZTools 的核心定位是**“呼出即用、用完即走”的闪电效率工�
   3. **CI 从源码构建 + hash 校验**：不接受作者自行上传的产物；构建产物 SHA-256 写入 `plugins.json`，客户端下载后强制校验；
   4. **下架开关**：`plugins.json` 中的 `revoked` 字段，客户端刷新索引时自动禁用已下架插件。
 - **上线后按需追加（当前不做）**：`plugins.json` 签名、运行时权限拦截/沙箱、高危权限 Two-Man Rule 双人复核、作者 2FA、举报后台、团队私有扩展签名。
-- **免运维静态分发**：GitHub Releases 自动产出 `{plugin-id}-{version}.zip` 与静态全局索引 `plugins.json`，直连腾讯云 COS / Cloudflare R2 对象存储，接入国内 EdgeOne CDN。**带版本号的 zip 可 30 天强缓存；`plugins.json` 必须短缓存（≤ 5 分钟）**，否则下架开关无法及时生效。
+- **免运维静态分发**：PR 合并后由 GitHub Actions 自动产出 `{plugin-id}-{version}.zip` 与插件目录 `catalog.json`（同内容另存一份 `plugins.json`），上传阿里云 OSS（存储桶 `ztools-data` 的 `plugins-v2/` 目录），经阿里云 CDN（`cdn.ztools.cn`）分发，客户端读取 `https://cdn.ztools.cn/plugins-v2/catalog.json`。**带版本号的 zip 可 30 天强缓存；插件目录必须短缓存（≤ 5 分钟）**，否则下架开关无法及时生效。
+  * **缓存时间由上传脚本写入（`deploy-plugins-storage.mjs`），CDN 控制台无需另配**：`catalog.json` / `plugins.json` 为 `max-age=300`；`<作者>/<id>/` 下的安装包与图标为 `max-age=2592000, immutable`（文件名带版本号，内容不变）。每次发布后脚本还会主动刷新插件目录与内容变化的安装包缓存；
+  * **严禁在 CDN 控制台对 `/plugins-v2/` 整个目录设置短缓存**：会让安装包也频繁回源 OSS，增加请求与流量费用。确需加规则时只能针对 `/plugins-v2/catalog.json` 与 `/plugins-v2/plugins.json` 两个文件，且不得开启「忽略源站缓存头」覆盖上述设置；
+  * 客户端请求插件目录不要追加 `?t=时间戳` 之类的防缓存参数（会绕过 CDN 每次回源 OSS）；排查时可临时手动加参数查看最新内容（当前 CDN 未开启「过滤参数」，带参数会回源）。
+- **插件源码与构建（强制）**：
+  * 源码以公开仓库 `ZToolsTeam/ZTools-extensions` 的 `extensions/<id>/src` 为准（内部对应 `plugins/<id>/src`，作者分组为 `official/<id>`），必须能在插件目录内独立编译；SDK 一律 `from '@ztools/declarative-ui'` 引入，严禁 `../../index.js` 这类越出插件目录的引用。`packages/declarative-ui/src/examples` 不再同步覆盖插件源码（`sync-35-plugins.mjs` 只同步脚手架模板）；
+  * 公共源码 `shared/hash.ts`、`shared/native-ipc.ts` 以复制方式进入插件 `src/`，副本必须与 `shared/` 完全一致；
+  * 编译统一用 `node scripts/build-declarative.mjs <id>|--all`（ES2022 + React JSX + Node 类型），改完源码必须重新编译 `dist/`；公开仓库不提交 `dist/`，由 CI 从源码构建；
+  * 合并前检查 `scripts/verify-changed-plugins.mjs`（目录与 id、编译、清单与 AST 扫描、插件自带测试）：**改已有插件必须升 `version`**（同版本换内容会被 CDN 旧包缓存导致安装校验失败），**不能直接删插件目录**，下架在 `plugin.json` 写 `"revoked": true` 与 `"revokedReason"`；
+  * 平台用 `targets` 声明（跨平台 / 仅 macOS / 仅 Windows），必须按实测结果写：核心功能依赖 Windows DLL 或 Windows 命令的只能写 Windows；功能没做完（只有示例数据、假成功）的写 `"draft": true` 与 `"draftReason"`，照常编译测试但不发布，客户端也不显示；
+  * 公开插件仓库是标准，`npm run release:extensions` 会用内部仓库覆盖公开仓库，必须显式加 `--overwrite-public` 才会执行。
 
 ### 3.1 双仓开源飞轮与商业资产物理隔离规范（Dual-Repo & Commercial Shield）
 - **战略双仓体系**：
-  1. **核心宿主开源仓库（`codingmuse/ZTools`）**：采用 **GNU GPL-3.0** 开源许可证。完全开源客户端壳层与声明式组件引擎，但依托 GPL-3.0 强传染性条款强制任何二次分发或商业衍生版本必须以同等 GPL-3.0 协议公开全部源码，从法律底层彻底封死竞品“套壳闭源”的商业侵占路径；官方依法独占双重许可（Dual-Licensing）变现权利。
-  2. **插件生态大仓（`codingmuse/ZTools-extensions`）**：采用 **MIT** 宽松许可证。官方插件与社区开发者贡献统一汇聚于此；根目录内置一键脚手架（`npm run create-plugin`）与本地 AST 安全扫描；开发者向社区提交 PR 零版权顾虑，最大化驱动生态飞轮。
+  1. **核心宿主开源仓库（`ZToolsTeam/ZTools`）**：采用 **GNU GPL-3.0** 开源许可证。完全开源客户端壳层与声明式组件引擎，但依托 GPL-3.0 强传染性条款强制任何二次分发或商业衍生版本必须以同等 GPL-3.0 协议公开全部源码，从法律底层彻底封死竞品“套壳闭源”的商业侵占路径；官方依法独占双重许可（Dual-Licensing）变现权利。
+  2. **插件生态大仓（`ZToolsTeam/ZTools-extensions`）**：采用 **MIT** 宽松许可证。官方插件与社区开发者贡献统一汇聚于此；根目录内置一键脚手架（`npm run create-plugin`）与本地 AST 安全扫描；开发者向社区提交 PR 零版权顾虑，最大化驱动生态飞轮。
 - **商业资产物理隔离红线（绝对禁止进入开源仓库）**：
   * **核心私有商业资产黑名单**：
     - `DLLPlugins/`：包含 35 款核心自营 Windows 原生动态库插件（极客独占底层工具、硬件专有驱动与深度系统适配，属企业核心商业资产），严禁开源；
@@ -207,7 +217,7 @@ ZTools 的核心定位是**“呼出即用、用完即走”的闪电效率工�
   2. **管理后台一键转接（漏斗过滤，拒绝无脑全量灌水）**：管理员在后台（`FeatureRequests.vue`）审核确认后一键【转为 GitHub Issue】；调用 GitHub REST API 创建规范化 Issue，自动回写关联 `github_issue_number` 与 `github_issue_url`，并向用户追加系统承接回复；
   3. **研发结案自动闭环回传**：核心研发在 GitHub 关联 PR 关闭 Issue 后，触发 Webhook（`POST /api/webhooks/github`，HMAC SHA-256 强制验签）；系统自动将商业端反馈状态置为 `completed`（已完成），并生成报喜通知回复（若 reopen 则自动恢复为 `developing`）。
 - **GitHub 官方 CLI (`gh`) 自动化运维代理规范**：
-  * 环境已全局就绪配置 GitHub 官方 CLI（`gh`，位于 `%LOCALAPPDATA%\Programs\GitHub CLI\bin`，已绑定 `codingmuse` 官方账号与 `repo`/`workflow` 权限）；
+  * 环境已全局就绪配置 GitHub 官方 CLI（`gh`，位于 `%LOCALAPPDATA%\Programs\GitHub CLI\bin`，登录账号须为 `ZToolsTeam` 组织成员并具备 `repo`/`workflow` 权限）；
   * AI 助手在后续会话中遇到用户需要“查询 Issues/PR”、“新建/关闭 Issue”、“配置 Webhooks”或“发版 Release”时，**必须优先利用 `gh` 命令或已封装的 API 为用户代劳执行，严禁让用户进行繁琐的人工重复搬运**。
 
 ### 3.3 微软官方 Windows Package Manager (Winget) 自动化分发规范（WinGet Distribution Pipeline）
@@ -378,8 +388,8 @@ cd frontend && npm run build:sdk
 
 # 开源双仓一键增量发布与同步 (支持 all / oss / extensions，默认同时推送 GitHub + Gitee)
 npm run release              # 一键同步核心宿主与插件大仓到 GitHub & Gitee
-npm run release:oss          # 仅同步核心宿主仓库 (GitHub: codingmuse/ZTools + Gitee: hoposky/ZTools)
-npm run release:extensions   # 仅同步插件生态大仓 (codingmuse/ZTools-extensions)
+npm run release:oss          # 仅同步核心宿主仓库 (GitHub: ZToolsTeam/ZTools + Gitee: hoposky/ZTools)
+npm run release:extensions   # 仅同步插件生态大仓 (ZToolsTeam/ZTools-extensions)
 
 # 发行版执行文件双端三包构建与上传 GitHub Releases (同时产出 Windows EXE/ZIP + macOS Universal DMG)
 npm run package:release      # 一键编译最新 Delphi 安装器并同时打包 Windows EXE 离线安装包 + ZIP 免安装便携包
@@ -391,11 +401,11 @@ npm run release:mac:download # 遥控云端编译 Mac DMG 并自动拉回本地 
 ### AI 自动化开源发版与零命令交互契约 (Zero-Command AI Release Pipeline)
 - **核心前提铁律（“发布源码到 GitHub / Gitee = 100% 推开源版，且默认双端同推”）**：
   * **商业私有源码绝对不推公开仓**：内部商业版母仓包含私有核心源码资产（`DLLPlugins/`、`backend/`、`installer/` 源码等），**永远不可能直接将私有源码推送到 GitHub 或 Gitee**；
-  * **GitHub 与 Gitee 双平台默认同时推送铁律**：**以后无论用户说“推送到 GitHub”还是说“推送到 Gitee”（或发布/同步/上传到 GitHub / Gitee），一律默认同时推送至 GitHub（`https://github.com/codingmuse/ZTools.git`）和 Gitee（`https://gitee.com/hoposky/ZTools.git`）双远端！**
+  * **GitHub 与 Gitee 双平台默认同时推送铁律**：**以后无论用户说“推送到 GitHub”还是说“推送到 Gitee”（或发布/同步/上传到 GitHub / Gitee），一律默认同时推送至 GitHub（`https://github.com/ZToolsTeam/ZTools.git`）和 Gitee（`https://gitee.com/hoposky/ZTools.git`）双远端！**
   * **凭据安全隔离**：GitHub 与 Gitee 访问令牌（`GITHUB_TOKEN`、`GITEE_TOKEN`）统一保存在本地 `.env.local`（已被 `.gitignore` 严格忽略且位于开源抽取白名单之外，严禁写入受跟踪文件），由 `scripts/sync-release.mjs` 自动读取并配置远端完成双推；
   * **默认唯一语义映射**：只要用户提到**“发布到 GitHub”、“推到 GitHub”、“发布到 Gitee”、“推到 Gitee”、“公布到 GitHub/Gitee”、“同步到 GitHub/Gitee”、“上传 GitHub/Gitee”**（无论用户是否显式说出“开源”二字），涉及源码同步时 **100% 唯一指的就是通过开源发布流水线（`scripts/sync-release.mjs`）将脱敏抽取后的开源版本同时推送到 GitHub 与 Gitee 公开仓库**！严禁反问“是推商业版还是开源版”，严禁只推单边平台，也严禁在母仓直接执行裸 `git push`。
 - **执行文件（Release 二进制产物）Windows + macOS 双平台三包齐发强制铁律（EXE 安装包 + ZIP 免安装包 + macOS Universal DMG）**：
-  * **双端三格式产物缺一不可**：凡是发包、打包商业版/发行版执行文件，或将构建好的安装包上传至 GitHub Releases（`codingmuse/ZTools`）时，**必须同时发布 Windows 与 macOS 双端全量安装包（及其 `.sha256` 校验文件），严禁只发 Windows 单平台或只打单包**：
+  * **双端三格式产物缺一不可**：凡是发包、打包商业版/发行版执行文件，或将构建好的安装包上传至 GitHub Releases（`ZToolsTeam/ZTools`）时，**必须同时发布 Windows 与 macOS 双端全量安装包（及其 `.sha256` 校验文件），严禁只发 Windows 单平台或只打单包**：
     1. **Windows EXE 离线安装包**：`ZTools-<version>-win32-x64.exe`（及 `.sha256`）—— 内置极简 Direct2D GPU 安装向导、支持一键平滑升级与空间不足智能换盘；
     2. **Windows ZIP 免安装便携包**：`ZTools-<version>-win32-x64-portable.zip`（及 `.sha256`）—— 解压即用免安装版；
     3. **macOS Universal DMG 通用安装包**：`ZTools-<version>-darwin-universal.dmg`（及 `.sha256`）—— 同时支持 Apple Silicon (M1/M2/M3/M4) 与 Intel 双架构，内置 Ad-hoc 深度签名与 3 个 macOS 原生辅助进程。
@@ -404,10 +414,10 @@ npm run release:mac:download # 遥控云端编译 Mac DMG 并自动拉回本地 
     - 单独触发云端 Mac DMG 编译并挂载 Release：`npm run release:mac`（若需同时下载回本地 Windows `dist/macos/` 目录则执行 `npm run release:mac:download`）；
     - 底层打包器 `electron-client/scripts/package-installer.mjs`、`package-macos-universal.mjs`、`package-macos-dmg.mjs` 与校验器 `verify-artifacts.mjs` 均已强制绑定产物完整性与 SHA-256 校验契约。
   * **版本号自增与四段式数字版本号强制防呆铁律（严禁漏升版本号或未触发构建包）**：
-    - **发版必先核对远端 Release 版本号**：凡是用户要求“发包”、“发布新版本”或在完成重要功能修复后要求“提交代码并发布到 Git 上”时，AI **必须先通过 `gh release list -R codingmuse/ZTools` 检查当前 `electron-client/package.json` 的版本号是否已经在 GitHub Releases 发布过**。若该版本号已存在，**必须先递增升级版本号并触发双端构建发包**，严禁只同步源码而漏掉版本号升级与安装包构建！
+    - **发版必先核对远端 Release 版本号**：凡是用户要求“发包”、“发布新版本”或在完成重要功能修复后要求“提交代码并发布到 Git 上”时，AI **必须先通过 `gh release list -R ZToolsTeam/ZTools` 检查当前 `electron-client/package.json` 的版本号是否已经在 GitHub Releases 发布过**。若该版本号已存在，**必须先递增升级版本号并触发双端构建发包**，严禁只同步源码而漏掉版本号升级与安装包构建！
     - **强制四段式数字版本号（`X.Y.Z.W`）**：Windows 底层服务 `electron-client/native/ZToolsService/CMakeLists.txt` 强制校验四段式数字版本号（正则 `^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$`）。**所有版本号必须严格写成四段式（例如 `1.1.8.0`、`1.1.8.1`，严禁写成三段式 `1.1.8`）**，`scripts/package-release-binaries.mjs` 在启动时亦强制执行该格式预检。
     - **五处版本号同步更新契约**：每次升级版本号时，必须同步更新以下 5 处：`package.json`、`electron-client/package.json`（含 `package-lock.json`）、`frontend/package.json`（含 `package-lock.json`）、`CHANGELOG.md` 顶部正式版标题、`README.md` 更新日志摘要（或直接加 `--bump` 参数由脚本自动自增）。
-    - **严禁先后颠倒（必须“先升版本推 GitHub 源码 → 再触发双端三包构建上传 → 最后验包”）**：由于云端 macOS DMG 构建（GitHub Actions）是从 GitHub `codingmuse/ZTools` 的 `main` 分支拉取源码并读取 `electron-client/package.json` 版本号，因此**必须先把升级好版本号的源码通过 `npm run release:oss` 推送到 GitHub `main` 分支，然后再执行 `npm run release:binaries -- --rebuild-app`**，确保本地 Windows 双包与云端 Mac DMG 挂载到同一个新版本 `v<version>` Release 下。
+    - **严禁先后颠倒（必须“先升版本推 GitHub 源码 → 再触发双端三包构建上传 → 最后验包”）**：由于云端 macOS DMG 构建（GitHub Actions）是从 GitHub `ZToolsTeam/ZTools` 的 `main` 分支拉取源码并读取 `electron-client/package.json` 版本号，因此**必须先把升级好版本号的源码通过 `npm run release:oss` 推送到 GitHub `main` 分支，然后再执行 `npm run release:binaries -- --rebuild-app`**，确保本地 Windows 双包与云端 Mac DMG 挂载到同一个新版本 `v<version>` Release 下。
 - **设计宗旨（彻底消除用户心智负担）**：
   * 用户**无需记忆任何脚本名称、参数选项、Git 命令行语法或本地文件系统的物理镜像路径**；
   * 用户在日常对话中只要使用任意模糊自然语言表达发版、发包、打包执行文件或 GitHub / Gitee 同步意图，AI **必须主动领会、安全校验并自动闭环完成全流程（源码默认同时推送 GitHub 与 Gitee；发包默认先升四段式版本号、推源码、再同时发布 Windows EXE/ZIP 与 macOS DMG）**，严禁反问用户或要求用户输入强命令。
@@ -423,8 +433,8 @@ npm run release:mac:download # 遥控云端编译 Mac DMG 并自动拉回本地 
   4. **调用统一同步/打包执行器**：
      - 先执行源码同步（自动双推 GitHub + Gitee）：`node scripts/sync-release.mjs [all|oss|extensions] [--msg "中文提交说明"]`；
      - 再执行双端二进制三包构建与上传（Windows + macOS）：`node scripts/package-release-binaries.mjs --rebuild-app --upload`，同时产出并上传 Windows `.exe` 安装包 + `-portable.zip` 免安装包，并自动联动 `scripts/build-macos-remote.mjs` 触发云端 macOS `.dmg` 安装包构建与上传；
-  5. **提交状态、SHA 与远端 Release 六文件真机核对**：确认 GitHub 与 Gitee 双远端 git push 成功；发包时**必须等待云端 Mac 构建完毕并执行 `gh release view v<version> -R codingmuse/ZTools`**，确认 `.exe`、`.exe.sha256`、`-portable.zip`、`-portable.zip.sha256`、`-darwin-universal.dmg`、`-darwin-universal.dmg.sha256` 共 **6 个文件全部在远端 Release 页面挂载就绪**；
-  6. **闭环反馈汇报**：向用户汇报新版本号、同步或打包上传完成概况，附带对应的 GitHub 与 Gitee 仓库/Release 地址及 macOS 云端构建链接（GitHub: [codingmuse/ZTools](https://github.com/codingmuse/ZTools) / Gitee: [hoposky/ZTools](https://gitee.com/hoposky/ZTools) / [ZTools-extensions](https://github.com/codingmuse/ZTools-extensions)），让用户彻底省心。
+  5. **提交状态、SHA 与远端 Release 六文件真机核对**：确认 GitHub 与 Gitee 双远端 git push 成功；发包时**必须等待云端 Mac 构建完毕并执行 `gh release view v<version> -R ZToolsTeam/ZTools`**，确认 `.exe`、`.exe.sha256`、`-portable.zip`、`-portable.zip.sha256`、`-darwin-universal.dmg`、`-darwin-universal.dmg.sha256` 共 **6 个文件全部在远端 Release 页面挂载就绪**；
+  6. **闭环反馈汇报**：向用户汇报新版本号、同步或打包上传完成概况，附带对应的 GitHub 与 Gitee 仓库/Release 地址及 macOS 云端构建链接（GitHub: [ZToolsTeam/ZTools](https://github.com/ZToolsTeam/ZTools) / Gitee: [hoposky/ZTools](https://gitee.com/hoposky/ZTools) / [ZTools-extensions](https://github.com/ZToolsTeam/ZTools-extensions)），让用户彻底省心。
 
 ### 客户端启动与 Windows 桌面穿透规范（零容忍最高高压线，违者必究）
 
@@ -464,6 +474,7 @@ npm run release:mac:download # 遥控云端编译 Mac DMG 并自动拉回本地 
   * **测试设备号 (Device Code)**：`ZTOOLS-TEST-DEVICE-0001`
   * **用户唯一标识 (OpenID)**：`device:ZTOOLS-TEST-DEVICE-0001`
   * **测试用户名 / 昵称**：`AI测试专用设备号`
+- **仅限测试环境（安全红线）**：该接口不校验任何凭证，后端只有显式设置 `ALLOW_DEVICE_LOGIN=true` 且 `NODE_ENV` 不是 `production` 时才开放，否则两个路由都返回 404；登录弹窗里的按钮只在开发版（`import.meta.env.DEV`）出现，正式包不显示。严禁在正式环境开启。
 - **AI 自动化与联调操作指南**：
   1. **CDP UI 自动化路径**：遇到登录弹窗（`LoginModal.vue`）时，AI 或自动化脚本直接点击弹窗底部的 `.device-login-link` 按钮（“开发测试：设备号一键模拟登录”），800ms 内自动完成鉴权、持久化并关闭弹窗；
   2. **前端 JS 控制台路径**：在 Renderer 进程控制台直接调用 `await window.ztools.api.deviceLogin('ZTOOLS-TEST-DEVICE-0001')`；
@@ -476,7 +487,8 @@ npm run release:mac:download # 遥控云端编译 Mac DMG 并自动拉回本地 
 - **子模块协作边界**：本仓库是父仓库，`backend/`、`bin/`、`DLLPlugins/`、`docs/`、`electron-client/`、`frontend/`、`installer/`、`official-website/`、`plugins/` 均为子模块。
 - **逐级提交原则**：修改子模块时先进入对应子模块目录提交和推送，父仓库仅记录子模块引用更新；除非用户明确说明，不要随意提交父仓库中的子模块引用变动。
 
-### 代码审查与提交前强制门禁规范（强制调用 `rex-code-review`）
-- **技能存放路径**：仓库内置双轴代码审查技能位于 [`.agent/skills/rex-code-review/SKILL.md`](file:///e:/csdwork3/git/ZTools/.agent/skills/rex-code-review/SKILL.md)（同步镜像于 [`skills/rex-code-review/SKILL.md`](file:///e:/csdwork3/git/ZTools/skills/rex-code-review/SKILL.md) 与 [`skills/code-review/SKILL.md`](file:///e:/csdwork3/git/ZTools/skills/code-review/SKILL.md)）。
-- **提交代码前默认审查门禁（Pre-Commit Review Gate）**：每次准备执行 `git commit` 提交代码前，**必须默认自动调用 `rex-code-review/SKILL.md`**，将本次全部变动代码（`git diff HEAD` / `git diff --cached`）作为审查范围执行一次完整的双轴审查（核对 `ZTOOLS-STD-1` ~ `ZTOOLS-STD-10` 十项硬红线、Fowler 12 项 Smell 基线与 Spec 契约），并运行 `node scripts/rex-precommit-gate.mjs` 静态门禁检查；凡发现 `hard` 级违规（`verdict: "changes_requested"`），必须先完成闭环修复并通过复审，严禁带病提交！
-- **显式指令与修改后自动触发**：每当用户提出“审查代码”、“代码审查”、“扫描插件”或完成代码修改时，同样自动读取并严格遵循 `rex-code-review/SKILL.md` 执行双轴独立审查，输出标准 `rex.standards-spec-review.v1` 结论信封。
+### 代码审查与提交/推送分级门禁规范（强制调用 `rex-code-review`）
+- **技能存放路径**：仓库内置分级双轴代码审查技能位于 [`.agent/skills/rex-code-review/SKILL.md`](file:///e:/csdwork3/git/ZTools/.agent/skills/rex-code-review/SKILL.md)（子代理分级模板位于 [`.agent/skills/rex-code-review/references/acceptance-scenario-matrix.md`](file:///e:/csdwork3/git/ZTools/.agent/skills/rex-code-review/references/acceptance-scenario-matrix.md)，同步镜像于 [`skills/rex-code-review/SKILL.md`](file:///e:/csdwork3/git/ZTools/skills/rex-code-review/SKILL.md) 与 [`skills/code-review/SKILL.md`](file:///e:/csdwork3/git/ZTools/skills/code-review/SKILL.md)）。
+- **L1 写完代码立即极速双检（10~15 秒闭环）**：每次写完或修改业务源码后，立即执行 `node scripts/quality-gate.mjs --fast --files <modified-files>`（`< 50ms` 拦截语法硬伤与单文件内大段复制粘贴），并调用 `invoke_subagent`（`TypeName: "research"`, `Role: "极速原则审查员 (Fast Reviewer)"`, **`Model: "flash"`**，遵循「六大舍弃」提速铁律，5 行内输出 `[PASS]` / `[NEEDS_FIX]`）。
+- **L2 提交/推送前完整质量门禁（抓大放小）**：每次准备执行 `git commit`（`.githooks/pre-commit` 自动运行 `node scripts/quality-gate.mjs --staged`）与 `git push`（`.githooks/pre-push` 自动运行 `node scripts/quality-gate.mjs --push`）时，自动执行 6 大原则维度扫描 + 同目录未修改兄弟文件感知的跨文件大段重复代码克隆检测（连续 `>= 16` 行有效代码且 `>= 320` 字符）+ Git 中文提交说明校验，并结合 L2 `代码审查专员 (Code Reviewer)` 输出标准 `rex.standards-spec-review.v1` 结论信封；对文件/函数行数、圈复杂度、代码排版等软性细节只作 `warning` 提示绝不阻断，凡发现 `hard` 级原则违规必须当场闭环修复！
+

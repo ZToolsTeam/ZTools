@@ -98,6 +98,35 @@ describe('ModelRouter (BYOK & Multi-Provider Gateway)', () => {
 
           const body = JSON.parse(bodyStr);
 
+          if (body.stream && body.model === 'claude-tool-stream') {
+            res.writeHead(200, {
+              'Content-Type': 'text/event-stream',
+              'Cache-Control': 'no-cache',
+              Connection: 'keep-alive'
+            });
+            res.write(
+              `data: ${JSON.stringify({
+                type: 'content_block_start',
+                content_block: { type: 'tool_use', id: 'toolu_01', name: 'get_weather' }
+              })}\n\n`
+            );
+            res.write(
+              `data: ${JSON.stringify({
+                type: 'content_block_delta',
+                delta: { type: 'input_json_delta', partial_json: '{"city":"Shanghai"}' }
+              })}\n\n`
+            );
+            res.write(
+              `data: ${JSON.stringify({
+                type: 'message_delta',
+                delta: { stop_reason: 'tool_use' },
+                usage: { output_tokens: 12 }
+              })}\n\n`
+            );
+            res.end();
+            return;
+          }
+
           res.writeHead(200, { 'Content-Type': 'application/json' });
           res.end(
             JSON.stringify({
@@ -271,5 +300,37 @@ describe('ModelRouter (BYOK & Multi-Provider Gateway)', () => {
     const metrics = router.getMetrics();
     assert.equal(metrics.fallbackCount, 1);
     assert.equal(metrics.successfulRequests, 1);
+  });
+
+  test('ClaudeProvider formats multi-turn toolCalls/tool_result and streams tool_use blocks', async () => {
+    const router = new ModelRouter();
+    router.registerProvider({
+      id: 'claude-tools',
+      name: 'Claude Tools',
+      type: 'claude',
+      apiKey: 'sk-claude-test-key',
+      baseUrl: `http://127.0.0.1:${serverPort}/v1`,
+      defaultModel: 'claude-tool-stream'
+    });
+
+    const chunks = [];
+    for await (const chunk of router.chatStream({
+      provider: 'claude-tools',
+      messages: [
+        { role: 'user', content: '查天气' },
+        {
+          role: 'assistant',
+          content: '',
+          toolCalls: [{ id: 'toolu_00', type: 'function', function: { name: 'get_weather', arguments: '{"city":"Beijing"}' } }]
+        },
+        { role: 'tool', toolCallId: 'toolu_00', content: 'Sunny 25C' }
+      ]
+    })) {
+      chunks.push(chunk);
+    }
+
+    assert.ok(chunks.some((c) => c.delta.toolCalls?.[0]?.function?.name === 'get_weather'));
+    assert.ok(chunks.some((c) => c.delta.toolCalls?.[0]?.function?.arguments === '{"city":"Shanghai"}'));
+    assert.ok(chunks.some((c) => c.finishReason === 'tool_calls'));
   });
 });

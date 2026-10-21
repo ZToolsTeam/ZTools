@@ -13,7 +13,7 @@ import { routeUtils } from '@/router/routes'
 import { isOfficialPlugin } from '@/utils/officialPlugins'
 import { RcSquircle } from '@/components/base'
 import { resolveItemGlyph } from '@/utils/brandIcons'
-import { DEFAULT_GLOBAL_WAKE_HOTKEY } from '@/utils/globalWakeHotkey'
+import { currentGlobalWakeHotkey } from '@/utils/globalWakeHotkey'
 
 
 const props = defineProps({
@@ -284,11 +284,11 @@ defineExpose({ focusInput })
     <!-- 搜索情境提示：引导全局唤起悬浮条 -->
     <transition name="hint-fade">
       <div
-        v-if="isFocused && localValue && !hintDismissed && !isDropdownOpen"
+        v-if="currentGlobalWakeHotkey && isFocused && localValue && !hintDismissed && !isDropdownOpen"
         class="search-hint absolute left-0 right-0 top-full mt-1.5 select-none"
       >
         <span class="truncate">
-          在任何地方按 <ShortcutKeys :combo="DEFAULT_GLOBAL_WAKE_HOTKEY" /> 也能直接搜索
+          在任何地方按 <ShortcutKeys :combo="currentGlobalWakeHotkey" /> 也能直接搜索
         </span>
         <div class="flex items-center gap-1 flex-shrink-0">
           <button type="button" class="search-hint-btn" @mousedown.prevent="tryGeekLauncher">

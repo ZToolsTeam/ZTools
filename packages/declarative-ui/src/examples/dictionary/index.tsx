@@ -292,78 +292,11 @@ export default function DictionaryCommand() {
       onSelectionChange={(id) => setSelectedWord(id || "")}
       filterBar={{
         summaryText: `当前词条结果 ${displayedEntries.length} 条 · 生词本已收藏 ${bookmarks.length} 个单词 · 历史查询 ${recents.length} 条`,
-        groups: [
-          {
-            id: "dict-tab-filter",
-            label: "词库视图",
-            value: currentTab,
-            onChange: (val) => setCurrentTab(val as DictFilterTab),
-            options: [
-              { value: "all", label: "全部词条", badge: results.length },
-              { value: "bookmarks", label: "生词本收藏", badge: bookmarks.length },
-              { value: "history", label: "最近查询", badge: recents.length }
-            ]
-          }
-        ],
         actions: [
           {
-            id: "dict-act-us",
-            label: "🔊 美式发音 (US)",
-            title: "🔊 美式发音 (US)",
-            style: "primary",
-            onAction: () => {
-              if (!activeEntry) {
-                void showToast(Toast.Style.Failure, "请先选择或搜索一个词条");
-                return;
-              }
-              void handlePronounce(activeEntry, "US");
-            }
-          },
-          {
-            id: "dict-act-uk",
-            label: "🔊 英式发音 (UK)",
-            title: "🔊 英式发音 (UK)",
-            style: "secondary",
-            onAction: () => {
-              if (!activeEntry) {
-                void showToast(Toast.Style.Failure, "请先选择或搜索一个词条");
-                return;
-              }
-              void handlePronounce(activeEntry, "UK");
-            }
-          },
-          {
-            id: "dict-act-copy-zh",
-            label: "📋 复制中文释义",
-            title: "📋 复制中文释义",
-            style: "secondary",
-            onAction: async () => {
-              if (!activeEntry) {
-                await showToast(Toast.Style.Failure, "请先选择或搜索一个词条");
-                return;
-              }
-              await handleSelectWord(activeEntry);
-              await Clipboard.copy(activeEntry.definitionZh);
-              await showToast(Toast.Style.Success, "已复制中文释义", activeEntry.definitionZh);
-            }
-          },
-          {
-            id: "dict-act-bookmark",
-            label: "⭐ 加入/移出生词本",
-            title: "⭐ 加入/移出生词本",
-            style: "secondary",
-            onAction: () => {
-              if (!activeEntry) {
-                void showToast(Toast.Style.Failure, "请先选择或搜索一个词条");
-                return;
-              }
-              void handleToggleBookmark(activeEntry);
-            }
-          },
-          {
             id: "dict-act-cambridge",
-            label: "🌐 剑桥词典打开",
-            title: "🌐 剑桥词典打开",
+            label: "剑桥词典打开",
+            title: "剑桥词典打开",
             style: "secondary",
             onAction: async () => {
               const targetWord = activeEntry?.word || searchText.trim() || "architecture";

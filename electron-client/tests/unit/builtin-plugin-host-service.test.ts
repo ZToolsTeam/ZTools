@@ -1086,3 +1086,61 @@ test('MediaOcrHost plugins enforce no-fake-fallback on ColorPicker, Record, Batc
   }
 })
 
+test('Security Hardening: protects user root directories (~/Desktop, homedir), enforces clipboard port, and sanitizes MultiDownload filenames', async () => {
+  const hostWithoutClipboard = new BuiltinPluginHostService()
+  const desktopDir = path.join(os.homedir(), 'Desktop')
+
+  try {
+    // 1. SoftwareManagerPlugin.uninstall refuses protected user Desktop root
+    const uninstallRes = (await hostWithoutClipboard.handlePluginCall('SoftwareManagerPlugin', 'uninstall', {
+      id: 'desktop-shortcut',
+      name: 'DesktopApp',
+      installLocation: desktopDir
+    })) as {
+      ok: boolean
+      success: boolean
+      error?: string
+    }
+    assert.equal(uninstallRes.ok, false)
+    assert.equal(uninstallRes.success, false)
+    assert.match(String(uninstallRes.error), /系统核心路径|系统保护路径|受保护/)
+
+    // 2. ShredderPlugin refuses homedir root
+    const shredRes = (await hostWithoutClipboard.handlePluginCall('ShredderPlugin', 'shred', {
+      paths: [os.homedir()]
+    })) as {
+      ok: boolean
+      error?: string
+    }
+    assert.equal(shredRes.ok, false)
+    assert.match(String(shredRes.error), /受保护|保护/)
+
+    // 3. ClipboardHistoryPlugin.setClipboardText fails explicitly when clipboard port is absent
+    const clipRes = (await hostWithoutClipboard.handlePluginCall('ClipboardHistoryPlugin', 'setClipboardText', {
+      text: 'should fail without port'
+    })) as {
+      ok: boolean
+      copied: boolean
+      error?: string
+    }
+    assert.equal(clipRes.ok, false)
+    assert.equal(clipRes.copied, false)
+    assert.match(String(clipRes.error), /剪贴板.*未注入/)
+
+    // 4. MultiDownloadPlugin.addTask blocks protected saveDir
+    const dlProtectedRes = (await hostWithoutClipboard.handlePluginCall('MultiDownloadPlugin', 'addTask', {
+      url: 'https://example.com/file.zip',
+      saveDir: 'C:\\Windows\\System32',
+      filename: '../../pwned.exe'
+    })) as {
+      ok: boolean
+      error?: string
+    }
+    assert.equal(dlProtectedRes.ok, false)
+    assert.match(String(dlProtectedRes.error), /系统保护路径|路径/)
+  } finally {
+    await hostWithoutClipboard.stop()
+  }
+})
+
+

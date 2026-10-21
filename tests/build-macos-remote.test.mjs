@@ -38,7 +38,7 @@ describe('build-macos-remote.mjs 远程云端编译 macOS Universal DMG 集成�
       log: (msg) => logs.push(msg)
     })
     assert.equal(plan.mode, 'dry-run')
-    assert.equal(plan.repo, 'codingmuse/ZTools')
+    assert.equal(plan.repo, 'ZToolsTeam/ZTools')
     assert.equal(plan.workflow, 'build-macos-dmg.yml')
     assert.equal(plan.uploadToRelease, false)
     assert.match(plan.expectedDmgFile, /^ZTools-.*-darwin-universal\.dmg$/)

@@ -129,7 +129,7 @@ describe('ZTools M1-7 / M1-8 / M1-9 专项集成与混沌抗毁套件', () => {
 
       const deps = {
         getDownloadSign: async (pid) => ({
-          downloadUrl: `https://plugins.ztools.cn/${pid}/${pid}-1.0.0.zip`,
+          downloadUrl: `https://cdn.ztools.cn/plugins-v2/${pid}/${pid}-1.0.0.zip`,
           version: '1.0.0'
         }),
         installPluginNative: async (pid, info) => {
@@ -159,7 +159,7 @@ describe('ZTools M1-7 / M1-8 / M1-9 专项集成与混沌抗毁套件', () => {
         getDownloadSign: async (pid) => {
           // 模拟网络请求耗时 20ms
           await new Promise(r => setTimeout(r, 20))
-          return { downloadUrl: `https://plugins.ztools.cn/${pid}-1.0.0.zip` }
+          return { downloadUrl: `https://cdn.ztools.cn/plugins-v2/${pid}-1.0.0.zip` }
         },
         installPluginNative: async (pid) => {
           nativeCalls++
@@ -214,7 +214,7 @@ describe('ZTools M1-7 / M1-8 / M1-9 专项集成与混沌抗毁套件', () => {
 
       const deps = {
         getDownloadSign: async (pid) => ({
-          downloadUrl: `https://plugins.ztools.cn/${pid}-1.0.0.zip`
+          downloadUrl: `https://cdn.ztools.cn/plugins-v2/${pid}-1.0.0.zip`
         }),
         installPluginNative: async (pid) => {
           return { success: false, error: '安装包 SHA-256 校验不匹配，拒绝执行' }

@@ -8,12 +8,8 @@ import { scanPluginSecurity } from '../scripts/scan-plugin-security.mjs'
 import { buildPluginsRelease } from '../scripts/build-plugins-release.mjs'
 
 // 导入 4 款全新声明式插件的纯核心逻辑 (基于编译产物测试真实运行能力)
-import {
-  evaluateExpression,
-  tokenize,
-  formatResultNumber,
-  MathParser
-} from '../plugins/calculator/dist/engine.js'
+// 计算器（随客户端内置的 plugins/calculator），与主搜索框内联计算共用同一份引擎
+import { evaluateMathExpression } from '../plugins/calculator/dist/calculator-engine.js'
 import CalculatorCommand from '../plugins/calculator/dist/index.js'
 
 import {
@@ -116,106 +112,64 @@ describe('ZTools 纯声明式轻量插件套件集成与混沌抗毁性测试', 
   // 第二部分：极简即时计算器 (calculator) 业务闭环与破坏性异常测试
   // =========================================================================
   describe('2. 极简即时计算器 (calculator) 业务闭环与破坏性异常测试', () => {
+    const ok = (expr, formatted) => {
+      const r = evaluateMathExpression(expr)
+      assert.equal(r.error, undefined, `${expr}: ${r.error}`)
+      assert.equal(r.formattedAnswer, formatted, expr)
+    }
+    const fail = (expr, pattern) => {
+      const r = evaluateMathExpression(expr)
+      assert.equal(r.answer, null, expr)
+      assert.equal(r.formattedAnswer, '', expr)
+      assert.match(r.error, pattern, expr)
+    }
+
     it('Happy Path: 基础算术运算与科学函数高精度计算', () => {
-      // 基础运算
-      const r1 = evaluateExpression('1024 * 768 + 512')
-      assert.equal(r1.success, true)
-      assert.equal(r1.formatted, '786944')
-
-      // 浮点数防误差
-      const r2 = evaluateExpression('0.1 + 0.2')
-      assert.equal(r2.success, true)
-      assert.equal(r2.formatted, '0.3')
-
-      // 幂运算
-      const r3 = evaluateExpression('2 ^ 10')
-      assert.equal(r3.success, true)
-      assert.equal(r3.formatted, '1024')
-
-      // 常用数学函数与常量
-      const r4 = evaluateExpression('sqrt(65536)')
-      assert.equal(r4.success, true)
-      assert.equal(r4.formatted, '256')
-
-      const r5 = evaluateExpression('sin(90)')
-      assert.equal(r5.success, true)
-      assert.equal(r5.formatted, '1')
-
-      const r6 = evaluateExpression('cos(0)')
-      assert.equal(r6.success, true)
-      assert.equal(r6.formatted, '1')
-
-      const r7 = evaluateExpression('abs(-99.5)')
-      assert.equal(r7.success, true)
-      assert.equal(r7.formatted, '99.5')
-
-      const r8 = evaluateExpression('log(1000)')
-      assert.equal(r8.success, true)
-      assert.equal(r8.formatted, '3')
+      ok('1024 * 768 + 512', '786,944')
+      ok('0.1 + 0.2', '0.3')
+      ok('2 ^ 10', '1,024')
+      ok('sqrt(65536)', '256')
+      ok('sin(pi / 2)', '1')
+      ok('cos(0)', '1')
+      ok('abs(-99.5)', '99.5')
+      ok('log(1000)', '3')
+      // 一元负号：2*-3 与 2^-1 曾被错误算成 -3 与 0
+      ok('2*-3', '-6')
+      ok('2^-1', '0.5')
     })
 
     it('Fault Injection: 除以零与模运算除以零破坏性拦截', () => {
-      const r1 = evaluateExpression('100 / 0')
-      assert.equal(r1.success, false)
-      assert.equal(r1.error, '除数不能为0')
-
-      const r2 = evaluateExpression('50 % 0')
-      assert.equal(r2.success, false)
-      assert.equal(r2.error, '模运算除数不能为0')
-
-      const r3 = evaluateExpression('(10 + 20) / (5 - 5)')
-      assert.equal(r3.success, false)
-      assert.equal(r3.error, '除数不能为0')
+      fail('100 / 0', /除数不能为零/)
+      fail('50 % 0', /除数不能为零/)
+      fail('(10 + 20) / (5 - 5)', /除数不能为零/)
     })
 
     it('Fault Injection: 负数开方与非法对数参数破坏性拦截', () => {
-      const r1 = evaluateExpression('sqrt(-16)')
-      assert.equal(r1.success, false)
-      assert.equal(r1.error, '不能对负数开平方')
-
-      const r2 = evaluateExpression('log(0)')
-      assert.equal(r2.success, false)
-      assert.equal(r2.error, '对数真数必须大于0')
-
-      const r3 = evaluateExpression('ln(-5)')
-      assert.equal(r3.success, false)
-      assert.equal(r3.error, '自然对数真数必须大于0')
+      fail('sqrt(-16)', /负数没有实数平方根/)
+      fail('log(0)', /无实数解/)
+      fail('ln(-5)', /无实数解/)
     })
 
     it('Fault Injection: 畸形括号与语法残缺异常拦截', () => {
-      const r1 = evaluateExpression('((10 + 20)')
-      assert.equal(r1.success, false)
-      assert.ok(r1.error.includes('缺少匹配的右括号'))
-
-      const r2 = evaluateExpression('10 + * 5')
-      assert.equal(r2.success, false)
-
-      const r3 = evaluateExpression('sqrt')
-      assert.equal(r3.success, false)
-      assert.ok(r3.error.includes('应紧随括号'))
-
-      const r4 = evaluateExpression('10 + ')
-      assert.equal(r4.success, false)
+      fail('((10 + 20)', /括号不匹配/)
+      fail('10 + * 5', /参数不足/)
+      fail('sqrt', /参数不足/)
+      fail('10 + ', /参数不足/)
     })
 
     it('Fault Injection: 空值、非法字符与脚本注入攻击防御', () => {
-      assert.equal(evaluateExpression('').success, false)
-      assert.equal(evaluateExpression('   ').success, false)
-      assert.equal(evaluateExpression(null).success, false)
-      assert.equal(evaluateExpression(undefined).success, false)
-
-      const rInjection = evaluateExpression('<script>alert(1)</script>')
-      assert.equal(rInjection.success, false)
-      assert.ok(rInjection.error.includes('无法识别的字符'))
-
-      const rSql = evaluateExpression('select * from user')
-      assert.equal(rSql.success, false)
+      for (const empty of ['', '   ', null, undefined]) {
+        const r = evaluateMathExpression(empty)
+        assert.equal(r.isCalculation, false)
+        assert.equal(r.answer, null)
+      }
+      fail('<script>alert(1)</script>', /非法输入字符/)
+      fail('select * from user', /未知标识符/)
     })
 
     it('Declarative UI View: 计算器主组件渲染测试', () => {
       const view = CalculatorCommand()
       assert.equal(view.type, 'List')
-      assert.equal(view.props.navigationTitle, '极简即时计算器')
       assert.ok(Array.isArray(view.children))
       assert.ok(view.children.length > 0)
     })

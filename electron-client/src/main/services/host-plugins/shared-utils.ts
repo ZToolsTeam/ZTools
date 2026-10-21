@@ -3,6 +3,7 @@ import crypto from 'node:crypto'
 import fsSync from 'node:fs'
 import fs from 'node:fs/promises'
 import type http from 'node:http'
+import os from 'node:os'
 import path from 'node:path'
 import { PNG } from 'pngjs'
 import type { CallerIdentity } from '../../../contracts/capabilities.js'
@@ -125,15 +126,48 @@ export function guessMimeType(ext: string): string {
   }
 }
 
+export function escapeHtml(raw: string): string {
+  return String(raw ?? '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;')
+}
+
 export function isProtectedSystemPath(resolvedPath: string): boolean {
-  const normalized = path.resolve(resolvedPath).toLowerCase()
-  if (/^[a-z]:\\?$/.test(normalized) || normalized === '/') {
+  const normalized = path.resolve(resolvedPath).replace(/[\\/]+$/, '').toLowerCase()
+  if (/^[a-z]:\\?$/.test(normalized) || normalized === '' || normalized === '/') {
     return true
   }
-  const winDir = (process.env.WINDIR || 'C:\\Windows').toLowerCase()
-  const sysRoot = (process.env.SystemRoot || 'C:\\Windows').toLowerCase()
-  const progFiles = (process.env.ProgramFiles || 'C:\\Program Files').toLowerCase()
-  const progFilesX86 = (process.env['ProgramFiles(x86)'] || 'C:\\Program Files (x86)').toLowerCase()
+  const homeDir = path.resolve(os.homedir()).replace(/[\\/]+$/, '').toLowerCase()
+  const exactProtectedDirs = new Set<string>([
+    homeDir,
+    path.join(homeDir, 'desktop'),
+    path.join(homeDir, 'documents'),
+    path.join(homeDir, 'downloads'),
+    path.join(homeDir, 'pictures'),
+    path.join(homeDir, 'music'),
+    path.join(homeDir, 'videos'),
+    path.join(homeDir, 'appdata'),
+    path.join(homeDir, 'appdata', 'local'),
+    path.join(homeDir, 'appdata', 'roaming'),
+    path.join(homeDir, 'library'),
+    'c:\\users',
+    'c:\\programdata',
+    '/users',
+    '/home',
+    '/var',
+    '/tmp'
+  ])
+  if (exactProtectedDirs.has(normalized)) {
+    return true
+  }
+
+  const winDir = (process.env.WINDIR || 'C:\\Windows').replace(/[\\/]+$/, '').toLowerCase()
+  const sysRoot = (process.env.SystemRoot || 'C:\\Windows').replace(/[\\/]+$/, '').toLowerCase()
+  const progFiles = (process.env.ProgramFiles || 'C:\\Program Files').replace(/[\\/]+$/, '').toLowerCase()
+  const progFilesX86 = (process.env['ProgramFiles(x86)'] || 'C:\\Program Files (x86)').replace(/[\\/]+$/, '').toLowerCase()
   const protectedPrefixes = [
     winDir,
     sysRoot,

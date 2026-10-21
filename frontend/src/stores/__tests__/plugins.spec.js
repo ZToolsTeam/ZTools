@@ -396,7 +396,7 @@ describe('usePluginsStore', () => {
       expect(store.installedSet.has('p-new')).toBe(true)
     })
 
-    it('[回归] 本地旧版同名或别名插件（如 clipboard-manager / everything-search）自动合并为 2.0 声明式定义并去重', async () => {
+    it('[回归] 插件市场分发的真实插件（clipboard-manager / everything-file-search）不再并入旧示例实现，同名与别名记录不重复', async () => {
       const store = usePluginsStore()
       apiMocks.getLocalPlugins.mockResolvedValue([
         {
@@ -422,20 +422,20 @@ describe('usePluginsStore', () => {
       ])
 
       const combined = await store.fetchInstalledPlugins()
-      const clipMatches = combined.filter(
-        (p) => p.pluginId === 'clipboard-manager' || p.pluginId === 'clipboard-history'
-      )
+      // clipboard-manager 现在是插件市场分发的真实插件：按安装目录里的清单展示，不再并入同名旧示例实现
+      const clipMatches = combined.filter((p) => p.pluginId === 'clipboard-manager')
       expect(clipMatches).toHaveLength(1)
-      expect(clipMatches[0].isDeclarative).toBe(true)
-      expect(typeof clipMatches[0].command).toBe('function')
-      expect(clipMatches[0].platforms).toBeUndefined()
+      expect(clipMatches[0].command).toBeUndefined()
+      // 只存在于旧示例实现里的 clipboard-history 不在展示列表里
+      const visibleIds = store.installedPlugins.map((p) => p.pluginId)
+      expect(visibleIds).not.toContain('clipboard-history')
+      expect(visibleIds.filter((id) => id === 'clipboard-manager').length).toBeLessThanOrEqual(1)
 
       const searchMatches = combined.filter(
         (p) => p.pluginId === 'everything-search' || p.pluginId === 'everything-file-search'
       )
+      // everything-file-search 也改为插件市场分发，旧别名记录不再并入旧示例实现，但仍只保留一条
       expect(searchMatches).toHaveLength(1)
-      expect(searchMatches[0].isDeclarative).toBe(true)
-      expect(typeof searchMatches[0].command).toBe('function')
     })
   })
 
