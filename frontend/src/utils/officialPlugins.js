@@ -1,0 +1,1437 @@
+/**
+ * 官方标杆声明式应用注册与转发中心 (Official Built-in & Store Registry)
+ *
+ * 体系定调：
+ * 1. 第一方内置核心应用 (First-party Built-in Core Apps):
+ *    剪贴板历史、短语展开、窗口极速调度、文件秒搜、计算器色彩、系统运维、快捷链接等。
+ *    随宿主预置、零外部依赖、开箱即用、免安装。
+ * 2. 官方 Store 扩展 (Official Store Extensions):
+ *    依赖外部网络/第三方环境的应用（GitHub, Obsidian, Speedtest, Winget, 汇率换算）
+ *    已正式移入 plugins/official/* 官方商店目录，支持独立分发与转发渲染。
+ */
+
+import {
+  GoogleTranslateCommand,
+  KillProcessCommand,
+  EverythingFileSearchCommand,
+  ClipboardHistoryCommand,
+  SnippetsCommand,
+  WindowManagementCommand,
+  SystemCommand,
+  QuicklinksCommand,
+  SettingsCommand,
+  RaycastCoreCommand,
+  RaycastWrappedCommand,
+  TrialNudgesCommand,
+  WindowsShortcutsCommand,
+  GithubDashboardCommand,
+  ObsidianCommand,
+  SpeedtestCommand,
+  WingetCommand,
+  CurrencyExchangeCommand,
+  EmojiPickerCommand,
+  TranslatorCommand,
+  WindowsRunCommand,
+  WindowsTaskbarCommand,
+  ScreenshotsCommand,
+  ApplicationsCommand,
+  DictionaryCommand,
+  PasswordVaultCommand,
+  WifiPasswordRevealCommand,
+  AudioDeviceCommand,
+  CleanKeyboardCommand,
+  DownloadsManagerCommand,
+  ProcessMonitorCommand,
+  SoftwareManagerCommand,
+  CleanerCommand,
+  DiskAnalyzerCommand,
+  WechatCleanerCommand,
+  QQCleanerCommand,
+  FlowGuardCommand,
+  HardwareInfoCommand,
+  BoostCommand,
+  BatchRenameCommand,
+  BatchVideoCommand,
+  BatchAudioCommand,
+  PdfCommand,
+  MultiDownloadCommand,
+  VideoDownloaderCommand,
+  AppleShortcutsCommand,
+  NavigationCommand,
+  HomebrewCommand,
+  ScriptCommandsCommand,
+  RaycastFocusCommand,
+  CalendarCommand,
+  WebSearchesCommand,
+  NetworkAdapterCommand,
+  NetworkRescueCommand,
+  ContextMenuCommand,
+  WechatMultiCommand,
+  LanShareCommand,
+  MoverCommand,
+  DataRecoveryCommand,
+  ShredderCommand,
+  SystemBackupCommand,
+  SqlitePluginCommand,
+  AiImageCommand,
+  AiVideoCommand,
+  OcrCommand,
+  RecordCommand
+} from '@ztools/declarative-ui'
+import { isBundledPlugin, isStoreOfficialPlugin } from './bundledPlugins.js'
+
+/**
+ * 官方标杆应用唯一标识清单
+ */
+export const OFFICIAL_PLUGIN_IDS = Object.freeze({
+  // 第一方内置核心套件 (Core Built-ins)
+  CLIPBOARD_HISTORY: 'clipboard-history',
+  SNIPPETS: 'snippets',
+  WINDOW_MANAGEMENT: 'window-management',
+  EVERYTHING_SEARCH: 'everything-file-search',
+  SYSTEM: 'system',
+  QUICKLINKS: 'quicklinks',
+  KILL_PROCESS: 'kill-process',
+  GOOGLE_TRANSLATE: 'google-translate',
+
+  // 原生插件声明式 2.0 升级标杆 (Native Plugin Declarative 2.0 Benchmark)
+  PROCESS_MONITOR: 'process-monitor',
+  SOFTWARE_MANAGER: 'software-manager',
+  CLEANER: 'cleaner',
+  DISK_ANALYZER: 'disk-analyzer',
+  WECHAT_CLEANER: 'wechat-cleaner',
+  QQ_CLEANER: 'qq-cleaner',
+  FLOW_GUARD: 'flow-guard',
+  HARDWARE_INFO: 'hardware-info',
+  BOOST: 'boost',
+  BATCH_RENAME: 'batch-rename',
+  BATCH_VIDEO: 'batch-video',
+  BATCH_AUDIO: 'batch-audio',
+  PDF: 'pdf',
+  MULTI_DOWNLOAD: 'multi-download',
+  VIDEO_DOWNLOADER: 'video-downloader',
+  NETWORK_ADAPTER: 'network-adapter',
+  NETWORK_RESCUE: 'network-rescue',
+  CONTEXT_MENU: 'context-menu',
+  WECHAT_MULTI: 'wechat-multi',
+  LAN_SHARE: 'lan-share',
+  MOVER: 'mover',
+  DATA_RECOVERY: 'data-recovery',
+  SHREDDER: 'shredder',
+  SYSTEM_BACKUP: 'system-backup',
+  SQLITE_PLUGIN: 'sqlite-plugin',
+  AI_IMAGE: 'ai-image',
+  AI_VIDEO: 'ai-video',
+  OCR: 'ocr',
+  RECORD: 'record',
+
+  // M1.5 第二组: 高频核心内置应用 (Group 2 Built-in Apps)
+  EMOJI_PICKER: 'emoji-picker',
+  TRANSLATOR: 'translator',
+  WINDOWS_RUN: 'windows-run',
+  WINDOWS_TASKBAR: 'windows-taskbar',
+  SCREENSHOTS: 'screenshots',
+  APPLICATIONS: 'applications',
+  DICTIONARY: 'dictionary',
+
+  // 新增 5 款装机高频独立套件 (Password Vault, WiFi Reveal, Audio Device, Clean Keyboard, Downloads Manager)
+  PASSWORD_VAULT: 'password-vault',
+  WIFI_PASSWORD_REVEAL: 'wifi-password-reveal',
+  AUDIO_DEVICE: 'audio-device',
+  CLEAN_KEYBOARD: 'clean-keyboard',
+  DOWNLOADS_MANAGER: 'downloads-manager',
+
+  // M1.5 第四组: 系统治理与设置套件
+  RAYCAST_SETTINGS: 'raycast-settings',
+  RAYCAST_CORE: 'raycast-core',
+  RAYCAST_WRAPPED: 'raycast-wrapped',
+  TRIAL_NUDGES: 'trial-nudges',
+  WINDOWS_SHORTCUTS: 'windows-shortcuts',
+  APPLE_SHORTCUTS: 'apple-shortcuts',
+
+  // 新增 macOS 与跨端第一方标杆内置套件 (Navigation, Homebrew, Script Commands, Focus, Calendar, Web Searches)
+  NAVIGATION: 'navigation',
+  HOMEBREW: 'homebrew',
+  SCRIPT_COMMANDS: 'script-commands',
+  RAYCAST_FOCUS: 'raycast-focus',
+  CALENDAR: 'calendar',
+  WEB_SEARCHES: 'web-searches',
+
+  // 官方 Store 扩展转发 (Store Extensions in plugins/official/*)
+  GITHUB: 'github',
+  OBSIDIAN: 'obsidian',
+  SPEEDTEST: 'speedtest',
+  WINGET: 'winget',
+  CURRENCY_EXCHANGE: 'currency-exchange'
+})
+
+/**
+ * 官方标杆应用元数据与组件定义表
+ */
+export const OFFICIAL_PLUGINS_MAP = Object.freeze({
+  // ==================== 第一方核心内置应用 (Core Built-in Apps) ====================
+  [OFFICIAL_PLUGIN_IDS.CLIPBOARD_HISTORY]: Object.freeze({
+    id: 'clipboard-history',
+    pluginId: 'clipboard-history',
+    name: '剪贴板历史',
+    title: '剪贴板历史',
+    description: '自动记录复制过的文本、图片与文件历史，支持关键词搜索、置顶收藏与连续粘贴',
+    category: '办公效率',
+    keyword: 'clipboard history 剪贴板 粘贴 复制 历史 流水粘贴 clipboard-history',
+    faIcon: 'fa-clipboard',
+    version: '1.0.1',
+    author: 'ZTools Official',
+    badge: '内置核心',
+    isBuiltin: true,
+    isDeclarative: true,
+    enabled: true,
+    command: ClipboardHistoryCommand
+  }),
+
+  [OFFICIAL_PLUGIN_IDS.SNIPPETS]: Object.freeze({
+    id: 'snippets',
+    pluginId: 'snippets',
+    name: '快捷短语',
+    title: '快捷短语',
+    description: '保存常用文本片段与回复模板，输入简短缩写即可自动展开为完整内容，支持日期与剪贴板动态变量',
+    category: '办公效率',
+    keyword: 'snippets snippet 短语 快捷 文本 宏 模板 snippets',
+    faIcon: 'fa-font',
+    version: '1.0.0',
+    author: 'ZTools Official',
+    badge: '内置核心',
+    isBuiltin: true,
+    isDeclarative: true,
+    enabled: true,
+    command: SnippetsCommand
+  }),
+
+  [OFFICIAL_PLUGIN_IDS.WINDOW_MANAGEMENT]: Object.freeze({
+    id: 'window-management',
+    pluginId: 'window-management',
+    name: '窗口分屏',
+    title: '窗口分屏',
+    description: '快捷键一键将当前窗口左半屏、右半屏、四分屏、最大化或居中排版，高效整理多窗口桌面',
+    category: '系统工具',
+    keyword: 'window management 窗口 分屏 吸附 排版 最大化 居中 window-management',
+    faIcon: 'fa-window-restore',
+    version: '1.0.1',
+    author: 'ZTools Official',
+    badge: '内置核心',
+    isBuiltin: true,
+    isDeclarative: true,
+    enabled: true,
+    command: WindowManagementCommand
+  }),
+
+  [OFFICIAL_PLUGIN_IDS.EVERYTHING_SEARCH]: Object.freeze({
+    id: 'everything-file-search',
+    pluginId: 'everything-file-search',
+    name: '文件秒搜',
+    title: '文件秒搜',
+    description: '毫秒级全盘文件搜索，支持按文件名、后缀名与路径快速定位本机任意文件',
+    category: '系统工具',
+    keyword: 'everything search file 秒搜 文件 检索 mft usn everything-file-search',
+    faIcon: 'fa-search',
+    version: '1.0.0',
+    author: 'ZTools Official',
+    badge: '内置核心',
+    isBuiltin: true,
+    isDeclarative: true,
+    enabled: true,
+    command: EverythingFileSearchCommand
+  }),
+
+  [OFFICIAL_PLUGIN_IDS.SYSTEM]: Object.freeze({
+    id: 'system',
+    pluginId: 'system',
+    name: '系统快捷操作',
+    title: '系统快捷操作',
+    description: '锁屏、关机、重启、清空回收站、静音、调音量',
+    category: '系统工具',
+    keyword: 'system power 关机 重启 锁屏 清空回收站 静音 运维 win32 system',
+    faIcon: 'fa-cogs',
+    version: '1.0.0',
+    author: 'ZTools Official',
+    badge: '内置核心',
+    isBuiltin: true,
+    isDeclarative: true,
+    enabled: true,
+    command: SystemCommand
+  }),
+
+  [OFFICIAL_PLUGIN_IDS.QUICKLINKS]: Object.freeze({
+    id: 'quicklinks',
+    pluginId: 'quicklinks',
+    name: '快捷链接',
+    title: '快捷链接',
+    description: '给常用网址起个短别名，输入别名加关键词直接打开搜索',
+    category: '办公效率',
+    keyword: 'quicklinks link 直达 网址 书签 别名 quicklink quicklinks',
+    faIcon: 'fa-link',
+    version: '1.0.0',
+    author: 'ZTools Official',
+    badge: '内置核心',
+    isBuiltin: true,
+    isDeclarative: true,
+    enabled: true,
+    command: QuicklinksCommand
+  }),
+
+  [OFFICIAL_PLUGIN_IDS.KILL_PROCESS]: Object.freeze({
+    id: 'kill-process',
+    pluginId: 'kill-process',
+    name: '结束进程',
+    title: '结束进程',
+    description: '按内存/CPU 搜索进程列表，一键强制结束进程动作与任务管理器对比',
+    category: '系统工具',
+    keyword: 'kill process task 进程 任务管理器 强退 卡死 结束进程 内存',
+    faIcon: 'fa-tasks',
+    version: '1.0.1',
+    author: 'ZTools Official',
+    badge: '内置核心',
+    isBuiltin: true,
+    isDeclarative: true,
+    enabled: true,
+    command: KillProcessCommand
+  }),
+
+  [OFFICIAL_PLUGIN_IDS.GOOGLE_TRANSLATE]: Object.freeze({
+    id: 'google-translate',
+    pluginId: 'google-translate',
+    name: '在线翻译',
+    title: '在线翻译',
+    description: '中英日韩等多语言互译，可朗读译文、保存历史；译文由在线翻译服务提供，需联网',
+    category: '办公效率',
+    keyword: 'translate 翻译 词典 英语 日语 语言 fanyi google-translate',
+    faIcon: 'fa-language',
+    version: '1.0.0',
+    author: 'ZTools Official',
+    badge: '官方标杆',
+    isBuiltin: true,
+    isDeclarative: true,
+    enabled: true,
+    command: GoogleTranslateCommand
+  }),
+
+  // ==================== M1.5 第四组: 系统治理与组织协同套件 ====================
+  [OFFICIAL_PLUGIN_IDS.RAYCAST_SETTINGS]: Object.freeze({
+    id: 'raycast-settings',
+    pluginId: 'raycast-settings',
+    name: '偏好设置',
+    title: '偏好设置',
+    description: '管理全局唤醒快捷键、界面主题、开机自启、云端加密同步与账号偏好设置',
+    category: '系统工具',
+    keyword: 'settings preferences 偏好设置 系统设置 主题 快捷键 同步 代理 ztools-settings',
+    faIcon: 'fa-cog',
+    version: '1.0.0',
+    author: 'ZTools Official',
+    badge: '系统治理',
+    isBuiltin: true,
+    isDeclarative: true,
+    enabled: true,
+    command: SettingsCommand
+  }),
+
+  [OFFICIAL_PLUGIN_IDS.RAYCAST_CORE]: Object.freeze({
+    id: 'raycast-core',
+    pluginId: 'raycast-core',
+    name: '版本更新',
+    title: '版本更新',
+    description: '检查客户端版本更新、浏览新版本功能日志与官方系统公告',
+    category: '系统工具',
+    keyword: 'core update release notes changelog 公告 更新 版本 升级 ztools-core',
+    faIcon: 'fa-info-circle',
+    version: '1.0.0',
+    author: 'ZTools Official',
+    badge: '核心系统',
+    isBuiltin: true,
+    isDeclarative: true,
+    enabled: true,
+    command: RaycastCoreCommand
+  }),
+
+  [OFFICIAL_PLUGIN_IDS.RAYCAST_WRAPPED]: Object.freeze({
+    id: 'raycast-wrapped',
+    pluginId: 'raycast-wrapped',
+    name: '年度报告',
+    title: '年度报告',
+    description: '统计个人命令唤醒次数、最常使用的效率工具排行与累计节省的操作时间',
+    category: '办公效率',
+    keyword: 'wrapped review report 战报 年度 报告 极客 统计 ztools-wrapped',
+    faIcon: 'fa-trophy',
+    version: '1.0.0',
+    author: 'ZTools Official',
+    badge: '极客战报',
+    isBuiltin: true,
+    isDeclarative: true,
+    enabled: true,
+    command: RaycastWrappedCommand
+  }),
+
+  [OFFICIAL_PLUGIN_IDS.TRIAL_NUDGES]: Object.freeze({
+    id: 'trial-nudges',
+    pluginId: 'trial-nudges',
+    name: '功能特权',
+    title: '功能特权',
+    description: '查看文件极速索引、跨窗口取词、端到端加密同步与自定义 AI 密钥等核心能力状态',
+    category: '系统工具',
+    keyword: 'nudges pro trial features 特权 方案 架构 索引 穿透 trial-nudges',
+    faIcon: 'fa-star',
+    version: '1.0.0',
+    author: 'ZTools Official',
+    badge: '核心特权',
+    isBuiltin: true,
+    isDeclarative: true,
+    enabled: true,
+    command: TrialNudgesCommand
+  }),
+
+  [OFFICIAL_PLUGIN_IDS.WINDOWS_SHORTCUTS]: Object.freeze({
+    id: 'windows-shortcuts',
+    pluginId: 'windows-shortcuts',
+    name: '快捷指令',
+    title: '快捷指令',
+    description: '把常用系统操作做成快捷指令，比如刷新 DNS、重启资源管理器',
+    category: '系统工具',
+    keyword: 'shortcuts apple-shortcuts windows automation 快捷指令 自动化 脚本 powershell cmd',
+    faIcon: 'fa-bolt',
+    version: '1.0.0',
+    author: 'ZTools Official',
+    badge: '原生自动化',
+    isBuiltin: true,
+    isDeclarative: true,
+    enabled: true,
+    command: WindowsShortcutsCommand
+  }),
+
+  // ==================== M1.5 第二组: 高频核心内置应用 (Group 2 Built-in Apps) ====================
+  [OFFICIAL_PLUGIN_IDS.EMOJI_PICKER]: Object.freeze({
+    id: 'emoji-picker',
+    pluginId: 'emoji-picker',
+    name: '表情符号',
+    title: '表情符号',
+    description: '按中文、拼音或英文搜索 Emoji，点一下就复制',
+    category: '办公效率',
+    keyword: 'emoji biaoqing 符号 表情 symbol picker 表情包 emoji-picker',
+    faIcon: 'fa-smile-o',
+    version: '1.0.0',
+    author: 'ZTools Official',
+    badge: '内置核心',
+    isBuiltin: true,
+    isDeclarative: true,
+    enabled: true,
+    command: EmojiPickerCommand
+  }),
+
+  [OFFICIAL_PLUGIN_IDS.TRANSLATOR]: Object.freeze({
+    id: 'translator',
+    pluginId: 'translator',
+    name: '划词翻译',
+    title: '划词翻译',
+    description: '支持中英日韩法德多语种互译、英汉词典释义、商务邮件润色与代码变量命名转换',
+    category: '办公效率',
+    keyword: 'translator translate 翻译 fanyi 词典 查词 划词 translator',
+    faIcon: 'fa-language',
+    version: '1.0.0',
+    author: 'ZTools Official',
+    badge: '内置核心',
+    isBuiltin: true,
+    isDeclarative: true,
+    enabled: true,
+    command: TranslatorCommand
+  }),
+
+  [OFFICIAL_PLUGIN_IDS.WINDOWS_RUN]: Object.freeze({
+    id: 'windows-run',
+    pluginId: 'windows-run',
+    name: '运行命令',
+    title: '运行命令',
+    description: '加强版「运行」：内置常用系统命令别名，可自定义，可用管理员身份执行',
+    category: '系统工具',
+    keyword: 'run yongxing 运行 windows-run cmd powershell control regedit gpedit 系统命令',
+    faIcon: 'fa-terminal',
+    version: '1.0.1',
+    author: 'ZTools Official',
+    badge: '内置核心',
+    isBuiltin: true,
+    isDeclarative: true,
+    enabled: true,
+    command: WindowsRunCommand
+  }),
+
+  [OFFICIAL_PLUGIN_IDS.WINDOWS_TASKBAR]: Object.freeze({
+    id: 'windows-taskbar',
+    pluginId: 'windows-taskbar',
+    name: '任务栏控制',
+    title: '任务栏控制',
+    description: '一键隐藏或显示任务栏',
+    category: '系统工具',
+    keyword: 'taskbar renwulan 任务栏 隐藏 显示 全屏 windows-taskbar',
+    faIcon: 'fa-window-maximize',
+    version: '1.0.1',
+    author: 'ZTools Official',
+    badge: '内置核心',
+    isBuiltin: true,
+    isDeclarative: true,
+    enabled: true,
+    command: WindowsTaskbarCommand
+  }),
+
+  [OFFICIAL_PLUGIN_IDS.SCREENSHOTS]: Object.freeze({
+    id: 'screenshots',
+    pluginId: 'screenshots',
+    name: '截图历史',
+    title: '截图历史',
+    description: '快速全屏或区域截图，集中浏览近期截图历史，支持一键复制、置顶贴图与批量清理',
+    category: '办公效率',
+    keyword: 'screenshots jietu 截图 截屏 贴图 图片剪贴板 screenshots',
+    faIcon: 'fa-camera',
+    version: '1.0.1',
+    author: 'ZTools Official',
+    badge: '内置核心',
+    isBuiltin: true,
+    isDeclarative: true,
+    enabled: true,
+    command: ScreenshotsCommand
+  }),
+
+  [OFFICIAL_PLUGIN_IDS.APPLICATIONS]: Object.freeze({
+    id: 'applications',
+    pluginId: 'applications',
+    name: '应用卸载',
+    title: '应用卸载',
+    description: '全面列出电脑已安装软件、占用体积与使用频率，支持强力卸载并彻底扫除注册表与文件夹残留',
+    category: '系统工具',
+    keyword: 'applications apps yingyong 应用 软件 卸载 uninstall xiezai applications',
+    faIcon: 'fa-th-large',
+    version: '1.0.0',
+    author: 'ZTools Official',
+    badge: '内置核心',
+    isBuiltin: true,
+    isDeclarative: true,
+    enabled: true,
+    command: ApplicationsCommand
+  }),
+
+  [OFFICIAL_PLUGIN_IDS.DICTIONARY]: Object.freeze({
+    id: 'dictionary',
+    pluginId: 'dictionary',
+    name: '英汉词典',
+    title: '英汉词典',
+    description: '技术名词与高频词汇英汉释义、音标、双语例句、离线查询与生词收藏',
+    category: '办公效率',
+    keyword: 'dictionary cidian 词典 查词 英语 英汉 释义 dictionary',
+    faIcon: 'fa-book',
+    version: '1.0.0',
+    author: 'ZTools Official',
+    badge: '内置核心',
+    isBuiltin: true,
+    isDeclarative: true,
+    enabled: true,
+    command: DictionaryCommand
+  }),
+
+  // ==================== 官方 Store 扩展转发 (Official Store Extensions) ====================
+  [OFFICIAL_PLUGIN_IDS.GITHUB]: Object.freeze({
+    id: 'github',
+    pluginId: 'github',
+    name: 'GitHub 助手',
+    title: 'GitHub 助手',
+    description: '快速查看 GitHub 仓库 Issue、Pull Request、Actions 构建状态与收藏项目',
+    category: '办公效率',
+    keyword: 'github git pr issue repo 仓库 workflow actions commit',
+    faIcon: 'fa-github',
+    version: '1.0.0',
+    author: 'official',
+    badge: '官方商店',
+    isBuiltin: true,
+    isStoreExtension: true,
+    isDeclarative: true,
+    enabled: true,
+    command: GithubDashboardCommand
+  }),
+
+  [OFFICIAL_PLUGIN_IDS.OBSIDIAN]: Object.freeze({
+    id: 'obsidian',
+    pluginId: 'obsidian',
+    name: 'Obsidian 笔记',
+    title: 'Obsidian 笔记',
+    description: '快速搜索与预览本地 Obsidian 知识库笔记，支持随时新建 Markdown 笔记与追加灵感',
+    category: '办公效率',
+    keyword: 'obsidian markdown 笔记 随手记 vault note 知识库',
+    faIcon: 'fa-book',
+    version: '1.0.0',
+    author: 'official',
+    badge: '官方商店',
+    isBuiltin: true,
+    isStoreExtension: true,
+    isDeclarative: true,
+    enabled: true,
+    command: ObsidianCommand
+  }),
+
+  [OFFICIAL_PLUGIN_IDS.SPEEDTEST]: Object.freeze({
+    id: 'speedtest',
+    pluginId: 'speedtest',
+    name: '网速测试',
+    title: '网速测试',
+    description: '一键测试当前宽带下载与上传网速、网络延迟，并查看本机内外网 IP 与 DNS 响应速度',
+    category: '系统工具',
+    keyword: 'speedtest network ping dns 测速 延迟 网络诊断 speed',
+    faIcon: 'fa-tachometer',
+    version: '1.0.0',
+    author: 'official',
+    badge: '官方商店',
+    isBuiltin: true,
+    isStoreExtension: true,
+    isDeclarative: true,
+    enabled: true,
+    command: SpeedtestCommand
+  }),
+
+  [OFFICIAL_PLUGIN_IDS.WINGET]: Object.freeze({
+    id: 'winget',
+    pluginId: 'winget',
+    name: 'Winget 软件源',
+    title: 'Winget 软件源',
+    description: '用图形界面搜索、安装、更新和卸载软件（基于 Windows 自带的 winget）',
+    category: '系统工具',
+    keyword: 'winget package install app 软件 管理器 安装 卸载 更新',
+    faIcon: 'fa-cube',
+    version: '1.0.0',
+    author: 'official',
+    badge: '官方商店',
+    isBuiltin: true,
+    isStoreExtension: true,
+    isDeclarative: true,
+    enabled: true,
+    command: WingetCommand
+  }),
+
+  [OFFICIAL_PLUGIN_IDS.CURRENCY_EXCHANGE]: Object.freeze({
+    id: 'currency-exchange',
+    pluginId: 'currency-exchange',
+    name: '汇率换算',
+    title: '汇率换算',
+    description: '全球 160+ 国家法定与加密货币实时汇率牌价、离线缓存与多向极速换算',
+    category: '金融理财',
+    keyword: 'currency exchange 汇率 换算 货币 美元 人民币 欧元 rates',
+    faIcon: 'fa-exchange',
+    version: '1.0.0',
+    author: 'official',
+    badge: '官方商店',
+    isBuiltin: true,
+    isStoreExtension: true,
+    isDeclarative: true,
+    enabled: true,
+    command: CurrencyExchangeCommand
+  }),
+
+  // ==================== 新增 5 款装机高频独立套件 ====================
+  [OFFICIAL_PLUGIN_IDS.PASSWORD_VAULT]: Object.freeze({
+    id: 'password-vault',
+    pluginId: 'password-vault',
+    name: '密码保险箱',
+    title: '密码保险箱',
+    description: '纯粹管理网站账号、密码、网址与私密备注，支持主密码加密锁与 Chrome/Edge CSV 密码表导入导出',
+    category: '安全隐私',
+    keyword: 'password vault keepass bitwarden 密码 保险箱 账号 登录 csv password-vault',
+    faIcon: 'fa-key',
+    version: '1.0.0',
+    author: 'ZTools Official',
+    badge: '内置核心',
+    isBuiltin: true,
+    isDeclarative: true,
+    enabled: true,
+    command: PasswordVaultCommand
+  }),
+
+  [OFFICIAL_PLUGIN_IDS.WIFI_PASSWORD_REVEAL]: Object.freeze({
+    id: 'wifi-password-reveal',
+    pluginId: 'wifi-password-reveal',
+    name: 'Wi-Fi 密码',
+    title: 'Wi-Fi 密码',
+    description: '一键提取本机已保存的所有历史 Wi-Fi 明文密码，并生成手机扫码连网二维码',
+    category: '系统工具',
+    keyword: 'wifi password reveal wlan 无线 密码 查看 二维码 连网 wifi-password-reveal',
+    faIcon: 'fa-wifi',
+    version: '1.0.0',
+    author: 'ZTools Official',
+    badge: '内置核心',
+    isBuiltin: true,
+    isDeclarative: true,
+    enabled: true,
+    command: WifiPasswordRevealCommand
+  }),
+
+  [OFFICIAL_PLUGIN_IDS.AUDIO_DEVICE]: Object.freeze({
+    id: 'audio-device',
+    pluginId: 'audio-device',
+    name: '音频切换',
+    title: '音频切换',
+    description: '蓝牙耳机、外接显示器音响、本机扬声器与麦克风一键秒切，支持精确调音与会议/外放场景组合',
+    category: '系统工具',
+    keyword: 'audio device sound speaker microphone 音频 声卡 耳机 扬声器 麦克风 切换 音量 audio-device',
+    faIcon: 'fa-volume-up',
+    version: '1.0.0',
+    author: 'ZTools Official',
+    badge: '内置核心',
+    isBuiltin: true,
+    isDeclarative: true,
+    enabled: true,
+    command: AudioDeviceCommand
+  }),
+
+  [OFFICIAL_PLUGIN_IDS.CLEAN_KEYBOARD]: Object.freeze({
+    id: 'clean-keyboard',
+    pluginId: 'clean-keyboard',
+    name: '键盘锁',
+    title: '键盘锁',
+    description: '擦拭键盘、清洁屏幕或防宠物踩踏时一键锁定全键盘输入，实时统计拦截误触次数并支持 Ctrl+U 紧急解锁',
+    category: '系统工具',
+    keyword: 'clean keyboard lock 键盘 清洁 防误触 锁定 擦键盘 猫咪 clean-keyboard',
+    faIcon: 'fa-keyboard-o',
+    version: '1.0.0',
+    author: 'ZTools Official',
+    badge: '内置核心',
+    isBuiltin: true,
+    isDeclarative: true,
+    enabled: true,
+    command: CleanKeyboardCommand
+  }),
+
+  [OFFICIAL_PLUGIN_IDS.DOWNLOADS_MANAGER]: Object.freeze({
+    id: 'downloads-manager',
+    pluginId: 'downloads-manager',
+    name: '下载管理',
+    title: '下载管理',
+    description: '一键打开或复制最新下载文件，支持按安装包/压缩包/文档/图片智能归档整理与过期大文件清理',
+    category: '办公效率',
+    keyword: 'downloads manager folder 下载 文件夹 管家 归档 清理 最新下载 downloads-manager',
+    faIcon: 'fa-download',
+    version: '1.0.0',
+    author: 'ZTools Official',
+    badge: '内置核心',
+    isBuiltin: true,
+    isDeclarative: true,
+    enabled: true,
+    command: DownloadsManagerCommand
+  }),
+
+  [OFFICIAL_PLUGIN_IDS.PROCESS_MONITOR]: Object.freeze({
+    id: 'process-monitor',
+    pluginId: 'process-monitor',
+    name: '进程监控',
+    title: '进程监控',
+    description: '查看正在运行的程序和服务占用的 CPU、内存，可结束程序或打开所在目录',
+    category: '系统工具',
+    keyword: 'process monitor 进程管理 进程 监控 任务管理器 杀死 结束进程 服务 cpu 内存 process-monitor',
+    faIcon: 'fa-tasks',
+    version: '2.0.0',
+    author: 'ZTools Official',
+    badge: '2.0标杆',
+    isBuiltin: true,
+    isDeclarative: true,
+    enabled: true,
+    command: ProcessMonitorCommand
+  }),
+
+  [OFFICIAL_PLUGIN_IDS.SOFTWARE_MANAGER]: Object.freeze({
+    id: 'software-manager',
+    pluginId: 'software-manager',
+    name: '软件卸载',
+    title: '软件卸载',
+    description: '列出已安装的软件及占用空间，一键卸载',
+    category: '系统工具',
+    keyword: 'software manager uninstall 软件 管理 卸载 清理 运行库 体积排行 静默卸载 software-manager',
+    faIcon: 'fa-cubes',
+    version: '2.0.0',
+    author: 'ZTools Official',
+    badge: '2.0标杆',
+    isBuiltin: true,
+    isDeclarative: true,
+    enabled: true,
+    command: SoftwareManagerCommand
+  }),
+
+  [OFFICIAL_PLUGIN_IDS.CLEANER]: Object.freeze({
+    id: 'cleaner',
+    pluginId: 'cleaner',
+    name: '垃圾清理',
+    title: '垃圾清理',
+    description: '扫描并清理临时文件、系统更新残留、浏览器缓存和日志，释放磁盘空间',
+    category: '系统工具',
+    keyword: 'cleaner clean 垃圾清理 系统垃圾 临时文件 磁盘清理 缓存 清理 cleaner',
+    faIcon: 'fa-trash-o',
+    version: '2.0.0',
+    author: 'ZTools Official',
+    badge: '2.0标杆',
+    isBuiltin: true,
+    isDeclarative: true,
+    enabled: true,
+    command: CleanerCommand
+  }),
+
+  [OFFICIAL_PLUGIN_IDS.DISK_ANALYZER]: Object.freeze({
+    id: 'disk-analyzer',
+    pluginId: 'disk-analyzer',
+    name: '磁盘空间分析',
+    title: '磁盘空间分析',
+    description: '看看磁盘空间被哪些文件夹和大文件占了，可移到回收站',
+    category: '系统工具',
+    keyword: 'disk analyzer space 磁盘分析 空间占用 大文件 分区 容量 磁盘清理 disk-analyzer',
+    faIcon: 'fa-pie-chart',
+    version: '2.0.0',
+    author: 'ZTools Official',
+    badge: '2.0标杆',
+    isBuiltin: true,
+    isDeclarative: true,
+    enabled: true,
+    command: DiskAnalyzerCommand
+  }),
+
+  [OFFICIAL_PLUGIN_IDS.WECHAT_CLEANER]: Object.freeze({
+    id: 'wechat-cleaner',
+    pluginId: 'wechat-cleaner',
+    name: '微信清理',
+    title: '微信清理',
+    description: '清理微信的图片、视频和小程序缓存，不动聊天记录',
+    category: '系统工具',
+    keyword: 'wechat cleaner wx 微信清理 微信缓存 朋友圈 聊天记录保护 瘦身 wechat-cleaner',
+    faIcon: 'fa-comments',
+    version: '2.0.0',
+    author: 'ZTools Official',
+    badge: '2.0标杆',
+    isBuiltin: true,
+    isDeclarative: true,
+    enabled: true,
+    command: WechatCleanerCommand
+  }),
+
+  [OFFICIAL_PLUGIN_IDS.QQ_CLEANER]: Object.freeze({
+    id: 'qq-cleaner',
+    pluginId: 'qq-cleaner',
+    name: 'QQ 清理',
+    title: 'QQ 清理',
+    description: '清理 QQ 的图片、视频缓存和日志，不动聊天记录',
+    category: '系统工具',
+    keyword: 'qq cleaner ntqq QQ清理 腾讯文件 群聊缓存 瘦身 qq-cleaner',
+    faIcon: 'fa-commenting-o',
+    version: '2.0.0',
+    author: 'ZTools Official',
+    badge: '2.0标杆',
+    isBuiltin: true,
+    isDeclarative: true,
+    enabled: true,
+    command: QQCleanerCommand
+  }),
+
+  [OFFICIAL_PLUGIN_IDS.FLOW_GUARD]: Object.freeze({
+    id: 'flow-guard',
+    pluginId: 'flow-guard',
+    name: '流量监控',
+    title: '流量监控',
+    description: '查看哪些程序在联网、连到了哪里，可断开可疑程序的网络',
+    category: '系统工具',
+    keyword: 'flow guard network traffic port 流量监控 网络连接 端口 远端IP 断网拦截 flow-guard',
+    faIcon: 'fa-tachometer',
+    version: '2.0.0',
+    author: 'ZTools Official',
+    badge: '2.0标杆',
+    isBuiltin: true,
+    isDeclarative: true,
+    enabled: true,
+    command: FlowGuardCommand
+  }),
+
+  [OFFICIAL_PLUGIN_IDS.HARDWARE_INFO]: Object.freeze({
+    id: 'hardware-info',
+    pluginId: 'hardware-info',
+    name: '硬件信息',
+    title: '硬件信息',
+    description: '查看 CPU、内存、硬盘、显示器和电池等硬件信息',
+    category: '系统工具',
+    keyword: 'hardware info cpu ram gpu display 硬件信息 处理器 内存 显卡 显示器 温度 hardware-info',
+    faIcon: 'fa-microchip',
+    version: '2.0.0',
+    author: 'ZTools Official',
+    badge: '2.0标杆',
+    isBuiltin: true,
+    isDeclarative: true,
+    enabled: true,
+    command: HardwareInfoCommand
+  }),
+
+  [OFFICIAL_PLUGIN_IDS.BOOST]: Object.freeze({
+    id: 'boost',
+    pluginId: 'boost',
+    name: '开机启动项',
+    title: '开机启动项',
+    description: '查看内存占用高的程序，清理临时文件，释放内存',
+    category: '系统工具',
+    keyword: 'boost memory optimize 加速 内存整理 释放内存 性能优化 系统加速 boost',
+    faIcon: 'fa-rocket',
+    version: '2.0.0',
+    author: 'ZTools Official',
+    badge: '2.0标杆',
+    isBuiltin: true,
+    isDeclarative: true,
+    enabled: true,
+    command: BoostCommand
+  }),
+
+  [OFFICIAL_PLUGIN_IDS.BATCH_RENAME]: Object.freeze({
+    id: 'batch-rename',
+    pluginId: 'batch-rename',
+    name: '批量重命名',
+    title: '批量重命名',
+    description: '批量改文件名：加序号、加前后缀、改大小写，改之前先预览',
+    category: '办公效率',
+    keyword: 'batch rename file 批量重命名 文件改名 序号 前缀 后缀 batch-rename',
+    faIcon: 'fa-i-cursor',
+    version: '2.0.0',
+    author: 'ZTools Official',
+    badge: '2.0标杆',
+    isBuiltin: true,
+    isDeclarative: true,
+    enabled: true,
+    command: BatchRenameCommand
+  }),
+
+  [OFFICIAL_PLUGIN_IDS.BATCH_VIDEO]: Object.freeze({
+    id: 'batch-video',
+    pluginId: 'batch-video',
+    name: '视频转码',
+    title: '视频转码',
+    description: '批量压缩视频、转成 MP4 或 GIF、裁成竖屏',
+    category: '图像视频',
+    keyword: 'batch video transcode mp4 compress 批量视频 视频压缩 视频转码 水印 gif batch-video',
+    faIcon: 'fa-film',
+    version: '2.0.0',
+    author: 'ZTools Official',
+    badge: '2.0标杆',
+    isBuiltin: true,
+    isDeclarative: true,
+    enabled: true,
+    command: BatchVideoCommand
+  }),
+
+  [OFFICIAL_PLUGIN_IDS.BATCH_AUDIO]: Object.freeze({
+    id: 'batch-audio',
+    pluginId: 'batch-audio',
+    name: '音频转换',
+    title: '音频转换',
+    description: '批量转 MP3 或 FLAC，统一音量，去掉首尾静音',
+    category: '图像视频',
+    keyword: 'batch audio mp3 flac loudnorm 批量音频 音频转码 响度均衡 静音裁剪 batch-audio',
+    faIcon: 'fa-music',
+    version: '2.0.0',
+    author: 'ZTools Official',
+    badge: '2.0标杆',
+    isBuiltin: true,
+    isDeclarative: true,
+    enabled: true,
+    command: BatchAudioCommand
+  }),
+
+  [OFFICIAL_PLUGIN_IDS.PDF]: Object.freeze({
+    id: 'pdf',
+    pluginId: 'pdf',
+    name: 'PDF 工具箱',
+    title: 'PDF 工具箱',
+    description: 'PDF 转 Word、Excel 或长图，Office 文件转 PDF，合并多个 PDF',
+    category: '办公效率',
+    keyword: 'pdf word excel merge convert PDF工具箱 PDF转Word PDF合并 文档转换 pdf',
+    faIcon: 'fa-file-pdf-o',
+    version: '2.0.0',
+    author: 'ZTools Official',
+    badge: '2.0标杆',
+    isBuiltin: true,
+    isDeclarative: true,
+    enabled: true,
+    command: PdfCommand
+  }),
+
+  [OFFICIAL_PLUGIN_IDS.MULTI_DOWNLOAD]: Object.freeze({
+    id: 'multi-download',
+    pluginId: 'multi-download',
+    name: '多线程下载',
+    title: '多线程下载',
+    description: '多线程下载文件，自动识别剪贴板里的下载链接',
+    category: '网络工具',
+    keyword: 'multi download aria2 16线程 多线程下载 高速下载 断点续传 磁力链 multi-download',
+    faIcon: 'fa-cloud-download',
+    version: '2.0.0',
+    author: 'ZTools Official',
+    badge: '2.0标杆',
+    isBuiltin: true,
+    isDeclarative: true,
+    enabled: true,
+    command: MultiDownloadCommand
+  }),
+
+  [OFFICIAL_PLUGIN_IDS.VIDEO_DOWNLOADER]: Object.freeze({
+    id: 'video-downloader',
+    pluginId: 'video-downloader',
+    name: '视频下载',
+    title: '视频下载',
+    description: '粘贴 B 站、抖音、快手、YouTube 等视频链接，下载视频或音频',
+    category: '图像视频',
+    keyword: 'video downloader bilibili douyin youtube 视频下载 B站下载 抖音去水印 音轨提取 video-downloader',
+    faIcon: 'fa-video-camera',
+    version: '2.0.0',
+    author: 'ZTools Official',
+    badge: '2.0标杆',
+    isBuiltin: true,
+    isDeclarative: true,
+    enabled: true,
+    command: VideoDownloaderCommand
+  }),
+
+  // ==================== 新增 macOS 与跨端第一方内置套件 (macOS & Cross-Platform Built-ins) ====================
+  [OFFICIAL_PLUGIN_IDS.APPLE_SHORTCUTS]: Object.freeze({
+    id: 'apple-shortcuts',
+    pluginId: 'apple-shortcuts',
+    name: 'macOS 快捷指令',
+    title: 'macOS 快捷指令',
+    description: '搜索并一键运行 macOS 系统快捷指令，支持传入文本参数与快速打开编辑',
+    category: '系统工具',
+    keyword: 'apple shortcuts macos 快捷指令 自动化 工作流 siri shortcuts apple-shortcuts',
+    faIcon: 'fa-bolt',
+    version: '2.0.0',
+    author: 'ZTools Official',
+    badge: '内置核心',
+    isBuiltin: true,
+    isDeclarative: true,
+    enabled: true,
+    command: AppleShortcutsCommand
+  }),
+
+  [OFFICIAL_PLUGIN_IDS.NAVIGATION]: Object.freeze({
+    id: 'navigation',
+    pluginId: 'navigation',
+    name: '窗口切换',
+    title: '窗口切换',
+    description: '全键盘快速切换当前打开的桌面窗口，并支持直接搜索前台软件顶部菜单命令',
+    category: '系统工具',
+    keyword: 'navigation switch windows menu bar 窗口切换 菜单栏 搜索 聚焦 激活窗口 navigation',
+    faIcon: 'fa-compass',
+    version: '2.0.0',
+    author: 'ZTools Official',
+    badge: '内置核心',
+    isBuiltin: true,
+    isDeclarative: true,
+    enabled: true,
+    command: NavigationCommand
+  }),
+
+  [OFFICIAL_PLUGIN_IDS.HOMEBREW]: Object.freeze({
+    id: 'homebrew',
+    pluginId: 'homebrew',
+    name: 'Homebrew 管理',
+    title: 'Homebrew 管理',
+    description: '可视化搜索、安装、更新与卸载 macOS Homebrew 软件包，支持一键清理旧版本缓存',
+    category: '开发工具',
+    keyword: 'homebrew brew cask formula macos 包管理器 安装 升级 卸载 软件源 homebrew',
+    faIcon: 'fa-beer',
+    version: '2.0.0',
+    author: 'ZTools Official',
+    badge: '内置核心',
+    isBuiltin: true,
+    isDeclarative: true,
+    enabled: true,
+    command: HomebrewCommand
+  }),
+
+  [OFFICIAL_PLUGIN_IDS.SCRIPT_COMMANDS]: Object.freeze({
+    id: 'script-commands',
+    pluginId: 'script-commands',
+    name: '自定义脚本',
+    title: '自定义脚本',
+    description: '将常用的 Shell、PowerShell、Python 或 Node 脚本添加为快捷命令，随时一键运行并查看输出',
+    category: '开发工具',
+    keyword: 'script commands bash zsh applescript python 自定义脚本 命令行 自动化 script-commands',
+    faIcon: 'fa-terminal',
+    version: '2.0.0',
+    author: 'ZTools Official',
+    badge: '内置核心',
+    isBuiltin: true,
+    isDeclarative: true,
+    enabled: true,
+    command: ScriptCommandsCommand
+  }),
+
+  [OFFICIAL_PLUGIN_IDS.RAYCAST_FOCUS]: Object.freeze({
+    id: 'raycast-focus',
+    pluginId: 'raycast-focus',
+    name: '番茄专注',
+    title: '番茄专注',
+    description: '番茄工作法专注倒计时工具，支持专注期间自动拦截分心软件与网站，统计每日专注时长',
+    category: '办公效率',
+    keyword: 'focus pomodoro timer 专注 番茄钟 心流 屏蔽 分心 倒计时 raycast-focus',
+    faIcon: 'fa-bullseye',
+    version: '2.0.0',
+    author: 'ZTools Official',
+    badge: '内置核心',
+    isBuiltin: true,
+    isDeclarative: true,
+    enabled: true,
+    command: RaycastFocusCommand
+  }),
+
+  [OFFICIAL_PLUGIN_IDS.CALENDAR]: Object.freeze({
+    id: 'calendar',
+    pluginId: 'calendar',
+    name: '日程日历',
+    title: '日程日历',
+    description: '查看今日与近期日程、一键加入视频会议，支持快速新建提醒事项并导出日历文件',
+    category: '办公效率',
+    keyword: 'calendar schedule meeting 日程 日历 会议 飞书 zoom 提醒 ics calendar',
+    faIcon: 'fa-calendar',
+    version: '2.0.0',
+    author: 'ZTools Official',
+    badge: '内置核心',
+    isBuiltin: true,
+    isDeclarative: true,
+    enabled: true,
+    command: CalendarCommand
+  }),
+
+  [OFFICIAL_PLUGIN_IDS.WEB_SEARCHES]: Object.freeze({
+    id: 'web-searches',
+    pluginId: 'web-searches',
+    name: '网页搜索',
+    title: '网页搜索',
+    description: '输入关键词一键在百度、Google、GitHub、知乎、B站等主流网站发起搜索',
+    category: '网络工具',
+    keyword: 'web searches browser contacts 网页搜索 搜索引擎 浏览器标签 通讯录 联系人 web-searches',
+    faIcon: 'fa-globe',
+    version: '2.0.0',
+    author: 'ZTools Official',
+    badge: '内置核心',
+    isBuiltin: true,
+    isDeclarative: true,
+    enabled: true,
+    command: WebSearchesCommand
+  }),
+
+  // ==================== 补齐 35 款本地原生标杆插件全集 (35 Local Native Suite) ====================
+  [OFFICIAL_PLUGIN_IDS.NETWORK_ADAPTER]: Object.freeze({
+    id: 'network-adapter',
+    pluginId: 'network-adapter',
+    name: '网卡管理',
+    title: '网卡管理',
+    description: '查看本机物理与虚拟网卡 IPv4/IPv6、MAC 地址、网关与 DNS，一键复制配置或刷新 DNS 缓存',
+    category: '网络工具',
+    keyword: 'network adapter nic ip mac dns 网卡 网络适配器 以太网 wifi 虚拟网卡 network-adapter',
+    faIcon: 'fa-sitemap',
+    version: '2.0.0',
+    author: 'ZTools Official',
+    badge: '2.0标杆',
+    isBuiltin: true,
+    isDeclarative: true,
+    enabled: true,
+    command: NetworkAdapterCommand
+  }),
+
+  [OFFICIAL_PLUGIN_IDS.NETWORK_RESCUE]: Object.freeze({
+    id: 'network-rescue',
+    pluginId: 'network-rescue',
+    name: '网络修复',
+    title: '网络修复',
+    description: '一键诊断并修复 DNS 解析异常、残留系统代理拦截、Winsock 协议栈损坏与 Hosts 劫持',
+    category: '网络工具',
+    keyword: 'network rescue repair dns winsock proxy 断网急救 网络修复 无法上网 代理清除 network-rescue',
+    faIcon: 'fa-medkit',
+    version: '2.0.0',
+    author: 'ZTools Official',
+    badge: '2.0标杆',
+    isBuiltin: true,
+    isDeclarative: true,
+    enabled: true,
+    command: NetworkRescueCommand
+  }),
+
+  [OFFICIAL_PLUGIN_IDS.CONTEXT_MENU]: Object.freeze({
+    id: 'context-menu',
+    pluginId: 'context-menu',
+    name: '右键菜单管理',
+    title: '右键菜单管理',
+    description: '扫描并启用/禁用文件、目录与桌面右键菜单扩展项，一键切换 Windows 11 经典完整右键菜单',
+    category: '系统工具',
+    keyword: 'context menu shell right click 右键菜单 经典菜单 注册表扩展 context-menu',
+    faIcon: 'fa-bars',
+    version: '2.0.0',
+    author: 'ZTools Official',
+    badge: '2.0标杆',
+    isBuiltin: true,
+    isDeclarative: true,
+    enabled: true,
+    command: ContextMenuCommand
+  }),
+
+  [OFFICIAL_PLUGIN_IDS.WECHAT_MULTI]: Object.freeze({
+    id: 'wechat-multi',
+    pluginId: 'wechat-multi',
+    name: '微信多开',
+    title: '微信多开',
+    description: '电脑端微信多账号同时登录工具，支持一键启动新微信、多开窗口备注管理与快速切换',
+    category: '办公效率',
+    keyword: 'wechat multi instance 微信多开 微信双开 微信分身 小程序内存 wechat-multi',
+    faIcon: 'fa-weixin',
+    version: '2.0.0',
+    author: 'ZTools Official',
+    badge: '2.0标杆',
+    isBuiltin: true,
+    isDeclarative: true,
+    enabled: true,
+    command: WechatMultiCommand
+  }),
+
+  [OFFICIAL_PLUGIN_IDS.LAN_SHARE]: Object.freeze({
+    id: 'lan-share',
+    pluginId: 'lan-share',
+    name: '局域网传文件',
+    title: '局域网传文件',
+    description: '将本机文件或剪贴板生成局域网 HTTP 免密直连地址与二维码，手机同一 Wi-Fi 扫码即下',
+    category: '网络工具',
+    keyword: 'lan share airdrop qrcode 局域网快传 内网共享 扫码传文件 隔空投送 lan-share',
+    faIcon: 'fa-share-alt',
+    version: '2.0.0',
+    author: 'ZTools Official',
+    badge: '2.0标杆',
+    isBuiltin: true,
+    isDeclarative: true,
+    enabled: true,
+    command: LanShareCommand
+  }),
+
+  [OFFICIAL_PLUGIN_IDS.MOVER]: Object.freeze({
+    id: 'mover',
+    pluginId: 'mover',
+    name: 'C盘搬家',
+    title: 'C盘搬家',
+    description: '将微信、QQ 及大型软件存放在 C 盘的膨胀数据无损迁移到 D 盘等其他分区，彻底拯救 C 盘空间红线',
+    category: '系统工具',
+    keyword: 'mover junction mklink c盘搬家 目录迁移 软件搬家 符号链接 mover',
+    faIcon: 'fa-truck',
+    version: '2.0.0',
+    author: 'ZTools Official',
+    badge: '2.0标杆',
+    isBuiltin: true,
+    isDeclarative: true,
+    enabled: true,
+    command: MoverCommand
+  }),
+
+  [OFFICIAL_PLUGIN_IDS.DATA_RECOVERY]: Object.freeze({
+    id: 'data-recovery',
+    pluginId: 'data-recovery',
+    name: '数据恢复',
+    title: '数据恢复',
+    description: '深度扫描硬盘与 U 盘，快速找回误删、清空回收站或格式化丢失的办公文档、照片与视频',
+    category: '系统工具',
+    keyword: 'data recovery undelete restore 数据恢复 文件恢复 误删恢复 回收站恢复 data-recovery',
+    faIcon: 'fa-history',
+    version: '2.0.0',
+    author: 'ZTools Official',
+    badge: '2.0标杆',
+    isBuiltin: true,
+    isDeclarative: true,
+    enabled: true,
+    command: DataRecoveryCommand
+  }),
+
+  [OFFICIAL_PLUGIN_IDS.SHREDDER]: Object.freeze({
+    id: 'shredder',
+    pluginId: 'shredder',
+    name: '文件粉碎',
+    title: '文件粉碎',
+    description: '强力解除文件占用并彻底粉碎机密文件与顽固文件夹，防止被任何数据恢复软件还原',
+    category: '安全隐私',
+    keyword: 'shredder wipe secure delete 文件粉碎 彻底删除 安全擦除 防恢复 shredder',
+    faIcon: 'fa-eraser',
+    version: '2.0.0',
+    author: 'ZTools Official',
+    badge: '2.0标杆',
+    isBuiltin: true,
+    isDeclarative: true,
+    enabled: true,
+    command: ShredderCommand
+  }),
+
+  [OFFICIAL_PLUGIN_IDS.SYSTEM_BACKUP]: Object.freeze({
+    id: 'system-backup',
+    pluginId: 'system-backup',
+    name: '系统备份',
+    title: '系统备份',
+    description: '一键打包备份 Hosts、环境变量、SSH 密钥、终端与开发配置，换机或重装系统后秒级还原',
+    category: '系统工具',
+    keyword: 'system backup restore dotfiles 系统备份 配置备份 环境变量备份 快照还原 system-backup',
+    faIcon: 'fa-archive',
+    version: '2.0.0',
+    author: 'ZTools Official',
+    badge: '2.0标杆',
+    isBuiltin: true,
+    isDeclarative: true,
+    enabled: true,
+    command: SystemBackupCommand
+  }),
+
+  [OFFICIAL_PLUGIN_IDS.SQLITE_PLUGIN]: Object.freeze({
+    id: 'sqlite-plugin',
+    pluginId: 'sqlite-plugin',
+    name: 'SQLite 查看器',
+    title: 'SQLite 查看器',
+    description: '打开并浏览本地 SQLite 数据库文件，支持查看表结构、检索数据行与导出 CSV / JSON / SQL',
+    category: '开发工具',
+    keyword: 'sqlite database db table sql 数据库 浏览 导出 sqlite-plugin',
+    faIcon: 'fa-database',
+    version: '2.0.0',
+    author: 'ZTools Official',
+    badge: '2.0标杆',
+    isBuiltin: true,
+    isDeclarative: true,
+    enabled: true,
+    command: SqlitePluginCommand
+  }),
+
+  [OFFICIAL_PLUGIN_IDS.AI_IMAGE]: Object.freeze({
+    id: 'ai-image',
+    pluginId: 'ai-image',
+    name: 'AI 图片修复',
+    title: 'AI 图片修复',
+    description: '本地 AI 图片无损放大、模糊画质修复、智能一键抠图去背景与人像老照片翻新',
+    category: '图像视频',
+    keyword: 'ai image upscale removebg AI图像 超分放大 智能抠图 去背景 画质修复 ai-image',
+    faIcon: 'fa-picture-o',
+    version: '2.0.0',
+    author: 'ZTools Official',
+    badge: '2.0标杆',
+    isBuiltin: true,
+    isDeclarative: true,
+    enabled: true,
+    command: AiImageCommand
+  }),
+
+  [OFFICIAL_PLUGIN_IDS.AI_VIDEO]: Object.freeze({
+    id: 'ai-video',
+    pluginId: 'ai-video',
+    name: 'AI 视频增强',
+    title: 'AI 视频增强',
+    description: '本地 AI 视频画质超清放大、60/120 帧流畅补帧与低清视频画质修复',
+    category: '图像视频',
+    keyword: 'ai video rife upscale 60fps AI视频 视频补帧 视频超分 画质增强 ai-video',
+    faIcon: 'fa-film',
+    version: '2.0.0',
+    author: 'ZTools Official',
+    badge: '2.0标杆',
+    isBuiltin: true,
+    isDeclarative: true,
+    enabled: true,
+    command: AiVideoCommand
+  }),
+
+  [OFFICIAL_PLUGIN_IDS.OCR]: Object.freeze({
+    id: 'ocr',
+    pluginId: 'ocr',
+    name: '图片识字',
+    title: '图片识字',
+    description: '批量识别本机截图与图片中的中英日韩文字、代码段与 Markdown 表格，一键写入剪贴板',
+    category: '办公效率',
+    keyword: 'ocr text recognition 文字识别 截图识字 提取文字 表格识别 ocr',
+    faIcon: 'fa-file-text-o',
+    version: '2.0.0',
+    author: 'ZTools Official',
+    badge: '2.0标杆',
+    isBuiltin: true,
+    isDeclarative: true,
+    enabled: true,
+    command: OcrCommand
+  }),
+
+  [OFFICIAL_PLUGIN_IDS.RECORD]: Object.freeze({
+    id: 'record',
+    pluginId: 'record',
+    name: '屏幕录制',
+    title: '屏幕录制',
+    description: '高清全屏、区域与单窗口录屏工具，支持同时录制系统声音与麦克风，可直出 MP4 视频或 GIF 动图',
+    category: '图像视频',
+    keyword: 'record screen capture video 录屏 屏幕录制 系统内录 录像管理 record',
+    faIcon: 'fa-dot-circle-o',
+    version: '2.0.0',
+    author: 'ZTools Official',
+    badge: '2.0标杆',
+    isBuiltin: true,
+    isDeclarative: true,
+    enabled: true,
+    command: RecordCommand
+  }),
+})
+
+/**
+ * 35 款本地插件常用别名映射表 (Canonical Alias Map)
+ */
+export const OFFICIAL_PLUGIN_ALIASES = Object.freeze({
+  'clipboard-manager': OFFICIAL_PLUGIN_IDS.CLIPBOARD_HISTORY,
+  'everything-search': OFFICIAL_PLUGIN_IDS.EVERYTHING_SEARCH,
+  'window-manager': OFFICIAL_PLUGIN_IDS.WINDOW_MANAGEMENT,
+  'system-tools': OFFICIAL_PLUGIN_IDS.SYSTEM,
+  screenshot: OFFICIAL_PLUGIN_IDS.SCREENSHOTS
+})
+
+/**
+ * 官方标杆应用列表 (Array)
+ */
+export const OFFICIAL_PLUGINS_LIST = Object.freeze(Object.values(OFFICIAL_PLUGINS_MAP))
+
+// 只认对象自身的键：'__proto__'、'constructor' 等原型链上的名字不能被当成插件 id
+function ownLookup(map, key) {
+  return typeof key === 'string' && Object.hasOwn(map, key) ? map[key] : undefined
+}
+
+function resolveOfficialId(pluginId) {
+  const normalized = pluginId.trim().toLowerCase()
+  return { normalized, resolved: ownLookup(OFFICIAL_PLUGIN_ALIASES, normalized) || normalized }
+}
+
+/**
+ * 判断是否为官方内置或官方商店标杆应用
+ * @param {string} pluginId
+ * @returns {boolean}
+ */
+export function isOfficialPlugin(pluginId) {
+  if (!pluginId || typeof pluginId !== 'string') return false
+  const { normalized, resolved } = resolveOfficialId(pluginId)
+  // 与内置原版插件同 ID 的旧实现让位给原版
+  if (isBundledPlugin(normalized) || isBundledPlugin(resolved)) return false
+  return Boolean(
+    ownLookup(OFFICIAL_PLUGINS_MAP, resolved) ||
+    ownLookup(OFFICIAL_PLUGINS_MAP, pluginId.trim())
+  )
+}
+
+/**
+ * 获取官方应用定义
+ * @param {string} pluginId
+ * @returns {typeof OFFICIAL_PLUGINS_MAP[string] | undefined}
+ */
+export function getOfficialPlugin(pluginId) {
+  if (!pluginId || typeof pluginId !== 'string') return undefined
+  const { normalized, resolved } = resolveOfficialId(pluginId)
+  // 内置插件与插件市场分发的官方插件都以 plugins 仓库的真实实现为准，不再返回同名的旧示例实现
+  if (isBundledPlugin(normalized) || isBundledPlugin(resolved)) return undefined
+  if (isStoreOfficialPlugin(normalized) || isStoreOfficialPlugin(resolved)) return undefined
+  return ownLookup(OFFICIAL_PLUGINS_MAP, resolved) || ownLookup(OFFICIAL_PLUGINS_MAP, pluginId.trim())
+}
+
+/**
+ * 获取全量官方应用清单副本
+ * @returns {Array<typeof OFFICIAL_PLUGINS_MAP[string]>}
+ */
+export function getOfficialPluginsList() {
+  return OFFICIAL_PLUGINS_LIST.filter((p) => !isBundledPlugin(p.pluginId) && !isStoreOfficialPlugin(p.pluginId))
+}
+
+

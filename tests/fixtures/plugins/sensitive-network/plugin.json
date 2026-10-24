@@ -1,0 +1,28 @@
+{
+  "targets": [
+    {
+      "id": "windows-electron-any",
+      "platform": "windows",
+      "runtime": "electron",
+      "arch": "any"
+    },
+    {
+      "id": "macos-electron-any",
+      "platform": "macos",
+      "runtime": "electron",
+      "arch": "any"
+    }
+  ],
+  "nativeComponents": [],
+  "id": "sensitive-network",
+  "name": "天气查询插件",
+  "version": "1.0.0",
+  "description": "合规声明 network 权限的天气查询插件",
+  "author": "weather-dev",
+  "entry": "index.html",
+  "icon": "icon.png",
+  "permissions": [
+    "network",
+    "dialog"
+  ]
+}

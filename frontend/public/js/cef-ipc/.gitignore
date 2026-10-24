@@ -1,0 +1,20 @@
+# 忽略node_modules(如果将来使用npm)
+node_modules/
+
+# 忽略压缩文件(如果生成)
+dist/*.min.js
+
+# 忽略临时文件
+*.tmp
+*.log
+
+# 忽略编辑器配置
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# 保留dist目录下的主文件
+!dist/ztools-api.js
+

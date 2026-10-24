@@ -1,0 +1,376 @@
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
+import { mount, flushPromises } from '@vue/test-utils'
+import { createPinia, setActivePinia } from 'pinia'
+import { createRouter, createMemoryHistory } from 'vue-router'
+
+import Details from '../Details.vue'
+import { usePluginsStore } from '@/stores/plugins'
+
+const toastSpies = vi.hoisted(() => ({
+  toastSuccess: vi.fn(),
+  toastError: vi.fn(),
+  toastWarning: vi.fn()
+}))
+
+const apiMocks = vi.hoisted(() => ({
+  openPlugin: vi.fn(),
+  getDownloadSign: vi.fn(),
+  installPluginNative: vi.fn(),
+  uninstallPluginNative: vi.fn(),
+  getPluginDetails: vi.fn(),
+  createShortcut: vi.fn(),
+  checkPluginUpdate: vi.fn(),
+  downloadPluginUpdate: vi.fn(),
+  getMarketPlugins: vi.fn(),
+  getLocalPlugins: vi.fn()
+}))
+
+vi.mock('@/composables/useToast', () => ({
+  useToast: () => toastSpies
+}))
+
+// 公共详情页按开源版行为测试（两种仓库里结果一致）；官方版的留言、登录拦截由版本扩展自行测试
+vi.mock('@edition', () => import('@/edition-oss/index.js'))
+
+vi.mock('@/composables/useVersionCompat', () => ({
+  useVersionCompat: () => ({
+    checkPluginCompat: vi.fn().mockResolvedValue({ compatible: true, reason: '' })
+  }),
+  fetchVersions: vi.fn().mockResolvedValue({
+    appVersion: '1.0.0',
+    webVersion: '1.0.0'
+  }),
+  checkCompat: vi.fn().mockReturnValue({ compatible: true, reason: '' })
+}))
+
+vi.mock('@/utils/pluginFeatureHotkeys', () => ({
+  getPluginFeatureHotkeyItemByTrigger: vi.fn().mockReturnValue(null)
+}))
+
+vi.mock('@/api/apiserver', () => ({
+  openPlugin: apiMocks.openPlugin,
+  getDownloadSign: apiMocks.getDownloadSign,
+  installPluginNative: apiMocks.installPluginNative,
+  uninstallPluginNative: apiMocks.uninstallPluginNative,
+  getPluginDetails: apiMocks.getPluginDetails,
+  createShortcut: apiMocks.createShortcut,
+  checkPluginUpdate: apiMocks.checkPluginUpdate,
+  downloadPluginUpdate: apiMocks.downloadPluginUpdate,
+  getMarketPlugins: apiMocks.getMarketPlugins,
+  getLocalPlugins: apiMocks.getLocalPlugins,
+  isPluginVersionIncompatibleError: () => false,
+  getPluginVersionIncompatibleMessage: (e) => e?.message || ''
+}))
+
+function createTestRouter() {
+  return createRouter({
+    history: createMemoryHistory(),
+    routes: [
+      {
+        path: '/details/:pluginId',
+        name: 'details',
+        component: Details
+      },
+      {
+        path: '/list/:category?',
+        name: 'list',
+        component: { template: '<div />' }
+      },
+      {
+        path: '/advanced-settings',
+        name: 'advanced-settings',
+        component: { template: '<div />' }
+      }
+    ]
+  })
+}
+
+describe('Details Page', () => {
+  let router
+  let wrapper
+  let pluginsStore
+
+  beforeEach(async () => {
+    setActivePinia(createPinia())
+    pluginsStore = usePluginsStore()
+    router = createTestRouter()
+
+    for (const mock of Object.values(apiMocks)) {
+      mock.mockReset()
+    }
+
+    apiMocks.getPluginDetails.mockResolvedValue({
+      pluginId: 'plugin-1',
+      name: 'Plugin 1',
+      version: '1.0.0',
+      category: '媒体处理',
+      size: '1 MB',
+      downloads: 12,
+      rating: 5,
+      author: 'ZTools Team',
+      screenshots: [],
+      changelogs: []
+    })
+    apiMocks.getLocalPlugins.mockResolvedValue([])
+    apiMocks.getMarketPlugins.mockResolvedValue({
+      list: [],
+      total: 0,
+      page: 1,
+      pageSize: 12
+    })
+
+    pluginsStore.installedSet = new Set(['plugin-1'])
+    pluginsStore.installedPlugins = [{ pluginId: 'plugin-1', version: '1.0.0' }]
+    pluginsStore.updateMap = {
+      'plugin-1': { hasUpdate: true, version: '1.1.0' }
+    }
+
+    global.window.ztools = {
+      analytics: {
+        report: vi.fn()
+      },
+      trigger: {
+        list: vi.fn().mockResolvedValue([])
+      },
+      events: {
+        subscribe: vi.fn().mockResolvedValue(undefined),
+        on: vi.fn(),
+        off: vi.fn(),
+        emit: vi.fn().mockResolvedValue(undefined)
+      }
+    }
+
+    await router.push('/details/plugin-1')
+    await router.isReady()
+  })
+
+  afterEach(() => {
+    if (wrapper) {
+      wrapper.unmount()
+      wrapper = null
+    }
+    vi.clearAllMocks()
+  })
+
+  it('插件卸载后会清除详情页的有更新状态', async () => {
+    wrapper = mount(Details, {
+      global: {
+        plugins: [router],
+        stubs: {
+          PluginDetailHeader: {
+            props: ['isInstalled', 'hasUpdate'],
+            template:
+              '<div data-test=\"detail-header-state\">{{ isInstalled ? \"installed\" : \"not-installed\" }}|{{ hasUpdate ? \"update\" : \"no-update\" }}</div>'
+          },
+          PluginScreenshots: true,
+          PluginDescription: true,
+        }
+      }
+    })
+
+    await flushPromises()
+
+    expect(wrapper.get('[data-test=\"detail-header-state\"]').text()).toBe(
+      'installed|update'
+    )
+
+    pluginsStore.onUninstallComplete({ pluginId: 'plugin-1' })
+    await flushPromises()
+
+    expect(wrapper.get('[data-test=\"detail-header-state\"]').text()).toBe(
+      'not-installed|no-update'
+    )
+  })
+
+  it('安装完成后本地版本尚未刷新时不误显示更新', async () => {
+    pluginsStore.installedPlugins = []
+    pluginsStore.updateMap = {}
+    apiMocks.checkPluginUpdate.mockResolvedValue({
+      hasUpdate: true,
+      version: '1.0.0'
+    })
+
+    wrapper = mount(Details, {
+      global: {
+        plugins: [router],
+        stubs: {
+          PluginDetailHeader: {
+            props: ['isInstalled', 'hasUpdate'],
+            template:
+              '<div data-test=\"detail-header-state\">{{ isInstalled ? \"installed\" : \"not-installed\" }}|{{ hasUpdate ? \"update\" : \"no-update\" }}</div>'
+          },
+          PluginScreenshots: true,
+          PluginDescription: true,
+        }
+      }
+    })
+
+    await flushPromises()
+
+    expect(apiMocks.checkPluginUpdate).not.toHaveBeenCalled()
+    expect(wrapper.get('[data-test=\"detail-header-state\"]').text()).toBe(
+      'installed|no-update'
+    )
+  })
+
+  it('开源版详情页只有「详情」Tab，不显示留言入口，切到不存在的 Tab 不生效', async () => {
+    apiMocks.getPluginDetails.mockResolvedValueOnce({
+      pluginId: 'plugin-1',
+      name: 'Plugin 1',
+      version: '1.0.0',
+      // 即使插件数据里带了留言数，开源版也不显示留言入口
+      commentsCount: 3,
+      screenshots: [],
+      changelogs: [{ id: 1, version: '1.0.0', changes: 'x' }]
+    })
+
+    wrapper = mount(Details, {
+      global: {
+        plugins: [router],
+        stubs: {
+          PluginDetailHeader: {
+            props: ['commentsCount'],
+            emits: ['show-comments'],
+            template:
+              '<button data-test="comments-action" @click="$emit(\'show-comments\')">{{ commentsCount === null ? "none" : commentsCount }}</button>'
+          },
+          PluginScreenshots: true,
+          PluginDescription: { template: '<div data-test="description-panel"></div>' }
+        }
+      }
+    })
+    await flushPromises()
+
+    expect(wrapper.findAll('.tab-btn').map((b) => b.text())).toEqual(['详情'])
+    expect(wrapper.get('[data-test="comments-action"]').text()).toBe('none')
+
+    // 头部误发「查看留言」或外部切换到不存在的 Tab：保持在详情，不报错
+    await wrapper.get('[data-test="comments-action"]').trigger('click')
+    wrapper.vm.handleTabChange('comments')
+    await flushPromises()
+    expect(wrapper.find('[data-test="description-panel"]').exists()).toBe(true)
+  })
+
+  it('创建桌面快捷方式期间忽略重复请求', async () => {
+    let resolveShortcut
+    apiMocks.createShortcut.mockImplementationOnce(
+      () => new Promise((resolve) => {
+        resolveShortcut = resolve
+      })
+    )
+
+    wrapper = mount(Details, {
+      global: {
+        plugins: [router],
+        stubs: {
+          PluginDetailHeader: {
+            props: ['creatingShortcut'],
+            template:
+              '<div data-test="shortcut-state">{{ creatingShortcut ? "creating" : "idle" }}</div>'
+          },
+          PluginScreenshots: true,
+          PluginDescription: true,
+        }
+      }
+    })
+    await flushPromises()
+
+    const firstCall = wrapper.vm.createShortcut()
+    const duplicateCall = wrapper.vm.createShortcut()
+    await duplicateCall
+
+    expect(apiMocks.createShortcut).toHaveBeenCalledTimes(1)
+    expect(wrapper.get('[data-test="shortcut-state"]').text()).toBe('creating')
+
+    resolveShortcut({ success: true })
+    await firstCall
+    await flushPromises()
+
+    expect(wrapper.get('[data-test="shortcut-state"]').text()).toBe('idle')
+    expect(toastSpies.toastSuccess).toHaveBeenCalledWith('桌面快捷方式已生成')
+  })
+
+  it('开源版没有账号：安装不要求登录，直接安装', async () => {
+    pluginsStore.installPlugin = vi.fn().mockResolvedValue(undefined)
+    wrapper = mount(Details, {
+      global: {
+        plugins: [router],
+        stubs: {
+          PluginDetailHeader: true,
+          PluginScreenshots: true,
+          PluginDescription: true
+        }
+      }
+    })
+    await flushPromises()
+
+    await wrapper.vm.downloadPlugin()
+
+    expect(toastSpies.toastError).not.toHaveBeenCalledWith('请先登录后下载插件')
+    expect(pluginsStore.installPlugin).toHaveBeenCalledWith('plugin-1', { autoOpen: true })
+    expect(toastSpies.toastSuccess).toHaveBeenCalledWith('插件安装完成')
+    // 开源版不上报使用统计（详情页访问、点击安装都不上报）
+    expect(window.ztools.analytics.report).not.toHaveBeenCalled()
+  })
+
+  it('[故障] 开源版收藏返回 401 时按普通失败提示，不走登录流程', async () => {
+    pluginsStore.toggleFavorite = vi.fn().mockRejectedValue(Object.assign(new Error('Unauthorized'), { status: 401 }))
+    wrapper = mount(Details, {
+      global: {
+        plugins: [router],
+        stubs: { PluginDetailHeader: true, PluginScreenshots: true, PluginDescription: true }
+      }
+    })
+    await flushPromises()
+
+    await wrapper.vm.toggleFavorite()
+
+    expect(toastSpies.toastError).toHaveBeenCalledWith('操作失败: Unauthorized')
+    expect(toastSpies.toastWarning).not.toHaveBeenCalledWith('Unauthorized')
+  })
+
+  it('开源版安装失败时提示真实原因，不弹登录框', async () => {
+    pluginsStore.installPlugin = vi.fn().mockRejectedValue(
+      Object.assign(new Error('插件市场未收录该插件或缺少下载信息'), { code: 'PLUGIN_NOT_IN_CATALOG' })
+    )
+    wrapper = mount(Details, {
+      global: {
+        plugins: [router],
+        stubs: { PluginDetailHeader: true, PluginScreenshots: true, PluginDescription: true }
+      }
+    })
+    await flushPromises()
+
+    await wrapper.vm.downloadPlugin()
+
+    expect(toastSpies.toastError).toHaveBeenCalledWith('安装失败: 插件市场未收录该插件或缺少下载信息')
+  })
+
+  it('打开随包内置插件 (bundledPlugin 如 json-format) 详情页时首帧同步直出，不闪骨架屏且不请求远程详情接口', async () => {
+    pluginsStore.installedSet = new Set()
+    await router.push('/details/json-format')
+
+    wrapper = mount(Details, {
+      global: {
+        plugins: [router],
+        stubs: {
+          PluginDetailHeader: {
+            props: ['plugin', 'isInstalled'],
+            template:
+              '<div data-test="bundled-detail-header">{{ plugin?.name }}|{{ isInstalled ? "installed" : "not-installed" }}</div>'
+          },
+          PluginScreenshots: true,
+          PluginDescription: true,
+        }
+      }
+    })
+
+    // 首帧（无需等待 flushPromises）即已渲染详情头部，不闪现 .skeleton-container
+    expect(wrapper.find('.skeleton-container').exists()).toBe(false)
+    expect(wrapper.get('[data-test="bundled-detail-header"]').text()).toBe(
+      'JSON 格式化|installed'
+    )
+    expect(apiMocks.getPluginDetails).not.toHaveBeenCalled()
+  })
+})
+

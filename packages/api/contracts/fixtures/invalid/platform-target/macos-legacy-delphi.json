@@ -1,0 +1,6 @@
+{
+  "id": "invalid-macos-legacy-delphi",
+  "platform": "macos",
+  "runtime": "legacy-delphi",
+  "arch": "arm64"
+}

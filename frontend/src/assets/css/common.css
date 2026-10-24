@@ -1,0 +1,366 @@
+/* ===== ZTools Frontend 主题变量 =====
+   统一的设计 Token，支持亮色/暗黑模式切换
+   颜色全部引用 theme.css 的 --rc-* 积木 Z × 余烬橙标记，不再硬编码
+   使用方式：在样式中引用 var(--zt-xxx) 变量
+*/
+
+:root {
+  /* ===== 基础背景色 ===== */
+  --zt-bg: var(--rc-canvas);
+  --zt-bg-secondary: var(--rc-surface-subtle);
+  --zt-bg-elevated: var(--rc-surface);
+  --zt-bg-hover: var(--rc-surface-hover);
+  --zt-bg-active: var(--rc-surface-active);
+
+  /* ===== 文字颜色 (Ant Design 标准) ===== */
+  --zt-text: var(--rc-text-primary);
+  --zt-text-secondary: var(--rc-text-muted);
+  --zt-text-disabled: var(--rc-text-faint);
+
+  /* ===== 主题色 (Ant Design 标准) ===== */
+  --zt-primary: var(--rc-accent);
+  --zt-primary-hover: var(--rc-accent-hover);
+  --zt-primary-active: var(--rc-accent-hover);
+  --zt-primary-bg: var(--rc-accent-subtle);
+  --zt-primary-border: rgba(255, 107, 61, 0.35);
+
+  /* ===== 状态色 (Ant Design 标准) ===== */
+  --zt-success: var(--rc-success);
+  --zt-success-bg: var(--rc-success-subtle);
+  --zt-warning: var(--rc-warning);
+  --zt-warning-bg: var(--rc-warning-subtle);
+  --zt-error: var(--rc-error);
+  --zt-error-bg: var(--rc-error-subtle);
+  --zt-info: var(--rc-h-slate-fg);
+  --zt-info-bg: var(--rc-h-slate-bg);
+
+  /* ===== 边框 ===== */
+  --zt-border: var(--rc-border);
+  --zt-border-strong: var(--rc-border-highlight);
+
+  /* ===== 阴影 ===== */
+  --zt-shadow: 0 2px 8px rgba(0, 0, 0, 0.06);
+  --zt-shadow-strong: 0 4px 16px rgba(0, 0, 0, 0.12);
+
+  /* ===== 圆角 ===== */
+  --zt-radius-sm: 4px;
+  --zt-radius: 8px;
+  --zt-radius-lg: 12px;
+  --zt-radius-xl: 16px;
+
+  /* ===== 间距 ===== */
+  --zt-spacing-xs: 4px;
+  --zt-spacing-sm: 8px;
+  --zt-spacing: 16px;
+  --zt-spacing-lg: 24px;
+  --zt-spacing-xl: 32px;
+
+  /* ===== 过渡 ===== */
+  --zt-transition-fast: 0.15s ease;
+  --zt-transition: 0.3s ease;
+  --zt-transition-slow: 0.5s ease;
+
+  /* ===== 布局 ===== */
+  --zt-sidebar-width: 140px;
+  --zt-sidebar-collapsed-width: 64px;
+  --zt-header-height: 48px;
+
+  /* ===== 滚动条 - 更柔和的颜色 ===== */
+  --zt-scrollbar-thumb: rgba(0, 0, 0, 0.08);
+  --zt-scrollbar-thumb-hover: rgba(0, 0, 0, 0.15);
+  --zt-scrollbar-track: transparent;
+
+  /* ===== 兼容 plugin 变量名（供共用组件使用）===== */
+  --plugin-bg: var(--zt-bg);
+  --plugin-panel-bg: var(--zt-bg-elevated);
+  --plugin-text: var(--zt-text);
+  --plugin-text-secondary: var(--zt-text-secondary);
+  --plugin-text-disabled: var(--zt-text-disabled);
+  --plugin-primary: var(--zt-primary);
+  --plugin-primary-hover: var(--zt-primary-hover);
+  --plugin-primary-active: var(--zt-primary-active);
+  --plugin-success: var(--zt-success);
+  --plugin-warning: var(--zt-warning);
+  --plugin-error: var(--zt-error);
+  --plugin-info: var(--zt-info);
+  --plugin-border: var(--zt-border);
+  --plugin-border-strong: var(--zt-border-strong);
+  --plugin-shadow: var(--zt-shadow);
+  --plugin-shadow-strong: var(--zt-shadow-strong);
+  --plugin-radius: var(--zt-radius);
+  --plugin-radius-sm: var(--zt-radius-sm);
+  --plugin-radius-lg: var(--zt-radius-lg);
+  --plugin-spacing: var(--zt-spacing);
+  --plugin-spacing-sm: var(--zt-spacing-sm);
+  --plugin-spacing-lg: var(--zt-spacing-lg);
+}
+
+/* ===== 暗黑模式变量覆盖 (与插件保持一致) ===== */
+.dark {
+  /* 基础背景色 - 与插件统一 */
+  --zt-bg: var(--rc-canvas);
+  --zt-bg-secondary: var(--rc-surface-subtle);
+  --zt-bg-elevated: var(--rc-surface);
+  --zt-header-bg: var(--rc-head);
+  --zt-bg-hover: var(--rc-surface-hover);
+  --zt-bg-active: var(--rc-surface-active);
+
+  /* 文字颜色 - 与插件统一 */
+  --zt-text: var(--rc-text-primary);
+  --zt-text-secondary: var(--rc-text-muted);
+  --zt-text-disabled: var(--rc-text-faint);
+
+  /* 主题色 - 与插件统一 */
+  --zt-primary: var(--rc-accent);
+  --zt-primary-hover: var(--rc-accent-hover);
+  --zt-primary-active: var(--rc-accent-hover);
+  --zt-primary-bg: var(--rc-accent-subtle);
+  --zt-primary-border: rgba(255, 107, 61, 0.35);
+
+  /* 状态色 - 与插件统一 */
+  --zt-success: var(--rc-success);
+  --zt-success-bg: var(--rc-success-subtle);
+  --zt-warning: var(--rc-warning);
+  --zt-warning-bg: var(--rc-warning-subtle);
+  --zt-error: var(--rc-error);
+  --zt-error-bg: var(--rc-error-subtle);
+  --zt-info: var(--rc-h-slate-fg);
+  --zt-info-bg: var(--rc-h-slate-bg);
+
+  /* 边框 - 与插件统一 */
+  --zt-border: var(--rc-border);
+  --zt-border-strong: var(--rc-border-highlight);
+
+  /* 阴影 - 暗黑模式下淡化 */
+  --zt-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
+  --zt-shadow-strong: 0 4px 16px rgba(0, 0, 0, 0.2);
+
+  /* 滚动条 - 暗黑模式 */
+  --zt-scrollbar-thumb: rgba(255, 255, 255, 0.1);
+  --zt-scrollbar-thumb-hover: rgba(255, 255, 255, 0.2);
+}
+
+/* ===== 全局滚动条美化 - 简洁风格 ===== */
+
+/* Firefox */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--zt-scrollbar-thumb) transparent;
+}
+
+/* Webkit (Chrome, Edge, Safari) */
+*::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+*::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+*::-webkit-scrollbar-thumb {
+  background: var(--zt-scrollbar-thumb);
+  border-radius: 3px;
+  min-height: 30px;
+}
+
+*::-webkit-scrollbar-thumb:hover {
+  cursor: grab;
+}
+
+*::-webkit-scrollbar-thumb:active {
+  cursor: grabbing;
+}
+
+*::-webkit-scrollbar-corner {
+  background: transparent;
+}
+
+/* ===== 通用工具类 ===== */
+
+/* 面板/卡片 */
+.zt-panel {
+  background-color: var(--zt-bg-elevated);
+  border-radius: var(--zt-radius);
+  border: 1px solid var(--zt-border);
+  box-shadow: var(--zt-shadow);
+  transition: all var(--zt-transition);
+}
+
+.zt-panel-hover:hover {
+  border-color: var(--zt-primary);
+  box-shadow: var(--zt-shadow-strong);
+  transform: translateY(-2px);
+}
+
+/* 状态徽章 */
+.zt-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 20px;
+  height: 20px;
+  padding: 0 6px;
+  font-size: 12px;
+  line-height: 20px;
+  border-radius: 10px;
+  background-color: var(--zt-primary);
+  color: var(--rc-accent-contrast);
+  font-weight: 500;
+}
+
+.zt-badge-success {
+  background-color: var(--zt-success);
+}
+
+.zt-badge-warning {
+  background-color: var(--zt-warning);
+  color: var(--rc-text-inverse);
+}
+
+.zt-badge-error {
+  background-color: var(--zt-error);
+}
+
+/* 分隔线 */
+.zt-divider {
+  height: 1px;
+  margin: var(--zt-spacing) 0;
+  background-color: var(--zt-border);
+  border: none;
+}
+
+/* 文本省略 */
+.zt-ellipsis {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.zt-ellipsis-2 {
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+/* 加载状态 */
+.zt-loading {
+  position: relative;
+  pointer-events: none;
+  opacity: 0.6;
+}
+
+.zt-loading::after {
+  content: '';
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 20px;
+  height: 20px;
+  margin: -10px 0 0 -10px;
+  border: 2px solid var(--zt-primary);
+  border-radius: 50%;
+  border-top-color: transparent;
+  animation: zt-spin 0.8s linear infinite;
+}
+
+@keyframes zt-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* 禁用状态 */
+.zt-disabled {
+  cursor: not-allowed !important;
+  opacity: 0.5;
+  pointer-events: none;
+}
+
+/* ===== 分页组件样式 - 柔和圆角风格 ===== */
+
+/* 分页容器 */
+.ant-pagination {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+/* 分页项：全部引用主题标记，亮/暗模式自动切换 */
+.ant-pagination .ant-pagination-item,
+.ant-pagination .ant-pagination-prev,
+.ant-pagination .ant-pagination-next,
+.ant-pagination .ant-pagination-jump-prev,
+.ant-pagination .ant-pagination-jump-next {
+  min-width: 32px;
+  height: 32px;
+  line-height: 32px;
+  border-radius: var(--rc-radius-md);
+  border: 1px solid transparent;
+  background: transparent;
+  transition: background-color 0.15s ease, color 0.15s ease;
+  margin: 0;
+}
+
+.ant-pagination .ant-pagination-item a {
+  color: var(--rc-text-muted);
+  font-weight: 500;
+  font-size: 13px;
+}
+
+.ant-pagination .ant-pagination-item:hover,
+.ant-pagination .ant-pagination-prev:hover,
+.ant-pagination .ant-pagination-next:hover {
+  background: var(--rc-surface-hover);
+}
+
+.ant-pagination .ant-pagination-item:hover a,
+.ant-pagination .ant-pagination-prev:hover button,
+.ant-pagination .ant-pagination-next:hover button {
+  color: var(--rc-text-primary);
+}
+
+/* 当前页：选中底色 + 橙色文字，不做大面积橙色填充 */
+.ant-pagination .ant-pagination-item-active,
+.ant-pagination .ant-pagination-item-active:hover {
+  background: var(--rc-surface-active);
+  border-color: var(--rc-border-highlight);
+}
+
+.ant-pagination .ant-pagination-item-active a,
+.ant-pagination .ant-pagination-item-active:hover a {
+  color: var(--rc-accent-text) !important;
+  font-weight: 600;
+}
+
+.ant-pagination .ant-pagination-prev button,
+.ant-pagination .ant-pagination-next button {
+  color: var(--rc-text-muted);
+}
+
+.ant-pagination .ant-pagination-disabled,
+.ant-pagination .ant-pagination-disabled:hover {
+  background: transparent;
+  cursor: not-allowed;
+}
+
+.ant-pagination .ant-pagination-disabled button {
+  color: var(--rc-text-faint) !important;
+  opacity: 0.5;
+}
+
+.ant-pagination .ant-pagination-jump-prev .ant-pagination-item-ellipsis,
+.ant-pagination .ant-pagination-jump-next .ant-pagination-item-ellipsis {
+  color: var(--rc-text-faint);
+}
+
+.ant-pagination.ant-pagination-mini .ant-pagination-item,
+.ant-pagination.ant-pagination-mini .ant-pagination-prev,
+.ant-pagination.ant-pagination-mini .ant-pagination-next,
+.ant-pagination.ant-pagination-mini .ant-pagination-jump-prev,
+.ant-pagination.ant-pagination-mini .ant-pagination-jump-next {
+  min-width: 28px;
+  height: 28px;
+  line-height: 28px;
+}

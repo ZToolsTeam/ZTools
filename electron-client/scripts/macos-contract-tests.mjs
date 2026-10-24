@@ -1,0 +1,81 @@
+import fs from 'node:fs'
+import path from 'node:path'
+
+export const macContractScripts = Object.freeze([
+  'scripts/test-sandbox-preload-bundle.mjs',
+  'scripts/test-build-macos-vision.mjs',
+  'scripts/test-build-macos-native-host.mjs',
+  'scripts/test-macos-native-worker-key-source.mjs',
+  'scripts/test-reference-image-functions.mjs',
+  'scripts/test-build-macos-clipboard.mjs',
+  'scripts/test-build-macos-path-access.mjs',
+  'scripts/test-build-windows-path-access.mjs',
+  'scripts/test-macos-apfs-fixtures.mjs',
+  'scripts/test-macos-path-names-apfs.mjs',
+  'scripts/test-macos-bundle-version.mjs',
+  'scripts/test-macos-plugin-baseline.mjs',
+  'scripts/test-macos-plugin-coverage.mjs',
+  'scripts/test-macos-app-integration.mjs',
+  'scripts/test-normal-app-preboot-isolation.test.mjs',
+  'scripts/lib/windows-normal-app-harness.contract.test.mjs',
+  'scripts/lib/normal-app-plugin-install.contract.test.mjs',
+  'scripts/lib/windows-clipboard-metadata.contract.test.mjs',
+  'scripts/test-macos-normal-app-database-chain.test.mjs',
+  'scripts/test-macos-fixtures.mjs',
+  'scripts/test-macos-data-fixtures.mjs',
+  'scripts/test-macos-loopback-fixtures.mjs',
+  'scripts/test-macos-lifecycle-baseline.mjs',
+  'scripts/test-macos-owned-cleanup.mjs',
+  'scripts/test-macos-minimum-os.mjs',
+  'scripts/test-macos-preflight.mjs',
+  'scripts/test-macos-readonly-cases.mjs',
+  'scripts/test-macos-release.mjs',
+  'scripts/test-package-macos-universal.mjs',
+  'scripts/test-sign-macos.mjs',
+  'scripts/test-start-macos.mjs',
+  'scripts/test-test-run-options.mjs',
+  'scripts/test-verify-macos-universal.mjs',
+  // Portable source/fixture contracts only. Fixed build ZIP evidence uses separate explicit entries.
+  '../plugins/create-plugin/scripts/test-calculator-normal-app-contract.mjs',
+  '../plugins/create-plugin/scripts/test-calendar-normal-app-contract.mjs',
+  '../plugins/create-plugin/scripts/test-chinese-number-converter-normal-app-contract.mjs',
+  '../plugins/create-plugin/scripts/test-color-picker-normal-app-contract.mjs',
+  '../plugins/create-plugin/scripts/test-crypto-tool-normal-app-contract.mjs',
+  '../plugins/create-plugin/scripts/test-exchange-rate-normal-app-contract.mjs',
+  '../plugins/create-plugin/scripts/test-text-formatter-normal-app-contract.mjs',
+  '../plugins/create-plugin/scripts/test-timestamp-normal-app-contract.mjs',
+  '../plugins/create-plugin/scripts/test-timestamp-main-fault-contract.mjs',
+  '../plugins/create-plugin/scripts/test-todo-normal-app-contract.mjs',
+  '../plugins/create-plugin/scripts/test-todo-ui-actions-contract.mjs',
+  '../plugins/create-plugin/scripts/test-unit-converter-normal-app-contract.mjs',
+  '../plugins/create-plugin/scripts/test-uuid-generator-normal-app-contract.mjs',
+  '../plugins/create-plugin/scripts/test-world-clock-normal-app-contract.mjs',
+  '../plugins/create-plugin/scripts/test-json-formatter-normal-app-contract.mjs',
+  '../plugins/create-plugin/scripts/test-super-markdown-normal-app-contract.mjs',
+  '../plugins/create-plugin/scripts/test-base64image-normal-app-contract.mjs',
+  '../plugins/create-plugin/scripts/test-image-editor-normal-app-contract.mjs',
+  '../plugins/create-plugin/scripts/test-image-tool-normal-app-contract.mjs',
+  '../plugins/create-plugin/scripts/test-batch-text-convert-normal-app-contract.mjs',
+  '../plugins/create-plugin/scripts/test-file-compare-normal-app-contract.mjs',
+  '../plugins/create-plugin/scripts/test-translator-normal-app-contract.mjs'
+])
+
+// Entries outside electron-client (for example ../plugins/create-plugin) belong to internal-only
+// sibling projects. A public checkout does not contain them, so they are reported as NOT_RUN
+// instead of failing. When the sibling project exists, every entry runs exactly as before.
+export function externalProjectRoot(clientRoot, script) {
+  const segments = script.split('/')
+  if (segments[0] !== '..' || segments.length < 4) return null
+  return path.resolve(clientRoot, ...segments.slice(0, 3))
+}
+
+export function partitionMacContractScripts(clientRoot, scripts = macContractScripts, exists = fs.existsSync) {
+  const runnable = []
+  const notRun = []
+  for (const script of scripts) {
+    const projectRoot = externalProjectRoot(clientRoot, script)
+    if (projectRoot !== null && !exists(projectRoot)) notRun.push({ script, reason: `missing ${projectRoot}` })
+    else runnable.push(script)
+  }
+  return { runnable, notRun }
+}

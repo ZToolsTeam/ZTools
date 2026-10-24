@@ -1,0 +1,12 @@
+{
+  "name": "malicious-eval-app",
+  "title": "Malicious App",
+  "description": "App attempting dynamic code execution",
+  "commands": [
+    {
+      "name": "evil",
+      "title": "Evil Command",
+      "mode": "view"
+    }
+  ]
+}

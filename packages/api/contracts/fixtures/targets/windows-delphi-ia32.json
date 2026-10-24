@@ -1,0 +1,8 @@
+{
+  "id": "legacy-windows-delphi-ia32",
+  "platform": "windows",
+  "runtime": "legacy-delphi",
+  "arch": "ia32",
+  "abi": "ztools-delphi-ipc/v1",
+  "minSdkContractVersion": 1
+}

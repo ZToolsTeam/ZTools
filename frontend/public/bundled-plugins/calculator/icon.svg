@@ -1,0 +1,19 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100" width="100" height="100">
+  <defs>
+    <linearGradient id="calcGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#3b82f6"/>
+      <stop offset="100%" stop-color="#1d4ed8"/>
+    </linearGradient>
+  </defs>
+  <rect width="100" height="100" rx="22" fill="url(#calcGrad)"/>
+  <rect x="22" y="18" width="56" height="18" rx="4" fill="#ffffff" opacity="0.9"/>
+  <circle cx="32" cy="50" r="5" fill="#ffffff"/>
+  <circle cx="50" cy="50" r="5" fill="#ffffff"/>
+  <circle cx="68" cy="50" r="5" fill="#38bdf8"/>
+  <circle cx="32" cy="66" r="5" fill="#ffffff"/>
+  <circle cx="50" cy="66" r="5" fill="#ffffff"/>
+  <circle cx="68" cy="66" r="5" fill="#38bdf8"/>
+  <circle cx="32" cy="82" r="5" fill="#ffffff"/>
+  <circle cx="50" cy="82" r="5" fill="#ffffff"/>
+  <circle cx="68" cy="82" r="5" fill="#f59e0b"/>
+</svg>

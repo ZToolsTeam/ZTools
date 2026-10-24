@@ -1,0 +1,23 @@
+{
+  "contractVersion": 1,
+  "appVersion": "1.1.7.1",
+  "target": {
+    "id": "windows-electron-ia32",
+    "platform": "windows",
+    "runtime": "electron",
+    "arch": "ia32"
+  },
+  "os": {
+    "productVersion": "10.0.22631",
+    "arch": "x64"
+  },
+  "process": {
+    "arch": "ia32",
+    "translationMode": "compatibility"
+  },
+  "nativeHost": {
+    "state": "available",
+    "arch": "ia32",
+    "protocolVersion": 1
+  }
+}

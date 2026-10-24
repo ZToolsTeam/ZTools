@@ -1,0 +1,68 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ztools.cn/contracts/platform-target.schema.json",
+  "title": "ZTools Platform Runtime Target",
+  "description": "A syntactic target descriptor. It does not declare that a target is implemented or published.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["platform", "runtime", "arch"],
+  "properties": {
+    "id": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9-]*$"
+    },
+    "platform": {
+      "type": "string",
+      "enum": ["windows", "macos"]
+    },
+    "runtime": {
+      "type": "string",
+      "enum": ["electron", "legacy-delphi"]
+    },
+    "arch": {
+      "type": "string",
+      "enum": ["any", "ia32", "x64", "arm64", "universal"]
+    },
+    "abi": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "^[a-z][a-z0-9.-]*(?:/v|@)(?:0|[1-9][0-9]*)(?:\\.(?:0|[1-9][0-9]*)){0,2}$"
+    },
+    "minSdkContractVersion": {
+      "type": "integer",
+      "minimum": 1
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "type": "object",
+        "properties": {
+          "runtime": { "const": "legacy-delphi" }
+        },
+        "required": ["runtime"]
+      },
+      "then": {
+        "type": "object",
+        "properties": {
+          "platform": { "const": "windows" }
+        }
+      }
+    },
+    {
+      "if": {
+        "type": "object",
+        "properties": {
+          "platform": { "const": "macos" }
+        },
+        "required": ["platform"]
+      },
+      "then": {
+        "type": "object",
+        "properties": {
+          "arch": { "enum": ["any", "x64", "arm64", "universal"] }
+        }
+      }
+    }
+  ]
+}

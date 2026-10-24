@@ -1,0 +1,7 @@
+{
+  "id": "invalid-min-contract-version-type",
+  "platform": "macos",
+  "runtime": "electron",
+  "arch": "arm64",
+  "minSdkContractVersion": "2"
+}

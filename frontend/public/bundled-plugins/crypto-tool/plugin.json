@@ -1,0 +1,102 @@
+{
+  "id": "crypto-tool",
+  "name": "编码与加密",
+  "version": "1.1.1",
+  "description": "支持 Base64 / URL / Unicode / Hex 编码互转、MD5 / SHA 哈希计算、AES 加解密与 UUID 批量生成",
+  "author": "ZTools Team",
+  "entry": "dist/index.js",
+  "icon": "icon.svg",
+  "alias": "enc",
+  "permissions": [
+    "clipboard",
+    "crypto"
+  ],
+  "targets": [
+    {
+      "id": "windows-electron-any",
+      "platform": "windows",
+      "runtime": "electron",
+      "arch": "any"
+    },
+    {
+      "id": "macos-electron-any",
+      "platform": "macos",
+      "runtime": "electron",
+      "arch": "any"
+    }
+  ],
+  "nativeComponents": [],
+  "keywords": [
+    "md5",
+    "sha",
+    "sha256",
+    "hash",
+    "哈希",
+    "aes",
+    "hmac",
+    "加密",
+    "解密",
+    "base64",
+    "url编码",
+    "编码转换",
+    "unicode",
+    "uuid",
+    "guid"
+  ],
+  "features": [
+    {
+      "code": "codec-base64",
+      "explain": "Base64 编码与解码",
+      "mode": "view",
+      "cmds": [
+        "base64",
+        "base64解码",
+        "base64编码",
+        "编码转换",
+        "文本转码"
+      ]
+    },
+    {
+      "code": "codec-url",
+      "explain": "URL 编码与解码 (encodeURI)",
+      "mode": "view",
+      "cmds": [
+        "url编码",
+        "url解码",
+        "urlencode",
+        "urldecode",
+        "转义"
+      ]
+    },
+    {
+      "code": "hash-digest",
+      "explain": "计算 MD5 / SHA256 哈希摘要",
+      "mode": "view",
+      "cmds": [
+        "md5",
+        "sha1",
+        "sha256",
+        "sha512",
+        "哈希",
+        "散列",
+        "摘要",
+        "hash"
+      ]
+    },
+    {
+      "code": "cipher-aes",
+      "explain": "AES 对称加密与解密",
+      "mode": "view",
+      "cmds": [
+        "aes",
+        "aes加密",
+        "aes解密",
+        "hmac",
+        "加密解密"
+      ]
+    }
+  ],
+  "category": [
+    "开发工具"
+  ]
+}

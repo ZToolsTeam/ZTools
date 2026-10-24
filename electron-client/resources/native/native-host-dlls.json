@@ -1,0 +1,95 @@
+[
+  {
+    "pluginId": "clipboard-manager",
+    "dllId": "ClipboardManagerPlugin",
+    "source": "bin",
+    "path": "lib/ClipboardManagerPlugin.dll",
+    "functions": [
+      "GetStatus",
+      "PasteToPreviousEditor"
+    ]
+  },
+  {
+    "pluginId": "batch-audio",
+    "dllId": "BatchAudioPlugin",
+    "source": "plugins",
+    "path": "lib/BatchAudioPlugin.dll",
+    "functions": [
+      "GetTaskStatus",
+      "GetTaskList",
+      "CancelTask",
+      "GetFileInfo",
+      "BatchConvertFormat",
+      "BatchNormalizeVolume",
+      "BatchLoudnorm",
+      "BatchTrimAudio",
+      "BatchExtractSegment",
+      "BatchMergeAudio",
+      "BatchAddWatermark",
+      "BatchFadeInOut",
+      "BatchEqualizer",
+      "BatchCompressor",
+      "BatchDenoise",
+      "BatchDetectSilence",
+      "BatchSetMetadata"
+    ]
+  },
+  {
+    "pluginId": "batch-video",
+    "dllId": "BatchVideoPlugin",
+    "source": "plugins",
+    "path": "lib/BatchVideoPlugin.dll",
+    "functions": [
+      "BatchCompressVideo",
+      "BatchTrimVideo",
+      "BatchExtractSegment",
+      "BatchExtractClips",
+      "BatchCropByRatio",
+      "BatchConvertFormat",
+      "BatchConvertToGif",
+      "BatchAddWatermark",
+      "BatchResizeVideo",
+      "BatchSetThumbnail",
+      "BatchSpeedUpVideo",
+      "BatchFlipVideo",
+      "BatchRotateVideo",
+      "BatchMergeVideo",
+      "BatchRemoveAudio",
+      "BatchExtractAudio",
+      "BatchExtractFrames",
+      "GetTaskStatus",
+      "GetTaskList",
+      "CancelTask",
+      "GetFileInfo",
+      "GenerateThumbnail",
+      "SaveWatermarkSettings",
+      "LoadWatermarkSettings"
+    ]
+  },
+  {
+    "pluginId": "batch-media-report",
+    "dllId": "BatchAudioPlugin",
+    "source": "plugins",
+    "path": "lib/BatchAudioPlugin.dll",
+    "functions": [
+      "GetFileInfo"
+    ]
+  },
+  {
+    "pluginId": "record",
+    "dllId": "RecordPlugin",
+    "source": "plugins",
+    "path": "lib/RecordPlugin.dll",
+    "functions": [
+      "StartRecord",
+      "StopRecord",
+      "GetRecordingProgress",
+      "GetMediaInfo",
+      "ConvertMedia",
+      "GetConvertTaskStatus",
+      "CancelConvertTask",
+      "ExtractFrame",
+      "ConvertToGif"
+    ]
+  }
+]

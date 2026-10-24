@@ -1,0 +1,40 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>F11 TEST ONLY Process Chain</title>
+    <style>
+      body { font: 14px sans-serif; margin: 20px; color: #20242a; }
+      label { display: block; margin: 8px 0; }
+      input, select { box-sizing: border-box; width: 100%; padding: 6px; }
+      button { margin: 4px; padding: 8px 12px; }
+      pre { min-height: 72px; white-space: pre-wrap; overflow-wrap: anywhere; background: #f3f5f7; padding: 10px; }
+    </style>
+  </head>
+  <body>
+    <h1>TEST ONLY — F11 Windows process chain</h1>
+    <label>Executable path <input id="exe-path" autocomplete="off" /></label>
+    <label>Mode <select id="mode"><option value="hold">bounded hold</option><option value="exit">delayed exit</option></select></label>
+    <label>Duration (ms) <input id="duration" type="number" value="110000" /></label>
+    <label>Exit code <input id="exit-code" type="number" value="23" /></label>
+    <label>Main PID <input id="main-pid" type="number" /></label>
+    <label>Fixture PID <input id="fixture-pid" type="number" value="0" /></label>
+    <label>Target PID <input id="pid" type="number" /></label>
+    <label>Wait timeout (ms) <input id="timeout" type="number" value="600" /></label>
+    <div>
+      <button data-action="choose-executable">Choose executable</button>
+      <button data-action="start">Start fixture</button>
+      <button data-action="list">List processes</button>
+      <button data-action="info">Get Main info</button>
+      <button data-action="exists">Check target exists</button>
+      <button data-action="wait">Wait for target</button>
+      <button data-action="kill-owned">Kill owned target</button>
+      <button data-action="kill-main">Attempt Main kill</button>
+    </div>
+    <pre id="result" data-sequence="0">{"ready":false}</pre>
+    <script src="ztools://web/sdk/ztools-api.js"></script>
+    <script src="ztools://web/sdk/plugin-sdk.js"></script>
+    <script src="ztools://plugins/f11-process-chain-test/app.js"></script>
+  </body>
+</html>

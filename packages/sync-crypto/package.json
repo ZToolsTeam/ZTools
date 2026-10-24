@@ -1,0 +1,35 @@
+{
+  "name": "@ztools/sync-crypto",
+  "version": "1.0.0",
+  "description": "ZTools 去中心化端到端加密同步引擎 (E2EE Sync Engine with Argon2id, AES-256-GCM, WebDAV & GitHub Gist)",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "src",
+    "README.md"
+  ],
+  "scripts": {
+    "build": "node ../../electron-client/node_modules/typescript/bin/tsc",
+    "test": "node --test tests/*.test.mjs"
+  },
+  "keywords": [
+    "ztools",
+    "e2ee",
+    "sync",
+    "crypto",
+    "argon2id",
+    "aes-256-gcm",
+    "webdav",
+    "gist"
+  ],
+  "author": "ZTools Team",
+  "license": "GPL-3.0-only"
+}

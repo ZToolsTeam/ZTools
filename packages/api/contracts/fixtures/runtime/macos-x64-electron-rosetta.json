@@ -1,0 +1,23 @@
+{
+  "contractVersion": 1,
+  "appVersion": "1.1.7.1",
+  "target": {
+    "platform": "macos",
+    "runtime": "electron",
+    "arch": "x64"
+  },
+  "os": {
+    "productVersion": "14.5",
+    "kernelVersion": "23.5.0",
+    "arch": "arm64"
+  },
+  "process": {
+    "arch": "x64",
+    "translationMode": "translated"
+  },
+  "nativeHost": {
+    "state": "not-applicable",
+    "arch": "unknown",
+    "protocolVersion": null
+  }
+}

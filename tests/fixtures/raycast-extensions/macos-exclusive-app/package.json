@@ -1,0 +1,16 @@
+{
+  "name": "macos-exclusive-app",
+  "title": "macOS AppleScript Controller",
+  "description": "Control macOS specific system events",
+  "platforms": ["macOS"],
+  "commands": [
+    {
+      "name": "trigger-applescript",
+      "title": "Trigger AppleScript",
+      "mode": "view"
+    }
+  ],
+  "dependencies": {
+    "run-applescript": "^7.0.0"
+  }
+}

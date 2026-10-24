@@ -1,0 +1,51 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ztools.cn/contracts/capability-record.schema.json",
+  "title": "ZTools Capability Record",
+  "description": "A read-only capability snapshot with implementation, caller authorization, and OS permission represented independently.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "contractVersion",
+    "target",
+    "capability",
+    "implementation",
+    "authorization",
+    "osPermission",
+    "revision"
+  ],
+  "properties": {
+    "contractVersion": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "target": {
+      "$ref": "https://ztools.cn/contracts/platform-target.schema.json"
+    },
+    "capability": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "^[a-z][a-z0-9]*(?:[.-][a-z0-9]+)*(?:\\.[a-z][a-z0-9]*(?:[.-][a-z0-9]+)*)+$"
+    },
+    "implementation": {
+      "type": "string",
+      "enum": ["supported", "unsupported", "unavailable"]
+    },
+    "authorization": {
+      "type": "string",
+      "enum": ["granted", "denied", "unknown"]
+    },
+    "osPermission": {
+      "type": "string",
+      "enum": ["not-required", "not-determined", "granted", "denied", "restricted", "unknown"]
+    },
+    "revision": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "reasonCode": {
+      "type": "string",
+      "pattern": "^[A-Z][A-Z0-9_]{0,63}$"
+    }
+  }
+}

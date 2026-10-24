@@ -1,0 +1,78 @@
+{
+  "id": "invoice-assistant",
+  "name": "发票助手",
+  "description": "自动识别 PDF/XML 电子发票金额与税号，支持重复发票查重、抬头校验、批量规范重命名与导出报销明细表",
+  "version": "1.1.1",
+  "author": "ZTools Team",
+  "entry": "dist/index.js",
+  "icon": "icon.svg",
+  "alias": "fp",
+  "category": [
+    "办公效率",
+    "文档处理"
+  ],
+  "keywords": [
+    "invoice",
+    "fapiao",
+    "reimbursement",
+    "pdf",
+    "csv",
+    "excel",
+    "发票",
+    "报销",
+    "电子发票",
+    "数电票"
+  ],
+  "features": [
+    {
+      "code": "invoice-reimburse",
+      "explain": "电子发票汇总与导出报销单",
+      "mode": "view",
+      "cmds": [
+        "发票报销",
+        "报销台账",
+        "发票汇总",
+        "导出报销单",
+        "数电票",
+        "电子发票"
+      ]
+    },
+    {
+      "code": "invoice-rename",
+      "explain": "电子发票批量规范重命名",
+      "mode": "view",
+      "cmds": [
+        "发票重命名",
+        "发票改名",
+        "归档重命名"
+      ]
+    },
+    {
+      "code": "invoice-travel",
+      "explain": "差旅交通与住宿票据筛选",
+      "mode": "view",
+      "cmds": [
+        "差旅发票",
+        "打车票",
+        "高铁票",
+        "交通发票",
+        "酒店发票"
+      ]
+    }
+  ],
+  "permissions": [
+    "fs",
+    "clipboard",
+    "shell"
+  ],
+  "requireAdmin": false,
+  "nativeComponents": [],
+  "targets": [
+    {
+      "id": "windows-electron-any",
+      "platform": "windows",
+      "runtime": "electron",
+      "arch": "any"
+    }
+  ]
+}

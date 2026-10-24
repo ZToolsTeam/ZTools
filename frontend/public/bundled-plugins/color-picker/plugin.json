@@ -1,0 +1,70 @@
+{
+  "id": "color-picker",
+  "name": "取色与配色",
+  "version": "2.1.1",
+  "description": "支持 HEX / RGB / HSL / CMYK 色值实时互转、WCAG 无障碍对比度检测与常用色板收藏",
+  "author": "ZTools Team",
+  "entry": "dist/index.js",
+  "icon": "icon.svg",
+  "alias": "clr",
+  "permissions": [
+    "clipboard"
+  ],
+  "targets": [
+    {
+      "id": "windows-electron-any",
+      "platform": "windows",
+      "runtime": "electron",
+      "arch": "any"
+    },
+    {
+      "id": "macos-electron-any",
+      "platform": "macos",
+      "runtime": "electron",
+      "arch": "any"
+    }
+  ],
+  "nativeComponents": [],
+  "keywords": [
+    "color",
+    "颜色",
+    "取色",
+    "拾色器",
+    "hex",
+    "rgb",
+    "hsl",
+    "oklch",
+    "调色板"
+  ],
+  "features": [
+    {
+      "code": "convert-color",
+      "explain": "HEX / RGB / HSL / OKLCH 色值互转",
+      "mode": "view",
+      "cmds": [
+        "色值转换",
+        "颜色转换",
+        "hex转rgb",
+        "rgb转hex",
+        "oklch",
+        "cmyk",
+        "取色",
+        "拾色器"
+      ]
+    },
+    {
+      "code": "contrast-check",
+      "explain": "WCAG 无障碍颜色对比度检测",
+      "mode": "view",
+      "cmds": [
+        "对比度",
+        "无障碍对比度",
+        "wcag",
+        "配色方案"
+      ]
+    }
+  ],
+  "category": [
+    "设计工具"
+  ]
+}

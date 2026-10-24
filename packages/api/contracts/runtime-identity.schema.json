@@ -1,0 +1,167 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ztools.cn/contracts/runtime-identity.schema.json",
+  "title": "ZTools Runtime Identity",
+  "description": "Runtime-reported identity and independently observed OS, process, and native-host architecture.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["contractVersion", "appVersion", "target", "os", "process", "nativeHost"],
+  "properties": {
+    "contractVersion": {
+      "type": "integer",
+      "const": 1
+    },
+    "appVersion": {
+      "$ref": "https://ztools.cn/contracts/application-version.schema.json"
+    },
+    "target": {
+      "$ref": "https://ztools.cn/contracts/platform-target.schema.json"
+    },
+    "os": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["productVersion", "arch"],
+      "properties": {
+        "productVersion": {
+          "type": "string",
+          "minLength": 1
+        },
+        "kernelVersion": {
+          "type": "string",
+          "minLength": 1
+        },
+        "arch": {
+          "type": "string",
+          "enum": ["ia32", "x64", "arm64", "unknown"]
+        }
+      }
+    },
+    "process": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["arch", "translationMode"],
+      "properties": {
+        "arch": {
+          "type": "string",
+          "enum": ["ia32", "x64", "arm64", "unknown"]
+        },
+        "translationMode": {
+          "type": "string",
+          "enum": ["native", "translated", "compatibility", "not-applicable", "unknown"]
+        }
+      }
+    },
+    "nativeHost": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["state", "arch", "protocolVersion"],
+      "properties": {
+        "state": {
+          "type": "string",
+          "enum": ["not-applicable", "available", "unavailable", "unknown"]
+        },
+        "arch": {
+          "type": "string",
+          "enum": ["ia32", "x64", "arm64", "unknown"]
+        },
+        "protocolVersion": {
+          "type": ["integer", "null"],
+          "minimum": 1,
+          "maximum": 65535
+        }
+      }
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "type": "object",
+        "properties": {
+          "target": {
+            "type": "object",
+            "properties": {
+              "platform": { "const": "macos" }
+            },
+            "required": ["platform"]
+          }
+        },
+        "required": ["target"]
+      },
+      "then": {
+        "type": "object",
+        "properties": {
+          "os": {
+            "type": "object",
+            "properties": {
+              "arch": { "enum": ["x64", "arm64", "unknown"] }
+            }
+          },
+          "process": {
+            "type": "object",
+            "properties": {
+              "arch": { "enum": ["x64", "arm64", "unknown"] }
+            }
+          },
+          "nativeHost": {
+            "type": "object",
+            "properties": {
+              "arch": { "enum": ["x64", "arm64", "unknown"] }
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "type": "object",
+        "properties": {
+          "nativeHost": {
+            "type": "object",
+            "properties": {
+              "state": { "const": "available" }
+            },
+            "required": ["state"]
+          }
+        },
+        "required": ["nativeHost"]
+      },
+      "then": {
+        "type": "object",
+        "properties": {
+          "nativeHost": {
+            "type": "object",
+            "properties": {
+              "protocolVersion": { "type": "integer" }
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "type": "object",
+        "properties": {
+          "nativeHost": {
+            "type": "object",
+            "properties": {
+              "state": { "const": "not-applicable" }
+            },
+            "required": ["state"]
+          }
+        },
+        "required": ["nativeHost"]
+      },
+      "then": {
+        "type": "object",
+        "properties": {
+          "nativeHost": {
+            "type": "object",
+            "properties": {
+              "protocolVersion": { "const": null }
+            }
+          }
+        }
+      }
+    }
+  ]
+}

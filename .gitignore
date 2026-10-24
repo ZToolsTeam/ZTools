@@ -1,0 +1,60 @@
+# ---------------------------------------------------------------------------
+# 依赖与构建产物
+# ---------------------------------------------------------------------------
+node_modules/
+package-lock.json
+build/
+/bin/
+/dist/
+packages/*/dist/
+!frontend/public/bundled-plugins/**/dist/
+!frontend/public/bundled-plugins/**/dist/**
+out-test*/
+artifacts/
+**/artifacts/
+.vite/
+/.codegraph
+scratch/
+
+# 原生编译中间文件与大体积媒体文件
+*.pch
+*.pdb
+*.lib
+*.obj
+*.mp4
+*.m4a
+*.wav
+
+# ---------------------------------------------------------------------------
+# 图片：默认忽略，只保留仓库需要的图片
+# ---------------------------------------------------------------------------
+*.png
+*.jpg
+*.jpeg
+!assets/
+!assets/**
+!assets/screenshots/*.png
+!assets/screenshots/*.jpg
+!assets/screenshots/*.jpeg
+!electron-client/resources/app/app-icon.png
+!tests/fixtures/plugins/**/icon.png
+
+# ---------------------------------------------------------------------------
+# 本地环境变量（只提交 .env.example）
+# ---------------------------------------------------------------------------
+.env
+.env.*
+!.env.example
+
+# ---------------------------------------------------------------------------
+# 日志、编辑器与操作系统生成的文件
+# ---------------------------------------------------------------------------
+logs/
+*.log
+*.out.txt
+.vscode/
+.idea/
+.claude/
+.cursor/
+.DS_Store
+Thumbs.db

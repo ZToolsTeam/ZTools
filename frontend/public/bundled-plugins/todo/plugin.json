@@ -1,0 +1,36 @@
+{
+  "id": "todo",
+  "name": "待办清单",
+  "version": "1.0.2",
+  "description": "极简任务待办清单，回车快速添加任务，支持高优标记、到期提醒与完成状态筛选",
+  "author": "ZTools Team",
+  "entry": "dist/index.js",
+  "icon": "icon.svg",
+  "permissions": [
+    "clipboard"
+  ],
+  "targets": [
+    {
+      "id": "windows-electron-any",
+      "platform": "windows",
+      "runtime": "electron",
+      "arch": "any"
+    },
+    {
+      "id": "macos-electron-any",
+      "platform": "macos",
+      "runtime": "electron",
+      "arch": "any"
+    }
+  ],
+  "nativeComponents": [],
+  "keywords": [
+    "todo",
+    "待办",
+    "任务",
+    "清单"
+  ],
+  "category": [
+    "效率工具"
+  ]
+}

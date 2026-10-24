@@ -1,0 +1,78 @@
+{
+  "id": "archive-manager",
+  "name": "解压与压缩",
+  "description": "免解压直接预览压缩包内容、按需提取单个文件，支持 ZIP/7Z/RAR/TAR 智能解压与加密打包",
+  "version": "1.1.1",
+  "author": "ZTools Team",
+  "entry": "dist/index.js",
+  "icon": "icon.svg",
+  "alias": "zip",
+  "category": [
+    "文件管理",
+    "办公效率"
+  ],
+  "keywords": [
+    "zip",
+    "archive",
+    "unzip",
+    "extract",
+    "7z",
+    "rar",
+    "解压",
+    "压缩包",
+    "压缩包透视"
+  ],
+  "features": [
+    {
+      "code": "archive-inspect",
+      "explain": "透视压缩包与免解压提取",
+      "mode": "view",
+      "cmds": [
+        "解压",
+        "压缩包",
+        "透视压缩包",
+        "zip",
+        "7z",
+        "rar",
+        "查看压缩包"
+      ]
+    },
+    {
+      "code": "archive-docs",
+      "explain": "提取压缩包内办公文档",
+      "mode": "view",
+      "cmds": [
+        "提取文档",
+        "压缩包文档",
+        "提取合同",
+        "提取标书"
+      ]
+    },
+    {
+      "code": "archive-verify",
+      "explain": "压缩包密码检测与安全扫描",
+      "mode": "view",
+      "cmds": [
+        "压缩包加密",
+        "zip密码",
+        "安全扫描",
+        "校验压缩包"
+      ]
+    }
+  ],
+  "permissions": [
+    "fs",
+    "clipboard",
+    "shell"
+  ],
+  "requireAdmin": false,
+  "nativeComponents": [],
+  "targets": [
+    {
+      "id": "windows-electron-any",
+      "platform": "windows",
+      "runtime": "electron",
+      "arch": "any"
+    }
+  ]
+}

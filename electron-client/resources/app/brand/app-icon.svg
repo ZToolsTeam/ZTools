@@ -1,0 +1,21 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <!-- ZTools 应用图标：墨黑底板 + 积木 Z（24 网格，方块边长 6、间距 1、圆角 1.7），末块余烬橙带光晕 -->
+  <defs>
+    <linearGradient id="tile" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#232327"/>
+      <stop offset="1" stop-color="#141416"/>
+    </linearGradient>
+    <filter id="glowSoft" x="-150%" y="-150%" width="400%" height="400%"><feGaussianBlur stdDeviation="3.2"/></filter>
+    <filter id="glowCore" x="-100%" y="-100%" width="300%" height="300%"><feGaussianBlur stdDeviation="1.1"/></filter>
+  </defs>
+  <rect x="100" y="100" width="824" height="824" rx="186" fill="url(#tile)"/>
+  <rect x="100.5" y="100.5" width="823" height="823" rx="185.5" fill="none" stroke="#FFFFFF" stroke-opacity="0.08"/>
+  <g transform="translate(176 176) scale(28)">
+    <rect x="16" y="12.5" width="6" height="6" rx="1.7" fill="#FF6B3D" filter="url(#glowSoft)" opacity="0.7"/>
+    <rect x="16" y="12.5" width="6" height="6" rx="1.7" fill="#FF6B3D" filter="url(#glowCore)" opacity="0.9"/>
+    <rect x="2" y="5.5" width="6" height="6" rx="1.7" fill="#F2F2F0"/>
+    <rect x="9" y="5.5" width="6" height="6" rx="1.7" fill="#F2F2F0"/>
+    <rect x="9" y="12.5" width="6" height="6" rx="1.7" fill="#F2F2F0"/>
+    <rect x="16" y="12.5" width="6" height="6" rx="1.7" fill="#FF6B3D"/>
+  </g>
+</svg>

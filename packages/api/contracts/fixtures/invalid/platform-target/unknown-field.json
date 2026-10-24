@@ -1,0 +1,7 @@
+{
+  "id": "invalid-unknown-field",
+  "platform": "macos",
+  "runtime": "electron",
+  "arch": "arm64",
+  "host": "unknown"
+}

@@ -1,0 +1,38 @@
+{
+  "id": "base64image",
+  "name": "图片 Base64",
+  "version": "1.0.2",
+  "description": "图片文件或截图与 Base64 编码双向互转，支持一键复制 Data URL 或还原预览图片",
+  "author": "ZTools Team",
+  "entry": "dist/index.js",
+  "icon": "icon.svg",
+  "permissions": [
+    "clipboard"
+  ],
+  "targets": [
+    {
+      "id": "windows-electron-any",
+      "platform": "windows",
+      "runtime": "electron",
+      "arch": "any"
+    },
+    {
+      "id": "macos-electron-any",
+      "platform": "macos",
+      "runtime": "electron",
+      "arch": "any"
+    }
+  ],
+  "nativeComponents": [],
+  "keywords": [
+    "base64",
+    "图片",
+    "image",
+    "datauri",
+    "编码",
+    "解码"
+  ],
+  "category": [
+    "开发工具"
+  ]
+}

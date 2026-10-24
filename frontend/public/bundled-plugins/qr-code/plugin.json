@@ -1,0 +1,60 @@
+{
+  "id": "qr-code",
+  "name": "二维码生成",
+  "version": "2.1.1",
+  "description": "输入网址或文本实时生成高清二维码，支持生成 Wi-Fi 连网二维码、复制图片与导出 PNG",
+  "author": "ZTools Team",
+  "entry": "dist/index.js",
+  "icon": "icon.svg",
+  "alias": "qr",
+  "permissions": [
+    "clipboard"
+  ],
+  "targets": [
+    {
+      "id": "windows-electron-any",
+      "platform": "windows",
+      "runtime": "electron",
+      "arch": "any"
+    },
+    {
+      "id": "macos-electron-any",
+      "platform": "macos",
+      "runtime": "electron",
+      "arch": "any"
+    }
+  ],
+  "nativeComponents": [],
+  "keywords": [
+    "qr",
+    "qrcode",
+    "二维码",
+    "wifi"
+  ],
+  "features": [
+    {
+      "code": "qr-text",
+      "explain": "文本与链接生成二维码",
+      "mode": "view",
+      "cmds": [
+        "二维码",
+        "生成二维码",
+        "网址转二维码",
+        "qrcode"
+      ]
+    },
+    {
+      "code": "qr-wifi",
+      "explain": "生成 Wi-Fi 扫码连网二维码",
+      "mode": "view",
+      "cmds": [
+        "wifi二维码",
+        "连wifi二维码",
+        "无线网二维码"
+      ]
+    }
+  ],
+  "category": [
+    "效率工具"
+  ]
+}

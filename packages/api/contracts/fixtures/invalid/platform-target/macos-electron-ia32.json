@@ -1,0 +1,6 @@
+{
+  "id": "invalid-macos-electron-ia32",
+  "platform": "macos",
+  "runtime": "electron",
+  "arch": "ia32"
+}

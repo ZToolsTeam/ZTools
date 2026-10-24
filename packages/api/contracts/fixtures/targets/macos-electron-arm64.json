@@ -1,0 +1,7 @@
+{
+  "id": "macos-electron-arm64",
+  "platform": "macos",
+  "runtime": "electron",
+  "arch": "arm64",
+  "abi": "ztools-native-host/v1"
+}

@@ -1,0 +1,29 @@
+{
+  "name": "@ztools/plugins-spec",
+  "version": "1.0.0",
+  "description": "ZTools GitOps 插件规范、JSON Schema 校验与权限模型",
+  "type": "module",
+  "main": "./src/index.js",
+  "exports": {
+    ".": "./src/index.js",
+    "./schema": "./plugin.schema.json",
+    "./plugin.schema.json": "./plugin.schema.json"
+  },
+  "files": [
+    "plugin.schema.json",
+    "reserved-ids.json",
+    "src"
+  ],
+  "scripts": {
+    "test": "node --test tests/*.test.mjs"
+  },
+  "keywords": [
+    "ztools",
+    "plugin",
+    "spec",
+    "schema",
+    "gitops"
+  ],
+  "author": "ZTools Team",
+  "license": "MIT"
+}

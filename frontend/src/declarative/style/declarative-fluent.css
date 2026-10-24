@@ -1,0 +1,58 @@
+/**
+ * Fluent 2.0 / Mica 声明式渲染器沉浸式设计系统
+ */
+:root {
+  /* 声明式渲染器标记全部桥接到 theme.css，随亮 / 暗主题切换 */
+  --mica-bg: var(--rc-surface);
+  --mica-bg-solid: var(--rc-surface);
+  --mica-surface: var(--rc-surface-subtle);
+  --mica-surface-hover: var(--rc-surface-hover);
+  --mica-surface-active: var(--rc-surface-active);
+  --mica-border: var(--rc-border);
+  --mica-border-subtle: var(--rc-border-subtle);
+  --mica-accent: var(--rc-accent);
+  --mica-accent-subtle: var(--rc-accent-subtle);
+  --mica-text-primary: var(--rc-text-primary);
+  --mica-text-secondary: var(--rc-text-secondary);
+  --mica-text-muted: var(--rc-text-muted);
+  --mica-badge-bg: var(--rc-kbd-bg);
+}
+
+.declarative-mica-shell {
+  background: var(--mica-bg);
+  backdrop-filter: blur(28px) saturate(180%);
+  -webkit-backdrop-filter: blur(28px) saturate(180%);
+  border: 1px solid var(--mica-border);
+  box-shadow: var(--rc-shadow-lg);
+  color: var(--mica-text-primary);
+  font-family: var(--rc-font-sans);
+}
+
+/* 选中项：中性选中底色，标记方块由组件自身绘制，不再用整条彩色左边框 */
+.declarative-item-active {
+  background: var(--mica-surface-active);
+}
+
+.declarative-focus-ring:focus-visible {
+  outline: none;
+  box-shadow: var(--rc-focus-ring);
+}
+
+/* 自定义细腻滚动条 */
+.declarative-scrollbar::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+.declarative-scrollbar::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.declarative-scrollbar::-webkit-scrollbar-thumb {
+  background: var(--zt-scrollbar-thumb);
+  border-radius: 9999px;
+}
+
+.declarative-scrollbar::-webkit-scrollbar-thumb:hover {
+  background: var(--zt-scrollbar-thumb-hover);
+}

@@ -1,0 +1,65 @@
+{
+  "id": "timestamp",
+  "name": "时间戳转换",
+  "version": "1.1.1",
+  "description": "秒与毫秒时间戳、日期格式实时互转，支持全球城市世界时钟与多时区时差换算",
+  "author": "ZTools Team",
+  "entry": "dist/index.js",
+  "icon": "icon.svg",
+  "alias": "ts",
+  "permissions": [
+    "clipboard"
+  ],
+  "targets": [
+    {
+      "id": "windows-electron-any",
+      "platform": "windows",
+      "runtime": "electron",
+      "arch": "any"
+    },
+    {
+      "id": "macos-electron-any",
+      "platform": "macos",
+      "runtime": "electron",
+      "arch": "any"
+    }
+  ],
+  "nativeComponents": [],
+  "keywords": [
+    "timestamp",
+    "时间戳",
+    "unix",
+    "date",
+    "日期",
+    "时间",
+    "时区",
+    "世界时钟"
+  ],
+  "features": [
+    {
+      "code": "tz-convert",
+      "explain": "Unix 秒/毫秒时间戳与日期互转",
+      "mode": "view",
+      "cmds": [
+        "时间戳",
+        "时间戳转换",
+        "unix时间",
+        "毫秒转日期"
+      ]
+    },
+    {
+      "code": "tz-world",
+      "explain": "UTC 与全球时区时间对照",
+      "mode": "view",
+      "cmds": [
+        "世界时钟",
+        "时区转换",
+        "utc时间",
+        "全球时间"
+      ]
+    }
+  ],
+  "category": [
+    "开发工具"
+  ]
+}

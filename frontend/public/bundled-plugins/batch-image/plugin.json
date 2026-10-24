@@ -1,0 +1,113 @@
+{
+  "id": "batch-image",
+  "name": "图片压缩",
+  "description": "批量无损压缩 PNG/JPG/WebP 图片体积，支持政务报销 300KB 限额压缩、格式转换、清除拍摄隐私与多图合并转 PDF",
+  "version": "1.1.1",
+  "author": "ZTools Team",
+  "entry": "dist/index.js",
+  "icon": "icon.svg",
+  "alias": "img",
+  "category": [
+    "图像媒体",
+    "办公效率"
+  ],
+  "keywords": [
+    "image",
+    "compress",
+    "tinypng",
+    "png",
+    "jpg",
+    "webp",
+    "exif",
+    "图片压缩",
+    "格式转换",
+    "图片转PDF"
+  ],
+  "features": [
+    {
+      "code": "preset-lossless",
+      "explain": "图片智能无损压缩",
+      "mode": "view",
+      "cmds": [
+        "图片压缩",
+        "无损压缩",
+        "tinypng",
+        "压缩图片",
+        "图片瘦身"
+      ]
+    },
+    {
+      "code": "preset-gov-limit",
+      "explain": "政务/报销图片极限压缩 (≤300KB)",
+      "mode": "view",
+      "cmds": [
+        "证件照压缩",
+        "限制大小",
+        "300kb",
+        "政务上传",
+        "报销附图"
+      ]
+    },
+    {
+      "code": "preset-to-jpg",
+      "explain": "WebP/HEIC 批量转 JPG",
+      "mode": "view",
+      "cmds": [
+        "图片格式转换",
+        "webp转jpg",
+        "heic转jpg",
+        "png转jpg",
+        "转jpg"
+      ]
+    },
+    {
+      "code": "preset-strip-exif",
+      "explain": "清除图片 EXIF 隐私信息",
+      "mode": "view",
+      "cmds": [
+        "去exif",
+        "清除exif",
+        "抹除定位",
+        "图片脱敏",
+        "拍摄信息"
+      ]
+    },
+    {
+      "code": "preset-merge-pdf",
+      "explain": "多张图片合并转 PDF",
+      "mode": "view",
+      "cmds": [
+        "图片转pdf",
+        "多图转pdf",
+        "合成pdf",
+        "jpg转pdf"
+      ]
+    },
+    {
+      "code": "preset-doc-bw",
+      "explain": "合同扫描件黑白高对比增强",
+      "mode": "view",
+      "cmds": [
+        "扫描件增强",
+        "合同去灰底",
+        "黑白扫描",
+        "票据增强"
+      ]
+    }
+  ],
+  "permissions": [
+    "fs",
+    "clipboard",
+    "shell"
+  ],
+  "requireAdmin": false,
+  "nativeComponents": [],
+  "targets": [
+    {
+      "id": "windows-electron-any",
+      "platform": "windows",
+      "runtime": "electron",
+      "arch": "any"
+    }
+  ]
+}

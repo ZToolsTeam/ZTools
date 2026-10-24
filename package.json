@@ -1,0 +1,34 @@
+{
+  "name": "ztools",
+  "version": "1.1.8.2",
+  "private": true,
+  "description": "ZTools - 纯粹开源、免费极客、轻量宿主、极致性能的现代化双端效率中枢平台",
+  "type": "module",
+  "scripts": {
+    "postinstall": "node scripts/dev-bootstrap.mjs --install-only",
+    "dev": "node scripts/dev-bootstrap.mjs",
+    "start": "node scripts/dev-bootstrap.mjs",
+    "start:rebuild": "node scripts/dev-bootstrap.mjs --force-build",
+    "pretest": "node packages/declarative-ui/scripts/ensure-dist.mjs && npm --prefix packages/ai-mcp run build && npm --prefix packages/sync-crypto run build && node electron-client/node_modules/typescript/bin/tsc -p electron-client/tsconfig.json",
+    "test": "node --test tests/e2e-cross-module-resilience.test.mjs",
+    "test:quick": "npm --prefix electron-client run test:quick",
+    "scan-plugins": "node scripts/scan-plugin-security.mjs",
+    "release:promote": "node scripts/release-state.mjs promote",
+    "start:mac": "npm --prefix electron-client run start:mac",
+    "package:mac": "npm --prefix electron-client run package:app:darwin:universal --",
+    "package:mac:dmg": "npm --prefix electron-client run package:dmg:darwin --"
+  },
+  "workspaces": [
+    "packages/*"
+  ],
+  "keywords": [
+    "ztools",
+    "declarative-components",
+    "productivity",
+    "launcher",
+    "declarative-ui",
+    "mcp"
+  ],
+  "author": "ZTools Team",
+  "license": "GPL-3.0-only"
+}

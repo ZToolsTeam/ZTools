@@ -1,0 +1,27 @@
+{
+  "targets": [
+    {
+      "id": "windows-electron-any",
+      "platform": "windows",
+      "runtime": "electron",
+      "arch": "any"
+    },
+    {
+      "id": "macos-electron-any",
+      "platform": "macos",
+      "runtime": "electron",
+      "arch": "any"
+    }
+  ],
+  "nativeComponents": [],
+  "id": "unauthorized-fs",
+  "name": "未授权文件系统插件",
+  "version": "1.0.0",
+  "description": "测试代码调用未声明的 fs 模块",
+  "author": "attacker",
+  "entry": "index.html",
+  "icon": "icon.png",
+  "permissions": [
+    "clipboard"
+  ]
+}

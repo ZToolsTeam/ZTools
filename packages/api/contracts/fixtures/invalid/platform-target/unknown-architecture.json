@@ -1,0 +1,6 @@
+{
+  "id": "invalid-unknown-architecture",
+  "platform": "macos",
+  "runtime": "electron",
+  "arch": "mips"
+}

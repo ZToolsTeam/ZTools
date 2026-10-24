@@ -1,0 +1,90 @@
+{
+  "id": "translator",
+  "name": "划词翻译",
+  "description": "支持中英日韩法德多语种互译、英汉词典释义、商务邮件润色与代码变量命名转换",
+  "version": "1.1.1",
+  "author": "ZTools Team",
+  "entry": "dist/index.js",
+  "icon": "icon.svg",
+  "alias": "tr",
+  "category": [
+    "办公效率",
+    "文本工具"
+  ],
+  "keywords": [
+    "translate",
+    "translator",
+    "dictionary",
+    "english",
+    "chinese",
+    "翻译",
+    "划词翻译",
+    "词典",
+    "中英互译",
+    "商务英语"
+  ],
+  "features": [
+    {
+      "code": "translate-standard",
+      "explain": "中英日韩多语种互译",
+      "mode": "view",
+      "cmds": [
+        "翻译",
+        "划词翻译",
+        "中英互译",
+        "英文翻译",
+        "日文翻译",
+        "translate"
+      ]
+    },
+    {
+      "code": "translate-business",
+      "explain": "外贸与商务邮件得体润色",
+      "mode": "view",
+      "cmds": [
+        "商务英语",
+        "邮件润色",
+        "英文邮件",
+        "外贸翻译",
+        "商务翻译"
+      ]
+    },
+    {
+      "code": "translate-dict",
+      "explain": "专业术语词典与词根拆解",
+      "mode": "view",
+      "cmds": [
+        "词典",
+        "查词",
+        "单词",
+        "术语拆解",
+        "英汉词典",
+        "dictionary"
+      ]
+    },
+    {
+      "code": "translate-naming",
+      "explain": "代码变量命名翻译 (驼峰/下划线)",
+      "mode": "view",
+      "cmds": [
+        "变量命名",
+        "代码命名",
+        "驼峰命名",
+        "camelcase"
+      ]
+    }
+  ],
+  "permissions": [
+    "clipboard"
+  ],
+  "requireAdmin": false,
+  "nativeComponents": [],
+  "targets": [
+    {
+      "id": "windows-electron-any",
+      "platform": "windows",
+      "runtime": "electron",
+      "arch": "any"
+    }
+  ]
+}

@@ -1,0 +1,6 @@
+{
+  "id": "invalid-arch-type",
+  "platform": "macos",
+  "runtime": "electron",
+  "arch": 64
+}

@@ -1,0 +1,40 @@
+{
+  "name": "@ztools/api",
+  "version": "1.0.0",
+  "description": "ZTools 官方开放生态契约、Manifest Schema、TypeScript 类型声明与校验工具",
+  "type": "module",
+  "main": "types/index.d.ts",
+  "types": "types/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./types/index.d.ts"
+    },
+    "./types": {
+      "types": "./types/index.d.ts"
+    },
+    "./schema/plugin.schema.json": "./schema/plugin.schema.json",
+    "./contracts/*": "./contracts/*",
+    "./runtime/*": "./runtime/*"
+  },
+  "files": [
+    "types",
+    "schema",
+    "contracts",
+    "runtime",
+    "scripts"
+  ],
+  "scripts": {
+    "test:contracts": "node contracts/validate-contracts.mjs",
+    "test:validator": "node --test scripts/validate-plugin-targets.test.mjs",
+    "test": "npm run test:contracts && npm run test:validator"
+  },
+  "keywords": [
+    "ztools",
+    "plugin",
+    "api",
+    "types",
+    "schema"
+  ],
+  "author": "ZTools Team",
+  "license": "MIT"
+}

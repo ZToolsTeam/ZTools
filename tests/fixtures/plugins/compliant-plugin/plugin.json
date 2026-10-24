@@ -1,0 +1,41 @@
+{
+  "targets": [
+    {
+      "id": "windows-electron-any",
+      "platform": "windows",
+      "runtime": "electron",
+      "arch": "any"
+    },
+    {
+      "id": "macos-electron-any",
+      "platform": "macos",
+      "runtime": "electron",
+      "arch": "any"
+    }
+  ],
+  "nativeComponents": [],
+  "id": "text-counter",
+  "name": "字数统计工具",
+  "version": "1.2.0",
+  "description": "本地快速统计中文字数、词频与字符数的纯净小工具",
+  "author": "ztools-dev",
+  "category": [
+    "text",
+    "utility"
+  ],
+  "keywords": [
+    "counter",
+    "word"
+  ],
+  "entry": "index.html",
+  "icon": "icon.png",
+  "permissions": [
+    "clipboard"
+  ],
+  "window": {
+    "width": 600,
+    "height": 450,
+    "resizable": true,
+    "singleInstance": true
+  }
+}
