@@ -1,7 +1,7 @@
 {
   "id": "crypto-tool",
   "name": "编码与加密",
-  "version": "1.1.1",
+  "version": "1.1.2",
   "description": "支持 Base64 / URL / Unicode / Hex 编码互转、MD5 / SHA 哈希计算、AES 加解密与 UUID 批量生成",
   "author": "ZTools Team",
   "entry": "dist/index.js",
@@ -58,7 +58,7 @@
     },
     {
       "code": "codec-url",
-      "explain": "URL 编码与解码 (encodeURI)",
+      "explain": "URL 组件编码与解码 (encodeURIComponent)",
       "mode": "view",
       "cmds": [
         "url编码",
@@ -93,6 +93,34 @@
         "aes解密",
         "hmac",
         "加密解密"
+      ]
+    },
+    {
+      "code": "codec-unicode",
+      "explain": "Unicode 编码与解码",
+      "mode": "view",
+      "cmds": [
+        "unicode编码",
+        "unicode解码"
+      ]
+    },
+    {
+      "code": "codec-hex",
+      "explain": "UTF-8 Hex 编码与解码",
+      "mode": "view",
+      "cmds": [
+        "hex编码",
+        "hex解码"
+      ]
+    },
+    {
+      "code": "gen-uuid",
+      "explain": "UUID v4 批量生成",
+      "mode": "view",
+      "cmds": [
+        "uuid",
+        "guid",
+        "生成uuid"
       ]
     }
   ],

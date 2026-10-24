@@ -117,6 +117,9 @@ function run() {
   var se = Application("System Events");
   var procs = se.applicationProcesses.whose({ backgroundOnly: false })();
   var out = [];
+  var attempted = 0;
+  var succeeded = 0;
+  var lastErr = null;
   for (var i = 0; i < procs.length; i++) {
     var p = procs[i];
     var pName = "";
@@ -125,9 +128,11 @@ function run() {
       pName = p.name();
       pid = p.unixId();
     } catch (e) { continue; }
-    if (pName === "ZTools") continue;
+    if (pName === "ZTools" || pName === "Electron") continue;
+    attempted++;
     try {
       var wins = p.windows();
+      succeeded++;
       for (var j = 0; j < wins.length; j++) {
         var w = wins[j];
         var wTitle = "";
@@ -148,7 +153,16 @@ function run() {
           }
         });
       }
-    } catch (e) {}
+    } catch (e) {
+      lastErr = e;
+      var msg = String(e);
+      if (/assistive|not allowed|not authori[sz]ed|permission|辅助功能|权限|-1719|-25211|-1743/i.test(msg)) {
+        throw new Error("ACCESSIBILITY_PERMISSION_DENIED: " + msg);
+      }
+    }
+  }
+  if (attempted > 0 && succeeded === 0 && lastErr) {
+    throw new Error("ACCESSIBILITY_PERMISSION_DENIED: " + String(lastErr));
   }
   return JSON.stringify(out);
 }
@@ -200,7 +214,9 @@ function run() {
         }
       } catch (e) {}
     }
-  } catch (e) {}
+  } catch (e) {
+    throw new Error("ACCESSIBILITY_PERMISSION_DENIED: " + String(e));
+  }
   return JSON.stringify(results);
 }
 `.trim()
@@ -234,8 +250,8 @@ export class NavigationService {
       try {
         windows = await this.queryWindowsFromSystem()
       } catch (err) {
-        console.warn('[NavigationService] queryWindowsFromSystem failed, falling back to mock:', err)
-        windows = this.getFallbackWindows()
+        const detail = err instanceof Error && err.message ? `：${err.message}` : ''
+        throw new Error(`无法读取系统窗口列表，请检查辅助功能与自动化权限${detail}`, { cause: err })
       }
     }
 
@@ -407,8 +423,8 @@ export class NavigationService {
             acronym: pinyin.slice(0, 4)
           }
         })
-      } catch {
-        items = this.getFallbackMenuItems()
+      } catch (error) {
+        throw new Error('无法读取应用菜单，请检查辅助功能与自动化权限', { cause: error })
       }
     } else if (this.platform === 'win32') {
       try {
@@ -465,15 +481,9 @@ export class NavigationService {
             }
           )
         }
-      } catch {
-        items = this.getFallbackMenuItems()
+      } catch (error) {
+        throw new Error('无法读取应用菜单，请检查辅助功能与自动化权限', { cause: error })
       }
-    } else {
-      items = this.getFallbackMenuItems()
-    }
-
-    if (items.length === 0) {
-      items = this.getFallbackMenuItems()
     }
 
     if (!search || !search.trim()) {
@@ -713,46 +723,6 @@ function run(argv) {
     this.cachedSystemWindows = mapped
     this.lastWindowsQueryAt = Date.now()
     return mapped
-  }
-
-  private getFallbackWindows(): WindowItemInfo[] {
-    return [
-      { hwnd: 1001, title: 'Visual Studio Code', processName: 'Code', processId: 1204, pinyin: 'visualstudiocode', acronym: 'vsc' },
-      { hwnd: 1002, title: 'Google Chrome', processName: 'chrome', processId: 3508, pinyin: 'googlechrome', acronym: 'gc' },
-      { hwnd: 1003, title: 'Terminal', processName: 'Terminal', processId: 7812, pinyin: 'terminal', acronym: 'term' }
-    ]
-  }
-
-  private getFallbackMenuItems(): MenuItemInfo[] {
-    return [
-      {
-        id: 'menu-file-new-window',
-        title: '新建窗口 (New Window)',
-        appName: 'Finder',
-        path: ['File', 'New Finder Window'],
-        shortcut: 'Cmd+N',
-        pinyin: 'newfinderwindowxinjianchuangkou',
-        acronym: 'nfw'
-      },
-      {
-        id: 'menu-edit-copy',
-        title: '拷贝 (Copy)',
-        appName: 'Finder',
-        path: ['Edit', 'Copy'],
-        shortcut: 'Cmd+C',
-        pinyin: 'editcopykaobei',
-        acronym: 'ec'
-      },
-      {
-        id: 'menu-window-minimize',
-        title: '最小化 (Minimize)',
-        appName: 'Finder',
-        path: ['Window', 'Minimize'],
-        shortcut: 'Cmd+M',
-        pinyin: 'windowminimizezuixiaohua',
-        acronym: 'wm'
-      }
-    ]
   }
 
   public async stop(): Promise<void> {

@@ -1,14 +1,15 @@
 {
   "id": "calculator",
   "name": "计算器",
-  "version": "2.1.1",
-  "description": "输入算式即时计算，内置科学函数、单位换算、实时汇率、人民币大写金额转换与日期推算",
+  "version": "2.1.2",
+  "description": "输入算式即时计算，内置科学函数、单位换算、每日汇率、人民币大写金额转换与日期推算",
   "author": "ZTools Team",
   "entry": "dist/index.js",
   "icon": "icon.svg",
   "alias": "calc",
   "permissions": [
-    "clipboard"
+    "clipboard",
+    "network"
   ],
   "targets": [
     {
@@ -49,7 +50,7 @@
     },
     {
       "code": "calc-currency",
-      "explain": "实时多币种汇率换算",
+      "explain": "每日多币种汇率换算",
       "mode": "view",
       "cmds": [
         "汇率换算",

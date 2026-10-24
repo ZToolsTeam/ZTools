@@ -400,6 +400,9 @@ export async function scanDirectoryForSearch(
   }
 
   if (!fs.existsSync(resolvedRoot)) {
+    if (filesMap.size === 0 && subdirMap.size === 0) {
+      throw new Error(`目录不存在或无法访问: ${resolvedRoot}`)
+    }
     const fallbackMatched = Array.from(filesMap.values()).slice(0, safeLimit)
     const fallbackSubdirs = Array.from(subdirMap.values()).map(({ topFiles: _tf, ...rest }) => rest)
     const elapsedMs = performance.now() - t0
@@ -451,7 +454,10 @@ export async function scanDirectoryForSearch(
     let entries: fs.Dirent[] = []
     try {
       entries = await fs.promises.readdir(current.dirPath, { withFileTypes: true })
-    } catch {
+    } catch (err) {
+      if (!current.topSubdir && filesMap.size === 0 && subdirMap.size === 0) {
+        throw new Error(`无法读取目录 ${resolvedRoot}: ${err instanceof Error ? err.message : String(err)}`, { cause: err })
+      }
       continue
     }
 

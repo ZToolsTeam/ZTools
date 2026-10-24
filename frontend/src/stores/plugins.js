@@ -16,6 +16,7 @@ import {
   installPluginNative
 } from '@/api/apiserver'
 import { fetchVersions, checkCompat } from '@/composables/useVersionCompat'
+import { loadV2StaticCatalogList } from '@/api/pluginCatalog'
 import { formatLogArg } from '@/utils/logFormat'
 import { isPluginSupportedOnCurrentPlatform } from '@/utils/platform'
 import { cloudSync, track } from '@edition'
@@ -26,8 +27,7 @@ import {
 } from '@/utils/storeCatalogManager'
 import {
   clearDeclarativePluginCache,
-  loadInstalledDeclarativePlugin,
-  V2_CATALOG_CDN_URL
+  loadInstalledDeclarativePlugin
 } from '@/utils/declarativePluginLoader'
 import { getBundledPluginEntries, isBundledPlugin, resolveBundledReplacement } from '@/utils/bundledPlugins'
 import { isPluginVisible } from '@/utils/pluginVisibility'
@@ -333,25 +333,12 @@ export const usePluginsStore = defineStore('plugins', {
      */
     _getCatalogManager() {
       if (!this._catalogManager) {
-        // 插件目录以 CDN 静态目录为准（后台不再提供目录接口）；CDN 不可用时回退插件列表接口，再不行由目录管理器回退本地快照与内置清单
+        // 与详情、下载和更新共用一次 CDN 读取；离线时目录管理器只展示本地快照与内置插件。
         this._catalogManager = new StoreCatalogManager({
-          staticCatalogUrl: V2_CATALOG_CDN_URL,
-          getStaticCatalog: async () => {
-            const res = await fetch(V2_CATALOG_CDN_URL, {
-              headers: { Accept: 'application/json' }
-            })
-            return res.ok ? normalizeCdnCatalogPayload(await res.json()) : null
-          },
           fetchRemote: async () => {
-            try {
-              const res = await fetch(V2_CATALOG_CDN_URL, { headers: { Accept: 'application/json' } })
-              if (res.ok) {
-                return normalizeCdnCatalogPayload(await res.json())
-              }
-            } catch (e) {
-              console.warn('[plugins] 静态 catalog 拉取失败，回退插件列表接口:', e)
-            }
-            return apiGetMarketPlugins({ per_page: 500, page: 1 })
+            const list = await loadV2StaticCatalogList()
+            this._applyRevocations(list)
+            return normalizeCdnCatalogPayload(list)
           },
           getLocalSnapshot: async () => {
             if (window.ztools?.config) {
@@ -439,10 +426,9 @@ export const usePluginsStore = defineStore('plugins', {
       }
 
       const result = await manager.query(queryParams)
+      // 下架状态来自完整目录，与当前分页、搜索和分类无关。
+      this._applyRevocations(manager._catalog)
       this._updateCategoryCounts(manager._catalog)
-
-      // 识别官方下架状态并全链路同步（M1-8）
-      this._applyRevocations(result.list)
 
       return result
     },
@@ -465,6 +451,7 @@ export const usePluginsStore = defineStore('plugins', {
     async refreshCategoryCounts() {
       try {
         const { catalog } = await this._getCatalogManager().ensureCatalog()
+        this._applyRevocations(catalog)
         this._updateCategoryCounts(catalog)
       } catch (error) {
         console.warn('[PluginsStore] 统计分类插件数失败，保留全部分类:', error)
@@ -702,6 +689,7 @@ export const usePluginsStore = defineStore('plugins', {
       if (!Array.isArray(list) || list.length === 0) return
       let changed = false
       for (const item of list) {
+        if (!item || typeof item !== 'object') continue
         const pid = normalizePluginId(item.pluginId || item.id)
         if (!pid) continue
         if (item.revoked) {
@@ -724,7 +712,9 @@ export const usePluginsStore = defineStore('plugins', {
               found.enabled = false
             }
             if (window.ztools?.plugin?.toggle) {
-              window.ztools.plugin.toggle(pid, false).catch(() => {})
+              window.ztools.plugin.toggle(pid, false).catch((error) => {
+                console.warn('[plugins] 禁用已下架插件失败:', pid, error)
+              })
             }
           }
         }
@@ -1047,7 +1037,7 @@ export const usePluginsStore = defineStore('plugins', {
     /**
      * 一键静默安装插件（M1-7 支持原地状态流转、并发互斥防重与异常回滚）
      * @param {string} pluginId - 插件ID
-     * @param {Object} options - { autoOpen?: boolean, downloadInfo?: Object }
+     * @param {Object} options - { autoOpen?: boolean }
      */
     async installPlugin(pluginId, options = {}) {
       const pid = normalizePluginId(pluginId)
@@ -1080,58 +1070,19 @@ export const usePluginsStore = defineStore('plugins', {
       }
 
       try {
-        // 4. 获取下载签名与包信息（优先使用内存中已有的 V2 条目）
-        let downloadInfo = options.downloadInfo
-        if (!downloadInfo) {
-          const lowerPid = pid.toLowerCase()
-          const v2Candidate =
-            this._catalogManager?.getById?.(pid) ||
-            this._catalogManager?._catalog?.find?.(
-              (i) => normalizePluginId(i.pluginId || i.id).toLowerCase() === lowerPid
-            ) ||
-            (this.items || []).find(
-              (i) => normalizePluginId(i.pluginId || i.id).toLowerCase() === lowerPid
-            )
-          if (
-            v2Candidate &&
-            v2Candidate.downloadUrl &&
-            (v2Candidate.sha256 || v2Candidate.checksum)
-          ) {
-            const sha256 = v2Candidate.sha256 || v2Candidate.checksum
-            const size =
-              Number(v2Candidate.size ?? v2Candidate.fileSize ?? v2Candidate.file_size ?? 0) || 0
-            downloadInfo = {
-              ...v2Candidate,
-              id: v2Candidate.id || pid,
-              pluginId: pid,
-              version: v2Candidate.version || '1.0.0',
-              downloadUrl: v2Candidate.downloadUrl,
-              sha256,
-              checksum: v2Candidate.checksum || sha256,
-              size,
-              fileSize: size
-            }
-          } else {
-            downloadInfo = await getDownloadSign(pid)
-          }
-        }
+        // 4. 安装前统一在线校验；展示快照和调用方传入的旧地址不能决定实际安装包。
+        const downloadInfo = await getDownloadSign(pid)
         const downloadUrl = downloadInfo?.downloadUrl
         if (!downloadUrl) {
           throw new Error('无法获取插件下载地址')
         }
 
-        // 5. 校验平台与版本兼容性
+        // 5. 校验平台与版本兼容性（fetchVersions / checkCompat 不会抛错，不兼容时必须中止安装）
         if (typeof checkCompat === 'function' && downloadInfo) {
-          try {
-            const ver = await fetchVersions()
-            const compat = checkCompat(downloadInfo, ver.appVersion, ver.webVersion)
-            if (!compat.compatible) {
-              throw new Error(compat.reason || '当前应用版本不满足该插件兼容性要求')
-            }
-          } catch (compatErr) {
-            if (compatErr?.message && compatErr.message.includes('不满足')) {
-              throw compatErr
-            }
+          const ver = await fetchVersions()
+          const compat = checkCompat(downloadInfo, ver.appVersion, ver.webVersion)
+          if (!compat.compatible) {
+            throw new Error(compat.reason || '当前应用版本不满足该插件兼容性要求')
           }
         }
 
@@ -1157,7 +1108,9 @@ export const usePluginsStore = defineStore('plugins', {
               }
               try {
                 window.ztools?.events?.off?.('plugin_install_complete', onInstallEvent)
-              } catch {}
+              } catch (error) {
+                console.warn('[plugins] 取消安装结果监听失败:', error)
+              }
             }
             const onInstallEvent = (evt) => {
               const payload =
@@ -1179,8 +1132,12 @@ export const usePluginsStore = defineStore('plugins', {
               reject(new Error('插件安装等待超时 (30s)'))
             }, 30 * 1000)
             try {
-              window.ztools.events.subscribe?.('plugin_install_complete')?.catch?.(() => {})
-            } catch {}
+              window.ztools.events.subscribe?.('plugin_install_complete')?.catch?.((error) => {
+                console.warn('[plugins] 订阅安装结果失败:', error)
+              })
+            } catch (error) {
+              console.warn('[plugins] 订阅安装结果失败:', error)
+            }
             window.ztools.events.on('plugin_install_complete', onInstallEvent)
           })
         }
@@ -1276,6 +1233,9 @@ export const usePluginsStore = defineStore('plugins', {
         this.lastUpdateCheckTime = Date.now()
         return
       }
+      this._applyRevocations(Object.entries(updates)
+        .filter(([, info]) => info?.revoked)
+        .map(([pluginId, info]) => ({ ...info, pluginId })))
 
       // 获取当前版本用于兼容性判断
       let appVer = '1.0.0'

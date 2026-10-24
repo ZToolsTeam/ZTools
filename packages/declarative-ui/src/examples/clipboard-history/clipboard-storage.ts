@@ -301,6 +301,7 @@ export class PasteSequenceManager {
   private offset = 0;
   private lastInvocation: number | null = null;
   private topItemId: string | null = null;
+  private lastPastedId: string | null = null;
   private timeoutSeconds = 60;
 
   constructor(timeoutSeconds = 60) {
@@ -322,22 +323,25 @@ export class PasteSequenceManager {
     const now = Date.now();
     if (this.lastInvocation && now - this.lastInvocation > this.timeoutSeconds * 1000) {
       this.offset = 0;
+      this.lastPastedId = null;
     }
 
     const topItem = items[0] ?? null;
-    if (topItem && topItem.id !== this.topItemId) {
-      this.offset = 0;
-      this.topItemId = topItem.id;
-    }
+    this.topItemId = topItem?.id ?? null;
     this.lastInvocation = now;
 
-    if (this.offset >= items.length) {
+    const lastIndex = this.lastPastedId ? items.findIndex((i) => i.id === this.lastPastedId) : -1;
+    const currentIndex = lastIndex >= 0 ? lastIndex + 1 : this.offset;
+
+    if (currentIndex >= items.length) {
       this.offset = 0;
+      this.lastPastedId = null;
       return { item: null, remaining: 0, offset: 0 };
     }
 
-    const item = items[this.offset];
-    this.offset += 1;
+    const item = items[currentIndex];
+    this.lastPastedId = item.id;
+    this.offset = currentIndex + 1;
     const remaining = items.length - this.offset;
     return { item, remaining, offset: this.offset };
   }
@@ -346,6 +350,7 @@ export class PasteSequenceManager {
     this.offset = 0;
     this.lastInvocation = null;
     this.topItemId = null;
+    this.lastPastedId = null;
   }
 
   public getState(): PasteSequenceState {

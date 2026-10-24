@@ -18,6 +18,7 @@ export interface ZToolsDeclarativeBridge {
   pasteToActive?: (text: string | number) => Promise<void>;
   manageWindow?: (action: string) => Promise<boolean>;
   storageGetItem?: (key: string) => Promise<any>;
+  storageCompareAndSet?: (key: string, expected: unknown, value: unknown) => Promise<boolean>;
   storageSetItem?: (key: string, value: any) => Promise<void>;
   storageRemoveItem?: (key: string) => Promise<void>;
   storageClear?: () => Promise<void>;

@@ -86,6 +86,3 @@ export const cloudSync = Object.freeze({
   pullHomeLayout: async () => {},
   push: async () => {}
 })
-
-/** 插件市场后台：开源版没有，只读 CDN 静态插件目录 */
-export const marketBackend = null

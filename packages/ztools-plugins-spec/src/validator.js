@@ -1,6 +1,7 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { APP_VERSION_REGEX } from './host-requirements.js'
 
 /** 客户端内置功能占用的插件 ID（见 ../reserved-ids.json）；社区插件用了会被客户端隐藏 */
 export const RESERVED_PLUGIN_IDS = new Set(
@@ -211,6 +212,11 @@ export function validatePluginManifest(manifest, options = {}) {
     if (manifest[field] === undefined || manifest[field] === null || manifest[field] === '') {
       errors.push(`缺少必填字段: ${field}`)
     }
+  }
+
+  // 最低客户端版本（可选；发布脚本还会按插件用到的宿主接口自动提高）
+  if (manifest.minAppVersion !== undefined && (typeof manifest.minAppVersion !== 'string' || !APP_VERSION_REGEX.test(manifest.minAppVersion))) {
+    errors.push(`minAppVersion 格式无效: "${manifest.minAppVersion}"（应为 1.1.8.3 这样的客户端版本号）`)
   }
 
   // 2. id 校验
@@ -439,6 +445,9 @@ export function validateCatalogPluginItem(item) {
     if (typeof item.size !== 'number' || item.size <= 0 || !Number.isSafeInteger(item.size)) {
       errors.push(`size 必须为正整数字节大小: "${item.size}"`)
     }
+  }
+  if (item.minAppVersion !== undefined && (typeof item.minAppVersion !== 'string' || !APP_VERSION_REGEX.test(item.minAppVersion))) {
+    errors.push(`minAppVersion 格式无效: "${item.minAppVersion}"`)
   }
   if (item.revoked !== undefined && typeof item.revoked !== 'boolean') {
     errors.push('revoked 字段必须为布尔值')

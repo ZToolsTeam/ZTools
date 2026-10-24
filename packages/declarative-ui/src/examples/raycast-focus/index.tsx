@@ -17,6 +17,7 @@ import {
   Action,
   Icon,
   Color,
+  LocalStorage,
   showToast,
   Toast,
   useNavigation
@@ -91,35 +92,67 @@ export const DEFAULT_FOCUS_CATEGORIES: readonly FocusCategory[] = Object.freeze(
 ]);
 
 const DEFAULT_FOCUS_STATS: FocusStatsSummary = {
-  completedSessions: 12,
-  totalFocusedMinutes: 540,
-  currentStreakDays: 5,
-  blockedDistractionsCount: 38
+  completedSessions: 0,
+  totalFocusedMinutes: 0,
+  currentStreakDays: 0,
+  blockedDistractionsCount: 0
 };
 
 let memoryCurrentSession: FocusSession | null = null;
 let memoryCategories: FocusCategory[] = [...DEFAULT_FOCUS_CATEGORIES];
 let memoryStats: FocusStatsSummary = { ...DEFAULT_FOCUS_STATS };
 
-export async function getFocusCurrentSession(hostOverride?: any): Promise<FocusSession | null> {
+function normalizeHostFocusSession(value: unknown): FocusSession | null {
+  if (!value || typeof value !== "object") return null;
+  const wrapped = value as Record<string, unknown>;
+  const raw = "session" in wrapped ? wrapped.session : wrapped;
+  if (!raw || typeof raw !== "object") return null;
+  const session = raw as Record<string, unknown>;
+  // 宿主在完成/取消后仍保留最后一次会话（status 为 completed / cancelled），对插件来说就是当前没有专注
+  if (!session.id || session.status !== "running" && session.status !== "paused" && session.status !== "active") return null;
+  const durationMinutes = Number(session.durationMinutes ?? Number(session.totalDurationMs ?? 0) / 60000);
+  const categoryId = String(session.categoryId ?? "");
+  // 宿主不保存屏蔽清单，按分类从插件自己的存储补回
+  const category = memoryCategories.find((c) => c.id === categoryId);
+  return {
+    id: String(session.id), goal: String(session.title ?? session.goal ?? "专注"),
+    categoryId, categoryName: String(session.categoryName ?? ""),
+    durationMinutes, remainingSeconds: Number(session.remainingSeconds ?? Number(session.remainingMs ?? 0) / 1000),
+    status: session.status === "paused" ? "paused" : "active",
+    startedAt: Number(session.startedAt ?? 0),
+    blockedApps: [...(category?.blockedApps ?? [])], blockedSites: [...(category?.blockedSites ?? [])]
+  };
+}
+
+/** 屏蔽清单按分类单独存一个键：分类 ID 唯一，直接覆盖写，不存在并发读改写 */
+const BLOCKLIST_KEY_PREFIX = "ztools.raycast-focus.blocklist.";
+
+interface FocusBlocklist {
+  readonly blockedApps: readonly string[];
+  readonly blockedSites: readonly string[];
+}
+
+async function loadBlocklist(categoryId: string): Promise<FocusBlocklist | null> {
+  const stored = await LocalStorage.getItem<FocusBlocklist>(BLOCKLIST_KEY_PREFIX + categoryId);
+  if (!stored || typeof stored !== "object") return null;
+  return {
+    blockedApps: Array.isArray(stored.blockedApps) ? stored.blockedApps.map(String) : [],
+    blockedSites: Array.isArray(stored.blockedSites) ? stored.blockedSites.map(String) : []
+  };
+}
+
+export async function getFocusCurrentSession(hostOverride?: unknown): Promise<FocusSession | null> {
   if (hostOverride || isRealElectronHost()) {
-    const res = await callHostTransport<any>("focus_get_current", {}, hostOverride);
-    if (res.ok && res.data) {
-      const s = res.data.session !== undefined ? res.data.session : res.data;
-      if (!s || !s.id || s.status === "idle") return null;
-      return {
-        id: String(s.id),
-        goal: String(s.goal || s.title || "专注冲刺"),
-        categoryId: String(s.categoryId || "cat-deep-coding"),
-        categoryName: String(s.categoryName || "深度编码"),
-        durationMinutes: Number(s.durationMinutes || 25),
-        remainingSeconds: Number(s.remainingSeconds ?? (Number(s.durationMinutes || 25) * 60)),
-        status: (s.status || "active") as FocusSessionState,
-        startedAt: Number(s.startedAt || Date.now()),
-        blockedApps: Array.isArray(s.blockedApps) ? s.blockedApps.map(String) : [],
-        blockedSites: Array.isArray(s.blockedSites) ? s.blockedSites.map(String) : []
-      };
+    const res = await callHostTransport("focus_get_current", {}, hostOverride);
+    if (!res.ok) throw new Error(res.error || "无法获取专注状态");
+    let session = normalizeHostFocusSession(res.data);
+    if (session && session.categoryId && session.blockedApps.length === 0 && session.blockedSites.length === 0) {
+      const stored = await loadBlocklist(session.categoryId).catch(() => null);
+      if (stored) {
+        session = { ...session, blockedApps: [...stored.blockedApps], blockedSites: [...stored.blockedSites] };
+      }
     }
+    memoryCurrentSession = session;
   }
   return memoryCurrentSession ? { ...memoryCurrentSession } : null;
 }
@@ -149,15 +182,23 @@ export async function listFocusCategories(hostOverride?: any): Promise<FocusCate
         ? res.data.categories
         : null;
     if (res.ok && list && list.length > 0) {
-      return list.map((c: any, idx: number) => ({
-        id: String(c.id || `cat-${idx}`),
-        name: String(c.name || "Focus Category"),
-        icon: normalizeFocusIcon(c.icon),
-        defaultDurationMinutes: Number(c.defaultDurationMinutes || c.durationMinutes || 25),
-        blockedApps: Array.isArray(c.blockedApps) ? c.blockedApps.map(String) : [],
-        blockedSites: Array.isArray(c.blockedSites) ? c.blockedSites.map(String) : []
+      memoryCategories = await Promise.all(list.map(async (c: Record<string, unknown>, idx: number) => {
+        const id = String(c.id || `cat-${idx}`);
+        // 屏蔽清单读不出来时不影响分类本身显示
+        const stored = await loadBlocklist(id).catch(() => null);
+        return {
+          id,
+          name: String(c.name || "Focus Category"),
+          icon: normalizeFocusIcon(c.icon),
+          defaultDurationMinutes: Number(c.defaultDurationMinutes || c.durationMinutes || 25),
+          blockedApps: stored?.blockedApps ?? (Array.isArray(c.blockedApps) ? c.blockedApps.map(String) : []),
+          blockedSites: stored?.blockedSites ?? (Array.isArray(c.blockedSites) ? c.blockedSites.map(String) : [])
+        };
       }));
+      return [...memoryCategories];
     }
+    if (!res.ok) throw new Error(res.error || "无法读取专注分类");
+    return [];
   }
   return [...memoryCategories];
 }
@@ -168,12 +209,13 @@ export async function getFocusStats(hostOverride?: any): Promise<FocusStatsSumma
     if (res.ok && res.data) {
       const d = res.data;
       return {
-        completedSessions: Number(d.completedSessions ?? d.totalSessions ?? memoryStats.completedSessions),
-        totalFocusedMinutes: Number(d.totalFocusedMinutes ?? d.totalMinutes ?? memoryStats.totalFocusedMinutes),
-        currentStreakDays: Number(d.currentStreakDays ?? d.streakDays ?? memoryStats.currentStreakDays),
-        blockedDistractionsCount: Number(d.blockedDistractionsCount ?? memoryStats.blockedDistractionsCount)
+        completedSessions: Number(d.totalCompletedSessions ?? d.completedSessions ?? d.totalSessions ?? 0),
+        totalFocusedMinutes: Number(d.totalFocusedMinutes ?? d.totalMinutes ?? 0),
+        currentStreakDays: Number(d.currentStreakDays ?? d.streakDays ?? 0),
+        blockedDistractionsCount: Number(d.blockedDistractionsCount ?? 0)
       };
     }
+    throw new Error(res.error || "无法获取专注统计");
   }
   return { ...memoryStats };
 }
@@ -192,35 +234,14 @@ export async function startFocusSession(
     memoryCategories.find((c) => c.id === params.categoryId) || memoryCategories[0];
 
   if (hostOverride || isRealElectronHost()) {
-    const res = await callHostTransport<any>(
-      "focus_start",
-      {
-        goal,
-        categoryId: cat.id,
-        durationMinutes: duration,
-        blockedApps: [...cat.blockedApps],
-        blockedSites: [...cat.blockedSites]
-      },
-      hostOverride
-    );
-    if (res.ok && res.data) {
-      const s = res.data.session || res.data;
-      if (s && s.id) {
-        memoryCurrentSession = {
-          id: String(s.id),
-          goal: String(s.goal || goal),
-          categoryId: String(s.categoryId || cat.id),
-          categoryName: String(s.categoryName || cat.name),
-          durationMinutes: Number(s.durationMinutes || duration),
-          remainingSeconds: Number(s.remainingSeconds ?? duration * 60),
-          status: "active",
-          startedAt: Date.now(),
-          blockedApps: [...cat.blockedApps],
-          blockedSites: [...cat.blockedSites]
-        };
-        return { ...memoryCurrentSession };
-      }
-    }
+    const res = await callHostTransport("focus_start", {
+      title: goal, categoryId: params.categoryId, durationMinutes: duration
+    }, hostOverride);
+    if (!res.ok) throw new Error(res.error || "无法启动专注会话");
+    const session = normalizeHostFocusSession(res.data);
+    if (!session) throw new Error("专注服务未返回有效会话");
+    memoryCurrentSession = session;
+    return { ...session };
   }
 
   memoryCurrentSession = {
@@ -251,7 +272,11 @@ export async function controlFocusSession(
   } as const;
 
   if (hostOverride || isRealElectronHost()) {
-    await callHostTransport<any>(methodMap[action], {}, hostOverride);
+    const res = await callHostTransport(methodMap[action], {}, hostOverride);
+    if (!res.ok) return { ok: false, session: memoryCurrentSession, message: res.error || "专注操作失败" };
+    memoryCurrentSession = normalizeHostFocusSession(res.data);
+    const message = action === "complete" ? "本次专注已完成" : action === "cancel" ? "已取消本次专注" : "专注状态已更新";
+    return { ok: true, session: memoryCurrentSession, message };
   }
 
   if (action === "pause" && memoryCurrentSession) {
@@ -315,7 +340,19 @@ export async function createFocusCategory(
   };
 
   if (hostOverride || isRealElectronHost()) {
-    await callHostTransport("focus_create_category", category as any, hostOverride);
+    const res = await callHostTransport("focus_create_category", { name: cleanName, defaultDurationMinutes: duration }, hostOverride);
+    if (!res.ok || !res.data?.id) throw new Error(res.error || "专注分类未能保存");
+    const saved = { ...category, id: String(res.data.id) };
+    try {
+      await LocalStorage.setItem(BLOCKLIST_KEY_PREFIX + saved.id, {
+        blockedApps: [...saved.blockedApps],
+        blockedSites: [...saved.blockedSites]
+      });
+    } catch (err) {
+      throw new Error(`分类已创建，但屏蔽清单未能保存：${err instanceof Error ? err.message : String(err)}`);
+    }
+    memoryCategories = [saved, ...memoryCategories];
+    return saved;
   }
   memoryCategories = [category, ...memoryCategories];
   return category;
@@ -427,15 +464,16 @@ export function RaycastFocusCommand() {
 
   useEffect(() => {
     let active = true;
-    Promise.all([
-      getFocusCurrentSession(),
-      listFocusCategories(),
-      getFocusStats()
-    ]).then(([cur, cats, st]) => {
+    // 先读分类：会话的屏蔽清单按分类补全
+    listFocusCategories().then((cats) =>
+      Promise.all([getFocusCurrentSession(), getFocusStats()]).then(([cur, st]) => [cur, cats, st] as const)
+    ).then(([cur, cats, st]) => {
       if (!active) return;
       setSession(cur);
-      setCategories(cats.length > 0 ? cats : [...DEFAULT_FOCUS_CATEGORIES]);
+      setCategories(cats);
       setStats(st);
+    }).catch((error) => {
+      if (active) void showToast(Toast.Style.Failure, "读取专注状态失败", error instanceof Error ? error.message : String(error));
     });
     return () => {
       active = false;
@@ -467,7 +505,9 @@ export function RaycastFocusCommand() {
 
       if (tickCount % 10 === 0 && isRealElectronHost()) {
         getFocusCurrentSession().then((remote) => {
-          if (remote) setSession(remote);
+          setSession(remote);
+        }).catch((error) => {
+          void showToast(Toast.Style.Failure, "同步专注状态失败", error instanceof Error ? error.message : String(error));
         });
       }
     }, 1000);
@@ -502,12 +542,13 @@ export function RaycastFocusCommand() {
     await showToast(
       Toast.Style.Success,
       `🎯 已开启专注: ${started.goal}`,
-      `${started.durationMinutes} 分钟 • 已启用 ${cat.blockedApps.length} 款应用与 ${cat.blockedSites.length} 个站点防打扰拦截`
+      `${started.durationMinutes} 分钟`
     );
   };
 
   const handleControl = async (action: "toggle" | "pause" | "resume" | "complete" | "cancel") => {
     const res = await controlFocusSession(action);
+    if (!res.ok) { await showToast(Toast.Style.Failure, res.message); return; }
     setSession(res.session);
     const latestStats = await getFocusStats();
     setStats(latestStats);

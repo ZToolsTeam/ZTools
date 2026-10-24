@@ -154,7 +154,12 @@ Handle OpenChild(Handle parent, const std::string& segment, bool directory, Open
 #endif
     O_RDONLY;
   const int flags = access | O_CLOEXEC | O_NOFOLLOW | O_NONBLOCK | (directory ? O_DIRECTORY : 0);
-  const auto h = openat(parent, segment.c_str(), flags, 0600);
+  auto h = openat(parent, segment.c_str(), flags, 0600);
+#ifdef __APPLE__
+  if (h == Invalid && directory && !create && mode != OpenMode::metadata && (errno == EPERM || errno == EACCES)) {
+    h = openat(parent, segment.c_str(), O_EXEC | O_CLOEXEC | O_NOFOLLOW | O_NONBLOCK | O_DIRECTORY, 0600);
+  }
+#endif
   if (h == Invalid) { if (mode == OpenMode::metadata && errno == ENOENT) return Invalid; Fail(); }
   return h;
 }

@@ -8,6 +8,7 @@ import { errorCodes, ZToolsError } from '../../contracts/errors.js'
 import { isValidFileBase64 } from '../../contracts/method-params.js'
 import type { CredentialProtection, CredentialProtectionStatus } from './credential-protection.js'
 import type {
+  DatabaseCompareAndSetParams,
   DatabaseBatchParams,
   DatabaseGetParams,
   DatabaseKeyParams,
@@ -217,6 +218,7 @@ export interface CredentialV1SetParams extends CredentialV1KeyParams {
   value: string
   /** true：只在 key 不存在时写入（按 key 串行锁内判断），已存在返回 data:'EXISTS'，用于多窗口并发迁移 */
   ifAbsent?: boolean
+  expectedValue?: string | null
 }
 
 export type CredentialV1Status = CredentialProtectionStatus
@@ -305,6 +307,30 @@ export class DatabaseService {
       await store.put(params.key, serializeValue(params.value, params.is_base64), { sync: true })
       return { success: true, data: 'OK' }
     })
+  }
+
+  async compareAndSet(
+    params: DatabaseCompareAndSetParams, caller: CallerIdentity, signal: AbortSignal
+  ): Promise<{ success: true; data: boolean }> {
+    rejectCredentialDatabaseKey(params.key)
+    const value = serializeValue(params.value)
+    const expected = params.expectedValue === null ? undefined : serializeValue(params.expectedValue)
+    let committed = false
+    try {
+      return await this.#perform(params.plugin_id, caller, signal, '更新数据库', async (store) => {
+        const current = await store.get(params.key)
+        const matches = current === undefined ? expected === undefined : expected !== undefined && current.equals(expected)
+        if (!matches) return { success: true, data: false }
+        requireNotAborted(signal)
+        await store.put(params.key, value, { sync: true })
+        committed = true
+        return { success: true, data: true }
+      })
+    } catch (error) {
+      // 同步提交已成功，随后取消不能撤销写入；不得让调用方误以为可以重做同一次更新。
+      if (committed && isCancellation(error)) return { success: true, data: true }
+      throw error
+    }
   }
 
   async get(
@@ -435,7 +461,7 @@ export class DatabaseService {
     params: CredentialV1SetParams,
     caller: CallerIdentity,
     signal: AbortSignal
-  ): Promise<{ success: true; data: 'OK' | 'EXISTS' }> {
+  ): Promise<{ success: true; data: 'OK' | 'EXISTS' | 'CONFLICT' }> {
     requireCredentialKey(params.key)
     if (params.ifAbsent !== undefined && typeof params.ifAbsent !== 'boolean') {
       throw new ZToolsError(errorCodes.invalidRequest, 'ifAbsent 必须是布尔值')
@@ -471,10 +497,16 @@ export class DatabaseService {
       const dbKey = credentialDatabaseKey(params.key)
       let committed = false
       try {
-        return await this.#performCredential(caller, signal, '保存安全凭据', async (store): Promise<{ success: true; data: 'OK' | 'EXISTS' }> => {
+        return await this.#performCredential(caller, signal, '保存安全凭据', async (store): Promise<{ success: true; data: 'OK' | 'EXISTS' | 'CONFLICT' }> => {
           requireNotAborted(signal)
           // 已在按 key 串行的锁内：判断与写入之间不会插入同 key 的其他写入
+          if (Object.hasOwn(params, 'expectedValue')) {
+            const current = await this.#readCredential(store, protection, pluginId, params.key, signal)
+            const value = current.status === 'present' ? current.value : null
+            if (value !== params.expectedValue) return { success: true, data: 'CONFLICT' }
+          }
           if (params.ifAbsent === true && await store.has(dbKey)) return { success: true, data: 'EXISTS' }
+          requireNotAborted(signal)
           await store.put(dbKey, record, { sync: true })
           committed = true
           return { success: true, data: 'OK' }
@@ -497,72 +529,79 @@ export class DatabaseService {
     const pluginId = this.#credentialNamespace(caller)
     return this.#withCredentialKeyLock(pluginId, params.key, async () => {
       const protection = await this.#requireCredentialProtection()
-      const dbKey = credentialDatabaseKey(params.key)
       return this.#performCredential(caller, signal, '读取安全凭据', async (store) => {
-        let record: Buffer | undefined
-        try {
-          record = await store.get(dbKey)
-        } catch (error) {
-          if (errorCode(error) !== 'LEVEL_NOT_FOUND') throw error
-        }
-        if (record === undefined) return { success: true, data: { status: 'missing' } }
-        const maxEncodedRecordBytes = CREDENTIAL_RECORD_PREFIX.length + Math.ceil(MAX_CREDENTIAL_CIPHERTEXT_BYTES / 3) * 4
-        if (record.byteLength > maxEncodedRecordBytes) {
-          throw new ZToolsError(errorCodes.dataCorrupt, '安全凭据记录超过大小上限')
-        }
-        const encoded = decodeUtf8(record)
-        if (!encoded.startsWith(CREDENTIAL_RECORD_PREFIX)) {
-          throw new ZToolsError(errorCodes.dataCorrupt, '安全凭据记录格式无效')
-        }
-        const base64 = encoded.slice(CREDENTIAL_RECORD_PREFIX.length)
-        let ciphertext: Buffer
-        try {
-          ciphertext = strictBase64(base64)
-        } catch {
-          throw new ZToolsError(errorCodes.dataCorrupt, '安全凭据记录格式无效')
-        }
-        if (ciphertext.byteLength === 0 || ciphertext.byteLength > MAX_CREDENTIAL_CIPHERTEXT_BYTES ||
-            ciphertext.toString('base64') !== base64) {
-          throw new ZToolsError(errorCodes.dataCorrupt, '安全凭据记录格式无效')
-        }
-        requireNotAborted(signal)
-        let decrypted: { readonly plaintext: string; readonly shouldReEncrypt: boolean }
-        try {
-          decrypted = await protection.decrypt(ciphertext)
-        } catch {
-          throw new ZToolsError(errorCodes.dataCorrupt, '安全凭据无法解密')
-        }
-        let envelope: unknown
-        try {
-          envelope = JSON.parse(decrypted.plaintext)
-        } catch {
-          throw new ZToolsError(errorCodes.dataCorrupt, '安全凭据内容损坏')
-        }
-        if (!isCredentialEnvelope(envelope) || envelope.pluginId !== pluginId || envelope.key !== params.key ||
-            Buffer.byteLength(envelope.value, 'utf8') > MAX_CREDENTIAL_VALUE_BYTES) {
-          throw new ZToolsError(errorCodes.dataCorrupt, '安全凭据内容损坏')
-        }
-        if (decrypted.shouldReEncrypt) {
-          requireNotAborted(signal)
-          let refreshedCiphertext: Buffer
-          try {
-            refreshedCiphertext = await protection.encrypt(decrypted.plaintext)
-          } catch {
-            throw new ZToolsError(errorCodes.storageError, '安全凭据重新保护失败')
-          }
-          if (!Buffer.isBuffer(refreshedCiphertext) || refreshedCiphertext.byteLength === 0 ||
-              refreshedCiphertext.byteLength > MAX_CREDENTIAL_CIPHERTEXT_BYTES) {
-            throw new ZToolsError(errorCodes.storageError, '安全凭据重新保护结果无效')
-          }
-          await store.put(
-            dbKey,
-            Buffer.from(`${CREDENTIAL_RECORD_PREFIX}${refreshedCiphertext.toString('base64')}`, 'utf8'),
-            { sync: true }
-          )
-        }
-        return { success: true, data: { status: 'present', value: envelope.value } }
+        return { success: true, data: await this.#readCredential(store, protection, pluginId, params.key, signal) }
       })
     })
+  }
+
+  async #readCredential(
+    store: LevelStore, protection: CredentialProtection, pluginId: string, key: string, signal: AbortSignal
+  ): Promise<CredentialV1Value> {
+    const dbKey = credentialDatabaseKey(key)
+    let record: Buffer | undefined
+    try {
+      record = await store.get(dbKey)
+    } catch (error) {
+      if (errorCode(error) !== 'LEVEL_NOT_FOUND') throw error
+    }
+    if (record === undefined) return { status: 'missing' }
+    const maxEncodedRecordBytes = CREDENTIAL_RECORD_PREFIX.length + Math.ceil(MAX_CREDENTIAL_CIPHERTEXT_BYTES / 3) * 4
+    if (record.byteLength > maxEncodedRecordBytes) {
+      throw new ZToolsError(errorCodes.dataCorrupt, '安全凭据记录超过大小上限')
+    }
+    const encoded = decodeUtf8(record)
+    if (!encoded.startsWith(CREDENTIAL_RECORD_PREFIX)) {
+      throw new ZToolsError(errorCodes.dataCorrupt, '安全凭据记录格式无效')
+    }
+    const base64 = encoded.slice(CREDENTIAL_RECORD_PREFIX.length)
+    let ciphertext: Buffer
+    try {
+      ciphertext = strictBase64(base64)
+    } catch {
+      throw new ZToolsError(errorCodes.dataCorrupt, '安全凭据记录格式无效')
+    }
+    if (ciphertext.byteLength === 0 || ciphertext.byteLength > MAX_CREDENTIAL_CIPHERTEXT_BYTES ||
+        ciphertext.toString('base64') !== base64) {
+      throw new ZToolsError(errorCodes.dataCorrupt, '安全凭据记录格式无效')
+    }
+    requireNotAborted(signal)
+    let decrypted: { readonly plaintext: string; readonly shouldReEncrypt: boolean }
+    try {
+      decrypted = await protection.decrypt(ciphertext)
+    } catch {
+      throw new ZToolsError(errorCodes.dataCorrupt, '安全凭据无法解密')
+    }
+    let envelope: unknown
+    try {
+      envelope = JSON.parse(decrypted.plaintext)
+    } catch {
+      throw new ZToolsError(errorCodes.dataCorrupt, '安全凭据内容损坏')
+    }
+    if (!isCredentialEnvelope(envelope) || envelope.pluginId !== pluginId || envelope.key !== key ||
+        Buffer.byteLength(envelope.value, 'utf8') > MAX_CREDENTIAL_VALUE_BYTES) {
+      throw new ZToolsError(errorCodes.dataCorrupt, '安全凭据内容损坏')
+    }
+    if (decrypted.shouldReEncrypt) {
+      requireNotAborted(signal)
+      let refreshedCiphertext: Buffer
+      try {
+        refreshedCiphertext = await protection.encrypt(decrypted.plaintext)
+      } catch {
+        throw new ZToolsError(errorCodes.storageError, '安全凭据重新保护失败')
+      }
+      if (!Buffer.isBuffer(refreshedCiphertext) || refreshedCiphertext.byteLength === 0 ||
+          refreshedCiphertext.byteLength > MAX_CREDENTIAL_CIPHERTEXT_BYTES) {
+        throw new ZToolsError(errorCodes.storageError, '安全凭据重新保护结果无效')
+      }
+      requireNotAborted(signal)
+      await store.put(
+        dbKey,
+        Buffer.from(`${CREDENTIAL_RECORD_PREFIX}${refreshedCiphertext.toString('base64')}`, 'utf8'),
+        { sync: true }
+      )
+    }
+    return { status: 'present', value: envelope.value }
   }
 
   /** Deletes idempotently; deletion remains available when OS encryption is unavailable. */
@@ -691,7 +730,10 @@ export class DatabaseService {
       const namespace = this.#namespace(requestedNamespace, caller)
       const { store } = await this.#database(namespace)
       requireNotAborted(signal)
-      const result = await operation(store)
+      const result = await this.#withCredentialKeyLock(`db:${namespace.toLowerCase()}`, '', async () => {
+        requireNotAborted(signal)
+        return operation(store)
+      })
       requireNotAborted(signal)
       return result
     } catch (error) {

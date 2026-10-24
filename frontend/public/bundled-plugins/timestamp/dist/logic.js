@@ -14,10 +14,8 @@ export function formatDateTime(d) {
     return `${y}-${m}-${day} ${h}:${min}:${s}`;
 }
 export function formatBeijingTime(d) {
-    // UTC+8 偏移计算
-    const utc = d.getTime() + d.getTimezoneOffset() * 60000;
-    const beijingDate = new Date(utc + 3600000 * 8);
-    return formatDateTime(beijingDate);
+    // 只读 UTC 字段，避免本地 DST 偏移在加八小时后发生变化。
+    return new Date(d.getTime() + 3600000 * 8).toISOString().slice(0, 19).replace("T", " ");
 }
 export function getRelativeTime(d, now = new Date()) {
     const diffSec = Math.round((d.getTime() - now.getTime()) / 1000);
@@ -183,7 +181,7 @@ export function parseTimeInput(rawInput, referenceNow = new Date()) {
         };
     }
     // 边界保护：检查年份合理范围 (1970 ~ 2100)
-    const fullYear = date.getFullYear();
+    const fullYear = date.getUTCFullYear();
     if (fullYear < 1970 || fullYear > 2200) {
         return {
             valid: false,

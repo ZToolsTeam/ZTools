@@ -20,6 +20,7 @@ import zlib from 'node:zlib'
 import { fileURLToPath } from 'node:url'
 import { scanPluginSecurity } from './scan-plugin-security.mjs'
 import { getManifestPlatforms, validateStoreCatalog } from '../packages/ztools-plugins-spec/src/validator.js'
+import { resolvePluginMinAppVersion } from '../packages/ztools-plugins-spec/src/host-requirements.js'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const rootDir = path.resolve(__dirname, '..')
@@ -361,6 +362,11 @@ export async function buildPluginsRelease(options = {}) {
       authorSlug === 'ztools-team' ||
       String(authorDisplay || '').toLowerCase().includes('ztools')
 
+    const { minAppVersion, apis: requiredHostApis } = resolvePluginMinAppVersion(dir, manifest)
+    if (minAppVersion) {
+      console.log(`ℹ 最低客户端版本 ${minAppVersion}${requiredHostApis.length ? `（用到 ${requiredHostApis.join('、')}）` : ''}`)
+    }
+
     const pluginMetadata = {
       id: manifest.id,
       pluginId: manifest.id,
@@ -374,6 +380,8 @@ export async function buildPluginsRelease(options = {}) {
       icon: iconUrl,
       entry: manifest.entry,
       minZToolsVersion: manifest.minZToolsVersion || '2.0.0',
+      // 客户端只认 minAppVersion：低于它时不提供更新、安装前提示先升级客户端
+      ...(minAppVersion ? { minAppVersion } : {}),
       requireAdmin: !!manifest.requireAdmin,
       // 平台声明由 plugin.json 的 targets 决定（安全扫描已校验必填与格式），不再默认填「双端」
       targets: manifest.targets,

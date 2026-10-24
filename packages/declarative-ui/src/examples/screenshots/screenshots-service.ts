@@ -511,10 +511,8 @@ export class ScreenshotsManager {
     // 1. 优先尝试通过宿主 IPC 通道 screenshots_scan 获取跨平台截图列表
     try {
       if (strictReal) {
-        let scanRes = await callHostTransport<any>("screenshots_scan", { forceRefresh }, hostOverride);
-        if (!scanRes.ok) {
-          scanRes = await callHostTransport<any>("screenshots_search", { forceRefresh }, hostOverride);
-        }
+        // 宿主只提供 screenshots_scan；失败时如实报告它的错误，不再回退到不存在的方法（会把真实原因覆盖掉）
+        const scanRes = await callHostTransport("screenshots_scan", { forceRefresh }, hostOverride);
         if (scanRes.ok && scanRes.data) {
           const rawList = Array.isArray(scanRes.data)
             ? scanRes.data

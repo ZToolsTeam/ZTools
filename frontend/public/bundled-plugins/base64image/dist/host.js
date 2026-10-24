@@ -13,7 +13,8 @@ export class HostError extends Error {
     }
 }
 export async function callHost(method, params = {}) {
-    const methods = globalThis.window?.__ztoolsElectron?.transport?.methods ?? globalThis.__ztoolsElectron?.transport?.methods;
+    const root = globalThis;
+    const methods = root.window?.__ztoolsElectron?.transport?.methods ?? root.__ztoolsElectron?.transport?.methods;
     const fn = methods?.[method];
     if (typeof fn !== "function")
         throw new HostError("HOST_UNAVAILABLE", `当前环境不支持 ${method}`);
@@ -27,6 +28,16 @@ export async function callHost(method, params = {}) {
 }
 /** 单张图片读取上限：宿主 IPC 单次最多 16 MiB，Base64 会膨胀到 4/3，这里留出余量 */
 export const MAX_IMAGE_FILE_BYTES = 10 * 1024 * 1024;
+/** 保存转换后的文本；文件选择器授予当前会话写入权限，取消不创建文件。 */
+export async function saveEncodedText(content, defaultName) {
+    const picked = await callHost("window_show_save_dialog", {
+        title: "保存 Base64 转换结果", defaultName, filters: "文本文件|txt"
+    });
+    if (!picked || picked.canceled || !picked.filePath)
+        return null;
+    await callHost("filesystem_write_file", { path: picked.filePath, content, encoding: "utf8" });
+    return picked.filePath;
+}
 const IMAGE_EXTENSIONS = ["png", "jpg", "jpeg", "gif", "webp", "svg"];
 const IMAGE_FILTER = `图片|${IMAGE_EXTENSIONS.join(";")}`;
 const formatMb = (bytes) => `${(bytes / 1024 / 1024).toFixed(1)} MB`;

@@ -104,6 +104,8 @@ export interface DeclarativeSecureStorage {
   /** JSON 后 ≤ 64 KiB；不可用抛 SECURE_STORAGE_UNAVAILABLE */
   setItem(key: string, value: unknown): Promise<void>
   removeItem(key: string): Promise<void>
+  compareAndSet(key: string, expected: unknown, value: unknown): Promise<boolean>
+  updateItem<T>(key: string, update: (current: unknown) => T): Promise<T>
   importFromLocalStorage(key: string, options?: { targetKey?: string }): Promise<DeclarativeSecureStorageImportResult>
   discardLocalStorage(key: string): Promise<void>
 }

@@ -123,3 +123,18 @@ test('dir:/ scan never descends into devfs or system volume mount points', { ski
   assert.ok(!names.includes('/net'))
   assert.ok(result.files.every((file) => !file.path.startsWith('/dev/') && !file.path.startsWith('/System/Volumes/')))
 })
+
+test('dir: scan rejects when root directory does not exist or cannot be read', posixOnly, async () => {
+  const root = await makeTempDir('ztools-dirscan-err-')
+  const unreadable = path.join(root, 'denied')
+  await fs.mkdir(unreadable, { mode: 0o000 })
+  try {
+    await assert.rejects(scanDirectoryForSearch(path.join(root, 'missing'), 20), /目录不存在或无法访问/)
+    if (process.getuid?.() !== 0) {
+      await assert.rejects(scanDirectoryForSearch(unreadable, 20), /无法读取目录/)
+    }
+  } finally {
+    await fs.chmod(unreadable, 0o700).catch(() => {})
+    await fs.rm(root, { recursive: true, force: true })
+  }
+})

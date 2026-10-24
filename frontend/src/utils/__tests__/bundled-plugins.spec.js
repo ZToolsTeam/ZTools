@@ -38,6 +38,11 @@ function createFakeHostDb() {
       case 'db_put':
         db.set(params.key, params.value)
         return { success: true, data: 'OK' }
+      case 'db_compare_and_set': {
+        const matches = (db.get(params.key) ?? null) === params.expectedValue
+        if (matches) db.set(params.key, params.value)
+        return { success: true, data: matches }
+      }
       case 'db_get':
         if (!db.has(params.key)) throw notFound()
         return { success: true, data: db.get(params.key) }

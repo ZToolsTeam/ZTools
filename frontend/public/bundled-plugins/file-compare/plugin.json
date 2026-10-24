@@ -1,7 +1,7 @@
 {
   "id": "file-compare",
   "name": "文本对比",
-  "version": "2.0.3",
+  "version": "2.0.4",
   "description": "左右并排对比两段文本、代码或配置文件的逐行差异，支持忽略空白与一键复制差异报告",
   "author": "ZTools Team",
   "entry": "dist/index.js",

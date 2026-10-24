@@ -73,10 +73,28 @@ int main(int argc, const char *argv[]) {
             response = @{@"version": @1, @"success": @YES, @"paths": paths};
         } else if ([request[@"mode"] isEqual:@"write"] && [request count] == 3 &&
                    validPaths(request[@"paths"]) && ztools::clipboard::valid_count([request[@"paths"] count], true)) {
-            NSMutableArray *urls = [NSMutableArray array];
-            for (NSString *item in request[@"paths"]) [urls addObject:[NSURL fileURLWithPath:item]];
+            NSMutableArray<NSPasteboardItem *> *items = [NSMutableArray array];
+            NSMutableArray<NSData *> *representations = [NSMutableArray array];
+            for (NSString *path in request[@"paths"]) {
+                NSString *url = [NSURL fileURLWithPath:path].absoluteString;
+                NSData *data = [url dataUsingEncoding:NSUTF8StringEncoding];
+                NSPasteboardItem *item = [[NSPasteboardItem alloc] init];
+                if (!data || ![item setData:data forType:NSPasteboardTypeFileURL]) return 3;
+                [items addObject:item];
+                [representations addObject:data];
+            }
             [pasteboard clearContents];
-            if (![pasteboard writeObjects:urls]) return 3;
+            if (![pasteboard writeObjects:items]) return 3;
+            NSInteger changeCount = pasteboard.changeCount;
+            NSArray<NSPasteboardItem *> *written = pasteboard.pasteboardItems;
+            if (written.count != items.count || pasteboard.changeCount != changeCount) return 3;
+            // 短进程退出前同步物化每个文件表示，否则后续条目会随数据提供者退出而丢失。
+            // 只读取本次文件 URL；遇到其他应用更新时立即失败，不读取其余类型。
+            for (NSUInteger index = 0; index < written.count; ++index) {
+                if (pasteboard.changeCount != changeCount) return 3;
+                NSData *data = [written[index] dataForType:NSPasteboardTypeFileURL];
+                if (![data isEqual:representations[index]] || pasteboard.changeCount != changeCount) return 3;
+            }
             response = @{@"version": @1, @"success": @YES};
         } else return 2;
         NSData *output = [NSJSONSerialization dataWithJSONObject:response options:0 error:nil];

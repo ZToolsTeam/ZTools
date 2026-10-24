@@ -1,6 +1,6 @@
 <template>
   <div
-    class="launcher-window-root flex flex-col h-screen w-screen overflow-hidden p-3 select-none"
+    class="launcher-window-root flex flex-col h-screen w-screen overflow-hidden select-none"
     @keydown="handleKeyDown"
   >
     <!-- 悬浮搜索条主体：克制的中性面板，橙色只用于标志、选中标记与匹配高亮 -->
@@ -905,7 +905,6 @@ watch(
   border: 1px solid var(--rc-border-highlight);
   background: var(--rc-surface);
   color: var(--rc-text-secondary);
-  box-shadow: var(--rc-shadow-lg);
 }
 
 .launcher-head {

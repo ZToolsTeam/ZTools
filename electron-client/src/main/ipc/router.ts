@@ -63,6 +63,7 @@ import {
   type DatabaseBatchParams,
   type DatabaseGetParams,
   type DatabaseKeyParams,
+  type DatabaseCompareAndSetParams,
   type DatabasePutParams,
   type DatabaseQueryParams,
   type DatabaseSecurePutParams,
@@ -193,6 +194,7 @@ import {
   RuntimeCapabilityService,
   type RuntimeCapabilityProviders
 } from '../services/runtime-capability-service.js'
+import { listSystemVolumes } from '../services/volume-service.js'
 import { createRuntimeCapabilityProviders } from '../services/runtime-capability-providers.js'
 import { RUNTIME_CAPABILITY_CATALOG } from '../services/runtime-capability-catalog.js'
 import { RUNTIME_PERMISSION_CHANGED_EVENT, type RuntimeCapabilityRecord } from '../../contracts/runtime-capability.js'
@@ -334,7 +336,7 @@ export interface ReferenceRuntimeAttachment {
 
 type RouterAppAdapter = Pick<
   typeof app,
-  'getPath' | 'isPackaged' | 'runningUnderARM64Translation' | 'getFileIcon'
+  'getPath' | 'getAppPath' | 'isPackaged' | 'runningUnderARM64Translation' | 'getFileIcon'
 >
 
 export interface IpcRouterOptions {
@@ -363,6 +365,7 @@ export interface IpcRouterOptions {
 
 const credentialV1Methods = new Set([
   'credential_v1_status',
+  'credential_v1_compare_and_set',
   'credential_v1_set',
   'credential_v1_get',
   'credential_v1_delete'
@@ -654,6 +657,7 @@ export class IpcRouter {
         Date.now,
         options.pathSemanticsAdapter ?? createPathSemanticsAdapter(process.platform),
         {
+          pathAccessBroker: { platform: process.platform, isPackaged: mainApp.isPackaged, appPath: mainApp.getAppPath(), resourcesPath: process.resourcesPath },
           // 宿主自己的数据目录不接受「扫描结果移入回收站」
           protectedTrashRoots: [
             options.systemPlatformAdapter.userDataPath,
@@ -977,9 +981,7 @@ export class IpcRouter {
         caller => registry.getSdkApiLane(caller) === 1,
         nativePlatform === 'win32' || nativePlatform === 'darwin' ? async entry => {
           await database.recordClipboard(entry)
-          if (entry.type === 'text') {
-            await services.clipboardHistory.recordItem({ content: entry.text, format_type: 'text' })
-          }
+          services.clipboardHistory.recordClipboardEntry(entry)
         } : undefined,
         registry,
         inputInjection,
@@ -987,6 +989,17 @@ export class IpcRouter {
       ),
       (clipboard) => clipboard.stop()
     )
+    services.clipboardHistory.useImageThumbnailer((dataUrl) => {
+      const img = nativeImage.createFromDataURL(dataUrl)
+      if (img.isEmpty()) return ''
+      const { width, height } = img.getSize()
+      const maxEdge = 320
+      const thumb = width > maxEdge || height > maxEdge
+        ? img.resize(width >= height ? { width: maxEdge } : { height: maxEdge })
+        : img
+      return thumb.toDataURL()
+    })
+    constructionScope.own(services.clipboardHistory, (history) => history.useImageThumbnailer(undefined))
     const clipboard = this.#clipboard
     this.#system = constructionScope.own(new SystemService(files, registry, {
       appName: 'ZTools',
@@ -1502,6 +1515,9 @@ export class IpcRouter {
       async system_get_cpu_usage() {
         return system.getCpuUsage()
       },
+      async system_list_volumes() {
+        return listSystemVolumes()
+      },
       async system_get_memory_usage() {
         return system.getMemoryUsage()
       },
@@ -1690,6 +1706,9 @@ export class IpcRouter {
       async filesystem_copy_file(params, caller) {
         return files.copyFile(params as FileCopyParams, caller)
       },
+      async filesystem_move_file_no_replace(params, caller, signal) {
+        return files.moveFileNoReplace(params as FileCopyParams, caller, signal)
+      },
       async filesystem_move_file(params, caller) {
         return files.moveFile(params as FileCopyParams, caller)
       },
@@ -1859,6 +1878,9 @@ export class IpcRouter {
       async clipboard_clear() {
         return clipboard.clear()
       },
+      async db_compare_and_set(params, caller, signal) {
+        return database.compareAndSet(params as DatabaseCompareAndSetParams, caller, signal)
+      },
       async db_put(params, caller, signal) {
         return database.put(params as DatabasePutParams, caller, signal)
       },
@@ -1885,6 +1907,9 @@ export class IpcRouter {
       },
       async credential_v1_status(_params, caller) {
         return database.credentialV1Status(caller)
+      },
+      async credential_v1_compare_and_set(params, caller, signal) {
+        return database.credentialV1Set(params as CredentialV1SetParams, caller, signal)
       },
       async credential_v1_set(params, caller, signal) {
         return database.credentialV1Set(params as CredentialV1SetParams, caller, signal)
@@ -2010,6 +2035,12 @@ export class IpcRouter {
         }
         return services.clipboardHistory.queryItems(params as any)
       },
+      async clipboard_history_restore(params, caller, signal) {
+        const input = params as { id: string; paste?: boolean }
+        const restored = await clipboard.restoreHistoryEntry(services.clipboardHistory.getEntry(input.id), caller, signal, input.paste === true)
+        services.clipboardHistory.touchItem(input.id)
+        return restored
+      },
       async clipboard_history_toggle_pin(params) {
         const input = params as { id: string }
         const success = services.clipboardHistory.togglePin(input?.id)
@@ -2025,8 +2056,8 @@ export class IpcRouter {
         return { success: true, count }
       },
       async clipboard_history_paste_sequential(_params, caller, signal) {
-        return services.clipboardHistory.pasteSequential(async (text) => {
-          await clipboard.hideAndPasteText({ text }, caller, signal)
+        return services.clipboardHistory.pasteSequential(async (_text, item) => {
+          await clipboard.restoreHistoryEntry(services.clipboardHistory.getEntry(item.id), caller, signal, true)
         })
       },
       async clipboard_history_reset_sequence() {

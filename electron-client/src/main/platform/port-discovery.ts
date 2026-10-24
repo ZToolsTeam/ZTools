@@ -9,7 +9,7 @@ export interface PortSummary {
   fieldAvailability: { processName: boolean; processPath: false; startTime: false }
 }
 /**
- * source：darwin-netstat 为当前 macOS 实现（netstat -anv 无需 root 即可列出系统服务套接字），darwin-lsof 为旧实现保留的兼容值。
+ * source：darwin-netstat 可列出系统服务套接字；部分 macOS 应用环境下 netstat 成功退出却不输出数据，此时改用 darwin-lsof。
  * visibility：all-sockets 表示列出了全部本地套接字；visible-processes 表示只列出当前用户可见进程的套接字。
  */
 export interface PortSnapshot { data: PortSummary[]; source: 'darwin-netstat' | 'darwin-lsof' | 'windows-netstat'; visibility: 'all-sockets' | 'visible-processes'; queriedAt: string }
@@ -19,6 +19,12 @@ const execute: Execute = promisify(execFile)
 const invalid = () => new ZToolsError(errorCodes.processError, '端口列表无效或未完整返回')
 const MAX_BYTES = 4 * 1024 * 1024, MAX_ROWS = 20000
 function boundedOutput(value: string) { if (typeof value !== 'string' || Buffer.byteLength(value) > MAX_BYTES) throw invalid() }
+function lsofExitOneStdout(error: unknown): string | undefined {
+  if (!error || typeof error !== 'object') return undefined
+  const result = error as { code?: unknown; stdout?: unknown; stderr?: unknown; killed?: unknown; signal?: unknown }
+  if (result.code !== 1 || result.killed || result.signal || typeof result.stdout !== 'string' || result.stderr !== '') return undefined
+  return result.stdout
+}
 function endpoint(value: string): { address: string; port: number } {
   const match = /^(?:\[([^\]]+)\]|([^\[\]]+)):(\d{1,5})$/.exec(value)
   if (!match) throw invalid()
@@ -177,6 +183,25 @@ export function createPlatformPortDiscoveryAdapter(platform: NodeJS.Platform, ru
       const [tcp, udp] = await Promise.all([runNetstat('tcp'), runNetstat('udp')])
       if (signal.aborted) throw signal.reason ?? invalid()
       const data = unique([...parseMacosNetstatPorts(tcp), ...parseMacosNetstatPorts(udp)])
+      if (!tcp.trim() || !udp.trim()) {
+        // 任一协议无输出都不能承诺完整；有合法表头但无记录则是正常空集。
+        // lsof 重新查询两个协议，只承诺当前用户可见进程的套接字。
+        let output: string
+        try {
+          // -Ts 只输出 TCP 状态，避免默认队列字段混入严格的 NUL 字段协议。
+          const result = await run('/usr/sbin/lsof', ['-nP', '-iTCP', '-iUDP', '-F0pcftPnT', '-Ts'], { encoding: 'utf8', shell: false, timeout: 10000, maxBuffer: MAX_BYTES, signal, windowsHide: true })
+          if (result.stderr?.trim()) throw invalid()
+          output = result.stdout
+        } catch (error) {
+          if (signal.aborted) throw signal.reason ?? invalid()
+          // lsof 同时查 -iTCP 与 -iUDP 时，任一协议无匹配或均无匹配都以退出码 1 结束；无 stderr 时正常解析 stdout。
+          const partialStdout = lsofExitOneStdout(error)
+          if (partialStdout === undefined) throw invalid()
+          output = partialStdout
+        }
+        if (signal.aborted) throw signal.reason ?? invalid()
+        return { data: parseMacosPorts(output), source: 'darwin-lsof', visibility: 'visible-processes', queriedAt: new Date().toISOString() }
+      }
       return { data, source: 'darwin-netstat', visibility: 'all-sockets', queriedAt: new Date().toISOString() }
     }
     const file = path.win32.join(process.env.SystemRoot ?? 'C:\\Windows', 'System32', 'netstat.exe')

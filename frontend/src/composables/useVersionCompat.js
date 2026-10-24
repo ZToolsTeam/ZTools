@@ -85,13 +85,13 @@ function checkCompat(info, appVersion, webVersion) {
   if (!isVersionGte(appVersion, minApp)) {
     return {
       compatible: false,
-      reason: `此插件有新版本，新版本需要 App >= ${minApp}，当前 ${formatVersionForDisplay(appVersion, appVersion || '')}，请先升级客户端`
+      reason: `该插件需要 App >= ${minApp}，当前 ${formatVersionForDisplay(appVersion, appVersion || '')}，请先升级客户端`
     }
   }
   if (!isNumericVersionGte(webVersion, minWeb)) {
     return {
       compatible: false,
-      reason: `此插件有新版本，新版本需要 Web >= ${minWeb}，当前 ${formatVersionForDisplay(webVersion, webVersion || '')}，请检查更新`
+      reason: `该插件需要 Web >= ${minWeb}，当前 ${formatVersionForDisplay(webVersion, webVersion || '')}，请检查更新`
     }
   }
   return { compatible: true, reason: '' }

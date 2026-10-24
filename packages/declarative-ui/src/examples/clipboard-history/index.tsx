@@ -350,13 +350,21 @@ export default function ClipboardHistoryCommand() {
   };
 
   const handleSyncSystemClipboard = async () => {
-    const res = await syncCurrentSystemClipboard(items);
-    setItems(res.items);
-    await showToast(
-      Toast.Style.Success,
-      res.added ? "已同步当前系统剪贴板" : "系统剪贴板已是最新记录",
-      res.item?.preview || "当前系统剪贴板为空"
-    );
+    try {
+      const res = await syncCurrentSystemClipboard(items);
+      setItems(res.items);
+      await showToast(
+        Toast.Style.Success,
+        res.added ? "已同步当前系统剪贴板" : "系统剪贴板已是最新记录",
+        res.item?.preview || "当前系统剪贴板为空"
+      );
+    } catch (error) {
+      await showToast(
+        Toast.Style.Failure,
+        "同步系统剪贴板失败",
+        error instanceof Error ? error.message : String(error)
+      );
+    }
   };
 
   const handleSaveEditedItem = async (saved: ClipboardItem) => {

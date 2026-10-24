@@ -3,7 +3,7 @@
 // 2. Native API - 宿主原生功能（窗口、系统、本地插件等）
 // 账号、反馈、云同步等在线服务属于官方版，由 @edition 提供，不从这里导出
 
-// ============ 插件市场与更新（CDN 静态插件目录；官方版由 @edition 接入后台） ============
+// ============ 插件市场与更新（官方版与开源版共用 CDN 静态插件目录） ============
 
 // 插件市场相关
 export {
@@ -16,7 +16,7 @@ export {
 } from './plugins'
 
 // 更新检查相关
-export { checkPluginUpdate, batchCheckPlugins } from './update'
+export { checkPluginUpdate, batchCheckPlugins, downloadPluginUpdate } from './update'
 
 // ============ Native API - 从 native.js 导出 ============
 export {
@@ -34,7 +34,6 @@ export {
   getCloseConfirm,
   setCloseConfirm,
   downloadAppUpdate,
-  downloadPluginUpdate,
   getDllPluginList,
   callDllPlugin,
   installPluginNative,

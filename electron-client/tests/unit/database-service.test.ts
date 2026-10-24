@@ -567,3 +567,110 @@ test('credential v1 writes opaque records, detects corrupt binding and re-encryp
     await dispose(root, service)
   }
 })
+
+test('普通CAS：同一旧值并发只有一个提交，其他命名空间不互相覆盖', async () => {
+  const { root, service } = await createService()
+  const own = { plugin_id: pluginCaller.pluginId!, key: 'cas-counter' }
+  try {
+    await service.put({ ...own, value: '0' }, pluginCaller, signal())
+    const results = await Promise.all(['1', '2', '3'].map(value => service.compareAndSet({ ...own, expectedValue: '0', value }, pluginCaller, signal())))
+    assert.equal(results.filter(r => r.data).length, 1)
+    const winner = (await service.get(own, pluginCaller, signal())).data
+    assert.ok(['1', '2', '3'].includes(winner))
+    await service.compareAndSet({ plugin_id: 'separate', key: own.key, expectedValue: null, value: 'different' }, mainCaller, signal())
+    assert.equal((await service.get(own, pluginCaller, signal())).data, winner)
+    await assert.rejects(service.compareAndSet({ plugin_id: 'separate', key: own.key, expectedValue: 'different', value: 'hijack' }, pluginCaller, signal()), { code: errorCodes.permissionDenied })
+  } finally { await dispose(root, service) }
+})
+
+test('普通CAS：提交后取消仍返回成功；读取期间取消不写入且释放锁', async (t) => {
+  const { root, service } = await createService()
+  const params = { plugin_id: 'cas-cancel', key: 'counter' }
+  const originalPut = ClassicLevel.prototype.put
+  const originalGet = ClassicLevel.prototype.get
+  try {
+    await service.put({ ...params, value: '0' }, mainCaller, signal())
+    const afterCommit = new AbortController()
+    const putMock = t.mock.method(ClassicLevel.prototype, 'put', async function (this: ClassicLevel<any, any>, ...args: any[]) {
+      await Reflect.apply(originalPut, this, args)
+      if (args[0] === params.key) afterCommit.abort(errorCodes.callerDestroyed)
+    })
+    assert.deepEqual(await service.compareAndSet({ ...params, expectedValue: '0', value: '1' }, mainCaller, afterCommit.signal), { success: true, data: true })
+    putMock.mock.restore()
+    assert.equal((await service.get(params, mainCaller, signal())).data, '1')
+    const beforeWrite = new AbortController()
+    const getMock = t.mock.method(ClassicLevel.prototype, 'get', async function (this: ClassicLevel<any, any>, ...args: any[]) {
+      const value = await Reflect.apply(originalGet, this, args)
+      if (args[0] === params.key) beforeWrite.abort(errorCodes.callerDestroyed)
+      return value
+    })
+    await assert.rejects(service.compareAndSet({ ...params, expectedValue: '1', value: '2' }, mainCaller, beforeWrite.signal), { code: errorCodes.callerDestroyed })
+    getMock.mock.restore()
+    assert.equal((await service.get(params, mainCaller, signal())).data, '1')
+    assert.equal((await service.compareAndSet({ ...params, expectedValue: '1', value: '3' }, mainCaller, signal())).data, true)
+  } finally { t.mock.restoreAll(); await dispose(root, service) }
+})
+
+test('安全CAS：同插件多窗口并发只有一个提交，其他插件同key隔离', async () => {
+  const protection = new TestCredentialProtection()
+  const { root, service } = await createSecureService(protection)
+  try {
+    await service.credentialV1Set({ key: 'counter', value: '0' }, credentialCallerA, signal())
+    const results = await Promise.all([
+      service.credentialV1Set({ key: 'counter', value: '1', expectedValue: '0' }, credentialCallerA, signal()),
+      service.credentialV1Set({ key: 'counter', value: '2', expectedValue: '0' }, credentialCallerB, signal())
+    ])
+    assert.deepEqual(results.map(r => r.data).sort(), ['CONFLICT', 'OK'])
+    assert.equal((await service.credentialV1Set({ key: 'counter', value: 'private', expectedValue: null }, otherCredentialCaller, signal())).data, 'OK')
+    const own = (await service.credentialV1Get({ key: 'counter' }, credentialCallerA, signal())).data
+    assert.equal(own.status, 'present')
+    assert.notEqual(own.status === 'present' ? own.value : null, 'private')
+  } finally { await dispose(root, service) }
+})
+
+test('安全CAS：解密旧值期间取消不覆盖；存在性读取期间取消不创建', async (t) => {
+  const protection = new TestCredentialProtection()
+  const { root, service } = await createSecureService(protection)
+  const originalDecrypt = protection.decrypt.bind(protection)
+  const originalHas = ClassicLevel.prototype.has
+  try {
+    await service.credentialV1Set({ key: 'counter', value: 'old' }, credentialCallerA, signal())
+    const controller = new AbortController()
+    const decryptMock = t.mock.method(protection, 'decrypt', async (cipher: Buffer) => {
+      const result = await originalDecrypt(cipher)
+      controller.abort(errorCodes.callerDestroyed)
+      return result
+    })
+    await assert.rejects(service.credentialV1Set({ key: 'counter', value: 'new', expectedValue: 'old' }, credentialCallerA, controller.signal), { code: errorCodes.callerDestroyed })
+    decryptMock.mock.restore()
+    assert.deepEqual((await service.credentialV1Get({ key: 'counter' }, credentialCallerA, signal())).data, { status: 'present', value: 'old' })
+    const absent = new AbortController()
+    const hasMock = t.mock.method(ClassicLevel.prototype, 'has', async function (this: ClassicLevel<any, any>, ...args: any[]) {
+      const exists = await Reflect.apply(originalHas, this, args)
+      absent.abort(errorCodes.callerDestroyed)
+      return exists
+    })
+    await assert.rejects(service.credentialV1Set({ key: 'new-key', value: 'new', ifAbsent: true }, credentialCallerA, absent.signal), { code: errorCodes.callerDestroyed })
+    hasMock.mock.restore()
+    assert.deepEqual((await service.credentialV1Get({ key: 'new-key' }, credentialCallerA, signal())).data, { status: 'missing' })
+  } finally { t.mock.restoreAll(); await dispose(root, service) }
+})
+
+test('安全凭据：重新加密期间取消不得写回；锁释放后仍能正常读取', async (t) => {
+  const protection = new TestCredentialProtection()
+  const { root, service } = await createSecureService(protection)
+  const originalEncrypt = protection.encrypt.bind(protection)
+  const originalPut = ClassicLevel.prototype.put
+  try {
+    await service.credentialV1Set({ key: 'rotate', value: 'unchanged' }, credentialCallerA, signal())
+    const controller = new AbortController()
+    let writes = 0
+    t.mock.method(ClassicLevel.prototype, 'put', async function (this: ClassicLevel<any, any>, ...args: any[]) { writes++; return Reflect.apply(originalPut, this, args) })
+    const encryptMock = t.mock.method(protection, 'encrypt', async (text: string) => { const result = await originalEncrypt(text); controller.abort(errorCodes.callerDestroyed); return result })
+    protection.requestReEncryption = true
+    await assert.rejects(service.credentialV1Get({ key: 'rotate' }, credentialCallerA, controller.signal), { code: errorCodes.callerDestroyed })
+    assert.equal(writes, 0)
+    encryptMock.mock.restore()
+    assert.deepEqual((await service.credentialV1Get({ key: 'rotate' }, credentialCallerA, signal())).data, { status: 'present', value: 'unchanged' })
+  } finally { t.mock.restoreAll(); await dispose(root, service) }
+})

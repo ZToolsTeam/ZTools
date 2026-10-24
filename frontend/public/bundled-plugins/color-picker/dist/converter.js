@@ -372,7 +372,7 @@ export function parseColor(input) {
     const trimmed = input.trim();
     const lower = trimmed.toLowerCase();
     // 0. 命名颜色支持
-    if (NAMED_COLORS[lower]) {
+    if (Object.prototype.hasOwnProperty.call(NAMED_COLORS, lower)) {
         return parseColor(NAMED_COLORS[lower]);
     }
     // 1. HEX 匹配 (#RGB, #RGBA, #RRGGBB, #RRGGBBAA)
@@ -521,7 +521,7 @@ export async function saveColorToPalette(name, hex) {
     if (current.length >= 100)
         throw new Error("调色板最多保存 100 个颜色，请先删除一些");
     const newItem = {
-        id: `color_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+        id: `color_${globalThis.crypto.randomUUID()}`,
         name: name || hex,
         hex: paletteHex(hex),
         savedAt: new Date().toLocaleString()

@@ -6,19 +6,30 @@ import { usePluginsStore, sanitizeRecentUsedAt } from '../plugins'
 const apiMocks = vi.hoisted(() => ({
   getMarketPlugins: vi.fn(),
   getLocalPlugins: vi.fn(),
-  getPluginDetails: vi.fn()
+  getPluginDetails: vi.fn(),
+  installPluginNative: vi.fn(),
+  getDownloadSign: vi.fn()
 }))
 
 vi.mock('@/api/apiserver', () => ({
   getMarketPlugins: apiMocks.getMarketPlugins,
   getLocalPlugins: apiMocks.getLocalPlugins,
-  getPluginDetails: apiMocks.getPluginDetails
+  getPluginDetails: apiMocks.getPluginDetails,
+  installPluginNative: apiMocks.installPluginNative,
+  getDownloadSign: apiMocks.getDownloadSign
 }))
 
-vi.mock('@/composables/useVersionCompat', () => ({
-  fetchVersions: vi.fn().mockResolvedValue({ appVersion: '2.0.0', webVersion: '1.0.0' }),
-  checkCompat: vi.fn().mockReturnValue({ compatible: true, reason: '' })
+const catalogMocks = vi.hoisted(() => ({ load: vi.fn() }))
+vi.mock('@/api/pluginCatalog', async (importOriginal) => ({
+  ...(await importOriginal()), loadV2StaticCatalogList: catalogMocks.load
 }))
+
+const compatMocks = vi.hoisted(() => ({
+  fetchVersions: vi.fn(),
+  checkCompat: vi.fn()
+}))
+
+vi.mock('@/composables/useVersionCompat', () => compatMocks)
 
 function setupZtools({ isLoggedIn = false, configValues = {} } = {}) {
   global.window.ztools = {
@@ -44,6 +55,9 @@ describe('usePluginsStore', () => {
     setActivePinia(createPinia())
     vi.useFakeTimers()
     for (const mock of Object.values(apiMocks)) mock.mockReset()
+    catalogMocks.load.mockReset().mockResolvedValue([])
+    compatMocks.fetchVersions.mockReset().mockResolvedValue({ appVersion: '2.0.0', webVersion: '1.0.0' })
+    compatMocks.checkCompat.mockReset().mockReturnValue({ compatible: true, reason: '' })
     apiMocks.getLocalPlugins.mockResolvedValue([])
     apiMocks.getMarketPlugins.mockResolvedValue({ list: [], total: 0, page: 1, pageSize: 12 })
     setupZtools()
@@ -255,8 +269,7 @@ describe('usePluginsStore', () => {
 
   // ── listCache ─────────────────────────────────────────────────
   describe('列表缓存', () => {
-    // 目录管理器会先尝试 V2 接口与 CDN 静态索引；测试里断开真实网络，
-    // 保证确定性地回退到 getMarketPlugins，避免结果随网络环境漂移
+    // 注入目录读取边界，验证列表缓存本身；真实 CDN 链路见 pluginDistribution.spec.js
     beforeEach(() => {
       vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new Error('测试环境断网')))
       vi.spyOn(console, 'warn').mockImplementation(() => {})
@@ -270,35 +283,35 @@ describe('usePluginsStore', () => {
     it('loadWithCache 命中缓存时不重复请求', async () => {
       const store = usePluginsStore()
       const params = { category: 'tools', page: 1, per_page: 12 }
-      apiMocks.getMarketPlugins.mockResolvedValue({ list: [{ pluginId: 'p1' }], total: 1 })
+      catalogMocks.load.mockResolvedValue([{ pluginId: 'p1' }])
 
       await store.loadWithCache(params)
       await store.loadWithCache(params)
 
-      expect(apiMocks.getMarketPlugins).toHaveBeenCalledTimes(1)
+      expect(catalogMocks.load).toHaveBeenCalledTimes(1)
     })
 
     it('forceRefresh=true 时跳过缓存', async () => {
       const store = usePluginsStore()
       const params = { category: 'tools', page: 1, per_page: 12 }
-      apiMocks.getMarketPlugins.mockResolvedValue({ list: [], total: 0 })
+      catalogMocks.load.mockResolvedValue([])
 
       await store.loadWithCache(params)
       await store.loadWithCache(params, true)
 
-      expect(apiMocks.getMarketPlugins).toHaveBeenCalledTimes(2)
+      expect(catalogMocks.load).toHaveBeenCalledTimes(2)
     })
 
     it('clearListCache 清空缓存', async () => {
       const store = usePluginsStore()
       const params = { page: 1 }
-      apiMocks.getMarketPlugins.mockResolvedValue({ list: [], total: 0 })
+      catalogMocks.load.mockResolvedValue([])
 
       await store.loadWithCache(params)
       store.clearListCache()
       await store.loadWithCache(params)
 
-      expect(apiMocks.getMarketPlugins).toHaveBeenCalledTimes(2)
+      expect(catalogMocks.load).toHaveBeenCalledTimes(2)
     })
   })
 
@@ -543,5 +556,56 @@ describe('usePluginsStore', () => {
       expect(JSON.parse(saved[1])).toEqual(store.recentUsedAt)
     })
   })
-})
 
+  describe('下架状态贯穿完整目录与更新检查', () => {
+    it.each(['市场分页', '批量更新'])('%s 未显示下架插件时仍禁用已安装项', async (source) => {
+      const store = usePluginsStore()
+      const gone = { pluginId: 'gone-tool', revoked: true, revokedReason: '已撤回', category: '办公效率' }
+      store.installedSet = new Set(['gone-tool'])
+      store.installedPlugins = [{ pluginId: 'gone-tool', enabled: true }]
+      window.ztools.plugin = { toggle: vi.fn().mockResolvedValue(true) }
+      if (source === '市场分页') {
+        store._getCatalogManager = () => ({
+          _catalog: [gone, { pluginId: 'visible', category: '系统工具' }],
+          query: async () => ({ list: [{ pluginId: 'visible' }], total: 2 })
+        })
+        await store.loadWithCache({ page: 1, per_page: 1 })
+        expect(store.categoryCounts).toEqual({ 系统工具: 1 })
+      } else {
+        await store.setUpdateInfo({ 'gone-tool': { ...gone, hasUpdate: false } })
+      }
+      expect(store.isRevoked('gone-tool')).toBe(true)
+      expect(store.getRevokedReason('gone-tool')).toBe('已撤回')
+      expect(store.installedPlugins[0].enabled).toBe(false)
+      expect(window.ztools.plugin.toggle).toHaveBeenCalledWith('gone-tool', false)
+      await expect(store.openPlugin('gone-tool')).rejects.toThrow('下架')
+    })
+  })
+
+  describe('安装必须重新读取发布状态', () => {
+    it('目录失败时不使用列表快照或调用方提供的地址，释放安装状态', async () => {
+      const store = usePluginsStore()
+      const cached = { pluginId: 'test-distribution', downloadUrl: 'https://cdn.ztools.cn/plugins/old.zip', sha256: 'a'.repeat(64) }
+      store.items = [cached]
+      apiMocks.getDownloadSign.mockRejectedValue(Object.assign(new Error('插件已下架'), { code: 'PLUGIN_REVOKED' }))
+      await expect(store.installPlugin('test-distribution', { downloadInfo: cached })).rejects.toMatchObject({ code: 'PLUGIN_REVOKED' })
+      expect(apiMocks.getDownloadSign).toHaveBeenCalledWith('test-distribution')
+      expect(apiMocks.installPluginNative).not.toHaveBeenCalled()
+      expect(store.installingSet.has('test-distribution')).toBe(false)
+      expect(store.downloadingSet.has('test-distribution')).toBe(false)
+      expect(store.isInstallFailed('test-distribution')).toBe(true)
+    })
+  })
+
+  describe('installPlugin 版本门槛', () => {
+    it('客户端版本低于 minAppVersion 时中止安装，不调用宿主安装', async () => {
+      compatMocks.checkCompat.mockReturnValue({ compatible: false, reason: '该插件需要 App >= 1.1.8.3，当前 1.1.8.2，请先升级客户端' })
+      const store = usePluginsStore()
+      const downloadInfo = { downloadUrl: 'https://cdn.example.com/a.zip', sha256: 'a'.repeat(64), minAppVersion: '1.1.8.3' }
+      apiMocks.getDownloadSign.mockResolvedValue(downloadInfo)
+      await expect(store.installPlugin('disk-analyzer')).rejects.toThrow('1.1.8.3')
+      expect(compatMocks.checkCompat).toHaveBeenCalledWith(downloadInfo, '2.0.0', '1.0.0')
+      expect(apiMocks.installPluginNative).not.toHaveBeenCalled()
+    })
+  })
+})

@@ -1,6 +1,6 @@
 {
   "name": "ztools-electron-client",
-  "version": "1.1.8.2",
+  "version": "1.1.8.3",
   "private": true,
   "license": "GPL-3.0-only",
   "description": "ZTools Electron Windows x64 client",
@@ -46,6 +46,7 @@
     "build:native:mac:clipboard": "node scripts/build-macos-clipboard.mjs",
     "build:native:mac:path-access": "node scripts/build-macos-path-access.mjs",
     "build:native:win:path-access": "node scripts/build-windows-path-access.mjs",
+    "build:native:win:path-access-broker": "node scripts/build-sidecars.mjs --path-access-broker",
     "test:win:reference:resources": "node scripts/test-file-resource-dispatch.mjs",
     "test:win:reference:images": "node scripts/test-windows-reference-images.mjs",
     "test:win:normal-app:plugin-file-chain": "node scripts/test-windows-normal-app-plugin-file-chain.mjs",
@@ -61,7 +62,7 @@
     "test:reference:zip": "node scripts/test-reference-zip.mjs",
     "test:mac:contracts": "node scripts/run-test-workflow.mjs mac-contracts",
     "start": "npm run build:native-host32 && npm run build && electron .",
-    "package:app:win32:x64": "npm run build:native-host32 && npm run build:ztools-service && npm run build && node scripts/package.mjs",
+    "package:app:win32:x64": "npm run build:native-host32 && npm run build:ztools-service && npm run build:native:win:path-access-broker && npm run build && node scripts/package.mjs",
     "package:app:darwin:universal": "node scripts/package-macos-universal.mjs",
     "package:dmg:darwin": "node scripts/package-macos-dmg.mjs",
     "test:portable-contract": "tsc -p tsconfig.test.json && node scripts/run-tests.mjs portable-contract"

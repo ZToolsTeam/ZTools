@@ -16,6 +16,9 @@ import type {
   FileWriteStartParams
 } from '../../contracts/method-params.js'
 import type { WindowRegistry } from '../windows/window-registry.js'
+import { NativePathAccessAdapter } from '../platform/native-path-access.js'
+import type { AnchoredPathObject } from '../platform/path-access.js'
+import { resolvePathAccessBroker, type PathAccessBrokerContext } from '../platform/path-access-broker.js'
 import { createPathSemanticsAdapter } from '../platform/path-semantics.js'
 import type { PathSemanticsAdapter } from '../platform/path-semantics.js'
 
@@ -135,6 +138,7 @@ const MAX_TRANSFER_PATHS = 2000
 export interface FileSystemServiceOptions {
   /** 追加的回收站保护根（如宿主 userData / 业务数据目录） */
   protectedTrashRoots?: readonly string[]
+  pathAccessBroker?: PathAccessBrokerContext
 }
 
 interface FileCapability {
@@ -396,7 +400,7 @@ export class FileSystemService {
     private readonly cacheRoot: string,
     private readonly now: () => number = Date.now,
     pathSemantics: PathSemanticsAdapter = createPathSemanticsAdapter(process.platform),
-    options: FileSystemServiceOptions = {}
+    private readonly options: FileSystemServiceOptions = {}
   ) {
     this.#pathSemantics = pathSemantics
     this.#protectedTrashRoots = [...defaultProtectedTrashRoots(), ...(options.protectedTrashRoots ?? [])]
@@ -779,6 +783,75 @@ export class FileSystemService {
     }
   }
 
+  /** 由平台原子提交“不替换”移动；不以 exists + rename 模拟，避免检查后目标被占用。 */
+  async moveFileNoReplace(params: FileCopyParams, caller: CallerIdentity, signal: AbortSignal): Promise<{ success: true }> {
+    const source = await this.resolveAuthorizedPath(params.sourcePath, caller, 'write', false)
+    const authorizedTarget = await this.resolveAuthorizedPath(params.destPath, caller, 'write', true)
+    // 大小写不敏感的文件系统上，目标名解析回源文件本身：只差大小写（或 Unicode 规范化）
+    const requestedName = path.basename(path.resolve(params.destPath))
+    const sameFileRename = source === authorizedTarget
+    if (sameFileRename && requestedName === path.basename(source)) return { success: true }
+    const context = this.options.pathAccessBroker
+    const resolution = context ? resolvePathAccessBroker(context) : undefined
+    if (!resolution?.available) {
+      throw new ZToolsError(errorCodes.notSupported, '安全改名所需的原生文件组件缺失，客户端安装不完整，请重新安装客户端')
+    }
+    const adapter = new NativePathAccessAdapter(resolution.executable, 5000, { platform: resolution.platform })
+    try {
+      // 只使用已通过授权的规范路径，不重新解析可被并发切换的原始路径。
+      const directory = await adapter.pin(path.dirname(source), 'directory', ['read', 'list', 'write'], signal)
+      if (sameFileRename) {
+        await this.#renameSameFile(adapter, directory, source, requestedName, signal)
+      } else {
+        const destination = await adapter.pin(authorizedTarget, 'save', ['write'], signal)
+        await adapter.move(directory, [path.basename(source)], destination, false, signal)
+      }
+      return { success: true }
+    } catch (error) {
+      throw fileFailure(error)
+    } finally {
+      await adapter.stop()
+    }
+  }
+
+  /**
+   * 同一文件只改名字的大小写。原生组件要求目标名字槽为空，而大小写不敏感的文件系统上新名字会命中源文件本身，
+   * 所以经唯一临时名分两步不覆盖改名；两步都不替换已有文件，第二步失败（例如新名字被另一个文件抢占）时放回原名。
+   */
+  async #renameSameFile(
+    adapter: NativePathAccessAdapter,
+    directory: AnchoredPathObject,
+    source: string,
+    requestedName: string,
+    signal: AbortSignal
+  ): Promise<void> {
+    const parent = path.dirname(source)
+    const [sourceStats, requestedStats] = await Promise.all([
+      fs.lstat(source, { bigint: true }),
+      fs.lstat(path.join(parent, requestedName), { bigint: true }).catch(() => undefined)
+    ])
+    if (!requestedStats || !sourceStats.isFile() || requestedStats.dev !== sourceStats.dev || requestedStats.ino !== sourceStats.ino) {
+      throw new ZToolsError(errorCodes.fileAlreadyExists, '输出已存在，未覆盖')
+    }
+    const temporaryName = `.ztools-rename-${randomUUID()}`
+    const temporary = await adapter.pin(path.join(parent, temporaryName), 'save', ['write'], signal)
+    await adapter.move(directory, [path.basename(source)], temporary, false, signal)
+    // 第一步已提交，后续步骤不再响应取消，避免文件停留在临时名上。
+    const committedSignal = new AbortController().signal
+    try {
+      const destination = await adapter.pin(path.join(parent, requestedName), 'save', ['write'], committedSignal)
+      await adapter.move(directory, [temporaryName], destination, false, committedSignal)
+    } catch (error) {
+      try {
+        const original = await adapter.pin(source, 'save', ['write'], committedSignal)
+        await adapter.move(directory, [temporaryName], original, false, committedSignal)
+      } catch {
+        throw new ZToolsError(errorCodes.fileWriteOutcomeUnknown, `改名未完成，文件暂存为 ${temporaryName}`)
+      }
+      throw error
+    }
+  }
+
   async fileExists(params: FilePathParams, caller: CallerIdentity): Promise<{ success: true; exists: boolean }> {
     const target = await this.resolveAuthorizedPath(params.path, caller, 'read', true)
     try {
@@ -829,8 +902,16 @@ export class FileSystemService {
     }
   }
 
-  async getDirectoryContents(params: FilePathParams, caller: CallerIdentity): Promise<{ success: true; files: FileInfo[] }> {
-    return { success: true, files: await this.#list(params.path, caller) }
+  async getDirectoryContents(params: FilePathParams, caller: CallerIdentity): Promise<{ success: true; files: FileInfo[]; writeAuthorized: boolean }> {
+    const files = await this.#list(params.path, caller)
+    let writeAuthorized = false
+    try {
+      await this.resolveAuthorizedPath(params.path, caller, 'write', false)
+      writeAuthorized = true
+    } catch (error) {
+      if (!(error instanceof ZToolsError) || error.code !== errorCodes.permissionDenied) throw error
+    }
+    return { success: true, files, writeAuthorized }
   }
 
   async getCurrentDirectory(caller: CallerIdentity): Promise<{ success: true; path: string }> {

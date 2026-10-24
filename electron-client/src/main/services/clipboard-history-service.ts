@@ -2,7 +2,8 @@ import { createHash, randomUUID } from 'node:crypto'
 import path from 'node:path'
 import fs from 'node:fs'
 import { DatabaseSync } from 'node:sqlite'
-import { ZToolsError } from '../../contracts/errors.js'
+import { ZToolsError, errorCodes } from '../../contracts/errors.js'
+import type { ClipboardHistoryEntry } from './clipboard-history.js'
 
 export type ClipboardFormatType = 'text' | 'html' | 'image' | 'files'
 
@@ -55,6 +56,21 @@ export interface ClipboardHistoryServiceOptions {
   retentionMaxItems?: number
   appBlacklist?: string[]
 }
+
+/** 把图片 data URL 缩成列表预览用的小图 data URL；无法解码时返回空串 */
+export type ImageThumbnailer = (image: string) => string | undefined
+
+/** 未注入缩略图生成器时，不超过该长度的图片 data URL 直接作为预览 */
+const FALLBACK_THUMBNAIL_CHARS = 256 * 1024
+
+/**
+ * 列表查询的列：图片只返回缩略图（content 列存原图，最大约 16 MiB，只在按 ID 恢复时读取）。
+ * thumbnail_missing 标记旧版本写入、还没有缩略图的图片。
+ */
+const LIST_COLUMNS = `id,
+  CASE WHEN format_type = 'image' THEN COALESCE(thumbnail, '') ELSE content END AS content,
+  CASE WHEN format_type = 'image' AND thumbnail IS NULL THEN 1 ELSE 0 END AS thumbnail_missing,
+  text_preview, format_type, sha256, char_count, source_app_name, source_app_path, is_pinned, created_at, updated_at`
 
 const DEFAULT_APP_BLACKLIST = [
   '1password',
@@ -136,8 +152,10 @@ export class ClipboardHistoryService {
 
   // 流水粘贴状态机
   private sequencePointer = 0
+  private sequenceLastId: string | null = null
   private lastPasteTimestamp = 0
   private initialSeedDone = false
+  private thumbnailer: ImageThumbnailer | undefined
 
   constructor(options: ClipboardHistoryServiceOptions = {}) {
     this.dbPath = options.dbPath || ':memory:'
@@ -239,6 +257,44 @@ export class ClipboardHistoryService {
       CREATE INDEX IF NOT EXISTS idx_clipboard_sha256 ON clipboard_items(sha256);
       CREATE INDEX IF NOT EXISTS idx_clipboard_pinned ON clipboard_items(is_pinned DESC, updated_at DESC);
     `)
+    const columns = this.db.prepare('PRAGMA table_info(clipboard_items)').all() as Array<{ name: string }>
+    if (!columns.some((column) => column.name === 'captured_from_system')) {
+      this.db.exec('ALTER TABLE clipboard_items ADD COLUMN captured_from_system INTEGER NOT NULL DEFAULT 0')
+    }
+    // 图片列表预览：NULL 表示旧版本写入、尚未生成；空串表示无法生成预览
+    if (!columns.some((column) => column.name === 'thumbnail')) {
+      this.db.exec('ALTER TABLE clipboard_items ADD COLUMN thumbnail TEXT')
+    }
+  }
+
+  /**
+   * 注入图片缩略图生成器（依赖 Electron nativeImage，由路由层提供）。
+   * 未注入时（单元测试、无图形环境）小图直接作预览，大图不提供预览。
+   */
+  public useImageThumbnailer(thumbnailer: ImageThumbnailer | undefined): void {
+    this.thumbnailer = thumbnailer
+  }
+
+  private createThumbnail(image: string): string {
+    try {
+      if (this.thumbnailer) return this.thumbnailer(image) ?? ''
+    } catch {
+      return ''
+    }
+    return image.length <= FALLBACK_THUMBNAIL_CHARS ? image : ''
+  }
+
+  /** 旧数据没有缩略图：按 ID 逐条读原图生成一次并写回，之后查询不再加载原图。 */
+  private fillMissingThumbnails(rows: ClipboardItemRecord[]): void {
+    if (!this.db) return
+    for (const row of rows) {
+      if (row.format_type !== 'image' || (row as { thumbnail_missing?: number }).thumbnail_missing !== 1) continue
+      const original = this.db.prepare('SELECT content FROM clipboard_items WHERE id = ?').get(row.id) as { content: string } | undefined
+      const thumbnail = original ? this.createThumbnail(original.content) : ''
+      this.db.prepare('UPDATE clipboard_items SET thumbnail = ? WHERE id = ?').run(thumbnail, row.id)
+      row.content = thumbnail
+    }
+    for (const row of rows) delete (row as { thumbnail_missing?: number }).thumbnail_missing
   }
 
   /**
@@ -269,14 +325,18 @@ export class ClipboardHistoryService {
     let content = input.content
     let charCount = content.length
 
+    const formatType: ClipboardFormatType = input.format_type || 'text'
+    if (formatType !== 'text' && formatType !== 'html' && Buffer.byteLength(content, 'utf8') > 16 * 1024 * 1024) {
+      throw new ZToolsError(errorCodes.fileTooLarge, '剪贴板历史内容超过 16 MiB 上限')
+    }
+
     // 2. 长文本截断保护（防止恶意写入百兆长文本打爆内存）
-    if (content.length > this.maxTextBytes) {
+    if ((formatType === 'text' || formatType === 'html') && content.length > this.maxTextBytes) {
       content = content.slice(0, this.maxTextBytes) + `\n... [已自动截断，原长 ${charCount} 字符]`
       charCount = content.length
     }
 
-    const sha256 = createHash('sha256').update(content).digest('hex')
-    const formatType: ClipboardFormatType = input.format_type || 'text'
+    const sha256 = createHash('sha256').update(formatType === 'text' ? content : `${formatType}:${content}`).digest('hex')
 
     // 3. 高熵密码与机密识别脱敏
     let preview = input.text_preview || content.slice(0, this.maxPreviewChars)
@@ -287,10 +347,11 @@ export class ClipboardHistoryService {
     }
 
     // 4. SHA-256 去重：若已存在相同哈希，仅更新时间戳并移至顶端
-    const existingStmt = this.db.prepare('SELECT * FROM clipboard_items WHERE sha256 = ?')
+    const existingStmt = this.db.prepare(`SELECT ${LIST_COLUMNS} FROM clipboard_items WHERE sha256 = ?`)
     const existing = existingStmt.get(sha256) as ClipboardItemRecord | undefined
 
     if (existing) {
+      this.fillMissingThumbnails([existing])
       const updateStmt = this.db.prepare(`
         UPDATE clipboard_items
         SET updated_at = ?, source_app_name = COALESCE(?, source_app_name), source_app_path = COALESCE(?, source_app_path)
@@ -308,12 +369,13 @@ export class ClipboardHistoryService {
 
     // 5. 插入全新条目
     const id = randomUUID()
+    const thumbnail = formatType === 'image' ? this.createThumbnail(content) : null
     const insertStmt = this.db.prepare(`
       INSERT INTO clipboard_items (
         id, content, text_preview, format_type, sha256,
         char_count, source_app_name, source_app_path, is_pinned,
-        created_at, updated_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?)
+        created_at, updated_at, thumbnail
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?)
     `)
 
     insertStmt.run(
@@ -326,14 +388,15 @@ export class ClipboardHistoryService {
       input.source_app_name ?? null,
       input.source_app_path ?? null,
       now,
-      now
+      now,
+      thumbnail
     )
 
     this.enforceRetentionLimit()
 
     return {
       id,
-      content,
+      content: thumbnail ?? content,
       text_preview: preview,
       format_type: formatType,
       sha256,
@@ -344,6 +407,33 @@ export class ClipboardHistoryService {
       created_at: now,
       updated_at: now
     }
+  }
+
+  /** 采集器的文本、图片原始 data URL、文件列表统一写入当前历史库。 */
+  public recordClipboardEntry(entry: ClipboardHistoryEntry, now = Date.now()): ClipboardItemRecord | null {
+    if (entry.type === 'text') return this.recordItem({ content: entry.text, format_type: 'text' }, now)
+    if (entry.type === 'image') return this.recordItem({ content: entry.image, format_type: 'image', text_preview: '图片' }, now)
+    if (entry.files.length === 0) return null
+    const record = this.recordItem({ content: JSON.stringify(entry.files), format_type: 'files', text_preview: entry.files.join('\n') }, now)
+    if (record) this.db!.prepare('UPDATE clipboard_items SET captured_from_system = 1 WHERE id = ?').run(record.id)
+    return record
+  }
+
+  /** 只按持久化条目 ID 恢复，不接收渲染进程提交的文件路径或图片字节。 */
+  public getEntry(id: string): ClipboardHistoryEntry {
+    if (!this.db) throw new Error('Database is closed')
+    const item = this.db.prepare('SELECT * FROM clipboard_items WHERE id = ?').get(id) as unknown as (ClipboardItemRecord & { captured_from_system: number }) | undefined
+    if (!item) throw new ZToolsError(errorCodes.fileError, '剪贴板历史记录已不存在，请刷新列表')
+    if (item.format_type === 'image') return { type: 'image', image: item.content }
+    if (item.format_type === 'files') {
+      if (item.captured_from_system !== 1) throw new ZToolsError(errorCodes.permissionDenied, '此文件历史并非系统剪贴板采集，请重新复制文件')
+      const parsed: unknown = JSON.parse(item.content)
+      if (!Array.isArray(parsed) || parsed.length === 0 || !parsed.every((file): file is string => typeof file === 'string' && file.length > 0)) {
+        throw new ZToolsError(errorCodes.invalidRequest, '剪贴板文件历史记录损坏')
+      }
+      return { type: 'files', files: parsed }
+    }
+    return { type: 'text', text: item.content }
   }
 
   /**
@@ -366,7 +456,8 @@ export class ClipboardHistoryService {
 
     if (options.search && options.search.trim()) {
       const q = `%${options.search.trim()}%`
-      conditions.push('(text_preview LIKE ? OR content LIKE ? OR source_app_name LIKE ?)')
+      // 图片的 content 是 base64，任意两三个字母都能命中，只按预览文字与来源应用匹配
+      conditions.push("(text_preview LIKE ? OR (format_type != 'image' AND content LIKE ?) OR source_app_name LIKE ?)")
       params.push(q, q, q)
     }
 
@@ -375,7 +466,7 @@ export class ClipboardHistoryService {
     const offset = Math.max(0, options.offset ?? 0)
 
     const sql = `
-      SELECT * FROM clipboard_items
+      SELECT ${LIST_COLUMNS} FROM clipboard_items
       ${whereClause}
       ORDER BY is_pinned DESC, updated_at DESC
       LIMIT ? OFFSET ?
@@ -383,7 +474,15 @@ export class ClipboardHistoryService {
     params.push(limit, offset)
 
     const stmt = this.db.prepare(sql)
-    return stmt.all(...params) as unknown as ClipboardItemRecord[]
+    const rows = stmt.all(...params) as unknown as ClipboardItemRecord[]
+    this.fillMissingThumbnails(rows)
+    return rows
+  }
+
+  /** 用户从历史里选中并恢复某条后把它移到最前（恢复写回剪贴板不会再被采集成新记录）。 */
+  public touchItem(id: string, now = Date.now()): boolean {
+    if (!this.db) throw new Error('Database is closed')
+    return Number(this.db.prepare('UPDATE clipboard_items SET updated_at = ? WHERE id = ?').run(now, id).changes) > 0
   }
 
   /**
@@ -430,7 +529,7 @@ export class ClipboardHistoryService {
    * 依次取出历史条目回贴，每次指针自动下移；若超过 sequenceTimeout 则自动从头开始
    */
   public async pasteSequential(
-    pasteCallback?: (text: string) => Promise<void> | void,
+    pasteCallback?: (text: string, item: ClipboardItemRecord) => Promise<void> | void,
     now = Date.now()
   ): Promise<SequentialPasteResult> {
     if (!this.db) throw new Error('Database is closed')
@@ -438,6 +537,7 @@ export class ClipboardHistoryService {
     // 检查超时重置
     if (this.lastPasteTimestamp > 0 && now - this.lastPasteTimestamp > this.sequenceTimeoutMs) {
       this.sequencePointer = 0
+      this.sequenceLastId = null
     }
 
     const allItems = this.queryItems({ limit: 200 })
@@ -451,12 +551,13 @@ export class ClipboardHistoryService {
       }
     }
 
+    // 按上一次粘贴的条目定位下一条：期间用户又复制了新内容（插到列表顶部）时，按下标推进会重复粘贴同一条
+    const lastIndex = this.sequenceLastId ? allItems.findIndex((item) => item.id === this.sequenceLastId) : -1
+    let currentIndex = lastIndex >= 0 ? lastIndex + 1 : this.sequencePointer
     // 若指针超界则循环回 0
-    if (this.sequencePointer >= allItems.length) {
-      this.sequencePointer = 0
-    }
+    if (currentIndex >= allItems.length) currentIndex = 0
 
-    const currentItem = allItems[this.sequencePointer]
+    const currentItem = allItems[currentIndex]
     if (!currentItem) {
       return {
         success: false,
@@ -466,18 +567,21 @@ export class ClipboardHistoryService {
         message: '未找到指定条目'
       }
     }
-    const currentIndex = this.sequencePointer
+    const previousLastId = this.sequenceLastId
 
-    // 指针后移并更新时间戳
-    this.sequencePointer = (this.sequencePointer + 1) % allItems.length
+    // 指针后移并更新时间戳（先推进，避免并发的下一次调用拿到同一条）
+    this.sequencePointer = (currentIndex + 1) % allItems.length
+    this.sequenceLastId = currentItem.id
     this.lastPasteTimestamp = now
 
-    if (pasteCallback && currentItem.content) {
+    if (pasteCallback) {
       try {
-        await pasteCallback(currentItem.content)
+        // 图片条目的 content 只是缩略图，回调应按 item.id 读取原始内容
+        await pasteCallback(currentItem.content, currentItem)
       } catch (err) {
         // 粘贴失败时指针回退，保证下次重试的仍是同一条，且如实返回失败
         this.sequencePointer = currentIndex
+        this.sequenceLastId = previousLastId
         const message = err instanceof Error && err.message ? err.message : '流水粘贴失败'
         return {
           success: false,
@@ -503,6 +607,7 @@ export class ClipboardHistoryService {
    */
   public resetPasteSequence(): { success: boolean; sequenceIndex: number } {
     this.sequencePointer = 0
+    this.sequenceLastId = null
     this.lastPasteTimestamp = 0
     return {
       success: true,

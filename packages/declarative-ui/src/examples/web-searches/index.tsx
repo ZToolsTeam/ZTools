@@ -232,35 +232,44 @@ export function buildSearchTargetUrl(engine: WebSearchEngine, query: string): st
 
 export const buildSearchUrl = buildSearchTargetUrl;
 
+/**
+ * 通过宿主在系统浏览器打开网址。
+ * 优先 shell_open_external（失败会报错）；旧宿主缺少该方法时退回 url_quick_open，
+ * 它打开失败时不报错而是返回 { opened: false }，必须检查。
+ */
+async function openUrlViaHost(url: string, hostOverride?: unknown): Promise<{ ok: boolean; error?: string }> {
+  const ext = await callHostTransport<{ opened?: boolean }>("shell_open_external", { url }, hostOverride);
+  if (ext.ok && ext.data?.opened !== false) return { ok: true };
+  const quick = await callHostTransport<{ opened?: boolean }>("url_quick_open", { url }, hostOverride);
+  if (quick.ok && quick.data?.opened !== false) return { ok: true };
+  return { ok: false, error: quick.error || ext.error || "浏览器没有打开该网址" };
+}
+
+async function openUrl(url: string, hostOverride?: unknown): Promise<{ ok: boolean; error?: string }> {
+  if (hostOverride || isRealElectronHost()) return openUrlViaHost(url, hostOverride);
+  try {
+    await open(url);
+    return { ok: true };
+  } catch (err) {
+    return { ok: false, error: err instanceof Error ? err.message : String(err) };
+  }
+}
+
 export async function performWebSearch(
   engineOrId: string | WebSearchEngine,
   query = "",
   hostOverride?: any
-): Promise<{ ok: boolean; url: string; engineName: string }> {
+): Promise<{ ok: boolean; url: string; engineName: string; error?: string }> {
   const allEngines = [...memoryCustomEngines, ...WEB_SEARCH_ENGINES];
   const engine =
     typeof engineOrId === "object" && engineOrId !== null
       ? engineOrId
       : allEngines.find((e) => e.id === engineOrId || e.keyword === engineOrId) ||
         WEB_SEARCH_ENGINES[0];
+  // 按引擎自己的 URL 模板直接打开；不走宿主 web_search（只认内置引擎，自定义引擎会被换成别的搜索）
   const url = buildSearchTargetUrl(engine, query);
-
-  if (hostOverride || isRealElectronHost()) {
-    const res = await callHostTransport<any>(
-      "web_search",
-      { engine: engine.id, query: query.trim(), url },
-      hostOverride
-    );
-    if (!res.ok) {
-      const extRes = await callHostTransport<any>("shell_open_external", { url }, hostOverride);
-      if (!extRes.ok) {
-        await callHostTransport<any>("url_quick_open", { url }, hostOverride);
-      }
-    }
-  } else {
-    await open(url);
-  }
-
+  const opened = await openUrl(url, hostOverride);
+  if (!opened.ok) return { ok: false, url, engineName: engine.name, error: opened.error };
   return { ok: true, url, engineName: engine.name };
 }
 
@@ -269,22 +278,12 @@ export const triggerWebSearch = performWebSearch;
 export async function quickOpenUrl(
   url: string,
   hostOverride?: any
-): Promise<{ ok: boolean; url: string }> {
+): Promise<{ ok: boolean; url: string; error?: string }> {
   const clean = (url || "").trim();
   if (!clean) return { ok: false, url: "" };
   const normalizedUrl = /^https?:\/\//i.test(clean) ? clean : `https://${clean}`;
-  if (hostOverride || isRealElectronHost()) {
-    const res = await callHostTransport<any>(
-      "url_quick_open",
-      { url: normalizedUrl },
-      hostOverride
-    );
-    if (!res.ok) {
-      await callHostTransport<any>("shell_open_external", { url: normalizedUrl }, hostOverride);
-    }
-  } else {
-    await open(normalizedUrl);
-  }
+  const opened = await openUrl(normalizedUrl, hostOverride);
+  if (!opened.ok) return { ok: false, url: normalizedUrl, error: opened.error || "无法打开链接" };
   return { ok: true, url: normalizedUrl };
 }
 
@@ -762,6 +761,7 @@ export function WebSearchesCommand() {
                       icon={Icon.MagnifyingGlass}
                       onAction={async () => {
                         const res = await performWebSearch(engine, trimmedQuery);
+                        if (!res.ok) { await showToast(Toast.Style.Failure, "搜索页面未打开", res.error); return; }
                         await showToast(
                           Toast.Style.Success,
                           `已通过 ${res.engineName} 打开搜索`,

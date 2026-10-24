@@ -79,6 +79,12 @@ function createFakeHost() {
       db.set(`${envelope.params.plugin_id}:${envelope.params.key}`, envelope.params.value)
       return ok({ success: true, data: 'OK' })
     },
+    async db_compare_and_set(envelope) {
+      const key = `${envelope.params.plugin_id}:${envelope.params.key}`
+      const matches = (db.get(key) ?? null) === envelope.params.expectedValue
+      if (matches) db.set(key, envelope.params.value)
+      return ok({ success: true, data: matches })
+    },
     async db_delete(envelope) {
       db.delete(`${envelope.params.plugin_id}:${envelope.params.key}`)
       return ok({ success: true, data: 'OK' })

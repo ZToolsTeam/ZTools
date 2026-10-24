@@ -25,6 +25,7 @@ const artifactVersion = buildQualifier ? `${packageJson.version}-${buildQualifie
 const outputRoot = getWindowsArtifactRoot(root, artifactVersion)
 const nativeHostSource = path.join(root, 'out', 'native', 'win32-ia32', 'ZToolsNativeHost32.exe')
 const serviceSource = path.join(root, 'out', 'native', 'service-win32-ia32', 'ZToolsService.exe')
+const pathAccessBrokerSource = path.join(root, 'out', 'native', 'win32-x64', 'bin', 'ZToolsPathAccessBroker.exe')
 const pluginSourceRoot = path.resolve(root, '..', 'bin', 'Data', 'Plugins')
 const privilegedManifestSource = path.join(
   root,
@@ -142,6 +143,7 @@ if (packageJson.dependencies?.yauzl !== '3.4.0') throw new Error('yauzl 版本�
 if (fs.existsSync(outputRoot)) throw new Error(`输出目录已存在，请归档后重试: ${outputRoot}`)
 if (!fs.existsSync(nativeHostSource)) throw new Error(`NativeHost32 产物不存在: ${nativeHostSource}`)
 if (!fs.existsSync(serviceSource)) throw new Error(`ZToolsService 产物不存在: ${serviceSource}`)
+if (!fs.existsSync(pathAccessBrokerSource)) throw new Error(`ZToolsPathAccessBroker 产物不存在: ${pathAccessBrokerSource}`)
 if (!fs.existsSync(privilegedManifestSource)) {
   throw new Error(`ZToolsService 生产特权清单不存在: ${privilegedManifestSource}`)
 }
@@ -189,11 +191,12 @@ for (const applicationPath of applicationPaths) {
   fs.mkdirSync(nativeDirectory, { recursive: true })
   fs.copyFileSync(nativeHostSource, path.join(nativeDirectory, 'ZToolsNativeHost32.exe'))
   const pathAccessBroker = stageWindowsPathAccessBroker({ clientRoot: root, resourcesNativeDirectory: nativeDirectory })
-  if (pathAccessBroker) console.log(`已打包 x64 PathAccessBroker: ${pathAccessBroker}`)
-  else console.log('未找到受控 x64 PathAccessBroker 构建输出；文件引用运行时将报告 unavailable。')
-  const pathAccessBrokerSha256 = pathAccessBroker
-    ? createHash('sha256').update(fs.readFileSync(pathAccessBroker)).digest('hex')
-    : undefined
+  // 批量改名等安全文件操作依赖该组件，缺失时不能打出功能残缺的安装包
+  if (!pathAccessBroker) {
+    throw new Error('未找到 x64 ZToolsPathAccessBroker.exe（out/native/win32-x64/bin），请先运行 npm run build:native:win:path-access-broker')
+  }
+  console.log(`已打包 x64 PathAccessBroker: ${pathAccessBroker}`)
+  const pathAccessBrokerSha256 = createHash('sha256').update(fs.readFileSync(pathAccessBroker)).digest('hex')
   fs.writeFileSync(
     path.join(nativeDirectory, '.ztools-native-host.xml'),
     nativeHostManifest,

@@ -1,5 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
+import { createServer } from 'node:net'
 import { createPlatformPortDiscoveryAdapter, parseMacosNetstatPorts, parseMacosPorts, parseWindowsPorts } from '../../src/main/platform/port-discovery.js'
 import { ProcessService } from '../../src/main/services/process-service.js'
 import type { WindowRegistry } from '../../src/main/windows/window-registry.js'
@@ -80,10 +81,83 @@ test('Mac netstat runner rejects crashes, diagnostics and timeouts instead of re
   await assert.rejects(createPlatformPortDiscoveryAdapter('darwin', async () => ({ stdout: netstatTcp, stderr: 'warning' })).list(signal()), { code: 'PROCESS_ERROR' })
   const late = new AbortController(); await assert.rejects(createPlatformPortDiscoveryAdapter('darwin', async () => { late.abort('cancel'); return { stdout: netstatTcp } }).list(late.signal))
 })
-test('Mac netstat parser handles the real local netstat output', { skip: process.platform !== 'darwin' }, async () => {
+test('Mac empty netstat output falls back to visible lsof sockets and preserves the listening PID', async () => {
+  const observed: string[][] = []
+  const adapter = createPlatformPortDiscoveryAdapter('darwin', async (file, args, options) => {
+    observed.push([file, ...args])
+    assert.equal(options.shell, false)
+    assert.equal(options.maxBuffer, 4 * 1024 * 1024)
+    assert.equal(options.timeout, 10000)
+    return { stdout: file.endsWith('/lsof') ? 'p68103\0cElectron\0\nf32\0tIPv4\0PTCP\0n127.0.0.1:9233\0TST=LISTEN\0\n' : '' }
+  })
+  const result = await adapter.list(signal())
+  assert.equal(result.source, 'darwin-lsof')
+  assert.equal(result.visibility, 'visible-processes')
+  assert.deepEqual(result.data.map(row => [row.localPort, row.pid, row.state]), [[9233, 68103, 'LISTEN']])
+  assert.deepEqual(observed.at(-1), ['/usr/sbin/lsof', '-nP', '-iTCP', '-iUDP', '-F0pcftPnT', '-Ts'])
+})
+for (const emptyProtocol of ['tcp', 'udp']) {
+  test(`Mac empty ${emptyProtocol} output replaces the partial netstat snapshot with both lsof protocols`, async () => {
+    const result = await createPlatformPortDiscoveryAdapter('darwin', async (file, args) => {
+      if (file.endsWith('/lsof')) return { stdout: lsof }
+      if (args.includes(emptyProtocol)) return { stdout: ' \n\t' }
+      return { stdout: args.includes('tcp') ? netstatTcp : netstatUdp }
+    }).list(signal())
+    assert.equal(result.source, 'darwin-lsof')
+    assert.equal(result.visibility, 'visible-processes')
+    assert.deepEqual(result.data.map(row => [row.protocol, row.localPort]), [['TCP', 3000], ['TCP', 4000], ['UDP', 5353]])
+  })
+}
+test('Mac valid protocol headers with no sockets remain complete without lsof fallback', async () => {
+  for (const [tcp, udp, count] of [[netstatHeader, netstatUdp, 3], [netstatTcp, netstatHeader, 5], [netstatHeader, netstatHeader, 0]] as const) {
+    const result = await createPlatformPortDiscoveryAdapter('darwin', async (file, args) => {
+      assert.equal(file, '/usr/sbin/netstat')
+      return { stdout: args.includes('tcp') ? tcp : udp }
+    }).list(signal())
+    assert.equal(result.source, 'darwin-netstat')
+    assert.equal(result.visibility, 'all-sockets')
+    assert.equal(result.data.length, count)
+  }
+})
+test('Mac lsof fallback accepts exit code 1 for empty or single-protocol match and rejects failure, malformed output and late cancellation', async () => {
+  const noMatch = createPlatformPortDiscoveryAdapter('darwin', async file => {
+    if (file.endsWith('/lsof')) throw { code: 1, stdout: '', stderr: '' }
+    return { stdout: '' }
+  })
+  const empty = await noMatch.list(signal())
+  assert.deepEqual(empty.data, [])
+  assert.equal(empty.visibility, 'visible-processes')
+  const oneProtocolMatch = createPlatformPortDiscoveryAdapter('darwin', async file => {
+    if (file.endsWith('/lsof')) throw { code: 1, stdout: lsof, stderr: '' }
+    return { stdout: '' }
+  })
+  const partial = await oneProtocolMatch.list(signal())
+  assert.equal(partial.data.length, 3)
+  assert.equal(partial.source, 'darwin-lsof')
+  for (const failure of [{ code: 1, stdout: 'truncated-no-nul', stderr: '' }, { code: 2, stdout: lsof, stderr: '' }, { code: 1, stdout: '', stderr: 'denied' }, { code: 'ENOENT' }]) {
+    await assert.rejects(createPlatformPortDiscoveryAdapter('darwin', async file => {
+      if (file.endsWith('/lsof')) throw failure
+      return { stdout: '' }
+    }).list(signal()), { code: 'PROCESS_ERROR' })
+  }
+  for (const result of [{ stdout: lsof, stderr: 'warning' }, { stdout: 'invalid' }]) {
+    await assert.rejects(createPlatformPortDiscoveryAdapter('darwin', async file => file.endsWith('/lsof') ? result : { stdout: '' }).list(signal()), { code: 'PROCESS_ERROR' })
+  }
+  const controller = new AbortController()
+  await assert.rejects(createPlatformPortDiscoveryAdapter('darwin', async file => {
+    if (file.endsWith('/lsof')) { controller.abort('cancel'); return { stdout: lsof } }
+    return { stdout: '' }
+  }).list(controller.signal))
+})
+test('Mac adapter reports the actual temporary listener in Node and Electron runtimes', { skip: process.platform !== 'darwin' }, async t => {
+  const server = createServer()
+  await new Promise<void>((resolve, reject) => { server.once('error', reject); server.listen(0, '127.0.0.1', resolve) })
+  t.after(() => new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve())))
+  const address = server.address()
+  assert.ok(address && typeof address === 'object')
   const result = await createPlatformPortDiscoveryAdapter('darwin').list(signal())
-  assert.equal(result.source, 'darwin-netstat')
-  assert.ok(result.data.length > 0)
+  assert.equal(result.visibility, result.source === 'darwin-netstat' ? 'all-sockets' : 'visible-processes')
+  assert.ok(result.data.some(row => row.pid === process.pid && row.localPort === address.port && row.state === 'LISTEN'))
   assert.ok(result.data.every(row => row.localPort >= 1 && row.localPort <= 65535 && Number.isSafeInteger(row.pid)))
 })
 test('runner rejects diagnostic/partial failures and missing platforms, skips preabort and discards late output', async () => {

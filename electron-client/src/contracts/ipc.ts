@@ -24,9 +24,11 @@ const largeRequestMethods = new Set([
   'filesystem_write_file_chunk',
   'filesystem_write_cache_chunk',
   'clipboard_copy_image',
+  'db_compare_and_set',
   'db_put',
   'db_batch',
   'db_put_secure',
+  'credential_v1_compare_and_set',
   'credential_v1_set'
 ])
 

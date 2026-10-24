@@ -550,6 +550,8 @@ export function AppleShortcutsCommand() {
     try {
       const list = await getAppleShortcuts();
       setShortcuts(list);
+    } catch (error) {
+      await showToast(Toast.Style.Failure, "读取快捷指令失败", error instanceof Error ? error.message : String(error));
     } finally {
       setIsLoading(false);
     }
@@ -564,8 +566,11 @@ export function AppleShortcutsCommand() {
           setShortcuts(list);
           setIsLoading(false);
         }
-      } catch {
-        if (isMounted) setIsLoading(false);
+      } catch (error) {
+        if (isMounted) {
+          setIsLoading(false);
+          await showToast(Toast.Style.Failure, "读取快捷指令失败", error instanceof Error ? error.message : String(error));
+        }
       }
     })();
     return () => {

@@ -8,7 +8,7 @@ import { errorCodes, ZToolsError } from '../../src/contracts/errors.js'
 import { runtimePathsForBusinessDataRoot } from '../../src/main/runtime/runtime-paths.js'
 import { UpdateService } from '../../src/main/services/update-service.js'
 
-test('unsupported update platforms reject before network, filesystem or updater handoff', async () => {
+test('Mac 允许离线检查，非 Windows 仍拒绝自动下载安装且不产生副作用', async () => {
   for (const platform of ['darwin', 'linux'] as const) {
     const isolatedRoot = path.join(os.tmpdir(), `ztools-update-platform-${randomUUID()}`)
     let fetches = 0
@@ -30,7 +30,8 @@ test('unsupported update platforms reject before network, filesystem or updater 
     }
     const unsupported = (error: unknown) => error instanceof ZToolsError && error.code === errorCodes.notSupported
     assert.equal(fs.existsSync(isolatedRoot), false)
-    await assert.rejects(updates.check({ source: 'manual' }), unsupported)
+    if (platform === 'linux') await assert.rejects(updates.check({ source: 'manual' }), unsupported)
+    else assert.deepEqual(await updates.check({ source: 'manual' }), { success: true, source: 'manual', app: null, web: null })
     await assert.rejects(updates.download(request), unsupported)
     await assert.rejects(updates.install(request), unsupported)
     assert.equal(fetches, 0)

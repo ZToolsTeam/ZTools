@@ -1,3 +1,4 @@
+import { updateStoredItem } from "./storage-update.js";
 import { getDeclarativeBridge } from "./bridge.js";
 import { ZToolsHostError } from "./host-error.js";
 
@@ -30,6 +31,8 @@ export interface SecureStorageApi {
   status(): Promise<SecureStorageStatus>;
   getItem<T = unknown>(key: string): Promise<T | undefined>;
   setItem(key: string, value: unknown): Promise<void>;
+  compareAndSet(key: string, expected: unknown, value: unknown): Promise<boolean>;
+  updateItem<T>(key: string, update: (current: unknown) => T): Promise<T>;
   removeItem(key: string): Promise<void>;
   /** 把 LocalStorage 里的明文条目搬进加密存储：写入 → 读回校验 → 删除明文（宿主库 + 浏览器旧键）→ 压缩 */
   importFromLocalStorage(key: string, options?: { targetKey?: string }): Promise<SecureStorageImportResult>;
@@ -75,6 +78,15 @@ export const SecureStorage: SecureStorageApi = {
     const impl = implementation();
     if (!impl?.setItem) throw unavailable();
     return impl.setItem(key, value);
+  },
+  async compareAndSet(key, expected, value) {
+    assertSecureStorageKey(key);
+    const impl = implementation();
+    if (!impl?.compareAndSet) throw unavailable();
+    return impl.compareAndSet(key, expected, value);
+  },
+  async updateItem<T>(key: string, update: (current: unknown) => T): Promise<T> {
+    return updateStoredItem(SecureStorage, key, update);
   },
   async removeItem(key) {
     assertSecureStorageKey(key);

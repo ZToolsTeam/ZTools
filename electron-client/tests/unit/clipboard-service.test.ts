@@ -112,6 +112,30 @@ function wait(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms))
 }
 
+test('历史恢复写入图片原始字节和完整文件列表，缺失文件不执行粘贴，且不会向调用方授予文件读权限', async () => {
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'clipboard-restore-'))
+  const first = path.join(directory, 'first.txt'), second = path.join(directory, '第二 份.txt')
+  await fs.writeFile(first, 'one'); await fs.writeFile(second, 'two')
+  const registry = new FakeRegistry(), events = new EventService(registry)
+  const clipboard = new FakeClipboard(), fileClipboard = new FakeFileClipboard()
+  const { files, grants } = createFiles()
+  const service = new ClipboardService(files, events, clipboard, createImages(), fileClipboard)
+  const signal = new AbortController().signal
+  try {
+    const image = 'data:image/png;base64,aGVsbG8='
+    await service.restoreHistoryEntry({ type: 'image', image }, caller, signal)
+    assert.equal(clipboard.readImage().toPNG().toString(), 'hello')
+    assert.equal(clipboard.text, '')
+    await service.restoreHistoryEntry({ type: 'files', files: [first, second] }, caller, signal)
+    assert.deepEqual(fileClipboard.paths, await Promise.all([fs.realpath(first), fs.realpath(second)]))
+    assert.deepEqual(grants, [])
+    assert.deepEqual((await service.readFiles(caller, signal)).files, [])
+    assert.deepEqual(grants, [])
+    await assert.rejects(service.restoreHistoryEntry({ type: 'files', files: [path.join(directory, 'missing')] }, caller, signal, true), /不存在或无法访问/)
+    assert.deepEqual(fileClipboard.paths, await Promise.all([fs.realpath(first), fs.realpath(second)]))
+  } finally { await service.stop(); events.stop(); await fs.rm(directory, { recursive: true, force: true }) }
+})
+
 test('filtered legacy clipboard events neither grant nor deliver raw paths to reference-lane subscribers', async () => {
   const registry = new FakeRegistry(), events = new EventService(registry), clipboard = new FakeClipboard()
   const { files } = createFiles(), fileClipboard = new FakeFileClipboard(), owners: number[] = []

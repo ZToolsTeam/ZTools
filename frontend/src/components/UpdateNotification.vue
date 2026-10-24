@@ -27,7 +27,11 @@
         新版本已就绪，建议立即更新
       </div>
 
-      <div v-if="updating" class="update-progress" aria-live="polite">
+      <p v-if="manualUpdate" class="update-changelog">
+        下载完成后，退出 ZTools，打开 DMG，将应用拖入“应用程序”替换旧版。
+      </p>
+
+      <div v-if="updating && !manualUpdate" class="update-progress" aria-live="polite">
         <div class="update-progress-row">
           <span>正在下载更新</span>
           <strong>{{ progress }}%</strong>
@@ -40,8 +44,8 @@
       <div v-if="updateError" class="update-error">{{ updateError }}</div>
 
       <!-- 操作按钮 -->
-      <div v-if="!updating" class="update-actions">
-        <template v-if="!force">
+      <div v-if="!updating || manualUpdate" class="update-actions">
+        <template v-if="!force && !updating">
           <button class="update-btn-text" @click="skipVersion">
             此版本不再提醒
           </button>
@@ -49,7 +53,7 @@
             稍后提醒
           </button>
         </template>
-        <button class="update-btn-primary" @click="doUpdate">立即更新</button>
+        <button class="update-btn-primary" :disabled="updating" @click="doUpdate">{{ manualUpdate ? '下载 macOS 安装包' : '立即更新' }}</button>
       </div>
       <div v-else class="update-actions">
         <button class="update-btn-ghost" @click="cancelInProgress">取消更新</button>
@@ -79,6 +83,7 @@ const updating = ref(false)
 const progress = ref(0)
 const updateError = ref('')
 const operationId = ref('')
+const manualUpdate = ref(false)
 
 /** 将 changelog 中的 \n 转换为 <br> 标签，并转义 HTML 特殊字符 */
 const formattedChangelog = computed(() => {
@@ -92,10 +97,11 @@ const formattedChangelog = computed(() => {
 })
 
 const updateStore = useUpdateStore()
-const { downloadAndInstall, silentWebUpdate, cancelUpdate } = useAppUpdate()
+const { downloadAndInstall, openManualUpdate, silentWebUpdate, cancelUpdate } = useAppUpdate()
 
 let pendingType = null
 let pendingData = null
+let actionRevision = 0
 
 /**
  * 从 LevelDB 读取更新偏好，判断是否应该展示通知
@@ -163,7 +169,7 @@ async function clearUpdatePrefs() {
     await window.ztools.db.delete({ _id: SKIP_VERSION_KEY, pluginId: SYSTEM_PLUGIN_ID })
     await window.ztools.db.delete({ _id: REMIND_AFTER_KEY, pluginId: SYSTEM_PLUGIN_ID })
   } catch (e) {
-    // 静默处理
+    console.warn('[update] 清除更新偏好失败:', e)
   }
 }
 
@@ -175,6 +181,8 @@ async function show(type, data) {
   if (!(await shouldShowNotification(ver, isForce))) return
 
   updateType.value = type
+  actionRevision += 1
+  manualUpdate.value = type === 'app' && data.manualUpdate === true
   version.value = ver
   changelog.value = data.changelog || ''
   force.value = isForce
@@ -189,6 +197,7 @@ async function show(type, data) {
 
 function dismiss() {
   if (updating.value) return
+  actionRevision += 1
   visible.value = false
   pendingType = null
   pendingData = null
@@ -207,6 +216,7 @@ function handleUpdateProgress(envelope) {
 }
 
 function cancelInProgress() {
+  actionRevision += 1
   cancelUpdate()
   updating.value = false
   updateError.value = '更新已取消'
@@ -235,9 +245,28 @@ async function doUpdate() {
   if (!pendingType || !pendingData || updating.value) return
   const type = pendingType
   const data = pendingData
+  const revision = actionRevision
 
-  // 用户选择立即更新，清除跳过/稍后提醒设置
+  // 在异步清理偏好前锁定按钮，避免重复打开下载或启动安装器。
+  if (type === 'app') updating.value = true
   await clearUpdatePrefs()
+  if (revision !== actionRevision) return
+
+  if (type === 'app' && data.manualUpdate === true) {
+    updating.value = true
+    updateError.value = ''
+    try {
+      await openManualUpdate(data)
+      updating.value = false
+      dismiss()
+      window.__ztoolsToast?.('info', '已打开 macOS 安装包下载，请完成手动替换')
+    } catch (error) {
+      updateError.value = error.message || '无法打开安装包下载'
+    } finally {
+      updating.value = false
+    }
+    return
+  }
 
   if (type === 'app') {
     updating.value = true
@@ -287,7 +316,9 @@ async function doUpdate() {
 onMounted(() => {
   const events = window.ztools?.events
   if (!events) return
-  Promise.resolve(events.subscribe?.('update_download_progress')).catch(() => {})
+  Promise.resolve(events.subscribe?.('update_download_progress')).catch(error => {
+    console.warn('[update] 订阅下载进度失败:', error)
+  })
   events.on?.('update_download_progress', handleUpdateProgress)
 })
 

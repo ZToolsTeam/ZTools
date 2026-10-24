@@ -66,8 +66,12 @@ test('exposes x64 Windows packaging commands and removes the former ia32 distrib
 
   assert.equal(
     packageJson.scripts['package:app:win32:x64'],
-    'npm run build:native-host32 && npm run build:ztools-service && npm run build && node scripts/package.mjs'
+    'npm run build:native-host32 && npm run build:ztools-service && npm run build:native:win:path-access-broker && npm run build && node scripts/package.mjs'
   )
+  assert.equal(packageJson.scripts['build:native:win:path-access-broker'], 'node scripts/build-sidecars.mjs --path-access-broker')
+  const packageScript = fs.readFileSync(new URL('./package.mjs', import.meta.url), 'utf8')
+  assert.match(packageScript, /ZToolsPathAccessBroker 产物不存在/)
+  assert.doesNotMatch(packageScript, /文件引用运行时将报告 unavailable/)
   assert.equal(
     packageJson.scripts['package:win32:x64'],
     'npm run package:app:win32:x64 && node scripts/package-installer.mjs'
@@ -102,7 +106,7 @@ test('records x64 main-process support and keeps isolated native processes expli
 })
 
 test('records and verifies optional PathAccessBroker status, SHA-256 and x64 PE without promoting SDK 1', () => {
-  const temporaryRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'ztools-win-path-manifest-'))
+  const temporaryRoot = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'ztools-win-path-manifest-')))
   const applicationRoot = path.join(temporaryRoot, 'ZTools-win32-x64')
   const brokerPath = path.join(applicationRoot, 'resources', 'native', 'ZToolsPathAccessBroker.exe')
   try {
@@ -249,7 +253,7 @@ test('verifies PE headers and rejects x86 Electron files or unlisted x86 helpers
 })
 
 test('packages only the fixed fresh-builder x64 broker and leaves missing broker explicitly unavailable', () => {
-  const temporaryRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'ztools-win-path-package-'))
+  const temporaryRoot = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'ztools-win-path-package-')))
   const outputRoot = path.join(temporaryRoot, 'out', 'native', 'win32-x64')
   const sourceDirectory = path.join(outputRoot, 'bin')
   const resourcesNative = path.join(temporaryRoot, 'package', 'resources', 'native')

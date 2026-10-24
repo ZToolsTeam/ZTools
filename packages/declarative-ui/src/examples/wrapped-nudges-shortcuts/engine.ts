@@ -571,7 +571,8 @@ export const DEFAULT_APPLE_SHORTCUTS: AppleShortcutItem[] = [
 export async function getAppleShortcuts(hostOverride?: any): Promise<AppleShortcutItem[]> {
   if (hostOverride || isRealElectronHost()) {
     const res = await callHostTransport<any>("shortcuts_list", {}, hostOverride);
-    if (res.ok && res.data !== undefined) {
+    if (!res.ok) throw new Error(res.error || "无法读取系统快捷指令");
+    if (res.data !== undefined) {
       const rawList = Array.isArray(res.data)
         ? res.data
         : Array.isArray(res.data?.items)
@@ -581,6 +582,7 @@ export async function getAppleShortcuts(hostOverride?: any): Promise<AppleShortc
         : typeof res.data === "string"
         ? res.data.split(/\r?\n/).map(s => s.trim()).filter(Boolean)
         : [];
+      if (rawList.length === 0) return [];
       if (rawList.length > 0) {
         return rawList.map((item: any, idx: number) => {
           if (typeof item === "string") {
@@ -607,8 +609,9 @@ export async function getAppleShortcuts(hostOverride?: any): Promise<AppleShortc
         });
       }
     }
+    throw new Error("快捷指令列表响应无效");
   }
-  return [...DEFAULT_APPLE_SHORTCUTS];
+  return [];
 }
 
 /**

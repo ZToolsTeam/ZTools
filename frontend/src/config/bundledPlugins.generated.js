@@ -72,7 +72,7 @@ export default {
       "id": "json-format",
       "name": "JSON 格式化",
       "description": "JSON 语法校验、高亮美化与压缩转义，支持一键生成 TypeScript / Go / Rust 数据结构定义",
-      "version": "2.1.1",
+      "version": "2.1.2",
       "author": "ZTools Team",
       "icon": "icon.svg",
       "category": [
@@ -131,7 +131,7 @@ export default {
       "id": "timestamp",
       "name": "时间戳转换",
       "description": "秒与毫秒时间戳、日期格式实时互转，支持全球城市世界时钟与多时区时差换算",
-      "version": "1.1.1",
+      "version": "1.1.2",
       "author": "ZTools Team",
       "icon": "icon.svg",
       "category": [
@@ -190,8 +190,8 @@ export default {
     {
       "id": "calculator",
       "name": "计算器",
-      "description": "输入算式即时计算，内置科学函数、单位换算、实时汇率、人民币大写金额转换与日期推算",
-      "version": "2.1.1",
+      "description": "输入算式即时计算，内置科学函数、单位换算、每日汇率、人民币大写金额转换与日期推算",
+      "version": "2.1.2",
       "author": "ZTools Team",
       "icon": "icon.svg",
       "category": [
@@ -222,7 +222,7 @@ export default {
         },
         {
           "code": "calc-currency",
-          "explain": "实时多币种汇率换算",
+          "explain": "每日多币种汇率换算",
           "mode": "view",
           "cmds": [
             "汇率换算",
@@ -262,7 +262,7 @@ export default {
       "id": "qr-code",
       "name": "二维码生成",
       "description": "输入网址或文本实时生成高清二维码，支持生成 Wi-Fi 连网二维码、复制图片与导出 PNG",
-      "version": "2.1.1",
+      "version": "2.1.2",
       "author": "ZTools Team",
       "icon": "icon.svg",
       "category": [
@@ -317,7 +317,7 @@ export default {
       "id": "base64image",
       "name": "图片 Base64",
       "description": "图片文件或截图与 Base64 编码双向互转，支持一键复制 Data URL 或还原预览图片",
-      "version": "1.0.2",
+      "version": "1.0.3",
       "author": "ZTools Team",
       "icon": "icon.svg",
       "category": [
@@ -352,7 +352,7 @@ export default {
       "id": "file-compare",
       "name": "文本对比",
       "description": "左右并排对比两段文本、代码或配置文件的逐行差异，支持忽略空白与一键复制差异报告",
-      "version": "2.0.3",
+      "version": "2.0.4",
       "author": "ZTools Team",
       "icon": "icon.svg",
       "category": [
@@ -386,7 +386,7 @@ export default {
       "id": "crypto-tool",
       "name": "编码与加密",
       "description": "支持 Base64 / URL / Unicode / Hex 编码互转、MD5 / SHA 哈希计算、AES 加解密与 UUID 批量生成",
-      "version": "1.1.1",
+      "version": "1.1.2",
       "author": "ZTools Team",
       "icon": "icon.svg",
       "category": [
@@ -425,7 +425,7 @@ export default {
         },
         {
           "code": "codec-url",
-          "explain": "URL 编码与解码 (encodeURI)",
+          "explain": "URL 组件编码与解码 (encodeURIComponent)",
           "mode": "view",
           "cmds": [
             "url编码",
@@ -461,6 +461,34 @@ export default {
             "hmac",
             "加密解密"
           ]
+        },
+        {
+          "code": "codec-unicode",
+          "explain": "Unicode 编码与解码",
+          "mode": "view",
+          "cmds": [
+            "unicode编码",
+            "unicode解码"
+          ]
+        },
+        {
+          "code": "codec-hex",
+          "explain": "UTF-8 Hex 编码与解码",
+          "mode": "view",
+          "cmds": [
+            "hex编码",
+            "hex解码"
+          ]
+        },
+        {
+          "code": "gen-uuid",
+          "explain": "UUID v4 批量生成",
+          "mode": "view",
+          "cmds": [
+            "uuid",
+            "guid",
+            "生成uuid"
+          ]
         }
       ],
       "targets": [
@@ -482,7 +510,7 @@ export default {
       "id": "google-auth",
       "name": "2FA 验证码",
       "description": "桌面端两步验证动态口令（TOTP）管理工具，支持秒级复制 6 位验证码，密钥加密保存在本机",
-      "version": "1.0.3",
+      "version": "1.0.4",
       "author": "ZTools Team",
       "icon": "icon.svg",
       "category": [
@@ -517,7 +545,7 @@ export default {
       "id": "color-picker",
       "name": "取色与配色",
       "description": "支持 HEX / RGB / HSL / CMYK 色值实时互转、WCAG 无障碍对比度检测与常用色板收藏",
-      "version": "2.1.1",
+      "version": "2.1.2",
       "author": "ZTools Team",
       "icon": "icon.svg",
       "category": [
@@ -615,8 +643,8 @@ export default {
     {
       "id": "todo",
       "name": "待办清单",
-      "description": "极简任务待办清单，回车快速添加任务，支持高优标记、到期提醒与完成状态筛选",
-      "version": "1.0.2",
+      "description": "极简任务待办清单，回车快速添加任务，支持高优标记与完成状态筛选",
+      "version": "1.0.3",
       "author": "ZTools Team",
       "icon": "icon.svg",
       "category": [

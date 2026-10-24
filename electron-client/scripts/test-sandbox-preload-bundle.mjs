@@ -26,6 +26,9 @@ test('the maintained application preload bundles its local helpers into one sand
   const exposed = runInBoundedModuleShim(compiled)
   assert.equal(exposed.get('__ztoolsElectron').contractVersion, 1)
   assert.equal(typeof exposed.get('__ztoolsElectron').transport.methods.config_get, 'function')
+  for (const method of ['system_list_volumes', 'filesystem_move_file_no_replace', 'clipboard_history_restore', 'db_compare_and_set', 'credential_v1_compare_and_set']) {
+    assert.equal(typeof exposed.get('__ztoolsElectron').transport.methods[method], 'function', method + ' 应从实际沙箱预加载脚本暴露')
+  }
 })
 
 test('plain TypeScript output cannot replace the bundled preload in the sandbox', () => {

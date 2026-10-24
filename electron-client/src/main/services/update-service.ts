@@ -17,6 +17,8 @@ const UPDATE_CHECK_TIMEOUT_MS = 30_000
 
 /** 一次更新检查的输入 */
 export interface UpdateCheckRequest {
+  readonly platform: 'windows' | 'macos'
+  readonly arch: string
   readonly appVersion: string
   readonly webVersion: string
   readonly source: UpdateCheckParams['source']
@@ -79,6 +81,8 @@ export interface UpdateInfo {
   downloadUrl: string
   checksum: string
   minAppVersion?: string
+  /** macOS 使用 DMG 手动替换，不进入 Windows 安装器。 */
+  manualUpdate?: boolean
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -347,6 +351,7 @@ function isDirectDownloadPath(downloadRoot: string, candidate: string): boolean 
 
 export class UpdateService {
   readonly #platform: NodeJS.Platform
+  readonly #arch: string
   readonly #runtimePaths: RuntimePaths
   readonly #appVersion: string
   #webVersion: string
@@ -371,6 +376,7 @@ export class UpdateService {
 
   constructor(options: {
     platform?: NodeJS.Platform
+    arch?: string
     runtimePaths: RuntimePaths
     appVersion: string
     webVersion: string
@@ -381,6 +387,7 @@ export class UpdateService {
     runUpdaterImpl?: typeof runUpdaterAndWait
   }) {
     this.#platform = options.platform ?? process.platform
+    this.#arch = options.arch ?? process.arch
     this.#runtimePaths = options.runtimePaths
     this.#appVersion = options.appVersion
     this.#webVersion = options.webVersion
@@ -393,7 +400,7 @@ export class UpdateService {
 
   #assertWindowsUpdate(): void {
     if (this.#platform !== 'win32') {
-      throw new ZToolsError(errorCodes.notSupported, '当前更新安装链仅支持 Windows；Mac 更新尚未验收')
+      throw new ZToolsError(errorCodes.notSupported, '应用内下载安装仅支持 Windows；macOS 请下载 DMG 手动替换')
     }
   }
 
@@ -466,13 +473,17 @@ export class UpdateService {
     app: UpdateInfo | null
     web: UpdateInfo | null
   }> {
-    this.#assertWindowsUpdate()
+    if (this.#platform !== 'win32' && this.#platform !== 'darwin') {
+      throw new ZToolsError(errorCodes.notSupported, '当前平台不支持更新检查')
+    }
     const updateSource = this.#updateSource
     if (updateSource === null) return { success: true, source: params.source, app: null, web: null }
     const controller = new AbortController()
     const timeout = setTimeout(() => controller.abort(), UPDATE_CHECK_TIMEOUT_MS)
     try {
       const envelope = await updateSource.fetchLatest({
+        platform: this.#platform === 'darwin' ? 'macos' : 'windows',
+        arch: this.#arch,
         appVersion: this.#appVersion,
         webVersion: this.#webVersion,
         source: params.source,
@@ -481,6 +492,10 @@ export class UpdateService {
       if (!isRecord(envelope)) throw new ZToolsError(errorCodes.dataCorrupt, '更新服务器响应结构无效')
       const app = normalizeUpdate(envelope.app, 'App')
       const web = normalizeUpdate(envelope.web, 'Web')
+      if (this.#platform === 'darwin' && web) {
+        throw new ZToolsError(errorCodes.dataCorrupt, 'macOS 更新必须使用完整安装包')
+      }
+      if (app && this.#platform === 'darwin') app.manualUpdate = true
       return {
         success: true,
         source: params.source,
@@ -491,6 +506,7 @@ export class UpdateService {
       throw networkError(error, '检查更新失败')
     } finally {
       clearTimeout(timeout)
+      controller.abort()
     }
   }
 

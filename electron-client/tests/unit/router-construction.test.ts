@@ -79,6 +79,7 @@ test('IpcRouter factory rolls back real service listeners after a late construct
   } as unknown as IpcRouterOptions
   const mainApp = {
     getPath: () => dataRoot,
+    getAppPath: () => dataRoot,
     isPackaged: false,
     runningUnderARM64Translation: false,
     async getFileIcon() { return { toDataURL: () => '' } }

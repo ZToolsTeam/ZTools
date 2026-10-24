@@ -1,7 +1,7 @@
 {
   "id": "google-auth",
   "name": "2FA 验证码",
-  "version": "1.0.3",
+  "version": "1.0.4",
   "description": "桌面端两步验证动态口令（TOTP）管理工具，支持秒级复制 6 位验证码，密钥加密保存在本机",
   "author": "ZTools Team",
   "entry": "dist/index.js",

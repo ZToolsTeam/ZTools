@@ -242,9 +242,9 @@ export async function fetchScriptCommands(
         ? res.data.scripts
         : Array.isArray(res.data?.commands)
           ? res.data.commands
-          : null;
-    if (res.ok && rawList) {
-      if (rawList.length > 0 || realHost) {
+          : Array.isArray(res.data?.items) ? res.data.items : null;
+    if (res.ok && res.data?.success !== false && rawList) {
+      if (rawList.length > 0 || realHost || forceReload) {
         return rawList.map((item: any, idx: number): ScriptCommandMetadata => {
           const parsed = item.sourceCode
             ? parseRaycastScriptHeaders(String(item.sourceCode))
@@ -263,6 +263,20 @@ export async function fetchScriptCommands(
             lastRunAt: item.lastRunAt ? Number(item.lastRunAt) : undefined
           };
         });
+      }
+    }
+    const hasExplicitMock = Boolean(
+      hostOverride &&
+        typeof hostOverride === "object" &&
+        (method in hostOverride || "transport" in hostOverride)
+    );
+    if (!res.ok || res.data?.success === false) {
+      if (forceReload || realHost || hasExplicitMock) {
+        throw new Error(
+          res.error ||
+            res.data?.error ||
+            (forceReload ? "重新扫描脚本目录失败" : "读取脚本目录失败")
+        );
       }
     }
     if (realHost) {
@@ -736,10 +750,19 @@ export function ScriptCommandsCommand() {
 
   const handleReload = async () => {
     setIsLoading(true);
-    const list = await fetchScriptCommands(true);
-    setScripts(list);
-    setIsLoading(false);
-    await showToast(Toast.Style.Success, "已重新扫描加载本地脚本目录", `共 ${list.length} 个脚本`);
+    try {
+      const list = await fetchScriptCommands(true);
+      setScripts(list);
+      await showToast(Toast.Style.Success, "已重新扫描加载本地脚本目录", `共 ${list.length} 个脚本`);
+    } catch (err) {
+      await showToast(
+        Toast.Style.Failure,
+        "重新扫描脚本目录失败",
+        err instanceof Error ? err.message : String(err)
+      );
+    } finally {
+      setIsLoading(false);
+    }
   };
 
   const activeScript = useMemo(

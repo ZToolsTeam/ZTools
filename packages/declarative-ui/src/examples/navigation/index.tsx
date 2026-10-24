@@ -169,7 +169,6 @@ export async function fetchNavigationWindows(
         ? res.data.windows
         : null;
     if (res.ok && list) {
-      if (list.length > 0 || realHost) {
         return list.map((w: any, idx: number) => ({
           id: String(w.id || w.handle || w.hwnd || `win-${idx}`),
           handle: String(w.handle || w.hwnd || w.id || `hwnd-${idx}`),
@@ -181,11 +180,8 @@ export async function fetchNavigationWindows(
           isFocused: Boolean(w.isFocused ?? idx === 0),
           workspace: w.workspace ? String(w.workspace) : "Desktop 1"
         }));
-      }
     }
-    if (realHost) {
-      return [];
-    }
+    throw new Error(res.error || "无法读取系统导航信息");
   }
 
   const q = query.trim().toLowerCase();
@@ -311,7 +307,6 @@ export async function searchNavigationMenuItems(
         ? res.data.items
         : null;
     if (res.ok && list) {
-      if (list.length > 0 || realHost) {
         return list.map((m: any, idx: number) => {
           const pathArr = Array.isArray(m.path)
             ? m.path.map(String)
@@ -327,11 +322,8 @@ export async function searchNavigationMenuItems(
             enabled: m.enabled !== false
           };
         });
-      }
     }
-    if (realHost) {
-      return [];
-    }
+    throw new Error(res.error || "无法读取系统导航信息");
   }
 
   const q = query.trim().toLowerCase();
@@ -475,6 +467,39 @@ export function NavigationWindowDetailView({ win }: { win: NavigationWindowItem 
   );
 }
 
+// 只认明确的"缺少权限"：宿主旧版本把超时等所有菜单失败都写成"请检查辅助功能与自动化权限"，不能据此判为权限问题
+const PERMISSION_ERROR_PATTERN =
+  /PERMISSION_DENIED|ACCESSIBILITY_(?:REQUIRED|DENIED|PERMISSION)|(?:未授权|未授予|没有|缺少|需要|未开启|未允许)[^，。,.;；]{0,12}(?:辅助功能|权限)|not (?:allowed|authori[sz]ed|trusted)|permission denied/i;
+
+/** 宿主返回的错误是否是缺少辅助功能等系统权限 */
+export function isNavigationPermissionError(error: unknown): boolean {
+  if (!error) return false;
+  const code = typeof error === "object" ? String((error as { code?: unknown }).code ?? "") : "";
+  const message = error instanceof Error ? error.message : String(error);
+  return PERMISSION_ERROR_PATTERN.test(`${code} ${message}`);
+}
+
+/**
+ * 汇总窗口列表与菜单查询的失败信息；都成功时返回 null。
+ * 任何一侧是权限错误时提示去授权辅助功能（重试无用，必须用户在系统设置里授权）。
+ */
+export function describeNavigationFailure(
+  windowError: unknown,
+  menuError: unknown
+): { title: string; message: string } | null {
+  if (!windowError && !menuError) return null;
+  if (isNavigationPermissionError(windowError) || isNavigationPermissionError(menuError)) {
+    return {
+      title: "需要辅助功能权限",
+      message: "请在 系统设置 > 隐私与安全性 > 辅助功能 中允许 ZTools，然后刷新列表"
+    };
+  }
+  const text = (error: unknown) => (error instanceof Error ? error.message : String(error));
+  if (windowError && menuError) return { title: "无法读取窗口和菜单", message: text(windowError) };
+  if (windowError) return { title: "无法读取窗口列表", message: text(windowError) };
+  return { title: "无法读取应用菜单", message: text(menuError) };
+}
+
 export function NavigationCommand() {
   const realHost = isRealElectronHost();
   const [searchText, setSearchText] = useState("");
@@ -493,19 +518,22 @@ export function NavigationCommand() {
   useEffect(() => {
     let active = true;
     setIsLoading(true);
-    Promise.all([
+    // 窗口与菜单互相独立：菜单查询超时或失败时窗口列表照常显示，反之亦然
+    void Promise.allSettled([
       fetchNavigationWindows(searchText),
       searchNavigationMenuItems(searchText)
-    ])
-      .then(([winList, menuList]) => {
-        if (!active) return;
-        setWindows(winList);
-        setMenuItems(menuList);
-        setIsLoading(false);
-      })
-      .catch(() => {
-        if (active) setIsLoading(false);
-      });
+    ]).then(([winResult, menuResult]) => {
+      if (!active) return;
+      // 失败的一侧清空：窗口与菜单都随前台应用变化，保留上次结果会显示过时内容
+      setWindows(winResult.status === "fulfilled" ? winResult.value : []);
+      setMenuItems(menuResult.status === "fulfilled" ? menuResult.value : []);
+      setIsLoading(false);
+      const failure = describeNavigationFailure(
+        winResult.status === "rejected" ? winResult.reason : undefined,
+        menuResult.status === "rejected" ? menuResult.reason : undefined
+      );
+      if (failure) void showToast({ style: Toast.Style.Failure, title: failure.title, message: failure.message });
+    });
     return () => {
       active = false;
     };

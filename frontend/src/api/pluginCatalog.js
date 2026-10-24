@@ -2,7 +2,7 @@
  * 插件目录（CDN 静态索引）公共能力
  *
  * 插件市场以 CDN 上的 plugins-v2/catalog.json 为准：列表、详情、下载信息与更新检查都从这里算出。
- * 未配置官方后台（单机模式）时只用这里；配置了后台时 plugins.js / update.js 的后台分支也复用这里的校验与换算，保证结果一致。
+ * 官方版与开源版共用这些校验，旧版插件目录不能作为下载或更新来源。
  */
 
 import { V2_CATALOG_CDN_URL } from '../utils/declarativePluginLoader'
@@ -18,23 +18,42 @@ const V2_CATALOG_FETCH_TIMEOUT_MS = 2500
 
 let _v2CatalogCache = null
 let _v2CatalogCacheTime = 0
+let _v2CatalogPending = null
 
 export function normalizeCatalogId(pluginId) {
   return String(pluginId || '').trim().toLowerCase()
 }
 
+/** 市场安装包必须来自新版分发目录，不能把旧版 ZIP 当作声明式插件安装。 */
+export function isV2PluginDownloadUrl(value) {
+  if (typeof value !== 'string') return false
+  try {
+    const url = new URL(value)
+    return url.origin === new URL(V2_CATALOG_CDN_URL).origin &&
+      !url.username && !url.password && !url.search && !url.hash &&
+      url.pathname.startsWith('/plugins-v2/') && url.pathname.endsWith('.zip')
+  } catch {
+    // 地址不合法，调用方会拒绝安装或更新。
+    return false
+  }
+}
+
 /**
  * 读取 V2 静态插件索引（CDN plugins-v2/catalog.json）的插件列表，60 秒内存缓存。
- * 拉取失败、超时或格式不对时返回 null，由调用方决定如何降级。
- * @returns {Promise<Array<object> | null>}
+ * 合并并发请求；拉取失败明确报错，不能把故障当成空目录或已是最新版。
+ * @returns {Promise<Array<object>>}
  */
-export async function loadV2StaticCatalogList() {
-  if (typeof fetch !== 'function') return null
-
+export async function loadV2StaticCatalogList({ forceRefresh = false } = {}) {
   const now = Date.now()
-  if (_v2CatalogCache && now - _v2CatalogCacheTime < V2_CATALOG_CACHE_TTL_MS) {
+  if (!forceRefresh && _v2CatalogCache && now - _v2CatalogCacheTime < V2_CATALOG_CACHE_TTL_MS) {
     return _v2CatalogCache
   }
+  if (_v2CatalogPending) return _v2CatalogPending
+  _v2CatalogPending = fetchCatalogList()
+  try { return await _v2CatalogPending } finally { _v2CatalogPending = null }
+}
+
+async function fetchCatalogList() {
   try {
     const controller = typeof AbortController !== 'undefined' ? new AbortController() : null
     const timer = controller ? setTimeout(() => controller.abort(), V2_CATALOG_FETCH_TIMEOUT_MS) : null
@@ -43,7 +62,7 @@ export async function loadV2StaticCatalogList() {
         headers: { Accept: 'application/json' },
         signal: controller ? controller.signal : undefined
       })
-      if (!res.ok) return null
+      if (!res.ok) throw new Error(`HTTP ${res.status}`)
       const raw = await res.json()
       const list = Array.isArray(raw)
         ? raw
@@ -52,16 +71,18 @@ export async function loadV2StaticCatalogList() {
           : Array.isArray(raw?.list)
             ? raw.list
             : null
-      if (list) {
-        _v2CatalogCache = list
-        _v2CatalogCacheTime = Date.now()
-      }
+      if (!list) throw new Error('插件目录格式无效')
+      _v2CatalogCache = list
+      _v2CatalogCacheTime = Date.now()
       return list
     } finally {
       if (timer) clearTimeout(timer)
+      controller?.abort()
     }
-  } catch {
-    return null
+  } catch (cause) {
+    const error = new Error('插件目录暂不可用，请检查网络后重试', { cause })
+    error.code = 'PLUGIN_CATALOG_UNAVAILABLE'
+    throw error
   }
 }
 
@@ -83,13 +104,13 @@ export function normalizeCatalogEntry(found, pluginId = '') {
 }
 
 /**
- * 在静态索引里按插件 id（不区分大小写）查找条目，找不到或索引不可用时返回 null
+ * 在静态索引里按插件 id（不区分大小写）查找条目，找不到返回 null；目录不可用时抛错
  */
-export async function findInV2StaticCatalog(pluginId) {
+export async function findInV2StaticCatalog(pluginId, options) {
   const pid = normalizeCatalogId(pluginId)
   if (!pid) return null
 
-  const list = await loadV2StaticCatalogList()
+  const list = await loadV2StaticCatalogList(options)
   if (!Array.isArray(list)) return null
   const found = list.find(
     (item) => normalizeCatalogId(item?.id || item?.pluginId) === pid
@@ -100,14 +121,24 @@ export async function findInV2StaticCatalog(pluginId) {
 
 /**
  * 由静态索引条目生成下载信息；已下架的插件直接抛出 PLUGIN_REVOKED
- * @returns {object|null} 条目缺下载地址时返回 null
+ * @returns {object|null} 不存在的条目返回 null，未发布或安装包无效时抛错
  */
 export function buildCatalogDownloadInfo(entry) {
-  if (!entry || !entry.downloadUrl) return null
+  if (!entry) return null
   if (entry.revoked) {
     const reason = entry.revokedReason || entry.revoked_reason || '该插件已被官方安全下架'
     const err = new Error(`插件已被官方安全下架: ${reason}`)
     err.code = 'PLUGIN_REVOKED'
+    throw err
+  }
+  if (entry.draft) {
+    const err = new Error(entry.draftReason || '插件尚未发布')
+    err.code = 'PLUGIN_NOT_PUBLISHED'
+    throw err
+  }
+  if (!isV2PluginDownloadUrl(entry.downloadUrl) || !SHA256_PATTERN.test(entry.sha256 || entry.checksum || '')) {
+    const err = new Error('插件缺少有效的新版安装包或 SHA-256 校验值')
+    err.code = 'PLUGIN_INVALID_PACKAGE'
     throw err
   }
   return {
@@ -117,7 +148,8 @@ export function buildCatalogDownloadInfo(entry) {
     downloadUrl: entry.downloadUrl,
     sha256: entry.sha256,
     checksum: entry.checksum,
-    size: entry.size
+    size: entry.size,
+    ...(entry.minAppVersion ? { minAppVersion: entry.minAppVersion } : {})
   }
 }
 
@@ -205,8 +237,10 @@ export function noUpdate(pluginId, message) {
 export function buildCatalogUpdateInfo(entry, currentVersion, platform) {
   const pluginId = entry?.pluginId || entry?.id || ''
   if (entry?.revoked) {
-    return { ...noUpdate(pluginId, '插件已下架'), revoked: true }
+    return { ...noUpdate(pluginId, '插件已下架'), revoked: true,
+      revokedReason: entry.revokedReason || entry.revoked_reason || '该插件已被官方下架禁用' }
   }
+  if (entry?.draft) return noUpdate(pluginId, '插件尚未发布')
   const platforms = getPluginPlatforms(entry)
   if (platforms && !platforms.includes(platform)) {
     return noUpdate(pluginId, '新版本不支持当前平台')
@@ -219,7 +253,7 @@ export function buildCatalogUpdateInfo(entry, currentVersion, platform) {
   const sha256 = String(entry.sha256 || entry.checksum || '').trim().toLowerCase()
   const downloadUrl = String(entry.downloadUrl || entry.download_url || '').trim()
   // 主进程安装时强制校验 SHA-256，缺校验值或下载地址的条目装不上，不提示更新
-  if (!SHA256_PATTERN.test(sha256) || !downloadUrl) {
+  if (!SHA256_PATTERN.test(sha256) || !isV2PluginDownloadUrl(downloadUrl)) {
     return { ...noUpdate(pluginId, '新版本缺少下载信息'), version: latest }
   }
   const size = Number(entry.size ?? entry.file_size ?? entry.fileSize ?? 0) || 0
@@ -243,8 +277,8 @@ export function buildCatalogUpdateInfo(entry, currentVersion, platform) {
 }
 
 /**
- * 静态索引按规范化 id 建表；索引不可用时返回 null
- * @returns {Promise<Map<string, object> | null>}
+ * 静态索引按规范化 id 建表；索引不可用时抛错
+ * @returns {Promise<Map<string, object>>}
  */
 export async function loadStaticCatalogMap() {
   const list = await loadV2StaticCatalogList()

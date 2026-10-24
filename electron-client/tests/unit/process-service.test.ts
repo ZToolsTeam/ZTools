@@ -362,3 +362,26 @@ test('handleProcessMonitorCall provides rich snapshot, detail, services, and cri
   }
 })
 
+
+test('macOS进程详情只使用真实快照：不伪造版本、时间、线程和峰值；不存在PID返回错误', async () => {
+  const registry = { onRemoved: () => () => {} } as unknown as WindowRegistry
+  const service = new ProcessService(registry, {} as FileSystemService, Date.now, 'darwin', {
+    async list() { return [{ pid: 234, name: 'fixture', path: '/tmp/fixture', cpuUsage: 3, memoryUsage: 8192, parentPid: 100, fieldAvailability: { path: true, cpuUsage: true, memoryUsage: true } }] }
+  })
+  try {
+    const result = (await service.handleProcessMonitorCall('GetProcessDetail', { pid: 234 }, signal())).data as Record<string, unknown>
+    assert.equal(result.name, 'fixture')
+    assert.equal(result.parentPid, 100)
+    assert.equal(result.memoryBytes, 8192)
+    for (const key of ['threadCount', 'handleCount', 'peakMemoryBytes', 'privateBytes']) assert.equal(result[key], null)
+    assert.equal(result.fileVersion, '')
+    assert.equal(result.startTime, '')
+    const missing = (await service.handleProcessMonitorCall('GetProcessDetail', { pid: 999999 }, signal())).data as Record<string, unknown>
+    assert.match(String(missing.error), /PROCESS_NOT_FOUND/)
+  } finally { service.stop() }
+})
+test('macOS进程详情发现适配器失败时拒绝，不返回成功假进程', async () => {
+  const registry = { onRemoved: () => () => {} } as unknown as WindowRegistry
+  const service = new ProcessService(registry, {} as FileSystemService, Date.now, 'darwin', { async list() { throw new Error('ps timeout') } })
+  try { await assert.rejects(service.handleProcessMonitorCall('GetProcessDetail', { pid: 234 }, signal()), /ps timeout/) } finally { service.stop() }
+})

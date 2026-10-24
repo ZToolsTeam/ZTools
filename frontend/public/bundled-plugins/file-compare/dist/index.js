@@ -26,7 +26,7 @@ export function EditTextsForm({ left, right, onSave }) {
                 title: '开始对比',
                 icon: Icon.Check,
                 onSubmit: () => {
-                    onSave(a === left.text ? left : { name: '左侧', text: a, source: 'text' }, b === right.text ? right : { name: '右侧', text: b, source: 'text' });
+                    onSave(a === left.text && left.source ? left : { name: '左侧', text: a, source: 'text' }, b === right.text && right.source ? right : { name: '右侧', text: b, source: 'text' });
                     pop();
                 }
             })
@@ -43,8 +43,8 @@ export function FileCompareCommand() {
     const [ignoreWhitespace, setIgnoreWhitespace] = usePopoutValue('ignoreWhitespace', () => false, isFlag);
     const { push } = useNavigation();
     // 两侧都有内容才对比；只有一侧时进入「待选另一侧」状态，不拿空文本做整篇删除的假差异
-    const hasLeft = left.text.length > 0;
-    const hasRight = right.text.length > 0;
+    const hasLeft = left.source !== undefined || left.text.length > 0;
+    const hasRight = right.source !== undefined || right.text.length > 0;
     const ready = hasLeft && hasRight;
     // 只在输入变化时重新计算（交换、忽略空白、载入新内容），其余重渲染直接复用结果
     const { result, error, report } = useMemo(() => {
@@ -55,7 +55,7 @@ export function FileCompareCommand() {
             return { result: r, error: '', report: formatUnifiedDiff(r, left.name, right.name) };
         }
         catch (err) {
-            return { result: null, error: String(err?.message || err), report: '' };
+            return { result: null, error: err instanceof Error ? err.message : String(err), report: '' };
         }
     }, [ready, left.text, right.text, left.name, right.name, ignoreWhitespace]);
     const openEditor = () => push(() => EditTextsForm({ left, right, onSave: (l, r) => { setLeft(l); setRight(r); } }));
@@ -76,7 +76,7 @@ export function FileCompareCommand() {
             side === 'left' ? setLeft({ name: file.name, text: file.text, source: 'file' }) : setRight({ name: file.name, text: file.text, source: 'file' });
         }
         catch (err) {
-            await showToast(Toast.Style.Failure, '读取文件失败', err?.message || String(err));
+            await showToast(Toast.Style.Failure, '读取文件失败', err instanceof Error ? err.message : String(err));
         }
     };
     const sourceActions = [

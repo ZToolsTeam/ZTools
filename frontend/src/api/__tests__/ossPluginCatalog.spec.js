@@ -94,9 +94,9 @@ describe('开源版插件市场：只读 CDN 静态插件目录', () => {
       size: 1024
     })
 
-    expect(await plugins.getCategories()).toEqual([])
-    // 60 秒缓存内只拉一次，且只访问 CDN 静态目录，不访问任何后台接口
-    expect(fetchMock).toHaveBeenCalledTimes(1)
+    expect(await plugins.getCategories()).toEqual([{ id: '系统工具', name: '系统工具', slug: '系统工具', pluginsCount: 2 }])
+    // 浏览共用缓存，安装前再读取一次目录；全程不访问后台接口
+    expect(fetchMock).toHaveBeenCalledTimes(2)
     for (const url of requestedUrls(fetchMock)) {
       expect(url.startsWith('https://cdn.ztools.cn/plugins-v2/')).toBe(true)
       expect(url).not.toMatch(/\/api\//)
@@ -158,22 +158,22 @@ describe('开源版插件市场：只读 CDN 静态插件目录', () => {
     await expect(plugins.getDownloadSign('missing')).rejects.toMatchObject({ code: 'PLUGIN_NOT_IN_CATALOG' })
   })
 
-  it('目录条目缺下载地址时不给下载信息', async () => {
+  it('目录条目缺下载地址时明确拒绝安装', async () => {
     serveCatalog([entry('broken', '1.0.0', { downloadUrl: '' })])
     const { plugins } = await loadApis()
 
-    await expect(plugins.getDownloadSign('broken')).rejects.toMatchObject({ code: 'PLUGIN_NOT_IN_CATALOG' })
+    await expect(plugins.getDownloadSign('broken')).rejects.toMatchObject({ code: 'PLUGIN_INVALID_PACKAGE' })
   })
 
   describe('CDN 异常', () => {
-    it('断网：列表为空、详情回退本地、下载报错，均不抛出未处理异常', async () => {
+    it('断网：列表与下载报错，详情仍可读取本地已安装插件', async () => {
       vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new Error('ENOTFOUND')))
       setHost('macos', [{ pluginId: 'local-a', name: 'A' }])
       const { plugins } = await loadApis()
 
-      expect(await plugins.getMarketPlugins({ page: 3 })).toEqual({ list: [], total: 0, page: 3, pageSize: 15, lastPage: 1 })
+      await expect(plugins.getMarketPlugins({ page: 3 })).rejects.toMatchObject({ code: 'PLUGIN_CATALOG_UNAVAILABLE' })
       expect(await plugins.getPluginDetails('local-a')).toMatchObject({ id: 'local-a' })
-      await expect(plugins.getDownloadSign('local-a')).rejects.toMatchObject({ code: 'PLUGIN_NOT_IN_CATALOG' })
+      await expect(plugins.getDownloadSign('local-a')).rejects.toMatchObject({ code: 'PLUGIN_CATALOG_UNAVAILABLE' })
     })
 
     it('5xx 与损坏的 JSON 当作目录不可用，下次请求重新拉取（失败结果不进缓存）', async () => {
@@ -186,9 +186,9 @@ describe('开源版插件市场：只读 CDN 静态插件目录', () => {
       vi.stubGlobal('fetch', fetchMock)
       const { plugins } = await loadApis()
 
-      expect((await plugins.getMarketPlugins()).list).toEqual([])
-      expect((await plugins.getMarketPlugins()).list).toEqual([])
-      expect((await plugins.getMarketPlugins()).list).toEqual([])
+      await expect(plugins.getMarketPlugins()).rejects.toMatchObject({ code: 'PLUGIN_CATALOG_UNAVAILABLE' })
+      await expect(plugins.getMarketPlugins()).rejects.toMatchObject({ code: 'PLUGIN_CATALOG_UNAVAILABLE' })
+      await expect(plugins.getMarketPlugins()).rejects.toMatchObject({ code: 'PLUGIN_CATALOG_UNAVAILABLE' })
       expect((await plugins.getMarketPlugins()).list.map((p) => p.pluginId)).toEqual(['alpha'])
       expect(fetchMock).toHaveBeenCalledTimes(4)
     })
@@ -253,17 +253,11 @@ describe('开源版插件更新：以 CDN 静态插件目录为准', () => {
     expect(res.unknown).toMatchObject({ hasUpdate: false, message: '插件市场未收录该插件' })
   })
 
-  it('CDN 不可用时不提示更新也不抛错，提示目录暂不可用', async () => {
+  it('CDN 不可用时明确失败，不能把故障说成已是最新版', async () => {
     vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new Error('ECONNRESET')))
     const { update } = await loadApis()
-
-    expect(await update.checkPluginUpdate('alpha', { current_version: '1.0.0' })).toMatchObject({
-      hasUpdate: false,
-      message: '插件目录暂不可用'
-    })
-    expect(await update.batchCheckPlugins({ plugins: [{ id: 'alpha', version: '1.0.0' }] })).toEqual({
-      alpha: { hasUpdate: false, pluginId: 'alpha', message: '插件目录暂不可用' }
-    })
+    await expect(update.checkPluginUpdate('alpha', { current_version: '1.0.0' })).rejects.toMatchObject({ code: 'PLUGIN_CATALOG_UNAVAILABLE' })
+    await expect(update.batchCheckPlugins({ plugins: [{ id: 'alpha', version: '1.0.0' }] })).rejects.toMatchObject({ code: 'PLUGIN_CATALOG_UNAVAILABLE' })
   })
 
   it('空列表与缺 id 的条目不发请求也不报错', async () => {
@@ -299,7 +293,8 @@ describe('开源版插件更新：以 CDN 静态插件目录为准', () => {
       expect(res.pluginId).toBe(`p${i}`)
       expect(res.hasUpdate).toBe(i % 2 === 1 && i > 0)
     })
-    // 并发首拉可能各自发起，但全部来自 CDN 静态目录
+    // 并发只读取一次目录，所有结果来自同一份目录
+    expect(fetchMock).toHaveBeenCalledTimes(1)
     for (const url of requestedUrls(fetchMock)) {
       expect(url.startsWith('https://cdn.ztools.cn/plugins-v2/')).toBe(true)
     }
@@ -332,16 +327,16 @@ describe('开源版不访问后台', () => {
     }
   })
 
-  it('[故障] 开源版的分类为空、市场后台为空：公共入口不转交任何后台实现', async () => {
+  it('[故障] 开源版目录失败时明确报错，不转交后台', async () => {
     const edition = await import('@edition')
-    expect(edition.marketBackend).toBe(null)
+    expect(Object.keys(edition)).not.toContain('marketBackend')
     const fetchMock = vi.fn().mockRejectedValue(new TypeError('Failed to fetch'))
     vi.stubGlobal('fetch', fetchMock)
     setHost('macos')
     const { plugins, update } = await loadApis()
-    expect(await plugins.getCategories()).toEqual([])
-    expect((await plugins.getMarketPlugins()).list).toEqual([])
-    expect(await update.checkPluginUpdate('x', { current_version: '1.0.0' })).toMatchObject({ hasUpdate: false })
+    await expect(plugins.getCategories()).rejects.toMatchObject({ code: 'PLUGIN_CATALOG_UNAVAILABLE' })
+    await expect(plugins.getMarketPlugins()).rejects.toMatchObject({ code: 'PLUGIN_CATALOG_UNAVAILABLE' })
+    await expect(update.checkPluginUpdate('x', { current_version: '1.0.0' })).rejects.toMatchObject({ code: 'PLUGIN_CATALOG_UNAVAILABLE' })
     for (const url of requestedUrls(fetchMock)) {
       expect(url.startsWith('https://cdn.ztools.cn/plugins-v2/')).toBe(true)
     }

@@ -1,5 +1,6 @@
 import { List, Form, ActionPanel, Action, Icon, showToast, Toast, Clipboard, useNavigation, useState, useEffect, useRef, LocalStorage, SecureStorage, confirmAlert } from "@ztools/declarative-ui";
 import { createAccount, generateTOTP, formatToken, getRemainingSeconds, filterAccounts, parseOTPAuthURL, inspectStoredAccounts, corruptBackupKey, mergeLegacyAccounts, describeSecureStorageUnavailable, CORRUPT_BACKUP_KEY_PATTERN, ACCOUNTS_STORAGE_KEY } from "./logic.js";
+import { updateStorageItem } from "./host-compat.js";
 /**
  * 添加 2FA 账号表单视图
  */
@@ -160,19 +161,21 @@ async function migrateAccounts() {
     if (!Array.isArray(result.value))
         return { raw: result.value };
     const legacy = inspectStoredAccounts(result.legacyValue);
-    const { merged, added } = mergeLegacyAccounts(result.value, legacy.accounts);
+    let raw = result.value;
     try {
         // 明文里有读不出的部分：先原样备份进加密存储，再删除明文
         if (legacy.corrupt || legacy.dropped > 0) {
             await SecureStorage.setItem(corruptBackupKey(result.legacyValue), result.legacyValue);
         }
-        if (added > 0)
-            await SecureStorage.setItem(ACCOUNTS_STORAGE_KEY, merged);
+        raw = await updateStorageItem(SecureStorage, ACCOUNTS_STORAGE_KEY, current => {
+            if (!Array.isArray(current))
+                throw new Error("加密存储已变化，请重新读取后重试迁移");
+            return mergeLegacyAccounts(current, legacy.accounts).merged;
+        });
     }
     catch (err) {
         return { raw: result.value, warning: `旧版明文中的账号未能合并到加密存储：${errorText(err)}。明文已保留，下次打开会重试` };
     }
-    const raw = added > 0 ? merged : result.value;
     try {
         await SecureStorage.discardLocalStorage(ACCOUNTS_STORAGE_KEY);
     }
@@ -224,6 +227,8 @@ export default function GoogleAuthCommand() {
     // 表单回调与异步流程读取最新值，不依赖打开表单那一刻捕获的旧闭包
     const accountsRef = useRef([]);
     const loadRef = useRef({ status: "loading" });
+    const damagedSnapshot = useRef(undefined);
+    const allowDamagedSnapshot = useRef(false);
     const setAccounts = (next) => {
         accountsRef.current = next;
         setAccountsState(next);
@@ -236,6 +241,8 @@ export default function GoogleAuthCommand() {
     useEffect(() => {
         let cancelled = false;
         setLoad({ status: "loading" });
+        damagedSnapshot.current = undefined;
+        allowDamagedSnapshot.current = false;
         // 加密存储不可用（readonly）或暂时读不了（error，可重新读取）：只显示旧的明文账号，不写任何东西
         const loadReadOnly = async (reason, retryable = false) => {
             let raw;
@@ -301,6 +308,8 @@ export default function GoogleAuthCommand() {
                 return;
             const raw = migrated.raw;
             const inspected = inspectStoredAccounts(raw);
+            if (inspected.corrupt || inspected.dropped > 0)
+                damagedSnapshot.current = JSON.stringify(raw);
             if (!inspected.corrupt && inspected.dropped === 0) {
                 setAccounts(inspected.accounts);
                 setLoad({ status: "ready" });
@@ -324,6 +333,7 @@ export default function GoogleAuthCommand() {
             }
             else {
                 // 部分条目损坏：备份成功后照常使用其余账号；备份失败则写入前需要确认
+                allowDamagedSnapshot.current = Boolean(backupKey);
                 setLoad(backupKey ? { status: "ready" } : { status: "damaged", corrupt: false, dropped: inspected.dropped });
                 await showToast(Toast.Style.Failure, `有 ${inspected.dropped} 条已保存的账号数据损坏，已跳过`, backupNote);
             }
@@ -370,17 +380,27 @@ export default function GoogleAuthCommand() {
         // 确认期间状态变了（例如用户触发了重新读取），以新状态为准，本次不写
         if (!confirmed || loadRef.current !== current)
             return false;
+        allowDamagedSnapshot.current = true;
         setLoad({ status: "ready" });
         return true;
     };
     // 先写入存储再更新界面：写入失败时界面保持原样，避免用户以为已保存
-    const persist = async (next) => {
+    const persist = async (mutate) => {
         if (loadRef.current.status !== "ready") {
             await showToast(Toast.Style.Failure, "保存失败", "已保存的账号尚未成功读取，为避免覆盖已暂停写入");
             return false;
         }
         try {
-            await SecureStorage.setItem(ACCOUNTS_STORAGE_KEY, next);
+            const next = await updateStorageItem(SecureStorage, ACCOUNTS_STORAGE_KEY, raw => {
+                const inspected = inspectStoredAccounts(raw);
+                if ((inspected.corrupt || inspected.dropped > 0) &&
+                    !(allowDamagedSnapshot.current && JSON.stringify(raw) === damagedSnapshot.current)) {
+                    throw new Error("已保存的账号已变化或损坏，请重新读取后再操作");
+                }
+                return mutate(inspected.accounts);
+            });
+            damagedSnapshot.current = undefined;
+            allowDamagedSnapshot.current = false;
             setAccounts(next);
             return true;
         }
@@ -393,7 +413,7 @@ export default function GoogleAuthCommand() {
         if (!(await ensureWritable()))
             return;
         push(() => CreateAccountForm({
-            onCreated: (item) => persist([item, ...accountsRef.current])
+            onCreated: (item) => persist(current => [item, ...current])
         }));
     };
     const handleReload = () => setReloadSeq((n) => n + 1);
@@ -408,7 +428,7 @@ export default function GoogleAuthCommand() {
         });
         if (!confirmed)
             return;
-        if (await persist(accountsRef.current.filter((acc) => acc.id !== id))) {
+        if (await persist(current => current.filter((acc) => acc.id !== id))) {
             await showToast(Toast.Style.Success, `已删除账号 ${name}`);
         }
     };

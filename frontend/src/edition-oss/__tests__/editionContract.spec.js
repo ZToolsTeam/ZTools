@@ -25,8 +25,7 @@ const EXPECTED_EXPORTS = {
   track: 'function',
   setTrackingWebVersion: 'function',
   onAppStart: 'function',
-  cloudSync: 'object',
-  marketBackend: 'object|null'
+  cloudSync: 'object'
 }
 
 function typeOf(value) {
@@ -61,12 +60,7 @@ function assertContract(mod) {
   for (const name of ['rootRoutes', 'layoutRoutes', 'preloadRouteLoaders', 'headerExtraComponents', 'layoutExtraComponents', 'pluginDetailTabs']) {
     expect(Object.isFrozen(mod[name]), `${name} 只读`).toBe(true)
   }
-  // 市场后台要么没有，要么提供公共插件市场与更新入口转交的全部方法
-  if (mod.marketBackend) {
-    for (const name of ['getCategories', 'getMarketPlugins', 'getPluginDetails', 'getDownloadSign', 'checkPluginUpdate', 'batchCheckPlugins']) {
-      expect(typeof mod.marketBackend[name], `marketBackend.${name}`).toBe('function')
-    }
-  }
+
 }
 
 describe('@edition 接口契约', () => {
@@ -74,7 +68,7 @@ describe('@edition 接口契约', () => {
     assertContract(oss)
     expect(oss.EDITION).toBe('oss')
     expect(oss.isOnline).toBe(false)
-    expect(oss.marketBackend).toBe(null)
+    expect(oss).not.toHaveProperty('marketBackend')
     expect(oss.cloudSync.enabled).toBe(false)
     expect(oss.rootRoutes).toHaveLength(0)
     expect(oss.layoutRoutes).toHaveLength(0)

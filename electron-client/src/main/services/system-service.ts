@@ -83,6 +83,44 @@ export interface SystemWifiProfile {
   security?: string | undefined
 }
 
+export interface BrewPackageInfo {
+  name: string
+  version?: string
+  latestVersion?: string
+  isCask?: boolean
+  outdated?: boolean
+}
+
+/** 解析 brew info --json=v2 --installed，保留 formula/cask 与升级状态。 */
+export function parseInstalledBrewPackages(output: string): BrewPackageInfo[] {
+  const raw: unknown = JSON.parse(output)
+  if (!raw || typeof raw !== 'object') throw new Error('Homebrew 软件包信息格式无效')
+  const data = raw as Record<string, unknown>
+  if (!Array.isArray(data.formulae) || !Array.isArray(data.casks)) throw new Error('Homebrew 软件包信息缺少 formulae/casks')
+  const readObject = (value: unknown): Record<string, unknown> => {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('Homebrew 软件包条目格式无效')
+    return value as Record<string, unknown>
+  }
+  return [
+    ...data.formulae.map((value: unknown) => {
+      const item = readObject(value)
+      if (typeof item.name !== 'string' || !item.name) throw new Error('Homebrew formula 名称无效')
+      const installed = Array.isArray(item.installed) ? item.installed : []
+      const versions = readObject(item.versions)
+      return { name: item.name, isCask: false, outdated: item.outdated === true,
+        version: installed.map((entry: unknown) => String(readObject(entry).version ?? '')).filter(Boolean).join(', '),
+        latestVersion: String(versions.stable ?? '') }
+    }),
+    ...data.casks.map((value: unknown) => {
+      const item = readObject(value)
+      if (typeof item.token !== 'string' || !item.token) throw new Error('Homebrew cask 名称无效')
+      return { name: item.token, isCask: true, outdated: item.outdated === true,
+        version: Array.isArray(item.installed) ? item.installed.map(String).join(', ') : String(item.installed ?? ''),
+        latestVersion: String(item.version ?? '') }
+    })
+  ]
+}
+
 export type BrewAction =
   | 'list'
   | 'search'
@@ -1158,7 +1196,7 @@ export class SystemService {
    */
   async listShortcuts(): Promise<SystemShortcutItem[]> {
     if (this.runtimePlatform !== 'darwin') {
-      return []
+      throw new ZToolsError(errorCodes.notSupported, '当前平台不支持 Apple Shortcuts')
     }
     try {
       const { stdout } = await execFileAsync('/usr/bin/shortcuts', ['list'], {
@@ -1174,8 +1212,8 @@ export class SystemService {
           id: `shortcut-${idx}-${Buffer.from(name).toString('base64url').slice(0, 16)}`,
           name
         }))
-    } catch {
-      return []
+    } catch (error) {
+      throw new ZToolsError(errorCodes.fileError, `读取快捷指令失败：${error instanceof Error ? error.message : String(error)}`)
     }
   }
 
@@ -1678,7 +1716,7 @@ export class SystemService {
     action: BrewAction
     stdout: string
     stderr: string
-    items?: Array<{ name: string; version?: string; isCask?: boolean }> | undefined
+    items?: BrewPackageInfo[] | undefined
     error?: string | undefined
   }> {
     const action = params.action
@@ -1709,9 +1747,9 @@ export class SystemService {
       }
     }
 
-    const args: string[] = [action]
+    const args: string[] = [action === 'list' ? 'info' : action]
     if (action === 'list') {
-      args.push('--versions')
+      args.push('--json=v2', '--installed')
       if (params.cask) args.push('--cask')
     } else if (action === 'outdated') {
       args.push('--verbose')
@@ -1741,7 +1779,7 @@ export class SystemService {
       })
       const outStr = String(stdout ?? '').trim()
       const errStr = String(stderr ?? '').trim()
-      const items = (action === 'list' || action === 'outdated' || action === 'search')
+      const items = action === 'list' ? parseInstalledBrewPackages(outStr) : (action === 'outdated' || action === 'search')
         ? outStr
             .split(/\r?\n/)
             .map((line) => line.trim())
@@ -1765,6 +1803,16 @@ export class SystemService {
         ...(items ? { items } : {})
       }
     } catch (err) {
+      const errText = `${(err as { stderr?: unknown })?.stderr ?? ''} ${err instanceof Error ? err.message : String(err)}`
+      if (action === 'search' && /No (?:formulae|casks|formulae or casks) found/i.test(errText)) {
+        return {
+          success: true,
+          action,
+          stdout: '',
+          stderr: '',
+          items: []
+        }
+      }
       return {
         success: false,
         action,

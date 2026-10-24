@@ -58,6 +58,7 @@ export interface FocusHistoryRecord {
 
 export interface FocusStats {
   todayFocusMinutes: number
+  totalFocusedMinutes: number
   totalCompletedSessions: number
   currentStreakDays: number
 }
@@ -323,19 +324,35 @@ export class FocusService {
     todayStart.setHours(0, 0, 0, 0)
     const todayTimestamp = todayStart.getTime()
 
-    const rows = this.db.prepare('SELECT duration_minutes, completed_at FROM focus_history ORDER BY completed_at DESC').all() as any[]
+    const rows = this.db.prepare('SELECT duration_minutes, completed_at FROM focus_history ORDER BY completed_at DESC').all() as { duration_minutes: number; completed_at: number }[]
 
     let todayFocusMinutes = 0
+    let totalFocusedMinutes = 0
+    const completedDays = new Set<number>()
     for (const r of rows) {
+      totalFocusedMinutes += r.duration_minutes
+      const day = new Date(r.completed_at)
+      day.setHours(0, 0, 0, 0)
+      completedDays.add(day.getTime())
       if (r.completed_at >= todayTimestamp) {
         todayFocusMinutes += r.duration_minutes
       }
     }
 
+    // 今日尚未完成时，连续记录从昨天起算；按本地日历递减以兼容夏令时。
+    const streakDay = new Date(todayTimestamp)
+    if (!completedDays.has(streakDay.getTime())) streakDay.setDate(streakDay.getDate() - 1)
+    let currentStreakDays = 0
+    while (completedDays.has(streakDay.getTime())) {
+      currentStreakDays += 1
+      streakDay.setDate(streakDay.getDate() - 1)
+    }
+
     return {
       todayFocusMinutes,
+      totalFocusedMinutes,
       totalCompletedSessions: rows.length,
-      currentStreakDays: rows.length > 0 ? 1 : 0
+      currentStreakDays
     }
   }
 

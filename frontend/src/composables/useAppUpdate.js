@@ -5,7 +5,7 @@ import { compareAppVersions } from '@/utils/version'
 let _webUpdateInProgress = false
 
 /**
- * 当前平台是否不支持应用内更新（主进程以 NOT_SUPPORTED 明确声明，例如 macOS 更新安装链尚未验收）。
+ * 当前平台是否不支持更新操作（主进程以 NOT_SUPPORTED 明确声明）。
  * 这是能力边界而不是故障：启动检查应静默跳过，手动检查应提示用户去官网下载。
  * @param {unknown} error
  */
@@ -18,15 +18,12 @@ export function useAppUpdate() {
 
   /**
    * 检查应用版本
-   * 更新编排由 Delphi 端统一管理，前端只负责发起检查请求
-   * Delphi 端通过 IPC 事件推送检查结果，前端在 main.js 的 update_handler 中处理展示
+   * 主进程按宿主平台选择正式安装包，前端负责展示检查结果。
    * @returns {Promise<Object>} 版本检查结果
    */
   async function checkVersion(source = 'manual') {
     try {
       const result = await window.ztools.update.check(source)
-      // Delphi 端会通过 update.checkResult 事件推送结果
-      // 前端在 main.js 的 update_handler 中统一处理展示
       return result
     } catch (error) {
       // 平台不支持不是错误，不写入更新错误状态
@@ -111,6 +108,7 @@ export function useAppUpdate() {
         fileSize: updateStore.versionInfo.fileSize
       })
 
+      if (result?.success !== true) throw new Error(result?.message || '安装器未启动，请重试')
       return result
     } catch (error) {
       updateStore.setError(error.message)
@@ -118,13 +116,25 @@ export function useAppUpdate() {
     }
   }
 
+  /** macOS 由浏览器下载已发布 DMG，打开下载不等于完成安装。 */
+  async function openManualUpdate(info) {
+    const version = info?.version
+    if (info?.manualUpdate !== true || typeof version !== 'string' || !/^\d+(\.\d+){3}$/.test(version) ||
+        info.downloadUrl !== `https://cdn.ztools.cn/client-v2/${version}/ZTools-${version}-darwin-universal.dmg`) {
+      throw new Error('macOS 安装包信息无效，请重新检查更新')
+    }
+    const opened = await window.ztools?.shell?.openExternal(info.downloadUrl)
+    if (opened !== true) throw new Error('无法打开安装包下载，请稍后重试')
+    return true
+  }
+
   /**
    * 取消更新
    */
   function cancelUpdate() {
-    const cancel = window.ztools?.update?.cancel
-    if (typeof cancel === 'function') {
-      Promise.resolve(cancel()).catch((error) => {
+    const update = window.ztools?.update
+    if (typeof update?.cancel === 'function') {
+      Promise.resolve().then(() => update.cancel()).catch((error) => {
         console.warn('[update] 取消更新失败:', error)
       })
     }
@@ -134,6 +144,7 @@ export function useAppUpdate() {
   return {
     checkVersion,
     downloadAndInstall,
+    openManualUpdate,
     cancelUpdate,
     silentWebUpdate
   }

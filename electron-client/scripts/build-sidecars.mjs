@@ -102,9 +102,14 @@ export function buildAllSidecars() {
   }
 }
 
+/** 编译安全文件操作组件（批量改名等依赖），产物位置即打包与开发运行时的查找位置。 */
+export function buildPathAccessBroker() {
+  return buildSidecar('ZToolsPathAccessBroker', path.join(nativeDir, 'ZToolsPathAccess'))
+}
+
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   try {
-    const res = buildAllSidecars()
+    const res = process.argv.includes('--path-access-broker') ? buildPathAccessBroker() : buildAllSidecars()
     console.log('[build-sidecars] All sidecars built successfully:', JSON.stringify(res, null, 2))
     process.exit(0)
   } catch (err) {

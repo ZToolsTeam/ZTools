@@ -317,7 +317,7 @@ export async function executeHomebrewAction(
             return {
               name: nameStr,
               fullName: String(item.fullName || item.full_name || item.id || nameStr),
-              type: item.type === "cask" || item.cask ? "cask" : "formula",
+              type: item.type === "cask" || item.cask || item.isCask ? "cask" : "formula",
               installedVersion: installedVer ? String(installedVer) : undefined,
               latestVersion: latestVer,
               outdated: Boolean(
@@ -346,7 +346,9 @@ export async function executeHomebrewAction(
           })
         : undefined;
 
-      if ((!mappedPackages || mappedPackages.length === 0) && stdoutStr) {
+      // 只有宿主没给结构化列表时才解析纯文本输出；空数组表示确实没有软件包。
+      // JSON 文本（list 走 brew info --json）不能按行解析，否则会把 "{"、"formulae": 当成软件包。
+      if (!rawList && stdoutStr && !/^\s*[[{]/.test(stdoutStr)) {
         const parsedFromStdout = parseBrewStdoutToPackages(stdoutStr, action);
         if (parsedFromStdout.length > 0) {
           mappedPackages = parsedFromStdout;
@@ -362,6 +364,10 @@ export async function executeHomebrewAction(
     }
 
     if (!res.ok) {
+      // brew search 搜不到时以退出码 1 结束（"No formulae or casks found"），这是空结果而不是失败
+      if (action === "search" && /No (?:formulae|casks|formulae or casks) found/i.test(res.error || "")) {
+        return { ok: true, message: "没有找到匹配的软件包", packages: [] };
+      }
       return {
         ok: false,
         message: res.error || `brew ${action} 执行失败`,
@@ -575,13 +581,14 @@ export function HomebrewCommand() {
     executeHomebrewAction("list")
       .then((res) => {
         if (!active) return;
-        if (res.ok && res.packages) {
-          setPackages(res.packages);
-        }
+        if (!res.ok) throw new Error(res.message || "无法读取 Homebrew 软件包");
+        setPackages(res.packages || []);
         setIsLoading(false);
       })
-      .catch(() => {
-        if (active) setIsLoading(false);
+      .catch((error) => {
+        if (!active) return;
+        setIsLoading(false);
+        void showToast({ style: Toast.Style.Failure, title: "无法读取 Homebrew 软件包", message: error instanceof Error ? error.message : String(error) });
       });
     return () => {
       active = false;
@@ -601,13 +608,15 @@ export function HomebrewCommand() {
       executeHomebrewAction("search", { query: q, pkg: q })
         .then((res) => {
           if (!active) return;
-          if (res.ok && res.packages) {
-            setRemoteSearchResults(res.packages);
-          }
+          if (!res.ok) throw new Error(res.message || "Homebrew 搜索失败");
+          setRemoteSearchResults(res.packages || []);
           setIsLoading(false);
         })
-        .catch(() => {
-          if (active) setIsLoading(false);
+        .catch((error) => {
+          if (!active) return;
+          setIsLoading(false);
+          setRemoteSearchResults([]);
+          void showToast({ style: Toast.Style.Failure, title: "Homebrew 搜索失败", message: error instanceof Error ? error.message : String(error) });
         });
     }, 260);
     return () => {

@@ -34,6 +34,28 @@ export interface ClipboardImage {
   isEmpty(): boolean
   getSize(): { width: number; height: number }
   toPNG(): Buffer
+  /** Electron nativeImage 提供；用于生成剪贴板历史列表缩略图 */
+  resize?(options: { width?: number; height?: number; quality?: 'good' | 'better' | 'best' }): ClipboardImage
+}
+
+const HISTORY_THUMBNAIL_EDGE = 320
+
+/**
+ * 把剪贴板历史里的图片 data URL 缩成最长边 320px 的 PNG data URL，供列表与详情预览；
+ * 原图仍保存在历史库，只在按 ID 恢复时读取。解码失败返回空串（不提供预览）。
+ */
+export function createClipboardHistoryThumbnail(images: ClipboardImageFactory, dataUrl: string): string {
+  const image = images.createFromDataURL(dataUrl)
+  if (image.isEmpty()) return ''
+  const { width, height } = image.getSize()
+  if (width <= HISTORY_THUMBNAIL_EDGE && height <= HISTORY_THUMBNAIL_EDGE) {
+    return dataUrl.length <= 512 * 1024 ? dataUrl : `data:image/png;base64,${image.toPNG().toString('base64')}`
+  }
+  if (!image.resize) return ''
+  const resized = width >= height
+    ? image.resize({ width: HISTORY_THUMBNAIL_EDGE, quality: 'good' })
+    : image.resize({ height: HISTORY_THUMBNAIL_EDGE, quality: 'good' })
+  return resized.isEmpty() ? '' : `data:image/png;base64,${resized.toPNG().toString('base64')}`
 }
 
 export interface ClipboardAdapter {
@@ -203,6 +225,9 @@ export class ClipboardService {
   #monitorAbort: AbortController | undefined
   #polling = false
   #lastFingerprint = ''
+  #restoredFingerprint = ''
+  #restoredFilesKey = ''
+  #restoreInFlight = 0
   #stopped = false
   #pendingPoll: Promise<void> = Promise.resolve()
 
@@ -351,6 +376,67 @@ export class ClipboardService {
     return copied
   }
 
+  /**
+   * 恢复由宿主历史库读取的条目，成功写入原始类型后才向前台发送粘贴。
+   * 只把内容写回系统剪贴板，不向调用方签发任何路径授权（文件历史不能变成读取文件的通道）；
+   * 写回的内容本来就在历史里，记住其指纹，采集器不会再把它记成一条新历史。
+   */
+  async restoreHistoryEntry(
+    entry: ClipboardHistoryEntry,
+    caller: CallerIdentity,
+    signal: AbortSignal,
+    paste = false
+  ): Promise<{ success: true }> {
+    this.#assertTextWriteActive(signal)
+    this.#restoreInFlight += 1
+    try {
+      let restoredFiles: string[] | undefined
+      if (entry.type === 'image') {
+        this.copyImage({ image: entry.image })
+      } else if (entry.type === 'files') {
+        restoredFiles = await this.#writeHistoryFiles(entry.files, signal)
+      } else {
+        try {
+          if (Buffer.byteLength(entry.text, 'utf8') > MAX_TEXT_BYTES) {
+            throw new ZToolsError(errorCodes.responseTooLarge, '剪贴板文本超过 8 MiB 上限')
+          }
+          this.#writeVerifiedText(entry.text, signal)
+        } catch (error) {
+          throw clipboardFailure(error)
+        }
+      }
+      this.#rememberHostWrite(restoredFiles)
+    } finally {
+      this.#restoreInFlight -= 1
+    }
+    this.#assertTextWriteActive(signal)
+    if (paste) await this.#hideAndPaste(caller, signal)
+    return { success: true }
+  }
+
+  async #writeHistoryFiles(files: string[], signal: AbortSignal): Promise<string[]> {
+    if (files.length === 0) throw new ZToolsError(errorCodes.invalidRequest, '剪贴板文件列表为空')
+    const resolved: string[] = []
+    for (const file of files) {
+      this.#assertTextWriteActive(signal)
+      try {
+        const target = await fs.realpath(file)
+        const stats = await fs.stat(target)
+        if (!stats.isFile() && !stats.isDirectory()) throw new Error('不是文件或目录')
+        resolved.push(target)
+      } catch (error) {
+        throw new ZToolsError(errorCodes.fileError, error instanceof Error ? `剪贴板中的文件已不存在或无法访问：${error.message}` : '剪贴板中的文件已不存在或无法访问')
+      }
+    }
+    this.#assertTextWriteActive(signal)
+    try {
+      await this.fileClipboard.writeFiles(resolved, signal)
+      return resolved
+    } catch (error) {
+      throw clipboardFailure(error)
+    }
+  }
+
   async hideAndType(
     text: string,
     caller: CallerIdentity,
@@ -477,6 +563,7 @@ export class ClipboardService {
   async readFiles(caller: CallerIdentity, signal: AbortSignal): Promise<{ success: true; files: string[] }> {
     try {
       const files = await this.#readFilePaths(signal)
+      if (this.#isRestoredClipboard(files)) return { success: true, files: [] }
       const granted: string[] = []
       for (const item of files) {
         try {
@@ -610,6 +697,16 @@ export class ClipboardService {
         : undefined
       if (monitoring.signal.aborted || this.#stopped || this.#monitorAbort !== monitoring) return
       if (fingerprint === this.#lastFingerprint) return
+      // 历史恢复正在写剪贴板：等写完记住指纹后再看，避免把恢复内容当成新复制
+      if (this.#restoreInFlight > 0) return
+      if (filePaths && this.#restoredFilesKey && JSON.stringify(filePaths) === this.#restoredFilesKey) {
+        this.#lastFingerprint = fingerprint
+        return
+      }
+      if (fingerprint !== this.#restoredFingerprint) {
+        this.#restoredFingerprint = ''
+        this.#restoredFilesKey = ''
+      }
       if (isPrivateMacClipboard(this.clipboard.availableFormats(), this.clipboard)) {
         // 密码管理器等标记为隐私/临时的内容：既不录入历史也不广播，记住指纹避免重复检查。
         this.#lastFingerprint = fingerprint
@@ -618,10 +715,11 @@ export class ClipboardService {
       const referenceFileEvent = Boolean(this.referenceFiles && filePaths)
       if (this.referenceFiles && filePaths) {
         await this.referenceFiles.publishChange(this.events, monitoring.signal, () =>
-          !monitoring.signal.aborted && !this.#stopped && this.#monitorAbort === monitoring && this.#fingerprint() === fingerprint, caller => this.#eligible(caller))
+          !monitoring.signal.aborted && !this.#stopped && this.#monitorAbort === monitoring && this.#restoreInFlight === 0 && this.#fingerprint() === fingerprint, caller => this.#eligible(caller))
       }
       const payload = await this.#captureChangePayload(monitoring.signal, owners, filePaths)
       if (monitoring.signal.aborted || this.#stopped || this.#monitorAbort !== monitoring ||
+          this.#restoreInFlight > 0 || fingerprint === this.#lastFingerprint ||
           this.#fingerprint() !== fingerprint) return
       if (persistHistory && payload?.hasData && this.recordHistory) {
         const entry: ClipboardHistoryEntry = payload.type === 'files'
@@ -677,12 +775,38 @@ export class ClipboardService {
   }
 
   #rememberCurrentClipboard(): void {
+    this.#restoredFilesKey = ''
     // The persistent collector also records copies made through the host API.
     if (this.recordHistory) return
     try {
       this.#lastFingerprint = this.#fingerprint()
     } catch {
       this.#lastFingerprint = ''
+    }
+  }
+
+  /**
+   * 历史恢复写回的内容：采集器跳过（不重复入库、不广播），clipboard_read_files 也不为它签发路径授权，
+   * 否则插件可以先恢复一条文件历史、再读剪贴板文件，绕开文件权限拿到读取授权。
+   */
+  #rememberHostWrite(restoredFiles?: readonly string[]): void {
+    this.#restoredFilesKey = restoredFiles ? JSON.stringify(restoredFiles) : ''
+    try {
+      this.#lastFingerprint = this.#fingerprint()
+      this.#restoredFingerprint = this.#lastFingerprint
+    } catch {
+      this.#restoredFingerprint = '__restored_unknown__'
+    }
+  }
+
+  #isRestoredClipboard(currentFiles?: readonly string[]): boolean {
+    if (this.#restoredFilesKey && currentFiles && JSON.stringify(currentFiles) === this.#restoredFilesKey) return true
+    if (!this.#restoredFingerprint) return false
+    try {
+      return this.#fingerprint() === this.#restoredFingerprint
+    } catch {
+      // 无法确认时按恢复内容处理，宁可不授权
+      return true
     }
   }
 
@@ -725,7 +849,7 @@ export class ClipboardService {
         if (!this.#eligible(caller)) continue
         for (const item of files) {
           signal.throwIfAborted()
-          if (!this.#eligible(caller)) break
+          if (!this.#eligible(caller) || this.#restoreInFlight > 0 || this.#isRestoredClipboard(files)) break
           try { await this.files.grantOpenPath(item, caller) } catch { /* stale clipboard path */ }
         }
       }

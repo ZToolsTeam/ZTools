@@ -8,3 +8,4 @@ const schemaPath = path.resolve(__dirname, '../plugin.schema.json')
 export const pluginSchema = JSON.parse(fs.readFileSync(schemaPath, 'utf8'))
 
 export * from './validator.js'
+export * from './host-requirements.js'

@@ -297,7 +297,7 @@ test('update check without a source makes no request; source faults surface as t
       return { app: { version: '1.0.0', url: 'https://cdn.example/a.exe' }, web: { version: '0.9.0', url: 'https://cdn.example/w.zip', file_size: 1 } }
     } } })
     assert.deepEqual(await echo.check({ source: 'manual' }), { success: true, source: 'manual', app: null, web: null })
-    assert.equal(seenSignal?.aborted, false)
+    assert.equal(seenSignal?.aborted, true, '检查结束后释放请求及未读取的响应体')
 
     // 20 次并发检查互不干扰
     let concurrent = 0

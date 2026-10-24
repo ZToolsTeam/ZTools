@@ -2,11 +2,12 @@
  * 插件更新检查 API
  *
  * 公共实现以 CDN 静态插件目录为准，不访问任何后台；
- * 官方版通过 @edition 提供 marketBackend 时，统一交给它处理（静态目录 + 老插件走后台）。
+ * 官方版和开源版使用同一条分发链路，不请求旧版插件；目录不可用时明确报错。
  */
 
-import { marketBackend } from '@edition'
 import { isBundledPlugin } from '../utils/bundledPlugins'
+import { getDownloadSign } from './plugins'
+import { downloadPluginUpdate as nativeDownloadPluginUpdate } from './native'
 import {
   resolveUpdatePlatform,
   normalizeCatalogId,
@@ -17,8 +18,13 @@ import {
 
 export { buildCatalogUpdateInfo } from './pluginCatalog'
 
-function notInCatalog(pluginId, catalog) {
-  return noUpdate(pluginId, catalog ? '插件市场未收录该插件' : '插件目录暂不可用')
+/** 点击更新时重新确认发布状态，展示时保存的地址不能绕过下架与兼容检查。 */
+export async function downloadPluginUpdate(pluginId) {
+  if (isBundledPlugin(pluginId)) throw new Error('内置插件随客户端更新')
+  const info = await getDownloadSign(pluginId)
+  const result = await nativeDownloadPluginUpdate(pluginId, { ...info, fileSize: info.size })
+  if (!result || result.success === false) throw new Error(result?.error || '插件更新启动失败')
+  return result
 }
 
 /**
@@ -30,8 +36,6 @@ function notInCatalog(pluginId, catalog) {
  * @returns {Promise<Object>} 更新信息
  */
 export async function checkPluginUpdate(pluginId, params = {}) {
-  if (marketBackend) return marketBackend.checkPluginUpdate(pluginId, params)
-
   const platform = await resolveUpdatePlatform(params.platform)
   const currentVersion = params.current_version || '1.0.0'
 
@@ -41,7 +45,7 @@ export async function checkPluginUpdate(pluginId, params = {}) {
   const catalog = await loadStaticCatalogMap()
   const entry = catalog?.get(normalizeCatalogId(pluginId))
   if (entry) return buildCatalogUpdateInfo(entry, currentVersion, platform)
-  return notInCatalog(pluginId, catalog)
+  return noUpdate(pluginId, '插件市场未收录该插件')
 }
 
 /**
@@ -52,8 +56,6 @@ export async function checkPluginUpdate(pluginId, params = {}) {
  * @returns {Promise<Object>} 更新信息对象（以插件标识符为 key）
  */
 export async function batchCheckPlugins(data = {}) {
-  if (marketBackend) return marketBackend.batchCheckPlugins(data)
-
   const platform = await resolveUpdatePlatform(data.platform)
   // 兼容两种传入格式：{ id: xxx } 或 { pluginId: xxx }
   const requested = (Array.isArray(data.plugins) ? data.plugins : [])
@@ -63,7 +65,7 @@ export async function batchCheckPlugins(data = {}) {
   const updates = {}
   if (requested.length === 0) return updates
 
-  const catalog = await loadStaticCatalogMap()
+  const catalog = requested.some((item) => !isBundledPlugin(item.id)) ? await loadStaticCatalogMap() : null
   for (const item of requested) {
     if (isBundledPlugin(item.id)) {
       updates[item.id] = noUpdate(item.id, '内置插件随客户端更新')
@@ -72,7 +74,7 @@ export async function batchCheckPlugins(data = {}) {
     const entry = catalog?.get(normalizeCatalogId(item.id))
     updates[item.id] = entry
       ? buildCatalogUpdateInfo(entry, item.version || '1.0.0', platform)
-      : notInCatalog(item.id, catalog)
+      : noUpdate(item.id, '插件市场未收录该插件')
   }
   return updates
 }

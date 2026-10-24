@@ -1,7 +1,11 @@
 import React from "@ztools/declarative-ui";
 import { confirmAlert } from "@ztools/declarative-ui";
 import { List, ActionPanel, Action, Icon, showToast, Toast, Clipboard } from "@ztools/declarative-ui";
-import { useState, useEffect, useMemo } from "@ztools/declarative-ui";
+import { useState, useEffect, useMemo, useNavigation } from "@ztools/declarative-ui";
+import RmbCommand from "./rmb.js";
+import CurrencyCommand from "./currency.js";
+export { default as calcRmb } from "./rmb.js";
+export { default as calcCurrency } from "./currency.js";
 import { evaluateCalculatorQuery, getCalculatorHistory, addCalculatorHistory, togglePinCalculatorHistory, deleteCalculatorHistory, clearCalculatorHistory } from "./calculator-engine.js";
 import { usePopoutValue } from "./popout-state.js";
 export * from "./calculator-engine.js";
@@ -48,6 +52,7 @@ const isHistoryItem = (v) => {
 // 独立窗口带来的历史里有一项不合法（旧版本形状、篡改）就整份不用，等存储读取结果
 const isHistory = (v) => Array.isArray(v) && v.every(isHistoryItem);
 export default function CalculatorCommand() {
+    const { push } = useNavigation();
     // 当前算式与历史随独立窗口带走：新窗口首帧就能显示，不闪空列表
     const [searchText, setSearchText] = usePopoutValue("searchText", () => "", isText);
     // 填入输入框后要选中的结果行 id（受控 selectedItemId）；用户自己输入或移动选中项后清空
@@ -79,7 +84,7 @@ export default function CalculatorCommand() {
             return true;
         }
         catch (err) {
-            await showToast(Toast.Style.Failure, "历史记录保存失败", err?.message || String(err));
+            await showToast(Toast.Style.Failure, "历史记录保存失败", err instanceof Error ? err.message : String(err));
             return false;
         }
     };
@@ -122,7 +127,7 @@ export default function CalculatorCommand() {
     };
     const pinnedItems = history.filter(item => item.pinned);
     const recentItems = history.filter(item => !item.pinned);
-    return (React.createElement(List, { searchBarPlaceholder: "\u8F93\u5165\u7B97\u5F0F\uFF0C\u5982 128*1024\u300132px to rem\u30010xFF to dec\u3001now + 2 weeks", searchText: searchText, onSearchTextChange: handleSearchTextChange, selectedItemId: selectedItemId, onSelectionChange: () => setSelectedItemId(undefined) },
+    return (React.createElement(List, { actions: ActionPanel({}, [Action({ title: "人民币大写…", icon: Icon.Text, onAction: () => push(RmbCommand) }), Action({ title: "汇率换算…", icon: Icon.Globe, onAction: () => push(CurrencyCommand) })]), searchBarPlaceholder: "\u8F93\u5165\u7B97\u5F0F\uFF0C\u5982 128*1024\u300132px to rem\u30010xFF to dec\u3001now + 2 weeks", searchText: searchText, onSearchTextChange: handleSearchTextChange, selectedItemId: selectedItemId, onSelectionChange: () => setSelectedItemId(undefined) },
         queryResult.type === "color" && queryResult.colorResult && (React.createElement(List.Section, { title: "\u8272\u5F69\u8BC6\u522B\u4E0E\u5373\u65F6\u8F6C\u6362" },
             React.createElement(List.Item, { id: "color-hex", title: queryResult.colorResult.hex, subtitle: `HEX 色彩代码 | 对比度 白:${queryResult.colorResult.contrastWhite}:1 黑:${queryResult.colorResult.contrastBlack}:1`, icon: Icon.Eye, accessories: [{ text: "HEX" }], actions: React.createElement(ActionPanel, { title: "\u8272\u5F69\u52A8\u4F5C" },
                     React.createElement(Action, { title: "\u590D\u5236 HEX", icon: Icon.CopyClipboard, onAction: () => handleCopy(queryResult.colorResult.hex, "HEX") }),

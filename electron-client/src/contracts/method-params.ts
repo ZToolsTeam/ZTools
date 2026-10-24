@@ -361,6 +361,11 @@ export interface DatabasePutParams extends DatabaseGetParams {
   value: unknown
 }
 
+export interface DatabaseCompareAndSetParams extends DatabaseKeyParams {
+  expectedValue: string | null;
+  value: string;
+}
+
 export interface DatabaseQueryParams {
   plugin_id: string
   prefix: string
@@ -1784,6 +1789,7 @@ export function validateMethodParams(method: AllowedMethod, params: unknown): vo
     case 'system_get_hardware_summary':
     case 'system_get_cpu_usage':
     case 'system_get_memory_usage':
+    case 'system_list_volumes':
     case 'system_get_network_stats':
     case 'system_get_battery_status':
     case 'system_reload_hotkeys':
@@ -2088,6 +2094,7 @@ export function validateMethodParams(method: AllowedMethod, params: unknown): vo
       return
     case 'filesystem_copy_file':
     case 'filesystem_move_file':
+    case 'filesystem_move_file_no_replace':
       rejectUnknownKeys(params, ['sourcePath', 'destPath'])
       requireFilePath(params, 'sourcePath')
       requireFilePath(params, 'destPath')
@@ -2224,6 +2231,13 @@ export function validateMethodParams(method: AllowedMethod, params: unknown): vo
     case 'db_put':
       validateDatabasePut(params)
       return
+    case 'db_compare_and_set':
+      rejectUnknownKeys(params, ['plugin_id', 'key', 'expectedValue', 'value'])
+      requireDatabasePluginId(params)
+      requireDatabaseKey(params)
+      if (params.expectedValue !== null) requireString(params, 'expectedValue', { max: 4 * 1024 * 1024 })
+      requireString(params, 'value', { max: 4 * 1024 * 1024 })
+      return
     case 'db_get':
       rejectUnknownKeys(params, ['plugin_id', 'key', 'is_base64'])
       requireDatabasePluginId(params)
@@ -2263,6 +2277,12 @@ export function validateMethodParams(method: AllowedMethod, params: unknown): vo
     case 'credential_v1_delete':
       rejectUnknownKeys(params, ['key'])
       requireCredentialKey(params)
+      return
+    case 'credential_v1_compare_and_set':
+      rejectUnknownKeys(params, ['key', 'value', 'expectedValue'])
+      requireCredentialKey(params)
+      requireString(params, 'value', { max: 64 * 1024 })
+      if (params.expectedValue !== null) requireString(params, 'expectedValue', { max: 64 * 1024 })
       return
     case 'credential_v1_set':
       rejectUnknownKeys(params, ['key', 'value', 'ifAbsent'])
@@ -2322,6 +2342,13 @@ export function validateMethodParams(method: AllowedMethod, params: unknown): vo
       return
     case 'clipboard_history_query':
       rejectUnknownKeys(params, ['query', 'limit', 'offset'])
+      return
+    case 'clipboard_history_restore':
+      rejectUnknownKeys(params, ['id', 'paste'])
+      requireString(params, 'id', { min: 1, max: 64 })
+      if (params.paste !== undefined && typeof params.paste !== 'boolean') {
+        throw new ZToolsError(errorCodes.invalidRequest, 'paste 必须是布尔值')
+      }
       return
     case 'clipboard_history_toggle_pin':
     case 'clipboard_history_delete':

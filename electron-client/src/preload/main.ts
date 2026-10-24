@@ -95,6 +95,7 @@ type PreloadMethod =
   | 'system_get_hardware_summary'
   | 'system_get_cpu_usage'
   | 'system_get_memory_usage'
+  | 'system_list_volumes'
   | 'system_get_disk_usage'
   | 'system_get_network_stats'
   | 'system_get_battery_status'
@@ -136,6 +137,7 @@ type PreloadMethod =
   | 'filesystem_delete_file'
   | 'filesystem_copy_file'
   | 'filesystem_move_file'
+  | 'filesystem_move_file_no_replace'
   | 'filesystem_file_exists'
   | 'filesystem_get_file_size'
   | 'filesystem_create_directory'
@@ -187,6 +189,7 @@ type PreloadMethod =
   | 'clipboard_hide_and_type'
   | 'clipboard_clear'
   | 'clipboard_history_query'
+  | 'clipboard_history_restore'
   | 'clipboard_history_toggle_pin'
   | 'clipboard_history_delete'
   | 'clipboard_history_clear_unpinned'
@@ -207,6 +210,7 @@ type PreloadMethod =
   | 'window_manage_action'
   | 'window_manage_list_actions'
   | 'db_put'
+  | 'db_compare_and_set'
   | 'db_get'
   | 'db_delete'
   | 'db_exists'
@@ -216,6 +220,7 @@ type PreloadMethod =
   | 'db_get_secure'
   | 'credential_v1_status'
   | 'credential_v1_set'
+  | 'credential_v1_compare_and_set'
   | 'credential_v1_get'
   | 'credential_v1_delete'
   | 'db_compact'
@@ -478,6 +483,7 @@ const bridge = Object.freeze({
       filesystem_delete_file: (request: unknown) => invokeMethod('filesystem_delete_file', request),
       filesystem_copy_file: (request: unknown) => invokeMethod('filesystem_copy_file', request),
       filesystem_move_file: (request: unknown) => invokeMethod('filesystem_move_file', request),
+      filesystem_move_file_no_replace: (request: unknown) => invokeMethod('filesystem_move_file_no_replace', request),
       filesystem_file_exists: (request: unknown) => invokeMethod('filesystem_file_exists', request),
       filesystem_get_file_size: (request: unknown) => invokeMethod('filesystem_get_file_size', request),
       filesystem_create_directory: (request: unknown) => invokeMethod('filesystem_create_directory', request),
@@ -529,6 +535,7 @@ const bridge = Object.freeze({
       clipboard_hide_and_type: (request: unknown) => invokeMethod('clipboard_hide_and_type', request),
       clipboard_clear: (request: unknown) => invokeMethod('clipboard_clear', request),
       clipboard_history_query: (request: unknown) => invokeMethod('clipboard_history_query', request),
+      clipboard_history_restore: (request: unknown) => invokeMethod('clipboard_history_restore', request),
       clipboard_history_toggle_pin: (request: unknown) => invokeMethod('clipboard_history_toggle_pin', request),
       clipboard_history_delete: (request: unknown) => invokeMethod('clipboard_history_delete', request),
       clipboard_history_clear_unpinned: (request: unknown) => invokeMethod('clipboard_history_clear_unpinned', request),
@@ -549,6 +556,7 @@ const bridge = Object.freeze({
       window_manage_action: (request: unknown) => invokeMethod('window_manage_action', request),
       window_manage_list_actions: (request: unknown) => invokeMethod('window_manage_list_actions', request),
       db_put: (request: unknown) => invokeMethod('db_put', request),
+      db_compare_and_set: (request: unknown) => invokeMethod('db_compare_and_set', request),
       db_get: (request: unknown) => invokeMethod('db_get', request),
       db_delete: (request: unknown) => invokeMethod('db_delete', request),
       db_exists: (request: unknown) => invokeMethod('db_exists', request),
@@ -558,6 +566,7 @@ const bridge = Object.freeze({
       db_get_secure: (request: unknown) => invokeMethod('db_get_secure', request),
       credential_v1_status: (request: unknown) => invokeMethod('credential_v1_status', request),
       credential_v1_set: (request: unknown) => invokeMethod('credential_v1_set', request),
+      credential_v1_compare_and_set: (request: unknown) => invokeMethod('credential_v1_compare_and_set', request),
       credential_v1_get: (request: unknown) => invokeMethod('credential_v1_get', request),
       credential_v1_delete: (request: unknown) => invokeMethod('credential_v1_delete', request),
       db_compact: (request: unknown) => invokeMethod('db_compact', request),
@@ -629,6 +638,7 @@ const bridge = Object.freeze({
       system_get_hardware_summary: (request: unknown) => invokeMethod('system_get_hardware_summary', request),
       system_get_cpu_usage: (request: unknown) => invokeMethod('system_get_cpu_usage', request),
       system_get_memory_usage: (request: unknown) => invokeMethod('system_get_memory_usage', request),
+      system_list_volumes: (request: unknown) => invokeMethod('system_list_volumes', request),
       system_get_disk_usage: (request: unknown) => invokeMethod('system_get_disk_usage', request),
       system_get_network_stats: (request: unknown) => invokeMethod('system_get_network_stats', request),
       system_get_battery_status: (request: unknown) => invokeMethod('system_get_battery_status', request),

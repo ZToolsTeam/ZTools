@@ -2,17 +2,20 @@
  * 插件市场 API
  *
  * 公共实现只读 CDN 静态插件目录（plugins-v2/catalog.json），不访问任何后台；
- * 官方版通过 @edition 提供 marketBackend 时，统一交给它处理（后台接口 + 静态目录）。
+ * 官方版与开源版共用同一份目录，账号、评论等在线服务不参与插件分发。
  */
 
-import { marketBackend } from '@edition'
 import { getLocalPlugins } from './native'
+import { getPluginPlatforms } from '../utils/platform'
+import { checkCompat, fetchVersions } from '../composables/useVersionCompat'
 import {
   loadV2StaticCatalogList,
   findInV2StaticCatalog,
   normalizeCatalogEntry,
   normalizeCatalogId,
-  buildCatalogDownloadInfo
+  buildCatalogDownloadInfo,
+  resolveUpdatePlatform,
+  normalizePluginVersionError
 } from './pluginCatalog'
 
 export {
@@ -43,12 +46,20 @@ function matchesKeyword(entry, keyword) {
 
 /**
  * 获取插件分类列表
- * 静态目录不单独提供分类，分类由本地已有插件合并得出（见 stores/categories）
+ * 分类按已发布插件的实际目录生成，内置插件分类由 stores/categories 补充
  * @returns {Promise<Array>} [{ id, name, slug, icon, sortOrder, pluginsCount }]
  */
 export async function getCategories() {
-  if (marketBackend) return marketBackend.getCategories()
-  return []
+  const entries = await loadV2StaticCatalogList()
+  const counts = new Map()
+  for (const entry of entries) {
+    if (!entry || typeof entry !== 'object' || !(entry.id || entry.pluginId) || entry.revoked || entry.draft) continue
+    const names = Array.isArray(entry.category) ? entry.category : [entry.category]
+    for (const name of new Set(names.filter((name) => typeof name === 'string' && name.trim()).map((name) => name.trim()))) {
+      counts.set(name, (counts.get(name) || 0) + 1)
+    }
+  }
+  return [...counts].map(([name, pluginsCount]) => ({ id: name, name, slug: name, pluginsCount }))
 }
 
 /**
@@ -63,15 +74,9 @@ export async function getCategories() {
  * @returns {Promise<Object>} { list, total, page, pageSize, lastPage }
  */
 export async function getMarketPlugins(params = {}) {
-  if (marketBackend) return marketBackend.getMarketPlugins(params)
-
   const page = toPositiveInt(params.page, 1)
   const pageSize = toPositiveInt(params.per_page, 15)
   const raw = await loadV2StaticCatalogList()
-  if (!Array.isArray(raw)) {
-    return { list: [], total: 0, page, pageSize, lastPage: 1 }
-  }
-
   let items = raw
     .filter((entry) => entry && typeof entry === 'object' && (entry.id || entry.pluginId))
     .map((entry) => normalizeCatalogEntry(entry))
@@ -91,7 +96,8 @@ export async function getMarketPlugins(params = {}) {
 
   const keyword = String(params.search || params.keyword || '').trim().toLowerCase()
   if (keyword) items = items.filter((entry) => matchesKeyword(entry, keyword))
-  if (params.category) items = items.filter((entry) => entry.category === params.category)
+  if (params.category) items = items.filter((entry) =>
+    (Array.isArray(entry.category) ? entry.category : [entry.category]).includes(params.category))
   if (params.sort === 'downloads') {
     items = [...items].sort((a, b) => (Number(b.downloads) || 0) - (Number(a.downloads) || 0))
   }
@@ -113,15 +119,19 @@ export async function getMarketPlugins(params = {}) {
  * @returns {Promise<Object>} 插件详情对象
  */
 export async function getPluginDetails(pluginId) {
-  if (marketBackend) return marketBackend.getPluginDetails(pluginId)
-
-  const catalogEntry = await findInV2StaticCatalog(pluginId)
-  if (catalogEntry) return catalogEntry
+  let catalogError
+  try {
+    const catalogEntry = await findInV2StaticCatalog(pluginId)
+    if (catalogEntry) return catalogEntry
+  } catch (error) {
+    console.warn('[plugins] 插件目录不可用，尝试读取已安装插件详情:', error)
+    catalogError = error
+  }
 
   const local = (await getLocalPlugins()).find(
     (p) => String(p?.pluginId) === String(pluginId)
   )
-  if (!local) throw createNotInCatalogError(pluginId)
+  if (!local) throw catalogError || createNotInCatalogError(pluginId)
   return { ...local, id: local.pluginId, pluginId: local.pluginId }
 }
 
@@ -131,10 +141,24 @@ export async function getPluginDetails(pluginId) {
  * @returns {Promise<Object>} { id, pluginId, version, downloadUrl, sha256, checksum, size }
  */
 export async function getDownloadSign(pluginId) {
-  if (marketBackend) return marketBackend.getDownloadSign(pluginId)
-
   // 已下架的条目在这里直接抛出 PLUGIN_REVOKED
-  const info = buildCatalogDownloadInfo(await findInV2StaticCatalog(pluginId))
+  // 安装前重新读取目录，不能把列表缓存或离线快照当作仍可安装的依据。
+  const entry = await findInV2StaticCatalog(pluginId, { forceRefresh: true })
+  const info = buildCatalogDownloadInfo(entry)
   if (!info) throw createNotInCatalogError(pluginId, '插件市场未收录该插件或缺少下载信息')
+  const platform = await resolveUpdatePlatform()
+  const platforms = getPluginPlatforms(entry)
+  if (platforms && !platforms.includes(platform)) {
+    const error = new Error('该插件不支持当前平台')
+    error.code = 'PLUGIN_PLATFORM_UNSUPPORTED'
+    throw error
+  }
+  const versions = await fetchVersions()
+  const compatible = checkCompat(entry, versions.appVersion, versions.webVersion)
+  if (!compatible.compatible) {
+    throw normalizePluginVersionError({ message: compatible.reason, errors: {
+      minAppVersion: entry.minAppVersion, currentAppVersion: versions.appVersion
+    } })
+  }
   return info
 }

@@ -184,8 +184,10 @@ export class LauncherController {
       skipTaskbar: true,
       resizable: false,
       show: false,
-      // macOS 使用非激活面板，显隐时不切换整个应用的前台状态。
-      ...(process.platform === 'darwin' ? { type: 'panel' } : {}),
+      // macOS 保留非激活面板和原生圆角，仅禁用原生阴影，避免透明留白出现额外外框。
+      ...(process.platform === 'darwin'
+        ? { type: 'panel', hasShadow: false }
+        : {}),
       backgroundColor: '#00000000',
       autoHideMenuBar: true,
       webPreferences: {

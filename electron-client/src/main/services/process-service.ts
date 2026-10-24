@@ -536,7 +536,7 @@ export class ProcessService {
     }
     const prev = this.#lastSysCpuTimes
     this.#lastSysCpuTimes = { idle, total }
-    if (!prev || total <= prev.total) return 12
+    if (!prev || total <= prev.total) return 0
     const idleDelta = idle - prev.idle
     const totalDelta = total - prev.total
     return Math.min(100, Math.max(0, Number((((totalDelta - idleDelta) / totalDelta) * 100).toFixed(1))))
@@ -553,16 +553,16 @@ export class ProcessService {
 
     const task = (async () => {
       if (this.runtimePlatform !== 'win32') {
-        const list = await this.#listProcesses(signal).catch(() => [])
+        const list = await this.#listProcesses(signal)
         const mapped = list.map((p) => ({
           pid: p.pid,
           name: p.name,
           path: p.path || '',
           cpuPercent: p.cpuUsage || 0,
           workingSetBytes: p.memoryUsage || 0,
-          privateBytes: Math.round((p.memoryUsage || 0) * 0.85),
-          threadCount: 4,
-          parentPid: p.parentPid ?? 1,
+          privateBytes: null,
+          threadCount: null,
+          parentPid: p.parentPid ?? null,
           isSystem: p.pid <= 4,
           description: p.name,
           companyName: ''
@@ -749,7 +749,8 @@ export class ProcessService {
           return { success: true, data: { error: 'INVALID_PID: 进程 PID 无效' } }
         }
         if (this.runtimePlatform !== 'win32') {
-          const cached = this.#cachedMonitorSnapshot?.processes.find((p) => p.pid === pid)
+          const cached = (await this.#queryRichProcessSnapshot(signal)).find((p) => p.pid === pid)
+          if (!cached) return { success: true, data: { error: 'PROCESS_NOT_FOUND: 进程已退出或不可见' } }
           return {
             success: true,
             data: {
@@ -759,14 +760,16 @@ export class ProcessService {
               commandLine: String(cached?.commandLine || cached?.path || ''),
               companyName: String(cached?.companyName || ''),
               fileDescription: String(cached?.description || ''),
-              fileVersion: '1.0.0',
+              fileVersion: '',
               productName: String(cached?.name || ''),
               signerName: '',
-              startTime: new Date().toISOString().replace('T', ' ').slice(0, 19),
-              handleCount: Number(cached?.handleCount ?? 120),
-              peakMemoryBytes: Math.round(Number(cached?.workingSetBytes ?? 0) * 1.15),
-              threadCount: Number(cached?.threadCount ?? 4),
-              parentPid: Number(cached?.parentPid ?? 1)
+              startTime: '',
+              handleCount: null,
+              peakMemoryBytes: null,
+              memoryBytes: cached.workingSetBytes ?? null,
+              privateBytes: null,
+              threadCount: cached.threadCount ?? null,
+              parentPid: cached.parentPid ?? null
             }
           }
         }

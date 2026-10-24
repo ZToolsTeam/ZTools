@@ -79,7 +79,7 @@ export function createPluginHostApis({ pluginId, methods = null, call = callHost
     }
   }
 
-  async function writeItem(key, value, ifAbsent) {
+  async function writeItem(key, value, ifAbsent, expected) {
     assertSecureStorageKey(key)
     if (value === undefined || typeof value === 'function' || typeof value === 'symbol') {
       throw new ZToolsHostError('INVALID_REQUEST', 'SecureStorage 只能保存可 JSON 序列化的值')
@@ -94,7 +94,11 @@ export function createPluginHostApis({ pluginId, methods = null, call = callHost
       throw new ZToolsHostError('FILE_TOO_LARGE', `「${key}」超过 64 KiB，无法保存到加密存储`)
     }
     try {
-      const result = await invokeCredential('credential_v1_set', { key, value: text, ...(ifAbsent ? { ifAbsent: true } : {}) })
+      const conditional = expected !== undefined
+      const result = await invokeCredential(conditional ? 'credential_v1_compare_and_set' : 'credential_v1_set', {
+        key, value: text, ...(ifAbsent ? { ifAbsent: true } : {}),
+        ...(conditional ? { expectedValue: expected.value === undefined ? null : stableJson(expected.value) } : {})
+      })
       return result?.data
     } catch (error) {
       if (error?.code === 'NOT_SUPPORTED') {
@@ -201,6 +205,22 @@ export function createPluginHostApis({ pluginId, methods = null, call = callHost
     getItem,
     async setItem(key, value) {
       await writeItem(key, value, false)
+    },
+    async compareAndSet(key, expected, value) {
+      const result = await writeItem(key, value, false, { value: expected })
+      if (result !== 'OK' && result !== 'CONFLICT') throw new ZToolsHostError('HOST_RESPONSE_INVALID', '宿主返回的存储结果无效')
+      return result === 'OK'
+    },
+    async updateItem(key, update) {
+      for (let attempt = 0; attempt < 8; attempt++) {
+        const current = await getItem(key)
+        const before = JSON.stringify(current)
+        const expected = before === undefined ? undefined : JSON.parse(before)
+        const next = update(current)
+        if (JSON.stringify(next) === before) return next
+        if (await SecureStorage.compareAndSet(key, expected, next)) return next
+      }
+      throw new ZToolsHostError('STORAGE_CONFLICT', '数据正在被其他窗口修改，请重试')
     },
     removeItem,
     importFromLocalStorage,
