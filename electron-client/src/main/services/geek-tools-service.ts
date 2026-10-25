@@ -124,13 +124,33 @@ export class GeekToolsService {
     `)
   }
 
+  private static readonly DEFAULT_STEAM_GAMES: readonly InstalledGame[] = [
+    { id: 'game-steam-730', name: 'Counter-Strike 2', platform: 'steam', launchCommand: 'steam://rungameid/730', pinyin: 'counterstrike2', acronym: 'cs2' },
+    { id: 'game-steam-570', name: 'Dota 2', platform: 'steam', launchCommand: 'steam://rungameid/570', pinyin: 'dota2', acronym: 'd2' },
+    { id: 'game-steam-1091500', name: '赛博朋克 2077', platform: 'steam', launchCommand: 'steam://rungameid/1091500', pinyin: 'saibopengke2077', acronym: 'sbpk' },
+    { id: 'game-black-myth', name: '黑神话：悟空', platform: 'steam', launchCommand: 'steam://rungameid/2358720', pinyin: 'heishenhuawukong', acronym: 'hsh' }
+  ]
+
   private initDefaultGames(): void {
-    this.installedGames = [
-      { id: 'game-steam-730', name: 'Counter-Strike 2', platform: 'steam', launchCommand: 'steam://rungameid/730', pinyin: 'counterstrike2', acronym: 'cs2' },
-      { id: 'game-steam-570', name: 'Dota 2', platform: 'steam', launchCommand: 'steam://rungameid/570', pinyin: 'dota2', acronym: 'd2' },
-      { id: 'game-steam-1091500', name: '赛博朋克 2077', platform: 'steam', launchCommand: 'steam://rungameid/1091500', pinyin: 'saibopengke2077', acronym: 'sbpk' },
-      { id: 'game-black-myth', name: '黑神话：悟空', platform: 'steam', launchCommand: 'steam://rungameid/2358720', pinyin: 'heishenhuawukong', acronym: 'hsh' }
+    const candidateDirs = [
+      'C:\\Program Files (x86)\\Steam',
+      'C:\\Program Files\\Steam',
+      'D:\\Steam',
+      'E:\\Steam',
+      '/Applications/Steam.app'
     ]
+    const hasSteamInstalled = candidateDirs.some((dir) => {
+      try {
+        return fs.existsSync(dir)
+      } catch {
+        return false
+      }
+    })
+    if (hasSteamInstalled) {
+      this.installedGames = [...GeekToolsService.DEFAULT_STEAM_GAMES]
+    } else {
+      this.installedGames = []
+    }
   }
 
   // =========================================================================
@@ -139,7 +159,10 @@ export class GeekToolsService {
   public listGames(search?: string): InstalledGame[] {
     if (!search || !search.trim()) return [...this.installedGames]
     const q = search.trim().toLowerCase()
-    return this.installedGames.filter(g =>
+    const pool = this.installedGames.length > 0
+      ? this.installedGames
+      : [...GeekToolsService.DEFAULT_STEAM_GAMES]
+    return pool.filter(g =>
       g.name.toLowerCase().includes(q) ||
       g.pinyin.includes(q) ||
       g.acronym.includes(q)
@@ -147,14 +170,14 @@ export class GeekToolsService {
   }
 
   public async launchGame(id: string): Promise<{ success: boolean; launchCommand?: string; error?: string }> {
-    const game = this.installedGames.find(g => g.id === id)
+    const game = this.installedGames.find(g => g.id === id) ?? GeekToolsService.DEFAULT_STEAM_GAMES.find(g => g.id === id)
     if (!game) throw new Error(`Game not found: ${id}`)
 
     try {
       await shell.openExternal(game.launchCommand)
       return { success: true, launchCommand: game.launchCommand }
-    } catch (err: any) {
-      return { success: false, launchCommand: game.launchCommand, error: err.message || String(err) }
+    } catch (err) {
+      return { success: false, launchCommand: game.launchCommand, error: err instanceof Error ? err.message : String(err) }
     }
   }
 
@@ -213,8 +236,8 @@ export class GeekToolsService {
         INSERT INTO typing_scores (id, challenge_id, wpm, accuracy_percentage, elapsed_seconds, error_count, completed_at)
         VALUES (?, ?, ?, ?, ?, ?, ?)
       `).run(randomUUID(), result.challengeId, result.wpm, result.accuracyPercentage, result.elapsedSeconds, result.errorCount, result.completedAt)
-    } catch {
-      // 容错
+    } catch (err) {
+      console.warn('[GeekToolsService] Failed to insert typing score:', err)
     }
 
     return result
@@ -358,18 +381,19 @@ export class GeekToolsService {
 
   private getBestScore2048(): number {
     try {
-      const row = this.db.prepare('SELECT best_score FROM game_2048_records WHERE id = "default"').get() as any
+      const row = this.db.prepare("SELECT best_score FROM game_2048_records WHERE id = 'default'").get() as { best_score?: number } | undefined
       return row?.best_score || 0
-    } catch {
+    } catch (err) {
+      console.warn('[GeekToolsService] Failed to read 2048 best score:', err)
       return 0
     }
   }
 
   private updateBestScore2048(score: number): void {
     try {
-      this.db.prepare('INSERT OR REPLACE INTO game_2048_records (id, best_score, updated_at) VALUES ("default", ?, ?)').run(score, Date.now())
-    } catch {
-      // 容错
+      this.db.prepare("INSERT OR REPLACE INTO game_2048_records (id, best_score, updated_at) VALUES ('default', ?, ?)").run(score, Date.now())
+    } catch (err) {
+      console.warn('[GeekToolsService] Failed to update 2048 best score:', err)
     }
   }
 
@@ -432,8 +456,8 @@ export class GeekToolsService {
   public stop(): void {
     try {
       this.db.close()
-    } catch {
-      // 容错
+    } catch (err) {
+      console.warn('[GeekToolsService] Failed to close database:', err)
     }
   }
 }

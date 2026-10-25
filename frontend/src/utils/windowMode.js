@@ -49,6 +49,8 @@ function writeStorage(key, value) {
   }
 }
 
+let unsubscribeHotkey = null
+
 /**
  * 初始化偏好设置与热键联动
  */
@@ -61,14 +63,31 @@ export function initWindowMode() {
   const discovered = readStorage(STORAGE_KEY_FIRST_GEEK_DISCOVERED, 'false')
   state.geekModeDiscovered = discovered === 'true'
 
-  // 如果用户偏好是 launcher，初次初始化为 launcher
-  if (state.wakePreference === WAKE_PREFERENCES.LAUNCHER) {
+  if (typeof window !== 'undefined' && window.ztools?.config?.set) {
+    window.ztools.config.set('ui.wake_preference', state.wakePreference, true, 'user_settings.json').catch(() => {})
+  }
+
+  const isDedicatedLauncherWindow = typeof window !== 'undefined' && (
+    window.location?.search?.includes('mode=launcher') ||
+    window.location?.hash?.startsWith('#/launcher')
+  )
+
+  // 如果用户偏好是 launcher（且当前并非后台静默预热的独立 launcher 窗口），初次初始化为 launcher
+  if (state.wakePreference === WAKE_PREFERENCES.LAUNCHER && !isDedicatedLauncherWindow) {
     switchWindowMode(WINDOW_MODES.LAUNCHER).catch(() => {})
   }
 
-  // 监听全局唤醒热键事件，按用户偏好自动切换
+  if (typeof unsubscribeHotkey === 'function') {
+    unsubscribeHotkey()
+    unsubscribeHotkey = null
+  }
+
+  // 监听全局唤醒热键事件（仅在单窗口降级模式下由渲染进程切换，独立原生窗口模式由主进程 toggleMainWindow 统一调度，避免双端竞态抢焦点）
   if (typeof window !== 'undefined' && window.ztools?.events?.on) {
-    window.ztools.events.on('hotkey_triggered', (data) => {
+    const off = window.ztools.events.on('hotkey_triggered', (data) => {
+      if (typeof window !== 'undefined' && window.__ztoolsLauncher) {
+        return
+      }
       const triggerId = data?.id || data?.payload?.id
       if (triggerId === 'global_wake_hotkey') {
         if (state.wakePreference === WAKE_PREFERENCES.LAUNCHER && state.currentMode !== WINDOW_MODES.LAUNCHER) {
@@ -78,6 +97,9 @@ export function initWindowMode() {
         }
       }
     })
+    if (typeof off === 'function') {
+      unsubscribeHotkey = off
+    }
   }
 }
 
@@ -85,6 +107,10 @@ export function initWindowMode() {
  * 重置状态（供测试或重新初始化使用）
  */
 export function _resetWindowModeForTesting() {
+  if (typeof unsubscribeHotkey === 'function') {
+    unsubscribeHotkey()
+    unsubscribeHotkey = null
+  }
   state.currentMode = WINDOW_MODES.DASHBOARD
   state.wakePreference = WAKE_PREFERENCES.DASHBOARD
   state.isTransitioning = false

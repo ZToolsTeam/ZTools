@@ -1,36 +1,19 @@
 import { defineStore } from 'pinia'
 import { getCategories } from '@/api/apiserver'
-import { getBundledPluginEntries } from '@/utils/bundledPlugins'
+import { CATEGORY_ICON_MAP, PLUGIN_CATEGORIES, normalizeCategoryNames } from '@/utils/pluginCategories'
 
 /** 分类数据缓存有效期：10 分钟 */
 const CACHE_TTL = 10 * 60 * 1000
 
-/** 分类名称 → 图标映射（前端本地维护） */
-const CATEGORY_ICON_MAP = {
-  '系统工具': 'fa-wrench',
-  '办公效率': 'fa-briefcase',
-  '媒体处理': 'fa-file-image-o',
-  '安全工具': 'fa-shield',
-  '开发工具': 'fa-code',
-  '效率工具': 'fa-bolt',
-  '设计工具': 'fa-paint-brush'
-}
-const DEFAULT_ICON = 'fa-cube'
-
-/**
- * 远端分类表之外，补上随客户端内置插件实际使用的分类。
- * 否则远端分类与内置插件的分类对不上时，市场「全部」页按分类分组会一个插件都分不进去，侧栏分类也为空。
- */
+/** 固定分类入口覆盖离线快照；空分类由实际目录的 categoryCounts 隐藏。 */
 export function mergeLocalCategories(remote) {
-  const list = Array.isArray(remote) ? [...remote] : []
-  const known = new Set(list.map((c) => c?.name))
-  for (const entry of getBundledPluginEntries()) {
-    const name = typeof entry.category === 'string' ? entry.category.trim() : ''
-    if (!name || known.has(name)) continue
-    known.add(name)
-    list.push({ id: `local:${name}`, name, slug: `local-${name}`, local: true })
+  const categories = new Map(PLUGIN_CATEGORIES.map(({ name, icon }) => [name, { id: name, name, slug: name, icon }]))
+  for (const category of Array.isArray(remote) ? remote : []) {
+    for (const name of normalizeCategoryNames(category?.name)) {
+      categories.set(name, { ...categories.get(name), ...category, id: name, name, slug: name })
+    }
   }
-  return list
+  return [...categories.values()]
 }
 
 export const useCategoriesStore = defineStore('categories', {
@@ -49,7 +32,7 @@ export const useCategoriesStore = defineStore('categories', {
         { name: '全部', icon: 'fa-th' },
         ...state.items.map((c) => ({
           name: c.name,
-          icon: CATEGORY_ICON_MAP[c.name] || DEFAULT_ICON
+          icon: CATEGORY_ICON_MAP[c.name] || 'fa-cube'
         }))
       ]
     }
@@ -69,24 +52,14 @@ export const useCategoriesStore = defineStore('categories', {
       this._fetchPromise = (async () => {
         try {
           const categories = await getCategories()
-          this.items = mergeLocalCategories(Array.isArray(categories) && categories.length > 0 ? categories : [
-            { id: 1, name: '办公效率', slug: 'office', icon: 'fa-briefcase' },
-            { id: 2, name: '系统工具', slug: 'system', icon: 'fa-wrench' },
-            { id: 3, name: '媒体处理', slug: 'media', icon: 'fa-file-image-o' },
-            { id: 4, name: '安全工具', slug: 'security', icon: 'fa-shield' }
-          ])
+          this.items = mergeLocalCategories(categories)
           this.loaded = true
           this.lastFetchTime = Date.now()
         } catch (e) {
           console.warn('[categories] 获取远程分类失败，回退内置官方分类列表:', e)
-          this.items = mergeLocalCategories([
-            { id: 1, name: '办公效率', slug: 'office', icon: 'fa-briefcase' },
-            { id: 2, name: '系统工具', slug: 'system', icon: 'fa-wrench' },
-            { id: 3, name: '媒体处理', slug: 'media', icon: 'fa-file-image-o' },
-            { id: 4, name: '安全工具', slug: 'security', icon: 'fa-shield' }
-          ])
-          this.loaded = true
-          this.error = null
+          this.items = mergeLocalCategories([])
+          this.loaded = false
+          this.error = e?.message || '加载分类失败'
         } finally {
           this.loading = false
           this._fetchPromise = null

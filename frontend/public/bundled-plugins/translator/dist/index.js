@@ -1,6 +1,6 @@
 import { List, ActionPanel, Action, Icon, Color, Clipboard, useState, useEffect, useRef, showToast, Toast, FilterBar } from '@ztools/declarative-ui';
 import { LANGUAGE_PAIR_OPTIONS, buildTranslationVariants, formatIdentifierCase, translateTextWithHost, fetchTranslationHistoryFromHost } from './logic.js';
-import { readRealClipboardText } from './native-ipc.js';
+import { readRealClipboardText, isRealElectronHost } from './native-ipc.js';
 export * from './logic.js';
 const DEFAULT_SAMPLE_TEXT = 'Please find attached the quarterly financial report for your review.';
 const INITIAL_HISTORY = [
@@ -61,8 +61,12 @@ export function TranslatorCommand() {
     const initialPairId = initialFeature === 'translate-naming' ? 'zh-CN->en' : LANGUAGE_PAIR_OPTIONS[0].id;
     const [searchText, setSearchText] = useState('');
     const [pairOptionId, setPairOptionId] = useState(initialPairId);
-    const [variants, setVariants] = useState(() => reorderVariantsForFeature(buildTranslationVariants(DEFAULT_SAMPLE_TEXT, '随信附上本季度财务报告，请您审阅。', 'en', 'zh-CN', '本地离线神经词库'), initialFeature));
-    const [history, setHistory] = useState(INITIAL_HISTORY);
+    const [variants, setVariants] = useState(() => isRealElectronHost()
+        ? []
+        : reorderVariantsForFeature(buildTranslationVariants(DEFAULT_SAMPLE_TEXT, '随信附上本季度财务报告，请您审阅。', 'en', 'zh-CN', '本地离线神经词库'), initialFeature));
+    const [history, setHistory] = useState(() => isRealElectronHost()
+        ? []
+        : INITIAL_HISTORY);
     const [isLoading, setIsLoading] = useState(false);
     const translatingRef = useRef(false);
     async function runTranslate(inputText, pairId, showToastOnDone = false) {

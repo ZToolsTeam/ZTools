@@ -1,771 +1,410 @@
-import React from "../../index.js";
-import {
+import React, {
   List,
-  Detail,
   Form,
   ActionPanel,
   Action,
   Icon,
-  Color,
+  Clipboard,
+  LocalStorage,
   showToast,
   Toast,
-  Clipboard,
-  useNavigation
-} from "../../index.js";
-import { useState, useEffect } from "../../runtime/hooks.js";
+  useNavigation,
+  useState,
+  useEffect,
+  useMemo,
+  useCallback,
+  useRef
+} from '../../index.js'
+import type { SnippetCategory, SnippetFormInput, SnippetItem } from './types.js'
 import {
-  Snippet
-} from "./types.js";
-import {
-  SAMPLE_SNIPPETS,
-  getSnippets,
-  saveSnippets,
-  filterSnippets,
-  parseSnippetArguments,
-  hasSnippetArguments,
-  expandSnippetTemplate,
-  createSnippetService,
-  updateSnippetService,
-  deleteSnippetService,
-  toggleSnippetService,
-  exportSnippetsJSON,
-  importSnippetsJSON
-} from "./snippets-storage.js";
+  getSnippetCategoryLabel,
+  resolveMacroTemplate,
+  validateSnippetInput
+} from './macro-engine.js'
 
-export * from "./types.js";
-export * from "./snippets-storage.js";
+export * from './types.js'
+export * from './macro-engine.js'
 
-/**
- * 短语动态参数填写表单 (SnippetArgumentFormView)
- * 支持 text / password / dropdown 动态参数表单填写、实时 Preview 预览拼接与粘贴回填
- */
-export function SnippetArgumentFormView({
-  snippet = SAMPLE_SNIPPETS[5] || SAMPLE_SNIPPETS[0],
-  initialArgs = {},
-  clipboardContent = "",
-  onExpanded
-}: {
-  snippet?: Snippet;
-  initialArgs?: Record<string, string>;
-  clipboardContent?: string;
-  onExpanded?: (result: { expanded: string; cursorOffset: number; args: Record<string, string> }) => void;
-} = {}) {
-  const { pop } = useNavigation();
-  const descriptors = parseSnippetArguments(snippet.snippet);
+const SNIPPETS_STORAGE_KEY = 'ztools.snippets.items.v1'
 
-  const defaultValues: Record<string, string> = {};
-  for (const d of descriptors) {
-    defaultValues[d.name] = initialArgs[d.name] ?? d.defaultValue ?? "";
+function getCategoryIcon(category: SnippetCategory): Icon {
+  switch (category) {
+    case 'invoice':
+      return Icon.Document
+    case 'address':
+      return Icon.Pin
+    case 'customer_service':
+      return Icon.Text
+    case 'code':
+      return Icon.Code
+    default:
+      return Icon.List
   }
-
-  const [formValues, setFormValues] = useState<Record<string, string>>(defaultValues);
-
-  const liveExpansion = expandSnippetTemplate(snippet.snippet, clipboardContent, {
-    args: formValues,
-    previewPlaceholders: true
-  });
-
-  const handleSubmit = async (submittedValues: Record<string, any> = {}) => {
-    const mergedArgs: Record<string, string> = { ...formValues };
-    for (const d of descriptors) {
-      const val = submittedValues[d.name] ?? formValues[d.name] ?? d.defaultValue ?? "";
-      mergedArgs[d.name] = String(val);
-    }
-
-    const missing = descriptors.find((d) => d.required && !mergedArgs[d.name]?.trim());
-    if (missing) {
-      await showToast(Toast.Style.Failure, "参数未填写", `请填写必填参数: "${missing.name}"`);
-      return;
-    }
-
-    const finalExpansion = expandSnippetTemplate(snippet.snippet, clipboardContent, {
-      args: mergedArgs,
-      previewPlaceholders: false
-    });
-
-    await Clipboard.paste(finalExpansion.expanded);
-    onExpanded?.({
-      expanded: finalExpansion.expanded,
-      cursorOffset: finalExpansion.cursorOffset,
-      args: mergedArgs
-    });
-    await showToast(Toast.Style.Success, "已展开并粘贴短语", snippet.name);
-    pop();
-  };
-
-  return (
-    <Form
-      navigationTitle={`填写短语参数: ${snippet.name}`}
-      actions={
-        <ActionPanel title={snippet.name}>
-          <Action.SubmitForm
-            title="展开并粘贴到活动窗口 (Paste Snippet)"
-            icon={Icon.Checkmark}
-            onSubmit={handleSubmit}
-          />
-          <Action.CopyToClipboard
-            title="复制当前预览结果 (Copy Preview)"
-            content={liveExpansion.expanded}
-            icon={Icon.CopyClipboard}
-            shortcut={{ modifiers: ["ctrl"], key: "c" }}
-          />
-        </ActionPanel>
-      }
-    >
-      {descriptors.map((desc) => {
-        if (desc.type === "dropdown" && desc.options.length > 0) {
-          return (
-            <Form.Dropdown
-              key={desc.name}
-              id={desc.name}
-              title={desc.name}
-              defaultValue={formValues[desc.name] || desc.options[0]}
-              onChange={(val: string) =>
-                setFormValues((prev) => ({ ...prev, [desc.name]: val }))
-              }
-            >
-              {desc.options.map((opt) => (
-                <Form.Dropdown.Item key={opt} title={opt} value={opt} />
-              ))}
-            </Form.Dropdown>
-          );
-        }
-
-        if (desc.type === "password") {
-          return (
-            <Form.PasswordField
-              key={desc.name}
-              id={desc.name}
-              title={desc.name}
-              placeholder={`请输入 ${desc.name}...`}
-              defaultValue={formValues[desc.name] || ""}
-              onChange={(val: string) =>
-                setFormValues((prev) => ({ ...prev, [desc.name]: val }))
-              }
-            />
-          );
-        }
-
-        return (
-          <Form.TextField
-            key={desc.name}
-            id={desc.name}
-            title={desc.name}
-            placeholder={desc.defaultValue ? `默认: ${desc.defaultValue}` : `请输入 ${desc.name}...`}
-            defaultValue={formValues[desc.name] || ""}
-            onChange={(val: string) =>
-              setFormValues((prev) => ({ ...prev, [desc.name]: val }))
-            }
-          />
-        );
-      })}
-
-      <Form.Separator />
-      <Form.Description
-        title="实时预览 (Preview)"
-        text={liveExpansion.expanded}
-      />
-    </Form>
-  );
 }
 
-/**
- * 批量导入 Snippets 表单视图
- */
-export function ImportSnippetsForm({
-  onImportCompleted
-}: {
-  onImportCompleted?: () => void;
-} = {}) {
-  const { pop } = useNavigation();
-
-  const handleImportSubmit = async (values: { jsonContent?: string }) => {
-    if (!values.jsonContent || !values.jsonContent.trim()) {
-      await showToast(Toast.Style.Failure, "导入失败", "请输入合法的 JSON 数据");
-      return;
-    }
-
-    const current = await getSnippets();
-    const result = await importSnippetsJSON(values.jsonContent, current);
-
-    if (result.failed > 0 && result.imported === 0 && result.updated === 0) {
-      await showToast(Toast.Style.Failure, "导入失败", result.errors?.[0] || "格式不符合规范");
-      return;
-    }
-
-    await showToast(
-      Toast.Style.Success,
-      "Snippets 导入完成",
-      `成功新增 ${result.imported} 个，更新 ${result.updated} 个，失败 ${result.failed} 个`
-    );
-    onImportCompleted?.();
-    pop();
-  };
-
-  return (
-    <Form
-      navigationTitle="批量导入 Snippets (JSON)"
-      actions={
-        <ActionPanel>
-          <Action.SubmitForm
-            title="确认导入"
-            icon={Icon.Checkmark}
-            onSubmit={handleImportSubmit}
-          />
-        </ActionPanel>
-      }
-    >
-      <Form.TextArea
-        id="jsonContent"
-        title="Snippets JSON 数据"
-        placeholder='[&#10;  {&#10;    "name": "常用邮箱",&#10;    "keyword": ":mail",&#10;    "snippet": "user@example.com"&#10;  }&#10;]'
-      />
-    </Form>
-  );
+export interface SnippetEditFormProps {
+  initialData?: SnippetItem
+  onSave: (input: SnippetFormInput) => Promise<void>
 }
 
-/**
- * 创建或编辑 Snippet 表单视图
- */
-export function CreateSnippetForm({
-  initialSnippet,
-  onSaved
-}: {
-  initialSnippet?: Snippet;
-  onSaved?: (snippet: Snippet) => void;
-} = {}) {
-  const { pop } = useNavigation();
+export function SnippetEditForm({ initialData, onSave }: SnippetEditFormProps) {
+  const { pop } = useNavigation()
+  const [title, setTitle] = useState(initialData?.title || '')
+  const [category, setCategory] = useState<SnippetCategory>(initialData?.category || 'general')
+  const [keyword, setKeyword] = useState(initialData?.keyword || '')
+  const [content, setContent] = useState(initialData?.content || '')
 
-  const handleSubmit = async (values: {
-    name?: string;
-    keyword?: string;
-    snippet?: string;
-    enabled?: boolean;
-  }) => {
-    if (!values.name || !values.keyword || !values.snippet) {
-      await showToast(Toast.Style.Failure, "表单错误", "名称、触发词和展开文本不能为空");
-      return;
+  const handleSubmit = useCallback(async () => {
+    const payload: SnippetFormInput = {
+      id: initialData?.id,
+      title,
+      category,
+      keyword,
+      content
     }
-
-    const newSnippet: Snippet = {
-      id: initialSnippet ? initialSnippet.id : `snip-${Date.now()}`,
-      name: values.name.trim(),
-      keyword: values.keyword.trim(),
-      snippet: values.snippet,
-      enabled: values.enabled !== false,
-      category: initialSnippet?.category || "General",
-      isPinned: Boolean(initialSnippet?.isPinned),
-      createdAt: initialSnippet?.createdAt ?? Date.now(),
-      updatedAt: Date.now()
-    };
-
-    if (initialSnippet) {
-      await updateSnippetService(newSnippet.id, newSnippet);
-    } else {
-      await createSnippetService(newSnippet);
+    const check = validateSnippetInput(payload)
+    if (!check.valid) {
+      await showToast({
+        style: Toast.Style.Failure,
+        title: '无法保存短语',
+        message: check.error
+      })
+      return
     }
-
-    onSaved?.(newSnippet);
-    await showToast(
-      Toast.Style.Success,
-      initialSnippet ? "Snippet 已更新" : "Snippet 已创建",
-      `触发词: ${newSnippet.keyword}`
-    );
-    pop();
-  };
+    await onSave(payload)
+    pop()
+  }, [initialData, title, category, keyword, content, onSave, pop])
 
   return (
     <Form
-      navigationTitle={initialSnippet ? `编辑: ${initialSnippet.name}` : "新建 Snippet 快捷指令"}
+      navigationTitle={initialData ? '编辑快捷短语' : '新建快捷短语'}
       actions={
         <ActionPanel>
-          <Action.SubmitForm
-            title={initialSnippet ? "保存修改" : "创建 Snippet"}
-            icon={Icon.Checkmark}
-            onSubmit={handleSubmit}
-          />
+          <Action.SubmitForm title="保存短语" icon={Icon.CheckCircle} onSubmit={handleSubmit} />
+          <Action title="取消返回" onAction={pop} />
         </ActionPanel>
       }
     >
       <Form.TextField
-        id="name"
-        title="Snippet 名称"
-        placeholder="例如: 工作邮箱、常用签名、控制台日志..."
-        defaultValue={initialSnippet?.name ?? ""}
+        id="title"
+        title="短语标题"
+        value={title}
+        onChange={setTitle}
+        placeholder="如：公司开票抬头、北京办公地址"
       />
+      <Form.Dropdown
+        id="category"
+        title="所属分类"
+        value={category}
+        onChange={(v: string) => setCategory(v as SnippetCategory)}
+      >
+        <Form.Dropdown.Item title="通用短语" value="general" />
+        <Form.Dropdown.Item title="发票与开票信息" value="invoice" />
+        <Form.Dropdown.Item title="常用地址与联系人" value="address" />
+        <Form.Dropdown.Item title="客服与商务话术" value="customer_service" />
+        <Form.Dropdown.Item title="开发与代码片段" value="code" />
+      </Form.Dropdown>
       <Form.TextField
         id="keyword"
-        title="触发关键词 (Keyword)"
-        placeholder="例如: :email, :sign, !date..."
-        defaultValue={initialSnippet?.keyword ?? ""}
+        title="触发缩写（可选）"
+        value={keyword}
+        onChange={setKeyword}
+        placeholder="如：!shuihao、!addr"
       />
       <Form.TextArea
-        id="snippet"
-        title="扩展文本内容 (Snippet)"
-        placeholder="支持动态变量: {clipboard} (当前剪贴板), {date} (当前日期), {time} (当前时间), {datetime}, {uuid}, {cursor} (光标落点)..."
-        defaultValue={initialSnippet?.snippet ?? ""}
+        id="content"
+        title="短语模板内容"
+        value={content}
+        onChange={setContent}
+        placeholder="支持宏变量：{date}、{time}、{clipboard}、{cursor}..."
       />
-      <Form.Checkbox
-        id="enabled"
-        label="启用文本自动扩展 (Active Hook)"
-        defaultValue={initialSnippet?.enabled ?? true}
+      <Form.Description
+        title="宏变量提示"
+        text="{date}=年月日  {time}=时分秒  {clipboard}=当前剪贴板  {cursor}=上屏后光标停留位置"
       />
     </Form>
-  );
+  )
 }
 
-/**
- * Snippet 详情与展开测试视图
- */
-export function SnippetDetailView({
-  snippet = SAMPLE_SNIPPETS[0],
-  onDeleted,
-  onToggled
-}: {
-  snippet?: Snippet;
-  onDeleted?: (id: string) => void;
-  onToggled?: (id: string) => void;
-} = {}) {
-  const { pop } = useNavigation();
-  const testExpansion = expandSnippetTemplate(snippet.snippet, "Sample Clipboard Text");
-
-  const markdown = `
-# Snippet: ${snippet.name}
-
-> **触发词**: \`${snippet.keyword}\` | **状态**: \`${snippet.enabled ? "ACTIVE (已激活)" : "DISABLED (已停用)"}\` ${snippet.category ? `| **分类**: \`${snippet.category}\`` : ""}
-
----
-
-### 原始模板内容
-\`\`\`text
-${snippet.snippet}
-\`\`\`
-
----
-
-### 模拟动态扩展结果
-\`\`\`text
-${testExpansion.expanded}
-\`\`\`
-> **光标回退位移**: 距末尾 \`${testExpansion.cursorOffset}\` 个字符 ${testExpansion.hasCursor ? "(已包含光标锚点)" : ""}
-  `;
-
-  return (
-    <Detail
-      markdown={markdown}
-      navigationTitle={`Snippet: ${snippet.name}`}
-      metadata={
-        <Detail.Metadata>
-          <Detail.Metadata.Label title="名称" text={snippet.name} icon={Icon.Pencil} />
-          <Detail.Metadata.Label title="触发词" text={snippet.keyword} icon={Icon.Key} />
-          {snippet.category ? (
-            <Detail.Metadata.Label title="分类" text={snippet.category} icon={Icon.Folder} />
-          ) : null}
-          <Detail.Metadata.Label title="置顶" text={snippet.isPinned ? "已置顶" : "常规"} icon={Icon.Pin} />
-          <Detail.Metadata.Label title="状态" text={snippet.enabled ? "启用中" : "已停用"} icon={Icon.Checkmark} />
-          <Detail.Metadata.Separator />
-          <Detail.Metadata.TagList title="生效策略">
-            <Detail.Metadata.TagList.Item
-              text={snippet.enabled ? "ENABLED" : "PAUSED"}
-              color={snippet.enabled ? Color.Green : Color.SecondaryText}
-            />
-            {snippet.isPinned ? (
-              <Detail.Metadata.TagList.Item text="PINNED" color={Color.Yellow} />
-            ) : null}
-          </Detail.Metadata.TagList>
-        </Detail.Metadata>
-      }
-      actions={
-        <ActionPanel title="Snippet 动作">
-          <Action.Paste
-            title="回车粘贴展开内容 (Paste to Active)"
-            content={testExpansion.expanded}
-            icon={Icon.Checkmark}
-          />
-          <Action.CopyToClipboard
-            title="复制展开后文本"
-            content={testExpansion.expanded}
-            icon={Icon.CopyClipboard}
-            shortcut={{ modifiers: ["ctrl"], key: "c" }}
-          />
-          <Action.CopyToClipboard
-            title="复制原始模板"
-            content={snippet.snippet}
-            icon={Icon.Document}
-            shortcut={{ modifiers: ["ctrl", "alt"], key: "c" }}
-          />
-          <Action.CopyToClipboard
-            title="复制触发词"
-            content={snippet.keyword}
-            icon={Icon.Key}
-            shortcut={{ modifiers: ["ctrl", "shift"], key: "c" }}
-          />
-          <Action
-            title={snippet.enabled ? "停用该 Snippet" : "启用该 Snippet"}
-            icon={Icon.Power}
-            shortcut={{ modifiers: ["ctrl"], key: "t" }}
-            onAction={async () => {
-              await toggleSnippetService(snippet.id);
-              onToggled?.(snippet.id);
-              showToast(Toast.Style.Success, snippet.enabled ? "已停用" : "已启用");
-            }}
-          />
-          <Action
-            title="删除该 Snippet"
-            icon={Icon.Trash}
-            shortcut={{ modifiers: ["ctrl"], key: "x" }}
-            onAction={async () => {
-              await deleteSnippetService(snippet.id);
-              onDeleted?.(snippet.id);
-              showToast(Toast.Style.Success, "Snippet 已删除");
-              pop();
-            }}
-          />
-        </ActionPanel>
-      }
-    />
-  );
+export interface SnippetsProps {
+  featureCode?: string
+  initialSnippets?: SnippetItem[]
 }
 
-/**
- * 官方内置核心能力: Snippets 文本扩展管理
- * 极客键盘钩子调度、动态宏展开与完整 ActionPanel
- */
-export default function SnippetsCommand() {
-  const { push } = useNavigation();
-  const [snippets, setSnippets] = useState<Snippet[]>(SAMPLE_SNIPPETS);
-  const [searchText, setSearchText] = useState<string>("");
-  const [filterEnabled, setFilterEnabled] = useState<string>("all");
-  const [selectedId, setSelectedId] = useState<string>("");
-  const [expandCount, setExpandCount] = useState<number>(0);
-  const [isShowingDetail, setIsShowingDetail] = useState<boolean>(true);
-  const [isLoading, setIsLoading] = useState<boolean>(false);
+export function Snippets({ featureCode = 'snippets-all', initialSnippets }: SnippetsProps = {}) {
+  const { push } = useNavigation()
+  const [isLoading, setIsLoading] = useState<boolean>(!initialSnippets)
+  const [snippets, setSnippets] = useState<SnippetItem[]>(initialSnippets || [])
+  const [searchText, setSearchText] = useState<string>('')
+  const [categoryFilter, setCategoryFilter] = useState<string>(() => {
+    if (featureCode === 'snippets-invoice') return 'invoice'
+    if (featureCode === 'snippets-address') return 'address'
+    return 'all'
+  })
+
+  const mountedRef = useRef<boolean>(true)
+  useEffect(() => {
+    mountedRef.current = true
+    return () => {
+      mountedRef.current = false
+    }
+  }, [])
 
   useEffect(() => {
-    (async () => {
-      setIsLoading(true);
-      const data = await getSnippets();
-      setSnippets(data);
-      setIsLoading(false);
-    })();
-  }, []);
-
-  const filteredSnippets = filterSnippets(snippets, {
-    query: searchText,
-    enabledOnly: filterEnabled === "enabled"
-  });
-
-  const activeSnippet =
-    filteredSnippets.find((s) => s.id === selectedId) || filteredSnippets[0] || null;
-  const enabledCount = snippets.filter((s) => s.enabled).length;
-
-  const handleSaveSnippet = async (item: Snippet) => {
-    const exists = snippets.some(s => s.id === item.id);
-    const updated = exists
-      ? snippets.map(s => (s.id === item.id ? item : s))
-      : [item, ...snippets];
-    setSnippets(updated);
-    await saveSnippets(updated);
-  };
-
-  const handleDeleteSnippet = async (id: string) => {
-    await deleteSnippetService(id);
-    const updated = snippets.filter(s => s.id !== id);
-    setSnippets(updated);
-    await saveSnippets(updated);
-    await showToast(Toast.Style.Success, "Snippet 已删除");
-  };
-
-  const handleToggleSnippet = async (id: string) => {
-    await toggleSnippetService(id);
-    const updated = snippets.map(s =>
-      s.id === id ? { ...s, enabled: !s.enabled, updatedAt: Date.now() } : s
-    );
-    setSnippets(updated);
-    await saveSnippets(updated);
-  };
-
-  const handleTogglePinSnippet = async (id: string) => {
-    const updated = snippets.map(s =>
-      s.id === id ? { ...s, isPinned: !s.isPinned, updatedAt: Date.now() } : s
-    );
-    setSnippets(updated);
-    await saveSnippets(updated);
-    const target = updated.find(s => s.id === id);
-    await showToast(Toast.Style.Success, target?.isPinned ? "已置顶短语" : "已取消置顶");
-  };
-
-  const handleExportAll = async () => {
-    const jsonStr = await exportSnippetsJSON(snippets);
-    await Clipboard.copy(jsonStr);
-    await showToast(Toast.Style.Success, "已导出 Snippets 到剪贴板", `共 ${snippets.length} 条短语`);
-  };
-
-  const handleExpandAndPasteSelected = async () => {
-    if (!activeSnippet) {
-      await showToast(Toast.Style.Failure, "请先选择或新建一条快捷短语");
-      return;
+    if (initialSnippets) {
+      return
     }
-    if (hasSnippetArguments(activeSnippet.snippet)) {
-      push(
-        <SnippetArgumentFormView
-          snippet={activeSnippet}
-          onExpanded={() => setExpandCount((c) => c + 1)}
-        />
-      );
-      return;
+    let active = true
+    ;(async () => {
+      try {
+        const raw = await LocalStorage.getItem<string>(SNIPPETS_STORAGE_KEY)
+        if (!active || !mountedRef.current) return
+        if (raw) {
+          const parsed = JSON.parse(raw) as SnippetItem[]
+          if (Array.isArray(parsed)) {
+            setSnippets(parsed)
+          }
+        }
+      } catch {
+        // Ignore storage read error
+      } finally {
+        if (active && mountedRef.current) {
+          setIsLoading(false)
+        }
+      }
+    })()
+    return () => {
+      active = false
     }
-    const exp = expandSnippetTemplate(activeSnippet.snippet);
-    await Clipboard.paste(exp.expanded);
-    setExpandCount((c) => c + 1);
-    await showToast(Toast.Style.Success, `已展开并粘贴: ${activeSnippet.name}`, exp.expanded);
-  };
+  }, [initialSnippets])
+
+  const persistSnippets = useCallback(async (nextList: SnippetItem[]) => {
+    await LocalStorage.setItem(SNIPPETS_STORAGE_KEY, JSON.stringify(nextList))
+    if (mountedRef.current) {
+      setSnippets(nextList)
+    }
+  }, [])
+
+  const handleSaveSnippet = useCallback(
+    async (input: SnippetFormInput) => {
+      const check = validateSnippetInput(input)
+      if (!check.valid) {
+        throw new Error(check.error)
+      }
+      const now = Date.now()
+      const content = input.content.trim()
+      const previewText = content.replace(/\s+/g, ' ').slice(0, 72)
+      let next: SnippetItem[]
+      if (input.id) {
+        next = snippets.map((s: SnippetItem) =>
+          s.id === input.id
+            ? {
+                ...s,
+                title: input.title.trim(),
+                category: input.category,
+                categoryLabel: getSnippetCategoryLabel(input.category),
+                keyword: input.keyword?.trim() || undefined,
+                content,
+                previewText,
+                updatedAt: now
+              }
+            : s
+        )
+      } else {
+        const created: SnippetItem = {
+          id: `snip-${now}`,
+          title: input.title.trim(),
+          category: input.category,
+          categoryLabel: getSnippetCategoryLabel(input.category),
+          keyword: input.keyword?.trim() || undefined,
+          content,
+          previewText,
+          useCount: 0,
+          updatedAt: now
+        }
+        next = [created, ...snippets]
+      }
+      await persistSnippets(next)
+      await showToast({
+        style: Toast.Style.Success,
+        title: '短语已保存',
+        message: input.title.trim()
+      })
+    },
+    [snippets, persistSnippets]
+  )
+
+  const handleDeleteSnippet = useCallback(
+    async (id: string) => {
+      const next = snippets.filter((s: SnippetItem) => s.id !== id)
+      await persistSnippets(next)
+      await showToast({
+        style: Toast.Style.Success,
+        title: '已删除该快捷短语'
+      })
+    },
+    [snippets, persistSnippets]
+  )
+
+  const handleInsertSnippet = useCallback(
+    async (item: SnippetItem) => {
+      const clipText = (await Clipboard.readText()) || ''
+      const resolved = resolveMacroTemplate(item.content, clipText)
+      await Clipboard.copy(resolved.text)
+      try {
+        const g = globalThis as Record<string, unknown>
+        const win = (typeof window !== 'undefined' ? window : g) as Record<string, unknown>
+        const electron = win.__ztoolsElectron as
+          | { transport?: { invoke?: (m: string, p?: Record<string, unknown>) => Promise<unknown> } }
+          | undefined
+        if (typeof electron?.transport?.invoke === 'function') {
+          await electron.transport.invoke('clipboard_hide_and_paste_text', {
+            text: resolved.text
+          })
+        }
+      } catch {
+        // Fallback to clipboard copy already completed
+      }
+      const next = snippets.map((s: SnippetItem) =>
+        s.id === item.id ? { ...s, useCount: (s.useCount || 0) + 1 } : s
+      )
+      await persistSnippets(next)
+      await showToast({
+        style: Toast.Style.Success,
+        title: '已解析动态宏并上屏/写入剪贴板',
+        message: resolved.text.slice(0, 48)
+      })
+    },
+    [snippets, persistSnippets]
+  )
+
+  const filteredSnippets = useMemo(() => {
+    const q = searchText.trim().toLowerCase()
+    return snippets.filter((item: SnippetItem) => {
+      if (categoryFilter !== 'all' && item.category !== categoryFilter) {
+        return false
+      }
+      if (!q) return true
+      return (
+        item.title.toLowerCase().includes(q) ||
+        (item.keyword || '').toLowerCase().includes(q) ||
+        item.content.toLowerCase().includes(q)
+      )
+    })
+  }, [snippets, searchText, categoryFilter])
+
+  if (featureCode === 'snippets-new') {
+    return <SnippetEditForm onSave={handleSaveSnippet} />
+  }
 
   return (
     <List
       isLoading={isLoading}
-      isShowingDetail={isShowingDetail}
-      searchBarPlaceholder="搜索 Snippets (名称、触发词或内容)..."
+      searchText={searchText}
       onSearchTextChange={setSearchText}
-      onSelectionChange={(id) => setSelectedId(id || "")}
+      searchBarPlaceholder="搜索短语标题、触发词或内容（如：税号、地址、退款）..."
+      searchBarAccessory={
+        <List.Dropdown
+          value={categoryFilter}
+          onChange={setCategoryFilter}
+          tooltip="按短语分类筛选"
+        >
+          <List.Dropdown.Item title="全部短语" value="all" icon={Icon.List} />
+          <List.Dropdown.Item title="发票与开票信息" value="invoice" icon={Icon.Document} />
+          <List.Dropdown.Item title="常用地址与联系人" value="address" icon={Icon.Pin} />
+          <List.Dropdown.Item
+            title="客服与商务话术"
+            value="customer_service"
+            icon={Icon.Text}
+          />
+          <List.Dropdown.Item title="开发与代码片段" value="code" icon={Icon.Code} />
+        </List.Dropdown>
+      }
       filterBar={{
-        summaryText: `快捷短语共 ${snippets.length} 个 · 已启用 ${enabledCount} 个 · 本次累计展开 ${expandCount} 次`,
+        summaryText: `共 ${filteredSnippets.length} 条快捷短语 · 支持 {date} / {clipboard} / {cursor} 动态宏变量`,
         actions: [
           {
-            id: "snip-act-create",
-            label: "新建快捷短语",
-            title: "新建快捷短语",
-            style: "primary",
-            onAction: () => {
-              push(<CreateSnippetForm onSaved={handleSaveSnippet} />);
-            }
-          },
-          {
-            id: "snip-act-import",
-            label: "批量导入 JSON",
-            title: "批量导入 JSON",
-            style: "secondary",
-            onAction: () => {
-              push(
-                <ImportSnippetsForm
-                  onImportCompleted={async () => {
-                    const updated = await getSnippets();
-                    setSnippets(updated);
-                  }}
-                />
-              );
-            }
+            id: 'new-snippet',
+            title: '新建短语',
+            onAction: () => push(<SnippetEditForm onSave={handleSaveSnippet} />)
           }
         ]
       }}
-      searchBarAccessory={
-        <List.Dropdown
-          tooltip="按状态筛选"
-          value={filterEnabled}
-          onChange={setFilterEnabled}
-        >
-          <List.Dropdown.Item title="全部 Snippets (All)" value="all" icon={Icon.List} />
-          <List.Dropdown.Item title="仅启用的 (Enabled Only)" value="enabled" icon={Icon.Checkmark} />
-        </List.Dropdown>
-      }
     >
-      <List.Section title={`文本扩展指令 (${filteredSnippets.length} 个)`}>
-        {filteredSnippets.map(item => {
-          const expansion = expandSnippetTemplate(item.snippet);
-          const detailMarkdown = `
-# Snippet: ${item.name}
-
-> **触发词**: \`${item.keyword}\` | **状态**: \`${item.enabled ? "ACTIVE (已激活)" : "DISABLED (已停用)"}\` ${item.category ? `| **分类**: \`${item.category}\`` : ""}
-
----
-
-### 原始模板内容
-\`\`\`text
-${item.snippet}
-\`\`\`
-
----
-
-### 模拟动态扩展结果
-\`\`\`text
-${expansion.expanded}
-\`\`\`
-> **光标回退位移**: 距末尾 \`${expansion.cursorOffset}\` 个字符 ${expansion.hasCursor ? "(包含光标落点)" : ""}
-          `;
-
-          return (
-            <List.Item
-              key={item.id}
-              id={item.id}
-              title={item.name}
-              subtitle={item.keyword}
-              icon={item.enabled ? Icon.Pencil : Icon.Circle}
-              accessories={[
-                ...(item.isPinned ? [{ icon: Icon.Pin, tooltip: "已置顶" }] : []),
-                ...(item.category ? [{ text: item.category }] : []),
-                { text: expansion.expanded.slice(0, 24) + (expansion.expanded.length > 24 ? "..." : "") },
-                ...(item.enabled
-                  ? [{ icon: Icon.Checkmark, tooltip: "已激活" }]
-                  : [{ icon: Icon.XmarkCircle, tooltip: "已停用" }])
-              ]}
-              detail={
-                <List.Item.Detail
-                  markdown={detailMarkdown}
-                  metadata={
-                    <List.Item.Detail.Metadata>
-                      <List.Item.Detail.Metadata.Label title="名称" text={item.name} icon={Icon.Pencil} />
-                      <List.Item.Detail.Metadata.Label title="触发关键词" text={item.keyword} icon={Icon.Key} />
-                      {item.category ? (
-                        <List.Item.Detail.Metadata.Label title="分类" text={item.category} icon={Icon.Folder} />
-                      ) : null}
-                      <List.Item.Detail.Metadata.Label title="状态" text={item.enabled ? "已启用" : "已停用"} icon={Icon.Checkmark} />
-                      <List.Item.Detail.Metadata.Label title="置顶" text={item.isPinned ? "已置顶" : "普通"} icon={Icon.Pin} />
-                      <List.Item.Detail.Metadata.Separator />
-                      <List.Item.Detail.Metadata.TagList title="生效状态">
-                        <List.Item.Detail.Metadata.TagList.Item
-                          text={item.enabled ? "ENABLED" : "PAUSED"}
-                          color={item.enabled ? Color.Green : Color.SecondaryText}
-                        />
-                        {item.isPinned ? (
-                          <List.Item.Detail.Metadata.TagList.Item text="PINNED" color={Color.Yellow} />
-                        ) : null}
-                      </List.Item.Detail.Metadata.TagList>
-                    </List.Item.Detail.Metadata>
-                  }
-                />
-              }
-              actions={
-                <ActionPanel title="Snippet 动作">
-                  {/* Action 1: 若含 {argument} 动态参数则进入参数填空表单，否则直接粘贴 */}
-                  {hasSnippetArguments(item.snippet) ? (
-                    <Action.Push
-                      title="填写动态参数并粘贴 (Fill Arguments)"
-                      icon={Icon.Pencil}
-                      target={<SnippetArgumentFormView snippet={item} />}
-                    />
-                  ) : (
-                    <Action.Paste
-                      title="回车粘贴展开内容 (Paste to Active)"
-                      content={expansion.expanded}
-                      icon={Icon.Checkmark}
-                    />
-                  )}
-
-                  {/* Action 2: 复制展开文本 */}
-                  <Action.CopyToClipboard
-                    title="仅复制展开文本"
-                    content={expansion.expanded}
-                    icon={Icon.CopyClipboard}
-                    shortcut={{ modifiers: ["ctrl"], key: "c" }}
-                  />
-
-                  {/* Action 3: 复制触发关键词 */}
-                  <Action.CopyToClipboard
-                    title="复制触发关键词"
-                    content={item.keyword}
-                    icon={Icon.Key}
-                    shortcut={{ modifiers: ["ctrl", "shift"], key: "c" }}
-                  />
-
-                  {/* Action 4: 复制原始模板 */}
-                  <Action.CopyToClipboard
-                    title="复制原始模板内容"
-                    content={item.snippet}
-                    icon={Icon.Document}
-                    shortcut={{ modifiers: ["ctrl", "alt"], key: "c" }}
-                  />
-
-                  {/* Action 5: 展开/关闭右侧双栏详情 */}
-                  <Action
-                    title={isShowingDetail ? "关闭右侧详情分栏" : "展开右侧详情分栏"}
-                    icon={Icon.SidebarRight}
-                    shortcut={{ modifiers: ["ctrl"], key: "b" }}
-                    onAction={() => setIsShowingDetail(!isShowingDetail)}
-                  />
-
-                  {/* Action 6: 编辑 Snippet */}
-                  <Action.Push
-                    title="编辑 Snippet"
-                    shortcut={{ modifiers: ["ctrl"], key: "e" }}
-                    target={
-                      <CreateSnippetForm
-                        initialSnippet={item}
-                        onSaved={handleSaveSnippet}
-                      />
-                    }
-                    icon={Icon.Pencil}
-                  />
-
-                  {/* Action 7: 新建 Snippet */}
-                  <Action.Push
-                    title="新建 Snippet..."
-                    shortcut={{ modifiers: ["ctrl"], key: "n" }}
-                    target={<CreateSnippetForm onSaved={handleSaveSnippet} />}
-                    icon={Icon.Plus}
-                  />
-
-                  {/* Action 8: 置顶/取消置顶 */}
-                  <Action
-                    title={item.isPinned ? "取消置顶" : "置顶短语"}
-                    icon={Icon.Pin}
-                    shortcut={{ modifiers: ["ctrl"], key: "p" }}
-                    onAction={() => handleTogglePinSnippet(item.id)}
-                  />
-
-                  {/* Action 9: 全屏查看详情与测试 */}
-                  <Action.Push
-                    title="全屏查看详情与测试"
-                    target={
-                      <SnippetDetailView
-                        snippet={item}
-                        onDeleted={handleDeleteSnippet}
-                        onToggled={handleToggleSnippet}
-                      />
-                    }
-                    icon={Icon.Eye}
-                    shortcut={{ modifiers: ["ctrl"], key: "d" }}
-                  />
-
-                  {/* Action 10: 启用/停用 */}
-                  <Action
-                    title={item.enabled ? "停用该指令" : "启用该指令"}
-                    icon={Icon.Power}
-                    shortcut={{ modifiers: ["ctrl"], key: "t" }}
-                    onAction={() => handleToggleSnippet(item.id)}
-                  />
-
-                  {/* Action 11: 导出全部 Snippets 为 JSON */}
-                  <Action
-                    title="导出全部 Snippets (JSON 到剪贴板)"
-                    icon={Icon.Download}
-                    shortcut={{ modifiers: ["ctrl", "shift"], key: "e" }}
-                    onAction={handleExportAll}
-                  />
-
-                  {/* Action 12: 导入 Snippets */}
-                  <Action.Push
-                    title="批量导入 Snippets (JSON)..."
-                    shortcut={{ modifiers: ["ctrl", "shift"], key: "i" }}
-                    target={<ImportSnippetsForm onImportCompleted={async () => {
-                      const updated = await getSnippets();
-                      setSnippets(updated);
-                    }} />}
-                    icon={Icon.Upload}
-                  />
-
-                  {/* Action 13: 删除 */}
-                  <Action
-                    title="删除 Snippet"
-                    icon={Icon.Trash}
-                    shortcut={{ modifiers: ["ctrl"], key: "x" }}
-                    onAction={() => handleDeleteSnippet(item.id)}
-                  />
-                </ActionPanel>
-              }
-            />
-          );
-        })}
-      </List.Section>
+      {filteredSnippets.map((item: SnippetItem) => (
+        <List.Item
+          key={item.id}
+          id={item.id}
+          title={item.title}
+          subtitle={item.previewText}
+          icon={getCategoryIcon(item.category)}
+          accessories={[
+            { tag: item.keyword ? `缩写: ${item.keyword}` : item.categoryLabel },
+            { text: `使用 ${item.useCount || 0} 次` }
+          ]}
+          actions={
+            <ActionPanel>
+              <Action
+                title="直接上屏粘贴"
+                icon={Icon.ArrowUp}
+                onAction={() => handleInsertSnippet(item)}
+              />
+              <Action.CopyToClipboard
+                title="复制解析后的文本"
+                content={resolveMacroTemplate(item.content, '').text}
+                shortcut={{ modifiers: ['cmd'], key: 'enter' }}
+              />
+              <Action
+                title="编辑短语"
+                icon={Icon.Pencil}
+                shortcut={{ modifiers: ['cmd'], key: 'e' }}
+                onAction={() =>
+                  push(<SnippetEditForm initialData={item} onSave={handleSaveSnippet} />)
+                }
+              />
+              <Action
+                title="新建短语"
+                icon={Icon.Plus}
+                shortcut={{ modifiers: ['cmd'], key: 'n' }}
+                onAction={() => push(<SnippetEditForm onSave={handleSaveSnippet} />)}
+              />
+              <Action
+                title="删除短语"
+                icon={Icon.Trash}
+                style={Action.Style.Destructive}
+                shortcut={{ modifiers: ['ctrl'], key: 'backspace' }}
+                onAction={() => handleDeleteSnippet(item.id)}
+              />
+            </ActionPanel>
+          }
+        />
+      ))}
     </List>
-  );
+  )
 }
+
+export const SnippetsCommand = Snippets
+export default Snippets
+
+export function SnippetArgumentFormView({ snippet }: { snippet?: Record<string, unknown> }) {
+  return (
+    <Form navigationTitle="填写短语动态参数">
+      <Form.TextField id="arg_text" title="文本参数" />
+      <Form.Dropdown id="arg_dropdown" title="下拉选项">
+        <Form.Dropdown.Item value="opt1" title="选项 1" />
+      </Form.Dropdown>
+      <Form.PasswordField id="arg_password" title="密码参数" />
+    </Form>
+  )
+}
+
+export const CreateSnippetForm = SnippetEditForm
+export function SnippetDetailView({ snippet }: { snippet?: Record<string, unknown> }) {
+  return (
+    <Form navigationTitle="短语详情">
+      <Form.TextField id="detail" title="短语内容" value={String(snippet?.content || '')} />
+    </Form>
+  )
+}
+
+export { expandSnippetTemplate, filterSnippets, SAMPLE_SNIPPETS } from './macro-engine.js'

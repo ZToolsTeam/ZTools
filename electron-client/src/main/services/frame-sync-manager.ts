@@ -40,6 +40,14 @@ export interface FrameSyncManagerOptions {
    */
   frameSyncTimeoutMs?: number
   /**
+   * 运行平台标识（传入 'darwin' 时自动跳过隐藏窗口的 rAF 阻塞等待，避免 macOS NSWindow Occlusion 导致超时死等）
+   */
+  platform?: NodeJS.Platform
+  /**
+   * 是否在窗口隐藏时跳过 show() 之前的 rAF 首帧等待
+   */
+  skipHiddenFrameWait?: boolean
+  /**
    * 挂起触发回调（用于显存清理通知或监控）
    */
   onSuspend?: (window: ManagedWindow) => void | Promise<void>
@@ -69,6 +77,7 @@ export interface FrameSyncManagerOptions {
 export class FrameSyncManager {
   readonly #suspendTimeoutMs: number
   readonly #frameSyncTimeoutMs: number
+  readonly #skipHiddenFrameWait: boolean
   readonly #onSuspend: ((window: ManagedWindow) => void | Promise<void>) | undefined
   readonly #onResume: ((window: ManagedWindow) => void | Promise<void>) | undefined
   readonly #trimMemory: (() => void | Promise<void>) | undefined
@@ -87,6 +96,7 @@ export class FrameSyncManager {
   constructor(options: FrameSyncManagerOptions = {}) {
     this.#suspendTimeoutMs = Math.max(10, options.suspendTimeoutMs ?? 15000)
     this.#frameSyncTimeoutMs = Math.max(10, options.frameSyncTimeoutMs ?? 300)
+    this.#skipHiddenFrameWait = options.skipHiddenFrameWait ?? (options.platform === 'darwin')
     this.#onSuspend = options.onSuspend
     this.#onResume = options.onResume
     this.#trimMemory = options.trimMemory
@@ -213,7 +223,8 @@ export class FrameSyncManager {
       return this.#resumingPromise
     }
 
-    const needsFrameSync = !this.#hasPresentedFrame || this.#state === 'suspended'
+    const skipWaitWhileHidden = this.#skipHiddenFrameWait && !win.isVisible()
+    const needsFrameSync = (!this.#hasPresentedFrame || this.#state === 'suspended') && !skipWaitWhileHidden
     const resumeAbort = new AbortController()
     this.#resumeAbort = resumeAbort
     const isCurrent = (): boolean => !resumeAbort.signal.aborted &&

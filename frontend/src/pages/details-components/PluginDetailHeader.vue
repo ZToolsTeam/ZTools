@@ -64,6 +64,8 @@ import { usePluginIcon } from '@/composables/usePluginIcon'
 import { RcSquircle } from '@/components/base'
 import { computed } from 'vue'
 import { getPluginPlatformLabel } from '@/utils/platform'
+import { normalizeCategoryNames } from '@/utils/pluginCategories'
+const categoryLabel = computed(() => normalizeCategoryNames(props.plugin.category).join(' · '))
 const platformLabel = computed(() => getPluginPlatformLabel(props.plugin))
 const { pluginIcon, pluginGlyph, displayIconUrl, iconFailed } = usePluginIcon(() => props.plugin)
 </script>
@@ -87,7 +89,7 @@ const { pluginIcon, pluginGlyph, displayIconUrl, iconFailed } = usePluginIcon(()
 
         <!-- 标签 -->
         <div class="plugin-tags">
-          <span v-if="plugin.category" class="tag">{{ plugin.category }}</span>
+          <span v-if="categoryLabel" class="tag">{{ categoryLabel }}</span>
           <span v-if="platformLabel" class="tag platform" :title="`支持平台：${platformLabel}`">{{ platformLabel }}</span>
           <span v-if="plugin.revoked || isRevoked" class="tag revoked" :title="revokedReason || plugin.revoked_reason || '该插件已被官方下架禁用'" style="background: var(--rc-error-subtle); color: var(--rc-error); border: 1px solid transparent;">已下架</span>
           <span v-if="isInstalled" class="tag installed">已安装</span>

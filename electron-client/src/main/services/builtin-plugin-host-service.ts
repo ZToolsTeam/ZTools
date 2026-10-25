@@ -103,7 +103,62 @@ export const SUPPORTED_PLUGIN_ALIASES: Record<string, string> = {
   'archive-manager': 'ArchiveManagerPlugin',
   archivemanagerplugin: 'ArchiveManagerPlugin',
   'invoice-assistant': 'InvoiceAssistantPlugin',
-  invoiceassistantplugin: 'InvoiceAssistantPlugin'
+  invoiceassistantplugin: 'InvoiceAssistantPlugin',
+  'downloads-manager': 'DownloadsManagerPlugin',
+  downloadsmanagerplugin: 'DownloadsManagerPlugin',
+  'file-unlock': 'FileUnlockPlugin',
+  fileunlockplugin: 'FileUnlockPlugin',
+  'startup-manager': 'StartupManagerPlugin',
+  startupmanagerplugin: 'StartupManagerPlugin',
+  'monitor-control': 'MonitorControlPlugin',
+  monitorcontrolplugin: 'MonitorControlPlugin',
+  caffeine: 'CaffeinePlugin',
+  caffeineplugin: 'CaffeinePlugin',
+  'audio-device': 'AudioDevicePlugin',
+  audiodeviceplugin: 'AudioDevicePlugin',
+  'wifi-password-reveal': 'WifiPasswordPlugin',
+  'wifi-password': 'WifiPasswordPlugin',
+  wifipasswordplugin: 'WifiPasswordPlugin',
+  'clean-keyboard': 'CleanKeyboardPlugin',
+  cleankeyboardplugin: 'CleanKeyboardPlugin',
+  'dns-benchmark': 'DnsBenchmarkPlugin',
+  dnsbenchmarkplugin: 'DnsBenchmarkPlugin',
+  'hotkey-radar': 'HotkeyRadarPlugin',
+  hotkeyradarplugin: 'HotkeyRadarPlugin',
+  'folder-sync': 'FolderSyncPlugin',
+  foldersyncplugin: 'FolderSyncPlugin',
+  speedtest: 'SpeedtestPlugin',
+  speedtestplugin: 'SpeedtestPlugin',
+  'browser-bookmarks': 'BrowserBookmarksPlugin',
+  browserbookmarksplugin: 'BrowserBookmarksPlugin',
+  'paste-stack': 'PasteStackPlugin',
+  pastestackplugin: 'PasteStackPlugin',
+  snippets: 'SnippetsPlugin',
+  snippetsplugin: 'SnippetsPlugin',
+  'office-slim': 'OfficeSlimPlugin',
+  officeslimplugin: 'OfficeSlimPlugin',
+  'md-to-office': 'MdToOfficePlugin',
+  mdtoofficeplugin: 'MdToOfficePlugin',
+  'font-manager': 'FontManagerPlugin',
+  fontmanagerplugin: 'FontManagerPlugin',
+  'file-inspector': 'FileInspectorPlugin',
+  fileinspectorplugin: 'FileInspectorPlugin',
+  'media-metadata': 'MediaMetadataPlugin',
+  mediametadataplugin: 'MediaMetadataPlugin',
+  'vscode-projects': 'VscodeProjectsPlugin',
+  vscodeprojectsplugin: 'VscodeProjectsPlugin',
+  'hosts-switcher': 'HostsSwitcherPlugin',
+  hostsswitcherplugin: 'HostsSwitcherPlugin',
+  'env-manager': 'EnvManagerPlugin',
+  envmanagerplugin: 'EnvManagerPlugin',
+  'docker-manager': 'DockerManagerPlugin',
+  dockermanagerplugin: 'DockerManagerPlugin',
+  'lan-scanner': 'LanScannerPlugin',
+  lanscannerplugin: 'LanScannerPlugin',
+  'ssh-proxy-helper': 'SshProxyHelperPlugin',
+  sshproxyhelperplugin: 'SshProxyHelperPlugin',
+  'ssl-domain-check': 'SslDomainCheckPlugin',
+  ssldomaincheckplugin: 'SslDomainCheckPlugin'
 }
 
 export function normalizePluginName(pluginName: string): string | null {
@@ -208,7 +263,11 @@ export class BuiltinPluginHostService {
   }
 
   async stop(): Promise<void> {
-    await Promise.all([this.#network.stop(), this.#mediaOcr.stop()])
+    await Promise.all([
+      this.#network.stop(),
+      this.#mediaOcr.stop(),
+      this.#systemRegistry.stop()
+    ])
   }
 
   async dispose(): Promise<void> {
@@ -280,6 +339,60 @@ export class BuiltinPluginHostService {
         return this.#mediaOcr.handlePdf(fn, params, caller)
       case 'ArchiveManagerPlugin':
         return this.#storage.handleArchiveManager(fn, params, caller, signal)
+      case 'DownloadsManagerPlugin':
+        return this.#storage.handleDownloadsManager(fn, params, caller, signal)
+      case 'FileUnlockPlugin':
+        return this.#systemRegistry.handleFileUnlock(fn, params, caller, signal)
+      case 'StartupManagerPlugin':
+        return this.#systemRegistry.handleStartupManager(fn, params, caller, signal)
+      case 'MonitorControlPlugin':
+        return this.#systemRegistry.handleMonitorControl(fn, params, signal)
+      case 'CaffeinePlugin':
+        return this.#systemRegistry.handleCaffeine(fn, params, signal)
+      case 'AudioDevicePlugin':
+        return this.#mediaOcr.handleAudioDevice(fn, params, signal)
+      case 'WifiPasswordPlugin':
+        return this.#network.handleWifiPassword(fn, params, signal)
+      case 'CleanKeyboardPlugin':
+        return this.#systemRegistry.handleCleanKeyboard(fn, params)
+      case 'DnsBenchmarkPlugin':
+        return this.#network.handleDnsBenchmark(fn, params, signal)
+      case 'HotkeyRadarPlugin':
+        return this.#systemRegistry.handleHotkeyRadar(fn, params, signal)
+      case 'FolderSyncPlugin':
+        return this.#storage.handleFolderSync(fn, params, caller)
+      case 'SpeedtestPlugin':
+        return this.#network.handleSpeedtest(fn, params, signal)
+      case 'BrowserBookmarksPlugin':
+        return this.#storage.handleBrowserBookmarks(fn, params)
+      case 'PasteStackPlugin':
+        return this.#storage.handlePasteStack(fn, params)
+      case 'SnippetsPlugin':
+        return this.#storage.handleSnippets(fn, params)
+      case 'OfficeSlimPlugin':
+        return this.#storage.handleOfficeSlim(fn, params, caller)
+      case 'MdToOfficePlugin':
+        return this.#storage.handleMdToOffice(fn, params, caller)
+      case 'FontManagerPlugin':
+        return this.#storage.handleFontManager(fn, params)
+      case 'FileInspectorPlugin':
+        return this.#storage.handleFileInspector(fn, params, caller)
+      case 'MediaMetadataPlugin':
+        return this.#storage.handleMediaMetadata(fn, params, caller)
+      case 'VscodeProjectsPlugin':
+        return this.#systemRegistry.handleVscodeProjects(fn, params)
+      case 'HostsSwitcherPlugin':
+        return this.#network.handleHostsSwitcher(fn, params, signal)
+      case 'EnvManagerPlugin':
+        return this.#systemRegistry.handleEnvManager(fn, params)
+      case 'DockerManagerPlugin':
+        return this.#network.handleDockerManager(fn, params, signal)
+      case 'LanScannerPlugin':
+        return this.#network.handleLanScanner(fn, params, signal)
+      case 'SshProxyHelperPlugin':
+        return this.#network.handleSshProxyHelper(fn, params, signal)
+      case 'SslDomainCheckPlugin':
+        return this.#network.handleSslDomainCheck(fn, params, signal)
       case 'ContextMenuPlugin':
         return this.#systemRegistry.handleContextMenu(fn, params, caller, signal)
       case 'WeChatMultiPlugin':

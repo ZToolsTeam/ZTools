@@ -12,7 +12,7 @@ export async function getSuperPanelConfig() {
       const config = await window.ztools.config.get('super_panel')
       return config || getDefaultConfig()
     } catch (error) {
-      console.error('Failed to get super panel config:', error)
+      console.warn('[SuperPanel] 读取配置失败:', error)
       return getDefaultConfig()
     }
   }

@@ -192,11 +192,14 @@ export interface WindowBounds {
 export interface WindowActionResult {
   success: boolean
   action: WindowActionName
+  preset?: WindowActionName | undefined
   title: string
   targetWindowId?: string | undefined
   rect?: WindowBounds | undefined
+  bounds?: WindowBounds | undefined
   previousRect?: WindowBounds | undefined
   error?: string | undefined
+  message?: string | undefined
 }
 
 export interface WindowManagementServiceOptions {
@@ -468,16 +471,41 @@ export class WindowManagementService {
               icon: meta.icon,
               durationMs: 1200
             })
-          } catch {
-            // ignore
+          } catch (err) {
+            console.warn('[WindowManagementService] HUD display error:', err)
           }
         }
         return {
           success: false,
           action: 'restore',
+          preset: 'restore',
           title: meta.title,
           targetWindowId,
-          error: errMsg
+          error: errMsg,
+          message: errMsg
+        }
+      }
+
+      if (this.options.sidecarManager) {
+        const sidecarRes = await this.options.sidecarManager.manageWindow('restore', savedBounds).catch((err: unknown) => ({
+          success: false,
+          action: 'restore',
+          error: err instanceof Error ? err.message : String(err)
+        }))
+        if (!sidecarRes || sidecarRes.success === false) {
+          const errMsg = sidecarRes?.error || '窗口调度失败'
+          return {
+            success: false,
+            action: 'restore',
+            preset: 'restore',
+            title: meta.title,
+            targetWindowId,
+            rect: { ...savedBounds },
+            bounds: { ...savedBounds },
+            previousRect: { ...currentBounds },
+            error: errMsg,
+            message: errMsg
+          }
         }
       }
 
@@ -487,27 +515,25 @@ export class WindowManagementService {
       }
       this.currentWindowBounds.set(targetWindowId, { ...savedBounds })
 
-      if (this.options.sidecarManager) {
-        await this.options.sidecarManager.manageWindow('restore', savedBounds).catch(() => null)
-      }
-
       if (this.options.hudService) {
         try {
           void this.options.hudService.showHUD(`窗口已${meta.title}`, {
             icon: meta.icon,
             durationMs: 1200
           })
-        } catch {
-          // ignore
+        } catch (err) {
+          console.warn('[WindowManagementService] HUD display error:', err)
         }
       }
 
       return {
         success: true,
         action: 'restore',
+        preset: 'restore',
         title: meta.title,
         targetWindowId,
         rect: { ...savedBounds },
+        bounds: { ...savedBounds },
         previousRect: { ...currentBounds }
       }
     }
@@ -516,9 +542,24 @@ export class WindowManagementService {
     let targetRect = this.computeTargetBounds(normalized, currentBounds, workArea)
 
     if (this.options.sidecarManager) {
-      const res = await this.options.sidecarManager.manageWindow(normalized, targetRect)
-      if (res && res.success && res.rect) {
-        targetRect = res.rect
+      const sidecarRes = await this.options.sidecarManager.manageWindow(normalized, targetRect)
+      if (!sidecarRes || sidecarRes.success === false) {
+        const errMsg = sidecarRes?.error || '窗口调度失败'
+        return {
+          success: false,
+          action: normalized,
+          preset: normalized,
+          title: meta.title,
+          targetWindowId,
+          rect: { ...targetRect },
+          bounds: { ...targetRect },
+          previousRect: { ...currentBounds },
+          error: errMsg,
+          message: errMsg
+        }
+      }
+      if (sidecarRes.rect) {
+        targetRect = sidecarRes.rect
       }
     }
 
@@ -541,9 +582,11 @@ export class WindowManagementService {
     return {
       success: true,
       action: normalized,
+      preset: normalized,
       title: meta.title,
       targetWindowId,
       rect: { ...targetRect },
+      bounds: { ...targetRect },
       previousRect: { ...currentBounds }
     }
   }

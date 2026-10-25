@@ -60,7 +60,13 @@ export class ConfigService {
     APP_CONFIG_FILE
   ])
 
+  #cachedWakePreference: 'dashboard' | 'launcher' = 'dashboard'
+
   constructor(private readonly store: JsonFileStore) {}
+
+  getCachedWakePreference(): 'dashboard' | 'launcher' {
+    return this.#cachedWakePreference
+  }
 
   async getFeatures(): Promise<FeatureFlags> {
     const result: FeatureFlags = { ...DEFAULT_FEATURE_FLAGS }
@@ -128,7 +134,11 @@ export class ConfigService {
           }
         }
       }
-      return toResponseString(value, defaultValue)
+      const response = toResponseString(value, defaultValue)
+      if (fileName === USER_SETTINGS_FILE && pathValue === 'ui.wake_preference') {
+        this.#cachedWakePreference = response === 'launcher' ? 'launcher' : 'dashboard'
+      }
+      return response
     } catch (error) {
       if (fileName === USER_SETTINGS_FILE) {
         if (pathValue === 'features') {
@@ -149,6 +159,10 @@ export class ConfigService {
     this.#requireConfigFile(fileName)
     const [group, ...remaining] = pathValue.split('.')
     if (group === undefined) throw new ZToolsError(errorCodes.invalidRequest, '配置路径无效')
+    if (fileName === USER_SETTINGS_FILE && pathValue === 'ui.wake_preference') {
+      const normalized = String(parseStoredValue(value)).trim()
+      this.#cachedWakePreference = normalized === 'launcher' ? 'launcher' : 'dashboard'
+    }
     await this.store.update(fileName, (document) => {
       if (remaining.length === 0) {
         const parsed = parseStoredValue(value)

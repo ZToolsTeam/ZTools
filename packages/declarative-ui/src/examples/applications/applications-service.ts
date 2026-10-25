@@ -307,15 +307,18 @@ export const INITIAL_APPLICATIONS: ApplicationRecord[] = [
   }
 ];
 
+let fallbackPidSeq = 10000;
+
 export class ApplicationsManager {
   private apps: ApplicationRecord[] = isRealElectronHost() ? [] : [...INITIAL_APPLICATIONS];
 
-  private mapHostAppRecord(r: any): ApplicationRecord {
+  private mapHostAppRecord(raw: unknown): ApplicationRecord {
+    const r = (raw && typeof raw === "object" ? raw : {}) as Record<string, unknown>;
     const name = String(r?.name || r?.displayName || "Unknown App");
     const py = computePinyin(name);
     const isMacApp = typeof r?.path === "string" && r.path.endsWith(".app");
     const defaultInstallLoc = isMacApp
-      ? r.path.replace(/\/[^/]+\.app$/i, "")
+      ? String(r.path).replace(/\/[^/]+\.app$/i, "")
       : r?.installLocation || "";
     const resolvedPath =
       typeof r?.path === "string" && r.path
@@ -341,21 +344,21 @@ export class ApplicationsManager {
           : r?.isSystemComponent
           ? "system"
           : "installed",
-      bundleId: r?.bundleId || r?.id,
-      uninstallString: r?.uninstallString,
-      quietUninstallString: r?.quietUninstallString,
-      displayIcon: r?.displayIcon || r?.icon,
+      bundleId: typeof (r?.bundleId || r?.id) === "string" ? String(r?.bundleId || r?.id) : undefined,
+      uninstallString: typeof r?.uninstallString === "string" ? r.uninstallString : undefined,
+      quietUninstallString: typeof r?.quietUninstallString === "string" ? r.quietUninstallString : undefined,
+      displayIcon: typeof (r?.displayIcon || r?.icon) === "string" ? String(r?.displayIcon || r?.icon) : undefined,
       estimatedSizeKb: typeof r?.estimatedSizeKb === "number" ? r.estimatedSizeKb : undefined,
       isSystemComponent: Boolean(r?.isSystemComponent),
       isUwp: Boolean(r?.isUwp),
-      pinyin: r?.pinyin || py.pinyin,
-      pinyinInitials: r?.pinyinInitials || py.initials,
+      pinyin: typeof r?.pinyin === "string" && r.pinyin ? r.pinyin : py.pinyin,
+      pinyinInitials: typeof r?.pinyinInitials === "string" && r.pinyinInitials ? r.pinyinInitials : py.initials,
       isRunning: Boolean(r?.isRunning),
       pid: typeof r?.pid === "number" ? r.pid : undefined,
       isGame: Boolean(r?.isGame),
       autoQuitEnabled: Boolean(r?.autoQuitEnabled),
       leftoverPaths: Array.isArray(r?.leftoverPaths)
-        ? r.leftoverPaths.map((p: any) => String(p))
+        ? r.leftoverPaths.map((p: unknown) => String(p))
         : undefined
     };
   }
@@ -363,50 +366,60 @@ export class ApplicationsManager {
   /**
    * 从宿主同步真实已安装应用列表 (Windows 注册表/Appx 或 macOS mdfind/system_profiler + ~/Library 残留分析)
    */
-  public async syncFromHost(forceRefresh = false, hostOverride?: any): Promise<ApplicationRecord[]> {
-    const res = await callHostTransport<any>(
+  public async syncFromHost(forceRefresh = false, hostOverride?: unknown): Promise<ApplicationRecord[]> {
+    const res = await callHostTransport<Record<string, unknown> | unknown[]>(
       "applications_list",
       { forceRefresh },
       hostOverride
     );
     if (res.ok && res.data) {
+      const dataObj = (!Array.isArray(res.data) && typeof res.data === "object" ? res.data : {}) as Record<string, unknown>;
       const rawList = Array.isArray(res.data)
         ? res.data
-        : Array.isArray(res.data?.applications)
-        ? res.data.applications
-        : Array.isArray(res.data?.apps)
-        ? res.data.apps
+        : Array.isArray(dataObj.applications)
+        ? dataObj.applications
+        : Array.isArray(dataObj.apps)
+        ? dataObj.apps
         : [];
       if (rawList.length > 0) {
-        const mapped = rawList.map((r: any) => this.mapHostAppRecord(r));
+        const mapped = rawList.map((r: unknown) => this.mapHostAppRecord(r));
         this.apps = mapped;
         return [...this.apps];
       }
     }
+    if (isRealElectronHost(hostOverride)) {
+      this.apps = [];
+      return [];
+    }
     return [...this.apps];
   }
 
-  public async getApplications(forceRefresh = false, hostOverride?: any): Promise<ApplicationRecord[]> {
+  public async getApplications(forceRefresh = false, hostOverride?: unknown): Promise<ApplicationRecord[]> {
     try {
-      const ztools = hostOverride ?? (globalThis as any).ztools;
+      const ztools = (hostOverride ?? (globalThis as Record<string, unknown>).ztools) as {
+        applications?: { searchApplications?: (q: string, opts: Record<string, unknown>) => Promise<unknown[]> };
+      } | undefined;
       if (ztools?.applications?.searchApplications) {
         const remote = await ztools.applications.searchApplications("", {
           includeSystemComponents: true,
           forceRefresh
         });
         if (Array.isArray(remote) && remote.length > 0) {
-          return remote.map((r: any) => this.mapHostAppRecord(r));
+          return remote.map((r: unknown) => this.mapHostAppRecord(r));
         }
       }
 
-      if (hostOverride || isRealElectronHost()) {
+      if (hostOverride || isRealElectronHost(hostOverride)) {
         const synced = await this.syncFromHost(forceRefresh, hostOverride);
-        if (synced.length > 0) {
+        if (synced.length > 0 || isRealElectronHost(hostOverride)) {
           return synced;
         }
       }
-    } catch {
-      // 优雅回退
+    } catch (err) {
+      console.warn("[applications] getApplications failed:", err);
+      if (isRealElectronHost(hostOverride)) {
+        return [];
+      }
     }
     return [...this.apps];
   }
@@ -443,7 +456,7 @@ export class ApplicationsManager {
   public async openApplication(
     app: ApplicationRecord,
     options: { runAsAdmin?: boolean } = {},
-    hostOverride?: any
+    hostOverride?: unknown
   ): Promise<ApplicationActionResult> {
     if (!app || !app.path) {
       return { success: false, message: "应用路径无效或为空", error: "INVALID_PATH" };
@@ -455,16 +468,26 @@ export class ApplicationsManager {
     }
 
     try {
-      const ztools = hostOverride ?? (globalThis as any).ztools;
+      const ztools = (hostOverride ?? (globalThis as Record<string, unknown>).ztools) as {
+        applications?: { open?: (opts: Record<string, unknown>) => Promise<unknown> };
+      } | undefined;
       if (ztools?.applications?.open) {
         await ztools.applications.open({ raycastAppId: app.bundleId || app.id, runAsAdmin: options.runAsAdmin });
-      } else if (hostOverride || isRealElectronHost()) {
-        await openRealPath(app.path, hostOverride);
+      } else if (hostOverride || isRealElectronHost(hostOverride)) {
+        const ok = await openRealPath(app.path, hostOverride);
+        if (!ok && isRealElectronHost(hostOverride)) {
+          return {
+            success: false,
+            message: `启动应用失败: 无法打开路径 ${app.path}`,
+            error: "LAUNCH_FAILED"
+          };
+        }
       }
 
       const idx = this.apps.findIndex((a) => a.id === app.id);
       if (idx !== -1) {
-        this.apps[idx] = { ...this.apps[idx], isRunning: true, pid: Math.floor(Math.random() * 20000) + 1000 };
+        const nextPid = isRealElectronHost(hostOverride) ? this.apps[idx].pid : ++fallbackPidSeq;
+        this.apps[idx] = { ...this.apps[idx], isRunning: true, pid: nextPid };
       }
 
       const modeStr = options.runAsAdmin ? "以管理员身份" : "";
@@ -473,30 +496,37 @@ export class ApplicationsManager {
         message: `已${modeStr}启动应用程序 [${app.name}]`,
         app: idx !== -1 ? this.apps[idx] : app
       };
-    } catch (err: any) {
+    } catch (err: unknown) {
+      const errMsg = err instanceof Error ? err.message : String(err);
       return {
         success: false,
-        message: `启动应用失败: ${err.message || String(err)}`,
+        message: `启动应用失败: ${errMsg}`,
         error: "LAUNCH_FAILED"
       };
     }
   }
 
-  public async revealApplication(app: ApplicationRecord, hostOverride?: any): Promise<ApplicationActionResult> {
+  public async revealApplication(app: ApplicationRecord, hostOverride?: unknown): Promise<ApplicationActionResult> {
     if (!app || !app.path) {
       return { success: false, message: "无效的应用路径", error: "INVALID_PATH" };
     }
 
     try {
-      const launcher = (globalThis as any).__ztoolsLauncher;
+      const launcher = (globalThis as Record<string, unknown>).__ztoolsLauncher as {
+        showItemInFolder?: (p: string) => Promise<unknown>;
+      } | undefined;
       if (launcher?.showItemInFolder) {
         await launcher.showItemInFolder(app.path);
-      } else if (hostOverride || isRealElectronHost()) {
-        await showRealItemInFolder(app.path, hostOverride);
+      } else if (hostOverride || isRealElectronHost(hostOverride)) {
+        const ok = await showRealItemInFolder(app.path, hostOverride);
+        if (!ok && isRealElectronHost(hostOverride)) {
+          return { success: false, message: `定位失败: 无法在资源管理器中显示 ${app.path}`, error: "REVEAL_FAILED" };
+        }
       }
       return { success: true, message: `已在资源管理器中定位 (Finder) [${app.name}]`, app };
-    } catch (err: any) {
-      return { success: false, message: `定位失败: ${err.message || String(err)}`, error: "REVEAL_FAILED" };
+    } catch (err: unknown) {
+      const errMsg = err instanceof Error ? err.message : String(err);
+      return { success: false, message: `定位失败: ${errMsg}`, error: "REVEAL_FAILED" };
     }
   }
 
@@ -551,7 +581,7 @@ export class ApplicationsManager {
 
   public async uninstallApplication(
     app: ApplicationRecord,
-    hostOverride?: any
+    hostOverride?: unknown
   ): Promise<ApplicationActionResult> {
     if (!app) {
       return { success: false, message: "应用对象为空", error: "NULL_APP" };
@@ -575,11 +605,13 @@ export class ApplicationsManager {
     }
 
     try {
-      const ztools = hostOverride ?? (globalThis as any).ztools;
+      const ztools = (hostOverride ?? (globalThis as Record<string, unknown>).ztools) as {
+        applications?: { launchUninstall?: (id: string) => Promise<unknown> };
+      } | undefined;
       if (ztools?.applications?.launchUninstall) {
         await ztools.applications.launchUninstall(app.id);
-      } else if (hostOverride || isRealElectronHost()) {
-        const res = await callHostTransport<any>(
+      } else if (hostOverride || isRealElectronHost(hostOverride)) {
+        const res = await callHostTransport<Record<string, unknown>>(
           "applications_uninstall",
           {
             id: app.id,
@@ -608,10 +640,11 @@ export class ApplicationsManager {
         message: `已调起 [${app.name}] 官方卸载向导${leftoverHint}`,
         app
       };
-    } catch (err: any) {
+    } catch (err: unknown) {
+      const errMsg = err instanceof Error ? err.message : String(err);
       return {
         success: false,
-        message: `启动卸载失败: ${err.message || String(err)}`,
+        message: `启动卸载失败: ${errMsg}`,
         error: "UNINSTALL_FAILED"
       };
     }

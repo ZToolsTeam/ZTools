@@ -93,13 +93,15 @@ window.__navigateTo = async (path, options) => {
   }
 
   router.push({ name: pageName || 'my' })
-    .catch(() => {})
     .then(() => {
       if (options?.scrollToSuperPanelSettings) {
         setTimeout(() => {
           window.dispatchEvent(new CustomEvent('ztools-scroll-to-super-panel-settings'))
         }, 80)
       }
+    })
+    .catch((err) => {
+      console.warn('[main] 路由导航失败:', err)
     })
 }
 
@@ -172,7 +174,9 @@ function update_handler(msgType, msgData) {
     const route = msgData?.route
     if (typeof route !== 'string' || !route.startsWith('/') || route.startsWith('//')) return
     if (router.resolve(route).matched.length === 0) return
-    router.push(route).catch(() => {})
+    router.push(route).catch((err) => {
+      console.warn('[main] navigation.open 路由跳转失败:', err)
+    })
   } else if (msgType === 'update.complete') {
     // console.log('[update] 更新完成:', msgData)
     window.__updateComplete?.(msgData.type, msgData.success, msgData.message)

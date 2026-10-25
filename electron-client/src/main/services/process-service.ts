@@ -1,9 +1,11 @@
 import { createPlatformPortDiscoveryAdapter, type PortDiscoveryAdapter, type PortSnapshot } from '../platform/port-discovery.js'
 import { execFile, spawn, type ChildProcess } from 'node:child_process'
+import fsSync from 'node:fs'
 import fs from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 import { promisify } from 'node:util'
+import { shell } from 'electron'
 import type { CallerIdentity } from '../../contracts/capabilities.js'
 import { errorCodes, ZToolsError } from '../../contracts/errors.js'
 import type {
@@ -605,8 +607,12 @@ export class ProcessService {
       })
 
       const rawText = String(res.stdout || '').trim()
-      const parsed = rawText ? JSON.parse(rawText) : []
-      const rows: any[] = Array.isArray(parsed) ? parsed : parsed ? [parsed] : []
+      const parsed: unknown = rawText ? JSON.parse(rawText) : []
+      const rows: Array<Record<string, unknown>> = Array.isArray(parsed)
+        ? (parsed as Array<Record<string, unknown>>)
+        : parsed && typeof parsed === 'object'
+          ? [parsed as Record<string, unknown>]
+          : []
       const logicalCores = Math.max(1, os.cpus().length)
       const sampleTimeMs = this.now()
       const currentPids = new Set<number>()
@@ -698,7 +704,7 @@ export class ProcessService {
     func: string,
     params: Record<string, unknown>,
     signal: AbortSignal
-  ): Promise<{ success: true; data: unknown }> {
+  ): Promise<{ success: boolean; data: unknown }> {
     if (signal.aborted) throw abortError(signal)
     const method = String(func || '').trim()
 
@@ -909,14 +915,19 @@ export class ProcessService {
       case 'OpenFileLocation': {
         const filePath = String(params?.path || '').trim()
         if (!filePath) {
-          return { success: true, data: { error: '路径不能为空' } }
+          return { success: false, data: { opened: false, error: '路径不能为空' } }
         }
-        return { success: true, data: { opened: true, path: filePath } }
+        const resolved = path.resolve(filePath)
+        if (!fsSync.existsSync(resolved)) {
+          return { success: false, data: { opened: false, error: 'FILE_NOT_FOUND' } }
+        }
+        shell.showItemInFolder(resolved)
+        return { success: true, data: { opened: true, path: resolved } }
       }
 
       default:
         return {
-          success: true,
+          success: false,
           data: { error: `UNSUPPORTED_PROCESS_MONITOR_METHOD: ${method}` }
         }
     }

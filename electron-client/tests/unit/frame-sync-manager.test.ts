@@ -466,6 +466,30 @@ test('HotKeyProtector: watchdog detects silent unregistration and automatically 
   protector.dispose()
 })
 
+test('FrameSyncManager: macOS (darwin) hidden window skips occluded rAF wait and shows immediately', async () => {
+  const win = new FakeManagedWindow()
+  win.webContents.rafDelayMs = 500
+
+  const fsm = new FrameSyncManager({
+    platform: 'darwin',
+    suspendTimeoutMs: 100,
+    frameSyncTimeoutMs: 300
+  })
+  fsm.attach(win)
+
+  const t0 = Date.now()
+  await fsm.showWindow()
+  const elapsed = Date.now() - t0
+
+  assert.equal(win.isVisible(), true)
+  assert.equal(win.focused, true)
+  assert.equal(win.showCalledCount, 1)
+  assert.equal(win.webContents.executedScripts.length, 0, 'macOS 隐藏窗口不应在 show() 前等待被 Occlusion 挂起的 rAF')
+  assert.ok(elapsed < 80, `macOS 唤醒耗时应 < 80ms，实际 ${elapsed}ms`)
+
+  fsm.dispose()
+})
+
 test('HotKeyProtector: monitors isolated hook lifecycle events and triggers repair', () => {
   const shortcutApi = new FakeGlobalShortcutApi()
   const hookPort = new FakeHookIsolationPort()

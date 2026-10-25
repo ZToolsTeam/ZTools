@@ -7,6 +7,7 @@
  */
 // 清单在构建时打包进代码，读取插件列表不依赖网络请求，不会因为读取失败导致主页或插件市场为空
 import bundledConfig from '../config/bundledPlugins.generated.js'
+import { normalizeCategoryNames } from './pluginCategories'
 
 export const BUNDLED_PLUGIN_IDS = Object.freeze([...bundledConfig.ids])
 const BUNDLED_ID_SET = new Set(BUNDLED_PLUGIN_IDS)
@@ -80,6 +81,53 @@ export function isStoreOfficialPlugin(value) {
   return STORE_OFFICIAL_ID_SET.has(normalizeId(value))
 }
 
+const STORE_PLUGIN_DEFAULT_CATEGORIES = Object.freeze({
+  calendar: '办公效率',
+  'everything-file-search': '系统工具',
+  'kill-process': '系统工具',
+  'text-formatter': '办公效率'
+})
+
+/** 展示层保留可读字符串；市场筛选用 normalizeCategoryNames 拆分，不能把整串作为分类名。 */
+export function normalizePluginCategory(rawCategory, fallback = '') {
+  const names = normalizeCategoryNames(rawCategory)
+  return (names.length ? names : normalizeCategoryNames(fallback)).join(' / ')
+}
+
+const STORE_OFFICIAL_META_MAP = new Map(
+  (Array.isArray(bundledConfig.storePlugins) ? bundledConfig.storePlugins : [])
+    .filter((p) => p && p.id)
+    .map((p) => {
+      const id = normalizeId(p.id)
+      const fallbackCat = Object.hasOwn(STORE_PLUGIN_DEFAULT_CATEGORIES, id)
+        ? STORE_PLUGIN_DEFAULT_CATEGORIES[id]
+        : ''
+      return [
+        id,
+        Object.freeze({
+          id: p.id,
+          pluginId: p.id,
+          name: p.name || p.id,
+          title: p.name || p.id,
+          description: p.description || '',
+          category: normalizePluginCategory(p.category, fallbackCat)
+        })
+      ]
+    })
+)
+
+/**
+ * 获取通过插件市场分发的官方插件最新展示元数据（来自 plugins 仓库 plugin.json），
+ * 确保在 CDN 静态目录尚未重新发布或本地存在旧快照缓存时，插件市场与已装列表仍展示精简短名称与标准分类。
+ * @param {string|object} value
+ * @returns {{ id: string, pluginId: string, name: string, title: string, description: string, category: string } | null}
+ */
+export function getStoreOfficialPluginMeta(value) {
+  const id = normalizeId(value)
+  if (!id || !STORE_OFFICIAL_META_MAP.has(id)) return null
+  return { ...STORE_OFFICIAL_META_MAP.get(id) }
+}
+
 /**
  * 读取内置插件的文件，供 loadInstalledDeclarativePlugin 的 options.readFile 使用
  */
@@ -124,8 +172,8 @@ function toEntry(p) {
     description: p.description || '',
     version: p.version || '1.0.0',
     author: p.author || 'ZTools Team',
-    // 页面按字符串展示分类
-    category: Array.isArray(p.category) ? p.category.join(' / ') : String(p.category || ''),
+    // 页面按单一标准分类字符串展示，避免多分类用斜杠拼接成超长分类名
+    category: normalizePluginCategory(p.category, '其他工具'),
     keywords: Array.isArray(p.keywords) ? p.keywords : [],
     alias: typeof p.alias === 'string' ? p.alias : '',
     features: Array.isArray(p.features) ? p.features : [],

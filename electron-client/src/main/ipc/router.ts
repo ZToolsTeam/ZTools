@@ -1779,7 +1779,7 @@ export class IpcRouter {
         return processes.listPorts(signal)
       },
       async process_list(_params, caller, signal) {
-        let result: { success: true; data: unknown }
+        let result: { success: boolean; data: unknown }
         let rows: unknown
         try {
           const listed = await processes.list(signal)
@@ -2033,7 +2033,7 @@ export class IpcRouter {
         } catch {
           services.clipboardHistory.ensureInitialHostClipboardSeed()
         }
-        return services.clipboardHistory.queryItems(params as any)
+        return services.clipboardHistory.queryItems(params as Parameters<typeof services.clipboardHistory.queryItems>[0])
       },
       async clipboard_history_restore(params, caller, signal) {
         const input = params as { id: string; paste?: boolean }
@@ -2067,11 +2067,11 @@ export class IpcRouter {
         return services.snippets.listSnippets((params as { query?: string })?.query)
       },
       async snippets_create(params) {
-        return services.snippets.createSnippet(params as any)
+        return services.snippets.createSnippet(params as Parameters<typeof services.snippets.createSnippet>[0])
       },
       async snippets_update(params) {
-        const input = params as { id: string; [key: string]: any }
-        return services.snippets.updateSnippet(input?.id, input as any)
+        const input = params as { id: string } & Parameters<typeof services.snippets.updateSnippet>[1]
+        return services.snippets.updateSnippet(input?.id, input)
       },
       async snippets_delete(params) {
         const input = params as { id: string }
@@ -2088,8 +2088,8 @@ export class IpcRouter {
         return services.snippets.matchAndExpand(input?.typedText, input?.clipboardContent)
       },
       async snippets_import(params) {
-        const input = params as { data: any }
-        return services.snippets.importSnippets(input?.data ?? params)
+        const input = params as { data?: Parameters<typeof services.snippets.importSnippets>[0] }
+        return services.snippets.importSnippets((input?.data ?? params) as Parameters<typeof services.snippets.importSnippets>[0])
       },
       async snippets_export() {
         return services.snippets.exportSnippets()
@@ -2121,7 +2121,7 @@ export class IpcRouter {
         return services.windowManagement.listActions()
       },
       async developer_create_extension(params) {
-        return services.developer.createExtension(params as any)
+        return services.developer.createExtension(params as Parameters<typeof services.developer.createExtension>[0])
       },
       async developer_import_extension(params) {
         const input = params as { path: string }
@@ -2143,7 +2143,7 @@ export class IpcRouter {
         return services.developer.extensionDiagnostics()
       },
       async mcp_install_server(params) {
-        return services.mcp.installServer(params as any)
+        return services.mcp.installServer(params as Parameters<typeof services.mcp.installServer>[0])
       },
       async mcp_manage_servers(params) {
         const input = params as { search?: string }
@@ -2158,7 +2158,7 @@ export class IpcRouter {
         return { success: await services.mcp.removeServer(input?.id) }
       },
       async focus_start(params) {
-        return services.focus.startSession(params as any)
+        return services.focus.startSession(params as Parameters<typeof services.focus.startSession>[0])
       },
       async focus_toggle() {
         return services.focus.toggleSession()
@@ -2183,7 +2183,7 @@ export class IpcRouter {
         return services.focus.listCategories(input?.search)
       },
       async focus_create_category(params) {
-        return services.focus.createCategory(params as any)
+        return services.focus.createCategory(params as Parameters<typeof services.focus.createCategory>[0])
       },
       async focus_get_stats() {
         return services.focus.getStats()
@@ -2195,17 +2195,17 @@ export class IpcRouter {
         return services.screenAwareness.captureScreen()
       },
       async screen_awareness_screen_area(params) {
-        const input = params as { rect: any }
+        const input = params as { rect: Parameters<typeof services.screenAwareness.captureScreenArea>[0] }
         return services.screenAwareness.captureScreenArea(input?.rect)
       },
       async screen_awareness_focused_window() {
         return services.screenAwareness.captureFocusedWindow()
       },
       async dictation_start(params) {
-        return services.dictation.startDictation(params as any)
+        return services.dictation.startDictation(params as Parameters<typeof services.dictation.startDictation>[0])
       },
       async dictation_finish(params) {
-        return services.dictation.finishDictation(params as any)
+        return services.dictation.finishDictation(params as Parameters<typeof services.dictation.finishDictation>[0])
       },
       async dictation_cancel() {
         return { success: services.dictation.cancelDictation() }
@@ -2225,7 +2225,7 @@ export class IpcRouter {
         return services.dictation.listVocabulary()
       },
       async calendar_create_event(params) {
-        return services.calendar.createEvent(params as any)
+        return services.calendar.createEvent(params as Parameters<typeof services.calendar.createEvent>[0])
       },
       async calendar_upcoming_events(params) {
         const input = params as { withinHours?: number }
@@ -2250,7 +2250,7 @@ export class IpcRouter {
         return { success: services.calendar.deleteEvent(input?.id) }
       },
       async calendar_export_ics(params) {
-        const input = (params || {}) as { events?: any[]; eventIds?: string[] }
+        const input = (params || {}) as { events?: Parameters<typeof services.calendar.exportToIcs>[0]; eventIds?: string[] }
         // 同时传 events 与 eventIds 时以 eventIds 为准；eventIds 为空数组时导出空日历，不能退回导出全部
         const events = Array.isArray(input.eventIds)
           ? services.calendar.getEventsByIds(input.eventIds)
@@ -2283,7 +2283,7 @@ export class IpcRouter {
         return services.navigation.clickMenuItem(input)
       },
       async web_search(params) {
-        const input = params as { engine: any; query: string }
+        const input = params as { engine: Parameters<typeof services.webBrowser.searchWeb>[0]; query: string }
         return services.webBrowser.searchWeb(input?.engine, input?.query)
       },
       async url_quick_open(params) {
@@ -2298,7 +2298,7 @@ export class IpcRouter {
         return services.webBrowser.listContacts(input?.search ?? input?.query, input?.limit)
       },
       async contacts_create(params) {
-        return services.webBrowser.createContact(params as any)
+        return services.webBrowser.createContact(params as Parameters<typeof services.webBrowser.createContact>[0])
       },
       async contacts_delete(params) {
         const input = params as { id: string }
@@ -2323,7 +2323,10 @@ export class IpcRouter {
         return services.geekTools.createGame2048()
       },
       async game_2048_move(params) {
-        const input = params as { state: any; direction: any }
+        const input = params as {
+          state: Parameters<typeof services.geekTools.moveGame2048>[0]
+          direction: Parameters<typeof services.geekTools.moveGame2048>[1]
+        }
         return services.geekTools.moveGame2048(input?.state, input?.direction)
       },
       async debug_sample_memory() {
@@ -2335,8 +2338,14 @@ export class IpcRouter {
       },
       // M1.5 Group 2 Services
       async emoji_search(params) {
-        const input = (params || {}) as { query?: string; category?: any; skinTone?: any; limit?: number }
-        const opts: Parameters<typeof services.emoji.search>[1] = {}
+        type EmojiSearchOpts = NonNullable<Parameters<typeof services.emoji.search>[1]>
+        const input = (params || {}) as {
+          query?: string
+          category?: EmojiSearchOpts['category']
+          skinTone?: EmojiSearchOpts['skinTone']
+          limit?: number
+        }
+        const opts: EmojiSearchOpts = {}
         if (input?.category !== undefined) opts.category = input.category
         if (input?.skinTone !== undefined) opts.skinTone = input.skinTone
         if (input?.limit !== undefined) opts.limit = input.limit
@@ -2372,7 +2381,7 @@ export class IpcRouter {
         return { items: services.translator.getHistory() }
       },
       async notes_list(params) {
-        const input = (params || {}) as any
+        const input = (params || {}) as Parameters<typeof services.notes.listNotes>[0]
         return services.notes.listNotes(input)
       },
       async notes_get(params) {
@@ -2380,7 +2389,8 @@ export class IpcRouter {
         return services.notes.getNote(input?.id)
       },
       async notes_save(params) {
-        const input = params as any
+        type NoteSaveInput = { id?: string } & Partial<Parameters<typeof services.notes.createNote>[0]>
+        const input = params as NoteSaveInput
         if (input?.id) {
           return services.notes.updateNote(input.id, {
             title: input?.title,
@@ -2423,8 +2433,9 @@ export class IpcRouter {
         return services.windowsRun.searchCommands(input?.query)
       },
       async windows_run_execute(params) {
-        const input = params as { command: string; args?: string[]; runAsAdmin?: boolean; shell?: any; workingDirectory?: string }
-        const opts: Parameters<typeof services.windowsRun.execute>[1] = {}
+        type WinRunExecOpts = NonNullable<Parameters<typeof services.windowsRun.execute>[1]>
+        const input = params as { command: string; args?: string[]; runAsAdmin?: boolean; shell?: WinRunExecOpts['shell']; workingDirectory?: string }
+        const opts: WinRunExecOpts = {}
         if (input?.args) opts.arguments = input.args.join(' ')
         if (input?.runAsAdmin !== undefined) opts.asAdministrator = input.runAsAdmin
         if (input?.shell !== undefined) opts.shell = input.shell
@@ -2575,14 +2586,23 @@ export class IpcRouter {
         return system.getWifiPassword(input?.ssid)
       },
       async brew_exec(params) {
-        const input = (params || {}) as { action: any; pkg?: string; query?: string; cask?: boolean }
+        const input = (params || {}) as { action: Parameters<typeof system.execBrewCommand>[0]['action']; pkg?: string; query?: string; cask?: boolean }
+        if (process.platform === 'win32' && input.action === 'outdated') {
+          return {
+            success: true,
+            action: input.action,
+            stdout: '',
+            stderr: '',
+            items: []
+          }
+        }
         if (
           process.platform === 'win32' &&
-          (input.action === 'list' || input.action === 'search' || input.action === 'outdated')
+          (input.action === 'list' || input.action === 'search')
         ) {
           const apps = await services.applications.searchApplications(input.pkg ?? input.query)
           if (apps.length > 0) {
-            const items = (input.action === 'outdated' ? apps.slice(0, 6) : apps.slice(0, 45)).map((app) => {
+            const items = apps.slice(0, 45).map((app) => {
               const slug = app.name
                 .toLowerCase()
                 .replace(/[^a-z0-9._+-]+/g, '-')
@@ -2642,11 +2662,19 @@ export class IpcRouter {
         )
       },
       async script_commands_create(params) {
-        const input = (params || {}) as { title: string; mode?: any; template?: string; language?: string; packageName?: string; description?: string }
+        type ScriptCmdCreateOpts = Parameters<typeof services.scriptCommands.createScriptCommand>[0]
+        const input = (params || {}) as {
+          title: string
+          mode?: ScriptCmdCreateOpts['mode']
+          template?: ScriptCmdCreateOpts['template']
+          language?: ScriptCmdCreateOpts['template']
+          packageName?: string
+          description?: string
+        }
         return services.scriptCommands.createScriptCommand({
           title: input.title,
           ...(input.mode !== undefined ? { mode: input.mode } : {}),
-          ...(input.template ?? input.language ? { template: (input.template ?? input.language) as any } : {}),
+          ...(input.template ?? input.language ? { template: input.template ?? input.language } : {}),
           ...(input.packageName !== undefined ? { packageName: input.packageName } : {}),
           ...(input.description !== undefined ? { description: input.description } : {})
         })

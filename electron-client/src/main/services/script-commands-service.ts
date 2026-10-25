@@ -1062,8 +1062,9 @@ export class ScriptCommandsService {
       if (typeof parsed === 'object' && parsed !== null && parsed.version === 1 && typeof parsed.trustedScripts === 'object') {
         return parsed as TrustStoreDocument
       }
-    } catch {
-      // 文件缺失或损坏时初始化默认结构
+    } catch (err) {
+      // 文件缺失或损坏时初始化默认结构并记录告警
+      console.warn('[ScriptCommandsService] Failed to read trust store:', err)
     }
     return { version: 1, trustedScripts: {} }
   }

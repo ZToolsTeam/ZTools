@@ -56,7 +56,7 @@ const router = createRouter({
                   pluginsStore.installedPlugins.length === 0
                 ) {
                   // 没有安装任何插件，跳转到全部页
-                  router.replace({ name: 'list' }).catch(() => {})
+                  router.replace({ name: 'list' }).catch((err) => console.warn('[router] 跳转插件列表页失败:', err))
                 }
               } catch (err) {
                 console.warn('[router] 初始化插件状态失败，默认进入我的页:', err)

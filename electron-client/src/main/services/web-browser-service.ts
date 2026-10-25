@@ -101,7 +101,8 @@ export class WebBrowserService {
     try {
       await shell.openExternal(targetUrl)
       return { url: targetUrl, opened: true }
-    } catch {
+    } catch (err) {
+      console.warn('[WebBrowserService] searchWeb openExternal failed:', err)
       return { url: targetUrl, opened: false }
     }
   }
@@ -131,7 +132,8 @@ export class WebBrowserService {
     try {
       await shell.openExternal(url)
       return { url, opened: true }
-    } catch {
+    } catch (err) {
+      console.warn('[WebBrowserService] quickOpenUrl openExternal failed:', err)
       return { url, opened: false }
     }
   }
@@ -190,8 +192,19 @@ export class WebBrowserService {
   }
 
   public listContacts(search?: string, limit = 50): ContactRecord[] {
+    interface ContactRow {
+      id: string
+      name: string
+      organization: string | null
+      phone: string | null
+      email: string | null
+      notes: string | null
+      pinyin: string
+      created_at: number
+      updated_at: number
+    }
     let sql = 'SELECT * FROM contacts'
-    const params: any[] = []
+    const params: Array<string | number> = []
 
     if (search && search.trim()) {
       const q = search.trim().toLowerCase()
@@ -202,7 +215,7 @@ export class WebBrowserService {
     sql += ' ORDER BY created_at DESC LIMIT ?'
     params.push(limit)
 
-    const rows = this.db.prepare(sql).all(...params) as any[]
+    const rows = this.db.prepare(sql).all(...params) as unknown as ContactRow[]
     return rows.map(r => ({
       id: r.id,
       name: r.name,
@@ -224,8 +237,8 @@ export class WebBrowserService {
   public stop(): void {
     try {
       this.db.close()
-    } catch {
-      // 容错
+    } catch (err) {
+      console.warn('[WebBrowserService] Failed to close database:', err)
     }
   }
 }

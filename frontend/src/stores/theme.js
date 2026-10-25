@@ -24,7 +24,9 @@ export const useThemeStore = defineStore('theme', {
         let localTheme = null
         try {
           localTheme = localStorage.getItem('ztools_theme')
-        } catch (e) {}
+        } catch (e) {
+          console.warn('[ThemeStore] 读取本地主题缓存失败:', e)
+        }
 
         // 优先从用户配置读取
         let theme = null
@@ -39,7 +41,7 @@ export const useThemeStore = defineStore('theme', {
           const isDark = theme === 'dark'
           this._applyTheme(isDark)
           if (window.ztools?.sys?.setDarkMode) {
-            await window.ztools.sys.setDarkMode(isDark).catch(() => {})
+            await window.ztools.sys.setDarkMode(isDark).catch((err) => console.warn('[ThemeStore] 同步主题配置失败:', err))
           }
           return
         }
@@ -50,7 +52,7 @@ export const useThemeStore = defineStore('theme', {
           if (info?.darkMode !== undefined) {
             this._applyTheme(info.darkMode)
             if (window.ztools?.sys?.setDarkMode) {
-              await window.ztools.sys.setDarkMode(info.darkMode).catch(() => {})
+              await window.ztools.sys.setDarkMode(info.darkMode).catch((err) => console.warn('[ThemeStore] 同步主题配置失败:', err))
             }
             return
           }
@@ -63,7 +65,7 @@ export const useThemeStore = defineStore('theme', {
           ).matches
           this._applyTheme(prefersDark)
           if (window.ztools?.sys?.setDarkMode) {
-            await window.ztools.sys.setDarkMode(prefersDark).catch(() => {})
+            await window.ztools.sys.setDarkMode(prefersDark).catch((err) => console.warn('[ThemeStore] 同步主题配置失败:', err))
           }
         }
       } catch (err) {
@@ -117,12 +119,14 @@ export const useThemeStore = defineStore('theme', {
       try {
         try {
           localStorage.setItem('ztools_theme', theme)
-        } catch (e) {}
+        } catch (e) {
+          console.warn('[ThemeStore] 写入本地主题缓存失败:', e)
+        }
         if (window.ztools?.sys?.setDarkMode) {
-          await window.ztools.sys.setDarkMode(isDark).catch(() => {})
+          await window.ztools.sys.setDarkMode(isDark).catch((err) => console.warn('[ThemeStore] 同步主题配置失败:', err))
         }
         if (window.ztools?.config?.set) {
-          await window.ztools.config.set('ui.theme', theme, true, 'user_settings.json').catch(() => {})
+          await window.ztools.config.set('ui.theme', theme, true, 'user_settings.json').catch((err) => console.warn('[ThemeStore] 同步主题配置失败:', err))
         }
       } catch (err) {
         console.warn('[ThemeStore] 保存主题失败:', err)

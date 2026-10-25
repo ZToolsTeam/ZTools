@@ -403,7 +403,7 @@ export class NotesService {
     params.push(limit)
 
     const stmt = db.prepare(query)
-    const rows = (stmt as any).all(...params) as Record<string, unknown>[]
+    const rows = stmt.all(...params) as unknown as Record<string, unknown>[]
     return rows.map(r => this.mapRow(r))
   }
 
@@ -447,8 +447,9 @@ export class NotesService {
             }))
           }
         }
-      } catch {
+      } catch (err) {
         // FTS 查询语法异常时无缝降级到普通 LIKE
+        console.warn('[NotesService] FTS5 query fallback to LIKE:', err)
       }
     }
 
@@ -496,7 +497,8 @@ export class NotesService {
         const parsed = JSON.parse(row.tags)
         if (Array.isArray(parsed)) tags = parsed
       }
-    } catch {
+    } catch (err) {
+      console.warn('[NotesService] Failed to parse note tags JSON:', err)
       tags = []
     }
 

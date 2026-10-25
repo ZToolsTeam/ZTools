@@ -1,85 +1,79 @@
-import React from "../../index.js";
-import { confirmAlert } from "../../api/alert.js";
-import { open as openTarget } from "../../api/open.js";
-import {
-  List,
-  Form,
-  Detail,
-  ActionPanel,
+import React, {
   Action,
+  ActionPanel,
+  Form,
   Icon,
-  Color,
-  showToast,
+  List,
   Toast,
-  Clipboard,
+  showToast,
+  useEffect,
+  useMemo,
+  useState,
   useNavigation
-} from "../../index.js";
-import { useState, useEffect, useMemo } from "../../runtime/hooks.js";
-import { Quicklink, QuicklinkInput } from "./types.js";
+} from '../../index.js'
 import {
   DEFAULT_QUICKLINKS,
-  getQuicklinks,
-  saveQuicklinks,
-  resolveQuicklinkUrl,
   filterQuicklinks,
-  exportQuicklinksJson,
-  importQuicklinksJson
-} from "./quicklinks-storage.js";
+  getQuicklinks,
+  importQuicklinksJson,
+  launchQuicklink,
+  saveQuicklinks,
+  validateQuicklinkUrlPattern
+} from './quicklinks-storage.js'
+import type { Quicklink, QuicklinkCategory } from './types.js'
 
-export * from "./types.js";
-export * from "./quicklinks-storage.js";
+export * from './types.js'
+export * from './quicklinks-storage.js'
 
-/**
- * 新建快捷直达链接表单
- */
 export function CreateQuicklinkForm({
   onCreated
 }: {
-  onCreated?: (item: Quicklink) => void;
+  onCreated?: (item: Quicklink) => void
 }) {
-  const { pop } = useNavigation();
-  const [title, setTitle] = useState("");
-  const [link, setLink] = useState("");
-  const [keyword, setKeyword] = useState("");
-  const [defaultArgument, setDefaultArgument] = useState("");
-  const [description, setDescription] = useState("");
+  const { pop } = useNavigation()
+  const [title, setTitle] = useState('')
+  const [link, setLink] = useState('')
+  const [keyword, setKeyword] = useState('')
+  const [description, setDescription] = useState('')
 
   const handleSubmit = async () => {
     if (!title.trim()) {
-      await showToast(Toast.Style.Failure, "请输入链接标题");
-      return;
+      await showToast({ style: Toast.Style.Failure, title: '请输入快捷链接标题' })
+      return
     }
-    const trimmedLink = link.trim();
-    if (!trimmedLink || !/^([a-zA-Z][a-zA-Z0-9+.-]*:\/\/|\/|[a-zA-Z]:\\)/i.test(trimmedLink)) {
-      await showToast(Toast.Style.Failure, "请输入合法的 URL 协议或系统路径");
-      return;
+    const urlCheck = validateQuicklinkUrlPattern(link)
+    if (!urlCheck.valid) {
+      await showToast({
+        style: Toast.Style.Failure,
+        title: urlCheck.error || '请输入合法的 URL 地址'
+      })
+      return
     }
 
-    const current = await getQuicklinks();
-    const newId = `ql-${Date.now()}`;
+    const current = await getQuicklinks()
     const newItem: Quicklink = {
-      id: newId,
+      id: `ql-${Date.now()}-${current.length + 1}`,
       title: title.trim(),
-      link: trimmedLink,
+      link: urlCheck.normalizedUrl,
+      urlPattern: urlCheck.normalizedUrl,
       keyword: keyword.trim() || undefined,
-      defaultArgument: defaultArgument.trim() || undefined,
+      alias: keyword.trim() || undefined,
+      category: /\{(query|argument|arg)\}/i.test(urlCheck.normalizedUrl) ? 'search' : 'direct',
+      isGroup: false,
       description: description.trim() || undefined,
-      icon: "globe",
-      openCount: 0,
       createdAt: Date.now(),
       updatedAt: Date.now()
-    };
-
-    const updated = [newItem, ...current];
-    await saveQuicklinks(updated);
-    await showToast(Toast.Style.Success, "快捷链接创建成功", newItem.title);
-    onCreated?.(newItem);
-    pop();
-  };
+    }
+    const updated = [newItem, ...current]
+    await saveQuicklinks(updated)
+    await showToast({ style: Toast.Style.Success, title: '快捷链接创建成功' })
+    onCreated?.(newItem)
+    pop()
+  }
 
   return (
     <Form
-      navigationTitle="新建快捷直达链接"
+      navigationTitle="新建快捷链接"
       actions={
         <ActionPanel>
           <Action.SubmitForm title="保存快捷链接" onSubmit={handleSubmit} />
@@ -89,425 +83,274 @@ export function CreateQuicklinkForm({
       <Form.TextField
         id="title"
         title="链接名称"
-        placeholder="例如: Google 搜索, GitHub 仓库"
+        placeholder="例如: GitHub 仓库搜索"
         value={title}
         onChange={setTitle}
       />
       <Form.TextField
         id="link"
-        title="目标 URL 地址"
-        placeholder="支持 {argument} 或 {query} 变量，如: https://google.com/search?q={argument}"
+        title="目标 URL 模板"
+        placeholder="支持 {query} 变量，如: https://github.com/search?q={query}"
         value={link}
         onChange={setLink}
       />
       <Form.TextField
         id="keyword"
-        title="触发关键词 / 别名 (可选)"
-        placeholder="例如: g (在主界面键入 'g 关键词' 即可秒开)"
+        title="触发别名 (Alias)"
+        placeholder="例如: gh"
         value={keyword}
         onChange={setKeyword}
       />
       <Form.TextField
-        id="defaultArgument"
-        title="默认参数值 (可选)"
-        placeholder="当未输入查询词时使用的预设参数"
-        value={defaultArgument}
-        onChange={setDefaultArgument}
-      />
-      <Form.TextArea
         id="description"
-        title="简要说明"
-        placeholder="说明该链接的使用场景或备注"
+        title="备注说明"
+        placeholder="选填描述"
         value={description}
         onChange={setDescription}
       />
     </Form>
-  );
+  )
 }
 
-/**
- * 编辑快捷直达链接表单
- */
 export function EditQuicklinkForm({
-  quicklink,
+  item,
   onUpdated
 }: {
-  quicklink: Quicklink;
-  onUpdated?: (item: Quicklink) => void;
+  item: Quicklink
+  onUpdated?: (updated: Quicklink) => void
 }) {
-  const { pop } = useNavigation();
-  const [title, setTitle] = useState(quicklink.title);
-  const [link, setLink] = useState(quicklink.link);
-  const [keyword, setKeyword] = useState(quicklink.keyword || "");
-  const [defaultArgument, setDefaultArgument] = useState(quicklink.defaultArgument || "");
-  const [description, setDescription] = useState(quicklink.description || "");
+  const { pop } = useNavigation()
+  const [title, setTitle] = useState(item.title)
+  const [link, setLink] = useState(item.link)
+  const [keyword, setKeyword] = useState(item.alias || item.keyword || '')
+  const [description, setDescription] = useState(item.description || '')
 
   const handleSubmit = async () => {
-    if (!title.trim()) {
-      await showToast(Toast.Style.Failure, "请输入链接标题");
-      return;
+    const urlCheck = validateQuicklinkUrlPattern(link)
+    if (!urlCheck.valid) {
+      await showToast({
+        style: Toast.Style.Failure,
+        title: urlCheck.error || '请输入合法的 URL 地址'
+      })
+      return
     }
-    const trimmedLink = link.trim();
-    if (!trimmedLink || !/^([a-zA-Z][a-zA-Z0-9+.-]*:\/\/|\/|[a-zA-Z]:\\)/i.test(trimmedLink)) {
-      await showToast(Toast.Style.Failure, "请输入合法的 URL 协议或系统路径");
-      return;
-    }
-
-    const current = await getQuicklinks();
     const updatedItem: Quicklink = {
-      ...quicklink,
-      title: title.trim(),
-      link: trimmedLink,
+      ...item,
+      title: title.trim() || item.title,
+      link: urlCheck.normalizedUrl,
+      urlPattern: urlCheck.normalizedUrl,
       keyword: keyword.trim() || undefined,
-      defaultArgument: defaultArgument.trim() || undefined,
+      alias: keyword.trim() || undefined,
       description: description.trim() || undefined,
       updatedAt: Date.now()
-    };
-
-    const updated = current.map(item => (item.id === quicklink.id ? updatedItem : item));
-    await saveQuicklinks(updated);
-    await showToast(Toast.Style.Success, "快捷链接已更新", updatedItem.title);
-    onUpdated?.(updatedItem);
-    pop();
-  };
+    }
+    onUpdated?.(updatedItem)
+    pop()
+  }
 
   return (
     <Form
-      navigationTitle={`编辑: ${quicklink.title}`}
+      navigationTitle="编辑快捷链接"
       actions={
         <ActionPanel>
           <Action.SubmitForm title="保存修改" onSubmit={handleSubmit} />
         </ActionPanel>
       }
     >
+      <Form.TextField id="title" title="链接名称" value={title} onChange={setTitle} />
+      <Form.TextField id="link" title="目标 URL" value={link} onChange={setLink} />
+      <Form.TextField id="keyword" title="触发别名" value={keyword} onChange={setKeyword} />
       <Form.TextField
-        id="title"
-        title="链接名称"
-        value={title}
-        onChange={setTitle}
-      />
-      <Form.TextField
-        id="link"
-        title="目标 URL 地址"
-        value={link}
-        onChange={setLink}
-      />
-      <Form.TextField
-        id="keyword"
-        title="触发关键词 / 别名"
-        value={keyword}
-        onChange={setKeyword}
-      />
-      <Form.TextField
-        id="defaultArgument"
-        title="默认参数值"
-        value={defaultArgument}
-        onChange={setDefaultArgument}
-      />
-      <Form.TextArea
         id="description"
-        title="简要说明"
+        title="备注说明"
         value={description}
         onChange={setDescription}
       />
     </Form>
-  );
+  )
 }
 
-/**
- * 导入 Quicklinks 表单
- */
 export function ImportQuicklinksForm({
   onImported
 }: {
-  onImported?: (count: number) => void;
+  onImported?: (items: Quicklink[]) => void
 }) {
-  const { pop } = useNavigation();
-  const [jsonText, setJsonText] = useState("");
+  const { pop } = useNavigation()
+  const [jsonText, setJsonText] = useState('')
 
-  const handleImport = async () => {
-    if (!jsonText.trim()) {
-      await showToast(Toast.Style.Failure, "请粘贴包含 Quicklinks 的 JSON 数据");
-      return;
+  const handleSubmit = async () => {
+    const current = await getQuicklinks()
+    const res = importQuicklinksJson(jsonText, current)
+    if (!res.success) {
+      await showToast({ style: Toast.Style.Failure, title: res.error || '导入失败' })
+      return
     }
-
-    const current = await getQuicklinks();
-    const result = importQuicklinksJson(jsonText, current);
-    if (!result.success) {
-      await showToast(Toast.Style.Failure, "导入失败", result.error);
-      return;
-    }
-
-    await saveQuicklinks(result.result);
-    await showToast(Toast.Style.Success, `成功导入 ${result.importedCount} 个快捷链接`);
-    onImported?.(result.importedCount);
-    pop();
-  };
+    await saveQuicklinks(res.result)
+    onImported?.(res.result)
+    pop()
+  }
 
   return (
     <Form
-      navigationTitle="导入 Quicklinks JSON"
+      navigationTitle="导入快捷链接 JSON"
       actions={
         <ActionPanel>
-          <Action.SubmitForm title="确认导入" onSubmit={handleImport} />
+          <Action.SubmitForm title="确认导入" onSubmit={handleSubmit} />
         </ActionPanel>
       }
     >
-      <Form.TextArea
-        id="json"
-        title="JSON 数据"
-        placeholder="在此粘贴导出的 Quicklinks JSON 文本..."
-        value={jsonText}
-        onChange={setJsonText}
-      />
+      <Form.TextArea id="json" title="JSON 内容" value={jsonText} onChange={setJsonText} />
     </Form>
-  );
+  )
 }
 
-/**
- * 快捷直达链接主命令
- */
-export default function QuicklinksCommand() {
-  const [quicklinks, setQuicklinks] = useState<Quicklink[]>(DEFAULT_QUICKLINKS);
-  const [searchText, setSearchText] = useState("");
-  const [isShowingDetail, setIsShowingDetail] = useState(true);
-  const [isLoading, setIsLoading] = useState(true);
+function getHostnameLabel(rawUrl: string): string {
+  try {
+    return new URL(rawUrl.replace(/\{(query|argument|arg)(?:\s+[^}]*)?\}/gi, 'q')).hostname
+  } catch {
+    return rawUrl.slice(0, 28)
+  }
+}
+
+export interface QuicklinksCommandProps {
+  featureCode?: string
+  initialLinks?: Quicklink[]
+}
+
+export function QuicklinksCommand(props: QuicklinksCommandProps = {}) {
+  const { push } = useNavigation()
+  const [links, setLinks] = useState<Quicklink[]>(props.initialLinks ?? DEFAULT_QUICKLINKS)
+  const [selectedCategory, setSelectedCategory] = useState<'all' | QuicklinkCategory>(() => {
+    if (props.featureCode === 'quicklinks-search-engines') return 'search'
+    if (props.featureCode === 'quicklinks-open-groups') return 'group'
+    return 'all'
+  })
+  const [searchText, setSearchText] = useState<string>('')
 
   useEffect(() => {
-    getQuicklinks().then(data => {
-      setQuicklinks(data);
-      setIsLoading(false);
-    });
-  }, []);
-
-  const { matches, directMatch } = useMemo(() => {
-    return filterQuicklinks(quicklinks, searchText);
-  }, [quicklinks, searchText]);
-
-  const handleOpenLink = async (ql: Quicklink, queryArg?: string) => {
-    const { url } = resolveQuicklinkUrl(ql.link, queryArg, ql.defaultArgument);
-    if (!url) return;
-
-    // 统一走宿主 shell.openExternal；打不开就如实提示，不计数也不报成功
-    try {
-      await openTarget(url);
-    } catch (err: any) {
-      await showToast(Toast.Style.Failure, `无法打开: ${ql.title}`, err?.message || String(err));
-      return;
+    if (!props.initialLinks) {
+      void getQuicklinks().then(setLinks)
     }
+  }, [props.initialLinks])
 
-    // 更新打开计数
-    const updated = quicklinks.map(item =>
-      item.id === ql.id ? { ...item, openCount: (item.openCount || 0) + 1, updatedAt: Date.now() } : item
-    );
-    setQuicklinks(updated);
-    await saveQuicklinks(updated);
+  const filtered = useMemo(
+    () => filterQuicklinks(links, searchText, selectedCategory),
+    [links, searchText, selectedCategory]
+  )
 
-    await showToast(Toast.Style.Success, `已在浏览器打开: ${ql.title}`, url);
-  };
+  const handleOpenLink = async (item: Quicklink) => {
+    const queryArg = filtered.directMatch?.quicklink.id === item.id ? filtered.directMatch.queryArg : ''
+    const urls = await launchQuicklink(item, queryArg)
+    await showToast({
+      style: Toast.Style.Success,
+      title: item.isGroup ? `已并发打开 ${urls.length} 个工作流网页` : `已打开: ${urls[0]}`
+    })
+  }
 
-  const handleDelete = async (id: string) => {
-    const target = quicklinks.find(ql => ql.id === id);
-    const confirmed = await confirmAlert({
-      title: `删除快捷链接「${target?.title || id}」？`,
-      message: "删除后无法恢复。",
-      primaryAction: { title: "删除", style: "destructive" },
-      dismissAction: { title: "取消" }
-    });
-    if (!confirmed) return;
-    const updated = quicklinks.filter(ql => ql.id !== id);
-    setQuicklinks(updated);
-    await saveQuicklinks(updated);
-    await showToast(Toast.Style.Success, "快捷链接已删除");
-  };
-
-  const handleDuplicate = async (ql: Quicklink) => {
-    const dup: Quicklink = {
-      ...ql,
-      id: `ql-${Date.now()}`,
-      title: `${ql.title} (副本)`,
-      openCount: 0,
-      createdAt: Date.now(),
-      updatedAt: Date.now()
-    };
-    const updated = [dup, ...quicklinks];
-    setQuicklinks(updated);
-    await saveQuicklinks(updated);
-    await showToast(Toast.Style.Success, "已复制快捷链接", dup.title);
-  };
-
-  const handleExport = async () => {
-    const json = exportQuicklinksJson(quicklinks);
-    await Clipboard.copy(json);
-    await showToast(Toast.Style.Success, `已导出 ${quicklinks.length} 个快捷链接到剪贴板`);
-  };
-
-  const handleCopy = async (text: string, label: string) => {
-    await Clipboard.copy(text);
-    await showToast(Toast.Style.Success, `已复制 ${label}`);
-  };
+  const handleResetDefaults = async () => {
+    setLinks([...DEFAULT_QUICKLINKS])
+    await saveQuicklinks([...DEFAULT_QUICKLINKS])
+    await showToast({
+      style: Toast.Style.Success,
+      title: '已恢复默认预设快开列表'
+    })
+  }
 
   return (
     <List
-      isLoading={isLoading}
-      isShowingDetail={isShowingDetail}
-      searchBarPlaceholder="搜索快捷链接，或用别名检索 (如: g deepseek, gh react, bili)..."
+      navigationTitle="网页快开"
+      isLoading={false}
+      isShowingDetail={false}
       searchText={searchText}
       onSearchTextChange={setSearchText}
+      searchBarPlaceholder="搜索快捷链接，或输入“别名 + 空格 + 关键词”（如：gh react）..."
+      searchBarAccessory={
+        <List.Dropdown
+          value={selectedCategory}
+          onChange={(val) => setSelectedCategory(val as 'all' | QuicklinkCategory)}
+          tooltip="按类型筛选"
+        >
+          <List.Dropdown.Item title="全部快捷链接" value="all" icon={Icon.Globe} />
+          <List.Dropdown.Item title="搜索平台（带参数）" value="search" icon={Icon.Globe} />
+          <List.Dropdown.Item title="直达网页" value="direct" icon={Icon.ArrowRight} />
+          <List.Dropdown.Item title="批量网址组" value="group" icon={Icon.Desktop} />
+        </List.Dropdown>
+      }
+      filterBar={{
+        summaryText: `共 ${filtered.matches.length} 个快开项 · 支持在搜索框输入别名快速带参检索`,
+        actions: [
+          {
+            id: 'create',
+            title: '新建快开',
+            onAction: () =>
+              push(
+                <CreateQuicklinkForm
+                  onCreated={(created) => setLinks((prev) => [created, ...prev])}
+                />
+              )
+          },
+          {
+            id: 'reset-default',
+            title: '恢复默认预设',
+            onAction: () => {
+              void handleResetDefaults()
+            }
+          }
+        ]
+      }}
     >
-      {/* 1. 别名关键词精准匹配直达区 */}
-      {directMatch && (
-        <List.Section title="快捷别名即时直达">
+      {filtered.matches.map((item) => {
+        const alias = item.alias || item.keyword
+        const pattern = item.urlPattern || item.link
+        const hasQuery = /\{(query|argument|arg)\}/i.test(pattern)
+        return (
           <List.Item
-            id="direct-match"
-            title={`直达: ${directMatch.quicklink.title}`}
-            subtitle={`检索词: "${directMatch.queryArg}" | 目标: ${resolveQuicklinkUrl(directMatch.quicklink.link, directMatch.queryArg).url}`}
-            icon={Icon.Globe}
-            accessories={[{ text: "ENTER 立即直达", icon: Icon.ArrowRight }]}
+            key={item.id}
+            id={item.id}
+            title={item.title}
+            subtitle={item.description || pattern}
+            icon={item.isGroup ? Icon.Desktop : Icon.Globe}
+            accessories={[
+              alias ? { tag: `别名: ${alias}` } : {},
+              {
+                text: item.isGroup
+                  ? `含 ${item.urls?.length || 0} 个网页`
+                  : getHostnameLabel(pattern)
+              }
+            ]}
             actions={
-              <ActionPanel title="直达动作">
+              <ActionPanel>
                 <Action
-                  title="立即在浏览器打开直达链接"
+                  title={hasQuery ? '带参搜索 / 访问' : '在浏览器中打开'}
                   icon={Icon.Globe}
-                  onAction={() => handleOpenLink(directMatch.quicklink, directMatch.queryArg)}
+                  onAction={() => handleOpenLink(item)}
                 />
                 <Action
-                  title="复制直达完整 URL"
-                  icon={Icon.CopyClipboard}
+                  title="编辑此快捷链接"
+                  icon={Icon.Pencil}
                   onAction={() =>
-                    handleCopy(
-                      resolveQuicklinkUrl(directMatch.quicklink.link, directMatch.queryArg).url,
-                      "完整 URL"
+                    push(
+                      <EditQuicklinkForm
+                        item={item}
+                        onUpdated={(u) => {
+                          setLinks((prev) => {
+                            const next = prev.map((x) => (x.id === u.id ? u : x))
+                            void saveQuicklinks(next)
+                            return next
+                          })
+                        }}
+                      />
                     )
                   }
                 />
+                <Action.CopyToClipboard title="复制目标网址" content={pattern} />
               </ActionPanel>
             }
           />
-        </List.Section>
-      )}
-
-      {/* 2. 快捷链接完整列表 */}
-      <List.Section title={`快捷直达清单 (${matches.length})`}>
-        {matches.map(item => {
-          const hasMacro = /\{(query|argument|arg)/i.test(item.link);
-          return (
-            <List.Item
-              key={item.id}
-              id={item.id}
-              title={item.title}
-              subtitle={item.link}
-              icon={Icon.Globe}
-              accessories={[
-                ...(item.keyword ? [{ text: `别名: ${item.keyword}`, icon: Icon.Key }] : []),
-                { text: `打开 ${item.openCount || 0} 次` }
-              ]}
-              detail={
-                <List.Item.Detail
-                  markdown={`### ${item.title}\n\n**目标链接**: \`${item.link}\`\n\n${item.description ? item.description + '\n\n' : ''}> **参数宏解析**: ${hasMacro ? '✅ 支持动态参数占位符 (`{argument}` / `{query}`)' : '❌ 固定静态链接'}${item.defaultArgument ? `\n> **预设默认参数**: \`${item.defaultArgument}\`` : ''}`}
-                  metadata={
-                    <List.Item.Detail.Metadata>
-                      <List.Item.Detail.Metadata.Label title="名称" text={item.title} icon={Icon.Document} />
-                      {item.keyword && (
-                        <List.Item.Detail.Metadata.Label title="别名 / 触发词" text={item.keyword} icon={Icon.Key} />
-                      )}
-                      {item.defaultArgument && (
-                        <List.Item.Detail.Metadata.Label title="默认参数" text={item.defaultArgument} icon={Icon.Pencil} />
-                      )}
-                      <List.Item.Detail.Metadata.Label title="累计打开" text={`${item.openCount || 0} 次`} icon={Icon.Eye} />
-                      <List.Item.Detail.Metadata.Separator />
-                      <List.Item.Detail.Metadata.Label title="完整链接" text={item.link} icon={Icon.Link} />
-                    </List.Item.Detail.Metadata>
-                  }
-                />
-              }
-              actions={
-                <ActionPanel title={`${item.title}`}>
-                  <Action
-                    title="在浏览器中打开 (Open)"
-                    icon={Icon.Globe}
-                    onAction={() => handleOpenLink(item)}
-                  />
-                  <Action
-                    title="复制目标链接"
-                    icon={Icon.CopyClipboard}
-                    shortcut={{ modifiers: ["ctrl"], key: "c" }}
-                    onAction={() => handleCopy(item.link, "目标链接")}
-                  />
-                  {item.keyword && (
-                    <Action
-                      title="复制别名触发词"
-                      icon={Icon.Key}
-                      shortcut={{ modifiers: ["ctrl"], key: "k" }}
-                      onAction={() => handleCopy(item.keyword!, "别名触发词")}
-                    />
-                  )}
-                  <Action.Push
-                    title="编辑快捷链接"
-                    icon={Icon.Pencil}
-                    shortcut={{ modifiers: ["ctrl"], key: "e" }}
-                    target={
-                      <EditQuicklinkForm
-                        quicklink={item}
-                        onUpdated={updatedItem => {
-                          setQuicklinks(quicklinks.map(q => (q.id === updatedItem.id ? updatedItem : q)));
-                        }}
-                      />
-                    }
-                  />
-                  <Action
-                    title="复制生成副本 (Duplicate)"
-                    icon={Icon.Document}
-                    shortcut={{ modifiers: ["ctrl"], key: "d" }}
-                    onAction={() => handleDuplicate(item)}
-                  />
-                  <Action.Push
-                    title="新建快捷链接"
-                    icon={Icon.Plus}
-                    shortcut={{ modifiers: ["ctrl"], key: "n" }}
-                    target={
-                      <CreateQuicklinkForm
-                        onCreated={newItem => setQuicklinks([newItem, ...quicklinks])}
-                      />
-                    }
-                  />
-                  <Action
-                    title="导出全部链接到剪贴板 (Export)"
-                    icon={Icon.Upload}
-                    shortcut={{ modifiers: ["ctrl", "shift"], key: "e" }}
-                    onAction={handleExport}
-                  />
-                  <Action.Push
-                    title="导入 Quicklinks JSON (Import)"
-                    icon={Icon.Download}
-                    shortcut={{ modifiers: ["ctrl", "shift"], key: "i" }}
-                    target={
-                      <ImportQuicklinksForm
-                        onImported={async () => {
-                          const refreshed = await getQuicklinks();
-                          setQuicklinks(refreshed);
-                        }}
-                      />
-                    }
-                  />
-                  <Action
-                    title={isShowingDetail ? "关闭详情侧栏" : "展开详情侧栏"}
-                    icon={Icon.SidebarRight}
-                    shortcut={{ modifiers: ["ctrl"], key: "b" }}
-                    onAction={() => setIsShowingDetail(!isShowingDetail)}
-                  />
-                  <Action
-                    title="删除该快捷链接"
-                    icon={Icon.Trash}
-                    shortcut={{ modifiers: ["ctrl"], key: "x" }}
-                    onAction={() => handleDelete(item.id)}
-                  />
-                </ActionPanel>
-              }
-            />
-          );
-        })}
-      </List.Section>
+        )
+      })}
     </List>
-  );
+  )
 }
+
+export default QuicklinksCommand

@@ -7,7 +7,7 @@
  * 3. 3 大办公语体版本生成（标准精准直译、商务邮件得体润色、专业术语与词典拆解）
  * 4. 极客命名格式一键转换（camelCase / snake_case / CONSTANT_CASE）与中英双语对照导出
  */
-import { callHostTransport } from './native-ipc.js';
+import { callHostTransport, isRealElectronHost } from './native-ipc.js';
 export const LANGUAGE_PAIR_OPTIONS = [
     {
         id: 'auto->zh-CN',
@@ -227,6 +227,18 @@ export async function translateTextWithHost(text, pairOptionId = 'auto->zh-CN', 
             variants,
             sourceLanguage: ipcRes.data.sourceLanguage || sourceLanguage,
             targetLanguage: ipcRes.data.targetLanguage || targetLanguage
+        };
+    }
+    const realHost = Boolean(hostOverride) || isRealElectronHost(hostOverride) || isRealElectronHost();
+    const lowerKey = clean.toLowerCase();
+    const matchedPreset = Boolean(LOCAL_OFFICE_PHRASE_DICT[lowerKey] || LOCAL_OFFICE_PHRASE_DICT[clean]);
+    if (realHost && !matchedPreset) {
+        return {
+            ok: false,
+            variants: [],
+            sourceLanguage,
+            targetLanguage,
+            error: ipcRes.error || '翻译服务调用失败，且本地离线词库未命中'
         };
     }
     const fallbackVariants = buildTranslationVariants(clean, clean, sourceLanguage, targetLanguage, '本地离线词库引擎');

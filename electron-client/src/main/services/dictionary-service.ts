@@ -415,7 +415,7 @@ export class DictionaryService {
     if (process.platform === 'darwin') {
       try {
         await execFileAsync('/usr/bin/say', [cleanWord], { timeout: 10_000 })
-        return { success: true, word: cleanWord }
+        return { success: false, word: cleanWord, error: `当前平台 (${process.platform}) 暂不支持语音朗读` }
       } catch (err) {
         return {
           success: false,
@@ -435,7 +435,7 @@ export class DictionaryService {
           '-w',
           cleanWord
         ], { windowsHide: true, timeout: 10_000 })
-        return { success: true, word: cleanWord }
+        return { success: false, word: cleanWord, error: `当前平台 (${process.platform}) 暂不支持语音朗读` }
       } catch (err) {
         return {
           success: false,
@@ -445,6 +445,6 @@ export class DictionaryService {
       }
     }
 
-    return { success: true, word: cleanWord }
+    return { success: false, word: cleanWord, error: `当前平台 (${process.platform}) 暂不支持语音朗读` }
   }
 }

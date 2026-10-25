@@ -47,7 +47,56 @@ function sync(frontend, ...args) {
   return { status: res.status, stdout: res.stdout, stderr: res.stderr }
 }
 
+function generatedConfig(frontend) {
+  const text = fs.readFileSync(path.join(frontend, 'src/config/bundledPlugins.generated.js'), 'utf8')
+  return JSON.parse(text.slice(text.indexOf('export default ') + 'export default '.length))
+}
+
 describe('sync-bundled-plugins.mjs', () => {
+  it('商店官方插件生成展示元数据，按ID排序；不复制草稿、下架、社区、内置或安装凭据字段', () => {
+    const ws = makeWorkspace()
+    const manifests = [
+      ['z-office', { id: 'z-office', name: '办公工具', category: ['办公效率', '文本工具'], description: '本地说明', version: '9.0.0', downloadUrl: 'https://example.com/private.zip', privateNote: '不可进入展示清单' }],
+      ['official/a-media', { id: 'a-media', name: '媒体工具', category: 'media' }],
+      ['draft', { id: 'draft', draft: true }],
+      ['revoked', { id: 'revoked', revoked: true }],
+      ['community', { id: 'community', author: 'Community' }]
+    ]
+    for (const [dir, manifest] of manifests) {
+      write(ws.plugins, `${dir}/plugin.json`, JSON.stringify({ author: 'ZTools Team', ...manifest }))
+    }
+    expect(sync(ws.frontend, '--ensure').status).toBe(0)
+    const generated = generatedConfig(ws.frontend)
+    expect(generated.storeOfficialIds).toEqual(['a-media', 'z-office'])
+    expect(generated.storePlugins).toEqual([
+      { id: 'a-media', name: '媒体工具', description: '', category: 'media' },
+      { id: 'z-office', name: '办公工具', description: '本地说明', category: ['办公效率', '文本工具'] }
+    ])
+    expect(sync(ws.frontend, '--ensure').status).toBe(0)
+    expect(generatedConfig(ws.frontend)).toEqual(generated)
+    expect(sync(ws.frontend, '--check').status).toBe(0)
+  })
+
+  it('元数据丢失或来源更新时 --check 只读报错，--ensure 恢复真实名称和分类', () => {
+    const ws = makeWorkspace()
+    write(ws.plugins, 'calendar/plugin.json', JSON.stringify({ id: 'calendar', author: { name: 'ZTools Team' } }))
+    expect(sync(ws.frontend).status).toBe(0)
+    const generated = generatedConfig(ws.frontend)
+    expect(generated.storePlugins).toEqual([{ id: 'calendar', name: 'calendar', description: '', category: [] }])
+    delete generated.storePlugins
+    const file = path.join(ws.frontend, 'src/config/bundledPlugins.generated.js')
+    fs.writeFileSync(file, `export default ${JSON.stringify(generated)}\n`)
+    const missing = fs.readFileSync(file, 'utf8')
+    const result = sync(ws.frontend, '--check')
+    expect(result.status).toBe(1)
+    expect(result.stderr).toContain('不一致：src/config/bundledPlugins.generated.js')
+    expect(fs.readFileSync(file, 'utf8')).toBe(missing)
+    write(ws.plugins, 'calendar/plugin.json', JSON.stringify({ id: 'calendar', author: 'ZTools Team', name: '日历', category: ['办公效率'] }))
+    expect(sync(ws.frontend, '--ensure').status).toBe(0)
+    expect(generatedConfig(ws.frontend).storePlugins).toEqual([{ id: 'calendar', name: '日历', description: '', category: ['办公效率'] }])
+    expect(sync(ws.frontend, '--check').status).toBe(0)
+  })
+
   it('同步后 --check 通过；--check 只读', () => {
     const ws = makeWorkspace()
     expect(sync(ws.frontend).status).toBe(0)

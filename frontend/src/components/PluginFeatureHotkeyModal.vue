@@ -198,7 +198,7 @@ const cleanupDeprecatedScreenshotHotkeys = async () => {
     try {
       await window.ztools.trigger.unregister(item.triggerId)
     } catch (error) {
-      // 触发器不存在时静默跳过
+      console.warn('[PluginFeatureHotkeyModal] 清理废弃触发器失败:', error)
     }
   }
 }

@@ -195,8 +195,8 @@ export class ClipboardHistoryService {
           now
         )
       }
-    } catch {
-      // ignore seed errors
+    } catch (err) {
+      console.warn('[ClipboardHistoryService] Failed to seed initial host clipboard:', err)
     }
   }
 
@@ -210,19 +210,24 @@ export class ClipboardHistoryService {
 
     try {
       this.db = new DatabaseSync(this.dbPath)
-    } catch (err: any) {
+    } catch (err: unknown) {
       if (this.dbPath !== ':memory:') {
-        console.warn(`[ClipboardHistoryService] SQLite 数据库初始化异常 (${err.message})，清理残留 WAL 并自动恢复...`)
+        const errMessage = err instanceof Error ? err.message : String(err)
+        console.warn(`[ClipboardHistoryService] SQLite 数据库初始化异常 (${errMessage})，清理残留 WAL 并自动恢复...`)
         try {
           fs.rmSync(`${this.dbPath}-shm`, { force: true })
           fs.rmSync(`${this.dbPath}-wal`, { force: true })
-        } catch {}
+        } catch (rmErr) {
+          console.warn('[ClipboardHistoryService] Failed to remove WAL/SHM files:', rmErr)
+        }
         try {
           this.db = new DatabaseSync(this.dbPath)
         } catch {
           try {
             fs.renameSync(this.dbPath, `${this.dbPath}.corrupt.${Date.now()}`)
-          } catch {}
+          } catch (renameErr) {
+            console.warn('[ClipboardHistoryService] Failed to rename corrupt database file:', renameErr)
+          }
           this.db = new DatabaseSync(this.dbPath)
         }
       } else {

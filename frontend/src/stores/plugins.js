@@ -1,3 +1,4 @@
+import { normalizeCategoryNames } from '@/utils/pluginCategories'
 import { defineStore } from 'pinia'
 import router from '@/router'
 import { routeUtils } from '@/router/routes'
@@ -438,9 +439,8 @@ export const usePluginsStore = defineStore('plugins', {
       if (!Array.isArray(catalog)) return
       const counts = {}
       for (const item of catalog) {
-        if (!item || this.isRevoked?.(item.pluginId || item.id)) continue
-        const names = Array.isArray(item.category) ? item.category : [item.category]
-        for (const name of new Set(names.filter((n) => typeof n === 'string' && n))) {
+        if (!item || item.draft || item.revoked || this.isRevoked?.(item.pluginId || item.id)) continue
+        for (const name of normalizeCategoryNames(item.category)) {
           counts[name] = (counts[name] || 0) + 1
         }
       }

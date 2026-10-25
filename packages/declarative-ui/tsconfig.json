@@ -13,8 +13,16 @@
     "jsx": "react",
     "jsxFactory": "React.createElement",
     "jsxFragmentFactory": "React.Fragment",
-    "typeRoots": ["./node_modules/@types", "../../electron-client/node_modules/@types"],
-    "types": ["node"]
+    "typeRoots": [
+      "./node_modules/@types",
+      "../../electron-client/node_modules/@types"
+    ],
+    "types": [
+      "node"
+    ],
+    "noImplicitAny": false
   },
-  "include": ["src/**/*"]
+  "include": [
+    "src/**/*"
+  ]
 }

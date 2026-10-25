@@ -54,12 +54,13 @@ async function fetchVersions() {
         _cachedAppVersion = null
         _cachedWebVersion = '1.0.0'
       }
+      _versionsCached = true
     } catch (e) {
       console.warn('[VersionCompat] 获取版本失败:', e)
       _cachedAppVersion = null
       _cachedWebVersion = '1.0.0'
+      _versionsCached = false
     }
-    _versionsCached = true
     return { appVersion: _cachedAppVersion, webVersion: _cachedWebVersion }
   })()
 

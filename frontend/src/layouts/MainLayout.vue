@@ -83,7 +83,7 @@ useKeymap(KEYMAP_SCOPES.GLOBAL, {
     return true
   },
   'Ctrl+M': () => {
-    switchWindowMode(WINDOW_MODES.LAUNCHER).catch(() => {})
+    switchWindowMode(WINDOW_MODES.LAUNCHER).catch((err) => console.warn('[MainLayout] 切换极客条模式失败:', err))
     return true
   },
   'Escape': () => {

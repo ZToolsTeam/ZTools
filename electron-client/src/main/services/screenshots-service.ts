@@ -348,7 +348,12 @@ export class ScreenshotsService {
 
     try {
       if (shell && typeof shell.trashItem === 'function') {
-        await shell.trashItem(filePath)
+        try {
+          await shell.trashItem(filePath)
+        } catch (err) {
+          console.warn('[ScreenshotsService] shell.trashItem failed:', err)
+          return false
+        }
       } else {
         await fs.promises.unlink(filePath)
       }

@@ -9,8 +9,8 @@ import {
   trashRealItem
 } from "../shared/native-ipc.js";
 
-declare const process: any;
-declare const Buffer: any;
+declare const process: { versions?: { node?: string }; getBuiltinModule?: (id: string) => unknown } | undefined;
+declare const Buffer: { alloc(size: number): Uint8Array & { subarray(start: number, end: number): { toString(enc: string): string } } };
 
 interface NodeFsPromisesLike {
   readdir(dirPath: string, options: { withFileTypes: true }): Promise<Array<{ name: string; isDirectory?: () => boolean }>>;
@@ -271,7 +271,8 @@ export function sortAndFilterFiles(
   return sorted;
 }
 
-function mapRawFileToRecord(f: any): FileRecord {
+function mapRawFileToRecord(raw: unknown): FileRecord {
+  const f = (raw && typeof raw === "object" ? raw : {}) as Record<string, unknown>;
   const isDir = Boolean(f?.is_dir || f?.isDir || f?.isDirectory);
   const fullPath = String(f?.path || "");
   const name = String(f?.name || fullPath.split(/[\\/]/).pop() || "");
@@ -287,61 +288,78 @@ function mapRawFileToRecord(f: any): FileRecord {
     mtime,
     category,
     extension: isDir ? undefined : ext,
-    acronym: f?.acronym,
-    pinyin: f?.pinyin
+    acronym: typeof f?.acronym === "string" ? f.acronym : undefined,
+    pinyin: typeof f?.pinyin === "string" ? f.pinyin : undefined
   };
 }
 
 /**
  * 检索文件 (深度联动 Rust 预编译侧车 ztools-indexer.exe 或系统 IPC)
  */
+interface LauncherBridgeLike {
+  searchFiles?: (q: string, limit: number) => Promise<unknown>;
+  openPath?: (p: string) => Promise<unknown>;
+  openWith?: (p: string, app?: string) => Promise<unknown>;
+  showItemInFolder?: (p: string) => Promise<unknown>;
+  moveToTrash?: (p: string) => Promise<unknown>;
+}
+interface ZtoolsSystemBridgeLike {
+  searchFiles?: (q: string, limit: number) => Promise<unknown>;
+  openFile?: (arg: { path: string }) => Promise<unknown>;
+  revealFile?: (arg: { path: string }) => Promise<unknown>;
+  placeInTrash?: (arg: { path: string }) => Promise<unknown>;
+}
+
 export async function searchLocalFiles(
   query: string,
   limit = 50,
-  hostOverride?: any
+  hostOverride?: unknown
 ): Promise<FileRecord[]> {
   const trimmed = (query || "").trim().toLowerCase();
   const realHost = isRealElectronHost(hostOverride);
 
   // 1. 若在真实宿主环境或注入了 hostOverride，优先调度底层 Rust 侧车 ztools-indexer / filesearch_query
   try {
-    const launcher = (globalThis as any).__ztoolsLauncher;
-    const system = (globalThis as any).ztools?.system;
+    const launcher = (globalThis as Record<string, unknown>).__ztoolsLauncher as LauncherBridgeLike | undefined;
+    const ztoolsObj = (globalThis as Record<string, unknown>).ztools as { system?: ZtoolsSystemBridgeLike } | undefined;
+    const system = ztoolsObj?.system;
 
-    let rawFiles: any[] = [];
+    let rawFiles: unknown[] = [];
     if (launcher?.searchFiles) {
       const res = await launcher.searchFiles(trimmed, limit);
-      const unwrapped = res && typeof res === "object" && "data" in res && res.data ? res.data : res;
+      const unwrapped = (res && typeof res === "object" && "data" in res && (res as Record<string, unknown>).data ? (res as Record<string, unknown>).data : res) as Record<string, unknown> | unknown[];
       if (Array.isArray(unwrapped)) rawFiles = unwrapped;
-      else if (Array.isArray(unwrapped?.files)) rawFiles = unwrapped.files;
+      else if (unwrapped && Array.isArray((unwrapped as Record<string, unknown>).files)) rawFiles = (unwrapped as Record<string, unknown>).files as unknown[];
     } else if (system?.searchFiles) {
       const res = await system.searchFiles(trimmed, limit);
       if (Array.isArray(res)) rawFiles = res;
-      else if (Array.isArray(res?.files)) rawFiles = res.files;
+      else if (res && typeof res === "object" && Array.isArray((res as Record<string, unknown>).files)) rawFiles = (res as Record<string, unknown>).files as unknown[];
     }
 
     if (rawFiles.length === 0 && (hostOverride || realHost)) {
-      const fsQueryRes = await callHostTransport<any>(
+      const fsQueryRes = await callHostTransport<Record<string, unknown> | unknown[]>(
         "filesearch_query",
         { query: trimmed, limit },
         hostOverride
       );
       if (fsQueryRes.ok && fsQueryRes.data) {
+        const dObj = (!Array.isArray(fsQueryRes.data) && typeof fsQueryRes.data === "object" ? fsQueryRes.data : {}) as Record<string, unknown>;
         if (Array.isArray(fsQueryRes.data)) rawFiles = fsQueryRes.data;
-        else if (Array.isArray(fsQueryRes.data?.files)) rawFiles = fsQueryRes.data.files;
-        else if (Array.isArray(fsQueryRes.data?.items)) rawFiles = fsQueryRes.data.items;
+        else if (Array.isArray(dObj.files)) rawFiles = dObj.files;
+        else if (Array.isArray(dObj.items)) rawFiles = dObj.items;
       }
 
       if (rawFiles.length === 0) {
-        const ipcRes = await callHostTransport<any>(
+        const ipcRes = await callHostTransport<Record<string, unknown> | unknown[]>(
           "system_search_files",
           { query: trimmed || ".", limit },
           hostOverride
         );
         if (ipcRes.ok && ipcRes.data) {
+          const dObj = (!Array.isArray(ipcRes.data) && typeof ipcRes.data === "object" ? ipcRes.data : {}) as Record<string, unknown>;
           if (Array.isArray(ipcRes.data)) rawFiles = ipcRes.data;
-          else if (Array.isArray(ipcRes.data?.files)) rawFiles = ipcRes.data.files;
-          else if (Array.isArray(ipcRes.data?.items)) rawFiles = ipcRes.data.items;
+          else if (Array.isArray(dObj.files)) rawFiles = dObj.files;
+          else if (Array.isArray(dObj.items)) rawFiles = dObj.items;
         }
       }
     }
@@ -450,7 +468,7 @@ const EXT_TO_LANG: Record<string, string> = {
  */
 export async function getFileQuickLook(
   file: FileRecord,
-  hostOverride?: any
+  hostOverride?: unknown
 ): Promise<FileQuickLookResult> {
   const category = getFileCategory(file.name, file.isDir);
   const ext = (file.name.split(".").pop() || "").toLowerCase();
@@ -499,7 +517,8 @@ export async function getFileQuickLook(
           truncated: entries.length > 25
         };
       }
-    } catch (err: any) {
+    } catch (err: unknown) {
+      const errMsg = err instanceof Error ? err.message : String(err);
       return {
         path: file.path,
         name: file.name,
@@ -508,7 +527,7 @@ export async function getFileQuickLook(
         mtime: file.mtime,
         category,
         previewType: "error",
-        error: `无法读取文件夹: ${err.message || String(err)}`
+        error: `无法读取文件夹: ${errMsg}`
       };
     }
 
@@ -556,7 +575,7 @@ export async function getFileQuickLook(
   if (TEXT_EXTS.has(ext)) {
     try {
       if (hostOverride || isRealElectronHost()) {
-        const readRes = await callHostTransport<any>(
+        const readRes = await callHostTransport<Record<string, unknown> | string>(
           "filesystem_read_text_file",
           { path: file.path, maxBytes: 64 * 1024 },
           hostOverride
@@ -564,8 +583,8 @@ export async function getFileQuickLook(
         const textData =
           readRes.ok && typeof readRes.data === "string"
             ? readRes.data
-            : readRes.ok && typeof readRes.data?.content === "string"
-            ? readRes.data.content
+            : readRes.ok && readRes.data && typeof (readRes.data as Record<string, unknown>).content === "string"
+            ? String((readRes.data as Record<string, unknown>).content)
             : null;
         if (textData !== null) {
           const allLines = textData.split(/\r?\n/);
@@ -594,7 +613,7 @@ export async function getFileQuickLook(
           const maxReadBytes = 64 * 1024; // 64KB
           const buffer = Buffer.alloc(Math.min(file.size, maxReadBytes));
           const { bytesRead } = await fileHandle.read(buffer, 0, buffer.length, 0);
-          const rawText = buffer.subarray(0, bytesRead).toString("utf8");
+          const rawText = new TextDecoder("utf-8").decode(buffer.subarray(0, bytesRead));
           const allLines = rawText.split(/\r?\n/);
           const maxLines = 200;
           const displayLines = allLines.slice(0, maxLines);
@@ -617,7 +636,8 @@ export async function getFileQuickLook(
           await fileHandle.close();
         }
       }
-    } catch (err: any) {
+    } catch (err: unknown) {
+      const errMsg = err instanceof Error ? err.message : String(err);
       return {
         path: file.path,
         name: file.name,
@@ -626,7 +646,7 @@ export async function getFileQuickLook(
         mtime: file.mtime,
         category,
         previewType: "error",
-        error: `读取文件失败: ${err.message || String(err)}`
+        error: `读取文件失败: ${errMsg}`
       };
     }
   }
@@ -668,8 +688,8 @@ export async function calculateFileSha256(filePath: string): Promise<string> {
       const res = await ztools.fileSearch.calculateSha256({ path: filePath });
       if (res?.sha256) return res.sha256;
     }
-  } catch {
-    // 降级使用本地流
+  } catch (err) {
+    console.warn("[everything-file-search] calculateSha256 host fallback:", err);
   }
 
   // 2. 本地 Node.js 流式计算
@@ -751,8 +771,9 @@ export async function openFile(filePath: string): Promise<FileActionResult> {
   }
 
   try {
-    const launcher = (globalThis as any).__ztoolsLauncher;
-    const system = (globalThis as any).ztools?.system;
+    const launcher = (globalThis as Record<string, unknown>).__ztoolsLauncher as LauncherBridgeLike | undefined;
+    const ztoolsObj = (globalThis as Record<string, unknown>).ztools as { system?: ZtoolsSystemBridgeLike } | undefined;
+    const system = ztoolsObj?.system;
 
     if (launcher?.openPath) {
       await launcher.openPath(filePath);
@@ -767,6 +788,7 @@ export async function openFile(filePath: string): Promise<FileActionResult> {
       if (ok) {
         return { success: true, message: `已打开文件: ${filePath}`, path: filePath };
       }
+      return { success: false, message: `打开文件失败: ${filePath}`, path: filePath, error: "OPEN_FAILED" };
     }
 
     if (typeof process !== "undefined" && process.versions?.node) {
@@ -778,8 +800,9 @@ export async function openFile(filePath: string): Promise<FileActionResult> {
     }
 
     return { success: true, message: `已打开文件: ${filePath}`, path: filePath };
-  } catch (err: any) {
-    return { success: false, message: `打开文件失败: ${err.message || String(err)}`, path: filePath, error: "OPEN_FAILED" };
+  } catch (err: unknown) {
+    const errMsg = err instanceof Error ? err.message : String(err);
+    return { success: false, message: `打开文件失败: ${errMsg}`, path: filePath, error: "OPEN_FAILED" };
   }
 }
 
@@ -792,18 +815,22 @@ export async function openWith(filePath: string, appPath?: string): Promise<File
   }
 
   try {
-    const launcher = (globalThis as any).__ztoolsLauncher;
+    const launcher = (globalThis as Record<string, unknown>).__ztoolsLauncher as LauncherBridgeLike | undefined;
     if (launcher?.openWith) {
       await launcher.openWith(filePath, appPath);
       return { success: true, message: `已调起打开方式向导`, path: filePath };
     }
     if (isRealElectronHost()) {
-      await openRealPath(filePath);
+      const ok = await openRealPath(filePath);
+      if (!ok) {
+        return { success: false, message: `通过系统关联程序打开失败: ${filePath}`, path: filePath, error: "OPEN_WITH_FAILED" };
+      }
       return { success: true, message: `已通过系统关联程序打开: ${filePath}`, path: filePath };
     }
     return { success: true, message: `已通过关联程序打开: ${appPath || "系统默认推荐"}`, path: filePath };
-  } catch (err: any) {
-    return { success: false, message: `选择打开方式失败: ${err.message || String(err)}`, path: filePath, error: "OPEN_WITH_FAILED" };
+  } catch (err: unknown) {
+    const errMsg = err instanceof Error ? err.message : String(err);
+    return { success: false, message: `选择打开方式失败: ${errMsg}`, path: filePath, error: "OPEN_WITH_FAILED" };
   }
 }
 
@@ -816,8 +843,9 @@ export async function revealFile(filePath: string): Promise<FileActionResult> {
   }
 
   try {
-    const launcher = (globalThis as any).__ztoolsLauncher;
-    const system = (globalThis as any).ztools?.system;
+    const launcher = (globalThis as Record<string, unknown>).__ztoolsLauncher as LauncherBridgeLike | undefined;
+    const ztoolsObj = (globalThis as Record<string, unknown>).ztools as { system?: ZtoolsSystemBridgeLike } | undefined;
+    const system = ztoolsObj?.system;
 
     if (launcher?.showItemInFolder) {
       await launcher.showItemInFolder(filePath);
@@ -832,6 +860,7 @@ export async function revealFile(filePath: string): Promise<FileActionResult> {
       if (ok) {
         return { success: true, message: `已在资源管理器中定位: ${filePath}`, path: filePath };
       }
+      return { success: false, message: `定位文件失败: ${filePath}`, path: filePath, error: "REVEAL_FAILED" };
     }
 
     if (typeof process !== "undefined" && process.versions?.node) {
@@ -843,8 +872,9 @@ export async function revealFile(filePath: string): Promise<FileActionResult> {
     }
 
     return { success: true, message: `已定位: ${filePath}`, path: filePath };
-  } catch (err: any) {
-    return { success: false, message: `定位文件失败: ${err.message || String(err)}`, path: filePath, error: "REVEAL_FAILED" };
+  } catch (err: unknown) {
+    const errMsg = err instanceof Error ? err.message : String(err);
+    return { success: false, message: `定位文件失败: ${errMsg}`, path: filePath, error: "REVEAL_FAILED" };
   }
 }
 
@@ -857,8 +887,9 @@ export async function moveToTrash(filePath: string): Promise<FileActionResult> {
   }
 
   try {
-    const launcher = (globalThis as any).__ztoolsLauncher;
-    const system = (globalThis as any).ztools?.system;
+    const launcher = (globalThis as Record<string, unknown>).__ztoolsLauncher as LauncherBridgeLike | undefined;
+    const ztoolsObj = (globalThis as Record<string, unknown>).ztools as { system?: ZtoolsSystemBridgeLike } | undefined;
+    const system = ztoolsObj?.system;
 
     if (launcher?.moveToTrash) {
       await launcher.moveToTrash(filePath);
@@ -889,8 +920,9 @@ export async function moveToTrash(filePath: string): Promise<FileActionResult> {
     }
 
     return { success: true, message: `已移入回收站: ${filePath}`, path: filePath };
-  } catch (err: any) {
-    return { success: false, message: `移入回收站失败: ${err.message || String(err)}`, path: filePath, error: "TRASH_FAILED" };
+  } catch (err: unknown) {
+    const errMsg = err instanceof Error ? err.message : String(err);
+    return { success: false, message: `移入回收站失败: ${errMsg}`, path: filePath, error: "TRASH_FAILED" };
   }
 }
 
@@ -903,7 +935,8 @@ export async function copyFileToClipboard(filePath: string): Promise<FileActionR
   }
 
   try {
-    const clipboard = (globalThis as any).ztools?.clipboard;
+    const ztoolsObj = (globalThis as Record<string, unknown>).ztools as { clipboard?: { copyFiles?: (files: string[]) => Promise<unknown> } } | undefined;
+    const clipboard = ztoolsObj?.clipboard;
     if (clipboard?.copyFiles) {
       await clipboard.copyFiles([filePath]);
       return { success: true, message: `已将文件本身复制到剪贴板`, path: filePath };
@@ -913,21 +946,30 @@ export async function copyFileToClipboard(filePath: string): Promise<FileActionR
       await navigator.clipboard.writeText(`file:///${filePath.replace(/\\/g, "/")}`);
     }
     return { success: true, message: `已复制文件到剪贴板`, path: filePath };
-  } catch (err: any) {
-    return { success: false, message: `复制文件失败: ${err.message || String(err)}`, path: filePath, error: "COPY_FILE_FAILED" };
+  } catch (err: unknown) {
+    const errMsg = err instanceof Error ? err.message : String(err);
+    return { success: false, message: `复制文件失败: ${errMsg}`, path: filePath, error: "COPY_FILE_FAILED" };
   }
 }
 
 /**
  * 调用系统原生 Quick Look 快速预览 (macOS qlmanage -p / Windows 预览桥接)
  */
-export async function quickLookFile(filePath: string, hostOverride?: any): Promise<FileActionResult> {
+export async function quickLookFile(filePath: string, hostOverride?: unknown): Promise<FileActionResult> {
   if (!filePath || !filePath.trim()) {
     return { success: false, message: "文件路径无效或为空", path: filePath || "", error: "INVALID_PATH" };
   }
   const res = await callHostTransport("filesearch_quick_look", { path: filePath }, hostOverride);
   if (res.ok) {
     return { success: true, message: `已调起 Quick Look 原生预览: ${filePath}`, path: filePath };
+  }
+  if (isRealElectronHost(hostOverride)) {
+    return {
+      success: false,
+      message: res.error || `无法调起快速预览: ${filePath}`,
+      path: filePath,
+      error: "QUICK_LOOK_FAILED"
+    };
   }
   return {
     success: true,

@@ -104,8 +104,8 @@ export default function ProcessMonitorCommand() {
           message: `PID: ${proc.pid}${svcRes?.length ? ` · 托管服务: ${svcRes.length} 项` : ''}`
         })
       }
-    } catch {
-      // ignore background detail errors
+    } catch (err) {
+      console.warn("[process-monitor] loadSelectedDetail failed:", err)
     }
   }
 
@@ -147,8 +147,9 @@ export default function ProcessMonitorCommand() {
     const timer = setInterval(() => {
       void refreshData(false)
     }, 2000)
-    if (typeof (timer as any)?.unref === 'function') {
-      ;(timer as any).unref()
+    const timerObj = timer as unknown as { unref?: () => void }
+    if (typeof timerObj?.unref === 'function') {
+      timerObj.unref()
     }
     return () => {
       clearInterval(timer)

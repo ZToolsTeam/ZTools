@@ -2,7 +2,7 @@
   "id": "batch-image",
   "name": "图片压缩",
   "description": "批量无损压缩 PNG/JPG/WebP 图片体积，支持政务报销 300KB 限额压缩、格式转换、清除拍摄隐私与多图合并转 PDF",
-  "version": "1.1.1",
+  "version": "1.1.2",
   "author": "ZTools Team",
   "entry": "dist/index.js",
   "icon": "icon.svg",

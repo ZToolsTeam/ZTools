@@ -13,6 +13,7 @@ import type { ProcessService } from '../process-service.js'
 export interface HostClipboardPort {
   getText(): Promise<string>
   setText(text: string): Promise<unknown>
+  getImage?(): Promise<string | Buffer | null>
 }
 
 export interface HostWindowControlPort {

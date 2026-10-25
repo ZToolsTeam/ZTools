@@ -178,11 +178,7 @@ export class OfflineTranslationProvider implements TranslationProvider {
       }
     }
 
-    // 默认回显或保留原文（离线模式下的兜底行为）
-    return {
-      translatedText: text,
-      detectedSourceLanguage: normSource === 'auto' ? detectLanguage(text) : normSource
-    }
+    throw new Error(`离线词库未收录该词条 (${normSource} -> ${normTarget}): ${text}`)
   }
 }
 
@@ -281,7 +277,11 @@ export class TranslatorService {
         translatedText = res.translatedText
         engine = 'offline'
       }
-    } catch {
+    } catch (err) {
+      if (this.primaryProvider === this.offlineProvider) {
+        throw err
+      }
+      console.warn('[TranslatorService] Primary provider failed, falling back to offline dictionary:', err)
       // 容灾平滑降级至本地离线 Provider
       const fallback = await this.offlineProvider.translate(trimmed, detectedSource, targetLang)
       translatedText = fallback.translatedText

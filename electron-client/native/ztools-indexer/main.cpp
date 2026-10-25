@@ -1,15 +1,16 @@
+#ifdef _WIN32
 #ifndef NOMINMAX
 #define NOMINMAX
 #endif
-
 #include <windows.h>
+#include <fcntl.h>
+#include <io.h>
+#endif
 #include <iostream>
 #include <string>
 #include <vector>
 #include <memory>
 #include <chrono>
-#include <fcntl.h>
-#include <io.h>
 
 #include "file_scanner.hpp"
 #include "flat_trie.hpp"
@@ -19,9 +20,11 @@ using namespace ztools::sidecar;
 using namespace ztools::indexer;
 
 int main(int argc, char* argv[]) {
+#ifdef _WIN32
   // Ensure binary mode for standard streams on Windows
   _setmode(_fileno(stdin), _O_BINARY);
   _setmode(_fileno(stdout), _O_BINARY);
+#endif
 
   std::string pipe_name;
   size_t auto_mock_count = 0;
@@ -82,6 +85,12 @@ int main(int argc, char* argv[]) {
       if (entries.empty()) {
         ConcurrentDirectoryScanner dirScanner;
         dirScanner.Scan(wpath, entries);
+#ifdef __APPLE__
+        if (path_str.rfind("/Users/", 0) == 0) {
+          dirScanner.Scan(Utf8ToWide("/Applications"), entries);
+          dirScanner.Scan(Utf8ToWide("/System/Applications"), entries);
+        }
+#endif
         scanner_used = "concurrent_directory";
       }
 
@@ -136,6 +145,7 @@ int main(int argc, char* argv[]) {
     return JsonRpcResponse::Error(req.id, -32601, "Method not found: " + req.method);
   };
 
+#ifdef _WIN32
   if (!pipe_name.empty()) {
     // Named Pipe mode
     HANDLE hPipe = CreateNamedPipeA(
@@ -192,6 +202,7 @@ int main(int argc, char* argv[]) {
       return 0;
     }
   }
+#endif
 
   // Stdin/Stdout mode
   RunLineRpcLoop(std::cin, std::cout, rpc_handler);

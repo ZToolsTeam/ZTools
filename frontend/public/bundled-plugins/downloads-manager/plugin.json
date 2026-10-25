@@ -1,0 +1,80 @@
+{
+  "id": "downloads-manager",
+  "name": "下载管理",
+  "description": "跨渠道聚合浏览器下载、网盘下载（百度/夸克/阿里/迅雷）与办公 IM 接收文件（微信/企微/QQ/飞书/钉钉），统一检索、打开与清理安装包",
+  "version": "2.1.1",
+  "author": "ZTools Team",
+  "entry": "dist/index.js",
+  "icon": "icon.svg",
+  "category": [
+    "效率工具",
+    "系统工具"
+  ],
+  "permissions": [
+    "fs",
+    "system",
+    "clipboard",
+    "shell"
+  ],
+  "requireAdmin": false,
+  "nativeComponents": [],
+  "features": [
+    {
+      "code": "downloads-all",
+      "explain": "聚合查看浏览器、网盘与微信/QQ/飞书最近下载或接收的所有文件",
+      "cmds": [
+        "下载",
+        "下载管理",
+        "downloads",
+        "dl",
+        "最近下载",
+        "接收文件"
+      ]
+    },
+    {
+      "code": "downloads-netdisk",
+      "explain": "快速筛选百度网盘、夸克网盘、阿里云盘、迅雷下载的文件",
+      "cmds": [
+        "网盘下载",
+        "百度网盘",
+        "夸克下载",
+        "迅雷下载",
+        "netdisk"
+      ]
+    },
+    {
+      "code": "downloads-im",
+      "explain": "快速查找微信、企业微信、QQ、飞书、钉钉接收的文件",
+      "cmds": [
+        "微信文件",
+        "微信接收",
+        "QQ文件",
+        "飞书文件",
+        "钉钉文件"
+      ]
+    },
+    {
+      "code": "downloads-clean-installers",
+      "explain": "筛选所有下载渠道中残留的 .exe/.msi/.dmg/.pkg 安装包并一键移入回收站",
+      "cmds": [
+        "清理安装包",
+        "删除安装包",
+        "installers"
+      ]
+    }
+  ],
+  "targets": [
+    {
+      "id": "windows-electron-any",
+      "platform": "windows",
+      "runtime": "electron",
+      "arch": "any"
+    },
+    {
+      "id": "macos-electron-any",
+      "platform": "macos",
+      "runtime": "electron",
+      "arch": "any"
+    }
+  ]
+}

@@ -21,7 +21,7 @@ const PREFERENCES_STORAGE_KEY = "ztools-window-management-preferences-v1";
 
 export async function getWindowPreferences(): Promise<WindowManagementPreferences> {
   try {
-    const raw = await LocalStorage.getItem(PREFERENCES_STORAGE_KEY);
+    const raw = await LocalStorage.getItem<Partial<WindowManagementPreferences>>(PREFERENCES_STORAGE_KEY);
     if (raw && typeof raw === "object") {
       return {
         innerGap: typeof raw.innerGap === "number" ? Math.max(0, raw.innerGap) : DEFAULT_WINDOW_PREFERENCES.innerGap,

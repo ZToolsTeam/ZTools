@@ -245,24 +245,24 @@ export async function probeAria2JsonRpc(endpoint = "http://127.0.0.1:6800/jsonrp
   }
 }
 
-export async function readClipboardDownloadUrl(hostBridge?: any): Promise<{
+export async function readClipboardDownloadUrl(hostBridge?: unknown): Promise<{
   url: string;
   protocol: string;
   suggestedFileName: string;
 }> {
   try {
-    const ipcClip = await callHostTransport<any>("clipboard_read_text", {}, hostBridge);
+    const ipcClip = await callHostTransport<Record<string, unknown> | string>("clipboard_read_text", {}, hostBridge);
     if (ipcClip.ok && ipcClip.data) {
-      const txt = typeof ipcClip.data === "string" ? ipcClip.data : String(ipcClip.data.text || "");
+      const txt = typeof ipcClip.data === "string" ? ipcClip.data : String((ipcClip.data as Record<string, unknown>).text || "");
       return detectDownloadUrlFromText(txt);
     }
-  } catch {
-    // ignore
+  } catch (err) {
+    console.warn("[multi-download] readClipboardDownloadUrl fallback:", err);
   }
   return { url: "", protocol: "支持 HTTP/FTP/Magnet", suggestedFileName: "" };
 }
 
-export async function fetchMultiDownloadSnapshot(hostBridge?: any): Promise<MultiDownloadSnapshot> {
+export async function fetchMultiDownloadSnapshot(hostBridge?: unknown): Promise<MultiDownloadSnapshot> {
   const paths = await resolveRealSpecialPaths(hostBridge);
   const downloadDir = paths.downloads || `${paths.userProfile}\\Downloads`;
   const driveLetter = (downloadDir.match(/^[A-Za-z]:/) || ["C:"])[0].toUpperCase();
@@ -367,7 +367,7 @@ export async function startMultiThreadDownloadTask(
   url: string,
   downloadDir: string,
   preset: ThreadSplitPreset,
-  hostBridge?: any
+  hostBridge?: unknown
 ): Promise<NativeInvocationResult> {
   const trimmed = String(url || "").trim();
   if (!trimmed || !/^(https?|ftp|magnet):/i.test(trimmed)) {
@@ -427,8 +427,8 @@ export async function startMultiThreadDownloadTask(
         return { ok: true, code: 0, message: "Aria2 JSON-RPC 任务创建成功" };
       }
     }
-  } catch {
-    // fallback to host network_http_download
+  } catch (err) {
+    console.warn("[multi-download] aria2 rpc fallback:", err);
   }
 
   // 3. 调用宿主真实 HTTP 下载通道 network_http_download
@@ -494,7 +494,7 @@ export async function startMultiThreadDownloadTask(
 export async function deleteDownloadedFiles(
   paths: string[],
   knownFiles: DownloadedFileItem[] = [],
-  hostBridge?: any
+  hostBridge?: unknown
 ): Promise<{
   deletedCount: number;
   freedBytes: number;
@@ -525,7 +525,7 @@ export async function deleteDownloadedFiles(
 
 export async function openDownloadedFileLocation(
   targetPath: string,
-  hostBridge?: any
+  hostBridge?: unknown
 ): Promise<NativeInvocationResult> {
   const ok = await showRealItemInFolder(targetPath, hostBridge);
   return {
@@ -537,7 +537,7 @@ export async function openDownloadedFileLocation(
 
 export async function openDownloadedFile(
   targetPath: string,
-  hostBridge?: any
+  hostBridge?: unknown
 ): Promise<NativeInvocationResult> {
   const ok = await openRealPath(targetPath, hostBridge);
   return {

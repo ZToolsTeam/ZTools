@@ -228,25 +228,25 @@ export function detectVideoPlatform(rawText: string): {
   return { url: extractedUrl, platform: STREAM_PLATFORMS[5] };
 }
 
-export async function readClipboardStreamUrl(hostBridge?: any): Promise<{
+export async function readClipboardStreamUrl(hostBridge?: unknown): Promise<{
   url: string;
   platform: StreamPlatformMeta;
 }> {
   try {
-    const ipcClip = await callHostTransport<any>("clipboard_read_text", {}, hostBridge);
+    const ipcClip = await callHostTransport<Record<string, unknown> | string>("clipboard_read_text", {}, hostBridge);
     if (ipcClip.ok && ipcClip.data) {
-      const txt = typeof ipcClip.data === "string" ? ipcClip.data : String(ipcClip.data.text || "");
+      const txt = typeof ipcClip.data === "string" ? ipcClip.data : String((ipcClip.data as Record<string, unknown>).text || "");
       return detectVideoPlatform(txt);
     }
-  } catch {
-    // ignore
+  } catch (err) {
+    console.warn("[video-downloader] readClipboardStreamUrl fallback:", err);
   }
   return { url: "", platform: STREAM_PLATFORMS[0] };
 }
 
 const VIDEO_EXT_SET = new Set([".mp4", ".mkv", ".mov", ".webm", ".flv", ".avi", ".m4v", ".ts"]);
 
-export async function fetchVideoDownloaderSnapshot(hostBridge?: any): Promise<VideoDownloaderSnapshot> {
+export async function fetchVideoDownloaderSnapshot(hostBridge?: unknown): Promise<VideoDownloaderSnapshot> {
   const paths = await resolveRealSpecialPaths(hostBridge);
   const videosDir = paths.videos || `${paths.userProfile}\\Videos`;
   const downloadsDir = paths.downloads || `${paths.userProfile}\\Downloads`;
@@ -375,7 +375,7 @@ export async function parseAndDownloadStreamVideo(
   rawInput: string,
   saveDir: string,
   qualityPreset: VideoQualityPreset,
-  hostBridge?: any
+  hostBridge?: unknown
 ): Promise<NativeInvocationResult> {
   const detected = detectVideoPlatform(rawInput);
   if (!detected.url) {
@@ -477,7 +477,7 @@ export async function parseAndDownloadStreamVideo(
 export async function trashLocalVideoFiles(
   paths: string[],
   knownVideos: LocalMediaVideoItem[] = [],
-  hostBridge?: any
+  hostBridge?: unknown
 ): Promise<{ deletedCount: number; freedBytes: number }> {
   const sizeMap = new Map<string, number>();
   for (const v of knownVideos) {
@@ -503,7 +503,7 @@ export async function trashLocalVideoFiles(
   return { deletedCount, freedBytes };
 }
 
-export async function openLocalVideoFile(targetPath: string, hostBridge?: any): Promise<NativeInvocationResult> {
+export async function openLocalVideoFile(targetPath: string, hostBridge?: unknown): Promise<NativeInvocationResult> {
   if (!targetPath || FORBIDDEN_TARGET_PATTERN.test(targetPath)) {
     return { ok: false, code: -1, message: FORBIDDEN_REASON, error: FORBIDDEN_REASON };
   }
@@ -516,7 +516,7 @@ export async function openLocalVideoFile(targetPath: string, hostBridge?: any): 
   };
 }
 
-export async function openLocalVideoFolder(targetPath: string, hostBridge?: any): Promise<NativeInvocationResult> {
+export async function openLocalVideoFolder(targetPath: string, hostBridge?: unknown): Promise<NativeInvocationResult> {
   if (!targetPath || FORBIDDEN_TARGET_PATTERN.test(targetPath)) {
     return { ok: false, code: -1, message: FORBIDDEN_REASON, error: FORBIDDEN_REASON };
   }

@@ -152,7 +152,11 @@ export class ScreenAwarenessService {
         thumbnailSize: { width: 1920, height: 1080 }
       })
 
-      const targetSource = sources.find(s => s.name.includes(activeWindow.title) || s.id.includes(String(activeWindow.hwnd))) || sources[0]
+      const matchedSource = sources.find(s => (activeWindow.title && s.name.includes(activeWindow.title)) || (activeWindow.hwnd && s.id.includes(String(activeWindow.hwnd))))
+      const targetSource = matchedSource ?? (!activeWindow.title ? sources[0] : undefined)
+      if (!targetSource && activeWindow.title) {
+        console.warn('[ScreenAwareness] No matching window source found for title:', activeWindow.title)
+      }
       if (targetSource && targetSource.thumbnail) {
         imageBase64 = targetSource.thumbnail.toJPEG(85).toString('base64')
       }

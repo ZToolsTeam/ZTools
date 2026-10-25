@@ -133,20 +133,23 @@ function formatEventClockTime(raw: unknown, fallback: string): string {
 
 export async function fetchCalendarEvents(
   scope: CalendarFilterScope = "all",
-  hostOverride?: any
+  hostOverride?: unknown
 ): Promise<CalendarEventItem[]> {
-  if (hostOverride || isRealElectronHost()) {
+  if (hostOverride || isRealElectronHost(hostOverride)) {
     const method =
       scope === "upcoming" ? "calendar_upcoming_events" : "calendar_list_events";
-    const res = await callHostTransport<any>(method, { scope }, hostOverride);
+    const res = await callHostTransport<Record<string, unknown> | unknown[]>(method, { scope }, hostOverride);
+    const dataObj = (!Array.isArray(res.data) && res.data && typeof res.data === "object" ? res.data : {}) as Record<string, unknown>;
     const rawList = Array.isArray(res.data)
       ? res.data
-      : Array.isArray(res.data?.events)
-        ? res.data.events
+      : Array.isArray(dataObj.events)
+        ? dataObj.events
         : null;
     if (res.ok && rawList) {
-      if (rawList.length > 0 || isRealElectronHost()) {
-        return rawList.map((e: any, idx: number) => ({
+      if (rawList.length > 0 || isRealElectronHost(hostOverride)) {
+        return rawList.map((rawEvt: unknown, idx: number) => {
+          const e = (rawEvt && typeof rawEvt === "object" ? rawEvt : {}) as Record<string, unknown>;
+          return {
           id: String(e.id || `evt-${idx}`),
           title: String(e.title || e.summary || "Untitled Event"),
           startTime: formatEventClockTime(e.startTime ?? e.start, "09:00"),
@@ -157,10 +160,11 @@ export async function fetchCalendarEvents(
           notes: String(e.notes || e.description || ""),
           attendees: Array.isArray(e.attendees) ? e.attendees.map(String) : [],
           isAllDay: Boolean(e.isAllDay ?? e.allDay)
-        }));
+          };
+        });
       }
     }
-    if (isRealElectronHost() && !hostOverride) {
+    if (isRealElectronHost(hostOverride)) {
       return [];
     }
   }
@@ -177,7 +181,7 @@ export async function createCalendarEvent(
     calendarName?: string;
     notes?: string;
   },
-  hostOverride?: any
+  hostOverride?: unknown
 ): Promise<CalendarEventItem> {
   const cleanTitle = (input.title || "").trim();
   if (!cleanTitle) {
@@ -196,8 +200,8 @@ export async function createCalendarEvent(
     attendees: []
   };
 
-  if (hostOverride || isRealElectronHost()) {
-    const res = await callHostTransport<any>("calendar_create_event", newEvent as any, hostOverride);
+  if (hostOverride || isRealElectronHost(hostOverride)) {
+    const res = await callHostTransport<Record<string, unknown>>("calendar_create_event", { ...newEvent }, hostOverride);
     if (res.ok && res.data && res.data.id) {
       const merged: CalendarEventItem = {
         ...newEvent,
@@ -205,6 +209,9 @@ export async function createCalendarEvent(
       };
       memoryCalendarEvents = [merged, ...memoryCalendarEvents];
       return merged;
+    }
+    if (isRealElectronHost(hostOverride)) {
+      throw new Error(res.error || "CALENDAR_CREATE_FAILED: 宿主创建日程失败");
     }
   }
 
@@ -214,30 +221,33 @@ export async function createCalendarEvent(
 
 export async function deleteCalendarEvent(
   id: string,
-  hostOverride?: any
+  hostOverride?: unknown
 ): Promise<boolean> {
   const cleanId = (id || "").trim();
   if (!cleanId) return false;
-  if (hostOverride || isRealElectronHost()) {
-    await callHostTransport("calendar_delete_event", { id: cleanId }, hostOverride);
+  if (hostOverride || isRealElectronHost(hostOverride)) {
+    const res = await callHostTransport("calendar_delete_event", { id: cleanId }, hostOverride);
+    if (!res.ok && isRealElectronHost(hostOverride)) {
+      return false;
+    }
   }
   const before = memoryCalendarEvents.length;
   memoryCalendarEvents = memoryCalendarEvents.filter((e) => e.id !== cleanId);
-  return memoryCalendarEvents.length < before || true;
+  return memoryCalendarEvents.length < before;
 }
 
 export async function exportCalendarIcs(
-  events: readonly CalendarEventItem[] = memoryCalendarEvents,
-  hostOverride?: any
+  events: readonly CalendarEventItem[] = isRealElectronHost() ? [] : memoryCalendarEvents,
+  hostOverride?: unknown
 ): Promise<string> {
-  if (hostOverride || isRealElectronHost()) {
-    const res = await callHostTransport<any>(
+  if (hostOverride || isRealElectronHost(hostOverride)) {
+    const res = await callHostTransport<Record<string, unknown> | string>(
       "calendar_export_ics",
       { eventIds: events.map((e) => e.id) },
       hostOverride
     );
     if (res.ok && res.data) {
-      const ics = typeof res.data === "string" ? res.data : res.data.ics;
+      const ics = typeof res.data === "string" ? res.data : (res.data as Record<string, unknown>).ics;
       if (typeof ics === "string" && ics.includes("BEGIN:VCALENDAR")) {
         return ics;
       }
@@ -274,8 +284,9 @@ export function CreateCalendarEventForm({
       onCreated?.(created);
       await showToast(Toast.Style.Success, `已创建日程: ${created.title}`, `${created.startTime} - ${created.endTime}`);
       pop();
-    } catch (err: any) {
-      await showToast(Toast.Style.Failure, "创建日程失败", err?.message || String(err));
+    } catch (err: unknown) {
+      const errMsg = err instanceof Error ? err.message : String(err);
+      await showToast(Toast.Style.Failure, "创建日程失败", errMsg);
     }
   };
 
@@ -364,7 +375,8 @@ export function CalendarCommand() {
         setEvents(list);
         setIsLoading(false);
       })
-      .catch(() => {
+      .catch((err) => {
+        console.warn("[calendar] fetchCalendarEvents failed:", err);
         if (active) setIsLoading(false);
       });
     return () => {
@@ -421,29 +433,13 @@ export function CalendarCommand() {
       onSelectionChange={setSelectedId}
       filterBar={{
         summaryText: nextMeeting
-          ? `📅 日程安排 • 共 ${events.length} 场日程 (视频会议 ${events.filter((e) => Boolean(e.conferenceUrl)).length} 场) | 下一场: ${nextMeeting.title} (${nextMeeting.startTime})`
-          : `📅 日程安排 • 当前共 ${events.length} 场日程`,
-        groups: [
-          {
-            id: "calendar-scope",
-            value: scope,
-            onChange: (val) => setScope(val as CalendarFilterScope),
-            options: [
-              { title: "全部日程", value: "all", count: events.length },
-              { title: "即将开始", value: "upcoming", count: events.length },
-              {
-                title: "视频会议",
-                value: "meetings",
-                count: events.filter((e) => Boolean(e.conferenceUrl)).length
-              }
-            ]
-          }
-        ],
+          ? `日程安排 • 共 ${events.length} 场日程 (视频会议 ${events.filter((e) => Boolean(e.conferenceUrl)).length} 场) | 下一场: ${nextMeeting.title} (${nextMeeting.startTime})`
+          : `日程安排 • 当前共 ${events.length} 场日程`,
         actions: [
           {
             id: "join-video-meeting",
-            label: "📹 一键加入视频会议",
-            title: "📹 一键加入视频会议",
+            label: "一键加入视频会议",
+            title: "一键加入视频会议",
             style: "primary",
             onAction: async () => {
               const targetEvt =
@@ -482,15 +478,15 @@ export function CalendarCommand() {
           },
           {
             id: "export-all-ics",
-            label: "📤 导出全部日程 (.ics)",
-            title: "📤 导出全部日程 (.ics)",
+            label: "导出全部日程 (.ics)",
+            title: "导出全部日程 (.ics)",
             style: "secondary",
             onAction: handleExportIcs
           },
           {
             id: "copy-event-summary",
-            label: "📋 复制日程摘要",
-            title: "📋 复制日程摘要",
+            label: "复制日程摘要",
+            title: "复制日程摘要",
             style: "secondary",
             onAction: async () => {
               if (!activeEvent) return;
@@ -501,8 +497,8 @@ export function CalendarCommand() {
           },
           {
             id: "delete-selected-event",
-            label: "🗑️ 删除选中日程",
-            title: "🗑️ 删除选中日程",
+            label: "删除选中日程",
+            title: "删除选中日程",
             style: "danger",
             onAction: async () => {
               if (activeEvent) {
@@ -545,7 +541,7 @@ export function CalendarCommand() {
             icon={Icon.Plus}
             detail={
               <List.Item.Detail
-                markdown={`# 📅 暂无日程事件\n\n按 \`Enter\` 即可新建工作日程、会议室预约或视频会议直达链接。`}
+                markdown={`# 暂无日程事件\n\n按 \`Enter\` 即可新建工作日程、会议室预约或视频会议直达链接。`}
               />
             }
             actions={
@@ -578,16 +574,16 @@ export function CalendarCommand() {
             detail={
               <List.Item.Detail
                 markdown={[
-                  `# 📅 ${evt.title}`,
+                  `# ${evt.title}`,
                   `> **时间**: \`${evt.startTime} - ${evt.endTime}\` &nbsp;|&nbsp; **日历**: \`${evt.calendarName}\``,
                   `---`,
                   `- **地点 / 会议室**: ${evt.location || "未指定"}`,
                   evt.conferenceUrl
                     ? `- **在线会议直达**: [${evt.conferenceUrl}](${evt.conferenceUrl})`
                     : "",
-                  evt.notes ? `### 📝 议程与备注\n${evt.notes}` : "",
+                  evt.notes ? `### 议程与备注\n${evt.notes}` : "",
                   evt.attendees.length > 0
-                    ? `### 👥 参会人 (${evt.attendees.length})\n` +
+                    ? `### 参会人 (${evt.attendees.length})\n` +
                       evt.attendees.map((a) => `- \`${a}\``).join("\n")
                     : ""
                 ]

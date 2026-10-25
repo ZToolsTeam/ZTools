@@ -793,9 +793,7 @@ export async function invokeDllPluginCapability(pluginName, method, params = {},
     }
     const ipcRes = await callHostTransport('dllplugin_call', {
         plugin: pluginName,
-        pluginName,
         func: trimmedMethod,
-        method: trimmedMethod,
         params
     }, hostBridge);
     if (ipcRes.ok && ipcRes.data !== undefined && ipcRes.data !== null) {
@@ -832,10 +830,13 @@ export async function invokeDllPluginCapability(pluginName, method, params = {},
             fromFallback: true
         };
     }
+    const unavailableMsg = `HOST_UNAVAILABLE: ${pluginName}.${trimmedMethod} 宿主接口未就绪`;
     return {
-        ok: true,
-        code: 0,
-        data: { simulated: true, method: trimmedMethod, params },
+        ok: false,
+        code: -1,
+        data: null,
+        message: unavailableMsg,
+        error: unavailableMsg,
         pluginName,
         method: trimmedMethod,
         fromFallback: true
@@ -1218,7 +1219,7 @@ export async function computeRealFileSha256(filePath, hostOverride) {
     if (!filePath || !filePath.trim())
         return '';
     const target = filePath.trim();
-    const shaRes = await callHostTransport('filesearch_sha256', { path: target }, hostOverride);
+    const shaRes = await callHostTransport('filesearch_sha256', { fullPath: target }, hostOverride);
     if (shaRes.ok && shaRes.data) {
         const hash = typeof shaRes.data === 'string' ? shaRes.data : String(shaRes.data?.sha256 || shaRes.data?.hash || '');
         if (/^[0-9a-f]{64}$/i.test(hash))
@@ -1251,8 +1252,12 @@ export async function readRealClipboardText(hostOverride) {
     return '';
 }
 export async function writeRealClipboardText(text, hostOverride) {
-    const res = await callHostTransport('clipboard_write_text', { text: String(text || '') }, hostOverride);
+    const payload = { text: String(text || '') };
+    const res = await callHostTransport('clipboard_copy_text', payload, hostOverride);
     if (res.ok)
+        return true;
+    const fallbackRes = await callHostTransport('clipboard_write_text', payload, hostOverride);
+    if (fallbackRes.ok)
         return true;
     try {
         if (typeof navigator !== 'undefined' && navigator.clipboard?.writeText) {

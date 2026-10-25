@@ -34,8 +34,8 @@ export async function copyInlineAnswerToClipboard(text) {
       await navigator.clipboard.writeText(val)
       return true
     }
-  } catch {
-    // 忽略异常
+  } catch (err) {
+    console.warn("[useCommandSearch] 复制剪贴板失败:", err)
   }
   return false
 }
@@ -96,16 +96,18 @@ export function evaluateInlineCommandItem(rawQuery) {
       faIcon: isColor ? 'fa-tint' : 'fa-calculator',
       pluginId: 'calculator',
       action: async () => {
-        await copyInlineAnswerToClipboard(res.formattedAnswer)
+        const ok = await copyInlineAnswerToClipboard(res.formattedAnswer)
+        if (!ok) return false
         try {
           await addCalculatorHistory(res.expression, res.formattedAnswer, res.type)
-        } catch {
-          // 忽略历史写入异常
+        } catch (err) {
+          console.warn("[useCommandSearch] 写入计算历史失败:", err)
         }
         return res.formattedAnswer
       }
     }
-  } catch {
+  } catch (err) {
+    console.warn("[useCommandSearch] 内联计算求值异常:", err)
     return null
   }
 }
@@ -120,7 +122,7 @@ export const BUILTIN_COMMAND_ITEMS = Object.freeze([
     actionLabel: '打开设置',
     faIcon: 'fa-sliders',
     action: () => {
-      switchWindowMode(WINDOW_MODES.DASHBOARD).catch(() => {})
+      switchWindowMode(WINDOW_MODES.DASHBOARD).catch((err) => console.warn("[useCommandSearch] 切换窗口模式失败:", err))
       openSettings()
     }
   },
@@ -132,7 +134,7 @@ export const BUILTIN_COMMAND_ITEMS = Object.freeze([
     actionLabel: '展开',
     faIcon: 'fa-th-large',
     action: () => {
-      switchWindowMode(WINDOW_MODES.DASHBOARD).catch(() => {})
+      switchWindowMode(WINDOW_MODES.DASHBOARD).catch((err) => console.warn("[useCommandSearch] 切换窗口模式失败:", err))
     }
   },
   {
@@ -221,7 +223,8 @@ export function loadFrecencyMap() {
     if (!raw) return {}
     const parsed = JSON.parse(raw)
     return typeof parsed === 'object' && parsed !== null ? parsed : {}
-  } catch {
+  } catch (err) {
+    console.warn("[useCommandSearch] 读取 Frecency 缓存失败:", err)
     return {}
   }
 }
@@ -234,8 +237,8 @@ export function saveFrecencyMap(map) {
     if (typeof localStorage !== 'undefined') {
       localStorage.setItem(STORAGE_KEY_FRECENCY, JSON.stringify(map))
     }
-  } catch {
-    // 忽略异常
+  } catch (err) {
+    console.warn("[useCommandSearch] 保存 Frecency 缓存失败:", err)
   }
 }
 
@@ -377,6 +380,8 @@ export function useCommandSearch(options = {}) {
           res = await window.__ztoolsLauncher.searchFiles(trimmed, fileSearchLimit)
         } else if (window.ztools?.system?.searchFiles) {
           res = await window.ztools.system.searchFiles(trimmed, fileSearchLimit)
+        } else if (window.ztools?.sys?.searchFiles) {
+          res = await window.ztools.sys.searchFiles(trimmed, fileSearchLimit)
         }
       }
 

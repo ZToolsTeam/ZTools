@@ -147,6 +147,22 @@ function escapeIcsText(value: string): string {
   return value.replace(/\\/g, '\\\\').replace(/;/g, '\\;').replace(/,/g, '\\,').replace(/\r?\n/g, '\\n')
 }
 
+interface CalendarEventRow {
+  id: string
+  title: string
+  description: string | null
+  location: string | null
+  start_time: number
+  end_time: number
+  all_day: number
+  conference_url: string | null
+  conference_type: CalendarEvent['conferenceType'] | null
+  calendar_name: string | null
+  pinyin: string
+  created_at: number
+  updated_at: number
+}
+
 export class CalendarService {
   private readonly db: DatabaseSync
 
@@ -293,7 +309,7 @@ export class CalendarService {
       SELECT * FROM calendar_events
       WHERE end_time >= ? AND start_time <= ?
       ORDER BY start_time ASC
-    `).all(now - 30 * 60 * 1000, maxTime) as any[]
+    `).all(now - 30 * 60 * 1000, maxTime) as unknown as CalendarEventRow[]
 
     return rows.map(r => this.mapRowToEvent(r))
   }
@@ -332,7 +348,7 @@ export class CalendarService {
     const direction = options.order === 'desc' ? 'DESC' : 'ASC'
     const rows = this.db
       .prepare(`SELECT * FROM calendar_events ${where} ORDER BY start_time ${direction}, id ASC LIMIT ?`)
-      .all(...params, limit) as any[]
+      .all(...params, limit) as unknown as CalendarEventRow[]
     return rows.map(r => this.mapRowToEvent(r))
   }
 
@@ -363,7 +379,7 @@ export class CalendarService {
     const placeholders = unique.map(() => '?').join(', ')
     const rows = this.db
       .prepare(`SELECT * FROM calendar_events WHERE id IN (${placeholders}) ORDER BY start_time ASC, id ASC`)
-      .all(...unique) as any[]
+      .all(...unique) as unknown as CalendarEventRow[]
     return rows.map(r => this.mapRowToEvent(r))
   }
 
@@ -407,7 +423,7 @@ export class CalendarService {
     return lines.join('\r\n')
   }
 
-  private mapRowToEvent(r: any): CalendarEvent {
+  private mapRowToEvent(r: CalendarEventRow): CalendarEvent {
     return {
       id: r.id,
       title: r.title,
@@ -428,8 +444,8 @@ export class CalendarService {
   public stop(): void {
     try {
       this.db.close()
-    } catch {
-      // 容错处理
+    } catch (err) {
+      console.warn('[CalendarService] Failed to close database:', err)
     }
   }
 }

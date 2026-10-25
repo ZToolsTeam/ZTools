@@ -50,12 +50,14 @@ async function loadShortcuts() {
 // 保存快捷方式映射到配置文件
 async function saveShortcuts() {
   try {
-    if (!window.ztools?.config) return
+    if (!window.ztools?.config) return false
     const config = await window.ztools.config.get('super_panel') || {}
     config.shortcuts = shortcuts.value
     await window.ztools.config.set('super_panel', config)
+    return true
   } catch (e) {
     console.error('保存快捷方式失败:', e)
+    throw e
   }
 }
 
@@ -103,13 +105,24 @@ async function confirmAdd() {
   if (!addForm.value.pluginId) { addError.value = '请选择插件'; return }
   const err = validatePrefix(addForm.value.prefix)
   if (err) { addError.value = err; return }
+  const prev = [...shortcuts.value]
   shortcuts.value.push({
     prefix: normalizePrefix(addForm.value.prefix),
     pluginId: addForm.value.pluginId
   })
-  await saveShortcuts()
-  adding.value = false
-  addError.value = ''
+  try {
+    const ok = await saveShortcuts()
+    if (ok === false) {
+      shortcuts.value = prev
+      addError.value = '保存快捷方式失败'
+      return
+    }
+    adding.value = false
+    addError.value = ''
+  } catch (e) {
+    shortcuts.value = prev
+    addError.value = e?.message || '保存快捷方式失败'
+  }
 }
 
 function cancelAdd() {
@@ -129,13 +142,24 @@ async function confirmEdit() {
   if (!editForm.value.pluginId) { editError.value = '请选择插件'; return }
   const err = validatePrefix(editForm.value.prefix, editingIndex.value)
   if (err) { editError.value = err; return }
+  const prev = [...shortcuts.value]
   shortcuts.value[editingIndex.value] = {
     prefix: normalizePrefix(editForm.value.prefix),
     pluginId: editForm.value.pluginId
   }
-  await saveShortcuts()
-  editingIndex.value = -1
-  editError.value = ''
+  try {
+    const ok = await saveShortcuts()
+    if (ok === false) {
+      shortcuts.value = prev
+      editError.value = '保存快捷方式失败'
+      return
+    }
+    editingIndex.value = -1
+    editError.value = ''
+  } catch (e) {
+    shortcuts.value = prev
+    editError.value = e?.message || '保存快捷方式失败'
+  }
 }
 
 function cancelEdit() {
@@ -145,8 +169,17 @@ function cancelEdit() {
 
 // 删除映射
 async function removeShortcut(index) {
+  const prev = [...shortcuts.value]
   shortcuts.value.splice(index, 1)
-  await saveShortcuts()
+  try {
+    const ok = await saveShortcuts()
+    if (ok === false) {
+      shortcuts.value = prev
+    }
+  } catch (err) {
+    console.warn('删除快捷方式保存失败:', err)
+    shortcuts.value = prev
+  }
 }
 
 function resetEditState() {

@@ -19,7 +19,7 @@ export const LocalStorage = {
   /**
    * 获取存储项
    */
-  async getItem<T = any>(key: string): Promise<T | undefined> {
+  async getItem<T = unknown>(key: string): Promise<T | undefined> {
     const bridge = getDeclarativeBridge();
     if (bridge?.storageGetItem) {
       return await bridge.storageGetItem(key);
@@ -30,8 +30,8 @@ export const LocalStorage = {
         const raw = localStorage.getItem(`raycast_${key}`);
         if (raw === null) return undefined;
         return JSON.parse(raw) as T;
-      } catch {
-        // fallback to memory
+      } catch (err) {
+        console.warn("[LocalStorage] localStorage.getItem 失败，回退内存存储:", err);
       }
     }
 
@@ -39,7 +39,8 @@ export const LocalStorage = {
     if (val === undefined) return undefined;
     try {
       return JSON.parse(val) as T;
-    } catch {
+    } catch (err) {
+      console.warn("[LocalStorage] JSON.parse 失败，返回原始值:", err);
       return val as unknown as T;
     }
   },
@@ -47,7 +48,7 @@ export const LocalStorage = {
   /**
    * 写入存储项
    */
-  async setItem(key: string, value: any): Promise<void> {
+  async setItem(key: string, value: unknown): Promise<void> {
     const bridge = getDeclarativeBridge();
     if (bridge?.storageSetItem) {
       await bridge.storageSetItem(key, value);
@@ -60,8 +61,8 @@ export const LocalStorage = {
         localStorage.setItem(`raycast_${key}`, str);
         memoryStorage.set(key, str);
         return;
-      } catch {
-        // fallback to memory
+      } catch (err) {
+        console.warn("[LocalStorage] localStorage.setItem 失败，回退内存存储:", err);
       }
     }
 
@@ -81,8 +82,8 @@ export const LocalStorage = {
     if (typeof localStorage !== "undefined") {
       try {
         localStorage.removeItem(`raycast_${key}`);
-      } catch {
-        // ignore
+      } catch (err) {
+        console.warn("[LocalStorage] localStorage.removeItem 失败:", err);
       }
     }
 
@@ -111,8 +112,8 @@ export const LocalStorage = {
         for (const k of keysToRemove) {
           localStorage.removeItem(k);
         }
-      } catch {
-        // ignore
+      } catch (err) {
+        console.warn("[LocalStorage] localStorage.clear 失败:", err);
       }
     }
 
@@ -122,7 +123,7 @@ export const LocalStorage = {
   /**
    * 获取所有存储项
    */
-  async allItems<T = any>(): Promise<Record<string, T>> {
+  async allItems<T = unknown>(): Promise<Record<string, T>> {
     const bridge = getDeclarativeBridge();
     if (bridge?.storageAll) {
       return await bridge.storageAll();
@@ -138,24 +139,26 @@ export const LocalStorage = {
             if (raw !== null) {
               const actualKey = k.replace(/^raycast_/, "");
               try {
-                result[actualKey] = JSON.parse(raw);
-              } catch {
-                result[actualKey] = raw as any;
+                result[actualKey] = JSON.parse(raw) as T;
+              } catch (err) {
+                console.warn("[LocalStorage] JSON.parse 失败，返回原始值:", err);
+                result[actualKey] = raw as unknown as T;
               }
             }
           }
         }
         return result;
-      } catch {
-        // fallback
+      } catch (err) {
+        console.warn("[LocalStorage] 读取 localStorage 全量项失败，回退内存存储:", err);
       }
     }
 
     for (const [k, v] of memoryStorage.entries()) {
       try {
-        result[k] = JSON.parse(v);
-      } catch {
-        result[k] = v as any;
+        result[k] = JSON.parse(v) as T;
+      } catch (err) {
+        console.warn("[LocalStorage] 内存存储项 JSON.parse 失败，返回原始值:", err);
+        result[k] = v as unknown as T;
       }
     }
     return result;

@@ -30,8 +30,8 @@ export async function getHotkeyHostCapabilities() {
     if (typeof ztools?.isElectron === 'function' && ztools.isElectron()) {
       hostEnvironment = 'electron'
     }
-  } catch {
-    // Unknown host identity must not enable a host-specific gesture.
+  } catch (err) {
+    console.warn('[hotkeyRecorder] 检测宿主环境失败:', err)
   }
   return {
     platform,

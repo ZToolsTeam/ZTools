@@ -16,6 +16,127 @@ export function expandHomeDir(inputPath: string): string {
   return path.resolve(trimmed)
 }
 
+const PINYIN_BOUNDARY_CHARS = '阿八嚓哒妸发旮哈讥咔垃妈拿哦啪期然撒塌挖昔压匝'
+const PINYIN_INITIAL_LETTERS = 'abcdefghjklmnopqrstwxyz'
+const zhCollator = typeof Intl !== 'undefined' && typeof Intl.Collator === 'function'
+  ? new Intl.Collator('zh-CN', { sensitivity: 'base' })
+  : null
+
+const COMMON_HANZI_PINYIN: Readonly<Record<string, string>> = {
+  微: 'wei', 信: 'xin', 企: 'qi', 业: 'ye', 计: 'ji', 算: 'suan', 器: 'qi',
+  百: 'bai', 度: 'du', 网: 'wang', 盘: 'pan', 易: 'yi', 云: 'yun', 音: 'yin', 乐: 'yue',
+  钉: 'ding', 飞: 'fei', 书: 'shu', 腾: 'teng', 讯: 'xun', 会: 'hui', 议: 'yi',
+  哔: 'bi', 哩: 'li', 阿: 'a', 里: 'li', 金: 'jin', 山: 'shan', 文: 'wen', 档: 'dang',
+  有: 'you', 道: 'dao', 词: 'ci', 典: 'dian', 迅: 'xun', 雷: 'lei', 下: 'xia', 载: 'zai',
+  剪: 'jian', 映: 'ying', 专: 'zhuan', 版: 'ban', 系: 'xi', 统: 'tong', 设: 'she', 置: 'zhi',
+  任: 'ren', 务: 'wu', 管: 'guan', 理: 'li', 备: 'bei', 忘: 'wang', 录: 'lu', 语: 'yu',
+  终: 'zhong', 端: 'duan', 访: 'fang', 达: 'da', 预: 'yu', 览: 'lan', 照: 'zhao', 片: 'pian',
+  日: 'ri', 历: 'li', 邮: 'you', 件: 'jian', 提: 'ti', 醒: 'xing', 事: 'shi', 项: 'xiang',
+  地: 'di', 图: 'tu', 气: 'qi', 象: 'xiang', 桌: 'zhuo', 面: 'mian'
+}
+
+const pinyinMetaCache = new Map<string, { acronym: string; pinyin: string }>()
+
+function getCharInitial(ch: string): string {
+  const known = COMMON_HANZI_PINYIN[ch]
+  if (known) return known[0]!
+  if (!zhCollator) return ''
+  for (let i = PINYIN_BOUNDARY_CHARS.length - 1; i >= 0; i--) {
+    if (zhCollator.compare(ch, PINYIN_BOUNDARY_CHARS[i]!) >= 0) {
+      return PINYIN_INITIAL_LETTERS[i]!
+    }
+  }
+  return ''
+}
+
+export function computePinyinMeta(rawName: string): { acronym: string; pinyin: string } {
+  const cached = pinyinMetaCache.get(rawName)
+  if (cached) return cached
+  const base = rawName.replace(/\.app$/i, '')
+  let acronym = ''
+  let pinyin = ''
+  let prevWasAsciiAlnum = false
+  for (const ch of base) {
+    const code = ch.codePointAt(0) ?? 0
+    if ((code >= 48 && code <= 57) || (code >= 65 && code <= 90) || (code >= 97 && code <= 122)) {
+      const lower = ch.toLowerCase()
+      pinyin += lower
+      if (!prevWasAsciiAlnum) {
+        acronym += lower
+      }
+      prevWasAsciiAlnum = true
+    } else if (code >= 0x4e00 && code <= 0x9fa5) {
+      prevWasAsciiAlnum = false
+      const initial = getCharInitial(ch)
+      const full = COMMON_HANZI_PINYIN[ch] ?? initial
+      if (initial) acronym += initial
+      pinyin += full || ch
+    } else {
+      prevWasAsciiAlnum = false
+    }
+  }
+  const result = {
+    acronym: acronym || base.slice(0, 6).toLowerCase(),
+    pinyin: pinyin || base.toLowerCase()
+  }
+  if (pinyinMetaCache.size >= 4096) {
+    pinyinMetaCache.delete(pinyinMetaCache.keys().next().value!)
+  }
+  pinyinMetaCache.set(rawName, result)
+  return result
+}
+
+const statRecordCache = new Map<string, { expires: number; record: FileRecord }>()
+let macosAppCache: { expires: number; apps: FileRecord[] } | null = null
+
+async function getStatFileRecordCached(fullPath: string, name?: string): Promise<FileRecord> {
+  const now = Date.now()
+  const cached = statRecordCache.get(fullPath)
+  if (cached && cached.expires > now) {
+    return cached.record
+  }
+  const stat = await fs.promises.stat(fullPath)
+  const record = buildFileRecord(fullPath, name ?? path.basename(fullPath), stat)
+  if (statRecordCache.size >= 4096) {
+    statRecordCache.delete(statRecordCache.keys().next().value!)
+  }
+  statRecordCache.set(fullPath, { expires: now + 15_000, record })
+  return record
+}
+
+async function getCachedMacosApplications(): Promise<FileRecord[]> {
+  if (process.platform !== 'darwin') return []
+  const now = Date.now()
+  if (macosAppCache && macosAppCache.expires > now) {
+    return macosAppCache.apps
+  }
+  const appDirs = ['/Applications', '/System/Applications', path.join(os.homedir(), 'Applications')]
+  const apps: FileRecord[] = []
+  const seen = new Set<string>()
+  for (const dir of appDirs) {
+    let entries: fs.Dirent[] = []
+    try {
+      entries = await fs.promises.readdir(dir, { withFileTypes: true })
+    } catch {
+      continue
+    }
+    for (const ent of entries) {
+      if (!ent.name.toLowerCase().endsWith('.app')) continue
+      const fullPath = path.join(dir, ent.name)
+      if (seen.has(fullPath)) continue
+      seen.add(fullPath)
+      try {
+        const rec = await getStatFileRecordCached(fullPath, ent.name)
+        apps.push(rec)
+      } catch {
+        // ignore inaccessible app
+      }
+    }
+  }
+  macosAppCache = { expires: now + 30_000, apps }
+  return apps
+}
+
 function buildFileRecord(filePath: string, name: string, stat: fs.Stats): FileRecord {
   const isDir = stat.isDirectory()
   const isApplication = process.platform === 'darwin' && isDir && filePath.toLowerCase().endsWith('.app')
@@ -28,8 +149,8 @@ function buildFileRecord(filePath: string, name: string, stat: fs.Stats): FileRe
     is_dir: isDir,
     size,
     mtime,
-    acronym: name.slice(0, 6).toLowerCase(),
-    pinyin: name.toLowerCase()
+    acronym: computePinyinMeta(name).acronym,
+    pinyin: computePinyinMeta(name).pinyin
   }
 }
 
@@ -86,7 +207,8 @@ export async function scanLocalRecentFiles(
       }
 
       const fullPath = path.join(dir, ent.name)
-      if (qLower && !lowerName.includes(qLower) && !fullPath.toLowerCase().includes(qLower)) {
+      const pinyinMeta = qLower ? computePinyinMeta(ent.name) : null
+      if (qLower && !lowerName.includes(qLower) && !fullPath.toLowerCase().includes(qLower) && !(pinyinMeta && (pinyinMeta.acronym.includes(qLower) || pinyinMeta.pinyin.includes(qLower)))) {
         continue
       }
 
@@ -181,6 +303,7 @@ export async function searchFilesOnMacos(
     if (
       item.name.toLowerCase().includes(qLower) ||
       item.acronym.toLowerCase().includes(qLower) ||
+      (item.pinyin || '').toLowerCase().includes(qLower) ||
       item.path.toLowerCase().includes(qLower)
     ) {
       resultsMap.set(item.path, item)
@@ -191,17 +314,28 @@ export async function searchFilesOnMacos(
   let degraded = process.platform !== 'darwin'
   let source = 'macos-fs'
   if (process.platform === 'darwin' && resultsMap.size < safeLimit) {
+    const cachedApps = await getCachedMacosApplications()
+    for (const appItem of cachedApps) {
+      if (
+        appItem.name.toLowerCase().includes(qLower) ||
+        (appItem.display_name || '').toLowerCase().includes(qLower) ||
+        appItem.acronym.toLowerCase().includes(qLower) ||
+        appItem.pinyin.toLowerCase().includes(qLower)
+      ) {
+        resultsMap.set(appItem.path, appItem)
+      }
+    }
     const spotlight = await collectSpotlightPaths(cleanQuery, Math.max(safeLimit, Math.min(128, safeLimit * 4)))
     degraded = spotlight.degraded
     if (spotlight.paths.length > 0) source = 'macos-spotlight'
     // Small batches bound filesystem and metadata subprocess concurrency.
-    for (let offset = 0; offset < spotlight.paths.length; offset += 8) {
-      await Promise.all(spotlight.paths.slice(offset, offset + 8).map(async candidatePath => {
+    for (let offset = 0; offset < spotlight.paths.length; offset += 32) {
+      await Promise.all(spotlight.paths.slice(offset, offset + 32).map(async candidatePath => {
         if (resultsMap.has(candidatePath)) return
         try {
-          const stat = await fs.promises.stat(candidatePath)
-          const record = buildFileRecord(candidatePath, path.basename(candidatePath), stat)
-          resultsMap.set(candidatePath, record)
+          resultsMap.set(candidatePath, await getStatFileRecordCached(candidatePath))
+
+
         } catch (error) {
           // Index entries can disappear or become inaccessible while a query is running.
           if (!['ENOENT', 'EACCES', 'EPERM'].includes((error as NodeJS.ErrnoException).code ?? '')) {
@@ -250,6 +384,10 @@ export function rankSearchFiles(files: readonly FileRecord[], query: string): Fi
     if (names.some(name => name === normalized)) return 3
     if (names.some(name => name.startsWith(normalized))) return 2
     if (names.some(name => name.includes(normalized))) return 1
+    const acronym = (file.acronym || '').toLocaleLowerCase()
+    const pinyin = (file.pinyin || '').toLocaleLowerCase()
+    if ((acronym && acronym.startsWith(normalized)) || (pinyin && pinyin.startsWith(normalized))) return 0.8
+    if ((acronym && acronym.includes(normalized)) || (pinyin && pinyin.includes(normalized))) return 0.5
     return 0
   }
   return [...files].sort((a, b) => score(b) - score(a) ||

@@ -150,8 +150,8 @@ export function dispatchKeyEvent(event) {
             if (typeof event.preventDefault === 'function') event.preventDefault()
             if (typeof event.stopPropagation === 'function') event.stopPropagation()
             if (typeof event.stopImmediatePropagation === 'function') event.stopImmediatePropagation()
-          } catch {
-            // 忽略事件只读或 Mock 环境下的异常
+          } catch (err) {
+            console.warn('[Keymap] 阻止默认按键事件失败:', err)
           }
           return true
         }

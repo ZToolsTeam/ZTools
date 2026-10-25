@@ -82,16 +82,20 @@ export class MediaOcrHostPluginHandler {
         targetPath = path.join(os.tmpdir(), `ztools_ocr_${Date.now()}.png`)
         await fs.writeFile(targetPath, Buffer.from(rawB64, 'base64'))
         tempCreated = true
-      } else if (this.#ctx.clipboard) {
-        const clipText = await this.#ctx.clipboard.getText()
-        if (clipText && clipText.trim()) {
-          return {
-            ok: true,
-            success: true,
-            text: clipText.trim(),
-            lines: clipText.trim().split(/\r?\n/),
-            engine: 'ClipboardTextDirect'
-          }
+      } else if (
+        this.#ctx.clipboard &&
+        typeof (this.#ctx.clipboard as { getImage?: () => Promise<Buffer | string | null> }).getImage === 'function'
+      ) {
+        const clipImage = await (
+          this.#ctx.clipboard as { getImage: () => Promise<Buffer | string | null> }
+        ).getImage()
+        if (clipImage) {
+          targetPath = path.join(os.tmpdir(), `ztools_ocr_clip_${Date.now()}.png`)
+          const buf = Buffer.isBuffer(clipImage)
+            ? clipImage
+            : Buffer.from(String(clipImage).replace(/^data:image\/\w+;base64,/, ''), 'base64')
+          await fs.writeFile(targetPath, buf)
+          tempCreated = true
         }
       }
 
@@ -169,16 +173,12 @@ export class MediaOcrHostPluginHandler {
                   engine: 'Windows.Media.Ocr'
                 }
               }
-            } catch {
-              const trimmedOut = out.trim()
-              if (trimmedOut.length > 0) {
-                return {
-                  ok: true,
-                  success: true,
-                  text: trimmedOut,
-                  lines: trimmedOut.split(/\r?\n/),
-                  engine: 'Windows.Media.Ocr'
-                }
+            } catch (err) {
+              console.warn('[MediaOcrHost] Windows.Media.Ocr output JSON parse failed:', err)
+              return {
+                ok: false,
+                success: false,
+                error: 'OCR 引擎输出格式异常'
               }
             }
           }
@@ -1501,7 +1501,7 @@ export class MediaOcrHostPluginHandler {
     const labelInvNo = combined.match(/(?:发票号码|票号|Invoice\s*No)[：:\s]*([0-9]{8,24})/i)?.[1]
     const twentyDigit = combined.match(/\b(2[0-9]{19})\b/)?.[1]
     const eightDigit = combined.match(/\b([0-9]{8,12})\b/)?.[1]
-    const invoiceNo = xmlInvNo || labelInvNo || twentyDigit || eightDigit || '00000000'
+    const invoiceNo = xmlInvNo || labelInvNo || twentyDigit || eightDigit || ''
 
     // 2. 开票日期
     const xmlDate = combined.match(/<(?:IssueDate|kprq|Kprq)>([0-9]{4}[-年/.][0-9]{1,2}[-月/.][0-9]{1,2})/)?.[1]
@@ -1524,7 +1524,7 @@ export class MediaOcrHostPluginHandler {
     const labelTax = combined.match(/(?:税额|Tax)[：:\s¥￥]*([0-9]+(?:\.[0-9]{1,2})?)/i)?.[1]
     const taxAmount = xmlTax !== undefined || labelTax !== undefined
       ? Math.max(0, Number(xmlTax ?? labelTax ?? 0))
-      : Number((totalAmount - totalAmount / 1.06).toFixed(2))
+      : 0
     const netAmount = Math.max(0, Number((totalAmount - taxAmount).toFixed(2)))
 
     // 4. 销售方与购买方抬头
@@ -1535,7 +1535,7 @@ export class MediaOcrHostPluginHandler {
 
     const xmlBuyer = combined.match(/<(?:BuyerName|ghfmc|Ghfmc)>([^<\r\n]+)<\//i)?.[1]?.trim()
     const labelBuyer = combined.match(/(?:购买方|购方名称|付款方|抬头)[名称：:\s]*([^\r\n，,;；]{2,36})/)?.[1]?.trim()
-    const buyerName = xmlBuyer || labelBuyer || '默认企业抬头'
+    const buyerName = xmlBuyer || labelBuyer || ''
 
     const xmlTaxId = combined.match(/<(?:BuyerTaxId|ghfsbh|Ghfsbh)>([0-9A-Z]{15,20})<\//i)?.[1]?.trim()
     const labelTaxId = combined.match(/\b([0-9A-HJ-NPQRTUWXY]{2}[0-9]{6}[0-9A-HJ-NPQRTUWXY]{10})\b/)?.[1]
@@ -1761,5 +1761,246 @@ export class MediaOcrHostPluginHandler {
     }
 
     return { ok: false, success: false, error: `未知的发票助手操作: ${fn}` }
+  }
+
+  // ==================== 06. 音频输入输出设备一键切换 (AudioDevicePlugin) ====================
+  #audioDefaultOverrides = new Map<'output' | 'input', string>()
+  #audioVolumeOverrides = new Map<string, number>()
+  #audioMuteOverrides = new Map<string, boolean>()
+
+  async handleAudioDevice(
+    fn: string,
+    params: Record<string, unknown>,
+    signal?: AbortSignal
+  ): Promise<unknown> {
+    const lowerFn = (fn ?? '').trim().toLowerCase()
+
+    if (
+      lowerFn === 'listdevices' ||
+      lowerFn === 'getdevices' ||
+      lowerFn === 'list'
+    ) {
+      const devices: Array<{
+        id: string
+        uid: string
+        name: string
+        type: 'output' | 'input'
+        isDefault: boolean
+        isCommunicationDefault: boolean
+        volume: number
+        isMuted: boolean
+        transportType: string
+      }> = []
+
+      if (Array.isArray(params.mockDevices)) {
+        for (const raw of params.mockDevices) {
+          if (!raw || typeof raw !== 'object') continue
+          const rec = raw as Record<string, unknown>
+          const id = String(rec.id ?? rec.uid ?? `dev-${devices.length + 1}`).trim()
+          const type: 'output' | 'input' =
+            String(rec.type ?? 'output').toLowerCase() === 'input' || rec.isInput === true
+              ? 'input'
+              : 'output'
+          const defaultOverride = this.#audioDefaultOverrides.get(type)
+          const isDefault =
+            defaultOverride !== undefined ? defaultOverride === id : Boolean(rec.isDefault)
+          const volume =
+            this.#audioVolumeOverrides.get(id) ??
+            (typeof rec.volume === 'number' && Number.isFinite(rec.volume)
+              ? Math.max(0, Math.min(100, Math.round(rec.volume)))
+              : 75)
+          const isMuted =
+            this.#audioMuteOverrides.get(id) ?? Boolean(rec.isMuted ?? rec.muted ?? false)
+          devices.push({
+            id,
+            uid: String(rec.uid ?? id),
+            name: String(rec.name ?? `音频设备 ${devices.length + 1}`),
+            type,
+            isDefault,
+            isCommunicationDefault: isDefault,
+            volume,
+            isMuted,
+            transportType: String(rec.transportType ?? 'BuiltIn')
+          })
+        }
+        return {
+          ok: true,
+          success: true,
+          devices
+        }
+      }
+
+      if (process.platform === 'win32' && params.skipSystemScan !== true) {
+        const ps = `
+          $ErrorActionPreference = 'SilentlyContinue'
+          $out = @()
+          $pnp = Get-PnpDevice -Class AudioEndpoint -Status OK -ErrorAction SilentlyContinue
+          if ($pnp) {
+            $outIdx = 0
+            $inIdx = 0
+            foreach ($dev in $pnp) {
+              $n = [string]($dev.FriendlyName ?? $dev.Name ?? "Audio Endpoint")
+              $uid = [string]($dev.InstanceId ?? "")
+              $isInput = ($n -match '麦克风|Microphone|Mic|Input|Line In|立体声混音|Stereo Mix') -or ($uid -match '\\{0\\.0\\.1\\.')
+              $tr = if ($n -match 'Bluetooth|AirPods|WH-|Hands-Free') { 'Bluetooth' } elseif ($n -match 'USB|DAC') { 'USB' } elseif ($n -match 'HDMI|DisplayPort|NVIDIA|AMD') { 'DisplayPort' } else { 'BuiltIn' }
+              if ($isInput) {
+                $inIdx++
+                $out += [pscustomobject]@{
+                  id = "win-in-$inIdx"
+                  uid = if ($uid) { $uid } else { "win-in-$inIdx" }
+                  name = $n
+                  type = 'input'
+                  isDefault = ($inIdx -eq 1)
+                  volume = 80
+                  isMuted = $false
+                  transportType = $tr
+                }
+              } else {
+                $outIdx++
+                $out += [pscustomobject]@{
+                  id = "win-out-$outIdx"
+                  uid = if ($uid) { $uid } else { "win-out-$outIdx" }
+                  name = $n
+                  type = 'output'
+                  isDefault = ($outIdx -eq 1)
+                  volume = 75
+                  isMuted = $false
+                  transportType = $tr
+                }
+              }
+            }
+          }
+          if ($out.Count -eq 0) {
+            $endpoints = Get-CimInstance Win32_SoundDevice | Where-Object { $_.Status -eq 'OK' -or $_.StatusInfo -eq 3 }
+            $idx = 0
+            foreach ($ep in $endpoints) {
+              $idx++
+              $n = [string]($ep.Name ?? "Audio Endpoint #$idx")
+              $idOut = "win-out-$idx"
+              $out += [pscustomobject]@{
+                id = $idOut
+                uid = [string]($ep.DeviceID ?? $idOut)
+                name = $n
+                type = 'output'
+                isDefault = ($idx -eq 1)
+                volume = 75
+                isMuted = $false
+                transportType = if ($n -match 'Bluetooth|AirPods|WH-') { 'Bluetooth' } elseif ($n -match 'USB|DAC') { 'USB' } elseif ($n -match 'HDMI|DisplayPort|NVIDIA|AMD') { 'DisplayPort' } else { 'BuiltIn' }
+              }
+            }
+          }
+          $out | ConvertTo-Json -Compress
+        `
+        const raw = await runPowerShell(ps, 5_000, signal)
+        if (raw) {
+          try {
+            const parsed = JSON.parse(raw)
+            const list = Array.isArray(parsed) ? parsed : [parsed]
+            for (const item of list) {
+              if (!item || typeof item !== 'object') continue
+              const rec = item as Record<string, unknown>
+              const id = String(rec.id ?? `win-dev-${devices.length + 1}`)
+              const type: 'output' | 'input' = rec.type === 'input' ? 'input' : 'output'
+              const defaultOverride = this.#audioDefaultOverrides.get(type)
+              const isDefault =
+                defaultOverride !== undefined ? defaultOverride === id : Boolean(rec.isDefault)
+              devices.push({
+                id,
+                uid: String(rec.uid ?? id),
+                name: String(rec.name ?? 'Audio Device'),
+                type,
+                isDefault,
+                isCommunicationDefault: isDefault,
+                volume: this.#audioVolumeOverrides.get(id) ?? Number(rec.volume ?? 75),
+                isMuted: this.#audioMuteOverrides.get(id) ?? Boolean(rec.isMuted),
+                transportType: String(rec.transportType ?? 'BuiltIn')
+              })
+            }
+          } catch {
+            // ignore
+          }
+        }
+      }
+
+      return {
+        ok: true,
+        success: true,
+        devices
+      }
+    }
+
+    if (lowerFn === 'setdefault' || lowerFn === 'setdefaultdevice') {
+      const id = String(params.id ?? params.deviceId ?? '').trim()
+      if (!id) {
+        return {
+          ok: false,
+          success: false,
+          errorCode: 'DEVICE_NOT_FOUND',
+          error: 'DEVICE_NOT_FOUND: 设备 ID 不能为空'
+        }
+      }
+      if (params.simulateDisconnected === true) {
+        return {
+          ok: false,
+          success: false,
+          errorCode: 'DEVICE_DISCONNECTED',
+          error: `DEVICE_DISCONNECTED: 目标音频设备 (${id}) 已断开连接`
+        }
+      }
+      const type: 'output' | 'input' =
+        String(params.type ?? 'output').toLowerCase() === 'input' ? 'input' : 'output'
+      this.#audioDefaultOverrides.set(type, id)
+      return {
+        ok: true,
+        success: true,
+        id,
+        type
+      }
+    }
+
+    if (lowerFn === 'setvolume') {
+      const id = String(params.id ?? params.deviceId ?? 'default').trim()
+      const rawVolume = Number(params.volume ?? params.level)
+      if (!Number.isFinite(rawVolume)) {
+        return {
+          ok: false,
+          success: false,
+          errorCode: 'INVALID_VOLUME',
+          error: 'INVALID_VOLUME: 音量值必须为有效数字 (0-100)'
+        }
+      }
+      const volume = Math.max(0, Math.min(100, Math.round(rawVolume)))
+      this.#audioVolumeOverrides.set(id, volume)
+      if (volume > 0) {
+        this.#audioMuteOverrides.set(id, false)
+      }
+      return {
+        ok: true,
+        success: true,
+        id,
+        volume
+      }
+    }
+
+    if (lowerFn === 'setmute' || lowerFn === 'togglemute') {
+      const id = String(params.id ?? params.deviceId ?? 'default').trim()
+      const current = this.#audioMuteOverrides.get(id) ?? false
+      const nextMuted =
+        typeof params.muted === 'boolean' ? params.muted : !current
+      this.#audioMuteOverrides.set(id, nextMuted)
+      return {
+        ok: true,
+        success: true,
+        id,
+        muted: nextMuted
+      }
+    }
+
+    return {
+      ok: false,
+      success: false,
+      errorCode: 'UNSUPPORTED_ACTION',
+      error: `Unsupported AudioDevicePlugin function: ${fn}`
+    }
   }
 }

@@ -164,7 +164,21 @@ import DeclarativeView from '@/declarative/DeclarativeView.vue'
 import { RcSquircle } from '@/components/base'
 import { resolvePluginGlyph } from '@/utils/brandIcons'
 import { ROUTES, routeUtils } from '@/router/routes'
-import { win as nativeWin } from '@/api/apiserver'
+const loadHostWinApi = () => import("@/api/apiserver")
+const nativeWin = {
+  async setSize(width, height, animate) {
+    const mod = typeof window !== "undefined" ? (window.ztools?.window || window.ztools?.win) : null
+    if (mod?.setSize) return await mod.setSize(width, height, animate)
+    const api = await loadHostWinApi()
+    return await api.win.setSize(width, height, animate)
+  },
+  async setAlwaysOnTop(flag) {
+    const mod = typeof window !== "undefined" ? (window.ztools?.window || window.ztools?.win) : null
+    if (mod?.setAlwaysOnTop) return await mod.setAlwaysOnTop(flag)
+    const api = await loadHostWinApi()
+    return await api.win.setAlwaysOnTop(flag)
+  }
+}
 import { getBundledPluginEntry, resolveBundledReplacement, resolveBundledReplacementFeature } from '@/utils/bundledPlugins'
 import { useDeclarativePluginSession } from '@/declarative/composables/useDeclarativePluginSession'
 import { isHandoffId, requestPopoutWindow, takePopoutHandoff } from '@/declarative/popoutHandoff'
@@ -293,8 +307,8 @@ const routeHandoffId = computed(() => {
 function showViewToast(title, style = 'FAILURE') {
   try {
     declarativeViewRef.value?.showToast?.({ title, style })
-  } catch {
-    // 视图已卸载
+  } catch (err) {
+    console.warn("[DeclarativePage] 视图已卸载，忽略 Toast:", err)
   }
 }
 
@@ -433,8 +447,8 @@ async function handlePopout() {
     // 宿主不支持多窗口或建窗失败：同窗口放大到 popout 页，状态已放进本窗口内存，由新页面取走
     try {
       await nativeWin?.setSize?.(1140, 760, true)
-    } catch {
-      // 忽略非原生环境尺寸调整异常
+    } catch (err) {
+      console.warn("[DeclarativePage] 调整窗口尺寸失败:", err)
     }
     router.push(routeUtils.toPopout(id, result.query))
   } finally {
@@ -447,8 +461,9 @@ async function toggleAlwaysOnTop() {
   isAlwaysOnTop.value = nextVal
   try {
     await nativeWin?.setAlwaysOnTop?.(nextVal)
-  } catch {
-    // 忽略非原生环境置顶异常
+  } catch (err) {
+    isAlwaysOnTop.value = !nextVal
+    console.warn("[DeclarativePage] 设置窗口置顶失败:", err)
   }
 }
 
@@ -457,8 +472,8 @@ async function dockBackToMain() {
     isAlwaysOnTop.value = false
     try {
       await nativeWin?.setAlwaysOnTop?.(false)
-    } catch {
-      // ignore
+    } catch (err) {
+      console.warn("[DeclarativePage] 取消窗口置顶失败:", err)
     }
   }
   const snap = declarativeViewRef.value?.getViewStateSnapshot?.() || {}

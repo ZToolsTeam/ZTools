@@ -601,12 +601,9 @@ export class DllPluginService {
           }
           this.#startServiceTaskPolling(task)
           return { success: true, taskId, ...(settingsToSave ? { settingsSaved: task.settingsSaved } : {}) }
-        } catch {
-          // A timed-out service request may have started the task. Keep its reservation
-          // and report the unresolved start so callers can query or cancel it safely.
-          task.startState = 'unknown'
-          this.#startServiceTaskPolling(task)
-          return { success: true, taskId, taskStartPending: true }
+        } catch (error) {
+          this.#forgetTask(task)
+          throw error
         }
       }
       const nativeContext = this.#nativeContext(owner)
@@ -738,10 +735,9 @@ export class DllPluginService {
               taskId: requestedTaskId,
               ...(settingsToSave ? { settingsSaved: task.settingsSaved } : {})
             }
-          } catch {
-            task.startState = 'unknown'
-            this.#startServiceTaskPolling(task)
-            return { success: true, taskId: requestedTaskId, taskStartPending: true }
+          } catch (error) {
+            this.#forgetTask(task)
+            throw error
           }
         }
         const nativeContext = this.#nativeContext(owner)

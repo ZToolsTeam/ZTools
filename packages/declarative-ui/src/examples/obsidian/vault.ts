@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { LocalStorage } from "../../api/storage.js";
+import { isRealElectronHost } from "../shared/native-ipc.js";
 import { ObsidianNote, ObsidianVaultInfo, DailyNoteAppendOptions } from "./types.js";
 
 const STORAGE_KEY = "obsidian_vault_notes";
@@ -129,20 +130,23 @@ export async function sniffObsidianVaults(): Promise<ObsidianVaultInfo[]> {
         const text = fs.readFileSync(configPath, "utf8");
         const json = JSON.parse(text);
         if (json.vaults && typeof json.vaults === "object") {
-          const detected: ObsidianVaultInfo[] = Object.values(json.vaults).map((v: any) => ({
-            name: path.basename(v.path || "Vault"),
-            path: v.path || "",
-            open: !!v.open,
-            ts: v.ts
-          }));
+          const detected: ObsidianVaultInfo[] = Object.values(json.vaults).map((rawVault: unknown) => {
+            const v = (rawVault && typeof rawVault === "object" ? rawVault : {}) as { path?: string; open?: boolean; ts?: number };
+            return {
+              name: path.basename(v.path || "Vault"),
+              path: v.path || "",
+              open: Boolean(v.open),
+              ts: v.ts
+            };
+          });
           if (detected.length > 0) {
             return detected;
           }
         }
       }
     }
-  } catch {
-    // 降级回退
+  } catch (err) {
+    console.warn("[obsidian] Failed to sniff obsidian.json:", err);
   }
 
   // 2. 检查本地 LocalStorage 用户自定义库
@@ -151,22 +155,22 @@ export async function sniffObsidianVaults(): Promise<ObsidianVaultInfo[]> {
     if (custom && custom.length > 0) {
       return custom;
     }
-  } catch {
-    // 降级回退
+  } catch (err) {
+    console.warn("[obsidian] Failed to read configured vaults:", err);
   }
 
-  return DEFAULT_VAULTS;
+  return isRealElectronHost() ? [] : DEFAULT_VAULTS;
 }
 
 export async function getVaultNotes(vaultName?: string): Promise<ObsidianNote[]> {
-  let notes: ObsidianNote[] = SAMPLE_OBSIDIAN_NOTES;
+  let notes: ObsidianNote[] = isRealElectronHost() ? [] : SAMPLE_OBSIDIAN_NOTES;
   try {
     const list = await LocalStorage.getItem<ObsidianNote[]>(STORAGE_KEY);
     if (list && list.length > 0) {
       notes = list;
     }
-  } catch {
-    // fallback
+  } catch (err) {
+    console.warn("[obsidian] Failed to read vault notes:", err);
   }
 
   if (vaultName && vaultName !== "all") {

@@ -2,7 +2,7 @@
   "id": "archive-manager",
   "name": "解压与压缩",
   "description": "免解压直接预览压缩包内容、按需提取单个文件，支持 ZIP/7Z/RAR/TAR 智能解压与加密打包",
-  "version": "1.1.1",
+  "version": "1.1.2",
   "author": "ZTools Team",
   "entry": "dist/index.js",
   "icon": "icon.svg",

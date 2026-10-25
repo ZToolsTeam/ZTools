@@ -24,8 +24,8 @@ const holders = new Map()
 function logWarn(...args) {
   try {
     console.warn(...args)
-  } catch {
-    // 日志不可用时忽略
+  } catch (err) {
+    void err
   }
 }
 
@@ -79,7 +79,7 @@ export function createPluginSessionHolder(pluginId, options = {}) {
       }
       if (myGeneration !== generation || refs === 0) {
         // 打开途中已全部释放：立即关闭，不留残留
-        void call('declarative_session_close', { sessionId: data.sessionId }).catch(() => undefined)
+        void call('declarative_session_close', { sessionId: data.sessionId }).catch((err) => logWarn('[plugin-session] 关闭孤儿会话失败:', err))
         return
       }
       token = data.token
@@ -109,8 +109,8 @@ export function createPluginSessionHolder(pluginId, options = {}) {
     if (closing) {
       try {
         await call('declarative_session_close', { sessionId: closing })
-      } catch {
-        // 窗口刷新 / 主进程已清理时 close 失败无影响（主进程侧会话随窗口与导航清理）
+      } catch (err) {
+        logWarn('[plugin-session] 关闭插件会话失败:', err)
       }
     }
   }

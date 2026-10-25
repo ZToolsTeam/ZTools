@@ -110,8 +110,8 @@ export class DeveloperService {
       if (!fs.existsSync(this.devExtensionsDir)) {
         fs.mkdirSync(this.devExtensionsDir, { recursive: true })
       }
-    } catch {
-      // 容错处理
+    } catch (err) {
+      console.warn('[DeveloperService] Failed to create devExtensionsDir:', err)
     }
   }
 

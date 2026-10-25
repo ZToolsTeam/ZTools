@@ -102,6 +102,7 @@ export enum Icon {
   StarDisabled = "star-disabled",
   Info = "info",
   Unlock = "unlock",
+  LockUnlocked = "unlock",
   Person = "person",
   Signal3 = "signal-3",
   EyeDisabled = "eye-disabled",

@@ -493,7 +493,7 @@ export function validateCleanPayload(method: string, params: unknown): { valid: 
 export async function invokeNativeCapability(
   method: string,
   params: Record<string, unknown>,
-  hostBridge?: { dllplugin?: { call?: (plugin: string, fn: string, payload: unknown) => Promise<unknown> }; __isRealHost?: boolean }
+  hostBridge?: unknown
 ): Promise<NativeInvocationResult> {
   const check = validateCleanPayload(method, params)
   if (!check.valid) {
@@ -513,7 +513,7 @@ export async function invokeNativeCapability(
 async function scanRealCleanRuleTree(
   dirPaths: string[],
   filterExt?: RegExp,
-  hostOverride?: any
+  hostOverride?: unknown
 ): Promise<{ fileCount: number; totalSizeBytes: number; sampleFiles: CleanSampleFile[] }> {
   let fileCount = 0
   let totalSizeBytes = 0
@@ -547,7 +547,7 @@ async function scanRealCleanRuleTree(
   }
 }
 
-export async function fetchSystemDiskInfo(hostOverride?: any): Promise<{
+export async function fetchSystemDiskInfo(hostOverride?: unknown): Promise<{
   diskFreeBytes: number
   diskTotalBytes: number
   recycleBinBytes: number
@@ -577,7 +577,9 @@ export async function fetchSystemDiskInfo(hostOverride?: any): Promise<{
         if (typeof d.freeSpace === 'number') diskFreeBytes = d.freeSpace
         if (typeof d.totalSpace === 'number') diskTotalBytes = d.totalSpace
       }
-    } catch {}
+    } catch (err) {
+      console.warn('[cleaner] GetDiskSpaceInfo failed:', err)
+    }
   }
 
   if (hostOverride) {
@@ -587,7 +589,9 @@ export async function fetchSystemDiskInfo(hostOverride?: any): Promise<{
         const r = recRes.data as Record<string, unknown>
         if (typeof r.size === 'number') recycleBinBytes = r.size
       }
-    } catch {}
+    } catch (err) {
+      console.warn('[cleaner] GetRecycleBinInfo failed:', err)
+    }
   }
 
   if (!isRealElectronHost(hostOverride) && diskTotalBytes === 0) {
@@ -602,7 +606,7 @@ export async function fetchSystemDiskInfo(hostOverride?: any): Promise<{
 /**
  * 执行系统 6 大 CleanClass 深度扫描并拉取全量 18 项清理规则组
  */
-export async function fetchCleanRulesAndScan(hostOverride?: any): Promise<{
+export async function fetchCleanRulesAndScan(hostOverride?: unknown): Promise<{
   groups: CleanGroupItem[]
   summary: CleanSummaryData
 }> {
@@ -816,7 +820,8 @@ export async function fetchCleanRulesAndScan(hostOverride?: any): Promise<{
     if (scanRes.ok && scanRes.data && typeof scanRes.data === 'object') {
       const data = scanRes.data as Record<string, unknown>
       if (Array.isArray(data.groups) && data.groups.length > 0) {
-        const groups: CleanGroupItem[] = data.groups.map((g: any, index: number) => {
+        const groups: CleanGroupItem[] = data.groups.map((rawGroup: unknown, index: number) => {
+        const g = (rawGroup && typeof rawGroup === "object" ? rawGroup : {}) as Record<string, unknown> & { sampleFiles?: Array<{ name?: string; path?: string; sizeBytes?: number; size?: number }>; name?: string; category?: CleanGroupItem["category"]; description?: string; riskLevel?: CleanGroupItem["riskLevel"]; sizeBytes?: number; size?: number; fileCount?: number; count?: number; checked?: boolean };
           const totalSize = Number(g.totalSize || g.checkedSize || 0)
           const fileCount = Number(g.fileCount || g.checkedCount || 0)
           const classId = Number(g.classId || 1)
@@ -853,7 +858,9 @@ export async function fetchCleanRulesAndScan(hostOverride?: any): Promise<{
         return { groups, summary }
       }
     }
-  } catch {}
+  } catch (err) {
+    console.warn('[cleaner] ScanGarbage fallback:', err)
+  }
 
   if (isRealElectronHost(hostOverride)) {
     return {
@@ -880,7 +887,7 @@ export async function fetchCleanRulesAndScan(hostOverride?: any): Promise<{
 
 export async function executeCleanGroups(
   groups: CleanGroupItem[],
-  hostOverride?: any
+  hostOverride?: unknown
 ): Promise<CleanExecutionResult> {
   const checkedGroups = groups.filter(g => g.checked && g.totalSizeBytes > 0)
   if (checkedGroups.length === 0) {
@@ -965,7 +972,7 @@ export async function executeCleanGroups(
 
 export async function cleanSelectedSampleFiles(
   filePaths: string[],
-  hostOverride?: any
+  hostOverride?: unknown
 ): Promise<{ ok: boolean; trashedCount: number; error?: string }> {
   const safePaths = filePaths.filter(p => p && !FORBIDDEN_TARGET_PATTERN.test(p))
   if (safePaths.length === 0) {
@@ -974,7 +981,7 @@ export async function cleanSelectedSampleFiles(
   return moveRealFilesToTrash(safePaths, hostOverride)
 }
 
-export async function emptyRecycleBin(hostOverride?: any): Promise<{ ok: boolean; freedBytes: number; error?: string }> {
+export async function emptyRecycleBin(hostOverride?: unknown): Promise<{ ok: boolean; freedBytes: number; error?: string }> {
   const res = await invokeNativeCapability('EmptyRecycleBin', {}, hostOverride)
   if (!res.ok) {
     return { ok: false, freedBytes: 0, error: res.error }

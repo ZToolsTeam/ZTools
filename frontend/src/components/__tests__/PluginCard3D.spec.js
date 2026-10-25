@@ -43,6 +43,8 @@ describe('PluginCard3D', () => {
       hasUpdate: true,
       version: '1.0.1'
     })
+    expect(wrapper.find('.card-icon-btn.update').attributes('aria-label')).toBe('更新')
+    expect(wrapper.text()).not.toContain('更新')
     // 更新完成由 plugin_install_complete 事件异步驱动，不是同步 emit
     // 此处只验证 API 被正确调用且没有抛出异常
   })
@@ -64,6 +66,38 @@ describe('PluginCard3D', () => {
     expect(wrapper.emitted('toggle-favorite')).toEqual([['plugin-2']])
   })
 
+  it('官方插件只显示盾形标记，标题行不占「官方自营」四个字', () => {
+    const wrapper = mount(PluginCard3D, {
+      props: {
+        plugin: {
+          pluginId: 'official-memory',
+          name: '系统内存与进程',
+          isOfficial: true
+        }
+      }
+    })
+
+    const mark = wrapper.find('.card-mark-official')
+    expect(mark.exists()).toBe(true)
+    expect(mark.attributes('title')).toBe('官方自营')
+    expect(mark.attributes('aria-label')).toBe('官方自营')
+    expect(wrapper.text()).not.toContain('官方自营')
+    expect(wrapper.find('.card-title').attributes('title')).toBe('系统内存与进程')
+
+    const community = mount(PluginCard3D, {
+      props: {
+        plugin: {
+          pluginId: 'community-tool',
+          name: '社区工具',
+          sourceType: 'community',
+          isOfficial: false,
+          is_official: false
+        }
+      }
+    })
+    expect(community.find('.card-mark-official').exists()).toBe(false)
+  })
+
   it('插件卡片显示平台标签；未声明平台时不显示', () => {
     const t = (platform) => ({ id: `${platform}-electron-any`, platform, runtime: 'electron', arch: 'any' })
     const cases = [
@@ -71,13 +105,18 @@ describe('PluginCard3D', () => {
       [[t('windows')], '仅 Windows'],
       [[t('macos')], '仅 macOS']
     ]
-    for (const [targets, label] of cases) {
+    const icons = ['fa-globe', 'fa-windows', 'fa-apple']
+    for (const [index, [targets, label]] of cases.entries()) {
       const wrapper = mount(PluginCard3D, { props: { plugin: { pluginId: 'p', name: 'P', targets } } })
-      expect(wrapper.find('.card-badge-platform').text()).toBe(label)
+      const mark = wrapper.find('.card-mark-platform')
+      expect(mark.attributes('title')).toBe(label)
+      expect(mark.attributes('aria-label')).toBe(label)
+      expect(mark.find('i').classes()).toContain(icons[index])
+      expect(wrapper.text()).not.toContain(label)
       wrapper.unmount()
     }
     const legacy = mount(PluginCard3D, { props: { plugin: { pluginId: 'p', name: 'P' } } })
-    expect(legacy.find('.card-badge-platform').exists()).toBe(false)
+    expect(legacy.find('.card-mark-platform').exists()).toBe(false)
   })
 })
 

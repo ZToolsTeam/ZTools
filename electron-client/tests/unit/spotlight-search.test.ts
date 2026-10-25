@@ -5,7 +5,7 @@ import fs from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 import { collectSpotlightPaths } from '../../src/main/platform/macos/spotlight-search.js'
-import { rankSearchFiles, scanLocalRecentFiles, searchFilesOnMacos } from '../../src/main/platform/macos/file-indexer.js'
+import { rankSearchFiles, scanLocalRecentFiles, searchFilesOnMacos, computePinyinMeta } from '../../src/main/platform/macos/file-indexer.js'
 import type { FileRecord } from '../../src/main/services/sidecar-manager.js'
 
 function fixture(script: string): { launch(): ChildProcessWithoutNullStreams; child(): ChildProcessWithoutNullStreams } {
@@ -37,7 +37,7 @@ test('timeout retains completed paths and terminates an unresponsive child', asy
   const source = fixture(`process.on('SIGTERM', () => {}); process.stdout.write('/files/ready.png\\0'); setInterval(() => {}, 1000);`)
   const result = await collectSpotlightPaths('png', 12, { ...source, timeoutMs: 300 })
   assert.deepEqual(result, { paths: ['/files/ready.png'], degraded: true })
-  assert.equal(source.child().signalCode, 'SIGKILL')
+  assert.equal(source.child().signalCode, process.platform === 'win32' ? 'SIGTERM' : 'SIGKILL')
 })
 
 test('a failed process keeps usable output and marks incomplete results', async () => {
@@ -53,6 +53,43 @@ test('missing binary and successful empty results are distinguishable', async t 
   assert.deepEqual(missing, { paths: [], degraded: true })
   assert.equal(warning.mock.calls.length, 1)
   assert.deepEqual(await collectSpotlightPaths('none', 12, fixture('process.exit(0)')), { paths: [], degraded: false })
+})
+
+test('AbortSignal cancels in-flight Spotlight search immediately and marks results degraded', async () => {
+  const controller = new AbortController()
+  const source = fixture(`process.stdout.write('/Users/demo/partial.txt\\0'); setInterval(() => {}, 1000);`)
+  setTimeout(() => controller.abort(), 120)
+  const res = await collectSpotlightPaths('partial', 50, { ...source, timeoutMs: 5000, signal: controller.signal })
+  assert.equal(res.degraded, true)
+  assert.deepEqual(res.paths, ['/Users/demo/partial.txt'])
+})
+
+test('Chinese Pinyin initials and full Pinyin match and rank macOS apps and local files', async t => {
+  const metaWx = computePinyinMeta('微信.app')
+  assert.equal(metaWx.acronym, 'wx')
+  assert.equal(metaWx.pinyin, 'weixin')
+
+  const metaJsq = computePinyinMeta('计算器.app')
+  assert.equal(metaJsq.acronym, 'jsq')
+  assert.equal(metaJsq.pinyin, 'jisuanqi')
+
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'ztools-pinyin-search-'))
+  t.mock.method(os, 'homedir', () => root)
+  try {
+    const downloads = path.join(root, 'Downloads')
+    await fs.mkdir(downloads, { recursive: true })
+    const fileWx = path.join(downloads, '微信备份记录.txt')
+    await fs.writeFile(fileWx, 'backup')
+
+    const byAcronym = await scanLocalRecentFiles('wxbf', 10)
+    assert.equal(byAcronym.files.length, 1)
+    assert.equal(byAcronym.files[0]?.path, fileWx)
+
+    const ranked = rankSearchFiles(byAcronym.files, 'wxbf')
+    assert.equal(ranked[0]?.path, fileWx)
+  } finally {
+    await fs.rm(root, { recursive: true, force: true })
+  }
 })
 
 test('unterminated malformed output is bounded and marked incomplete', async () => {

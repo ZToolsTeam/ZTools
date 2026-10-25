@@ -4,7 +4,6 @@ import { createPinia, setActivePinia } from 'pinia'
 import { createRouter, createMemoryHistory } from 'vue-router'
 
 import List from '../List.vue'
-import { getBundledPluginEntries } from '@/utils/bundledPlugins'
 import { usePluginsStore } from '@/stores/plugins'
 
 const apiMocks = vi.hoisted(() => ({
@@ -63,8 +62,7 @@ function createTestRouter() {
   })
 }
 
-const LOCAL_CATEGORY_NAMES = [...new Set(getBundledPluginEntries().map((e) => e.category).filter(Boolean))]
-  .filter((name) => !['系统工具', '办公效率'].includes(name))
+const EXPECTED_CATEGORIES = ['办公效率', '系统工具', '图像媒体', '开发工具', '网络工具', 'AI工具', '安全隐私', '金融理财', '其他工具']
 
 describe('List page', () => {
   let wrapper
@@ -314,7 +312,7 @@ describe('List page', () => {
     await flushPromises()
 
     // 远端 2 个分类 + 内置插件补上的分类，各取一次预览
-    expect(apiMocks.getMarketPlugins).toHaveBeenCalledTimes(2 + LOCAL_CATEGORY_NAMES.length)
+    expect(apiMocks.getMarketPlugins).toHaveBeenCalledTimes(EXPECTED_CATEGORIES.length)
     expect(apiMocks.getMarketPlugins).toHaveBeenCalledWith({
       category: '系统工具',
       page: 1,
@@ -334,7 +332,7 @@ describe('List page', () => {
     expect(wrapper.text()).toContain('2')
     expect(wrapper.findAll('.category-view-all-btn')).toHaveLength(2)
 
-    await wrapper.findAll('.category-view-all-btn')[0].trigger('click')
+    await wrapper.findAll('.category-view-all-btn')[1].trigger('click')
     await flushPromises()
     expect(router.currentRoute.value.params.category).toBe('系统工具')
   })
@@ -380,12 +378,12 @@ describe('List page', () => {
 
     // 键盘导航列表 = 概览里实际渲染的卡片（按分类顺序展开），不再引用未定义变量
     expect(wrapper.vm.currentDisplayList.map((p) => p.pluginId)).toEqual([
-      'system-1', 'system-2', 'system-3', 'office-1', 'installed-plugin'
+      'office-1', 'installed-plugin', 'system-1', 'system-2', 'system-3'
     ])
-    expect(wrapper.vm.previewFlatIndex(1, 1)).toBe(4)
+    expect(wrapper.vm.previewFlatIndex(1, 1)).toBe(3)
 
     // 焦点高亮落在跨分类的正确卡片上
-    wrapper.vm.focusedCardIndex = 4
+    wrapper.vm.focusedCardIndex = 1
     await flushPromises()
     const focused = wrapper.findAll('.is-list-card-focused')
     expect(focused).toHaveLength(1)
@@ -551,15 +549,15 @@ describe('List page', () => {
 
     expect(wrapper.find('.market-title').text()).toBe('插件市场')
     const chips = wrapper.findAll('.market-chip')
-    // 远端分类在前，随后是内置插件用到、远端没有的分类
-    expect(chips.map((c) => c.text())).toEqual(['全部', '系统工具', '办公效率', ...LOCAL_CATEGORY_NAMES])
+    // 远端与本地共用固定的中文分类顺序
+    expect(chips.map((c) => c.text())).toEqual(['全部', ...EXPECTED_CATEGORIES])
     expect(chips[0].classes()).toContain('is-on')
 
-    await chips[1].trigger('click')
+    await chips[2].trigger('click')
     await flushPromises()
     expect(router.currentRoute.value.params.category).toBe('系统工具')
     expect(wrapper.find('.market-title').text()).toBe('系统工具')
-    expect(wrapper.findAll('.market-chip')[1].attributes('aria-pressed')).toBe('true')
+    expect(wrapper.findAll('.market-chip')[2].attributes('aria-pressed')).toBe('true')
 
     await router.push({ name: 'list', query: { q: 'json' } })
     await flushPromises()

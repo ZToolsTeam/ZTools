@@ -98,15 +98,14 @@ export class McpService {
                 enabled: s.enabled,
                 toolsCount: 0,
                 tools: [],
-                lastError: null,
-                ...(s.enabled ? { pingMs: 1.2 } : {})
+                lastError: null
               })
             }
           }
         }
       }
-    } catch {
-      // 容错处理
+    } catch (err) {
+      console.warn('[McpService] Failed to load MCP config:', err)
     }
   }
 
@@ -116,8 +115,8 @@ export class McpService {
       const dir = path.dirname(this.configPath)
       await fsPromises.mkdir(dir, { recursive: true })
       await fsPromises.writeFile(this.configPath, JSON.stringify(items, null, 2), 'utf8')
-    } catch {
-      // 容错处理
+    } catch (err) {
+      console.warn('[McpService] Failed to save MCP config:', err)
     }
   }
 
@@ -177,8 +176,7 @@ export class McpService {
       enabled: true,
       toolsCount: 0,
       tools: [],
-      lastError: null,
-      pingMs: 1.0
+      lastError: null
     })
 
     await this.saveConfig()
@@ -236,9 +234,7 @@ export class McpService {
     if (status) {
       status.enabled = s.enabled
       status.status = s.enabled ? 'connected' : 'disconnected'
-      if (s.enabled) {
-        status.pingMs = 1.0
-      } else {
+      if (!s.enabled) {
         delete status.pingMs
       }
     }

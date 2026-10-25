@@ -15,7 +15,7 @@ describe('插件 store 分类计数', () => {
       { pluginId: 'b', category: ['办公效率', '系统工具', '办公效率'] },
       { pluginId: 'c', category: '媒体处理' }
     ])
-    expect(store.categoryCounts).toEqual({ 办公效率: 2, 系统工具: 1, 媒体处理: 1 })
+    expect(store.categoryCounts).toEqual({ 办公效率: 2, 系统工具: 1, 图像媒体: 1 })
   })
 
   it('[破坏性] 已下架插件不计；空值、缺分类、非字符串分类不崩溃也不计', () => {

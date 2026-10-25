@@ -79,8 +79,8 @@ export function showInAppConfirm(options = {}) {
     function cancel() {
       try {
         instance?.destroy?.();
-      } catch {
-        // 已经关闭
+      } catch (err) {
+        console.warn("[declarative] 销毁确认框实例异常:", err);
       }
       settle(false);
     }
@@ -149,8 +149,9 @@ export function useDeclarativeStack(initialRoot, options = {}) {
     }, TOAST_AUTO_HIDE_MS);
   }
 
+  let toastSeq = 0;
   function showToast(options) {
-    const id = "toast_" + Math.random().toString(36).slice(2, 9);
+    const id = "toast_" + (++toastSeq).toString(36);
     const toastItem = {
       id,
       title: options.title,
@@ -315,11 +316,21 @@ export function useDeclarativeStack(initialRoot, options = {}) {
   const unwrapIpc = async (callPromise, fallback) => {
     try {
       const res = await callPromise;
-      if (res && typeof res === "object" && "success" in res && "data" in res) {
-        return res.success ? res.data : fallback;
+      if (res && typeof res === "object") {
+        if (res.ok === false) {
+          console.warn("[DeclarativeStack] IPC 调用失败:", res?.error || res);
+          return fallback;
+        }
+        if ("success" in res && "data" in res) {
+          if (!res.success) {
+            console.warn("[DeclarativeStack] IPC 调用失败:", res?.error || res);
+          }
+          return res.success ? res.data : fallback;
+        }
       }
       return res ?? fallback;
-    } catch {
+    } catch (err) {
+      console.warn("[DeclarativeStack] IPC 调用失败:", err);
       return fallback;
     }
   };
@@ -376,6 +387,7 @@ export function useDeclarativeStack(initialRoot, options = {}) {
       }
       if (typeof navigator !== "undefined" && navigator.clipboard) {
         await navigator.clipboard.writeText(String(text));
+        console.warn("[DeclarativeStack] 当前宿主不支持自动粘贴到活动窗口，仅写入剪贴板");
       }
     },
     manageWindow: async (action) => {

@@ -112,6 +112,17 @@ export class LauncherController {
     this.#registered = true
   }
 
+  /**
+   * 后台静默预热极客悬浮窗（避免用户首次按下快捷键时承受 BrowserWindow 创建与页面冷启动延迟）
+   */
+  prewarm(): void {
+    try {
+      this.#ensureWindow()
+    } catch (error) {
+      console.error('极客悬浮窗后台预热失败:', error)
+    }
+  }
+
   isVisible(): boolean {
     return Boolean(this.#window && !this.#window.isDestroyed() && this.#window.isVisible())
   }
@@ -197,6 +208,13 @@ export class LauncherController {
     })
 
     this.options.registry.registerMain(window.webContents)
+    if (process.platform === 'darwin') {
+      try {
+        window.setVisibleOnAllWorkspaces?.(true, { visibleOnFullScreen: true })
+      } catch {
+        // 兼容未提供该 API 的测试桩或旧版运行时
+      }
+    }
 
     window.webContents.on('before-input-event', (event, input) => {
       handleLauncherBeforeInputEvent(event, input, this)
@@ -222,6 +240,7 @@ export class LauncherController {
     this.#frameSyncManager = new FrameSyncManager({
       suspendTimeoutMs: 15000,
       frameSyncTimeoutMs: 150,
+      platform: process.platform,
       trimMemory: async () => {
         if (this.options.sidecars?.trimProcessMemory) {
           await this.options.sidecars.trimProcessMemory(process.pid)

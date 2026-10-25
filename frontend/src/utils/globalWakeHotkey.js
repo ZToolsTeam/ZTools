@@ -13,8 +13,8 @@ export const currentGlobalWakeHotkey = ref(DEFAULT_GLOBAL_WAKE_HOTKEY)
 export async function refreshCurrentGlobalWakeHotkey() {
   try {
     currentGlobalWakeHotkey.value = normalizeHotkey(await getHotkey()) || DEFAULT_GLOBAL_WAKE_HOTKEY
-  } catch {
-    // 读取失败时保留当前显示
+  } catch (err) {
+    console.warn('[globalWakeHotkey] 读取当前唤醒快捷键失败:', err)
   }
   return currentGlobalWakeHotkey.value
 }

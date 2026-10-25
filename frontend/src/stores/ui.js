@@ -23,7 +23,7 @@ export const useUIStore = defineStore('ui', {
           return window.localStorage.getItem('ztools_sidebar_collapsed') === 'true'
         }
       } catch (e) {
-        // 静默降级
+        console.warn('[UIStore] 读取侧边栏折叠状态失败:', e)
       }
       return false
     })()
@@ -77,7 +77,7 @@ export const useUIStore = defineStore('ui', {
           window.localStorage.setItem('ztools_sidebar_collapsed', String(this.sidebarCollapsed))
         }
       } catch (e) {
-        // 静默降级
+        console.warn('[UIStore] 保存侧边栏折叠状态失败:', e)
       }
     },
     toggleSidebar() {

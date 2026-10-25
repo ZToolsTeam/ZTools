@@ -17,15 +17,19 @@ export const useEventsStore = defineStore('events', {
           // 订阅全局事件（非阻塞，不需要 await）
           window.ztools.events
             .subscribe('plugin_install_complete')
-            .catch(() => {})
-          window.ztools.events.subscribe('plugin_uninstalled').catch(() => {})
+            .catch((err) => console.warn('[EventsStore] 订阅 plugin_install_complete 失败:', err))
+          window.ztools.events
+            .subscribe('plugin_uninstalled')
+            .catch((err) => console.warn('[EventsStore] 订阅 plugin_uninstalled 失败:', err))
           window.ztools.events
             .subscribe('ui_close_confirm_request')
-            .catch(() => {})
+            .catch((err) => console.warn('[EventsStore] 订阅 ui_close_confirm_request 失败:', err))
           window.ztools.events
             .subscribe('system.DarkModeChange')
-            .catch(() => {})
-          window.ztools.events.subscribe('plugin_not_installed').catch(() => {})
+            .catch((err) => console.warn('[EventsStore] 订阅 system.DarkModeChange 失败:', err))
+          window.ztools.events
+            .subscribe('plugin_not_installed')
+            .catch((err) => console.warn('[EventsStore] 订阅 plugin_not_installed 失败:', err))
 
           window.ztools.events.on(
             'plugin_install_complete',

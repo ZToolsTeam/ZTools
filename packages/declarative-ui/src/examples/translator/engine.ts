@@ -118,11 +118,13 @@ const DICT_TRANSLATIONS: Record<string, Record<string, { translated: string; pho
 /**
  * 执行多语言极速翻译（在真实 Electron 宿主中优先走 translator_translate IPC）
  */
+let translationRecordSeq = 0;
+
 export async function translateText(
   text: string,
   sourceLang: string = "auto",
   targetLang: string = "en",
-  hostOverride?: any
+  hostOverride?: unknown
 ): Promise<TranslationResult> {
   const trimmed = text.trim();
   if (!trimmed) {
@@ -146,8 +148,8 @@ export async function translateText(
   }
 
   // 3. 在真实 Electron 宿主或提供 hostOverride 时优先调用主进程 translator_translate IPC
-  if (hostOverride || isRealElectronHost()) {
-    const ipcRes = await callHostTransport<any>(
+  if (hostOverride || isRealElectronHost(hostOverride)) {
+    const ipcRes = await callHostTransport<Record<string, unknown>>(
       "translator_translate",
       {
         text: trimmed,
@@ -167,10 +169,10 @@ export async function translateText(
           translatedText: translatedStr,
           sourceLanguage: String(payload.sourceLanguage || effectiveSource),
           targetLanguage: String(payload.targetLanguage || effectiveTarget),
-          detectedLanguage: payload.detectedLanguage || detected,
-          phonetic: payload.phonetic,
+          detectedLanguage: (payload.detectedLanguage as TranslationResult["detectedLanguage"]) || detected,
+          phonetic: typeof payload.phonetic === "string" ? payload.phonetic : undefined,
           reverseTranslations: Array.isArray(payload.reverseTranslations)
-            ? payload.reverseTranslations
+            ? (payload.reverseTranslations as ReverseTranslationItem[])
             : undefined
         };
       }
@@ -252,6 +254,7 @@ export async function getRecentTranslations(): Promise<RecentTranslationRecord[]
     if (!Array.isArray(parsed)) return [];
     return parsed.filter(item => item && typeof item.sourceText === "string" && typeof item.translatedText === "string");
   } catch (e) {
+    console.warn("[translator] getRecentTranslations failed:", e);
     return [];
   }
 }
@@ -270,7 +273,7 @@ export async function saveRecentTranslation(
   const filtered = current.filter(r => r.sourceText !== cleanSource || r.targetLang !== targetLang);
 
   const newRecord: RecentTranslationRecord = {
-    id: `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+    id: `${Date.now()}-${++translationRecordSeq}`,
     sourceText: cleanSource,
     translatedText: cleanTrans,
     sourceLang,

@@ -29,6 +29,7 @@ const OFFICIAL_AUTHORS = new Set(['ztools', 'ztools team', 'ztools-team', 'ztool
 function officialPluginGroups() {
   const draft = []
   const store = []
+  const storePlugins = []
   const dirs = []
   for (const entry of fs.readdirSync(pluginsRoot, { withFileTypes: true })) {
     if (!entry.isDirectory()) continue
@@ -50,9 +51,24 @@ function officialPluginGroups() {
     }
     const author = String(typeof manifest.author === 'string' ? manifest.author : manifest.author?.name || '').trim().toLowerCase()
     if (!manifest.id || !OFFICIAL_AUTHORS.has(author) || ids.includes(manifest.id)) continue
-    ;(manifest.draft === true || manifest.revoked === true ? draft : store).push(manifest.id)
+    if (manifest.draft === true || manifest.revoked === true) {
+      draft.push(manifest.id)
+    } else {
+      store.push(manifest.id)
+      // 仅同步展示字段；安装版本、校验值、地址和发布状态仍以在线目录为准。
+      storePlugins.push({
+        id: manifest.id,
+        name: manifest.name || manifest.id,
+        description: manifest.description || '',
+        category: manifest.category || []
+      })
+    }
   }
-  return { unreleasedOfficialIds: draft.sort(), storeOfficialIds: store.sort() }
+  return {
+    unreleasedOfficialIds: draft.sort(),
+    storeOfficialIds: store.sort(),
+    storePlugins: storePlugins.sort((a, b) => a.id.localeCompare(b.id, 'en'))
+  }
 }
 const checkOnly = process.argv.includes('--check')
 const ensureMode = process.argv.includes('--ensure')
@@ -245,13 +261,13 @@ if (checkOnly) {
   pruneDirsWithoutExpected(outRoot, expectedOutFiles)
 }
 const indexText = JSON.stringify({ plugins: index }, null, 2) + '\n'
-const groups = officialPluginGroups()
+const { storePlugins, ...groups } = officialPluginGroups()
 const configText = JSON.stringify({ ...config, ...groups }, null, 2) + '\n'
 // 运行时代码读取这个生成的 JS 模块（Vite 与 Node 都能直接 import，不依赖 JSON 导入语法）
 const generatedPath = path.join(frontendRoot, 'src/config/bundledPlugins.generated.js')
 const generatedText =
   '// 由 scripts/sync-bundled-plugins.mjs 生成，请勿手改；修改内置插件名单请编辑 bundledPlugins.json 后重新运行脚本\n' +
-  `export default ${JSON.stringify({ ids, ...groups, plugins: index.map(({ files, ...rest }) => rest) }, null, 2)}\n`
+  `export default ${JSON.stringify({ ids, ...groups, storePlugins, plugins: index.map(({ files, ...rest }) => rest) }, null, 2)}\n`
 // 主搜索框「直接输入算式出结果」复用内置计算器插件的计算引擎（与插件同一份实现，避免两套算法结果不一致）。
 // 计算历史写入计算器插件自己的存储，在计算器插件里也能看到主搜索框算过的式子。
 const calculatorEngineSource = path.join(pluginsRoot, 'calculator/dist/calculator-engine.js')

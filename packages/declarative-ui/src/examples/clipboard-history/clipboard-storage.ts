@@ -497,12 +497,12 @@ export async function getClipboardHistory(hostOverride?: any): Promise<Clipboard
 
   // 5. 离线/单元测试环境兜底 LocalStorage 读取
   try {
-    const raw = await LocalStorage.getItem(STORAGE_KEY);
+    const raw = await LocalStorage.getItem<string>(STORAGE_KEY);
     if (!raw) {
       await LocalStorage.setItem(STORAGE_KEY, JSON.stringify(SAMPLE_CLIPBOARD_ITEMS));
       return SAMPLE_CLIPBOARD_ITEMS;
     }
-    return JSON.parse(raw);
+    return typeof raw === "string" ? JSON.parse(raw) : (raw as unknown as ClipboardItem[]);
   } catch {
     return SAMPLE_CLIPBOARD_ITEMS;
   }
@@ -757,7 +757,7 @@ export async function resetPasteSequence(): Promise<void> {
  */
 export async function getClipboardPreferences(): Promise<ClipboardPreferences> {
   try {
-    const raw = await LocalStorage.getItem(PREFS_STORAGE_KEY);
+    const raw = await LocalStorage.getItem<string>(PREFS_STORAGE_KEY);
     if (!raw) {
       return {
         historyDuration: "P1W",
@@ -766,7 +766,7 @@ export async function getClipboardPreferences(): Promise<ClipboardPreferences> {
         updateHistoryAfterAction: true
       };
     }
-    return JSON.parse(raw);
+    return typeof raw === "string" ? JSON.parse(raw) : (raw as unknown as ClipboardPreferences);
   } catch {
     return {
       historyDuration: "P1W",

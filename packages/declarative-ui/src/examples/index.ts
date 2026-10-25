@@ -17,9 +17,10 @@ export { default as ObsidianCommand, ObsidianNoteDetailView, ObsidianQuickNoteFo
 export * from "./obsidian/types.js";
 export * from "./obsidian/vault.js";
 
-// 7. 网络与 IP 诊断 (Speedtest)
+// 7. 网络测速与连通性诊断 (Speedtest)
 export { default as SpeedtestCommand, SpeedtestDetailView } from "./speedtest/index.js";
-export * from "./speedtest/diagnostic.js";
+export * from "./speedtest/types.js";
+export * from "./speedtest/speedtest-service.js";
 
 // 8. Windows 包管理器前端 (Winget)
 export { default as WingetCommand, WingetDetailView } from "./winget/index.js";
@@ -46,13 +47,16 @@ export * from "./clipboard-history/clipboard-storage.js";
 // 13. 官方内置核心能力: Snippets 文本扩展 (Snippets & Text Expansion)
 export {
   default as SnippetsCommand,
+  SnippetEditForm,
+  CreateSnippetForm,
   SnippetDetailView,
   SnippetArgumentFormView,
-  CreateSnippetForm,
-  ImportSnippetsForm
+  filterSnippets,
+  expandSnippetTemplate,
+  SAMPLE_SNIPPETS
 } from "./snippets/index.js";
 export * from "./snippets/types.js";
-export * from "./snippets/snippets-storage.js";
+export * from "./snippets/macro-engine.js";
 
 // 14. 官方内置核心能力: Window Management 窗口管理器 (Win32 SetWindowPos 下沉)
 export { default as WindowManagementCommand, WindowActionDetailView, WindowPreferencesForm } from "./window-management/index.js";
@@ -122,16 +126,13 @@ export * from "./applications/applications-service.js";
 // 29. 第二组高频应用: Dictionary (英汉双解科技词典)
 export { default as DictionaryCommand, WordDetailView } from "./dictionary/index.js";
 
-// 30. 密码保险箱 (Password Vault - 单一职责本地加密凭据与 CSV 导入导出)
+// 30. 密码保险箱 (Password Vault - AES-256-GCM 本地离线加密)
 export {
   default as PasswordVaultCommand,
-  VaultEntryDetailView,
-  VaultEntryForm,
-  VaultUnlockForm,
-  VaultImportCsvForm
+  VaultEntryForm
 } from "./password-vault/index.js";
 export * from "./password-vault/types.js";
-export * from "./password-vault/vault-storage.js";
+export * from "./password-vault/vault-crypto.js";
 
 // 31. Wi-Fi 密码查看器 (WiFi Password Reveal - 双端明文提取与扫码连网)
 export { default as WifiPasswordRevealCommand, WifiDetailView } from "./wifi-password-reveal/index.js";
@@ -651,3 +652,177 @@ export {
   startScreenRecording,
   formatBytes as formatRecordBytes
 } from "./record/logic.js";
+
+// 70. 文件解锁与占用句柄解除 (File Unlock - 布局一)
+export { default as FileUnlockCommand } from "./file-unlock/index.js";
+export * from "./file-unlock/types.js";
+export * from "./file-unlock/unlock-service.js";
+
+// 71. 启动管理与后台服务/计划任务精简 (Startup Manager - 布局一)
+export { default as StartupManagerCommand } from "./startup-manager/index.js";
+export * from "./startup-manager/types.js";
+export * from "./startup-manager/startup-service.js";
+
+// 72. 外接显示器亮度与控制 (Monitor Control - 布局一)
+export { default as MonitorControlCommand } from "./monitor-control/index.js";
+export * from "./monitor-control/types.js";
+export * from "./monitor-control/monitor-service.js";
+
+// 73. 防休眠常亮助手 (Caffeine - 布局一)
+export { default as CaffeineCommand } from "./caffeine/index.js";
+export * from "./caffeine/types.js";
+export * from "./caffeine/caffeine-service.js";
+
+// 74. DNS 优选测速器 (DNS Benchmark - 布局一)
+export { default as DnsBenchmarkCommand } from "./dns-benchmark/index.js";
+export * from "./dns-benchmark/types.js";
+export * from "./dns-benchmark/dns-service.js";
+
+// 75. 热键冲突检测器 (Hotkey Radar - 布局一)
+export { default as HotkeyRadarCommand } from "./hotkey-radar/index.js";
+export * from "./hotkey-radar/types.js";
+export * from "./hotkey-radar/hotkey-service.js";
+
+// 76. 文件夹双向同步对比 (Folder Sync - 布局一)
+export { default as FolderSyncCommand } from "./folder-sync/index.js";
+export * from "./folder-sync/types.js";
+export * from "./folder-sync/sync-service.js";
+
+// 77. 跨浏览器书签检索 (Browser Bookmarks - 布局一)
+export { default as BrowserBookmarksCommand } from "./browser-bookmarks/index.js";
+export * from "./browser-bookmarks/types.js";
+export * from "./browser-bookmarks/bookmark-scanner.js";
+
+// 78. 剪贴板粘贴栈 (Paste Stack - 布局一)
+export { default as PasteStackCommand } from "./paste-stack/index.js";
+export * from "./paste-stack/types.js";
+export * from "./paste-stack/stack-manager.js";
+
+// 79. Office文档瘦身 (Office Slim - 布局三)
+export { default as OfficeSlimCommand } from "./office-slim/index.js";
+export * from "./office-slim/types.js";
+export * from "./office-slim/office-slim-service.js";
+
+// 80. AI文档转Word (MD to Office - 布局三)
+export { default as MdToOfficeCommand } from "./md-to-office/index.js";
+export * from "./md-to-office/types.js";
+export * from "./md-to-office/md-to-office-service.js";
+
+// 81. 字体管理 (Font Manager - 布局一)
+export { default as FontManagerCommand } from "./font-manager/index.js";
+export * from "./font-manager/types.js";
+export * from "./font-manager/font-service.js";
+
+// 82. 文件编码与指纹鉴定 (File Inspector - 布局三)
+export { default as FileInspectorCommand } from "./file-inspector/index.js";
+export * from "./file-inspector/types.js";
+export * from "./file-inspector/inspector-service.js";
+
+// 83. 音视频属性与封皮管理 (Media Metadata - 布局三)
+export { default as MediaMetadataCommand } from "./media-metadata/index.js";
+export * from "./media-metadata/types.js";
+export * from "./media-metadata/media-service.js";
+
+// 84. 证件安全防伪水印 (ID Watermark - 布局三)
+export { default as IdWatermarkCommand } from "./id-watermark/index.js";
+export * from "./id-watermark/types.js";
+export * from "./id-watermark/watermark-service.js";
+
+// 85. 表格万能互转 (Table Converter - 布局三)
+export { default as TableConverterCommand } from "./table-converter/index.js";
+export * from "./table-converter/types.js";
+export * from "./table-converter/table-service.js";
+
+// 86. 番茄专注与防沉迷锁 (Pomodoro Focus - 布局一)
+export { default as PomodoroFocusCommand } from "./pomodoro-focus/index.js";
+export * from "./pomodoro-focus/types.js";
+export * from "./pomodoro-focus/pomodoro-service.js";
+
+// 87. IDE 项目启动器 (VSCode Projects - 布局一)
+export { default as VscodeProjectsCommand } from "./vscode-projects/index.js";
+export * from "./vscode-projects/types.js";
+export * from "./vscode-projects/project-service.js";
+
+// 88. Hosts 方案秒切 (Hosts Switcher - 布局一)
+export { default as HostsSwitcherCommand } from "./hosts-switcher/index.js";
+export * from "./hosts-switcher/types.js";
+export * from "./hosts-switcher/hosts-service.js";
+
+// 89. 环境变量管家 (Env Manager - 布局一)
+export { default as EnvManagerCommand } from "./env-manager/index.js";
+export * from "./env-manager/types.js";
+export * from "./env-manager/env-service.js";
+
+// 90. Docker 容器秒控 (Docker Manager - 布局一)
+export { default as DockerManagerCommand } from "./docker-manager/index.js";
+export * from "./docker-manager/types.js";
+export * from "./docker-manager/docker-service.js";
+
+// 91. 局域网扫描与唤醒 (LAN Scanner - 布局一)
+export { default as LanScannerCommand } from "./lan-scanner/index.js";
+export * from "./lan-scanner/types.js";
+export * from "./lan-scanner/lan-service.js";
+
+// 92. SSH 与终端代理助手 (SSH Proxy Helper - 布局一)
+export { default as SshProxyHelperCommand } from "./ssh-proxy-helper/index.js";
+export * from "./ssh-proxy-helper/types.js";
+export * from "./ssh-proxy-helper/ssh-proxy-service.js";
+
+// 93. 正则与Cron (Regex Cron - 布局二)
+export { default as RegexCronCommand } from "./regex-cron/index.js";
+export * from "./regex-cron/types.js";
+export * from "./regex-cron/regex-cron-service.js";
+
+// 94. 命令与状态码 (Linux HTTP Dict - 布局二)
+export { default as LinuxHttpDictCommand } from "./linux-http-dict/index.js";
+export * from "./linux-http-dict/types.js";
+export * from "./linux-http-dict/dict-service.js";
+
+// 95. Git救命锦囊 (Git Helper - 布局二)
+export { default as GitHelperCommand } from "./git-helper/index.js";
+export * from "./git-helper/types.js";
+export * from "./git-helper/git-helper-service.js";
+
+// 96. SQL格式化转换 (SQL Helper - 布局二)
+export { default as SqlHelperCommand } from "./sql-helper/index.js";
+export * from "./sql-helper/types.js";
+export * from "./sql-helper/sql-helper-service.js";
+
+// 97. 测试数据生成 (Mock Data - 布局二)
+export { default as MockDataCommand } from "./mock-data/index.js";
+export * from "./mock-data/types.js";
+export * from "./mock-data/mock-service.js";
+
+// 98. JWT与URL解析 (JWT & URL Codec - 布局二)
+export { default as JwtUrlCodecCommand } from "./jwt-url-codec/index.js";
+export * from "./jwt-url-codec/types.js";
+export * from "./jwt-url-codec/jwt-url-service.js";
+
+// 99. 轻量接口调试 (cURL & HTTP - 布局二)
+export { default as CurlHttpCommand } from "./curl-http/index.js";
+export * from "./curl-http/types.js";
+export * from "./curl-http/curl-service.js";
+
+// 100. 域名与SSL诊断 (SSL & Domain Check - 布局二)
+export { default as SslDomainCheckCommand } from "./ssl-domain-check/index.js";
+export * from "./ssl-domain-check/types.js";
+export * from "./ssl-domain-check/ssl-dns-service.js";
+
+// 101. SVG预览与压缩 (SVG Icon Studio - 布局二)
+export { default as SvgIconStudioCommand } from "./svg-icon-studio/index.js";
+export * from "./svg-icon-studio/types.js";
+export * from "./svg-icon-studio/svg-service.js";
+
+// 102. 网段与权限计算 (Chmod & CIDR Calc - 布局二)
+export { default as ChmodCidrCalcCommand } from "./chmod-cidr-calc/index.js";
+export * from "./chmod-cidr-calc/types.js";
+export * from "./chmod-cidr-calc/chmod-cidr-service.js";
+
+
+
+
+
+
+
+
+

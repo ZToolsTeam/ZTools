@@ -36,9 +36,14 @@ const isOfficial = computed(() =>
   isOfficialPluginItem(props.plugin) || isOfficialPlugin(props.plugin.pluginId || props.plugin.id)
 )
 const platformLabel = computed(() => getPluginPlatformLabel(props.plugin))
-const officialBadge = computed(() =>
-  props.plugin.official_badge || props.plugin.officialBadge || '官方自营'
-)
+const platformIcon = computed(() => {
+  switch (platformLabel.value) {
+    case '跨平台': return 'fa-globe'
+    case '仅 Windows': return 'fa-windows'
+    case '仅 macOS': return 'fa-apple'
+    default: return ''
+  }
+})
 const installError = computed(() =>
   pluginsStore.getInstallError(props.plugin.pluginId)
 )
@@ -115,32 +120,56 @@ const { pluginIcon, pluginGlyph, displayIconUrl, iconFailed, showImgOverlay, onI
     <div class="card-compact cursor-pointer" @click="onCardBodyClick">
       <div class="flex items-center" style="gap: var(--spacing-md)">
         <!-- 左侧图标：官方插件用品牌线性图形，第三方插件放进中性底块 -->
-        <RcSquircle
-          :glyph="pluginGlyph"
-          :src="displayIconUrl && !iconFailed ? displayIconUrl : ''"
-          :icon="pluginIcon"
-          :size="36"
-        />
+        <div class="card-icon-wrap">
+          <RcSquircle
+            :glyph="pluginGlyph"
+            :src="displayIconUrl && !iconFailed ? displayIconUrl : ''"
+            :icon="pluginIcon"
+            :size="36"
+          />
+          <!-- 官方标记放在图标角上，标题行不再为四个字让位 -->
+          <span
+            v-if="isOfficial"
+            class="card-mark-official"
+            title="官方自营"
+            aria-label="官方自营"
+          >
+            <i class="fa fa-shield" aria-hidden="true"></i>
+          </span>
+          <span
+            v-if="platformIcon"
+            class="card-mark-platform"
+            :class="{ 'is-stacked': isOfficial }"
+            :title="platformLabel"
+            :aria-label="platformLabel"
+          >
+            <i class="fa" :class="platformIcon" aria-hidden="true"></i>
+          </span>
+        </div>
 
         <!-- 中间信息 -->
         <div
           class="flex-1 min-w-0"
           style="gap: var(--spacing-xs); display: flex; flex-direction: column"
         >
-          <div class="flex items-center" style="gap: var(--spacing-sm)">
-            <span class="card-title">{{ plugin.name }}</span>
-            <!-- 官方自营金标 -->
+          <div class="flex items-center min-w-0" style="gap: var(--spacing-xs)">
+            <span class="card-title" :title="plugin.name">{{ plugin.name }}</span>
             <span
-              v-if="isOfficial"
-              class="card-badge-official"
-              title="官方自营认证 · 官方技术支持"
+              v-if="isRevoked"
+              class="card-mark-status is-revoked"
+              :title="revokedReason"
+              aria-label="已下架"
             >
-              {{ officialBadge }}
+              <i class="fa fa-ban" aria-hidden="true"></i>
             </span>
-            <span v-if="platformLabel" class="card-badge-platform" :title="`支持平台：${platformLabel}`">{{ platformLabel }}</span>
-            <span v-if="isRevoked" class="card-badge-revoked" :title="revokedReason">已下架</span>
-            <span v-else-if="hasUpdate" class="card-badge-update">更新</span>
-            <span v-else-if="isIncompatible" class="card-badge-incompat" :title="incompatReason">需升级</span>
+            <span
+              v-else-if="isIncompatible"
+              class="card-mark-status is-incompat"
+              :title="incompatReason || '需升级'"
+              aria-label="需升级"
+            >
+              <i class="fa fa-exclamation-triangle" aria-hidden="true"></i>
+            </span>
           </div>
           <p class="card-desc">{{ plugin.description || '暂无描述' }}</p>
         </div>
@@ -175,7 +204,8 @@ const { pluginIcon, pluginGlyph, displayIconUrl, iconFailed, showImgOverlay, onI
           <button
             v-if="hasUpdate"
             class="card-icon-btn update"
-            title="更新插件"
+            title="更新"
+            aria-label="更新"
             :disabled="isUpdating"
             @click.stop="handleUpdate"
           >
@@ -267,74 +297,87 @@ const { pluginIcon, pluginGlyph, displayIconUrl, iconFailed, showImgOverlay, onI
 
 /* 标题 */
 .card-title {
+  min-width: 0;
+  flex: 0 1 auto;
   font-size: 14px;
   font-weight: 500;
+  line-height: 1.35;
   color: var(--rc-text-primary);
-  white-space: nowrap;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
   overflow: hidden;
-  text-overflow: ellipsis;
+  white-space: normal;
+  word-break: break-word;
 }
 
-/* 下架标签 */
-.card-badge-revoked {
+.card-mark-status {
   flex-shrink: 0;
-  padding: 1px 5px;
-  border-radius: 4px;
-  font-size: 10px;
-  font-weight: 600;
-  background: var(--rc-error-subtle);
-  color: var(--rc-error);
-}
-
-/* 官方标签：中性小字，不用金色抢视线 */
-.card-badge-official {
-  flex-shrink: 0;
-  padding: 0 5px;
-  border-radius: 4px;
+  width: 14px;
+  height: 14px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   font-size: 11px;
-  line-height: 18px;
-  color: var(--rc-text-muted);
-  background: var(--rc-kbd-bg);
-}
-
-/* 更新标签 */
-.card-badge-platform {
-  flex-shrink: 0;
-  padding: 1px 5px;
-  border-radius: 4px;
-  font-size: 10px;
-  font-weight: 500;
-  background: var(--rc-surface);
-  color: var(--rc-text-muted);
-  border: 1px solid var(--rc-border);
-}
-
-.card-badge-update {
-  flex-shrink: 0;
-  padding: 1px 5px;
-  border-radius: 4px;
-  font-size: 10px;
-  font-weight: 600;
-  background: var(--rc-warning-subtle);
-  color: var(--rc-warning);
-  border: 1px solid var(--rc-border);
-}
-
-/* 不兼容标签（需升级） */
-.card-badge-incompat {
-  flex-shrink: 0;
-  padding: 1px 5px;
-  border-radius: 4px;
-  font-size: 10px;
-  font-weight: 600;
-  background: var(--rc-error-subtle);
-  color: var(--rc-error);
-  border: 1px solid var(--rc-border);
+  line-height: 1;
   cursor: help;
 }
 
-/* 描述 */
+.card-mark-status.is-revoked,
+.card-mark-status.is-incompat {
+  color: var(--rc-error);
+}
+
+.card-icon-wrap {
+  position: relative;
+  flex-shrink: 0;
+}
+
+/* 官方标记：盾形小标落在图标角上，悬停说明「官方自营」 */
+.card-mark-official {
+  position: absolute;
+  right: -3px;
+  bottom: -3px;
+  width: 14px;
+  height: 14px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 4px;
+  font-size: 9px;
+  line-height: 1;
+  color: var(--rc-text-secondary);
+  background: var(--rc-kbd-bg);
+  box-shadow: 0 0 0 2px var(--rc-surface);
+  cursor: help;
+}
+
+/* 平台标记：与官方盾标错开，悬停说明「跨平台 / 仅 Windows / 仅 macOS」 */
+.card-mark-platform {
+  position: absolute;
+  right: -3px;
+  bottom: -3px;
+  width: 14px;
+  height: 14px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 4px;
+  font-size: 9px;
+  line-height: 1;
+  color: var(--rc-text-secondary);
+  background: var(--rc-kbd-bg);
+  box-shadow: 0 0 0 2px var(--rc-surface);
+  cursor: help;
+}
+
+.card-mark-platform.is-stacked {
+  bottom: auto;
+  top: -3px;
+}
+
 .card-desc {
+  min-width: 0;
   font-size: 12px;
   color: var(--rc-text-muted);
   white-space: nowrap;

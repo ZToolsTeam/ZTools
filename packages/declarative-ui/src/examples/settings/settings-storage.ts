@@ -212,17 +212,30 @@ function sanitizeLocalEndpoint(value: unknown, fallback: string): string {
 /**
  * 校验并深度清洗偏好设置对象（Beyond Happy Path 容灾）
  */
-export function sanitizePreferences(input: any): ZToolsGlobalPreferences {
-  if (!input || typeof input !== "object" || Array.isArray(input)) {
+interface RawPreferencesInput {
+  general?: Partial<GeneralSettings> & Record<string, unknown>;
+  launcher?: Partial<LauncherSettings> & Record<string, unknown>;
+  extensions?: Array<Partial<ExtensionConfigItem> & Record<string, unknown>>;
+  shortcuts?: unknown[];
+  cloudSync?: Partial<CloudSyncSettings> & Record<string, unknown>;
+  advanced?: Partial<AdvancedSettings> & Record<string, unknown>;
+  ai?: Record<string, unknown>;
+  hotkey?: unknown;
+  theme?: unknown;
+}
+
+export function sanitizePreferences(rawInput: unknown): ZToolsGlobalPreferences {
+  if (!rawInput || typeof rawInput !== "object" || Array.isArray(rawInput)) {
     return JSON.parse(JSON.stringify(DEFAULT_PREFERENCES));
   }
+  const input = rawInput as RawPreferencesInput;
 
   const result: ZToolsGlobalPreferences = JSON.parse(JSON.stringify(DEFAULT_PREFERENCES));
 
   // 1. General
   if (input.general && typeof input.general === "object") {
-    if (["auto", "dark", "light"].includes(input.general.theme)) {
-      result.general.theme = input.general.theme;
+    if (typeof input.general.theme === "string" && ["auto", "dark", "light"].includes(input.general.theme)) {
+      result.general.theme = input.general.theme as GeneralSettings["theme"];
     }
     if (typeof input.general.openAtLogin === "boolean") {
       result.general.openAtLogin = input.general.openAtLogin;
@@ -230,8 +243,8 @@ export function sanitizePreferences(input: any): ZToolsGlobalPreferences {
     if (typeof input.general.autoHideOnBlur === "boolean") {
       result.general.autoHideOnBlur = input.general.autoHideOnBlur;
     }
-    if (["compact", "expanded"].includes(input.general.windowMode)) {
-      result.general.windowMode = input.general.windowMode;
+    if (typeof input.general.windowMode === "string" && ["compact", "expanded"].includes(input.general.windowMode)) {
+      result.general.windowMode = input.general.windowMode as GeneralSettings["windowMode"];
     }
     if (typeof input.general.showInTray === "boolean") {
       result.general.showInTray = input.general.showInTray;
@@ -246,8 +259,8 @@ export function sanitizePreferences(input: any): ZToolsGlobalPreferences {
 
   // 2. Launcher
   if (input.launcher && typeof input.launcher === "object") {
-    if (["frecency", "alphabetical", "usage_count"].includes(input.launcher.sortAlgorithm)) {
-      result.launcher.sortAlgorithm = input.launcher.sortAlgorithm;
+    if (typeof input.launcher.sortAlgorithm === "string" && ["frecency", "alphabetical", "usage_count"].includes(input.launcher.sortAlgorithm)) {
+      result.launcher.sortAlgorithm = input.launcher.sortAlgorithm as LauncherSettings["sortAlgorithm"];
     }
     if (typeof input.launcher.maxHistoryItems === "number") {
       if (input.launcher.maxHistoryItems > 0 && input.launcher.maxHistoryItems <= 500) {
@@ -308,8 +321,8 @@ export function sanitizePreferences(input: any): ZToolsGlobalPreferences {
   // 4. Shortcuts (严格过滤畸形条目)
   if (Array.isArray(input.shortcuts)) {
     result.shortcuts = input.shortcuts
-      .filter((s: any) => s && typeof s.id === "string" && typeof s.name === "string")
-      .map((s: any) => ({
+      .filter((s): s is Record<string, unknown> => Boolean(s && typeof s === "object" && typeof (s as Record<string, unknown>).id === "string" && typeof (s as Record<string, unknown>).name === "string"))
+      .map((s): ShortcutItem => ({
         id: String(s.id),
         name: String(s.name),
         commandId: String(s.commandId || s.id),
@@ -321,8 +334,8 @@ export function sanitizePreferences(input: any): ZToolsGlobalPreferences {
 
   // 5. CloudSync
   if (input.cloudSync && typeof input.cloudSync === "object") {
-    if (["disabled", "webdav", "gist"].includes(input.cloudSync.provider)) {
-      result.cloudSync.provider = input.cloudSync.provider;
+    if (typeof input.cloudSync.provider === "string" && ["disabled", "webdav", "gist"].includes(input.cloudSync.provider)) {
+      result.cloudSync.provider = input.cloudSync.provider as CloudSyncSettings["provider"];
     }
     if (typeof input.cloudSync.autoSyncIntervalMinutes === "number") {
       if (input.cloudSync.autoSyncIntervalMinutes > 0 && input.cloudSync.autoSyncIntervalMinutes <= 1440) {
@@ -338,14 +351,14 @@ export function sanitizePreferences(input: any): ZToolsGlobalPreferences {
 
   // 6. Advanced
   if (input.advanced && typeof input.advanced === "object") {
-    if (["system", "none", "manual"].includes(input.advanced.proxyMode)) {
-      result.advanced.proxyMode = input.advanced.proxyMode;
+    if (typeof input.advanced.proxyMode === "string" && ["system", "none", "manual"].includes(input.advanced.proxyMode)) {
+      result.advanced.proxyMode = input.advanced.proxyMode as AdvancedSettings["proxyMode"];
     }
     if (typeof input.advanced.proxyUrl === "string") {
       result.advanced.proxyUrl = input.advanced.proxyUrl.trim();
     }
-    if (["debug", "info", "warn", "error"].includes(input.advanced.logLevel)) {
-      result.advanced.logLevel = input.advanced.logLevel;
+    if (typeof input.advanced.logLevel === "string" && ["debug", "info", "warn", "error"].includes(input.advanced.logLevel)) {
+      result.advanced.logLevel = input.advanced.logLevel as AdvancedSettings["logLevel"];
     }
     if (typeof input.advanced.enableUiaAccess === "boolean") {
       result.advanced.enableUiaAccess = input.advanced.enableUiaAccess;
@@ -422,10 +435,15 @@ export async function savePreferences(
   await LocalStorage.setItem(SETTINGS_STORAGE_KEY, jsonStr);
 
   // 2. 双向联动：若存在 window.ztools，调用原生配置同步
-  if (typeof window !== "undefined" && (window as any).ztools?.config?.save) {
+  const winZtools = typeof window !== "undefined"
+    ? (window as unknown as { ztools?: { config?: { save?: (prefs: ZToolsGlobalPreferences) => Promise<unknown> } } }).ztools
+    : undefined;
+  if (winZtools?.config?.save) {
     try {
-      await (window as any).ztools.config.save(sanitized);
-    } catch (e) {}
+      await winZtools.config.save(sanitized);
+    } catch (e) {
+      console.warn("[settings] savePreferences host sync failed:", e);
+    }
   }
 
   return sanitized;
@@ -500,10 +518,10 @@ export async function updatePreferenceSection<K extends keyof ZToolsGlobalPrefer
 
   if (typeof currentVal === "object" && !Array.isArray(currentVal)) {
     const updated = { ...currentVal, ...data };
-    return await savePreferences({ [sectionKey]: updated } as any);
+    return await savePreferences({ [sectionKey]: updated } as unknown as Partial<ZToolsGlobalPreferences>);
   }
 
-  return await savePreferences({ [sectionKey]: data } as any);
+  return await savePreferences({ [sectionKey]: data } as unknown as Partial<ZToolsGlobalPreferences>);
 }
 
 /**
@@ -534,11 +552,12 @@ export async function importPreferencesJson(rawJson: string): Promise<{
   if (!rawJson || typeof rawJson !== "string" || !rawJson.trim()) {
     return { success: false, error: "导入的配置必须为有效的非空 JSON 字符串" };
   }
-  let parsed: any;
+  let parsed: unknown;
   try {
     parsed = JSON.parse(rawJson);
-  } catch (err: any) {
-    return { success: false, error: `JSON 解析失败: ${err.message}` };
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : String(err);
+    return { success: false, error: `JSON 解析失败: ${msg}` };
   }
 
   try {
@@ -546,8 +565,9 @@ export async function importPreferencesJson(rawJson: string): Promise<{
     sanitized.advanced.lastBackupTime = new Date().toISOString();
     await LocalStorage.setItem(SETTINGS_STORAGE_KEY, JSON.stringify(sanitized, null, 2));
     return { success: true, preferences: sanitized };
-  } catch (err: any) {
-    return { success: false, error: `偏好配置校验失败: ${err.message}` };
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : String(err);
+    return { success: false, error: `偏好配置校验失败: ${msg}` };
   }
 }
 

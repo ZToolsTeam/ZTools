@@ -411,7 +411,7 @@ function toggleMainWindow(): void {
   void (async () => {
     let pref = 'dashboard'
     try {
-      pref = (await services?.config.get('user_settings.json', 'ui.wake_preference', 'dashboard')) ?? 'dashboard'
+      pref = services?.config.getCachedWakePreference() ?? 'dashboard'
     } catch {
       pref = 'dashboard'
     }
@@ -908,7 +908,7 @@ if (!app.requestSingleInstanceLock()) {
     const activeServices = services
     if (activeServices) {
       void activeServices.sidecars.startAll().then(async () => {
-        if (process.platform === 'win32') {
+        if (process.platform === 'win32' || process.platform === 'darwin') {
           const home = os.homedir()
           await activeServices.sidecars.indexPath(home, 'auto').catch(() => {})
         }
@@ -919,6 +919,7 @@ if (!app.requestSingleInstanceLock()) {
     let persistedTheme = ''
     try {
       persistedTheme = await services.config.get('user_settings.json', 'ui.theme', '')
+      await services.config.get('user_settings.json', 'ui.wake_preference', 'dashboard').catch(() => 'dashboard')
     } catch (error) {
       console.warn('读取主题设置失败，将跟随系统:', error)
     }
@@ -1041,6 +1042,9 @@ if (!app.requestSingleInstanceLock()) {
       sidecars: services.sidecars
     })
     launcher.register()
+    if (healthCheckExitCode === undefined) {
+      launcher.prewarm()
+    }
     if (lifecyclePolicy.useSystemTray) {
       const initialTrayState = await readTrayState()
       tray = new TrayController({

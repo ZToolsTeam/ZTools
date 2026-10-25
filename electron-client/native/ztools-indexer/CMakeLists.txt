@@ -27,4 +27,12 @@ if(MSVC)
   set_target_properties(ztools-indexer PROPERTIES
     LINK_FLAGS_RELEASE "/LTCG /OPT:REF /OPT:ICF /DYNAMICBASE /NXCOMPAT /guard:cf /DEBUG:NONE"
   )
+else()
+  find_package(Threads REQUIRED)
+  target_link_libraries(ztools-indexer PRIVATE Threads::Threads)
+  target_compile_options(ztools-indexer PRIVATE
+    -Wall
+    -Wextra
+    $<$<CONFIG:Release>:-O3>
+  )
 endif()

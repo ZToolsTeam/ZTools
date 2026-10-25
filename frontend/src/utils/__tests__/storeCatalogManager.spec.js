@@ -48,7 +48,7 @@ describe('StoreCatalogManager 远程条目与内置插件同 ID 合并', () => {
     const calc = catalog.find((p) => p.pluginId === 'calculator')
     expect(calc.name).toBe('综合计算器与色彩速查')
     expect(calc.description).toBe('输入算式直接出结果')
-    expect(calc.category).toBe('办公效率')
+    expect(calc.category).toEqual(['办公效率'])
     expect(calc.downloads).toBe(845)
   })
 
@@ -158,6 +158,31 @@ describe('StoreCatalogManager 开源社区扩展 (ZTools-extensions) 识别与�
     expect(normalizeCdnCatalogPayload(undefined)).toBeUndefined()
     expect(normalizeCdnCatalogPayload('invalid')).toBe('invalid')
     expect(normalizeCdnCatalogPayload([null, { id: 'todo', author: 'ZTools Team' }])[1].source_type).toBe('community')
+  })
+
+  it('[集成] 远端 CDN 返回旧版冗长插件名称或英文分类时，自动对齐为 plugins 仓库最新精简名称与标准四字分类', async () => {
+    const staleRemotePlugins = [
+      { id: 'boost', name: '开机加速与启动项管理', description: '旧描述', category: ['系统工具'], author: 'ZTools Team' },
+      { id: 'cleaner', name: '系统垃圾深度清理', description: '旧描述', category: ['系统工具'], author: 'ZTools Team' },
+      { id: 'context-menu', name: '系统右键菜单管理', description: '旧描述', category: ['系统工具'], author: 'ZTools Team' },
+      { id: 'data-recovery', name: '误删数据恢复向导', description: '旧描述', category: ['系统工具'], author: 'ZTools Team' },
+      { id: 'disk-analyzer', name: '磁盘空间透视分析器', description: '旧描述', category: ['系统工具'], author: 'ZTools Team' },
+      { id: 'network-adapter', name: '网络适配器', description: '旧描述', category: 'system', author: 'ZTools Team' }
+    ]
+    const manager = new StoreCatalogManager({
+      apiBaseUrl: '',
+      fetchRemote: async () => ({ list: staleRemotePlugins }),
+      getOfficialList: () => []
+    })
+    const res = await manager.query({ category: '系统工具', pageSize: 20 })
+    const byId = Object.fromEntries(res.list.map((p) => [p.pluginId, p]))
+    expect(byId.boost.name).toBe('开机启动项')
+    expect(byId.cleaner.name).toBe('垃圾清理')
+    expect(byId['context-menu'].name).toBe('右键菜单管理')
+    expect(byId['data-recovery'].name).toBe('数据恢复')
+    expect(byId['disk-analyzer'].name).toBe('磁盘空间分析')
+    expect(byId['network-adapter'].name).toBe('网卡管理')
+    expect(byId['network-adapter'].category).toEqual(['系统工具'])
   })
 })
 

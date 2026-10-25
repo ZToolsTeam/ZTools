@@ -85,7 +85,7 @@ export class DictationService {
     `)
 
     // 加载持久化词汇
-    const rows = this.db.prepare('SELECT word FROM dictation_vocabulary').all() as any[]
+    const rows = this.db.prepare('SELECT word FROM dictation_vocabulary').all() as Array<{ word?: string }>
     for (const r of rows) {
       if (r && r.word) this.vocabularySet.add(r.word)
     }
@@ -132,11 +132,8 @@ export class DictationService {
       ? audioPayload.durationSeconds
       : Math.max(0.5, (now - this.recordingStartedAt) / 1000)
 
-    // 若未传入 textOverride，执行听写转写兜底逻辑（根据词汇表偏置模拟转写）
-    let transcribedText = audioPayload?.textOverride?.trim() || ''
-    if (!transcribedText) {
-      transcribedText = '这是 ZTools 语音听写转写结果'
-    }
+    // 若未传入 textOverride 且当前会话无录制的转写文本，返回空文本且不触发粘贴动作（严禁捏造假口号贴入用户编辑器）
+    const transcribedText = audioPayload?.textOverride?.trim() || ''
 
     const record: DictationRecord = {
       id: randomUUID(),
@@ -148,23 +145,25 @@ export class DictationService {
       createdAt: now
     }
 
-    // 持久化历史
-    try {
-      this.db.prepare(
-        'INSERT INTO dictation_history (id, text, audio_duration_seconds, output_action, language, target_app_name, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)'
-      ).run(record.id, record.text, record.audioDurationSeconds, record.outputAction, record.language, record.targetAppName ?? null, record.createdAt)
-    } catch {
-      // 容错处理
-    }
-
-    this.lastTranscription = record
-
-    // 回贴操作：如果为 paste 动作，则调用 SidecarManager.pasteToActive
-    if (record.outputAction === 'paste' && this.sidecars) {
+    // 持久化历史（仅在有实际转写文本时写入）
+    if (transcribedText) {
       try {
-        await this.sidecars.pasteToActive(this.currentOptions.targetHwnd || 0)
+        this.db.prepare(
+          'INSERT INTO dictation_history (id, text, audio_duration_seconds, output_action, language, target_app_name, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)'
+        ).run(record.id, record.text, record.audioDurationSeconds, record.outputAction, record.language, record.targetAppName ?? null, record.createdAt)
       } catch (err) {
-        console.warn('[DictationService] pasteToActive failed:', err)
+        console.warn('[DictationService] Failed to persist dictation history:', err)
+      }
+
+      this.lastTranscription = record
+
+      // 回贴操作：如果为 paste 动作且存在有效识别结果，则调用 SidecarManager.pasteToActive
+      if (record.outputAction === 'paste' && this.sidecars) {
+        try {
+          await this.sidecars.pasteToActive(this.currentOptions.targetHwnd || 0)
+        } catch (err) {
+          console.warn('[DictationService] pasteToActive failed:', err)
+        }
       }
     }
 
@@ -192,7 +191,15 @@ export class DictationService {
   public getLastTranscription(): DictationRecord | null {
     if (this.lastTranscription) return { ...this.lastTranscription }
 
-    const row = this.db.prepare('SELECT id, text, audio_duration_seconds, output_action, language, target_app_name, created_at FROM dictation_history ORDER BY created_at DESC LIMIT 1').get() as any
+    const row = this.db.prepare('SELECT id, text, audio_duration_seconds, output_action, language, target_app_name, created_at FROM dictation_history ORDER BY created_at DESC LIMIT 1').get() as {
+      id: string
+      text: string
+      audio_duration_seconds: number
+      output_action: string
+      language: string
+      target_app_name: string | null
+      created_at: number
+    } | undefined
     if (!row) return null
 
     return {
@@ -211,7 +218,7 @@ export class DictationService {
    */
   public searchTranscriptions(query?: string, limit = 50): DictationRecord[] {
     let sql = 'SELECT id, text, audio_duration_seconds, output_action, language, target_app_name, created_at FROM dictation_history'
-    const params: any[] = []
+    const params: Array<string | number> = []
 
     if (query && query.trim()) {
       sql += ' WHERE text LIKE ?'
@@ -221,7 +228,15 @@ export class DictationService {
     sql += ' ORDER BY created_at DESC LIMIT ?'
     params.push(limit)
 
-    const rows = this.db.prepare(sql).all(...params) as any[]
+    const rows = this.db.prepare(sql).all(...params) as Array<{
+      id: string
+      text: string
+      audio_duration_seconds: number
+      output_action: string
+      language: string
+      target_app_name: string | null
+      created_at: number
+    }>
     return rows.map(r => ({
       id: r.id,
       text: r.text,
@@ -243,8 +258,8 @@ export class DictationService {
     this.vocabularySet.add(raw)
     try {
       this.db.prepare('INSERT OR REPLACE INTO dictation_vocabulary (word, created_at) VALUES (?, ?)').run(raw, Date.now())
-    } catch {
-      // 容错处理
+    } catch (err) {
+      console.warn('[DictationService] Failed to add vocabulary word:', err)
     }
     return true
   }
@@ -258,8 +273,8 @@ export class DictationService {
     if (deleted) {
       try {
         this.db.prepare('DELETE FROM dictation_vocabulary WHERE word = ?').run(word)
-      } catch {
-        // 容错
+      } catch (err) {
+        console.warn('[DictationService] Failed to remove vocabulary word:', err)
       }
     }
     return deleted
@@ -269,8 +284,8 @@ export class DictationService {
     this.cancelDictation()
     try {
       this.db.close()
-    } catch {
-      // 容错
+    } catch (err) {
+      console.warn('[DictationService] Failed to close database:', err)
     }
   }
 }

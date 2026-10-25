@@ -1,3 +1,5 @@
+import { getStoreOfficialPluginMeta } from './bundledPlugins'
+import { getPluginCategories, normalizeCategoryNames } from './pluginCategories'
 /**
  * storeCatalogManager.js
  * ZTools 对齐 Raycast 标杆体系的 Local-First 扩展商店数据管理器
@@ -318,7 +320,9 @@ export class StoreCatalogManager {
           source = 'decentralized_static'
           isFallback = true
         }
-      } catch {}
+      } catch (error) {
+        console.warn('[StoreCatalogManager] 静态目录读取失败，尝试内置插件:', error)
+      }
     }
 
     // 5. 最终使用随包内置官方标杆应用保底（保证开源极客开箱即用，绝不崩溃）
@@ -353,6 +357,7 @@ export class StoreCatalogManager {
       seenIds.add(pid.toLowerCase())
 
       const builtinMatch = officialMap.get(pid.toLowerCase())
+      const storeMeta = getStoreOfficialPluginMeta(pid)
 
       const isOfficial = isOfficialPluginItem(item, builtinMatch)
       const officialBadge =
@@ -370,16 +375,6 @@ export class StoreCatalogManager {
         builtinMatch?.homepage ||
         ''
 
-      let mergedCategory = item.category || builtinMatch?.category || '实用工具'
-      if (builtinMatch?.category && item.category) {
-        const catA = Array.isArray(item.category) ? item.category : [item.category]
-        const catB = Array.isArray(builtinMatch.category)
-          ? builtinMatch.category
-          : [builtinMatch.category]
-        const combined = Array.from(new Set([...catA, ...catB].filter(Boolean)))
-        mergedCategory = combined.length === 1 ? combined[0] : combined
-      }
-
       const sourceType = isOfficial
         ? 'official'
         : item.source_type || item.sourceType || 'community'
@@ -389,11 +384,11 @@ export class StoreCatalogManager {
         ...item,
         id: pid,
         pluginId: pid,
-        name: item.name || builtinMatch?.name || pid,
-        title: item.title || item.name || builtinMatch?.title || pid,
+        name: storeMeta?.name || item.name || builtinMatch?.name || pid,
+        title: storeMeta?.title || item.title || item.name || builtinMatch?.title || pid,
         version: item.version || builtinMatch?.version || '1.0.0',
-        description: item.description || builtinMatch?.description || '',
-        category: mergedCategory,
+        description: storeMeta?.description || item.description || builtinMatch?.description || '',
+        category: getPluginCategories(storeMeta?.category || item.category),
         isBuiltin: Boolean(item.isBuiltin || builtinMatch?.isBuiltin),
         downloads: Number(item.downloads || item.downloadsCount || 0),
         rating: Number(item.rating || 5.0),
@@ -413,7 +408,7 @@ export class StoreCatalogManager {
         normalizedItem.name = builtinMatch.name || normalizedItem.name
         normalizedItem.title = builtinMatch.title || builtinMatch.name || normalizedItem.title
         normalizedItem.description = builtinMatch.description || normalizedItem.description
-        if (builtinMatch.category) normalizedItem.category = builtinMatch.category
+        if (normalizeCategoryNames(builtinMatch.category).length) normalizedItem.category = getPluginCategories(builtinMatch.category)
         if (Array.isArray(builtinMatch.platforms)) normalizedItem.platforms = builtinMatch.platforms
         else delete normalizedItem.platforms
       }
@@ -439,6 +434,7 @@ export class StoreCatalogManager {
         if (this.isPlatformSupported(official)) {
           mergedList.push({
             ...official,
+            category: getPluginCategories(official.category),
             id: pid,
             pluginId: pid,
             is_official: true,
@@ -536,10 +532,8 @@ export class StoreCatalogManager {
         targetCategory &&
         !['全部', 'all', 'official', '官方自营', 'community', '社区精选'].includes(targetCategory)
       ) {
-        const itemCat = Array.isArray(item.category)
-          ? item.category
-          : [String(item.category || '')]
-        if (!itemCat.some((c) => String(c).trim() === targetCategory)) {
+        const selected = normalizeCategoryNames(targetCategory)
+        if (!getPluginCategories(item.category).some((name) => selected.includes(name))) {
           return false
         }
       }

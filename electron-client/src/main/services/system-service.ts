@@ -913,13 +913,22 @@ export class SystemService {
       }
 
       case 'eject-all-disks': {
-        if (this.runtimePlatform === 'darwin') {
+        if (this.runtimePlatform !== 'darwin') {
+          return { success: false, action: normalized, message: '当前平台暂不支持一键推出所有外置磁盘' }
+        }
+        try {
           await execFileAsync('/usr/bin/osascript', [
             '-e',
             'tell application "Finder" to eject (every disk whose ejectable is true)'
           ], { timeout: 15_000 })
+          return { success: true, action: normalized, message: '所有外置磁盘已安全推出' }
+        } catch (err) {
+          return {
+            success: false,
+            action: normalized,
+            message: err instanceof Error ? err.message : '推出所有外置磁盘失败'
+          }
         }
-        return { success: true, action: normalized, message: '所有外置磁盘已安全推出' }
       }
 
       case 'toggle-hidden-files': {
@@ -1104,17 +1113,29 @@ export class SystemService {
       }
 
       case 'hide-other-apps': {
-        if (this.runtimePlatform === 'darwin') {
+        if (this.runtimePlatform !== 'darwin') {
+          return { success: false, action: normalized, message: '当前平台暂不支持隐藏其他应用程序' }
+        }
+        try {
           await execFileAsync('/usr/bin/osascript', [
             '-e',
             'tell application "System Events" to set visible of every process whose visible is true and frontmost is false to false'
           ], { timeout: 5_000 })
+          return { success: true, action: normalized, message: '已隐藏其他应用程序' }
+        } catch (err) {
+          return {
+            success: false,
+            action: normalized,
+            message: err instanceof Error ? err.message : '隐藏其他应用程序失败'
+          }
         }
-        return { success: true, action: normalized, message: '已隐藏其他应用程序' }
       }
 
       case 'quit-all-apps': {
-        if (this.runtimePlatform === 'darwin') {
+        if (this.runtimePlatform !== 'darwin') {
+          return { success: false, action: normalized, message: '当前平台暂不支持退出所有应用程序' }
+        }
+        try {
           const script = [
             'tell application "System Events"',
             '  set appNames to name of every application process whose background only is false and name is not "Finder" and name is not "ZTools"',
@@ -1126,12 +1147,21 @@ export class SystemService {
             'end repeat'
           ].join('\n')
           await execFileAsync('/usr/bin/osascript', ['-e', script], { timeout: 10_000 })
+          return { success: true, action: normalized, message: '已请求退出所有打开的应用程序' }
+        } catch (err) {
+          return {
+            success: false,
+            action: normalized,
+            message: err instanceof Error ? err.message : '退出所有应用程序失败'
+          }
         }
-        return { success: true, action: normalized, message: '已请求退出所有打开的应用程序' }
       }
 
       case 'quit-active-app': {
-        if (this.runtimePlatform === 'darwin') {
+        if (this.runtimePlatform !== 'darwin') {
+          return { success: false, action: normalized, message: '当前平台暂不支持退出当前前台应用程序' }
+        }
+        try {
           const script = [
             'tell application "System Events"',
             '  set frontApp to name of first application process whose frontmost is true',
@@ -1141,12 +1171,21 @@ export class SystemService {
             'end if'
           ].join('\n')
           await execFileAsync('/usr/bin/osascript', ['-e', script], { timeout: 5_000 })
+          return { success: true, action: normalized, message: '已退出当前前台应用程序' }
+        } catch (err) {
+          return {
+            success: false,
+            action: normalized,
+            message: err instanceof Error ? err.message : '退出当前前台应用程序失败'
+          }
         }
-        return { success: true, action: normalized, message: '已退出当前前台应用程序' }
       }
 
       case 'dismiss-notifications': {
-        if (this.runtimePlatform === 'darwin') {
+        if (this.runtimePlatform !== 'darwin') {
+          return { success: false, action: normalized, message: '当前平台暂不支持清理屏幕通知横幅' }
+        }
+        try {
           const script = [
             'tell application "System Events"',
             '  tell process "NotificationCenter"',
@@ -1156,9 +1195,15 @@ export class SystemService {
             '  end tell',
             'end tell'
           ].join('\n')
-          await execFileAsync('/usr/bin/osascript', ['-e', script], { timeout: 5_000 }).catch(() => {})
+          await execFileAsync('/usr/bin/osascript', ['-e', script], { timeout: 5_000 })
+          return { success: true, action: normalized, message: '已清理屏幕通知横幅' }
+        } catch (err) {
+          return {
+            success: false,
+            action: normalized,
+            message: err instanceof Error ? err.message : '清理屏幕通知横幅失败'
+          }
         }
-        return { success: true, action: normalized, message: '已清理屏幕通知横幅' }
       }
 
       case 'lock-screen': {
@@ -1424,10 +1469,10 @@ export class SystemService {
               })
               outputCount++
             }
-            if (isMicOnly || (!/nvidia|amd|display|hdmi/i.test(devName) && inputCount === 0)) {
+            if (isMicOnly) {
               devices.push({
                 id: `input:${devId}`,
-                name: isMicOnly ? devName : `${devName} (麦克风输入)`,
+                name: devName,
                 type: 'input',
                 isDefault: inputCount === 0,
                 volume: 80,
@@ -1438,18 +1483,6 @@ export class SystemService {
             }
           }
           if (devices.length > 0) {
-            if (!devices.some((d) => d.type === 'input')) {
-              const firstOut = devices[0]
-              devices.push({
-                id: `input:${firstOut?.id ?? 'default'}`,
-                name: `${firstOut?.name ?? 'System Audio'} (麦克风阵列)`,
-                type: 'input',
-                isDefault: true,
-                volume: 80,
-                muted: false,
-                transport: firstOut?.transport ?? 'Built-in'
-              })
-            }
             this.#winAudioCache = { devices, timestamp: Date.now() }
             return devices
           }
@@ -1527,14 +1560,23 @@ export class SystemService {
   async setAudioVolume(
     volume: number,
     type: 'output' | 'input' = 'output'
-  ): Promise<{ success: boolean; volume: number; type: 'output' | 'input' }> {
+  ): Promise<{ success: boolean; volume: number; type: 'output' | 'input'; error?: string }> {
     const clamped = Math.max(0, Math.min(100, Math.round(Number(volume) || 0)))
     if (this.runtimePlatform === 'darwin') {
       const targetProp = type === 'input' ? 'input volume' : 'output volume'
-      await execFileAsync('/usr/bin/osascript', [
-        '-e',
-        `set volume ${targetProp} ${clamped}`
-      ], { timeout: 4_000 }).catch(() => {})
+      try {
+        await execFileAsync('/usr/bin/osascript', [
+          '-e',
+          `set volume ${targetProp} ${clamped}`
+        ], { timeout: 4_000 })
+      } catch (err) {
+        return {
+          success: false,
+          volume: clamped,
+          type,
+          error: err instanceof Error ? err.message : String(err)
+        }
+      }
     }
     return { success: true, volume: clamped, type }
   }
@@ -1542,15 +1584,23 @@ export class SystemService {
   /**
    * 切换或设置系统静音状态
    */
-  async toggleAudioMute(muted?: boolean): Promise<{ success: boolean; muted: boolean }> {
+  async toggleAudioMute(muted?: boolean): Promise<{ success: boolean; muted: boolean; error?: string }> {
     if (this.runtimePlatform === 'darwin') {
       const currentSettings = await this.#readMacosVolumeSettings()
       const targetMuted = typeof muted === 'boolean' ? muted : !currentSettings.outputMuted
-      await execFileAsync('/usr/bin/osascript', [
-        '-e',
-        `set volume output muted ${targetMuted ? 'true' : 'false'}`
-      ], { timeout: 4_000 }).catch(() => {})
-      return { success: true, muted: targetMuted }
+      try {
+        await execFileAsync('/usr/bin/osascript', [
+          '-e',
+          `set volume output muted ${targetMuted ? 'true' : 'false'}`
+        ], { timeout: 4_000 })
+        return { success: true, muted: targetMuted }
+      } catch (err) {
+        return {
+          success: false,
+          muted: currentSettings.outputMuted,
+          error: err instanceof Error ? err.message : String(err)
+        }
+      }
     }
     return { success: true, muted: Boolean(muted ?? true) }
   }
@@ -1611,27 +1661,9 @@ export class SystemService {
           }
         }
       } catch {
-        // ignore and fallback to active network interfaces on desktop PCs without wireless NIC
+        // ignore when wireless NIC or wlan service is unavailable
       }
 
-      if (profiles.length > 0) {
-        return profiles
-      }
-
-      // Desktop PC / Wired LAN adapter fallback using real os.networkInterfaces()
-      const ifaces = os.networkInterfaces()
-      let firstMarked = false
-      for (const [name, entries] of Object.entries(ifaces)) {
-        if (!entries) continue
-        const ipv4 = entries.find((e) => e.family === 'IPv4' && !e.internal)
-        if (!ipv4) continue
-        profiles.push({
-          ssid: `${name} (${ipv4.address})`,
-          current: !firstMarked,
-          security: 'WPA2-Personal'
-        })
-        firstMarked = true
-      }
       return profiles
     }
 
@@ -1683,21 +1715,9 @@ export class SystemService {
           return { ssid: cleanSsid, password: match[1].trim() }
         }
       } catch {
-        // fallback to wired network interface inspection below
+        // ignore netsh error and return not found below
       }
 
-      const ifaces = os.networkInterfaces()
-      for (const [name, entries] of Object.entries(ifaces)) {
-        if (!entries) continue
-        const ipv4 = entries.find((e) => e.family === 'IPv4' && !e.internal)
-        if (!ipv4) continue
-        if (cleanSsid.includes(name) || cleanSsid.includes(ipv4.address)) {
-          return {
-            ssid: cleanSsid,
-            password: `MAC:${ipv4.mac.toUpperCase()} | CIDR:${ipv4.cidr || `${ipv4.address}/${ipv4.netmask}`}`
-          }
-        }
-      }
       return { ssid: cleanSsid, error: '未找到该 Wi-Fi 的明文密钥记录' }
     }
 
@@ -1981,21 +2001,14 @@ export class SystemService {
         stdout: outStr || `Completed ${action} ${rawPkg}`.trim(),
         stderr: errStr
       }
-    } catch {
-      const cached = this.#winBrewListCache?.items ?? []
-      const q = rawPkg.toLowerCase()
-      const matched = q
-        ? cached.filter((i) => i.name.toLowerCase().includes(q) || (i.fullName ?? '').toLowerCase().includes(q))
-        : cached
-      const summary = matched.length > 0
-        ? matched.map((i) => `${i.name}  ${i.fullName ?? i.name}  ${i.version ?? 'latest'}`).join('\n')
-        : `${rawPkg || 'system-packages'}  1.0.0`
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err)
       return {
-        success: true,
+        success: false,
         action,
-        stdout: summary,
-        stderr: '',
-        ...(matched.length > 0 ? { items: matched } : {})
+        stdout: '',
+        stderr: msg || 'winget 命令执行失败',
+        error: msg || 'winget 命令执行失败'
       }
     }
   }

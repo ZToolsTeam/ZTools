@@ -2,7 +2,7 @@
   "id": "translator",
   "name": "划词翻译",
   "description": "支持中英日韩法德多语种互译、英汉词典释义、商务邮件润色与代码变量命名转换",
-  "version": "1.1.1",
+  "version": "1.1.2",
   "author": "ZTools Team",
   "entry": "dist/index.js",
   "icon": "icon.svg",

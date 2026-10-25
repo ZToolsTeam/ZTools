@@ -34,8 +34,8 @@ describe('新版插件安装分发链路', () => {
     const fetchMock = serve([plugin(), plugin({ id: 'draft', draft: true }), plugin({ id: 'revoked', revoked: true })])
     const plugins = await api()
     expect(await plugins.getCategories()).toEqual([
-      { id: '系统工具', name: '系统工具', slug: '系统工具', pluginsCount: 1 },
-      { id: '办公效率', name: '办公效率', slug: '办公效率', pluginsCount: 1 }
+      { id: '办公效率', name: '办公效率', slug: '办公效率', pluginsCount: 1 },
+      { id: '系统工具', name: '系统工具', slug: '系统工具', pluginsCount: 1 }
     ])
     expect((await plugins.getMarketPlugins({ category: '办公效率' })).list.map((item) => item.id)).toEqual(['test-distribution'])
     expect(await plugins.getDownloadSign('test-distribution')).toMatchObject({ sha256: SHA, size: 1024 })

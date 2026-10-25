@@ -306,8 +306,8 @@ function focusFirstField() {
   try {
     const len = typeof el.value === "string" ? el.value.length : 0;
     el.setSelectionRange?.(len, len);
-  } catch {
-    // 部分输入类型不支持设置光标
+  } catch (err) {
+    console.warn('[FormRenderer] 设置输入框光标位置失败:', err)
   }
   return typeof document === "undefined" || document.activeElement === el;
 }

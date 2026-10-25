@@ -309,8 +309,12 @@ const activeItemActions = computed(() => {
           onAction: async () => {
             actionPanelVisible.value = false
             const eq = `${item.expression} = ${item.answer}`
-            await copyInlineAnswerToClipboard(eq)
-            showNoViewFeedback(`✓ 已复制等式: ${eq}`, false)
+            const ok = await copyInlineAnswerToClipboard(eq)
+            if (ok !== false) {
+              showNoViewFeedback(`✓ 已复制等式: ${eq}`, false)
+            } else {
+              showNoViewFeedback("复制等式失败，请重试", true)
+            }
           }
         }
       }
@@ -324,8 +328,12 @@ const activeItemActions = computed(() => {
             title: `复制 RGB (${item.colorResult.rgb})`,
             onAction: async () => {
               actionPanelVisible.value = false
-              await copyInlineAnswerToClipboard(item.colorResult.rgb)
-              showNoViewFeedback(`✓ 已复制 RGB: ${item.colorResult.rgb}`, false)
+              const ok = await copyInlineAnswerToClipboard(item.colorResult.rgb)
+              if (ok !== false) {
+                showNoViewFeedback(`✓ 已复制 RGB: ${item.colorResult.rgb}`, false)
+              } else {
+                showNoViewFeedback("复制 RGB 失败，请重试", true)
+              }
             }
           }
         },
@@ -335,8 +343,12 @@ const activeItemActions = computed(() => {
             title: `复制 HSL (${item.colorResult.hsl})`,
             onAction: async () => {
               actionPanelVisible.value = false
-              await copyInlineAnswerToClipboard(item.colorResult.hsl)
-              showNoViewFeedback(`✓ 已复制 HSL: ${item.colorResult.hsl}`, false)
+              const ok = await copyInlineAnswerToClipboard(item.colorResult.hsl)
+              if (ok !== false) {
+                showNoViewFeedback(`✓ 已复制 HSL: ${item.colorResult.hsl}`, false)
+              } else {
+                showNoViewFeedback("复制 HSL 失败，请重试", true)
+              }
             }
           }
         }
@@ -664,8 +676,12 @@ function executeItem(item) {
     recordUsage(item.key || item.pluginId)
   }
   if (item.type === 'inline-calculator' || item.type === 'inline-color') {
-    Promise.resolve(item.action?.()).then(() => {
-      showNoViewFeedback(`✓ 已复制结果: ${item.answer}`, false)
+    Promise.resolve(item.action?.()).then((ok) => {
+      if (ok !== false) {
+        showNoViewFeedback(`✓ 已复制结果: ${item.answer}`, false)
+      } else {
+        showNoViewFeedback("复制结果失败，请重试", true)
+      }
     })
     return
   }
@@ -815,8 +831,8 @@ async function popoutDeclarativePlugin(pluginId, featureCode = '', snapshotQuery
         return
       }
     }
-  } catch {
-    // 若不支持多窗，回退到工作台打开
+  } catch (err) {
+    console.warn("[LauncherBar] 打开独立窗口失败，回退工作台:", err)
   }
 
   expandToDashboard(routeUtils.toPopout(pid, qObj))
@@ -834,7 +850,7 @@ function expandToDashboard(target) {
   const route = location ? router.resolve(location).fullPath : undefined
   if (window.__ztoolsLauncher?.expandToDashboard) {
     const request = route ? window.__ztoolsLauncher.expandToDashboard(route) : window.__ztoolsLauncher.expandToDashboard()
-    Promise.resolve(request).catch(() => {})
+    Promise.resolve(request).catch((err) => console.warn("[LauncherBar] 异步操作失败:", err))
   } else {
     switchWindowMode(WINDOW_MODES.DASHBOARD)
     if (route) router.push(route)
@@ -848,9 +864,9 @@ function hideLauncher() {
   declarativeLoadError.value = ''
   activeDeclarativePlugin.value = null
   if (window.__ztoolsLauncher?.hide) {
-    window.__ztoolsLauncher.hide().catch(() => {})
+    window.__ztoolsLauncher.hide().catch((err) => console.warn("[LauncherBar] 异步操作失败:", err))
   } else if (window.ztools?.window?.hide) {
-    window.ztools.window.hide().catch(() => {})
+    window.ztools.window.hide().catch((err) => console.warn("[LauncherBar] 异步操作失败:", err))
   }
 }
 

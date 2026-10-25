@@ -6,6 +6,7 @@
  */
 
 import { getLocalPlugins } from './native'
+import { normalizeCategoryNames, sortCategories } from '../utils/pluginCategories'
 import { getPluginPlatforms } from '../utils/platform'
 import { checkCompat, fetchVersions } from '../composables/useVersionCompat'
 import {
@@ -54,12 +55,11 @@ export async function getCategories() {
   const counts = new Map()
   for (const entry of entries) {
     if (!entry || typeof entry !== 'object' || !(entry.id || entry.pluginId) || entry.revoked || entry.draft) continue
-    const names = Array.isArray(entry.category) ? entry.category : [entry.category]
-    for (const name of new Set(names.filter((name) => typeof name === 'string' && name.trim()).map((name) => name.trim()))) {
+    for (const name of normalizeCatalogEntry(entry).category) {
       counts.set(name, (counts.get(name) || 0) + 1)
     }
   }
-  return [...counts].map(([name, pluginsCount]) => ({ id: name, name, slug: name, pluginsCount }))
+  return sortCategories([...counts].map(([name, pluginsCount]) => ({ id: name, name, slug: name, pluginsCount })))
 }
 
 /**
@@ -96,8 +96,10 @@ export async function getMarketPlugins(params = {}) {
 
   const keyword = String(params.search || params.keyword || '').trim().toLowerCase()
   if (keyword) items = items.filter((entry) => matchesKeyword(entry, keyword))
-  if (params.category) items = items.filter((entry) =>
-    (Array.isArray(entry.category) ? entry.category : [entry.category]).includes(params.category))
+  if (params.category && !['all', '全部'].includes(params.category)) {
+    const categories = normalizeCategoryNames(params.category)
+    items = items.filter((entry) => entry.category.some((name) => categories.includes(name)))
+  }
   if (params.sort === 'downloads') {
     items = [...items].sort((a, b) => (Number(b.downloads) || 0) - (Number(a.downloads) || 0))
   }

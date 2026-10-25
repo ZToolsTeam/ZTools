@@ -51,7 +51,9 @@ export default function TranslatorCommand() {
       try {
         const history = await getRecentTranslations();
         if (mounted) setRecents(history);
-      } catch (e) {}
+      } catch (e) {
+        console.warn("[translator] load recent translations failed:", e);
+      }
     })();
     return () => { mounted = false; };
   }, []);
@@ -137,7 +139,7 @@ export default function TranslatorCommand() {
   // 构建翻译结果卡片的 Markdown
   const detailMarkdown = useMemo(() => {
     if (!translation || !inputText) {
-      return `### 🌐 极速多语言翻译中枢\n\n` +
+      return `### 极速多语言翻译中枢\n\n` +
         `- **支持语言**: 中、英、日、韩、法、德、西、俄 等 30+ 常用语言\n` +
         `- **极客特性**: 语言自动探测、双向热键对调 (\`Ctrl+S\`)、拼音/音标高保真注音、反向词条对照\n` +
         `- **快速操作**: 回车粘贴到当前焦点窗口，或按 \`Ctrl+C\` 复制译文\n\n` +
@@ -148,13 +150,13 @@ export default function TranslatorCommand() {
       `# ${translation.translatedText}`,
       translation.phonetic ? `*注音 / 音标:* \`${translation.phonetic}\`\n` : ``,
       `---`,
-      `### 📝 原文对照`,
+      `### 原文对照`,
       `> ${translation.sourceText}`,
       `**源语种**: \`${translation.detectedLanguage.label}\` (置信度: ${Math.round(translation.detectedLanguage.confidence * 100)}%) &nbsp;&nbsp;|&nbsp;&nbsp; **目标语种**: \`${targetLangDef.nativeName}\`\n`
     ];
 
     if (translation.reverseTranslations && translation.reverseTranslations.length > 0) {
-      lines.push(`### 🔄 反向词条对照 (Reverse Translations)`);
+      lines.push(`### 反向词条对照 (Reverse Translations)`);
       translation.reverseTranslations.forEach(r => {
         lines.push(`- **${r.term}** ${r.pos ? `\`${r.pos}\`` : ""} : ${r.meaning}`);
         if (r.alternates && r.alternates.length > 0) {

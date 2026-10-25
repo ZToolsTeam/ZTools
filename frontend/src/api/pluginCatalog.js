@@ -1,3 +1,4 @@
+import { getPluginCategories } from '../utils/pluginCategories'
 /**
  * 插件目录（CDN 静态索引）公共能力
  *
@@ -8,6 +9,10 @@
 import { V2_CATALOG_CDN_URL } from '../utils/declarativePluginLoader'
 import { getPluginPlatforms } from '../utils/platform'
 import { compareNumericVersions } from '../utils/version'
+import {
+  getBundledPluginEntry,
+  getStoreOfficialPluginMeta
+} from '../utils/bundledPlugins'
 
 export const PLUGIN_VERSION_INCOMPATIBLE = 'PLUGIN_VERSION_INCOMPATIBLE'
 
@@ -90,11 +95,18 @@ async function fetchCatalogList() {
  * 把静态索引里的条目整理成统一结构（id / pluginId / sha256 / size 等字段补齐）
  */
 export function normalizeCatalogEntry(found, pluginId = '') {
+  const resolvedId = found.id || found.pluginId || pluginId
+  const localMeta = getBundledPluginEntry(resolvedId) || getStoreOfficialPluginMeta(resolvedId)
   const sha256 = found.sha256 || found.checksum || ''
+  const category = getPluginCategories(localMeta?.category || found.category)
   return {
     ...found,
-    id: found.id || found.pluginId || pluginId,
+    id: resolvedId,
     pluginId: found.pluginId || found.id || pluginId,
+    name: localMeta?.name || found.name || resolvedId,
+    title: localMeta?.title || localMeta?.name || found.title || found.name || resolvedId,
+    description: localMeta?.description || found.description || '',
+    category,
     version: found.version || '1.0.0',
     downloadUrl: found.downloadUrl || '',
     sha256,

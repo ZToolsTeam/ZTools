@@ -325,10 +325,15 @@ export class WindowsRegistryScanner implements ApplicationRegistryScanner {
   }
 }
 
-async function movePathToTrash(targetPath: string): Promise<void> {
+async function movePathToTrash(targetPath: string): Promise<boolean> {
   if (shell && typeof shell.trashItem === 'function') {
-    await shell.trashItem(targetPath)
-    return
+    try {
+      await shell.trashItem(targetPath)
+      return true
+    } catch (err) {
+      console.warn('[ApplicationsService] shell.trashItem failed:', err)
+      return false
+    }
   }
   if (process.platform === 'darwin') {
     await execFileAsync('/usr/bin/osascript', [
@@ -338,9 +343,10 @@ async function movePathToTrash(targetPath: string): Promise<void> {
       'function run(argv) { var app = Application("Finder"); app.delete(Path(argv[0])); }',
       targetPath
     ], { timeout: 10000 })
-    return
+    return true
   }
   await fsPromises.rm(targetPath, { recursive: true, force: true })
+  return true
 }
 
 export class DefaultApplicationUninstaller implements ApplicationUninstaller {
@@ -363,7 +369,10 @@ export class DefaultApplicationUninstaller implements ApplicationUninstaller {
       try {
         const removedPaths: string[] = []
         if (fs.existsSync(trimmed)) {
-          await movePathToTrash(trimmed)
+          const trashed = await movePathToTrash(trimmed)
+          if (!trashed) {
+            return { success: false, error: `无法将应用移入废纸篓: ${trimmed}` }
+          }
           removedPaths.push(trimmed)
         }
         const leftovers = record?.leftoverPaths ?? (
@@ -372,7 +381,8 @@ export class DefaultApplicationUninstaller implements ApplicationUninstaller {
         for (const itemPath of leftovers) {
           try {
             if (fs.existsSync(itemPath)) {
-              await movePathToTrash(itemPath)
+              const trashed = await movePathToTrash(itemPath)
+              if (!trashed) continue
               removedPaths.push(itemPath)
             }
           } catch {

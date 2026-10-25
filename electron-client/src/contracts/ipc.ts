@@ -10,11 +10,15 @@ export const MAX_REQUEST_BYTES = 1024 * 1024
 export const MAX_FILE_REQUEST_BYTES = 24 * 1024 * 1024
 export const INFINITE_TIMEOUT = 'infinite' as const
 
-const infiniteTimeoutMethods = new Set([
+const userDialogMethods = new Set([
   'window_show_open_dialog',
   'window_show_save_dialog',
+  'window_show_select_folder_dialog'
+])
+
+const infiniteTimeoutMethods = new Set([
+  ...userDialogMethods,
   'update_install_start',
-  'window_show_select_folder_dialog',
   'process_wait'
 ])
 
@@ -94,7 +98,11 @@ export function parseRequest(value: unknown): ZToolsRequest {
       (typeof pluginSession !== 'string' || !PLUGIN_SESSION_TOKEN_PATTERN.test(pluginSession))) {
     throw new ZToolsError(errorCodes.invalidRequest, 'pluginSession 无效')
   }
-  const timeoutMs = value.timeoutMs
+  // 系统文件对话框等待用户选择或取消，不能被普通 IPC 的 10 秒默认超时截断。
+  // 调用方显式设置的时限仍按原规则校验并保留。
+  const timeoutMs = value.timeoutMs === undefined && userDialogMethods.has(value.method)
+    ? INFINITE_TIMEOUT
+    : value.timeoutMs
   const maxTimeoutMs = value.method === 'network_http_request'
     ? MAX_NETWORK_REQUEST_IPC_TIMEOUT_MS
     : MAX_TIMEOUT_MS

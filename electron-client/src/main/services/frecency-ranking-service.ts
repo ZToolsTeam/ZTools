@@ -311,12 +311,17 @@ export class FrecencyRankingService {
       const frecencyScore = this.getScore(id, now)
 
       // 获取短别名（优先以注册/记录的别名，次选 item 携带的别名）
-      const itemAlias = options.getAlias?.(item) ?? (item as any)?.alias
+      const rec = typeof item === 'object' ? (item as Record<string, unknown>) : {}
+      const rawAlias = typeof rec.alias === 'string' ? rec.alias : undefined
+      const itemAlias = options.getAlias?.(item) ?? rawAlias
       const effectiveAlias = (entry?.alias || itemAlias || '').trim().toLowerCase()
 
-      const title = (options.getTitle?.(item) ?? (item as any)?.name ?? (item as any)?.title ?? id).toString().toLowerCase()
-      const subtitle = (options.getSubtitle?.(item) ?? (item as any)?.description ?? (item as any)?.subtitle ?? '').toString().toLowerCase()
-      const keywords = (options.getKeywords?.(item) ?? (item as any)?.keywords ?? []) as string[]
+      const rawTitle = typeof rec.name === 'string' ? rec.name : typeof rec.title === 'string' ? rec.title : undefined
+      const rawSubtitle = typeof rec.description === 'string' ? rec.description : typeof rec.subtitle === 'string' ? rec.subtitle : undefined
+      const rawKeywords = Array.isArray(rec.keywords) ? (rec.keywords as string[]) : []
+      const title = (options.getTitle?.(item) ?? rawTitle ?? id).toString().toLowerCase()
+      const subtitle = (options.getSubtitle?.(item) ?? rawSubtitle ?? '').toString().toLowerCase()
+      const keywords = (options.getKeywords?.(item) ?? rawKeywords) as string[]
 
       let matchScore = 0
       let isExactAlias = false
@@ -495,8 +500,9 @@ export class FrecencyRankingService {
           }
         }
       }
-    } catch {
-      // 文件不存在或已损坏时安全静默重置为空状态
+    } catch (err) {
+      // 文件不存在或已损坏时安全重置为空状态并记录告警
+      console.warn('[FrecencyRankingService] Failed to load frecency storage:', err)
     }
   }
 

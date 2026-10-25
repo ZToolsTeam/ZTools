@@ -57,8 +57,8 @@ export class FileSearchService {
         return { success: false, path: resolved, error: errMsg }
       }
       return { success: true, path: resolved }
-    } catch (err: any) {
-      return { success: false, path: resolved, error: err.message || String(err) }
+    } catch (err: unknown) {
+      return { success: false, path: resolved, error: err instanceof Error ? err.message : String(err) }
     }
   }
 
@@ -77,8 +77,8 @@ export class FileSearchService {
     try {
       shell.showItemInFolder(resolved)
       return { success: true, path: resolved }
-    } catch (err: any) {
-      return { success: false, path: resolved, error: err.message || String(err) }
+    } catch (err: unknown) {
+      return { success: false, path: resolved, error: err instanceof Error ? err.message : String(err) }
     }
   }
 
@@ -100,14 +100,15 @@ export class FileSearchService {
           detached: true,
           stdio: 'ignore'
         })
+        child.on('error', (err) => console.warn('[QuickLook] 进程启动失败:', err))
         child.unref()
         return { success: true, path: normalized }
-      } catch (err: any) {
-        return { success: false, path: normalized, error: err.message || String(err) }
+      } catch (err: unknown) {
+        return { success: false, path: normalized, error: err instanceof Error ? err.message : String(err) }
       }
     }
 
-    return this.openFile(normalized)
+    return this.revealFile(normalized)
   }
 
   /**
@@ -153,8 +154,8 @@ export class FileSearchService {
           })
         })
       })
-    } catch (err: any) {
-      return { success: false, path: resolved, error: err.message || String(err) }
+    } catch (err: unknown) {
+      return { success: false, path: resolved, error: err instanceof Error ? err.message : String(err) }
     }
   }
 

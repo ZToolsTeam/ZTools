@@ -86,9 +86,47 @@ export function buildSidecar(name, sourceDir, options = {}) {
   return { name, exePath, sha256 }
 }
 
+export function buildMacosIndexerSidecar(sourceDir = path.join(nativeDir, 'ztools-indexer')) {
+  const macBinDir = path.join(rootDir, 'out', 'native', `darwin-${process.arch}`, 'bin')
+  fs.mkdirSync(macBinDir, { recursive: true })
+  const outBinary = path.join(macBinDir, 'ztools-indexer')
+  const mainCpp = path.join(sourceDir, 'main.cpp')
+  const sharedDir = path.join(nativeDir, 'shared')
+
+  console.log('[build-sidecars] Building ztools-indexer for macOS (clang++)...')
+  const buildRes = spawnSync('clang++', [
+    '-std=c++20',
+    '-O3',
+    '-pthread',
+    '-I', sourceDir,
+    '-I', sharedDir,
+    mainCpp,
+    '-o', outBinary
+  ], {
+    encoding: 'utf8',
+    env: process.env
+  })
+
+  if (buildRes.status !== 0) {
+    console.error(buildRes.stdout)
+    console.error(buildRes.stderr)
+    throw new Error(`Failed to build ztools-indexer on macOS: clang++ exited with ${buildRes.status}`)
+  }
+
+  fs.chmodSync(outBinary, 0o755)
+  const sha256 = createHash('sha256').update(fs.readFileSync(outBinary)).digest('hex')
+  console.log(`[build-sidecars] Successfully built ztools-indexer (${sha256.slice(0, 12)}...)`)
+  return { name: 'ztools-indexer', exePath: outBinary, sha256 }
+}
+
 export function buildAllSidecars() {
   const uiaccessDir = path.join(nativeDir, 'ztools-uiaccess')
   const indexerDir = path.join(nativeDir, 'ztools-indexer')
+
+  if (process.platform === 'darwin') {
+    const indexerRes = buildMacosIndexerSidecar(indexerDir)
+    return { indexer: indexerRes }
+  }
 
   console.log('[build-sidecars] Starting native sidecar build...')
   const uiaccessRes = buildSidecar('ztools-uiaccess', uiaccessDir)

@@ -228,6 +228,41 @@ describe('ZTools 双模态交互集成测试', () => {
   assert.equal(windowModeState.isTransitioning, false, '锁必须释放')
 })
 
+  it('8. [全局热键防双端竞态] 独立原生 Launcher 存在时渲染进程不重复抢占切换', async () => {
+    localStorage.clear()
+    _resetWindowModeForTesting()
+    localStorage.setItem('ztools_wake_preference', 'launcher')
+
+    let hotkeyCallback = null
+    let launcherShowCount = 0
+
+    globalThis.window = {
+      __ztoolsLauncher: {
+        show: async () => {
+          launcherShowCount++
+          return { success: true }
+        }
+      },
+      ztools: {
+        events: {
+          on: (event, cb) => {
+            if (event === 'hotkey_triggered') hotkeyCallback = cb
+            return () => { hotkeyCallback = null }
+          }
+        }
+      }
+    }
+
+    initWindowMode()
+    await new Promise((r) => setTimeout(r, 10))
+    const countAfterInit = launcherShowCount
+
+    assert.equal(typeof hotkeyCallback, 'function')
+    hotkeyCallback({ id: 'global_wake_hotkey' })
+    await new Promise((r) => setTimeout(r, 10))
+    assert.equal(launcherShowCount, countAfterInit, '独立原生窗口模式下渲染进程不应重复触发 __ztoolsLauncher.show()')
+  })
+
   it('7. [唤醒偏好状态与配置持久化] setWakePreference 联动 config 并在异常时兜底', () => {
     _resetWindowModeForTesting()
     let configWritten = null

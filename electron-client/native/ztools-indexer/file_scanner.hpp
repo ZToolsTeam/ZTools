@@ -1,11 +1,16 @@
 #pragma once
 
+#ifdef _WIN32
 #ifndef NOMINMAX
 #define NOMINMAX
 #endif
-
 #include <windows.h>
 #include <winioctl.h>
+#else
+#include <dirent.h>
+#include <sys/stat.h>
+#include <cstring>
+#endif
 #include <string>
 #include <vector>
 #include <queue>
@@ -22,20 +27,72 @@ namespace ztools::indexer {
 
 inline std::string WideToUtf8(const std::wstring& wstr) {
   if (wstr.empty()) return "";
+#ifdef _WIN32
   int size = WideCharToMultiByte(CP_UTF8, 0, wstr.data(), (int)wstr.size(), NULL, 0, NULL, NULL);
   if (size <= 0) return "";
   std::string result(size, 0);
   WideCharToMultiByte(CP_UTF8, 0, wstr.data(), (int)wstr.size(), &result[0], size, NULL, NULL);
   return result;
+#else
+  std::string result;
+  result.reserve(wstr.size());
+  for (wchar_t wc : wstr) {
+    uint32_t cp = static_cast<uint32_t>(wc);
+    if (cp <= 0x7F) {
+      result.push_back(static_cast<char>(cp));
+    } else if (cp <= 0x7FF) {
+      result.push_back(static_cast<char>(0xC0 | ((cp >> 6) & 0x1F)));
+      result.push_back(static_cast<char>(0x80 | (cp & 0x3F)));
+    } else if (cp <= 0xFFFF) {
+      result.push_back(static_cast<char>(0xE0 | ((cp >> 12) & 0x0F)));
+      result.push_back(static_cast<char>(0x80 | ((cp >> 6) & 0x3F)));
+      result.push_back(static_cast<char>(0x80 | (cp & 0x3F)));
+    } else {
+      result.push_back(static_cast<char>(0xF0 | ((cp >> 18) & 0x07)));
+      result.push_back(static_cast<char>(0x80 | ((cp >> 12) & 0x3F)));
+      result.push_back(static_cast<char>(0x80 | ((cp >> 6) & 0x3F)));
+      result.push_back(static_cast<char>(0x80 | (cp & 0x3F)));
+    }
+  }
+  return result;
+#endif
 }
 
 inline std::wstring Utf8ToWide(const std::string& str) {
   if (str.empty()) return L"";
+#ifdef _WIN32
   int size = MultiByteToWideChar(CP_UTF8, 0, str.data(), (int)str.size(), NULL, 0);
   if (size <= 0) return L"";
   std::wstring result(size, 0);
   MultiByteToWideChar(CP_UTF8, 0, str.data(), (int)str.size(), &result[0], size);
   return result;
+#else
+  std::wstring result;
+  result.reserve(str.size());
+  size_t i = 0;
+  while (i < str.size()) {
+    uint32_t cp = 0;
+    unsigned char c = static_cast<unsigned char>(str[i]);
+    if (c < 0x80) {
+      cp = c;
+      i += 1;
+    } else if ((c & 0xE0) == 0xC0 && i + 1 < str.size()) {
+      cp = ((c & 0x1F) << 6) | (static_cast<unsigned char>(str[i + 1]) & 0x3F);
+      i += 2;
+    } else if ((c & 0xF0) == 0xE0 && i + 2 < str.size()) {
+      cp = ((c & 0x0F) << 12) | ((static_cast<unsigned char>(str[i + 1]) & 0x3F) << 6) | (static_cast<unsigned char>(str[i + 2]) & 0x3F);
+      i += 3;
+    } else if ((c & 0xF8) == 0xF0 && i + 3 < str.size()) {
+      cp = ((c & 0x07) << 18) | ((static_cast<unsigned char>(str[i + 1]) & 0x3F) << 12) | ((static_cast<unsigned char>(str[i + 2]) & 0x3F) << 6) | (static_cast<unsigned char>(str[i + 3]) & 0x3F);
+      i += 4;
+    } else {
+      cp = c;
+      i += 1;
+    }
+    result.push_back(static_cast<wchar_t>(cp));
+  }
+  return result;
+#endif
 }
 
 struct FileEntry {
@@ -62,6 +119,11 @@ public:
   const char* GetName() const override { return "usn_journal"; }
 
   bool Scan(const std::wstring& target, std::vector<FileEntry>& out_entries) override {
+#ifndef _WIN32
+    (void)target;
+    (void)out_entries;
+    return false;
+#else
     // Determine volume from path, e.g. "C:\\..." -> "\\\\.\\C:"
     std::wstring volume = L"\\\\.\\";
     if (target.size() >= 2 && target[1] == L':') {
@@ -131,6 +193,7 @@ public:
 
     CloseHandle(hVol);
     return count > 0;
+#endif
   }
 };
 
@@ -237,6 +300,7 @@ private:
     std::vector<FileEntry>& files,
     std::vector<std::wstring>& subdirs
   ) {
+#ifdef _WIN32
     std::wstring search_pattern = dir + L"\\*";
     WIN32_FIND_DATAW find_data;
     HANDLE hFind = FindFirstFileExW(
@@ -275,6 +339,49 @@ private:
     } while (FindNextFileW(hFind, &find_data));
 
     FindClose(hFind);
+#else
+    std::string dir_utf8 = WideToUtf8(dir);
+    if (dir_utf8.empty()) return;
+    DIR* dp = opendir(dir_utf8.c_str());
+    if (!dp) return;
+
+    struct dirent* de = nullptr;
+    while ((de = readdir(dp)) != nullptr) {
+      const char* cname = de->d_name;
+      if (std::strcmp(cname, ".") == 0 || std::strcmp(cname, "..") == 0) continue;
+      // Skip noisy/hidden directories on macOS/POSIX
+      if (cname[0] == '.' || std::strcmp(cname, "Library") == 0 || std::strcmp(cname, "node_modules") == 0) {
+        continue;
+      }
+
+      std::string name(cname);
+      std::string full_utf8 = (dir_utf8 == "/") ? ("/" + name) : (dir_utf8 + "/" + name);
+      if (full_utf8 == "/dev" || full_utf8 == "/System/Volumes" || full_utf8 == "/private" || full_utf8 == "/cores" || full_utf8 == "/net") {
+        continue;
+      }
+
+      struct stat st {};
+      if (lstat(full_utf8.c_str(), &st) != 0) continue;
+      bool is_symlink = S_ISLNK(st.st_mode);
+      bool is_directory = S_ISDIR(st.st_mode);
+
+      FileEntry entry;
+      entry.name = name;
+      entry.path = full_utf8;
+      entry.is_dir = is_directory;
+      entry.size = is_directory ? 0 : static_cast<uint64_t>(st.st_size);
+      entry.mtime = static_cast<uint64_t>(st.st_mtime) * 1000ULL;
+
+      PinyinEngine::Convert(entry.name, entry.acronym, entry.pinyin_full, entry.name_lower);
+      files.push_back(std::move(entry));
+
+      bool is_app_bundle = name.size() > 4 && name.compare(name.size() - 4, 4, ".app") == 0;
+      if (is_directory && !is_symlink && !is_app_bundle) {
+        subdirs.push_back(Utf8ToWide(full_utf8));
+      }
+    }
+    closedir(dp);
+#endif
   }
 
   size_t thread_count_ = 4;

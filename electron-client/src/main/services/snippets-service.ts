@@ -224,6 +224,16 @@ export function expandSnippetMacros(template: string, context: MacroContext = {}
   }
 }
 
+interface SnippetRow {
+  id: string
+  name: string
+  keyword: string
+  snippet: string
+  enabled: number
+  created_at: number
+  updated_at: number
+}
+
 /**
  * 快捷短语与宏展开服务 (Snippets Service)
  */
@@ -284,12 +294,12 @@ export class SnippetsService {
         WHERE name LIKE ? OR keyword LIKE ? OR snippet LIKE ?
         ORDER BY updated_at DESC
       `)
-      const rows = stmt.all(q, q, q) as any[]
+      const rows = stmt.all(q, q, q) as unknown as SnippetRow[]
       return rows.map(r => this.mapRow(r))
     }
 
     const stmt = this.db.prepare('SELECT * FROM snippets ORDER BY updated_at DESC')
-    const rows = stmt.all() as any[]
+    const rows = stmt.all() as unknown as SnippetRow[]
     return rows.map(r => this.mapRow(r))
   }
 
@@ -299,7 +309,7 @@ export class SnippetsService {
   public getEnabledSnippets(): SnippetRecord[] {
     if (!this.db) throw new Error('Database is closed')
     const stmt = this.db.prepare('SELECT * FROM snippets WHERE enabled = 1 ORDER BY LENGTH(keyword) DESC')
-    const rows = stmt.all() as any[]
+    const rows = stmt.all() as unknown as SnippetRow[]
     return rows.map(r => this.mapRow(r))
   }
 
@@ -320,8 +330,9 @@ export class SnippetsService {
 
     try {
       stmt.run(id, input.name.trim(), input.keyword.trim(), input.snippet, enabled, now, now)
-    } catch (err: any) {
-      if (err.message && err.message.includes('UNIQUE constraint failed')) {
+    } catch (err: unknown) {
+      const errMessage = err instanceof Error ? err.message : String(err)
+      if (errMessage.includes('UNIQUE constraint failed')) {
         throw new Error(`触发词 "${input.keyword}" 已存在，不可重复`)
       }
       throw err
@@ -352,7 +363,7 @@ export class SnippetsService {
     if (!id || typeof id !== 'string') throw new Error('无效的短语 ID')
 
     const existingStmt = this.db.prepare('SELECT * FROM snippets WHERE id = ?')
-    const existing = existingStmt.get(id) as any
+    const existing = existingStmt.get(id) as unknown as SnippetRow | undefined
     if (!existing) {
       throw new Error(`未找到 ID 为 "${id}" 的短语`)
     }
@@ -374,8 +385,9 @@ export class SnippetsService {
 
     try {
       updateStmt.run(name, keyword, snippet, enabled, now, id)
-    } catch (err: any) {
-      if (err.message && err.message.includes('UNIQUE constraint failed')) {
+    } catch (err: unknown) {
+      const errMessage = err instanceof Error ? err.message : String(err)
+      if (errMessage.includes('UNIQUE constraint failed')) {
         throw new Error(`触发词 "${keyword}" 与其他短语冲突`)
       }
       throw err
@@ -534,15 +546,16 @@ export class SnippetsService {
   /**
    * 批量导入短语 (JSON Array)
    */
-  public importSnippets(data: string | any[]): SnippetImportResult {
+  public importSnippets(data: string | readonly unknown[]): SnippetImportResult {
     if (!this.db) throw new Error('Database is closed')
 
-    let items: any[]
+    let items: unknown[]
     if (typeof data === 'string') {
       try {
-        items = JSON.parse(data)
-      } catch (err: any) {
-        throw new Error(`JSON 解析失败: ${err.message}`)
+        items = JSON.parse(data) as unknown[]
+      } catch (err: unknown) {
+        const errMessage = err instanceof Error ? err.message : String(err)
+        throw new Error(`JSON 解析失败: ${errMessage}`)
       }
     } else if (Array.isArray(data)) {
       items = data
@@ -557,12 +570,13 @@ export class SnippetsService {
     const now = Date.now()
 
     for (let i = 0; i < items.length; i++) {
-      const item = items[i]
-      if (!item || typeof item !== 'object') {
+      const rawItem = items[i]
+      if (!rawItem || typeof rawItem !== 'object') {
         failed++
         errors.push(`第 ${i + 1} 项数据格式错误`)
         continue
       }
+      const item = rawItem as Record<string, unknown>
 
       const name = typeof item.name === 'string' ? item.name.trim() : ''
       const keyword = typeof item.keyword === 'string' ? item.keyword.trim() : ''
@@ -627,7 +641,7 @@ export class SnippetsService {
     }
   }
 
-  private mapRow(row: any): SnippetRecord {
+  private mapRow(row: SnippetRow): SnippetRecord {
     return {
       id: String(row.id),
       name: String(row.name),

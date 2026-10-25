@@ -27,8 +27,8 @@ export const Clipboard = {
         await navigator.clipboard.writeText(text);
         memoryClipboard = text;
         return;
-      } catch {
-        // fallback to memory
+      } catch (err) {
+        console.warn("[Clipboard] navigator.clipboard.writeText 失败，回退内存剪贴板:", err);
       }
     }
 
@@ -69,8 +69,8 @@ export const Clipboard = {
     ) {
       try {
         return await navigator.clipboard.readText();
-      } catch {
-        // fallback to memory
+      } catch (err) {
+        console.warn("[Clipboard] navigator.clipboard.readText 失败，回退内存剪贴板:", err);
       }
     }
 
@@ -96,8 +96,8 @@ export const Clipboard = {
     if (typeof navigator !== "undefined" && navigator.clipboard && typeof navigator.clipboard.writeText === "function") {
       try {
         await navigator.clipboard.writeText("");
-      } catch {
-        // 回退到内存剪贴板
+      } catch (err) {
+        console.warn("[Clipboard] 清空系统剪贴板失败，回退内存剪贴板:", err);
       }
     }
     memoryClipboard = "";

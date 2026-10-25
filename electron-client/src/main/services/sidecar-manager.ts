@@ -138,7 +138,7 @@ export class ManagedSidecarProcess {
 
   private nextRequestId = 1
   private pendingRequests = new Map<number | string, {
-    resolve: (res: any) => void
+    resolve: (res: unknown) => void
     reject: (err: Error) => void
     timer: NodeJS.Timeout
   }>()
@@ -198,14 +198,28 @@ export class ManagedSidecarProcess {
     }
 
     const appRoot = path.resolve(__dirname, '..', '..', '..')
-    const candidates = [
+    const isWin = process.platform === 'win32'
+    const binName = isWin ? `${name}.exe` : name
+    const platformDirs = isWin
+      ? ['win32-x64']
+      : [`darwin-${process.arch}`, 'darwin-universal', 'darwin']
+    const candidates: string[] = []
+    for (const dir of platformDirs) {
+      candidates.push(
+        path.join(appRoot, 'out', 'native', dir, 'bin', binName),
+        path.join(appRoot, 'resources', 'native', dir, 'bin', binName),
+        path.join(process.cwd(), 'out', 'native', dir, 'bin', binName),
+        path.join(process.cwd(), 'electron-client', 'out', 'native', dir, 'bin', binName)
+      )
+    }
+    const legacyCandidates = [
       path.join(appRoot, 'out', 'native', 'win32-x64', 'bin', `${name}.exe`),
       path.join(appRoot, 'resources', 'native', 'win32-x64', 'bin', `${name}.exe`),
       path.join(process.cwd(), 'out', 'native', 'win32-x64', 'bin', `${name}.exe`),
       path.join(process.cwd(), 'electron-client', 'out', 'native', 'win32-x64', 'bin', `${name}.exe`)
     ]
 
-    for (const c of candidates) {
+    for (const c of [...candidates, ...legacyCandidates]) {
       if (fs.existsSync(c)) {
         return c
       }
@@ -337,7 +351,7 @@ export class ManagedSidecarProcess {
     await this.start()
   }
 
-  public sendRequest<T = any>(method: string, params: Record<string, unknown> = {}, timeoutMs = 5000): Promise<T> {
+  public sendRequest<T = unknown>(method: string, params: Record<string, unknown> = {}, timeoutMs = 5000): Promise<T> {
     if (this.state !== 'running' && this.state !== 'starting') {
       return Promise.reject(new Error(`Cannot send request, sidecar is in ${this.state} state`))
     }
@@ -360,7 +374,7 @@ export class ManagedSidecarProcess {
         reject(new Error(`JSON-RPC request '${method}' timed out after ${timeoutMs}ms`))
       }, timeoutMs)
 
-      this.pendingRequests.set(id, { resolve, reject, timer })
+      this.pendingRequests.set(id, { resolve: resolve as (res: unknown) => void, reject, timer })
 
       try {
         const payload = JSON.stringify(req) + '\n'
@@ -560,7 +574,7 @@ export class SidecarManager {
     return {
       active: false,
       hwnd: 0,
-      title: 'Degraded / No Active Window',
+      title: '',
       pid: 0,
       process_name: '',
       process_path: ''
@@ -608,16 +622,16 @@ export class SidecarManager {
   public async manageWindow(
     action: string,
     bounds?: MacosWindowBounds
-  ): Promise<{ success: boolean; action: string; rect?: any; error?: string; errorCode?: string }> {
+  ): Promise<{ success: boolean; action: string; rect?: MacosWindowBounds; error?: string; errorCode?: string }> {
     if (this.uiaccessProcess.state === 'running') {
       try {
         return await this.uiaccessProcess.sendRequest('manage_window', {
           action,
           ...(bounds ? { bounds } : {})
         })
-      } catch (err: any) {
+      } catch (err: unknown) {
         console.warn('[SidecarManager] manage_window RPC failed:', err)
-        return { success: false, action, error: err.message || String(err) }
+        return { success: false, action, error: err instanceof Error ? err.message : String(err) }
       }
     }
 
@@ -641,11 +655,11 @@ export class SidecarManager {
     }
   }
 
-  public async setSnippets(snippets: any[]): Promise<any> {
+  public async setSnippets(snippets: unknown[]): Promise<unknown> {
     if (this.uiaccessProcess.state === 'running') {
       try {
         return await this.uiaccessProcess.sendRequest('set_snippets', { snippets })
-      } catch (err: any) {
+      } catch (err: unknown) {
         console.warn('[SidecarManager] set_snippets RPC failed:', err)
       }
     }
@@ -656,7 +670,7 @@ export class SidecarManager {
     if (this.uiaccessProcess.state === 'running') {
       try {
         return await this.uiaccessProcess.sendRequest<{ success: boolean }>('paste_to_active', { target_hwnd: targetHwnd })
-      } catch (err: any) {
+      } catch (err: unknown) {
         console.warn('[SidecarManager] paste_to_active RPC failed:', err)
       }
     }
@@ -685,7 +699,7 @@ export class SidecarManager {
           target_hwnd: targetHwnd
         })
         return { success: Boolean(rpcRes?.success), pasted: safeText }
-      } catch (err: any) {
+      } catch (err: unknown) {
         console.warn('[SidecarManager] pasteToActiveWindow RPC failed:', err)
       }
     }
@@ -693,7 +707,7 @@ export class SidecarManager {
     if (process.platform === 'darwin') {
       const macRes = await pasteToActiveWindowOnMac(safeText, 0)
       return {
-        success: macRes.success || macRes.clipboardWritten,
+        success: macRes.success,
         pasted: safeText,
         ...(macRes.error ? { error: macRes.error } : {}),
         ...(macRes.errorCode ? { errorCode: macRes.errorCode } : {})
@@ -701,8 +715,9 @@ export class SidecarManager {
     }
 
     return {
-      success: true,
-      pasted: safeText
+      success: false,
+      pasted: safeText,
+      error: 'UIAccess sidecar is not running'
     }
   }
 
@@ -738,7 +753,7 @@ export class SidecarManager {
           cursor_offset: cursorOffset
         })
         return { success: true, expanded, backspaces, cursorOffset }
-      } catch (err: any) {
+      } catch (err: unknown) {
         console.warn('[SidecarManager] expandSnippet RPC failed:', err)
       }
     }
@@ -746,7 +761,7 @@ export class SidecarManager {
     if (process.platform === 'darwin') {
       const macRes = await pasteToActiveWindowOnMac(expanded, cursorOffset)
       return {
-        success: macRes.success || macRes.clipboardWritten,
+        success: macRes.success,
         expanded,
         backspaces,
         cursorOffset,
@@ -756,10 +771,11 @@ export class SidecarManager {
     }
 
     return {
-      success: true,
+      success: false,
       expanded,
       backspaces,
-      cursorOffset
+      cursorOffset,
+      error: 'UIAccess sidecar is not running'
     }
   }
 
@@ -767,7 +783,7 @@ export class SidecarManager {
     if (this.uiaccessProcess.state === 'running') {
       try {
         return await this.uiaccessProcess.sendRequest<{ success: boolean; pid: number; trimmed: boolean }>('trim_process_memory', { pid })
-      } catch (err: any) {
+      } catch (err: unknown) {
         console.warn('[SidecarManager] trim_process_memory RPC failed:', err)
       }
     }
@@ -832,7 +848,7 @@ export class SidecarManager {
           query: trimmed,
           limit: safeLimit
         })
-        if (rpcRes && Array.isArray(rpcRes.files) && rpcRes.files.length > 0) {
+        if (rpcRes && Array.isArray(rpcRes.files) && (rpcRes.files.length > 0 || (rpcRes.total_indexed ?? 0) > 0)) {
           return rpcRes
         }
       } catch (err) {
@@ -875,32 +891,10 @@ export class SidecarManager {
       }
     }
 
-    // Degraded fallback
-    const t0 = performance.now()
-    this.fallbackFiles = []
-    try {
-      const entries = fs.readdirSync(targetPath, { withFileTypes: true, recursive: true })
-      for (const ent of entries) {
-        const fullPath = path.join(ent.parentPath || targetPath, ent.name)
-        this.fallbackFiles.push({
-          name: ent.name,
-          path: fullPath,
-          is_dir: ent.isDirectory(),
-          size: 0,
-          mtime: Date.now(),
-          acronym: ent.name.slice(0, 4).toLowerCase(),
-          pinyin: ent.name.toLowerCase()
-        })
-      }
-    } catch {
-      // Ignore readdir error in fallback
-    }
-
-    const elapsedMs = performance.now() - t0
     return {
       total_indexed: this.fallbackFiles.length,
-      scanner_used: 'node_fs_degraded',
-      elapsed_ms: elapsedMs
+      scanner_used: 'degraded_unindexed',
+      elapsed_ms: 0
     }
   }
 

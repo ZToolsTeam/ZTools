@@ -199,7 +199,21 @@ test('screen capture TCC denial preserves its structured public IPC error', asyn
   )
 })
 
-test('parseRequest only permits explicit infinite waits for dialogs', () => {
+test('文件对话框默认等待用户完成，显式时限与非法值仍遵守原契约', () => {
+  for (const method of ['window_show_open_dialog', 'window_show_save_dialog', 'window_show_select_folder_dialog']) {
+    const request = { messageId: 'dialog:default', method, params: {} }
+    assert.equal(parseRequest(request).timeoutMs, INFINITE_TIMEOUT)
+    assert.equal(parseRequest({ ...request, timeoutMs: 20_000 }).timeoutMs, 20_000)
+    for (const timeoutMs of [null, 0, -1, MAX_TIMEOUT_MS + 1, 'forever']) {
+      assert.throws(() => parseRequest({ ...request, timeoutMs }))
+    }
+  }
+  for (const method of ['app_ready', 'filesystem_move_file_no_replace', 'process_wait', 'update_install_start']) {
+    assert.equal(parseRequest({ messageId: 'ordinary:default', method, params: {} }).timeoutMs, undefined)
+  }
+})
+
+test('parseRequest only permits explicit infinite waits for allowlisted methods', () => {
   assert.equal(
     parseRequest({
       messageId: 'dialog:1',

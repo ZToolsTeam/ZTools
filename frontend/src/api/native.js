@@ -2,6 +2,7 @@
 // Encapsulates interactions with the Electron host via window.ztools
 
 import { isOfficialPlugin } from '@/utils/officialPlugins'
+import { normalizeCategoryNames } from '@/utils/pluginCategories'
 
 /**
  * Check if the native bridge is available
@@ -13,7 +14,8 @@ function hasNativeBridge() {
       window.ztools &&
       typeof window.ztools === 'object'
     )
-  } catch {
+  } catch (err) {
+    console.warn('[native] 检测原生桥接失败:', err)
     return false
   }
 }
@@ -121,7 +123,10 @@ const native = {
       const plugin = getNativeModule('plugin')
       const result = await plugin.getList()
       return result && result.data && Array.isArray(result.data)
-        ? result.data
+        ? result.data.map((item) => ({
+          ...item,
+          category: normalizeCategoryNames(item.category).join(' / ')
+        }))
         : []
     } catch (e) {
       console.error('getLocalPlugins error:', e)
@@ -184,6 +189,7 @@ const native = {
       const data = await config.get('plugins.favorites', '[]')
       return JSON.parse(data)
     } catch (e) {
+      console.warn('[native] getFavorites 失败:', e)
       return []
     }
   },
@@ -195,6 +201,7 @@ const native = {
       await config.set('plugins.favorites', data, true)
       return true
     } catch (e) {
+      console.warn('[native] setFavorites 失败:', e)
       return false
     }
   },
@@ -220,18 +227,15 @@ const native = {
 
   async setAutostart(enabled) {
     try {
-      const sys = getNativeModule('sys')
-      const isElectronHost = typeof window.ztools?.isElectron === 'function'
-        ? window.ztools.isElectron()
-        : Boolean(window.__ztoolsElectron)
-      if (isElectronHost && typeof sys.setAutostart === 'function') {
+      const sys = window.ztools?.sys
+      if (typeof sys?.setAutostart === 'function') {
         const result = await withTimeout(sys.setAutostart(!!enabled))
         return result?.success === true && normalizeBoolean(result.enabled) === !!enabled
       }
-      const config = getNativeModule('config')
-      await withTimeout(config.set('system.autostart', String(!!enabled), true))
-      return true
-    } catch {
+      console.warn('[native] 当前宿主不支持 sys.setAutostart，无法设置开机自启')
+      return false
+    } catch (err) {
+      console.warn('[native] setAutostart 失败:', err)
       return false
     }
   },
@@ -239,7 +243,8 @@ const native = {
   async getHotkey() {
     try {
       return (await getNativeModule('config').get('hotkey.global', '')) || ''
-    } catch {
+    } catch (err) {
+      console.warn('[native] getHotkey 失败:', err)
       return ''
     }
   },
@@ -247,7 +252,8 @@ const native = {
     try {
       await getNativeModule('config').set('hotkey.global', val || '', true)
       return true
-    } catch {
+    } catch (err) {
+      console.warn('[native] setHotkey 失败:', err)
       return false
     }
   },
@@ -258,7 +264,8 @@ const native = {
         'true'
       )
       return normalizeBoolean(raw)
-    } catch {
+    } catch (err) {
+      console.warn('[native] getMinimizeToTray 失败:', err)
       return true
     }
   },
@@ -270,7 +277,8 @@ const native = {
         true
       )
       return true
-    } catch {
+    } catch (err) {
+      console.warn('[native] setMinimizeToTray 失败:', err)
       return false
     }
   },
@@ -281,7 +289,8 @@ const native = {
         'true'
       )
       return normalizeBoolean(raw)
-    } catch {
+    } catch (err) {
+      console.warn('[native] getCloseConfirm 失败:', err)
       return true
     }
   },
@@ -293,7 +302,8 @@ const native = {
         true
       )
       return true
-    } catch {
+    } catch (err) {
+      console.warn('[native] setCloseConfirm 失败:', err)
       return false
     }
   },
@@ -377,6 +387,12 @@ const native = {
     async searchFiles(query, limit = 50) {
       if (window.__ztoolsLauncher?.searchFiles) {
         return await window.__ztoolsLauncher.searchFiles(query, limit)
+      }
+      if (typeof window.ztools?.system?.searchFiles === 'function') {
+        return await window.ztools.system.searchFiles(query, limit)
+      }
+      if (typeof window.ztools?.sys?.searchFiles === 'function') {
+        return await window.ztools.sys.searchFiles(query, limit)
       }
       return await getNativeModule('sys').searchFiles(query, limit)
     }
