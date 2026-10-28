@@ -1,3 +1,4 @@
+import { isRealElectronHost } from '../shared/native-ipc.js'
 import React, {
   List,
   ActionPanel,
@@ -26,7 +27,7 @@ const DEFAULT_SVG_SAMPLE = `<?xml version="1.0" encoding="UTF-8"?>
 </svg>`
 
 export function SvgIconStudioCommand() {
-  const [rawSvg, setRawSvg] = useState<string>(DEFAULT_SVG_SAMPLE)
+  const [rawSvg, setRawSvg] = useState<string>(isRealElectronHost() ? '' : DEFAULT_SVG_SAMPLE)
   const [exportFormat, setExportFormat] = useState<SvgExportFormat>('minified')
 
   const svgState = useMemo(() => {

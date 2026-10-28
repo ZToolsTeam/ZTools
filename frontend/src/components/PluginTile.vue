@@ -13,6 +13,8 @@ const props = defineProps({
   focused: { type: Boolean, default: false },
   pinned: { type: Boolean, default: false },
   revoked: { type: Boolean, default: false },
+  /** 禁用时的标签文字（官方下架为「已下架」，新版本不支持当前系统时为「不支持当前系统」） */
+  revokedText: { type: String, default: '已下架' },
   hasUpdate: { type: Boolean, default: false },
   installed: { type: Boolean, default: true },
   /** 插件启动快捷键（触发器中保存的写法，如 'Alt+V'、'CommandOrControl+Shift+J'、'DoubleCtrl'） */
@@ -24,7 +26,7 @@ const emit = defineEmits(['open', 'menu'])
 const { pluginIcon, pluginGlyph, displayIconUrl, iconFailed } = usePluginIcon(() => props.plugin)
 
 const status = computed(() => {
-  if (props.revoked) return { text: '已下架', tone: 'error' }
+  if (props.revoked) return { text: props.revokedText || '已下架', tone: 'error' }
   if (props.hasUpdate) return { text: '可更新', tone: 'accent' }
   if (!props.installed) return { text: '未安装', tone: 'muted' }
   return null

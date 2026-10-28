@@ -45,6 +45,7 @@ test('IpcRouter factory rolls back real service listeners after a late construct
   const dataRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'ztools-router-construction-'))
   const registry = new FakeRegistry()
   const nativeHost = new FakeNativeHost()
+  const thumbnailerChanges: unknown[] = []
   const services = {
     dataRoot,
     runtimePaths: runtimePathsForBusinessDataRoot(dataRoot),
@@ -56,6 +57,7 @@ test('IpcRouter factory rolls back real service listeners after a late construct
     },
     user: {},
     analytics: { stop() {} },
+    clipboardHistory: { useImageThumbnailer(value: unknown) { thumbnailerChanges.push(value) } },
     nativeHost,
     serviceClient: null,
     update: { onProgress() { return () => {} } },
@@ -97,6 +99,9 @@ test('IpcRouter factory rolls back real service listeners after a late construct
     assert.equal(nativeHost.dllListeners.size, 0)
     assert.equal(nativeHost.inputListeners.size, 0)
     assert.equal(nativeHost.lifecycleListeners.size, 0)
+    assert.equal(thumbnailerChanges.length, 2)
+    assert.equal(typeof thumbnailerChanges[0], 'function')
+    assert.equal(thumbnailerChanges[1], undefined)
   } finally {
     const temporaryRoot = path.resolve(os.tmpdir())
     const scratchRoot = path.resolve(dataRoot)

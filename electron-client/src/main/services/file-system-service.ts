@@ -1,4 +1,5 @@
 import fs from 'node:fs/promises'
+import { constants as fsConstants } from 'node:fs'
 import path from 'node:path'
 import { randomBytes, randomUUID } from 'node:crypto'
 import type { CallerIdentity } from '../../contracts/capabilities.js'
@@ -165,6 +166,9 @@ interface WriteSession {
   written: number
   file: import('node:fs/promises').FileHandle
   expiresAt: number
+  cancelled: boolean
+  finishing?: Promise<{ success: true; size: number }>
+  cleanup?: Promise<void>
 }
 
 interface PathGrant {
@@ -177,6 +181,9 @@ interface PathGrant {
 
 export function fileFailure(error: unknown): ZToolsError {
   if (error instanceof ZToolsError) return error
+  if (errorCode(error) === 'ERR_ENCODING_INVALID_ENCODED_DATA') {
+    return new ZToolsError(errorCodes.fileError, '文件不是有效的 UTF-8 文本，请先转换为 UTF-8 编码')
+  }
   if (errorCode(error) === 'EEXIST') return new ZToolsError(errorCodes.fileAlreadyExists, '输出已存在，未覆盖')
   if (errorCode(error) === 'ENOSPC') return new ZToolsError(errorCodes.diskFull, '磁盘空间不足')
   if (errorCode(error) === 'EACCES' || errorCode(error) === 'EPERM') {
@@ -319,8 +326,9 @@ async function samePathOnVolume(left: string, right: string): Promise<boolean> {
   return pathHasPrefixOnVolume(normalizedLeft, normalizedRight)
 }
 
-export async function replaceFile(source: string, target: string): Promise<void> {
+export async function replaceFile(source: string, target: string, beforeCommit?: () => void): Promise<void> {
   for (let attempt = 0; ; attempt += 1) {
+    beforeCommit?.()
     try {
       await fs.rename(source, target)
       return
@@ -680,17 +688,22 @@ export class FileSystemService {
     await this.#grant(caller, target, true, true, true)
   }
 
-  async readFile(params: FileReadParams, caller: CallerIdentity): Promise<{ success: true; content: string; size: number }> {
+  async readFile(params: FileReadParams, caller: CallerIdentity, signal?: AbortSignal): Promise<{ success: true; content: string; size: number }> {
     try {
+      signal?.throwIfAborted()
       const target = await this.resolveAuthorizedPath(params.path, caller, 'read', false)
-      const handle = await fs.open(target, 'r')
+      signal?.throwIfAborted()
+      // 非阻塞打开后再检查文件类型，避免命名管道在 open 阶段等待写入方。
+      const handle = await fs.open(target, fsConstants.O_RDONLY | (fsConstants.O_NONBLOCK || 0))
       try {
+        signal?.throwIfAborted()
         const stats = await handle.stat()
         if (!stats.isFile()) throw new ZToolsError(errorCodes.fileError, '目标不是文件')
         if (stats.size > MAX_FILE_BYTES) {
           throw new ZToolsError(errorCodes.fileTooLarge, '文件超过 16 MiB IPC 上限')
         }
-        const data = await handle.readFile()
+        const data = await handle.readFile({ ...(signal ? { signal } : {}) })
+        signal?.throwIfAborted()
         const content = params.encoding === 'base64'
           ? data.toString('base64')
           : new TextDecoder('utf-8', { fatal: true }).decode(data)
@@ -699,11 +712,12 @@ export class FileSystemService {
         await handle.close()
       }
     } catch (error) {
+      if (signal?.aborted) throw new ZToolsError(errorCodes.callerDestroyed, '文件读取已取消')
       throw fileFailure(error)
     }
   }
 
-  async writeFile(params: FileWriteParams, caller: CallerIdentity): Promise<{ success: true; size: number }> {
+  async writeFile(params: FileWriteParams, caller: CallerIdentity, signal?: AbortSignal): Promise<{ success: true; size: number }> {
     try {
       const data = params.encoding === 'base64'
         ? Buffer.from(params.content, 'base64')
@@ -712,7 +726,7 @@ export class FileSystemService {
         throw new ZToolsError(errorCodes.fileTooLarge, '文件超过 16 MiB IPC 上限')
       }
       const target = await this.resolveAuthorizedPath(params.path, caller, 'write', true)
-      await this.#writeData(target, data, params.overwrite !== false)
+      await this.#writeData(target, data, params.overwrite !== false, () => { signal?.throwIfAborted(); this.#assertCallerAvailable(caller) })
       return { success: true, size: data.byteLength }
     } catch (error) {
       throw fileFailure(error)
@@ -1064,7 +1078,8 @@ export class FileSystemService {
         totalSize: params.totalSize,
         written: 0,
         file,
-        expiresAt: this.now() + STREAM_TTL_MS
+        expiresAt: this.now() + STREAM_TTL_MS,
+        cancelled: false
       }
       this.#writeSessions.set(handle, session)
       return { success: true, handle, totalSize: params.totalSize }
@@ -1089,6 +1104,7 @@ export class FileSystemService {
     caller: CallerIdentity
   ): Promise<{ success: true; written: number; totalSize: number }> {
     const session = await this.#getWriteSession(params.handle, caller)
+    if (session.finishing) throw new ZToolsError(errorCodes.invalidRequest, '写入句柄正在提交')
     try {
       const data = Buffer.from(params.content, 'base64')
       if (data.byteLength === 0 || data.byteLength > MAX_FILE_CHUNK_BYTES) {
@@ -1111,21 +1127,31 @@ export class FileSystemService {
 
   async finishWrite(
     handle: string,
-    caller: CallerIdentity
+    caller: CallerIdentity,
+    signal?: AbortSignal
   ): Promise<{ success: true; size: number }> {
     const session = await this.#getWriteSession(handle, caller)
+    if (session.finishing) throw new ZToolsError(errorCodes.invalidRequest, '写入句柄正在提交')
     if (session.written !== session.totalSize) {
       throw new ZToolsError(errorCodes.invalidRequest, '写入内容尚未完成')
     }
-    this.#writeSessions.delete(handle)
-    try {
-      await session.file.close()
-      await replaceFile(session.temporary, session.target)
-      return { success: true, size: session.totalSize }
-    } catch (error) {
-      await fs.rm(session.temporary, { force: true }).catch(() => undefined)
-      throw fileFailure(error)
-    }
+    // 关闭文件也会异步等待。提交前保留会话，窗口关闭、取消和 stop 均可使它失效并等待收尾。
+    session.finishing = (async () => {
+      try {
+        await session.file.close()
+        await replaceFile(session.temporary, session.target, () => {
+          this.#assertCallerAvailable(caller)
+          if (session.cancelled || signal?.aborted) throw new ZToolsError(errorCodes.callerDestroyed, '分块写入已取消')
+        })
+        return { success: true as const, size: session.totalSize }
+      } catch (error) {
+        throw fileFailure(error)
+      } finally {
+        await fs.rm(session.temporary, { force: true }).catch(() => undefined)
+        if (this.#writeSessions.get(handle) === session) this.#writeSessions.delete(handle)
+      }
+    })()
+    return session.finishing
   }
 
   async cancelWrite(handle: string, caller: CallerIdentity): Promise<{ success: true }> {
@@ -1402,11 +1428,13 @@ export class FileSystemService {
     return this.resolveAuthorizedPath(target, caller, 'read', false)
   }
 
-  async #writeData(target: string, data: Buffer, overwrite = true): Promise<void> {
+  async #writeData(target: string, data: Buffer, overwrite = true, beforeCommit?: () => void): Promise<void> {
+    beforeCommit?.()
     await fs.mkdir(path.dirname(target), { recursive: true })
     const temporary = path.join(path.dirname(target), `.${path.basename(target)}.${randomUUID()}.tmp`)
     try {
       await fs.writeFile(temporary, data, { flag: 'wx' })
+      beforeCommit?.()
       if (overwrite) await replaceFile(temporary, target)
       else await fs.link(temporary, target)
     } finally {
@@ -1466,8 +1494,9 @@ export class FileSystemService {
   }
 
   async #getWriteSession(handle: string, caller: CallerIdentity): Promise<WriteSession> {
+    this.#assertCallerAvailable(caller)
     const session = this.#writeSessions.get(handle)
-    if (!session || session.webContentsId !== caller.webContentsId) {
+    if (!session || session.cancelled || session.webContentsId !== caller.webContentsId) {
       throw new ZToolsError(errorCodes.permissionDenied, '写入句柄未授权')
     }
     if (session.expiresAt <= this.now()) {
@@ -1478,9 +1507,18 @@ export class FileSystemService {
   }
 
   async #cleanupWriteSession(session: WriteSession): Promise<void> {
-    if (this.#writeSessions.get(session.handle) === session) this.#writeSessions.delete(session.handle)
-    await session.file.close().catch(() => undefined)
-    await fs.rm(session.temporary, { force: true }).catch(() => undefined)
+    session.cancelled = true
+    if (session.finishing) {
+      // 取消前已进入 OS 原子提交的操作可能完成；等待它的 finally 清理，不能并发关闭或删除。
+      await session.finishing.catch(() => undefined)
+      return
+    }
+    session.cleanup ??= (async () => {
+      if (this.#writeSessions.get(session.handle) === session) this.#writeSessions.delete(session.handle)
+      await session.file.close().catch(() => undefined)
+      await fs.rm(session.temporary, { force: true }).catch(() => undefined)
+    })()
+    await session.cleanup
   }
 
   async #canonical(value: string, allowMissing: boolean): Promise<string> {

@@ -1,4 +1,5 @@
 <script setup>
+import { StarFilled, StarOutlined } from '@ant-design/icons-vue'
 import PluginActions from './PluginActions.vue'
 
 const props = defineProps({
@@ -11,6 +12,14 @@ const props = defineProps({
     default: ''
   },
   isInstalled: Boolean,
+  canUninstall: {
+    type: Boolean,
+    default: true
+  },
+  canCreateShortcut: {
+    type: Boolean,
+    default: true
+  },
   hasUpdate: Boolean,
   downloading: Boolean,
   creatingShortcut: Boolean,
@@ -101,6 +110,8 @@ const { pluginIcon, pluginGlyph, displayIconUrl, iconFailed } = usePluginIcon(()
       <!-- 操作按钮 -->
       <PluginActions
         :isInstalled="isInstalled"
+        :canUninstall="canUninstall"
+        :canCreateShortcut="canCreateShortcut"
         :hasUpdate="hasUpdate"
         :downloading="downloading"
         :creatingShortcut="creatingShortcut"
@@ -132,14 +143,13 @@ const { pluginIcon, pluginGlyph, displayIconUrl, iconFailed } = usePluginIcon(()
         <span class="stat-label">评分</span>
         <span class="stat-value">
           <span class="stars">
-            <i
+            <component
               v-for="i in 5"
               :key="i"
-              class="fa"
-              :class="
-                i <= Math.round(plugin.rating || 0) ? 'fa-star' : 'fa-star-o'
-              "
-            ></i>
+              :is="i <= Math.round(plugin.rating || 0) ? StarFilled : StarOutlined"
+              :class="{ 'is-empty': i > Math.round(plugin.rating || 0) }"
+              aria-hidden="true"
+            />
           </span>
           <span>{{ plugin.rating || 'N/A' }}</span>
         </span>
@@ -275,12 +285,12 @@ const { pluginIcon, pluginGlyph, displayIconUrl, iconFailed } = usePluginIcon(()
   gap: 2px;
 }
 
-.stars .fa {
+.stars :deep(.anticon) {
   font-size: 11px;
   color: var(--rc-accent);
 }
 
-.stars .fa-star-o {
+.stars :deep(.is-empty) {
   color: var(--rc-border-highlight);
 }
 

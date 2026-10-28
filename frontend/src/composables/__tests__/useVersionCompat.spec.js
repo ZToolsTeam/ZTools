@@ -159,7 +159,8 @@ describe('fetchVersions', () => {
     expect(ver.appVersion).toBeNull()
     expect(ver.webVersion).toBe('1.0.0')
     expect(cachedVer).toEqual(ver)
-    expect(getCurrentVersion).toHaveBeenCalledTimes(1)
+    // 读取失败不缓存，下次重新读取，避免一次临时故障让插件一直判为不兼容
+    expect(getCurrentVersion).toHaveBeenCalledTimes(2)
     expect(freshCheckCompat({ minAppVersion: '1.0.0.1' }, ver.appVersion, ver.webVersion).compatible).toBe(false)
     expect(freshCheckCompat({}, ver.appVersion, ver.webVersion).compatible).toBe(true)
   })

@@ -4,7 +4,7 @@
       "id": "json-format",
       "name": "JSON 格式化",
       "description": "JSON 语法校验、高亮美化与压缩转义，支持一键生成 TypeScript / Go / Rust 数据结构定义",
-      "version": "2.1.2",
+      "version": "2.1.3",
       "author": "ZTools Team",
       "icon": "icon.svg",
       "category": [
@@ -70,7 +70,7 @@
       "id": "timestamp",
       "name": "时间戳转换",
       "description": "秒与毫秒时间戳、日期格式实时互转，支持全球城市世界时钟与多时区时差换算",
-      "version": "1.1.2",
+      "version": "1.1.3",
       "author": "ZTools Team",
       "icon": "icon.svg",
       "category": [
@@ -137,7 +137,7 @@
       "id": "calculator",
       "name": "计算器",
       "description": "输入算式即时计算，内置科学函数、单位换算、每日汇率、人民币大写金额转换与日期推算",
-      "version": "2.1.2",
+      "version": "2.1.5",
       "author": "ZTools Team",
       "icon": "icon.svg",
       "category": [
@@ -218,7 +218,7 @@
       "id": "qr-code",
       "name": "二维码生成",
       "description": "输入网址或文本实时生成高清二维码，支持生成 Wi-Fi 连网二维码、复制图片与导出 PNG",
-      "version": "2.1.2",
+      "version": "2.1.6",
       "author": "ZTools Team",
       "icon": "icon.svg",
       "category": [
@@ -281,7 +281,7 @@
       "id": "base64image",
       "name": "图片 Base64",
       "description": "图片文件或截图与 Base64 编码双向互转，支持一键复制 Data URL 或还原预览图片",
-      "version": "1.0.3",
+      "version": "1.0.4",
       "author": "ZTools Team",
       "icon": "icon.svg",
       "category": [
@@ -322,8 +322,8 @@
     {
       "id": "file-compare",
       "name": "文本对比",
-      "description": "左右并排对比两段文本、代码或配置文件的逐行差异，支持忽略空白与一键复制差异报告",
-      "version": "2.0.4",
+      "description": "逐行对比两段文本、代码或配置文件，逐处列出增删的行，支持忽略空白与复制 unified diff 差异报告",
+      "version": "2.0.5",
       "author": "ZTools Team",
       "icon": "icon.svg",
       "category": [
@@ -499,7 +499,7 @@
       "id": "google-auth",
       "name": "2FA 验证码",
       "description": "桌面端两步验证动态口令（TOTP）管理工具，支持秒级复制 6 位验证码，密钥加密保存在本机",
-      "version": "1.0.4",
+      "version": "1.0.6",
       "author": "ZTools Team",
       "icon": "icon.svg",
       "category": [
@@ -542,7 +542,7 @@
       "id": "color-picker",
       "name": "取色与配色",
       "description": "支持 HEX / RGB / HSL / CMYK 色值实时互转、WCAG 无障碍对比度检测与常用色板收藏",
-      "version": "2.1.2",
+      "version": "2.1.5",
       "author": "ZTools Team",
       "icon": "icon.svg",
       "category": [
@@ -551,8 +551,6 @@
       "keywords": [
         "color",
         "颜色",
-        "取色",
-        "拾色器",
         "hex",
         "rgb",
         "hsl",
@@ -571,9 +569,7 @@
             "hex转rgb",
             "rgb转hex",
             "oklch",
-            "cmyk",
-            "取色",
-            "拾色器"
+            "cmyk"
           ]
         },
         {
@@ -612,8 +608,8 @@
     {
       "id": "memo",
       "name": "便签",
-      "description": "轻量随手记便签，支持 Markdown 排版、分类标签筛选与全文快速搜索",
-      "version": "1.0.3",
+      "description": "轻量随手记便签，正文支持 Markdown，可加标签，按标题、正文或标签搜索",
+      "version": "1.0.6",
       "author": "ZTools Team",
       "icon": "icon.svg",
       "category": [
@@ -653,7 +649,7 @@
       "id": "todo",
       "name": "待办清单",
       "description": "极简任务待办清单，回车快速添加任务，支持高优标记与完成状态筛选",
-      "version": "1.0.3",
+      "version": "1.0.5",
       "author": "ZTools Team",
       "icon": "icon.svg",
       "category": [
@@ -692,8 +688,8 @@
     {
       "id": "batch-image",
       "name": "图片压缩",
-      "description": "批量无损压缩 PNG/JPG/WebP 图片体积，支持政务报销 300KB 限额压缩、格式转换、清除拍摄隐私与多图合并转 PDF",
-      "version": "1.1.2",
+      "description": "批量压缩与转换 PNG/JPG/WebP/BMP 图片：三档画质重新编码、限制最长边、转 JPG/PNG、扫描件转灰度，报销附件场景会标出仍超过 300KB 的图片；结果另存为原图同目录的 *_opt 文件，不覆盖原图",
+      "version": "1.1.4",
       "author": "ZTools Team",
       "icon": "icon.svg",
       "category": [
@@ -703,36 +699,32 @@
       "keywords": [
         "image",
         "compress",
-        "tinypng",
         "png",
         "jpg",
         "webp",
-        "exif",
         "图片压缩",
         "格式转换",
-        "图片转PDF"
+        "图片转jpg",
+        "图片缩放"
       ],
       "alias": "img",
       "features": [
         {
           "code": "preset-lossless",
-          "explain": "图片智能无损压缩",
+          "explain": "图片批量压缩",
           "mode": "view",
           "cmds": [
             "图片压缩",
-            "无损压缩",
-            "tinypng",
             "压缩图片",
             "图片瘦身"
           ]
         },
         {
           "code": "preset-gov-limit",
-          "explain": "政务/报销图片极限压缩 (≤300KB)",
+          "explain": "报销/政务附件压缩（标出超过 300KB 的图片）",
           "mode": "view",
           "cmds": [
             "证件照压缩",
-            "限制大小",
             "300kb",
             "政务上传",
             "报销附图"
@@ -740,48 +732,23 @@
         },
         {
           "code": "preset-to-jpg",
-          "explain": "WebP/HEIC 批量转 JPG",
+          "explain": "PNG/WebP/BMP 批量转 JPG",
           "mode": "view",
           "cmds": [
             "图片格式转换",
             "webp转jpg",
-            "heic转jpg",
             "png转jpg",
             "转jpg"
           ]
         },
         {
-          "code": "preset-strip-exif",
-          "explain": "清除图片 EXIF 隐私信息",
-          "mode": "view",
-          "cmds": [
-            "去exif",
-            "清除exif",
-            "抹除定位",
-            "图片脱敏",
-            "拍摄信息"
-          ]
-        },
-        {
-          "code": "preset-merge-pdf",
-          "explain": "多张图片合并转 PDF",
-          "mode": "view",
-          "cmds": [
-            "图片转pdf",
-            "多图转pdf",
-            "合成pdf",
-            "jpg转pdf"
-          ]
-        },
-        {
           "code": "preset-doc-bw",
-          "explain": "合同扫描件黑白高对比增强",
+          "explain": "扫描件转灰度",
           "mode": "view",
           "cmds": [
-            "扫描件增强",
-            "合同去灰底",
-            "黑白扫描",
-            "票据增强"
+            "扫描件转灰度",
+            "图片转灰度",
+            "黑白扫描件"
           ]
         }
       ],
@@ -805,8 +772,8 @@
     {
       "id": "archive-manager",
       "name": "解压与压缩",
-      "description": "免解压直接预览压缩包内容、按需提取单个文件，支持 ZIP/7Z/RAR/TAR 智能解压与加密打包",
-      "version": "1.1.2",
+      "description": "不解压就能查看本机 ZIP 压缩包里的文件，可整包解压或只提取勾选的文件；只支持 ZIP，不提供压缩打包",
+      "version": "1.1.4",
       "author": "ZTools Team",
       "icon": "icon.svg",
       "category": [
@@ -818,26 +785,22 @@
         "archive",
         "unzip",
         "extract",
-        "7z",
-        "rar",
         "解压",
         "压缩包",
-        "压缩包透视"
+        "查看压缩包"
       ],
       "alias": "zip",
       "features": [
         {
           "code": "archive-inspect",
-          "explain": "透视压缩包与免解压提取",
+          "explain": "查看 ZIP 压缩包内容并解压或提取",
           "mode": "view",
           "cmds": [
             "解压",
             "压缩包",
-            "透视压缩包",
+            "查看压缩包",
             "zip",
-            "7z",
-            "rar",
-            "查看压缩包"
+            "校验压缩包"
           ]
         },
         {
@@ -846,20 +809,7 @@
           "mode": "view",
           "cmds": [
             "提取文档",
-            "压缩包文档",
-            "提取合同",
-            "提取标书"
-          ]
-        },
-        {
-          "code": "archive-verify",
-          "explain": "压缩包密码检测与安全扫描",
-          "mode": "view",
-          "cmds": [
-            "压缩包加密",
-            "zip密码",
-            "安全扫描",
-            "校验压缩包"
+            "压缩包文档"
           ]
         }
       ],
@@ -883,8 +833,8 @@
     {
       "id": "invoice-assistant",
       "name": "发票助手",
-      "description": "自动识别 PDF/XML 电子发票金额与税号，支持重复发票查重、抬头校验、批量规范重命名与导出报销明细表",
-      "version": "1.1.2",
+      "description": "扫描下载、桌面、文档目录中的 PDF/XML 电子发票，识别发票号码、开票日期、销售方、购买方与金额（识别不到的字段需手动补全后才能导出），支持发票号查重、个人抬头提示、按模板复制规范命名的发票副本、导出报销明细 CSV 与复制表格文本",
+      "version": "1.1.4",
       "author": "ZTools Team",
       "icon": "icon.svg",
       "category": [
@@ -907,7 +857,7 @@
       "features": [
         {
           "code": "invoice-reimburse",
-          "explain": "电子发票汇总与导出报销单",
+          "explain": "电子发票汇总与导出报销明细",
           "mode": "view",
           "cmds": [
             "发票报销",
@@ -920,7 +870,7 @@
         },
         {
           "code": "invoice-rename",
-          "explain": "电子发票批量规范重命名",
+          "explain": "按模板复制规范命名的电子发票副本",
           "mode": "view",
           "cmds": [
             "发票重命名",
@@ -930,7 +880,7 @@
         },
         {
           "code": "invoice-travel",
-          "explain": "差旅交通与住宿票据筛选",
+          "explain": "差旅交通与住宿发票筛选",
           "mode": "view",
           "cmds": [
             "差旅发票",
@@ -961,8 +911,8 @@
     {
       "id": "translator",
       "name": "划词翻译",
-      "description": "支持中英日韩法德多语种互译、英汉词典释义、商务邮件润色与代码变量命名转换",
-      "version": "1.1.2",
+      "description": "中英互译常用词与办公短语（只查客户端内置的离线词库，收录有限），并把英文转成 camelCase / snake_case 变量名",
+      "version": "2.0.2",
       "author": "ZTools Team",
       "icon": "icon.svg",
       "category": [
@@ -979,51 +929,36 @@
         "划词翻译",
         "词典",
         "中英互译",
-        "商务英语"
+        "变量命名"
       ],
       "alias": "tr",
       "features": [
         {
           "code": "translate-standard",
-          "explain": "中英日韩多语种互译",
+          "explain": "中英互译（客户端离线词库，收录有限）",
           "mode": "view",
           "cmds": [
             "翻译",
             "划词翻译",
             "中英互译",
             "英文翻译",
-            "日文翻译",
             "translate"
           ]
         },
         {
-          "code": "translate-business",
-          "explain": "外贸与商务邮件得体润色",
-          "mode": "view",
-          "cmds": [
-            "商务英语",
-            "邮件润色",
-            "英文邮件",
-            "外贸翻译",
-            "商务翻译"
-          ]
-        },
-        {
           "code": "translate-dict",
-          "explain": "专业术语词典与词根拆解",
+          "explain": "查中英常用词的译文（客户端离线词库，收录有限）",
           "mode": "view",
           "cmds": [
             "词典",
             "查词",
             "单词",
-            "术语拆解",
-            "英汉词典",
             "dictionary"
           ]
         },
         {
           "code": "translate-naming",
-          "explain": "代码变量命名翻译 (驼峰/下划线)",
+          "explain": "中文翻译成英文变量名（camelCase / snake_case）",
           "mode": "view",
           "cmds": [
             "变量命名",
@@ -1053,8 +988,8 @@
     {
       "id": "downloads-manager",
       "name": "下载管理",
-      "description": "跨渠道聚合浏览器下载、网盘下载（百度/夸克/阿里/迅雷）与办公 IM 接收文件（微信/企微/QQ/飞书/钉钉），统一检索、打开与清理安装包",
-      "version": "2.1.1",
+      "description": "聚合已识别的系统下载、网盘与接收目录，支持自定义目录、筛选、打开和安全回收；扫描不完整时明确提示",
+      "version": "2.1.5",
       "author": "ZTools Team",
       "icon": "icon.svg",
       "category": [
@@ -1066,7 +1001,7 @@
       "features": [
         {
           "code": "downloads-all",
-          "explain": "聚合查看浏览器、网盘与微信/QQ/飞书最近下载或接收的所有文件",
+          "explain": "浏览和筛选已识别下载目录与自定义目录中的文件",
           "cmds": [
             "下载",
             "下载管理",
@@ -1078,7 +1013,7 @@
         },
         {
           "code": "downloads-netdisk",
-          "explain": "快速筛选百度网盘、夸克网盘、阿里云盘、迅雷下载的文件",
+          "explain": "筛选已识别的网盘和下载器目录中的文件",
           "cmds": [
             "网盘下载",
             "百度网盘",
@@ -1089,7 +1024,7 @@
         },
         {
           "code": "downloads-im",
-          "explain": "快速查找微信、企业微信、QQ、飞书、钉钉接收的文件",
+          "explain": "筛选已识别的办公软件接收目录中的文件，未识别目录可自行添加",
           "cmds": [
             "微信文件",
             "微信接收",
@@ -1100,7 +1035,7 @@
         },
         {
           "code": "downloads-clean-installers",
-          "explain": "筛选所有下载渠道中残留的 .exe/.msi/.dmg/.pkg 安装包并一键移入回收站",
+          "explain": "筛选当前列出的安装包，经确认后将未保护项移入回收站",
           "cmds": [
             "清理安装包",
             "删除安装包",
@@ -1125,6 +1060,7 @@
       "files": [
         "plugin.json",
         "icon.svg",
+        "dist/downloads-preferences.js",
         "dist/downloads-service.js",
         "dist/index.js",
         "dist/native-ipc.js",

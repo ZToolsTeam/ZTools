@@ -398,6 +398,14 @@ export function useCommandSearch(options = {}) {
         .map(f => {
           const isApplication = f.kind === 'application'
           const name = f.display_name || f.name
+          const rawStem = String(f.name || '').replace(/\.app$/i, '')
+          const extraKeywords = isApplication
+            ? [
+                rawStem,
+                ...String(f.acronym || '').split(/\s+/),
+                ...String(f.pinyin || '').split(/\s+/)
+              ].filter(Boolean)
+            : []
           const parentPath = f.path.replace(/[\\/][^\\/]+$/, '')
           return {
             key: 'file:' + f.path,
@@ -408,6 +416,9 @@ export function useCommandSearch(options = {}) {
             path: f.path,
             isDir: f.is_dir,
             isApplication,
+            acronym: f.acronym || '',
+            pinyin: f.pinyin || '',
+            keywords: extraKeywords,
             size: f.size,
             mtime: f.mtime,
             badge: isApplication ? '应用' : f.is_dir ? '文件夹' : '文件',
@@ -598,13 +609,47 @@ export function useCommandSearch(options = {}) {
   })
 
   /**
-   * 最终呈现的组合列表：高权重应用（含内联计算结果）在前，本地文件在后
+   * 最终呈现的组合列表：内联计算置顶，本地应用与插件命令按匹配度+Frecency 统一混排，普通文件在后
    */
   const filteredItems = computed(() => {
-    if (!query.value.trim()) {
+    const q = query.value.trim().toLowerCase()
+    if (!q) {
       return matchedPlugins.value
     }
-    return [...matchedPlugins.value, ...fileResults.value]
+    const apps = fileResults.value.filter((item) => item && item.isApplication)
+    const regularFiles = fileResults.value.filter((item) => !item || !item.isApplication)
+    if (apps.length === 0) {
+      return [...matchedPlugins.value, ...regularFiles]
+    }
+
+    const frecencyMap = loadFrecencyMap()
+    const now = Date.now()
+    const inlineItems = matchedPlugins.value.filter(
+      (item) => item.type === 'inline-calculator' || item.type === 'inline-color'
+    )
+    const commandItems = matchedPlugins.value.filter(
+      (item) => item.type !== 'inline-calculator' && item.type !== 'inline-color'
+    )
+
+    const combined = [
+      ...commandItems.map((item) => {
+        const { score } = matchItemWithQuery(item, q)
+        return {
+          item,
+          totalScore: score + calculateFrecencyBonus(frecencyMap[item.key], now)
+        }
+      }),
+      ...apps.map((item) => {
+        const { score } = matchItemWithQuery(item, q)
+        return {
+          item,
+          totalScore: Math.max(320, score) + calculateFrecencyBonus(frecencyMap[item.key], now)
+        }
+      })
+    ]
+    combined.sort((a, b) => b.totalScore - a.totalScore)
+
+    return [...inlineItems, ...combined.map((entry) => entry.item), ...regularFiles]
   })
 
   return {

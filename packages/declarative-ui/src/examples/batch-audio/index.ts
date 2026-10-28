@@ -45,8 +45,8 @@ const INITIAL_SAMPLE_AUDIOS: RealAudioFileItem[] = [
   {
     id: 'aud-init-3',
     name: 'Architecture_Review_Meeting_Audio_Track.m4a',
-    path: 'C:\\Users\\Geek\\Music\\Meetings\\Architecture_Review_Meeting_Audio_Track.m4a',
-    parentDir: 'C:\\Users\\Geek\\Music\\Meetings',
+    path: 'D:\\Workspace\\Music\\Meetings\\Architecture_Review_Meeting_Audio_Track.m4a',
+    parentDir: 'D:\\Workspace\\Music\\Meetings',
     extension: '.m4a',
     sizeBytes: 68 * 1024 * 1024
   },
@@ -61,8 +61,8 @@ const INITIAL_SAMPLE_AUDIOS: RealAudioFileItem[] = [
   {
     id: 'aud-init-5',
     name: 'Customer_Interview_Session_08_Noisy.mp3',
-    path: 'C:\\Users\\Geek\\Downloads\\Customer_Interview_Session_08_Noisy.mp3',
-    parentDir: 'C:\\Users\\Geek\\Downloads',
+    path: 'D:\\Workspace\\Downloads\\Customer_Interview_Session_08_Noisy.mp3',
+    parentDir: 'D:\\Workspace\\Downloads',
     extension: '.mp3',
     sizeBytes: 34 * 1024 * 1024
   },
@@ -85,8 +85,8 @@ const INITIAL_SAMPLE_AUDIOS: RealAudioFileItem[] = [
   {
     id: 'aud-init-8',
     name: 'Weekly_Standup_Voice_Memo_20261018.ogg',
-    path: 'C:\\Users\\Geek\\Desktop\\Weekly_Standup_Voice_Memo_20261018.ogg',
-    parentDir: 'C:\\Users\\Geek\\Desktop',
+    path: 'D:\\Workspace\\Desktop\\Weekly_Standup_Voice_Memo_20261018.ogg',
+    parentDir: 'D:\\Workspace\\Desktop',
     extension: '.ogg',
     sizeBytes: 12 * 1024 * 1024
   }

@@ -60,6 +60,14 @@ export function ColorPickerCommand() {
         }
     };
     const remove = async (item) => {
+        const ok = await confirmAlert({
+            title: `从调色板移除 ${item.hex}？`,
+            message: "移除后无法恢复。",
+            primaryAction: { title: "移除", style: "destructive" },
+            dismissAction: { title: "取消" }
+        });
+        if (!ok)
+            return;
         try {
             setPalette(await removeFromPalette(item.id));
             await showToast(Toast.Style.Success, `已移除 ${item.hex}`);
@@ -168,7 +176,7 @@ export function ColorPickerCommand() {
             List.Item({
                 id: "palette-empty",
                 title: "调色板还是空的",
-                subtitle: "在上面任一写法上按 Ctrl+K，选「收藏到调色板」",
+                subtitle: "在上面任一写法上按 ⌘/Ctrl+Enter 收藏到调色板",
                 icon: Icon.Star,
                 detail: List.Item.Detail({ markdown: "" })
             })
@@ -182,4 +190,8 @@ export function ColorPickerCommand() {
         onSearchTextChange: (val) => setInput(val)
     }, sections);
 }
+export const commands = {
+    "convert-color": ColorPickerCommand,
+    "contrast-check": ColorPickerCommand
+};
 export default ColorPickerCommand;

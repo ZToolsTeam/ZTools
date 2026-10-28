@@ -240,21 +240,21 @@ describe('useCommandSearch 统一搜索内核与 Frecency 排序测试套件', (
     search('')
     expect(filteredItems.value.some((i) => i.type === 'plugin-feature')).toBe(false)
 
-    // 2. 搜索「图片转pdf」命中 batch-image 的 preset-merge-pdf 子命令
-    search('图片转pdf')
-    expect(filteredItems.value.some((i) => i.key === 'batch-image:preset-merge-pdf')).toBe(true)
+    // 2. 搜索「webp转jpg」命中 batch-image 的 preset-to-jpg 子命令
+    search('webp转jpg')
+    expect(filteredItems.value.some((i) => i.key === 'batch-image:preset-to-jpg')).toBe(true)
 
-    // 3. 搜索「去exif」命中 batch-image 的 preset-strip-exif 子命令
-    search('去exif')
-    expect(filteredItems.value.some((i) => i.key === 'batch-image:preset-strip-exif')).toBe(true)
+    // 3. 搜索「扫描件转灰度」命中 batch-image 的 preset-doc-bw 子命令
+    search('扫描件转灰度')
+    expect(filteredItems.value.some((i) => i.key === 'batch-image:preset-doc-bw')).toBe(true)
 
     // 4. 搜索原独立插件「词典 / 查词」命中 translator 的 translate-dict 子命令
     search('词典')
     expect(filteredItems.value.some((i) => i.key === 'translator:translate-dict')).toBe(true)
 
-    // 5. 搜索「商务英语」命中 translator 的 translate-business 子命令
-    search('商务英语')
-    expect(filteredItems.value.some((i) => i.key === 'translator:translate-business')).toBe(true)
+    // 5. 搜索「变量命名」命中 translator 的 translate-naming 子命令
+    search('变量命名')
+    expect(filteredItems.value.some((i) => i.key === 'translator:translate-naming')).toBe(true)
 
     // 6. 搜索原独立插件「base64解码」命中 crypto-tool 的 codec-base64 子命令
     search('base64解码')

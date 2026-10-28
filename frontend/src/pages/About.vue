@@ -1,4 +1,5 @@
 <script setup>
+import { ReloadOutlined } from '@ant-design/icons-vue'
 import { ref, onMounted } from 'vue'
 import { formatVersionForDisplay } from '@/utils/versionDisplay'
 import { RcButton, RcCard } from '@/components/base'
@@ -93,7 +94,7 @@ function handleOpenLink(url) {
         <RcButton
           size="sm"
           variant="ghost"
-          :icon="checking ? 'fa-spinner fa-spin' : 'fa-refresh'"
+          :icon="ReloadOutlined"
           :loading="checking"
           @click="handleCheckUpdate"
         >

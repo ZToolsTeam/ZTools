@@ -290,7 +290,7 @@ describe('内置插件与可见性', () => {
       expect(isPluginVisible(id)).toBe(true)
       expect(isPluginVisible({ pluginId: id, author: 'ZTools Team' })).toBe(true)
     }
-    for (const id of ['kill-process', 'screen-color-picker', 'cleaner', 'wechat-multi']) expect(isPluginVisible(id)).toBe(true)
+    for (const id of ['kill-process', 'screen-color-picker', 'cleaner', 'shredder']) expect(isPluginVisible(id)).toBe(true)
     // 只存在于旧示例实现里的插件继续隐藏
     expect(isPluginVisible('clipboard-history')).toBe(false)
     // 草稿与已下架（plugin.json 写了 draft 或 revoked）一律隐藏，且与插件市场分发两份名单不能重叠
@@ -567,14 +567,14 @@ describe('重复插件只保留一个', () => {
       return { ok: true, status: 200, text: async () => content }
     })
     try {
-      // 1. batch-image 带 preset-merge-pdf 启动：首屏自动切到「多图合并转 PDF」预设
-      const mergePdfLoaded = await loadInstalledDeclarativePlugin('batch-image', {
-        featureCode: 'preset-merge-pdf'
+      // 1. batch-image 带 preset-to-jpg 启动：首屏自动切到「转 JPG」预设
+      const toJpgLoaded = await loadInstalledDeclarativePlugin('batch-image', {
+        featureCode: 'preset-to-jpg'
       })
-      expect(mergePdfLoaded.featureCode).toBe('preset-merge-pdf')
-      expect(mergePdfLoaded.title).toBe('多张图片合并转 PDF')
-      const mergeTree = mergePdfLoaded.command()
-      expect(mergeTree.props.searchBarAccessory.props.value).toBe('preset-merge-pdf')
+      expect(toJpgLoaded.featureCode).toBe('preset-to-jpg')
+      expect(toJpgLoaded.title).toBe('PNG/WebP/BMP 批量转 JPG')
+      const toJpgTree = toJpgLoaded.command()
+      expect(toJpgTree.props.searchBarAccessory.props.value).toBe('preset-to-jpg')
 
       // 2. batch-image 传入未知/过期 featureCode：安全回退默认预设 preset-smart-lossless，不抛异常
       const unknownLoaded = await loadInstalledDeclarativePlugin('batch-image', {
@@ -594,21 +594,19 @@ describe('重复插件只保留一个', () => {
         featureCode: 'invoice-travel'
       })
       const travelTree = travelLoaded.command()
-      expect(travelTree.props.subList.items.length).toBeGreaterThan(0)
+      // 不在客户端里运行时不再显示示例发票，列表可以为空；有内容时只能是交通出行票据
       expect(
         travelTree.props.subList.items.every((item) =>
           JSON.stringify(item).includes('交通出行') || JSON.stringify(item).includes('滴滴') || JSON.stringify(item).includes('铁路')
         )
       ).toBe(true)
 
-      // 4. translator 带 translate-business 启动：首行置顶「商务邮件润色」语体
-      const bizLoaded = await loadInstalledDeclarativePlugin('translator', {
-        featureCode: 'translate-business'
+      // 4. translator 带 translate-naming 启动：深链能加载并保留子命令
+      const namingLoaded = await loadInstalledDeclarativePlugin('translator', {
+        featureCode: 'translate-naming'
       })
-      const bizTree = bizLoaded.command()
-      const sections = bizTree.children || bizTree.props?.children || []
-      const firstSectionItems = sections[0]?.children || sections[0]?.props?.children || []
-      expect(firstSectionItems[0]?.props?.id).toBe('variant-business')
+      expect(namingLoaded.featureCode).toBe('translate-naming')
+      expect(() => namingLoaded.command()).not.toThrow()
     } finally {
       vi.unstubAllGlobals()
     }

@@ -4,7 +4,7 @@ import os from 'node:os'
 import path from 'node:path'
 import type { FileRecord, SearchFilesResult, SubdirStatRecord } from '../../services/sidecar-manager.js'
 
-import { collectSpotlightPaths, macosApplicationName } from './spotlight-search.js'
+import { batchMacosApplicationNames, collectSpotlightPaths, macosApplicationName } from './spotlight-search.js'
 
 /** dir: 扫描根目录的展开规则（~ 开头按用户主目录）；路由登记结果授权时用同一规则得到扫描根 */
 export function expandHomeDir(inputPath: string): string {
@@ -32,7 +32,15 @@ const COMMON_HANZI_PINYIN: Readonly<Record<string, string>> = {
   任: 'ren', 务: 'wu', 管: 'guan', 理: 'li', 备: 'bei', 忘: 'wang', 录: 'lu', 语: 'yu',
   终: 'zhong', 端: 'duan', 访: 'fang', 达: 'da', 预: 'yu', 览: 'lan', 照: 'zhao', 片: 'pian',
   日: 'ri', 历: 'li', 邮: 'you', 件: 'jian', 提: 'ti', 醒: 'xing', 事: 'shi', 项: 'xiang',
-  地: 'di', 图: 'tu', 气: 'qi', 象: 'xiang', 桌: 'zhuo', 面: 'mian'
+  地: 'di', 图: 'tu', 气: 'qi', 象: 'xiang', 桌: 'zhuo', 面: 'mian', 活: 'huo', 动: 'dong',
+  监: 'jian', 视: 'shi', 磁: 'ci', 工: 'gong', 具: 'ju', 控: 'kong', 制: 'zhi', 台: 'tai',
+  钥: 'yao', 匙: 'shi', 串: 'chuan', 问: 'wen', 截: 'jie', 屏: 'ping', 播: 'bo', 客: 'ke',
+  股: 'gu', 市: 'shi', 家: 'jia', 庭: 'ting', 无: 'wu', 边: 'bian', 记: 'ji', 密: 'mi',
+  码: 'ma', 息: 'xi', 通: 'tong', 电: 'dian', 天: 'tian', 时: 'shi', 钟: 'zhong', 查: 'cha',
+  找: 'zhao', 快: 'kuai', 捷: 'jie', 指: 'zhi', 令: 'ling', 字: 'zi', 体: 'ti', 册: 'ce',
+  数: 'shu', 测: 'ce', 色: 'se', 浏: 'liu', 放: 'fang', 知: 'zhi', 乎: 'hu', 小: 'xiao',
+  红: 'hong', 宝: 'bao', 支: 'zhi', 付: 'fu', 淘: 'tao', 汽: 'qi', 水: 'shui', 夸: 'kua',
+  克: 'ke', 豆: 'dou', 包: 'bao', 元: 'yuan', 滴: 'di'
 }
 
 const pinyinMetaCache = new Map<string, { acronym: string; pinyin: string }>()
@@ -56,23 +64,30 @@ export function computePinyinMeta(rawName: string): { acronym: string; pinyin: s
   let acronym = ''
   let pinyin = ''
   let prevWasAsciiAlnum = false
+  let prevWasAsciiLower = false
   for (const ch of base) {
     const code = ch.codePointAt(0) ?? 0
-    if ((code >= 48 && code <= 57) || (code >= 65 && code <= 90) || (code >= 97 && code <= 122)) {
+    const isDigit = code >= 48 && code <= 57
+    const isUpper = code >= 65 && code <= 90
+    const isLower = code >= 97 && code <= 122
+    if (isDigit || isUpper || isLower) {
       const lower = ch.toLowerCase()
       pinyin += lower
-      if (!prevWasAsciiAlnum) {
+      if (!prevWasAsciiAlnum || (prevWasAsciiLower && isUpper)) {
         acronym += lower
       }
       prevWasAsciiAlnum = true
+      prevWasAsciiLower = isLower
     } else if (code >= 0x4e00 && code <= 0x9fa5) {
       prevWasAsciiAlnum = false
+      prevWasAsciiLower = false
       const initial = getCharInitial(ch)
       const full = COMMON_HANZI_PINYIN[ch] ?? initial
       if (initial) acronym += initial
       pinyin += full || ch
     } else {
       prevWasAsciiAlnum = false
+      prevWasAsciiLower = false
     }
   }
   const result = {
@@ -88,6 +103,7 @@ export function computePinyinMeta(rawName: string): { acronym: string; pinyin: s
 
 const statRecordCache = new Map<string, { expires: number; record: FileRecord }>()
 let macosAppCache: { expires: number; apps: FileRecord[] } | null = null
+let macosAppCachePending: Promise<FileRecord[]> | null = null
 
 async function getStatFileRecordCached(fullPath: string, name?: string): Promise<FileRecord> {
   const now = Date.now()
@@ -104,13 +120,15 @@ async function getStatFileRecordCached(fullPath: string, name?: string): Promise
   return record
 }
 
-async function getCachedMacosApplications(): Promise<FileRecord[]> {
-  if (process.platform !== 'darwin') return []
-  const now = Date.now()
-  if (macosAppCache && macosAppCache.expires > now) {
-    return macosAppCache.apps
-  }
-  const appDirs = ['/Applications', '/System/Applications', path.join(os.homedir(), 'Applications')]
+async function buildMacosApplicationsCache(): Promise<FileRecord[]> {
+  const appDirs = [
+    '/Applications',
+    '/Applications/Utilities',
+    '/System/Applications',
+    '/System/Applications/Utilities',
+    '/System/Cryptexes/App/System/Applications',
+    path.join(os.homedir(), 'Applications')
+  ]
   const apps: FileRecord[] = []
   const seen = new Set<string>()
   for (const dir of appDirs) {
@@ -127,14 +145,48 @@ async function getCachedMacosApplications(): Promise<FileRecord[]> {
       seen.add(fullPath)
       try {
         const rec = await getStatFileRecordCached(fullPath, ent.name)
-        apps.push(rec)
+        apps.push({ ...rec })
       } catch {
         // ignore inaccessible app
       }
     }
   }
-  macosAppCache = { expires: now + 30_000, apps }
+
+  // 在构建应用缓存时一次性批量解析中文显示名称（如 WeChat.app -> 微信）并合并双语拼音与首字母
+  const localizedNames = await batchMacosApplicationNames(apps.map(a => a.path))
+  for (const app of apps) {
+    const displayName = localizedNames.get(app.path) || app.display_name || app.name.replace(/\.app$/i, '')
+    app.display_name = displayName
+    const nameMeta = computePinyinMeta(app.name)
+    const displayMeta = computePinyinMeta(displayName)
+    const acronyms = new Set([displayMeta.acronym, nameMeta.acronym].filter(Boolean))
+    const pinyins = new Set([displayMeta.pinyin, nameMeta.pinyin].filter(Boolean))
+    app.acronym = [...acronyms].join(' ')
+    app.pinyin = [...pinyins].join(' ')
+  }
+
+  macosAppCache = { expires: Date.now() + 60_000, apps }
   return apps
+}
+
+export async function getCachedMacosApplications(): Promise<FileRecord[]> {
+  if (process.platform !== 'darwin') return []
+  const now = Date.now()
+  if (macosAppCache && macosAppCache.expires > now) {
+    return macosAppCache.apps
+  }
+  if (!macosAppCachePending) {
+    macosAppCachePending = buildMacosApplicationsCache().finally(() => {
+      macosAppCachePending = null
+    })
+  }
+  return macosAppCachePending
+}
+
+/** 后台预热 macOS 应用列表与本地化名称缓存，让首次打开悬浮条搜索即达亚毫秒级命中 */
+export function prewarmMacosApplicationCache(): void {
+  if (process.platform !== 'darwin') return
+  void getCachedMacosApplications().catch(() => undefined)
 }
 
 function buildFileRecord(filePath: string, name: string, stat: fs.Stats): FileRecord {
@@ -379,15 +431,16 @@ export async function searchFilesOnMacos(
 export function rankSearchFiles(files: readonly FileRecord[], query: string): FileRecord[] {
   const normalized = query.trim().toLocaleLowerCase()
   const score = (file: FileRecord): number => {
+    const appBonus = file.kind === 'application' ? 0.05 : 0
     const names = [file.display_name ?? file.name, file.name.replace(/\.app$/i, '')]
       .map(name => name.toLocaleLowerCase())
-    if (names.some(name => name === normalized)) return 3
-    if (names.some(name => name.startsWith(normalized))) return 2
-    if (names.some(name => name.includes(normalized))) return 1
-    const acronym = (file.acronym || '').toLocaleLowerCase()
-    const pinyin = (file.pinyin || '').toLocaleLowerCase()
-    if ((acronym && acronym.startsWith(normalized)) || (pinyin && pinyin.startsWith(normalized))) return 0.8
-    if ((acronym && acronym.includes(normalized)) || (pinyin && pinyin.includes(normalized))) return 0.5
+    if (names.some(name => name === normalized)) return 3 + appBonus
+    if (names.some(name => name.startsWith(normalized))) return 2 + appBonus
+    if (names.some(name => name.includes(normalized))) return 1 + appBonus
+    const acronyms = (file.acronym || '').toLocaleLowerCase().split(/\s+/).filter(Boolean)
+    const pinyins = (file.pinyin || '').toLocaleLowerCase().split(/\s+/).filter(Boolean)
+    if (acronyms.some(a => a.startsWith(normalized)) || pinyins.some(p => p.startsWith(normalized))) return 0.8 + appBonus
+    if (acronyms.some(a => a.includes(normalized)) || pinyins.some(p => p.includes(normalized))) return 0.5 + appBonus
     return 0
   }
   return [...files].sort((a, b) => score(b) - score(a) ||

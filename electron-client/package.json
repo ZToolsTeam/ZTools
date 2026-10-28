@@ -1,6 +1,6 @@
 {
   "name": "ztools-electron-client",
-  "version": "1.1.8.4",
+  "version": "1.1.8.5",
   "private": true,
   "license": "GPL-3.0-only",
   "description": "ZTools Electron Windows x64 client",
@@ -40,6 +40,7 @@
     "test:win:path-journal:sealing": "node scripts/test-windows-path-journal-sealing.mjs",
     "test:native:portable:clipboard": "node scripts/test-portable-macos-clipboard.mjs",
     "test:native:mac:clipboard": "node scripts/test-native-macos-clipboard.mjs",
+    "test:native:mac:paste-session": "node scripts/test-macos-paste-session.mjs",
     "build:native:mac:vision": "node scripts/build-macos-vision.mjs",
     "test:native:mac:vision": "node scripts/test-native-macos-vision.mjs",
     "test:native:mac:host:contracts": "node scripts/test-macos-native-host-contracts.mjs",
@@ -65,7 +66,9 @@
     "package:app:win32:x64": "npm run build:native-host32 && npm run build:ztools-service && npm run build:native:win:path-access-broker && npm run build && node scripts/package.mjs",
     "package:app:darwin:universal": "node scripts/package-macos-universal.mjs",
     "package:dmg:darwin": "node scripts/package-macos-dmg.mjs",
-    "test:portable-contract": "tsc -p tsconfig.test.json && node scripts/run-tests.mjs portable-contract"
+    "test:portable-contract": "tsc -p tsconfig.test.json && node scripts/run-tests.mjs portable-contract",
+    "build:native:mac:audio": "node scripts/build-macos-audio.mjs",
+    "test:native:mac:audio": "node --test scripts/test-macos-audio.mjs"
   },
   "engines": {
     "node": ">=22.12.0"
@@ -75,6 +78,7 @@
     "@electron/packager": "20.3.0",
     "@types/node": "24.3.0",
     "@types/omggif": "1.0.5",
+    "@types/plist": "3.0.5",
     "@types/pngjs": "6.0.5",
     "@types/sql.js": "1.4.11",
     "@types/yauzl": "3.4.0",
@@ -84,11 +88,21 @@
     "typescript": "5.9.2"
   },
   "dependencies": {
+    "@xmldom/xmldom": "0.9.12",
     "classic-level": "3.0.0",
+    "docx": "9.14.0",
     "gifenc": "1.0.3",
+    "ini": "6.0.0",
+    "marked": "18.1.1",
+    "pinyin-pro": "3.28.1",
+    "plist": "3.1.1",
     "pngjs": "7.0.0",
     "sql.js": "1.14.1",
     "yauzl": "3.4.0",
     "yazl": "3.3.1"
+  },
+  "optionalDependencies": {
+    "exiftool-vendored.exe": "13.59.3",
+    "exiftool-vendored.pl": "13.59.3"
   }
 }

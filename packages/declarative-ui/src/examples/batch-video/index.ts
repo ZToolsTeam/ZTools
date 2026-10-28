@@ -47,8 +47,8 @@ const INITIAL_SAMPLE_VIDEOS: RealVideoFileItem[] = [
   {
     id: 'vid-init-3',
     name: 'Demo_Walkthrough_Raycast_Parity_Raw.mov',
-    path: 'C:\\Users\\Geek\\Videos\\Demo_Walkthrough_Raycast_Parity_Raw.mov',
-    parentDir: 'C:\\Users\\Geek\\Videos',
+    path: 'D:\\Workspace\\Videos\\Demo_Walkthrough_Raycast_Parity_Raw.mov',
+    parentDir: 'D:\\Workspace\\Videos',
     extension: '.mov',
     sizeBytes: 640 * 1024 * 1024,
     estimatedCompressedBytes: Math.round(640 * 1024 * 1024 * 0.35)
@@ -83,8 +83,8 @@ const INITIAL_SAMPLE_VIDEOS: RealVideoFileItem[] = [
   {
     id: 'vid-init-7',
     name: 'Declarative_UI_3_Layouts_Tutorial.mp4',
-    path: 'C:\\Users\\Geek\\Downloads\\Declarative_UI_3_Layouts_Tutorial.mp4',
-    parentDir: 'C:\\Users\\Geek\\Downloads',
+    path: 'D:\\Workspace\\Downloads\\Declarative_UI_3_Layouts_Tutorial.mp4',
+    parentDir: 'D:\\Workspace\\Downloads',
     extension: '.mp4',
     sizeBytes: 184 * 1024 * 1024,
     estimatedCompressedBytes: Math.round(184 * 1024 * 1024 * 0.35)

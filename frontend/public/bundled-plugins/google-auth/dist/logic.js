@@ -164,8 +164,11 @@ export function createAccount(params) {
     if (!isValidBase32(cleaned)) {
         throw new Error("密钥不是合法的 Base32 编码（仅支持 A-Z 与 2-7）");
     }
+    if (typeof globalThis.crypto?.randomUUID !== 'function') {
+        throw new Error('无法生成唯一标识，请重启客户端后重试');
+    }
     return {
-        id: "auth_" + Date.now().toString(36) + "_" + Math.random().toString(36).slice(2, 10),
+        id: "auth_" + Date.now().toString(36) + "_" + globalThis.crypto.randomUUID(),
         name: trimmedName,
         issuer: (params.issuer || "").trim() || "2FA",
         secret: cleaned,

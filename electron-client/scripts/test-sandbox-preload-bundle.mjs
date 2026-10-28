@@ -8,6 +8,8 @@ import vm from 'node:vm'
 import { createRequire } from 'node:module'
 import { buildRuntimeCapabilityPromptPreload, buildSandboxPreload } from './build-sandbox-preload.mjs'
 import { runInBoundedModuleShim } from '../tests/helpers/sandbox-preload-shim.mjs'
+import { createPluginSessionHolder, createScopedHostBridge, createScopedWindow } from '../../frontend/src/declarative/pluginSession.js'
+import SystemAPI from '../../frontend/public/js/cef-ipc/src/api/sys.js'
 
 const RUNTIME_CAPABILITY_PROMPT_ANSWER_CHANNEL = 'ztools:runtime-capability-prompt:answer'
 const RUNTIME_CAPABILITY_PROMPT_REQUEST_CHANNEL = 'ztools:runtime-capability-prompt:request'
@@ -26,8 +28,61 @@ test('the maintained application preload bundles its local helpers into one sand
   const exposed = runInBoundedModuleShim(compiled)
   assert.equal(exposed.get('__ztoolsElectron').contractVersion, 1)
   assert.equal(typeof exposed.get('__ztoolsElectron').transport.methods.config_get, 'function')
-  for (const method of ['system_list_volumes', 'filesystem_move_file_no_replace', 'clipboard_history_restore', 'db_compare_and_set', 'credential_v1_compare_and_set']) {
+  for (const method of ['system_power_session', 'system_list_volumes', 'filesystem_move_file_no_replace', 'clipboard_history_restore', 'db_compare_and_set', 'credential_v1_compare_and_set']) {
     assert.equal(typeof exposed.get('__ztoolsElectron').transport.methods[method], 'function', method + ' 应从实际沙箱预加载脚本暴露')
+  }
+})
+
+test('公开电源API经实际预加载与声明式作用域通道透传各插件归属', async () => {
+  const outputFile = path.join(output, 'power/main.js')
+  buildSandboxPreload({ outputFile })
+  const calls = []
+  const exposed = runInBoundedModuleShim(fs.readFileSync(outputFile, 'utf8'), {
+    invoke: async (channel, request) => {
+      assert.equal(channel, 'ztools:call')
+      calls.push(request)
+      return { messageId: request.messageId, success: true, data: { success: true, token: request.pluginSession, action: request.params.action } }
+    }
+  })
+  const real = exposed.get('__ztoolsElectron')
+  const unscopedSys = new SystemAPI({ call() { throw new Error('不应走宿主未归属通道') } })
+  const makeWindow = token => createScopedWindow({ ztools: { sys: unscopedSys } }, createScopedHostBridge({
+    pluginId: token, token, pending: null, track: fn => fn()
+  }, real))
+  const first = makeWindow('plugin-a'), second = makeWindow('plugin-b')
+  assert.equal((await first.ztools.sys.managePowerSession({ action: 'start', mode: 'display', durationMinutes: 1 })).token, 'plugin-a')
+  assert.equal((await second.ztools.sys.managePowerSession({ action: 'start' })).token, 'plugin-b')
+  assert.equal((await first.ztools.sys.managePowerSession({ action: 'stop' })).token, 'plugin-a')
+  assert.deepEqual(calls.map(r => [r.method, r.pluginSession]), [
+    ['system_power_session', 'plugin-a'], ['system_power_session', 'plugin-b'], ['system_power_session', 'plugin-a']
+  ])
+  assert.equal(first.ztools.sys, first.ztools.sys)
+  assert.notEqual(first.ztools.sys, second.ztools.sys)
+  assert.equal(unscopedSys.transport.call.name, 'call')
+})
+
+test('插件申请会话失败或会话已释放时，公开电源API拒绝调用且不触达宿主', async () => {
+  const outputFile = path.join(output, 'power-failure/main.js')
+  buildSandboxPreload({ outputFile })
+  const calls = []
+  const exposed = runInBoundedModuleShim(fs.readFileSync(outputFile, 'utf8'), {
+    invoke: async (_channel, request) => { calls.push(request); throw new Error('不应触达宿主') }
+  })
+  for (const failed of [true, false]) {
+    let closed
+    const closing = new Promise(resolve => { closed = resolve })
+    const holder = createPluginSessionHolder('caffeine', { graceMs: 0, call: async method => {
+      if (method === 'declarative_session_close') { closed(); return { success: true } }
+      if (failed) throw Object.assign(new Error('会话不可用'), { code: 'HOST_METHOD_UNAVAILABLE' })
+      return { data: { token: 'test-token', sessionId: 'test-session' } }
+    } })
+    const release = await holder.acquire()
+    release()
+    if (!failed) await closing
+    const scoped = createScopedWindow({ ztools: { sys: new SystemAPI({}) } },
+      createScopedHostBridge(holder, exposed.get('__ztoolsElectron')))
+    await assert.rejects(scoped.ztools.sys.managePowerSession({ action: 'start' }), { code: 'PLUGIN_SESSION_REQUIRED' })
+    assert.equal(calls.length, 0)
   }
 })
 

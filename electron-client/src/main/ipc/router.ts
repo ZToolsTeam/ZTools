@@ -1,5 +1,39 @@
+import { RecentProjectsService } from '../services/recent-projects-service.js'
+import { StartupManagerService } from '../services/startup-manager-service.js'
+import { StartupBackupStore } from '../services/startup-backups.js'
+import { MacStartupWriter, macStartupHelperPath } from '../services/startup-writer.js'
+import { LanNetworkService } from '../services/lan-network-service.js'
+import { NetworkSpeedtestService } from '../services/network-speedtest-service.js'
+import { HotkeyProbeService, nativeHotkeyProbe, macHotkeysHelperPath } from '../services/hotkey-probe-service.js'
+import { HostsManagerService } from '../services/hosts-manager-service.js'
+import { HostsBackups } from '../services/hosts-backups.js'
+import { MacHostsProvider, macHostsHelperPath } from '../services/hosts-provider.js'
+import { FolderSyncService } from '../services/folder-sync-service.js'
+import { NativePathAccessAdapter } from '../platform/native-path-access.js'
+import { resolvePathAccessBroker } from '../platform/path-access-broker.js'
+import { FontManagerService } from '../services/font-manager-service.js'
+import { BrowserBookmarksService } from '../services/browser-bookmarks-service.js'
+import { KeyboardLockService, macInputLockPath } from '../services/keyboard-lock-service.js'
+import { DockerManagerService } from '../services/docker-manager-service.js'
+import { EnvironmentManagerService } from '../services/environment-manager-service.js'
+import { FileUnlockService } from '../services/file-unlock-service.js'
+import { MacFileLocks } from '../services/mac-file-locks.js'
+import { SystemEnvironmentProvider } from '../services/environment-provider.js'
+import { EnvironmentBackupStore } from '../services/environment-backups.js'
+import { DnsBenchmarkService } from '../services/dns-benchmark-service.js'
+import { DnsBackupStore } from '../services/dns-backup-store.js'
+import { MacDnsNetworkProvider, macDnsHelperPath } from '../services/dns-network-provider.js'
+import { SystemFontProvider, macFontHelperPath } from '../services/font-provider.js'
+import { MediaMetadataService } from '../services/media-metadata-service.js'
+import { OfficeDocumentService } from '../services/office-document-service.js'
+import { MarkdownDocumentService } from '../services/markdown-document-service.js'
+import { MonitorControlService, monitorHelperPath } from '../services/monitor-control-service.js'
+import { SshProxyService } from '../services/ssh-proxy-service.js'
+import { TlsInspectService } from '../services/tls-inspect-service.js'
+import { ProxyConfigurationProvider } from '../services/proxy-configuration.js'
 import { bindNativeThemeEvents } from '../platform/native-theme-events.js'
 import { createMacPasteAdapter } from '../platform/macos/window-controller.js'
+import { showDesktopNotification } from '../platform/desktop-notification.js'
 import {
   app,
   BrowserWindow,
@@ -9,7 +43,6 @@ import {
   ipcMain,
   nativeTheme,
   nativeImage,
-  Notification,
   powerSaveBlocker,
   shell as electronShell,
   systemPreferences,
@@ -97,6 +130,7 @@ import {
   type ProcessKillParams,
   type ProcessPidParams,
   type PluginInstallParams,
+  type PluginInstallStatusParams,
   type PluginIconRefreshParams,
   type PluginKeyParams,
   type PluginOpenParams,
@@ -126,6 +160,7 @@ import {
   type SystemNotifyParams,
   type SystemPathParams,
   type SystemPreventSleepParams,
+  type SystemPowerSessionParams,
   type SystemShutdownParams,
   type SystemTextParams,
   type TriggerConflictParams,
@@ -189,6 +224,8 @@ import { isFullyQualifiedPath, isProtectedSystemPath } from '../services/host-pl
 import { ProcessService, type ProcessDiscoveryAdapter } from '../services/process-service.js'
 import { PluginIconService } from '../services/plugin-icon-service.js'
 import { PluginShortcutService } from '../services/plugin-shortcut-service.js'
+import { uninstallPluginWithCleanup } from '../services/plugin-uninstall-flow.js'
+import { publishAccountChanged, type AccountEventType } from '../services/account-events.js'
 import { PluginStateService } from '../services/plugin-state-service.js'
 import {
   RuntimeCapabilityService,
@@ -497,6 +534,37 @@ export function authorizeIpcRequest(
   }
 }
 
+/** 使用进程监控兜底（读取进程列表、结束进程等）的插件 */
+const PROCESS_MONITOR_FALLBACK_PLUGINS = new Set(['process-monitor', 'kill-process', 'boost', 'flow-guard'])
+
+/**
+ * dllplugin_call 落到宿主进程监控实现时的调用方限制：
+ * 宿主自身与 internal-* 受信任插件放行；其余只放行使用进程监控能力的插件（按 pluginId 或会话归属的 pluginId）。
+ */
+export function isProcessMonitorFallbackAllowed(caller: CallerIdentity): boolean {
+  if (isHostCaller(caller)) return true
+  if (caller.type === 'plugin' && isInternalPlugin(caller.pluginId)) return true
+  const callerPluginId = caller.attributedPlugin?.pluginId ?? (caller.type === 'plugin' ? caller.pluginId : undefined)
+  return callerPluginId !== undefined && PROCESS_MONITOR_FALLBACK_PLUGINS.has(callerPluginId)
+}
+
+/**
+ * dllplugin_call 落到宿主内置处理器时的调用方限制：
+ * 宿主自身与 internal-* 受信任插件可调用任意处理器；其余插件只能调用自己对应的处理器
+ * （独立插件窗口按 pluginId，主窗口声明式插件按会话归属的 pluginId；失效会话不放行）。
+ */
+export function isBuiltinPluginFallbackAllowed(
+  caller: CallerIdentity,
+  targetPlugin: string,
+  normalize: (pluginName: string) => string | null
+): boolean {
+  if (isHostCaller(caller)) return true
+  if (caller.type === 'plugin' && isInternalPlugin(caller.pluginId)) return true
+  const callerPluginId = caller.attributedPlugin?.pluginId ?? (caller.type === 'plugin' ? caller.pluginId : undefined)
+  const callerCanonical = callerPluginId ? normalize(callerPluginId) : null
+  return callerCanonical !== null && callerCanonical === normalize(targetPlugin)
+}
+
 /**
  * 供测试与安全审计验证请求鉴权结果的公开帮助函数。
  */
@@ -547,6 +615,37 @@ export class IpcRouter {
   readonly #triggers: TriggerService
   readonly #superPanelInput: SuperPanelInputService | null
   readonly #system: SystemService
+  readonly #folderSync: FolderSyncService
+  readonly #removeFolderSyncListener: () => void
+  readonly #fonts: FontManagerService
+  readonly #mediaMetadata: MediaMetadataService
+  readonly #office: OfficeDocumentService
+  readonly #recentProjects: RecentProjectsService
+  readonly #removeRecentProjectsListener: () => void
+  readonly #startupManager: StartupManagerService
+  readonly #removeStartupListener: () => void
+  readonly #browserBookmarks: BrowserBookmarksService
+  readonly #keyboardLock: KeyboardLockService
+  readonly #dockerManager: DockerManagerService
+  readonly #removeDockerWindowListener: () => void
+  readonly #environmentManager: EnvironmentManagerService
+  readonly #removeEnvironmentWindowListener: () => void
+  readonly #lanNetwork: LanNetworkService
+  readonly #removeLanWindowListener: () => void
+  readonly #networkSpeedtest: NetworkSpeedtestService
+  readonly #markdown: MarkdownDocumentService
+  readonly #monitorControl: MonitorControlService
+  readonly #sshProxy: SshProxyService
+  readonly #tlsInspect: TlsInspectService
+  readonly #removeTlsInspectListener: () => void
+  readonly #removeSshProxyListener: () => void
+  readonly #removeMarkdownWindowListener: () => void
+  readonly #removeSpeedtestWindowListener: () => void
+  readonly #hostsManager: HostsManagerService
+  readonly #removeHostsWindowListener: () => void
+  readonly #fileUnlock: FileUnlockService
+  readonly #removeFileUnlockWindowListener: () => void
+  readonly #dnsBenchmark: DnsBenchmarkService
   readonly #stopThemeEvents: () => void
   #referenceRuntime: ReferenceRuntimeAttachment | undefined
   #sdkLaneHandshakeListener: ((event: IpcMainEvent, ...args: unknown[]) => void) | undefined
@@ -612,10 +711,10 @@ export class IpcRouter {
     this.#events.publishHost('launch_intent', payload)
   }
 
-  publishDarkModeChange(enabled: boolean): void {
-    if (this.#lastDarkMode === enabled) return
+  publishDarkModeChange(enabled: boolean, force = false): void {
+    if (!force && this.#lastDarkMode === enabled) return
     this.#lastDarkMode = enabled
-    this.#events.publishHost('system.DarkModeChange', { isDark: enabled })
+    this.#events.publishHost('system.DarkModeChange', { isDark: enabled, mode: nativeTheme.themeSource })
   }
 
   refreshPermissionOwner(webContentsId: number): Promise<void> {
@@ -670,6 +769,57 @@ export class IpcRouter {
       (files) => files.stop()
     )
     const files = this.#files
+    const folderSync = this.#folderSync = constructionScope.own(new FolderSyncService(files, () => {
+      const broker = resolvePathAccessBroker({ platform: process.platform, isPackaged: mainApp.isPackaged, appPath: mainApp.getAppPath(), resourcesPath: process.resourcesPath })
+      if (!broker.available) throw new Error('安全文件组件不可用，请重新构建或更新客户端')
+      return new NativePathAccessAdapter(broker.executable, 30000)
+    }, [services.runtimePaths.businessDataRoot, services.runtimePaths.browserProfileRoot, services.runtimePaths.installRoot]), service => service.stop())
+    this.#removeFolderSyncListener = registry.onRemoved(id => { void folderSync.closeOwner(id).catch(error => console.error('目录同步关闭失败', error)) })
+    constructionScope.ownCleanup(this.#removeFolderSyncListener)
+    const fonts = this.#fonts = constructionScope.own(new FontManagerService(new SystemFontProvider(macFontHelperPath(mainApp.isPackaged, process.resourcesPath)), file => electronShell.showItemInFolder(file)), service => service.stop())
+    const recentProjects = this.#recentProjects = constructionScope.own(new RecentProjectsService(), service => service.stop())
+    this.#removeRecentProjectsListener = registry.onRemoved(id => recentProjects.closeOwner(id))
+    constructionScope.ownCleanup(this.#removeRecentProjectsListener)
+    const startupManager = this.#startupManager = constructionScope.own(new StartupManagerService(new StartupBackupStore(path.join(services.dataRoot, 'startup-backups')),
+      () => electronShell.openExternal('x-apple.systempreferences:com.apple.LoginItems-Settings.extension'), new MacStartupWriter(macStartupHelperPath(mainApp.isPackaged, process.resourcesPath))), service => service.stop())
+    this.#removeStartupListener = registry.onRemoved(id => startupManager.closeOwner(id))
+    constructionScope.ownCleanup(this.#removeStartupListener)
+    const browserBookmarks = this.#browserBookmarks = constructionScope.own(new BrowserBookmarksService(), service => service.stop())
+    const keyboardLock = this.#keyboardLock = constructionScope.own(new KeyboardLockService(macInputLockPath(mainApp.isPackaged, process.resourcesPath)), service => service.stop())
+    const dockerManager = this.#dockerManager = constructionScope.own(new DockerManagerService(), service => service.stop())
+    this.#removeDockerWindowListener = registry.onRemoved(id => dockerManager.closeOwner(id))
+    constructionScope.ownCleanup(this.#removeDockerWindowListener)
+    const environmentManager = this.#environmentManager = constructionScope.own(new EnvironmentManagerService(new SystemEnvironmentProvider(() => {
+      const broker = resolvePathAccessBroker({ platform: process.platform, isPackaged: mainApp.isPackaged, appPath: mainApp.getAppPath(), resourcesPath: process.resourcesPath })
+      if (!broker.available) throw new Error('安全文件组件不可用，请重新构建或更新客户端')
+      return new NativePathAccessAdapter(broker.executable, 30000)
+    }), new EnvironmentBackupStore(path.join(services.dataRoot, 'environment-backups'))), service => service.stop())
+    this.#removeEnvironmentWindowListener = registry.onRemoved(id => environmentManager.closeOwner(id))
+    constructionScope.ownCleanup(this.#removeEnvironmentWindowListener)
+    const lanNetwork = this.#lanNetwork = constructionScope.own(new LanNetworkService(), service => service.stop())
+    this.#removeLanWindowListener = registry.onRemoved(id => lanNetwork.closeOwner(id))
+    constructionScope.ownCleanup(this.#removeLanWindowListener)
+    const networkSpeedtest = this.#networkSpeedtest = constructionScope.own(new NetworkSpeedtestService(), service => service.stop())
+    this.#removeSpeedtestWindowListener = registry.onRemoved(id => networkSpeedtest.closeOwner(id))
+    constructionScope.ownCleanup(this.#removeSpeedtestWindowListener)
+    const hostsManager = this.#hostsManager = constructionScope.own(new HostsManagerService(new MacHostsProvider(macHostsHelperPath(mainApp.isPackaged, process.resourcesPath)), new HostsBackups(path.join(services.dataRoot, 'hosts-backups'))), service => service.stop())
+    this.#removeHostsWindowListener = registry.onRemoved(id => hostsManager.closeOwner(id))
+    constructionScope.ownCleanup(this.#removeHostsWindowListener)
+    const dnsBenchmark = this.#dnsBenchmark = constructionScope.own(new DnsBenchmarkService(new DnsBackupStore(path.join(services.dataRoot, 'dns-backups')),
+      new MacDnsNetworkProvider(undefined, undefined, macDnsHelperPath(mainApp.isPackaged, process.resourcesPath))), service => service.stop())
+    const mediaMetadata = this.#mediaMetadata = constructionScope.own(new MediaMetadataService(files), service => service.stop())
+    const office = this.#office = constructionScope.own(new OfficeDocumentService(files), service => service.stop())
+    const monitorControl = this.#monitorControl = constructionScope.own(new MonitorControlService(monitorHelperPath(mainApp.isPackaged, process.resourcesPath)), service => service.stop())
+    const sshProxy = this.#sshProxy = constructionScope.own(new SshProxyService(new ProxyConfigurationProvider(() => {
+      const broker = resolvePathAccessBroker({ platform: process.platform, isPackaged: mainApp.isPackaged, appPath: mainApp.getAppPath(), resourcesPath: process.resourcesPath })
+      if (!broker.available) throw new Error('安全文件组件不可用，请重新构建或更新客户端')
+      return new NativePathAccessAdapter(broker.executable, 30000)
+    }), new EnvironmentBackupStore(path.join(services.dataRoot, 'proxy-backups'))), service => service.stop())
+    this.#removeSshProxyListener = registry.onRemoved(id => sshProxy.closeOwner(id))
+    constructionScope.ownCleanup(this.#removeSshProxyListener)
+    const tlsInspect = this.#tlsInspect = constructionScope.own(new TlsInspectService(), service => service.stop())
+    this.#removeTlsInspectListener = registry.onRemoved(id => tlsInspect.closeOwner(id))
+    constructionScope.ownCleanup(this.#removeTlsInspectListener)
     const windows = constructionScope.own(new WindowService(files, registry), owned => owned.stop())
     this.#windows = windows
     const network = new NetworkService(registry, { fileService: files })
@@ -706,6 +856,18 @@ export class IpcRouter {
       (processes) => processes.stop()
     )
     const processes = this.#processes
+    const fileUnlock = this.#fileUnlock = constructionScope.own(new FileUnlockService(async (file, caller, access) => {
+      // 文件解锁延续内置工具的路径输入能力；其他插件仍需窗口的文件授权。
+      if (isHostCaller(caller) || caller.attributedPlugin?.pluginId === 'file-unlock' || caller.pluginId === 'file-unlock' || isInternalPlugin(caller.pluginId)) return path.resolve(file)
+      return files.resolveAuthorizedPath(file, caller, access, false)
+    }, () => {
+      const broker = resolvePathAccessBroker({ platform: process.platform, isPackaged: mainApp.isPackaged, appPath: mainApp.getAppPath(), resourcesPath: process.resourcesPath })
+      if (!broker.available) throw new Error('安全文件组件不可用，请重新构建或更新客户端')
+      return new NativePathAccessAdapter(broker.executable, 30000)
+    }, processes, new MacFileLocks(undefined, protectedProcessPids), [options.systemPlatformAdapter.userDataPath,
+      services.runtimePaths.businessDataRoot, services.runtimePaths.browserProfileRoot, services.runtimePaths.installRoot]), service => service.stop())
+    this.#removeFileUnlockWindowListener = registry.onRemoved(id => { void fileUnlock.closeOwner(id).catch(error => console.error('文件解锁关闭失败', error)) })
+    constructionScope.ownCleanup(this.#removeFileUnlockWindowListener)
     this.#builtinPluginHost = constructionScope.own(
       new BuiltinPluginHostService({
         processService: processes,
@@ -780,6 +942,9 @@ export class IpcRouter {
       (events) => events.stop()
     )
     const events = this.#events
+    const notifyAccountChanged = (type: AccountEventType): void => {
+      if (!this.#stopping) publishAccountChanged(events, type)
+    }
     const publishUpdateComplete = (payload: unknown): void => {
       try {
         if (!this.#stopping) events.publishHost('update_complete', payload)
@@ -820,6 +985,7 @@ export class IpcRouter {
       }),
       (triggers) => triggers.stop()
     )
+    const hotkeyProbe = new HotkeyProbeService(nativeHotkeyProbe(macHotkeysHelperPath(mainApp.isPackaged, process.resourcesPath)), globalShortcut, () => app.isReady())
     const triggers = this.#triggers
     this.#plugins = constructionScope.own(
       new PluginInstallService(services.dataRoot, events, {
@@ -1001,6 +1167,9 @@ export class IpcRouter {
     })
     constructionScope.own(services.clipboardHistory, (history) => history.useImageThumbnailer(undefined))
     const clipboard = this.#clipboard
+    const markdown = this.#markdown = constructionScope.own(new MarkdownDocumentService(files, clipboard), service => service.stop())
+    this.#removeMarkdownWindowListener = registry.onRemoved(id => markdown.closeOwner(id))
+    constructionScope.ownCleanup(this.#removeMarkdownWindowListener)
     this.#system = constructionScope.own(new SystemService(files, registry, {
       appName: 'ZTools',
       appVersion: services.appVersion,
@@ -1025,7 +1194,7 @@ export class IpcRouter {
         nativeTheme.themeSource = enabled ? 'dark' : 'light'
         void services.config.set('user_settings.json', 'ui.theme', enabled ? 'dark' : 'light', true)
           .catch((error: unknown) => console.warn('保存主题设置失败:', error))
-        this.publishDarkModeChange(enabled)
+        this.publishDarkModeChange(enabled, true)
         options.onDarkModeChanged?.(enabled)
       },
       async showNotification(params, caller) {
@@ -1043,10 +1212,7 @@ export class IpcRouter {
           else await dialog.showMessageBox(messageBoxOptions)
           return
         }
-        if (!Notification.isSupported()) {
-          throw new ZToolsError(errorCodes.notSupported, '当前系统不支持桌面通知')
-        }
-        new Notification({ title: params.title || 'ZTools', body: params.message }).show()
+        await showDesktopNotification(params.title || 'ZTools', params.message)
       },
       async getFileIcon(filePath) {
         if (nativePlatform === 'darwin' && filePath.toLowerCase().endsWith('.app')) {
@@ -1055,7 +1221,7 @@ export class IpcRouter {
         return (await mainApp.getFileIcon(filePath, { size: nativePlatform === 'darwin' ? 'normal' : 'large' })).toDataURL()
       },
       getNativeId: () => options.systemPlatformAdapter.getNativeId(),
-      startPreventSleep: () => powerSaveBlocker.start('prevent-display-sleep'),
+      startPreventSleep: (mode = 'display') => powerSaveBlocker.start(mode === 'system' ? 'prevent-app-suspension' : 'prevent-display-sleep'),
       stopPreventSleep: (id) => powerSaveBlocker.stop(id)
     }), (system) => system.stop())
     const system = this.#system
@@ -1106,9 +1272,16 @@ export class IpcRouter {
         const value = await config.get(input.file, input.path, input.default)
         return { success: true, value }
       },
-      async config_set(params) {
+      config_set: async (params) => {
         const input = params as ConfigSetParams
         await config.set(input.file, input.path, input.value, input.sync_enabled)
+        if (input.file === 'user_settings.json' && input.path === 'ui.theme' &&
+            (input.value === 'system' || input.value === 'light' || input.value === 'dark')) {
+          nativeTheme.themeSource = input.value
+          const isDark = nativeTheme.shouldUseDarkColors
+          options.onDarkModeChanged?.(isDark)
+          this.publishDarkModeChange(isDark, true)
+        }
         options.onTrayStatePossiblyChanged?.()
         return { success: true }
       },
@@ -1151,10 +1324,13 @@ export class IpcRouter {
       async user_set_token(params) {
         // 没有账号能力的版本（开源版）不保存任何凭据，返回未登录
         const saved = await services.user.setToken(params as UserSetTokenParams)
+        if (saved) notifyAccountChanged('user.login')
         return saved ? { success: true } : { success: false, logged_in: false }
       },
       async user_logout() {
         await services.user.logout()
+        // 401 时请求层会直接清掉本地凭据，界面的登录状态靠这个事件同步
+        notifyAccountChanged('user.logout')
         return { success: true }
       },
       async analytics_report(params, caller) {
@@ -1174,6 +1350,7 @@ export class IpcRouter {
           await triggers.syncPluginEnabled(manifest.id, enabled)
           if (!enabled) {
             attribution.revokePlugin(manifest.id)
+            system.releasePluginPowerSessions(manifest.id)
             await pluginWindows.closePlugin(manifest.id)
           }
           return { success: true, pluginId: manifest.id, enabled }
@@ -1184,6 +1361,7 @@ export class IpcRouter {
         await plugins.markRevoked(input.pluginId, input.revoked, input.reason)
         if (input.revoked) {
           attribution.revokePlugin(input.pluginId)
+          system.releasePluginPowerSessions(input.pluginId)
           await pluginWindows.closePlugin(input.pluginId)
           await dllPlugins.unloadPlugin(input.pluginId)
           await triggers.syncPluginEnabled(input.pluginId, false)
@@ -1218,6 +1396,10 @@ export class IpcRouter {
       async plugin_open(params) {
         return openPlugin(params as PluginOpenParams)
       },
+      async plugin_install_status(params) {
+        const input = params as PluginInstallStatusParams
+        return plugins.getInstallStatus(input.pluginId, input.operationId)
+      },
       async plugin_install(params) {
         const input = params as PluginInstallParams
         attribution.revokePlugin(input.pluginId)
@@ -1234,12 +1416,18 @@ export class IpcRouter {
       },
       async plugin_uninstall(params) {
         const input = params as PluginKeyParams
-        attribution.revokePlugin(input.pluginId)
-        await pluginWindows.closePlugin(input.pluginId)
-        await dllPlugins.unloadPlugin(input.pluginId)
-        await triggers.removePlugin(input.pluginId)
-        await pluginShortcuts.remove(input.pluginId)
-        return plugins.uninstall(input)
+        return uninstallPluginWithCleanup(input.pluginId, {
+          async stopRuntime(pluginId) {
+            attribution.revokePlugin(pluginId)
+            system.releasePluginPowerSessions(pluginId)
+            await pluginWindows.closePlugin(pluginId)
+            await dllPlugins.unloadPlugin(pluginId)
+          },
+          planShortcutCleanup: (pluginId) => pluginShortcuts.planUninstallCleanup(pluginId),
+          uninstall: () => plugins.uninstall(input),
+          removeTriggers: (pluginId) => triggers.removePlugin(pluginId),
+          warn: (message, error) => console.warn(message, error)
+        })
       },
       async plugin_data_list(params) {
         return plugins.listPreservedData((params as PluginKeyParams).pluginId)
@@ -1479,6 +1667,9 @@ export class IpcRouter {
       async system_prevent_sleep(params, caller) {
         return system.setPreventSleep(params as SystemPreventSleepParams, caller)
       },
+      async system_power_session(params, caller) {
+        return system.managePowerSession(params as SystemPowerSessionParams, caller)
+      },
       async system_simulate_key_press(params, _caller, signal) {
         if (!inputInjection) return deferredCapability('按键注入', 'M5')
         await inputInjection.injectKeyPress((params as SystemKeyParams).key, signal)
@@ -1544,15 +1735,9 @@ export class IpcRouter {
       },
       async dllplugin_call(params, caller, signal) {
         const input = params as DllPluginCallParams
-        try {
-          return await dllPlugins.call(input, caller, signal)
-        } catch (error) {
-          const allowedProcessMonitorCaller =
-            caller.type === 'main' ||
-            (caller.type === 'plugin' &&
-              (isInternalPlugin(caller.pluginId) ||
-                caller.pluginId === 'process-monitor' ||
-                caller.pluginId === 'kill-process'))
+        // 原生 DLL 不可用时落到宿主内置实现；调用方只能使用与自己对应的兜底能力
+        const hostFallback = async (error: unknown): Promise<unknown> => {
+          const allowedProcessMonitorCaller = isProcessMonitorFallbackAllowed(caller)
           if (
             input.plugin.toLowerCase() === 'processmonitorplugin' &&
             allowedProcessMonitorCaller &&
@@ -1571,11 +1756,11 @@ export class IpcRouter {
             }
             return fallback
           }
-          const allowedBuiltinPluginCaller =
-            caller.type === 'main' ||
-            (caller.type === 'plugin' &&
-              (isInternalPlugin(caller.pluginId) ||
-                builtinPluginHost.supportsPlugin(caller.pluginId ?? '')))
+          const allowedBuiltinPluginCaller = isBuiltinPluginFallbackAllowed(
+            caller,
+            input.plugin,
+            name => builtinPluginHost.normalizePluginName(name)
+          )
           if (
             allowedBuiltinPluginCaller &&
             builtinPluginHost.supportsPlugin(input.plugin) &&
@@ -1606,6 +1791,11 @@ export class IpcRouter {
             return hostResult
           }
           throw error
+        }
+        try {
+          return await dllPlugins.call(input, caller, signal)
+        } catch (error) {
+          return hostFallback(error)
         }
       },
       async dllplugin_call_async(params, caller) {
@@ -1688,11 +1878,11 @@ export class IpcRouter {
       async filesystem_write_cache_chunk(params, caller) {
         return files.writeChunk(params as FileWriteChunkParams, caller)
       },
-      async filesystem_write_file_end(params, caller) {
-        return files.finishWrite((params as FileWriteHandleParams).handle, caller)
+      async filesystem_write_file_end(params, caller, signal) {
+        return files.finishWrite((params as FileWriteHandleParams).handle, caller, signal)
       },
-      async filesystem_write_cache_end(params, caller) {
-        return files.finishWrite((params as FileWriteHandleParams).handle, caller)
+      async filesystem_write_cache_end(params, caller, signal) {
+        return files.finishWrite((params as FileWriteHandleParams).handle, caller, signal)
       },
       async filesystem_write_file_cancel(params, caller) {
         return files.cancelWrite((params as FileWriteHandleParams).handle, caller)
@@ -2157,7 +2347,8 @@ export class IpcRouter {
         const input = params as { id: string }
         return { success: await services.mcp.removeServer(input?.id) }
       },
-      async focus_start(params) {
+      async focus_start(params, caller) {
+        if ((params as { mode?: string }).mode === 'pomodoro') await requirePluginPermission(caller, 'notification', plugins)
         return services.focus.startSession(params as Parameters<typeof services.focus.startSession>[0])
       },
       async focus_toggle() {
@@ -2562,6 +2753,106 @@ export class IpcRouter {
         const input = params as { name: string }
         return system.viewShortcut(input?.name)
       },
+      async folder_sync(params, caller, signal) { return folderSync.execute(params, caller, signal) },
+      async folder_sync_cancel(params, caller) { return folderSync.cancel((params as { operationId: string }).operationId, caller) },
+      async font_manager(params, caller, signal) { return fonts.execute(params, caller, signal) },
+      async font_manager_cancel(params, caller) { return fonts.cancel((params as { operationId: string }).operationId, caller) },
+      async recent_projects(params, caller, signal) {
+        await requirePluginPermission(caller, 'fs', plugins)
+        if (['open', 'terminal'].includes((params as { action: string }).action)) await requirePluginPermission(caller, 'shell', plugins)
+        return recentProjects.handle(params, caller, signal)
+      },
+      async startup_manager(params, caller, signal) {
+        await requirePluginPermission(caller, 'system', plugins)
+        await requirePluginPermission(caller, 'fs', plugins)
+        return startupManager.handle(params, caller, signal)
+      },
+      async browser_bookmarks_scan(params, caller, signal) {
+        await requirePluginPermission(caller, 'fs', plugins)
+        return browserBookmarks.scan(params, caller, signal)
+      },
+      async downloads_manager(params, caller, signal) {
+        await requirePluginPermission(caller, 'fs', plugins)
+        const input = params as { action: 'discover' | 'validate'; customDirs?: string[]; dirPath?: string }
+        return builtinPluginHost.handlePluginCall('DownloadsManagerPlugin',
+          input.action === 'discover' ? 'discoverSources' : 'validateCustomDir',
+          input.action === 'discover' ? { customDirs: input.customDirs } : { dirPath: input.dirPath }, signal, caller)
+      },
+      async keyboard_lock(params, caller, signal) {
+        await requirePluginPermission(caller, 'system', plugins)
+        return keyboardLock.handle(params, caller, signal)
+      },
+      async docker_manager(params, caller, signal) {
+        await requirePluginPermission(caller, 'shell', plugins)
+        return dockerManager.handle(params, caller, signal)
+      },
+      async environment_manager(params, caller, signal) {
+        await requirePluginPermission(caller, 'system', plugins)
+        await requirePluginPermission(caller, 'fs', plugins)
+        return environmentManager.handle(params, caller, signal)
+      },
+      async lan_network(params, caller, signal) {
+        await requirePluginPermission(caller, 'network', plugins)
+        return lanNetwork.handle(params, caller, signal)
+      },
+      async network_speedtest(params, caller, signal) {
+        await requirePluginPermission(caller, 'network', plugins)
+        return networkSpeedtest.handle(params, caller, signal)
+      },
+      async hotkey_probe(params, caller, signal) {
+        await requirePluginPermission(caller, 'system', plugins)
+        return hotkeyProbe.probe(params, signal)
+      },
+      async hosts_manager(params, caller, signal) {
+        await requirePluginPermission(caller, 'system', plugins)
+        await requirePluginPermission(caller, 'fs', plugins)
+        return hostsManager.handle(params, caller, signal)
+      },
+      async file_unlock(params, caller, signal) {
+        await requirePluginPermission(caller, 'fs', plugins)
+        if ((params as { action: string }).action === 'terminate') await requirePluginPermission(caller, 'process', plugins)
+        return fileUnlock.handle(params, caller, signal)
+      },
+      async dns_benchmark(params, caller, signal) {
+        await requirePluginPermission(caller, 'network', plugins)
+        await requirePluginPermission(caller, 'system', plugins)
+        return dnsBenchmark.handle(params, caller, signal)
+      },
+      async browser_bookmarks_cancel(params, caller) {
+        await requirePluginPermission(caller, 'fs', plugins)
+        return browserBookmarks.cancel(params, caller)
+      },
+      async media_metadata(params, caller, signal) {
+        return mediaMetadata.execute(params, caller, signal)
+      },
+      async media_metadata_cancel(params, caller) {
+        return mediaMetadata.cancel((params as { operationId: string }).operationId, caller)
+      },
+      async office_document(params, caller, signal) {
+        return office.execute(params, caller, signal)
+      },
+      async markdown_document(params, caller, signal) {
+        const action = (params as { action: string }).action
+        if (action === 'read' || action === 'export') await requirePluginPermission(caller, 'fs', plugins)
+        if (action === 'copy') await requirePluginPermission(caller, 'clipboard', plugins)
+        return markdown.execute(params, caller, signal)
+      },
+      async monitor_control(params, caller, signal) {
+        await requirePluginPermission(caller, (params as { action: string }).action === 'sleep' ? 'system' : 'screen', plugins)
+        return monitorControl.execute(params, signal)
+      },
+      async ssh_proxy(params, caller, signal) {
+        const action = (params as { action: string }).action
+        await requirePluginPermission(caller, ['connect', 'tunnel', 'terminal-proxy'].includes(action) ? 'shell' : 'fs', plugins)
+        return sshProxy.handle(params, caller, signal)
+      },
+      async tls_inspect(params, caller, signal) {
+        await requirePluginPermission(caller, 'network', plugins)
+        return tlsInspect.handle(params, caller, signal)
+      },
+      async office_cancel(params, caller) {
+        return office.cancel((params as { operationId: string }).operationId, caller)
+      },
       async audio_get_devices() {
         return { devices: await system.getAudioDevices() }
       },
@@ -2571,17 +2862,18 @@ export class IpcRouter {
         return system.setDefaultAudioDevice(target, input?.type ?? 'output')
       },
       async audio_set_volume(params) {
-        const input = (params || {}) as { volume: number; type?: 'output' | 'input' }
-        return system.setAudioVolume(input?.volume, input?.type ?? 'output')
+        const input = (params || {}) as { volume: number; type?: 'output' | 'input'; id?: string }
+        return system.setAudioVolume(input?.volume, input?.type ?? 'output', input?.id)
       },
       async audio_toggle_mute(params) {
-        const input = (params || {}) as { muted?: boolean }
-        return system.toggleAudioMute(input?.muted)
+        const input = (params || {}) as { muted?: boolean; type?: 'output' | 'input'; id?: string }
+        return system.toggleAudioMute(input?.muted, input?.type ?? 'output', input?.id)
       },
       async wifi_get_profiles() {
         return { profiles: await system.getWifiProfiles() }
       },
-      async wifi_get_password(params) {
+      async wifi_get_password(params, caller) {
+        await requirePluginPermission(caller, 'system', plugins)
         const input = params as { ssid: string }
         return system.getWifiPassword(input?.ssid)
       },
@@ -2789,6 +3081,37 @@ export class IpcRouter {
         () => this.#processes.stop(),
         () => this.#builtinPluginHost.stop(),
         () => this.#system.stop(),
+        () => this.#folderSync.stop(),
+        () => this.#removeFolderSyncListener(),
+        () => this.#fonts.stop(),
+        () => this.#mediaMetadata.stop(),
+        () => this.#office.stop(),
+        () => this.#recentProjects.stop(),
+        () => this.#removeRecentProjectsListener(),
+        () => this.#startupManager.stop(),
+        () => this.#removeStartupListener(),
+        () => this.#browserBookmarks.stop(),
+        () => this.#keyboardLock.stop(),
+        () => this.#dnsBenchmark.stop(),
+        () => this.#dockerManager.stop(),
+        () => this.#removeDockerWindowListener(),
+        () => this.#environmentManager.stop(),
+        () => this.#removeEnvironmentWindowListener(),
+        () => this.#lanNetwork.stop(),
+        () => this.#removeLanWindowListener(),
+        () => this.#markdown.stop(),
+        () => this.#monitorControl.stop(),
+        () => this.#sshProxy.stop(),
+        () => this.#tlsInspect.stop(),
+        () => this.#removeTlsInspectListener(),
+        () => this.#removeSshProxyListener(),
+        () => this.#removeMarkdownWindowListener(),
+        () => this.#networkSpeedtest.stop(),
+        () => this.#removeSpeedtestWindowListener(),
+        () => this.#hostsManager.stop(),
+        () => this.#removeHostsWindowListener(),
+        () => this.#fileUnlock.stop(),
+        () => this.#removeFileUnlockWindowListener(),
         async () => { await this.#clipboard.stop(); await this.#database.stop() }
       ])
       await settle([

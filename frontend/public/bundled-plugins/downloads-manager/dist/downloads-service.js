@@ -1,4 +1,5 @@
-import { callHostTransport, formatBytes, getRealEnvPaths, invokePluginService, isRealElectronHost, moveRealFilesToTrash, openRealPath, probeRealDiskDrives, readRealDirectory, scanRealDirectoryTree, showRealItemInFolder, writeRealClipboardText } from './native-ipc';
+import { callHostTransport, formatBytes } from './native-ipc.js';
+import { readDownloadPreferences, updateDownloadPreferences } from './downloads-preferences.js';
 const INSTALLER_EXTS = new Set([
     '.exe', '.msi', '.dmg', '.pkg', '.deb', '.rpm', '.appimage', '.apk', '.msix'
 ]);
@@ -29,37 +30,6 @@ const TEMP_DOWNLOAD_SUFFIXES = [
     '.aria2',
     '.tmp'
 ];
-const PINNED_STORAGE_KEY = 'ztools_downloads_pinned_v1';
-const CUSTOM_DIRS_STORAGE_KEY = 'ztools_downloads_custom_dirs_v1';
-function loadPersistedSet(key) {
-    try {
-        if (typeof localStorage !== 'undefined') {
-            const raw = localStorage.getItem(key);
-            if (raw) {
-                const parsed = JSON.parse(raw);
-                if (Array.isArray(parsed)) {
-                    return new Set(parsed.filter((x) => typeof x === 'string' && x.trim().length > 0));
-                }
-            }
-        }
-    }
-    catch {
-        // ignore storage errors
-    }
-    return new Set();
-}
-function savePersistedSet(key, set) {
-    try {
-        if (typeof localStorage !== 'undefined') {
-            localStorage.setItem(key, JSON.stringify(Array.from(set)));
-        }
-    }
-    catch {
-        // ignore storage errors
-    }
-}
-const pinnedIdSet = loadPersistedSet(PINNED_STORAGE_KEY);
-const customDirectoriesStore = loadPersistedSet(CUSTOM_DIRS_STORAGE_KEY);
 export function isDownloadTemporaryOrHiddenFile(fileName) {
     const lower = String(fileName || '').trim().toLowerCase();
     if (!lower || lower === 'desktop.ini' || lower === '.ds_store' || lower === 'thumbs.db') {
@@ -105,10 +75,20 @@ export function getDownloadChannelLabel(channel) {
         case 'custom': return '自定义目录';
     }
 }
-function normalizePathKey(p) {
-    const trimmed = String(p || '').trim().replace(/[\\/]+$/, '');
-    const isWin = /^[A-Za-z]:/.test(trimmed) || trimmed.includes('\\');
-    return isWin ? trimmed.replace(/\//g, '\\').toLowerCase() : trimmed;
+function isWindowsPath(value) {
+    return /^[A-Za-z]:[\\/]/.test(value) || value.startsWith('\\\\');
+}
+function normalizePathKey(value) {
+    if (isWindowsPath(value))
+        return value.replace(/\//g, '\\').replace(/\\+$/, '').toLowerCase();
+    return value.replace(/\/+$/, '') || '/';
+}
+function isInsideDirectory(directory, file) {
+    if (file.includes('\0') || /(?:^|[\\/])\.\.(?:[\\/]|$)/.test(file))
+        return false;
+    const root = normalizePathKey(directory), candidate = normalizePathKey(file);
+    const separator = isWindowsPath(directory) ? '\\' : '/';
+    return candidate.startsWith(root === '/' ? '/' : root + separator) && candidate !== root;
 }
 function isAbsoluteFilePath(p) {
     const trimmed = String(p || '').trim();
@@ -128,178 +108,95 @@ export function validateCustomDownloadDirPath(rawPath) {
     const isPosix = trimmed.startsWith('/');
     const normalized = isPosix
         ? trimmed.replace(/\/+/g, '/').replace(/\/$/, '') || '/'
-        : trimmed.replace(/\//g, '\\').replace(/\\+$/, '');
+        : /^[A-Za-z]:[\\/]$/.test(trimmed) ? trimmed[0] + ':\\' : trimmed.replace(/\//g, '\\').replace(/\\+$/, '');
     return { ok: true, normalizedPath: normalized };
 }
-export function getCustomDownloadDirectories() {
-    return Array.from(customDirectoriesStore);
+export async function getCustomDownloadDirectories() {
+    return (await readDownloadPreferences()).directories;
 }
-export async function addCustomDownloadDirectory(rawDirPath, hostOverride) {
+export async function addCustomDownloadDirectory(rawDirPath, hostOverride, shouldContinue) {
     const check = validateCustomDownloadDirPath(rawDirPath);
-    if (!check.ok || !check.normalizedPath) {
-        return { ok: false, error: check.error || 'INVALID_DIR_PATH' };
-    }
-    const targetDir = check.normalizedPath;
-    const hostRes = await invokePluginService('DownloadsManagerPlugin', 'validateCustomDir', { dirPath: targetDir }, hostOverride);
-    if (hostRes.ok && hostRes.data?.path) {
-        customDirectoriesStore.add(hostRes.data.path);
-        savePersistedSet(CUSTOM_DIRS_STORAGE_KEY, customDirectoriesStore);
-        return { ok: true, path: hostRes.data.path };
-    }
-    if (hostRes.error && (hostRes.error.includes('NOT_A_DIRECTORY') || hostRes.error.includes('DIRECTORY_UNREADABLE') || hostRes.error.includes('PATH_TRAVERSAL'))) {
-        return { ok: false, error: hostRes.error };
-    }
-    if (isRealElectronHost(hostOverride)) {
-        const dirCheck = await callHostTransport('filesystem_directory_exists', { path: targetDir }, hostOverride);
-        const isValidDir = dirCheck.ok &&
-            (dirCheck.data === true ||
-                (typeof dirCheck.data === 'object' &&
-                    dirCheck.data !== null &&
-                    (dirCheck.data.isDirectory === true || dirCheck.data.exists === true)));
-        if (!isValidDir) {
-            return { ok: false, error: dirCheck.error || 'DIRECTORY_UNREADABLE: 目标目录不存在或不可访问' };
-        }
-    }
-    await readRealDirectory(targetDir, hostOverride);
-    customDirectoriesStore.add(targetDir);
-    savePersistedSet(CUSTOM_DIRS_STORAGE_KEY, customDirectoriesStore);
-    return { ok: true, path: targetDir };
-}
-export function removeCustomDownloadDirectory(rawDirPath) {
-    const targetKey = normalizePathKey(rawDirPath);
-    for (const existing of customDirectoriesStore) {
-        if (normalizePathKey(existing) === targetKey) {
-            customDirectoriesStore.delete(existing);
-            savePersistedSet(CUSTOM_DIRS_STORAGE_KEY, customDirectoriesStore);
-            return true;
-        }
-    }
-    return false;
-}
-export function clearCustomDownloadDirectories() {
-    customDirectoriesStore.clear();
-    savePersistedSet(CUSTOM_DIRS_STORAGE_KEY, customDirectoriesStore);
-}
-export async function discoverAllDownloadSources(customDirs = getCustomDownloadDirectories(), hostOverride) {
-    const validCustomDirs = [];
-    for (const raw of customDirs) {
-        const v = validateCustomDownloadDirPath(raw);
-        if (v.ok && v.normalizedPath)
-            validCustomDirs.push(v.normalizedPath);
-    }
-    const sourcesMap = new Map();
-    const registerSource = (src) => {
-        if (!src.path)
-            return;
-        const key = normalizePathKey(src.path);
-        if (!key || sourcesMap.has(key))
-            return;
-        sourcesMap.set(key, src);
-    };
-    const hostRes = await invokePluginService('DownloadsManagerPlugin', 'discoverSources', { customDirs: validCustomDirs }, hostOverride);
-    if (hostRes.ok && Array.isArray(hostRes.data?.sources)) {
-        for (const s of hostRes.data.sources) {
-            if (s && typeof s.path === 'string' && s.path.trim()) {
-                registerSource({
-                    id: String(s.id || `src-${sourcesMap.size + 1}`),
-                    label: String(s.label || '下载目录'),
-                    channel: s.channel || 'browser',
-                    appName: String(s.appName || '系统下载'),
-                    path: s.path.trim(),
-                    exists: true
-                });
-            }
-        }
-    }
-    const envPaths = await getRealEnvPaths(hostOverride);
-    const sep = envPaths.home.startsWith('/') ? '/' : '\\';
-    if (envPaths.downloads) {
-        registerSource({
-            id: 'browser-default',
-            label: '浏览器与系统下载',
-            channel: 'browser',
-            appName: '系统下载',
-            path: envPaths.downloads,
-            exists: true
+    if (!check.ok || !check.normalizedPath)
+        return { ok: false, error: check.error };
+    try {
+        const response = await callHostTransport('downloads_manager', { action: 'validate', dirPath: check.normalizedPath }, hostOverride);
+        if (!response.ok || response.data?.ok === false || !response.data?.path)
+            throw new Error(response.error || response.data?.error || '目录校验失败');
+        if (shouldContinue?.() === false)
+            throw new Error('操作已取消，未保存目录');
+        const validated = validateCustomDownloadDirPath(response.data.path);
+        if (!validated.ok || !validated.normalizedPath)
+            throw new Error('宿主返回了无效目录路径');
+        const target = validated.normalizedPath;
+        await updateDownloadPreferences(current => {
+            if (shouldContinue?.() === false)
+                throw new Error('操作已取消，未保存目录');
+            return { ...current, directories: current.directories.some(path => normalizePathKey(path) === normalizePathKey(target)) ? current.directories : [...current.directories, target] };
         });
+        return { ok: true, path: target };
     }
-    if (sourcesMap.size <= 1) {
-        const drives = await probeRealDiskDrives(['C', 'D', 'E', 'F'], hostOverride);
-        const driveRoots = drives.length > 0
-            ? drives.map((d) => (d.drive.startsWith('/') ? d.drive : `${d.drive.replace(/[\\/]+$/, '')}\\`))
-            : envPaths.home.startsWith('/')
-                ? [envPaths.home]
-                : ['C:\\', 'D:\\'];
-        const netdiskCandidates = [
-            { sub: 'BaiduNetdiskDownload', label: '百度网盘下载', appName: '百度网盘' },
-            { sub: 'QuarkDownload', label: '夸克网盘下载', appName: '夸克网盘' },
-            { sub: 'AliyunPanDownload', label: '阿里云盘下载', appName: '阿里云盘' },
-            { sub: '迅雷下载', label: '迅雷下载', appName: '迅雷' },
-            { sub: '360Download', label: '360浏览器下载', appName: '360浏览器', channel: 'browser' }
-        ];
-        for (const root of driveRoots) {
-            const cleanRoot = root.replace(/[\\/]+$/, '');
-            for (const cand of netdiskCandidates) {
-                const candidatePath = `${cleanRoot}${sep}${cand.sub}`;
-                registerSource({
-                    id: `netdisk-${cand.appName}-${cleanRoot.replace(/[^A-Za-z0-9]/g, '')}`,
-                    label: cand.label,
-                    channel: cand.channel ?? 'netdisk',
-                    appName: cand.appName,
-                    path: candidatePath
-                });
-            }
-        }
-        if (envPaths.documents) {
-            const cleanDocs = envPaths.documents.replace(/[\\/]+$/, '');
-            registerSource({
-                id: 'im-dingtalk-files',
-                label: '钉钉接收文件',
-                channel: 'im',
-                appName: '钉钉',
-                path: `${cleanDocs}${sep}DingTalk Files`
-            });
-        }
-        if (envPaths.downloads) {
-            const cleanDl = envPaths.downloads.replace(/[\\/]+$/, '');
-            registerSource({
-                id: 'im-lark-dl',
-                label: '飞书下载',
-                channel: 'im',
-                appName: '飞书',
-                path: `${cleanDl}${sep}Lark`
-            });
-        }
+    catch (error) {
+        return { ok: false, error: error instanceof Error ? error.message : String(error) };
     }
-    for (let i = 0; i < validCustomDirs.length; i++) {
-        const customPath = validCustomDirs[i];
-        const baseName = customPath.split(/[\\/]/).filter(Boolean).pop() || customPath;
-        registerSource({
-            id: `custom-${i + 1}`,
-            label: `自定义 (${baseName})`,
-            channel: 'custom',
-            appName: '自定义目录',
-            path: customPath,
-            exists: true
-        });
-    }
-    return Array.from(sourcesMap.values());
 }
-function buildDownloadEntry(raw, source, nowMs) {
-    const fileName = String(raw.name || raw.path.split(/[\\/]/).pop() || '').trim();
+export async function selectDownloadDirectory(hostOverride) {
+    const response = await callHostTransport('window_show_select_folder_dialog', { title: '选择下载目录' }, hostOverride);
+    if (!response.ok)
+        throw new Error(response.error || '无法打开目录选择窗口');
+    if (response.data?.canceled === true)
+        return null;
+    if (response.data?.canceled !== false || typeof response.data.folderPath !== 'string' || !validateCustomDownloadDirPath(response.data.folderPath).ok)
+        throw new Error('目录选择未得到有效回执');
+    return response.data.folderPath;
+}
+export async function removeCustomDownloadDirectory(rawDirPath) {
+    await updateDownloadPreferences(current => ({ ...current, directories: current.directories.filter(path => normalizePathKey(path) !== normalizePathKey(rawDirPath)) }));
+}
+export async function clearCustomDownloadDirectories() {
+    await updateDownloadPreferences(current => ({ ...current, directories: [] }));
+}
+export async function discoverAllDownloadSources(customDirs, hostOverride) {
+    const directories = customDirs ?? await getCustomDownloadDirectories();
+    const valid = directories.map(path => {
+        const checked = validateCustomDownloadDirPath(path);
+        if (!checked.ok || !checked.normalizedPath)
+            throw new Error(checked.error || '自定义目录无效');
+        return checked.normalizedPath;
+    });
+    const response = await callHostTransport('downloads_manager', { action: 'discover', customDirs: valid }, hostOverride);
+    if (!response.ok || response.data?.ok === false || !Array.isArray(response.data?.sources))
+        throw new Error(response.error || '无法读取下载目录来源，请重试');
+    const sources = new Map();
+    for (const source of response.data.sources) {
+        if (!source || typeof source.path !== 'string' || !validateCustomDownloadDirPath(source.path).ok || !['browser', 'im', 'netdisk', 'custom'].includes(source.channel))
+            throw new Error('宿主返回了无效的下载目录来源');
+        const key = normalizePathKey(source.path);
+        if (!sources.has(key))
+            sources.set(key, { ...source, exists: true });
+    }
+    // 用户配置的目录即使暂时不存在也要显示读取失败，不能静默隐藏。
+    for (const directory of valid) {
+        const key = normalizePathKey(directory);
+        if (!sources.has(key))
+            sources.set(key, { id: `custom-${key}`, label: '自定义目录', channel: 'custom', appName: '自定义', path: directory });
+    }
+    return [...sources.values()].sort((a, b) => b.path.length - a.path.length);
+}
+function buildDownloadEntry(raw, source, nowMs, pinned) {
+    const fileName = String(raw.name || raw.path.split(isWindowsPath(raw.path) ? /[\\/]/ : /\//).pop() || '');
     if (!fileName || isDownloadTemporaryOrHiddenFile(fileName)) {
         return null;
     }
-    const sizeBytes = Math.max(0, Number(raw.size || 0));
-    if (sizeBytes <= 0)
-        return null;
+    const sizeBytes = Number(raw.size);
+    if (!Number.isFinite(sizeBytes) || sizeBytes < 0)
+        throw new Error('文件大小无效');
     const dotIdx = fileName.lastIndexOf('.');
     const ext = dotIdx >= 0 ? fileName.slice(dotIdx).toLowerCase() : '';
-    const mtimeMs = Number.isFinite(raw.mtimeMs) && raw.mtimeMs > 0 ? raw.mtimeMs : nowMs;
-    const ageDays = Math.max(0, Math.floor((nowMs - mtimeMs) / 86_400_000));
+    const mtimeMs = Number.isFinite(raw.mtimeMs) && raw.mtimeMs > 0 ? raw.mtimeMs : 0;
+    const ageDays = mtimeMs ? Math.max(0, Math.floor((nowMs - mtimeMs) / 86_400_000)) : null;
     const id = `dl-${normalizePathKey(raw.path)}`;
     const dt = new Date(mtimeMs);
-    const modifiedAt = `${dt.getFullYear()}-${String(dt.getMonth() + 1).padStart(2, '0')}-${String(dt.getDate()).padStart(2, '0')} ${String(dt.getHours()).padStart(2, '0')}:${String(dt.getMinutes()).padStart(2, '0')}`;
+    const modifiedAt = !mtimeMs ? '修改时间未知' : `${dt.getFullYear()}-${String(dt.getMonth() + 1).padStart(2, '0')}-${String(dt.getDate()).padStart(2, '0')} ${String(dt.getHours()).padStart(2, '0')}:${String(dt.getMinutes()).padStart(2, '0')}`;
     return {
         id,
         name: fileName,
@@ -312,7 +209,7 @@ function buildDownloadEntry(raw, source, nowMs) {
         modifiedAt,
         mtimeMs,
         ageDays,
-        isPinned: pinnedIdSet.has(id),
+        isPinned: pinned.has(id),
         channel: source.channel,
         sourceId: source.id,
         sourceLabel: source.label,
@@ -320,73 +217,54 @@ function buildDownloadEntry(raw, source, nowMs) {
     };
 }
 export async function scanDownloadsDirectory(customDirOrOptions, hostOverride) {
-    const nowMs = Date.now();
-    const explicitDir = typeof customDirOrOptions === 'string' && customDirOrOptions.trim()
-        ? customDirOrOptions.trim()
-        : '';
-    const customDirs = typeof customDirOrOptions === 'object' && Array.isArray(customDirOrOptions?.customDirs)
-        ? customDirOrOptions.customDirs
-        : getCustomDownloadDirectories();
-    const maxFilesPerSource = typeof customDirOrOptions === 'object' && typeof customDirOrOptions?.maxFilesPerSource === 'number'
-        ? customDirOrOptions.maxFilesPerSource
-        : 80;
-    let sources;
-    if (explicitDir) {
-        const check = validateCustomDownloadDirPath(explicitDir);
-        if (!check.ok || !check.normalizedPath) {
-            throw new Error(check.error || 'INVALID_DIR_PATH');
+    const preferences = await readDownloadPreferences(), pinned = new Set(preferences.pins);
+    const explicit = typeof customDirOrOptions === 'string' ? validateCustomDownloadDirPath(customDirOrOptions) : null;
+    if (explicit && (!explicit.ok || !explicit.normalizedPath))
+        throw new Error(explicit.error || '下载目录无效');
+    const sources = explicit ? [{ id: 'explicit-dir', label: '指定下载目录', channel: 'browser', appName: '系统下载', path: explicit.normalizedPath }]
+        : await discoverAllDownloadSources((typeof customDirOrOptions === 'object' ? customDirOrOptions.customDirs : undefined) ?? preferences.directories, hostOverride);
+    const requested = typeof customDirOrOptions === 'object' ? customDirOrOptions.maxFilesPerSource ?? 100 : 100;
+    if (!Number.isInteger(requested) || requested < 1 || requested > 500)
+        throw new Error('每个来源的显示上限必须为 1～500');
+    const entries = [], seen = new Set(), scanIssues = [];
+    let partial = false;
+    for (const source of sources) {
+        if (typeof customDirOrOptions === 'object' && customDirOrOptions.shouldContinue?.() === false)
+            throw new Error('SCAN_CANCELLED');
+        const response = await callHostTransport('system_search_files', { query: `dir:${source.path}`, limit: requested }, hostOverride);
+        if (!response.ok || response.data?.success === false || !Array.isArray(response.data?.files)) {
+            scanIssues.push({ path: source.path, message: response.error || '目录扫描返回无效数据' });
+            continue;
         }
-        sources = [
-            {
-                id: 'explicit-dir',
-                label: '指定下载目录',
-                channel: 'browser',
-                appName: '系统下载',
-                path: check.normalizedPath,
-                exists: true
+        const data = response.data;
+        if (data.truncated || data.approximate || (data.total_matches ?? 0) > data.files.length || (data.files.length >= requested && data.total_matches === undefined))
+            partial = true;
+        for (const file of data.files) {
+            if (file.is_dir || file.isDir || file.isDirectory)
+                continue;
+            if (typeof file.path !== 'string' || !isInsideDirectory(source.path, file.path)) {
+                scanIssues.push({ path: source.path, message: '已忽略不属于该目录的无效结果' });
+                continue;
             }
-        ];
+            const key = normalizePathKey(file.path);
+            if (seen.has(key))
+                continue;
+            try {
+                const rawTime = file.mtimeMs ?? file.mtime ?? 0;
+                const entry = buildDownloadEntry({ name: file.name ?? '', path: file.path, size: file.sizeBytes ?? file.size ?? Number.NaN, mtimeMs: file.mtimeMs !== undefined ? file.mtimeMs : rawTime > 1e11 ? rawTime : rawTime * 1000 }, source, Date.now(), pinned);
+                if (entry) {
+                    seen.add(key);
+                    entries.push(entry);
+                }
+            }
+            catch (error) {
+                scanIssues.push({ path: file.path, message: error instanceof Error ? error.message : String(error) });
+            }
+        }
     }
-    else {
-        sources = await discoverAllDownloadSources(customDirs, hostOverride);
-    }
-    const seenPaths = new Set();
-    const entries = [];
-    const activeSources = [];
-    await Promise.all(sources.map(async (source) => {
-        try {
-            const scanRes = await scanRealDirectoryTree(source.path, { maxFiles: maxFilesPerSource, hostOverride }, hostOverride);
-            let rawFiles = scanRes.files.filter((f) => !f.isDir);
-            if (rawFiles.length === 0) {
-                const fallbackList = await readRealDirectory(source.path, hostOverride);
-                rawFiles = fallbackList.filter((f) => !f.isDir);
-            }
-            if (rawFiles.length > 0 || source.exists) {
-                activeSources.push({ ...source, exists: true });
-            }
-            for (const f of rawFiles) {
-                const normKey = normalizePathKey(f.path);
-                if (!normKey || seenPaths.has(normKey))
-                    continue;
-                const entry = buildDownloadEntry({
-                    name: f.name,
-                    path: f.path,
-                    size: f.sizeBytes ?? f.size,
-                    mtimeMs: f.mtimeMs || (f.mtime > 1e11 ? f.mtime : f.mtime * 1000)
-                }, source, nowMs);
-                if (!entry)
-                    continue;
-                seenPaths.add(normKey);
-                entries.push(entry);
-            }
-        }
-        catch {
-            // 单个渠道无权限或目录不存在时静默跳过，不中断其他渠道
-        }
-    }));
-    return computeDashboardSummary(explicitDir || activeSources[0]?.path || sources[0]?.path || '', entries, activeSources.length > 0 ? activeSources : sources);
+    return computeDashboardSummary(explicit?.normalizedPath || sources[0]?.path || '', entries, sources, { partial: partial || scanIssues.length > 0, scanIssues });
 }
-export function computeDashboardSummary(downloadDir, entries, sources = []) {
+export function computeDashboardSummary(downloadDir, entries, sources = [], diagnostics = {}) {
     const sorted = [...entries].sort((a, b) => {
         if (a.isPinned !== b.isPinned)
             return a.isPinned ? -1 : 1;
@@ -407,7 +285,7 @@ export function computeDashboardSummary(downloadDir, entries, sources = []) {
         if (e.sizeBytes >= 100 * 1024 * 1024) {
             largeFileCount++;
         }
-        if (e.ageDays >= 30 && !e.isPinned) {
+        if (e.ageDays !== null && e.ageDays >= 30 && !e.isPinned) {
             oldFileCount++;
             oldFileSizeBytes += e.sizeBytes;
         }
@@ -415,6 +293,8 @@ export function computeDashboardSummary(downloadDir, entries, sources = []) {
     return {
         downloadDir,
         sources,
+        partial: diagnostics.partial ?? false,
+        scanIssues: diagnostics.scanIssues ?? [],
         totalCount: sorted.length,
         totalSizeBytes,
         totalSizeFormatted: formatBytes(totalSizeBytes),
@@ -470,17 +350,38 @@ export function filterDownloadEntries(entries, options) {
         return b.mtimeMs - a.mtimeMs || b.sizeBytes - a.sizeBytes;
     });
 }
-export function togglePinEntry(entries, id) {
-    if (pinnedIdSet.has(id)) {
-        pinnedIdSet.delete(id);
-    }
-    else {
-        pinnedIdSet.add(id);
-    }
-    savePersistedSet(PINNED_STORAGE_KEY, pinnedIdSet);
-    return entries.map((item) => (item.id === id ? { ...item, isPinned: !item.isPinned } : item));
+export async function togglePinEntry(entries, id) {
+    if (!entries.some(item => item.id === id))
+        throw new Error('未找到要保护的下载项');
+    const preferences = await updateDownloadPreferences(current => ({ ...current, pins: current.pins.includes(id) ? current.pins.filter(pin => pin !== id) : [...current.pins, id] }));
+    const pinned = new Set(preferences.pins);
+    return entries.map(item => ({ ...item, isPinned: pinned.has(item.id) }));
 }
-async function executeBatchTrashClean(entries, toClean, hostOverride) {
+async function trashPaths(paths, hostOverride, shouldContinue) {
+    const trashedPaths = [], failedPaths = [];
+    const seen = new Set();
+    let error;
+    let cancelled = false;
+    for (const fullPath of paths) {
+        if (shouldContinue?.() === false) {
+            cancelled = true;
+            break;
+        }
+        const key = normalizePathKey(fullPath);
+        if (seen.has(key))
+            continue;
+        seen.add(key);
+        const response = await callHostTransport('shell_trash_item', { fullPath }, hostOverride);
+        if (response.ok && response.data?.success === true)
+            trashedPaths.push(fullPath);
+        else {
+            failedPaths.push(fullPath);
+            error = response.error || '未收到明确的回收成功回执，请刷新核对；没有自动重试。';
+        }
+    }
+    return { trashedPaths, failedPaths, error, cancelled };
+}
+async function executeBatchTrashClean(entries, toClean, hostOverride, shouldContinue) {
     if (toClean.length === 0) {
         return {
             cleanedCount: 0,
@@ -489,13 +390,14 @@ async function executeBatchTrashClean(entries, toClean, hostOverride) {
             remainingEntries: entries
         };
     }
-    const trashRes = await moveRealFilesToTrash(toClean.map((item) => item.path), hostOverride);
-    const failedSet = new Set((trashRes.failedPaths || []).map(normalizePathKey));
-    const deletedEntries = toClean.filter((item) => !failedSet.has(normalizePathKey(item.path)));
+    const trashRes = await trashPaths(toClean.map((item) => item.path), hostOverride, shouldContinue);
+    const succeeded = new Set(trashRes.trashedPaths.map(normalizePathKey));
+    const deletedEntries = toClean.filter((item) => succeeded.has(normalizePathKey(item.path)));
     const deletedIds = new Set(deletedEntries.map((item) => item.id));
     const freedBytes = deletedEntries.reduce((sum, item) => sum + item.sizeBytes, 0);
     const remainingEntries = entries.filter((item) => !deletedIds.has(item.id));
     return {
+        cancelled: trashRes.cancelled,
         cleanedCount: deletedEntries.length,
         freedBytes,
         freedFormatted: formatBytes(freedBytes),
@@ -504,21 +406,23 @@ async function executeBatchTrashClean(entries, toClean, hostOverride) {
         ...(trashRes.error ? { error: trashRes.error } : {})
     };
 }
-export async function cleanRedundantInstallers(entries, hostOverride) {
-    const toClean = entries.filter((item) => item.category === 'installer' && !item.isPinned);
-    return executeBatchTrashClean(entries, toClean, hostOverride);
+export async function cleanRedundantInstallers(entries, hostOverride, shouldContinue) {
+    const pinned = new Set((await readDownloadPreferences()).pins);
+    const toClean = entries.filter((item) => item.category === 'installer' && !item.isPinned && !pinned.has(item.id));
+    return executeBatchTrashClean(entries, toClean, hostOverride, shouldContinue);
 }
-export async function cleanExpiredDownloads(entries, daysThreshold = 30, minSizeBytes = 0, hostOverride) {
-    const toClean = entries.filter((item) => item.ageDays >= daysThreshold && item.sizeBytes >= minSizeBytes && !item.isPinned);
-    return executeBatchTrashClean(entries, toClean, hostOverride);
+export async function cleanExpiredDownloads(entries, daysThreshold = 30, minSizeBytes = 0, hostOverride, shouldContinue) {
+    const pinned = new Set((await readDownloadPreferences()).pins);
+    const toClean = entries.filter((item) => item.ageDays !== null && item.ageDays >= daysThreshold && item.sizeBytes >= minSizeBytes && !item.isPinned && !pinned.has(item.id));
+    return executeBatchTrashClean(entries, toClean, hostOverride, shouldContinue);
 }
 export async function trashDownloadItem(entries, targetIdOrPath, hostOverride) {
     const target = entries.find((item) => item.id === targetIdOrPath || item.path === targetIdOrPath);
     if (!target) {
         return { ok: false, remainingEntries: entries, freedBytes: 0, error: 'FILE_NOT_FOUND: 未找到目标下载项' };
     }
-    const trashRes = await moveRealFilesToTrash([target.path], hostOverride);
-    if (!trashRes.ok || trashRes.deletedCount === 0) {
+    const trashRes = await trashPaths([target.path], hostOverride);
+    if (!trashRes.trashedPaths.includes(target.path)) {
         return {
             ok: false,
             remainingEntries: entries,
@@ -532,32 +436,21 @@ export async function trashDownloadItem(entries, targetIdOrPath, hostOverride) {
         freedBytes: target.sizeBytes
     };
 }
+async function fileAction(method, params, hostOverride) {
+    if (!Object.values(params).every(value => value && !value.includes('\0')))
+        return { ok: false, error: '文件路径无效' };
+    const response = await callHostTransport(method, params, hostOverride);
+    return response.ok && response.data?.success === true ? { ok: true } : { ok: false, error: response.error || '未收到成功回执，请核对后重试。' };
+}
 export async function copyDownloadFileEntity(filePath, hostOverride) {
-    const trimmed = String(filePath || '').trim();
-    if (!trimmed) {
-        return { ok: false, error: 'EMPTY_FILE_PATH: 文件路径不能为空' };
-    }
-    const res = await callHostTransport('clipboard_copy_file', { filePath: trimmed }, hostOverride);
-    if (res.ok) {
-        return { ok: true };
-    }
-    return {
-        ok: false,
-        error: res.error || 'CLIPBOARD_COPY_FILE_FAILED: 复制文件实体失败'
-    };
+    return fileAction('clipboard_copy_file', { filePath }, hostOverride);
 }
 export async function copyDownloadFilePath(filePath, hostOverride) {
-    const trimmed = String(filePath || '').trim();
-    if (!trimmed)
-        return false;
-    const res = await callHostTransport('clipboard_copy_text', { text: trimmed }, hostOverride);
-    if (res.ok)
-        return true;
-    return writeRealClipboardText(trimmed, hostOverride);
+    return (await fileAction('clipboard_copy_text', { text: filePath }, hostOverride)).ok;
 }
 export async function openDownloadItem(filePath, hostOverride) {
-    return openRealPath(filePath, hostOverride);
+    return (await fileAction('shell_open_path', { fullPath: filePath }, hostOverride)).ok;
 }
 export async function revealDownloadItem(filePath, hostOverride) {
-    return showRealItemInFolder(filePath, hostOverride);
+    return (await fileAction('shell_show_item_in_folder', { fullPath: filePath }, hostOverride)).ok;
 }

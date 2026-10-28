@@ -1,7 +1,7 @@
 {
   "id": "color-picker",
   "name": "取色与配色",
-  "version": "2.1.2",
+  "version": "2.1.5",
   "description": "支持 HEX / RGB / HSL / CMYK 色值实时互转、WCAG 无障碍对比度检测与常用色板收藏",
   "author": "ZTools Team",
   "entry": "dist/index.js",
@@ -28,8 +28,6 @@
   "keywords": [
     "color",
     "颜色",
-    "取色",
-    "拾色器",
     "hex",
     "rgb",
     "hsl",
@@ -47,9 +45,7 @@
         "hex转rgb",
         "rgb转hex",
         "oklch",
-        "cmyk",
-        "取色",
-        "拾色器"
+        "cmyk"
       ]
     },
     {
@@ -66,5 +62,6 @@
   ],
   "category": [
     "设计工具"
-  ]
+  ],
+  "minAppVersion": "1.1.8.3"
 }

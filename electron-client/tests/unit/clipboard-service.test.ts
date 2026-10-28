@@ -3,6 +3,11 @@ import fs from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 import test from 'node:test'
+import { EventEmitter } from 'node:events'
+import { createHash } from 'node:crypto'
+import { PassThrough } from 'node:stream'
+import type { ChildProcessWithoutNullStreams } from 'node:child_process'
+import { MacPasteSession } from '../../src/main/platform/macos/paste-session.js'
 import type { CallerIdentity } from '../../src/contracts/capabilities.js'
 import { errorCodes, ZToolsError } from '../../src/contracts/errors.js'
 import {
@@ -15,7 +20,6 @@ import {
   type FileClipboardAdapter
 } from '../../src/main/services/clipboard-service.js'
 import type { WindowRegistry } from '../../src/main/windows/window-registry.js'
-import { sendPasteKeystrokeOnMac } from '../../src/main/platform/macos/window-controller.js'
 import { EventService } from '../../src/main/services/event-service.js'
 import type { FileSystemService } from '../../src/main/services/file-system-service.js'
 import { ReferenceClipboardFilesService } from '../../src/main/services/reference-clipboard-files-service.js'
@@ -34,6 +38,7 @@ class FakeImage implements ClipboardImage {
   isEmpty(): boolean { return this.png.byteLength === 0 }
   getSize(): { width: number; height: number } { return { width: this.width, height: this.height } }
   toPNG(): Buffer { return this.png }
+  toBitmap(): Buffer { return Buffer.alloc(this.width * this.height * 4, createHash('sha256').update(this.png).digest()) }
 }
 
 class FakeClipboard implements ClipboardAdapter {
@@ -161,6 +166,76 @@ async function until(check: () => boolean | Promise<boolean>): Promise<void> {
     await wait(10)
   }
 }
+
+test('图片轮询只为新内容编码一次，完整像素、尺寸及格式变化均触发采集', { skip: !['darwin', 'win32'].includes(process.platform) }, async () => {
+  const events = new EventService(new FakeRegistry()), clipboard = new FakeClipboard()
+  let encoded = 0, inspected = 0, recorded = 0
+  const bitmap = Buffer.alloc(128 * 128 * 4, 127)
+  let width = 128, height = 128
+  clipboard.writeImage({
+    isEmpty: () => false,
+    getSize: scale => { assert.equal(scale, 1); return { width, height } },
+    toBitmap: options => { assert.equal(options?.scaleFactor, 1); inspected++; return Buffer.from(bitmap) },
+    toPNG: () => { encoded++; return Buffer.from('encoded image') }
+  })
+  const service = new ClipboardService(createFiles().files, events, clipboard, createImages(), new FakeFileClipboard(),
+    10, undefined, undefined, undefined, async () => { recorded++ })
+  try {
+    await until(() => recorded === 1)
+    const firstInspections = inspected
+    await until(() => inspected >= firstInspections + 5)
+    assert.equal(encoded, 1)
+    assert.equal(recorded, 1)
+    // 改最后一个像素，防止以后改成只哈希前缀或采样。
+    bitmap[bitmap.length - 1] = bitmap[bitmap.length - 1]! ^ 1
+    await until(() => recorded === 2)
+    width = 256; height = 64
+    await until(() => recorded === 3)
+    clipboard.formats.push('image/tiff')
+    await until(() => recorded === 4)
+    assert.equal(encoded, 4)
+    await service.stop()
+    const stoppedInspections = inspected
+    await wait(30)
+    assert.equal(inspected, stoppedInspections)
+  } finally { await service.stop(); events.stop() }
+})
+
+test('图片非法尺寸在转换前拒绝，像素读取失败不录历史，恢复可读后重试', { skip: !['darwin', 'win32'].includes(process.platform) }, async () => {
+  const events = new EventService(new FakeRegistry()), clipboard = new FakeClipboard()
+  let reads = 0, converted = 0, encoded = 0, recorded = 0
+  let width = NaN, height = 1, failRead = false, emptyBitmap = false
+  clipboard.writeImage({
+    isEmpty: () => false,
+    getSize: () => { reads++; return { width, height } },
+    toBitmap: () => {
+      converted++
+      if (failRead) throw new Error('像素暂不可读')
+      return emptyBitmap ? Buffer.alloc(0) : Buffer.alloc(width * height * 4)
+    },
+    toPNG: () => { encoded++; return Buffer.from('encoded image') }
+  })
+  const service = new ClipboardService(createFiles().files, events, clipboard, createImages(), new FakeFileClipboard(),
+    10, undefined, undefined, undefined, async () => { recorded++ })
+  try {
+    for (const [nextWidth, nextHeight] of [[NaN, 1], [0, 1], [-1, 1], [1.5, 1], [8192, 4097]] as const) {
+      width = nextWidth; height = nextHeight
+      const before = reads
+      await until(() => reads >= before + 2)
+      assert.equal(converted, 0)
+    }
+    width = 2; height = 2; failRead = true
+    await until(() => converted >= 2)
+    failRead = false; emptyBitmap = true
+    const before = converted
+    await until(() => converted >= before + 2)
+    assert.equal(encoded, 0)
+    assert.equal(recorded, 0)
+    emptyBitmap = false
+    await until(() => recorded === 1)
+    assert.equal(encoded, 1)
+  } finally { await service.stop(); events.stop() }
+})
 
 test('persistent clipboard collects without a plugin, stores attachments and detects successive file lists', { skip: process.platform !== 'win32' }, async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'ztools-clipboard-history-'))
@@ -807,11 +882,13 @@ class FakeHostWindow {
   focus(): void { this.log.push('window.focus') }
 }
 
-function createMacPasteHarness(options: { trusted?: boolean; sendPaste?: (signal: AbortSignal) => Promise<void>; delayMs?: number } = {}) {
+function createMacPasteHarness(options: { trusted?: boolean; sendPaste?: (signal: AbortSignal, token: number) => Promise<void>; delayMs?: number; preparePaste?: (signal: AbortSignal) => Promise<number> } = {}) {
   const log: string[] = []
   const window = new FakeHostWindow(log)
   const mac: ClipboardMacPasteAdapter = {
     isTrusted: () => options.trusted ?? true,
+    preparePaste: options.preparePaste ?? (async () => 42),
+    stop: async () => {},
     hideApplication: () => { log.push('app.hide') },
     showApplication: () => { log.push('app.show') },
     sendPaste: options.sendPaste ?? (async () => { log.push('paste') }),
@@ -820,9 +897,10 @@ function createMacPasteHarness(options: { trusted?: boolean; sendPaste?: (signal
   }
   const registry = { getWebContents: (id: number) => (id === caller.webContentsId ? {} : undefined) } as unknown as WindowRegistry
   const clipboard = new FakeClipboard(), events = new EventService(new FakeRegistry())
-  const service = new ClipboardService(createFiles().files, events, clipboard, createImages(), new FakeFileClipboard(),
+  const { files } = createFiles(), fileClipboard = new FakeFileClipboard()
+  const service = new ClipboardService(files, events, clipboard, createImages(), fileClipboard,
     750, undefined, undefined, undefined, undefined, registry, undefined, mac)
-  return { log, window, clipboard, events, service }
+  return { log, window, clipboard, events, service, files, fileClipboard }
 }
 
 test('macOS hideAndPasteText writes the clipboard, hides ZTools, then sends the paste keystroke', async () => {
@@ -835,6 +913,21 @@ test('macOS hideAndPasteText writes the clipboard, hides ZTools, then sends the 
     assert.deepEqual(await service.hideAndPasteImage({ image: Buffer.from('png').toString('base64') }, caller, new AbortController().signal), { success: true })
     assert.deepEqual(log.slice(3), ['window.hide', 'app.hide', 'paste'])
   } finally { service.stop(); events.stop() }
+})
+
+test('等待粘贴时图片像素变化即停止，不复用轮询或上次读取的指纹', async () => {
+  const harness = createMacPasteHarness({ preparePaste: async () => {
+    const original = harness.clipboard.image.toBitmap()
+    original[original.length - 1] = original[original.length - 1]! ^ 1
+    harness.clipboard.image.toBitmap = () => original
+    return 42
+  } })
+  try {
+    await assert.rejects(harness.service.hideAndPasteImage({ image: Buffer.from('original').toString('base64') }, caller,
+      new AbortController().signal), error => error instanceof ZToolsError && error.details?.hostCode === 'CLIPBOARD_CHANGED')
+    assert.ok(!harness.log.includes('paste'))
+    assert.deepEqual(harness.log, ['window.hide', 'app.hide', 'app.show', 'window.show', 'window.focus'])
+  } finally { await harness.service.stop(); harness.events.stop() }
 })
 
 test('macOS paste without Accessibility permission fails with PERMISSION_DENIED, keeps the copy and never hides the window', async () => {
@@ -892,27 +985,239 @@ test('macOS paste from a destroyed or unknown caller window is rejected as unsup
   } finally { service.stop(); events.stop() }
 })
 
-test('sendPasteKeystrokeOnMac maps osascript TCC denial, timeout, abort and unknown failures to stable codes', async () => {
-  const calls: Array<{ file: string; args: string[]; timeout: number }> = []
-  await sendPasteKeystrokeOnMac(undefined, async (file, args, options) => { calls.push({ file, args, timeout: options.timeout }) }, 2500)
-  assert.equal(calls[0]?.file, '/usr/bin/osascript')
-  assert.match(calls[0]?.args.join(' ') ?? '', /keystroke "v" using command down/)
-  assert.equal(calls[0]?.timeout, 2500)
-  const tcc = Object.assign(new Error('Command failed'), { stderr: 'execution error: osascript is not allowed to send keystrokes. (1002)' })
-  await assert.rejects(sendPasteKeystrokeOnMac(undefined, async () => { throw tcc }), { code: errorCodes.permissionDenied })
-  const assistive = Object.assign(new Error('Command failed'), { stderr: 'System Events got an error: osascript is not allowed assistive access. (-1719)' })
-  await assert.rejects(sendPasteKeystrokeOnMac(undefined, async () => { throw assistive }), { code: errorCodes.permissionDenied })
-  const killed = Object.assign(new Error('Command failed'), { killed: true, signal: 'SIGTERM' })
-  await assert.rejects(sendPasteKeystrokeOnMac(undefined, async () => { throw killed }), { code: errorCodes.requestTimeout })
-  await assert.rejects(sendPasteKeystrokeOnMac(undefined, async () => { throw new Error('garbled \u0000 output') }), (error: unknown) => {
-    assert.ok(error instanceof ZToolsError)
-    assert.equal(error.code, errorCodes.nativeHostError)
-    assert.doesNotMatch(error.message, /garbled/)
-    return true
+test('敏感文本由宿主定时清除，调用窗口退出不撤销；后来的普通复制不受影响', async t => {
+  t.mock.timers.enable({ apis: ['setTimeout'] })
+  const events = new EventService(new FakeRegistry()), clipboard = new FakeClipboard()
+  const service = new ClipboardService(createFiles().files, events, clipboard, createImages(), new FakeFileClipboard())
+  try {
+    assert.deepEqual(await service.copyText({ text: 'fixture-secret', sensitive: true }, caller), { success: true, clearAfterMs: 30000 })
+    t.mock.timers.tick(29999); assert.equal(clipboard.text, 'fixture-secret')
+    t.mock.timers.tick(1); assert.equal(clipboard.text, '')
+    await service.copyText({ text: 'fixture-secret-2', sensitive: true }, caller)
+    clipboard.writeText('用户后来复制的普通内容')
+    t.mock.timers.tick(30000); assert.equal(clipboard.text, '用户后来复制的普通内容')
+    await service.copyText({ text: 'repeat', sensitive: true }, caller)
+    await service.copyText({ text: 'repeat' }, caller)
+    t.mock.timers.tick(30000); assert.equal(clipboard.text, 'repeat')
+    await service.copyText({ text: 'stop-secret', sensitive: true }, caller)
+    await service.stop(); assert.equal(clipboard.text, '')
+  } finally { await service.stop(); events.stop() }
+})
+
+test('敏感写入后读回失败仍保留到期清理，公开清除静默失败不能撤销保护', async t => {
+  t.mock.timers.enable({ apis: ['setTimeout'] })
+  class IntermittentClipboard extends FakeClipboard {
+    readFails = false
+    ignoreClear = false
+    override readImage() { if (this.readFails) throw new Error('暂时不可读'); return super.readImage() }
+    override clear() { if (!this.ignoreClear) super.clear() }
+  }
+  const events = new EventService(new FakeRegistry()), clipboard = new IntermittentClipboard()
+  const service = new ClipboardService(createFiles().files, events, clipboard, createImages(), new FakeFileClipboard())
+  try {
+    clipboard.readFails = true
+    await assert.rejects(service.copyText({ text: 'uncertain-secret', sensitive: true }, caller))
+    clipboard.readFails = false; t.mock.timers.tick(30000); assert.equal(clipboard.text, '')
+    await service.copyText({ text: 'retry-secret', sensitive: true }, caller)
+    clipboard.ignoreClear = true; assert.throws(() => service.clear())
+    t.mock.timers.tick(30000); assert.equal(clipboard.text, 'retry-secret')
+    clipboard.ignoreClear = false; t.mock.timers.tick(1000); assert.equal(clipboard.text, '')
+  } finally { clipboard.readFails = false; clipboard.ignoreClear = false; await service.stop(); events.stop() }
+})
+
+test('敏感清理耗尽重试后新请求重新登记，停止及取消状态不产生新任务', async t => {
+  t.mock.timers.enable({ apis: ['setTimeout'] })
+  class FailingClipboard extends FakeClipboard {
+    fail = false
+    override clear() { if (this.fail) throw new Error('busy'); super.clear() }
+    override readImage() { if (this.fail) throw new Error('busy'); return super.readImage() }
+  }
+  const events = new EventService(new FakeRegistry()), clipboard = new FailingClipboard()
+  const service = new ClipboardService(createFiles().files, events, clipboard, createImages(), new FakeFileClipboard())
+  try {
+    await service.copyText({ text: 'first-sensitive', sensitive: true }, caller)
+    clipboard.fail = true; t.mock.timers.tick(30000); t.mock.timers.tick(1000); t.mock.timers.tick(1000)
+    await assert.rejects(service.copyText({ text: 'second-sensitive', sensitive: true }, caller))
+    clipboard.fail = false; t.mock.timers.tick(30000); assert.equal(clipboard.text, '')
+    const abort = new AbortController(); abort.abort()
+    await assert.rejects(service.copyText({ text: 'cancelled', sensitive: true }, caller, abort.signal))
+    await service.stop(); await assert.rejects(service.copyText({ text: 'stopped', sensitive: true }, caller))
+    clipboard.writeText('ordinary'); t.mock.timers.tick(60000); assert.equal(clipboard.text, 'ordinary')
+  } finally { clipboard.fail = false; await service.stop(); events.stop() }
+})
+
+test('历史写入的异步间隙出现敏感复制，不得把密码录入历史或广播', { skip: !['darwin', 'win32'].includes(process.platform) }, async () => {
+  const registry = new FakeRegistry(), events = new EventService(registry), clipboard = new FakeClipboard()
+  let release: () => void = () => {}; let started = false
+  const pending = new Promise<void>(resolve => { release = resolve }), records: string[] = []
+  const service = new ClipboardService(createFiles().files, events, clipboard, createImages(), new FakeFileClipboard(),
+    5, undefined, undefined, undefined, async entry => {
+      if (entry.type !== 'text') return
+      records.push(entry.text)
+      if (entry.text === 'old-ordinary') { started = true; await pending }
+    })
+  events.subscribe({ key: 'clipboard_change' }, caller)
+  try {
+    clipboard.writeText('old-ordinary'); await until(() => started)
+    await service.copyText({ text: 'private-fixture', sensitive: true }, caller)
+    release(); await wait(60)
+    assert.deepEqual(records, ['old-ordinary'])
+    assert.ok(!JSON.stringify(registry.sent).includes('private-fixture'))
+    await service.stop(); assert.equal(clipboard.text, '')
+  } finally { release(); await service.stop(); events.stop() }
+})
+
+
+test('粘贴在途时所有宿主写入口拒绝抢占，原文本只粘贴一次，完成后可继续', async () => {
+  let entered = false, release: () => void = () => {}
+  const pending = new Promise<void>(resolve => { release = resolve }), pasted: string[] = []
+  const harness = createMacPasteHarness({ sendPaste: async () => { entered = true; await pending; pasted.push(harness.clipboard.text) } })
+  const { service, clipboard, events } = harness, signal = new AbortController().signal
+  const first = service.hideAndPasteText({ text: '第一份文本' }, caller, signal)
+  try {
+    await until(() => entered)
+    const operations: Array<() => unknown> = [
+      () => service.copyText({ text: '覆盖' }, caller),
+      () => service.copyImage({ image: Buffer.from('png').toString('base64') }),
+      () => service.copyFile({ filePath: '/not-read' }, caller, signal),
+      () => service.copyFiles({ filePaths: ['/not-read'] }, caller, signal),
+      () => service.copyTextReference({ text: '覆盖' }, caller, signal),
+      () => service.copyImageReference({ image: 'ignored' }, caller, signal),
+      () => service.clear(),
+      () => service.restoreHistoryEntry({ type: 'text', text: '覆盖' }, caller, signal),
+      () => service.restoreHistoryEntry({ type: 'text', text: '覆盖' }, caller, signal, true),
+      () => service.hideAndPasteText({ text: '第二份文本' }, caller, signal),
+      () => service.hideAndPasteImage({ image: 'ignored' }, caller, signal),
+      () => service.hideAndPasteFile({ filePath: '/not-read' }, caller, signal),
+      () => service.hideAndType('覆盖', caller, signal)
+    ]
+    for (const operation of operations) {
+      await assert.rejects(Promise.resolve().then(operation), { code: errorCodes.clipboardError, message: '剪贴板操作正在进行，请完成后重试' })
+      assert.equal(clipboard.text, '第一份文本')
+    }
+    release(); await first
+    assert.deepEqual(pasted, ['第一份文本'])
+    await service.hideAndPasteText({ text: '第二份文本' }, caller, signal)
+    assert.deepEqual(pasted, ['第一份文本', '第二份文本'])
+  } finally { release(); await first; await service.stop(); events.stop() }
+})
+
+test('异步文件写入准备阶段已持有互斥，拒绝粘贴抢先执行，失败后释放', async () => {
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'clipboard-write-lock-'))
+  const file = path.join(directory, 'fixture.txt'); await fs.writeFile(file, 'fixture')
+  const { service, clipboard, files, fileClipboard, events, log } = createMacPasteHarness()
+  let entered = false, release: () => void = () => {}
+  const pending = new Promise<void>(resolve => { release = resolve }), signal = new AbortController().signal
+  files.resolveAuthorizedPath = async () => { entered = true; await pending; return file }
+  const writing = service.copyFiles({ filePaths: [file] }, caller, signal)
+  try {
+    await until(() => entered)
+    await assert.rejects(service.hideAndPasteText({ text: '不能抢先' }, caller, signal), { code: errorCodes.clipboardError })
+    assert.equal(clipboard.text, ''); assert.deepEqual(log, [])
+    release(); await writing; assert.deepEqual(fileClipboard.paths, [file])
+    files.resolveAuthorizedPath = async () => { throw new Error('文件拒绝访问') }
+    await assert.rejects(service.copyFiles({ filePaths: [file] }, caller, signal))
+    await service.hideAndPasteText({ text: '失败后可恢复' }, caller, signal)
+    assert.equal(clipboard.text, '失败后可恢复')
+  } finally { release(); await writing; await service.stop(); events.stop(); await fs.rm(directory, { recursive: true, force: true }) }
+})
+
+test('等待目标应用激活时外部复制变化就停止粘贴，保留新内容并恢复窗口', async () => {
+  const { service, clipboard, events, log } = createMacPasteHarness({ delayMs: 30 })
+  try {
+    const request = service.hideAndPasteText({ text: '原文本' }, caller, new AbortController().signal)
+    const rejected = assert.rejects(request, { code: errorCodes.clipboardError, message: '剪贴板已变化，已停止自动粘贴，请重新选择内容' })
+    await until(() => log.includes('app.hide')); clipboard.writeText('用户后来复制的内容')
+    await rejected
+    assert.equal(clipboard.text, '用户后来复制的内容'); assert.ok(!log.includes('paste'))
+    assert.deepEqual(log.slice(-3), ['app.show', 'window.show', 'window.focus'])
+    await service.hideAndPasteText({ text: '重试' }, caller, new AbortController().signal)
+    assert.equal(log.filter(value => value === 'paste').length, 1)
+  } finally { await service.stop(); events.stop() }
+})
+
+test('已取消和已停止的粘贴在复制前拒绝，原剪贴板保持不变', async () => {
+  const { service, clipboard, events, log } = createMacPasteHarness()
+  clipboard.writeText('保留')
+  const controller = new AbortController(); controller.abort()
+  try {
+    await assert.rejects(service.hideAndPasteText({ text: '不写入' }, caller, controller.signal), { code: errorCodes.callerDestroyed })
+    await service.stop()
+    await assert.rejects(service.hideAndPasteText({ text: '不写入' }, caller, new AbortController().signal), { code: errorCodes.callerDestroyed })
+    assert.equal(clipboard.text, '保留'); assert.deepEqual(log, [])
+  } finally { await service.stop(); events.stop() }
+})
+
+test('敏感清理遇到在途写入先延后，停止等待取消后的释放再清理，不能提前返回', async t => {
+  t.mock.timers.enable({ apis: ['setTimeout'] })
+  const { service, clipboard, files, events } = createMacPasteHarness()
+  let entered = false, release: () => void = () => {}, stopped = false
+  const pending = new Promise<void>(resolve => { release = resolve })
+  files.readFile = async (_params, _caller, signal) => {
+    entered = true
+    await new Promise<void>((resolve, reject) => {
+      const abort = () => reject(new ZToolsError(errorCodes.callerDestroyed, '读取已取消'))
+      signal?.addEventListener('abort', abort, { once: true })
+      void pending.then(() => { signal?.removeEventListener('abort', abort); resolve() })
+    })
+    return { success: true, content: '停机后不能落地', size: 24 }
+  }
+  try {
+    await service.copyText({ text: '等待清除的假密码', sensitive: true }, caller)
+    const writing = service.copyText({ tempFile: '/isolated-fixture' }, caller)
+    assert.equal(entered, true)
+    const rejected = assert.rejects(writing, { code: errorCodes.callerDestroyed })
+    t.mock.timers.tick(30000); t.mock.timers.tick(3000)
+    assert.equal(clipboard.text, '等待清除的假密码')
+    const stopping = service.stop().then(() => { stopped = true })
+    await rejected; await stopping
+    assert.equal(clipboard.text, ''); assert.equal(stopped, true)
+    release(); await Promise.resolve(); assert.equal(clipboard.text, '', '读取迟到完成也不得重新写入')
+    clipboard.writeText('后来的正常复制'); t.mock.timers.tick(60000)
+    assert.equal(clipboard.text, '后来的正常复制')
+  } finally { release(); await service.stop(); events.stop() }
+})
+
+
+test('Mac目标无法确认时不隐藏窗口也不发送粘贴键', async () => {
+  const { log, events, service, clipboard } = createMacPasteHarness({
+    preparePaste: async () => { throw new ZToolsError(errorCodes.clipboardError, '无法确认粘贴目标', { hostCode: 'PASTE_TARGET_UNAVAILABLE' }) }
   })
-  const controller = new AbortController()
-  controller.abort()
-  let ran = 0
-  await assert.rejects(sendPasteKeystrokeOnMac(controller.signal, async () => { ran += 1 }), { code: errorCodes.callerDestroyed })
-  assert.equal(ran, 0)
+  try {
+    await assert.rejects(service.hideAndPasteText({ text: '仅复制的测试内容' }, caller, new AbortController().signal), error =>
+      error instanceof ZToolsError && error.details?.hostCode === 'PASTE_TARGET_UNAVAILABLE')
+    assert.equal(clipboard.text, '仅复制的测试内容')
+    assert.deepEqual(log, [])
+  } finally { await service.stop(); events.stop() }
+})
+
+test('原生目标或发键权限拒绝经完整服务保留原因，准备失败不隐藏，发送前撤权恢复窗口', async () => {
+  const scenarios = ['PASTE_TARGET_UNAVAILABLE', 'PASTE_HOST_NOT_ACTIVE', 'PASTE_TARGET_APP_UNAVAILABLE',
+    'PASTE_TARGET_WINDOW_UNAVAILABLE', 'PASTE_TARGET_ELEMENT_UNAVAILABLE', 'PASTE_FOCUS_OBSERVER_UNAVAILABLE', 'PASTE_EVENT_PERMISSION_DENIED']
+    .map(reason => ({ reason, phase: 'prepare' }))
+  scenarios.push({ reason: 'PASTE_EVENT_PERMISSION_DENIED', phase: 'paste' })
+  for (const { reason, phase } of scenarios) {
+    const stdin = new PassThrough(), stdout = new PassThrough(), stderr = new PassThrough()
+    const peer = Object.assign(new EventEmitter(), { stdin, stdout, stderr,
+      kill: () => { queueMicrotask(() => peer.emit('close')); return true } })
+    const requests: string[] = []
+    stdin.on('data', data => {
+      const request = JSON.parse(String(data)) as { id: number; mode: string }
+      requests.push(request.mode)
+      stdout.write(JSON.stringify(request.mode === phase
+        ? { version: 1, id: request.id, success: false, error: reason }
+        : { version: 1, id: request.id, success: true, state: 'prepared' }) + '\n')
+    })
+    const session = new MacPasteSession('/fixture/not-executed', () => peer as unknown as ChildProcessWithoutNullStreams)
+    stdout.write('{"version":1,"ready":true}\n')
+    const harness = createMacPasteHarness({ preparePaste: signal => session.prepare(signal), sendPaste: (signal, token) => session.paste(token, signal) })
+    try {
+      await assert.rejects(harness.service.hideAndPasteText({ text: '内存中的测试文字' }, caller, new AbortController().signal), error =>
+        error instanceof ZToolsError && error.code === (reason === 'PASTE_EVENT_PERMISSION_DENIED' ? errorCodes.permissionDenied : errorCodes.clipboardError)
+          && error.details?.hostCode === reason && /手动粘贴/.test(error.message))
+      assert.deepEqual(requests, phase === 'prepare' ? ['prepare'] : ['prepare', 'paste'])
+      assert.deepEqual(harness.log, phase === 'prepare' ? [] : ['window.hide', 'app.hide', 'app.show', 'window.show', 'window.focus'])
+      assert.equal(harness.clipboard.text, '内存中的测试文字')
+    } finally { await harness.service.stop(); harness.events.stop(); await session.stop() }
+  }
 })

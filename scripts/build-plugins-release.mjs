@@ -19,7 +19,7 @@ import crypto from 'node:crypto'
 import zlib from 'node:zlib'
 import { fileURLToPath } from 'node:url'
 import { scanPluginSecurity } from './scan-plugin-security.mjs'
-import { getManifestPlatforms, validateStoreCatalog } from '../packages/ztools-plugins-spec/src/validator.js'
+import { getManifestPlatforms, validateStoreCatalog, OFFICIAL_PLUGIN_IDS } from '../packages/ztools-plugins-spec/src/validator.js'
 import { resolvePluginMinAppVersion } from '../packages/ztools-plugins-spec/src/host-requirements.js'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
@@ -36,6 +36,10 @@ export function createZipArchiveFromDirectory(sourceDir, filterFn = null) {
     const entries = fs.readdirSync(currentDir, { withFileTypes: true })
     for (const entry of entries) {
       if (['node_modules', '.git', '.DS_Store', 'Thumbs.db', '.build-runs'].includes(entry.name)) {
+        continue
+      }
+      // 真机截图不进安装包：安装包公开可下载，截图里可能拍到个人信息，客户端运行也用不到
+      if (entry.isDirectory() && entry.name.toLowerCase() === 'screenshots') {
         continue
       }
       const fullPath = path.join(currentDir, entry.name)
@@ -354,13 +358,9 @@ export async function buildPluginsRelease(options = {}) {
       ? { required: true, reasons: scanResult.twoManReviewReasons, status: 'pending' }
       : { required: false, reasons: [], status: 'approved' }
 
-    const authorDisplay = typeof manifest.author === 'string'
-      ? manifest.author
-      : (manifest.author?.name || author)
-    const isOfficial =
-      authorSlug === 'official' ||
-      authorSlug === 'ztools-team' ||
-      String(authorDisplay || '').toLowerCase().includes('ztools')
+    // 官方标记只看维护者维护的官方名单（packages/ztools-plugins-spec/official-ids.json），不看作者名或目录名：
+    // 作者名谁都能写，按作者名判断会让社区插件拿到官方标记
+    const isOfficial = OFFICIAL_PLUGIN_IDS.has(manifest.id)
 
     const { minAppVersion, apis: requiredHostApis } = resolvePluginMinAppVersion(dir, manifest)
     if (minAppVersion) {

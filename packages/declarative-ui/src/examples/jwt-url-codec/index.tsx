@@ -1,3 +1,4 @@
+import { isRealElectronHost } from '../shared/native-ipc.js'
 import React, {
   List,
   ActionPanel,
@@ -25,7 +26,7 @@ const DEFAULT_JWT_SAMPLE =
 
 export function JwtUrlCodecCommand() {
   const [mode, setMode] = useState<CodecMode>('jwt')
-  const [rawInput, setRawInput] = useState<string>(DEFAULT_JWT_SAMPLE)
+  const [rawInput, setRawInput] = useState<string>(isRealElectronHost() ? '' : DEFAULT_JWT_SAMPLE)
   const [secretInput, setSecretInput] = useState<string>('')
   const [verifyMsg, setVerifyMsg] = useState<string>('未验签（可通过动作面板读取剪贴板密钥验签）')
 

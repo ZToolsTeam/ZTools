@@ -480,6 +480,13 @@ class SystemAPI {
     return r && r.success === true
   }
 
+  /** 管理当前窗口及插件的定时防休眠；离开插件页面后仍由主进程保持。 */
+  async managePowerSession(options) {
+    const r = await this.transport.call('system_power_session', options)
+    if (!r?.success) throw new Error(r?.error?.message || r?.error || '防休眠操作失败')
+    return r.data ?? r
+  }
+
   // ============ Phase 1.4: 键鼠模拟 ============
 
   /**

@@ -1,3 +1,12 @@
+import { buildMacDisplay } from './build-macos-display.mjs'
+import { buildMacNetwork } from './build-macos-network.mjs'
+import { createNetworkBundle, networkBundleId, NETWORK_HELPER_BUNDLE, NETWORK_HELPER_EXECUTABLE } from './macos-network-bundle.mjs'
+import { buildMacStartup } from './build-macos-startup.mjs'
+import { buildMacHotkeys } from './build-macos-hotkeys.mjs'
+import { buildMacHosts } from './build-macos-hosts.mjs'
+import { buildMacAudio } from './build-macos-audio.mjs'
+import { buildMacDns } from './build-macos-dns.mjs'
+import { buildMacInputLock } from './build-macos-input-lock.mjs'
 import { validateMacBundleVersions } from './macos-bundle-version.mjs'
 import { buildMacClipboard } from './build-macos-clipboard.mjs'
 import { buildMacVision } from './build-macos-vision.mjs'
@@ -165,7 +174,7 @@ export function createMacUniversalPackagerOptions({ sourceRoot, outputRoot, appB
       NSAppleEventsUsageDescription: 'ZTools 需要控制其他应用，用于切换窗口、粘贴内容和读取应用图标。',
       ...(minimumOs ? { LSMinimumSystemVersion: minimumOs } : {})
     },
-    asar: true,
+    asar: { unpackDir: '**/node_modules/exiftool-vendored.*' },
     // 打包器会把包内 package.json 的 version 改成 appVersion（三段式 Info.plist 版本），
     // 丢掉第 4 位后 app.getVersion() 与签名预检都会对不上；打 asar 前改回四段式完整版本
     ...(appPackageVersion ? { beforeAsar: [restorePackagedAppVersion(appPackageVersion)] } : {}),
@@ -354,6 +363,14 @@ export async function stageMacUniversal({
   buildNative = buildMacClipboard,
   buildPathAccessNative = buildMacPathAccess,
   buildVisionNative = buildMacVision,
+  buildAudioNative = buildMacAudio,
+  buildInputLockNative = buildMacInputLock,
+  buildDnsNative = buildMacDns,
+  buildHostsNative = buildMacHosts,
+  buildStartupNative = buildMacStartup,
+  buildDisplayNative = buildMacDisplay,
+  buildNetworkNative = buildMacNetwork,
+  buildHotkeysNative = buildMacHotkeys,
   platform = process.platform,
   sourceRoot = root,
   sourcePackage = packageJson,
@@ -395,6 +412,14 @@ export async function stageMacUniversal({
     throw new Error('INVALID_MAC_PATH_ACCESS_HELPER_LOCATION')
   }
   const visionNative = await buildVisionNative({ outputRoot: path.join(outputRoot, 'vision-native-build'), minimumOs })
+  const audioNative = await buildAudioNative({ outputRoot: path.join(outputRoot, 'audio-native-build'), minimumOs })
+  const inputLockNative = await buildInputLockNative({ outputRoot: path.join(outputRoot, 'input-lock-native-build'), minimumOs })
+  const dnsNative = await buildDnsNative({ outputRoot: path.join(outputRoot, 'dns-native-build'), minimumOs })
+  const hotkeysNative = await buildHotkeysNative({ outputRoot: path.join(outputRoot, 'hotkeys-native-build'), minimumOs })
+  const hostsNative = await buildHostsNative({ outputRoot: path.join(outputRoot, 'hosts-native-build'), minimumOs })
+  const startupNative = await buildStartupNative({ outputRoot: path.join(outputRoot, 'startup-native-build'), minimumOs })
+  const displayNative = await buildDisplayNative({ outputRoot: path.join(outputRoot, 'display-native-build'), minimumOs })
+  const networkNative = await buildNetworkNative({ outputRoot: path.join(outputRoot, 'network-native-build'), minimumOs })
 
   const options = createMacUniversalPackagerOptions({
     sourceRoot,
@@ -433,8 +458,45 @@ export async function stageMacUniversal({
   const visionHelperPath = path.join(nativeDestination, 'ZToolsMacVision')
   fsApi.copyFileSync(visionNative.executable, visionHelperPath, fs.constants.COPYFILE_EXCL)
   fsApi.chmodSync(visionHelperPath, 0o755)
+  const audioStats = fsApi.lstatSync(audioNative.executable)
+  if (!audioStats.isFile() || audioStats.isSymbolicLink()) throw new Error('INVALID_MAC_AUDIO_HELPER')
+  const audioHelperPath = path.join(nativeDestination, 'ZToolsMacAudio')
+  fsApi.copyFileSync(audioNative.executable, audioHelperPath, fs.constants.COPYFILE_EXCL)
+  fsApi.chmodSync(audioHelperPath, 0o755)
+  const inputLockStats = fsApi.lstatSync(inputLockNative.executable)
+  if (!inputLockStats.isFile() || inputLockStats.isSymbolicLink()) throw new Error('INVALID_MAC_INPUT_LOCK_HELPER')
+  const inputLockHelperPath = path.join(nativeDestination, 'ZToolsMacInputLock')
+  fsApi.copyFileSync(inputLockNative.executable, inputLockHelperPath, fs.constants.COPYFILE_EXCL)
+  fsApi.chmodSync(inputLockHelperPath, 0o755)
+  const dnsStats = fsApi.lstatSync(dnsNative.executable)
+  if (!dnsStats.isFile() || dnsStats.isSymbolicLink()) throw new Error('INVALID_MAC_DNS_HELPER')
+  const dnsHelperPath = path.join(nativeDestination, 'ZToolsMacDns')
+  fsApi.copyFileSync(dnsNative.executable, dnsHelperPath, fs.constants.COPYFILE_EXCL)
+  fsApi.chmodSync(dnsHelperPath, 0o755)
+  const hostsStats = fsApi.lstatSync(hostsNative.executable)
+  if (!hostsStats.isFile() || hostsStats.isSymbolicLink()) throw new Error('INVALID_MAC_HOSTS_HELPER')
+  const hotkeysHelperPath = path.join(nativeDestination, 'ZToolsMacHotkeys')
+  fsApi.copyFileSync(hotkeysNative.executable, hotkeysHelperPath, fs.constants.COPYFILE_EXCL)
+  fsApi.chmodSync(hotkeysHelperPath, 0o755)
+  const hostsHelperPath = path.join(nativeDestination, 'ZToolsMacHosts')
+  fsApi.copyFileSync(hostsNative.executable, hostsHelperPath, fs.constants.COPYFILE_EXCL)
+  fsApi.chmodSync(hostsHelperPath, 0o755)
+  const startupStats = fsApi.lstatSync(startupNative.executable)
+  if (!startupStats.isFile() || startupStats.isSymbolicLink()) throw new Error('INVALID_MAC_STARTUP_HELPER')
+  const startupHelperPath = path.join(nativeDestination, 'ZToolsMacStartup')
+  fsApi.copyFileSync(startupNative.executable, startupHelperPath, fs.constants.COPYFILE_EXCL)
+  fsApi.chmodSync(startupHelperPath, 0o755)
+  const displayStats = fsApi.lstatSync(displayNative.executable)
+  if (!displayStats.isFile() || displayStats.isSymbolicLink()) throw new Error('INVALID_MAC_DISPLAY_HELPER')
+  const displayHelperPath = path.join(nativeDestination, 'ZToolsMacDisplay')
+  fsApi.copyFileSync(displayNative.executable, displayHelperPath, fs.constants.COPYFILE_EXCL)
+  fsApi.chmodSync(displayHelperPath, 0o755)
+  fsApi.copyFileSync(displayNative.notice, path.join(nativeDestination, 'ZToolsMacDisplay.NOTICE.md'), fs.constants.COPYFILE_EXCL)
+  createNetworkBundle({ executable: networkNative.executable, bundlePath: path.join(appBundlePath, NETWORK_HELPER_BUNDLE),
+    bundleId: networkBundleId(validatedBundleId), minimumOs, fsApi })
   const verification = verifyBundle({ bundlePath: appBundlePath, minimumOs })
-  for (const helper of ['ZToolsMacClipboard', 'ZToolsPathAccessBroker', 'ZToolsMacVision']) {
+  if (!verification?.machoFiles?.includes(NETWORK_HELPER_EXECUTABLE)) throw new Error('REQUIRED_MAC_HELPER_MACHO_MISSING')
+  for (const helper of ['ZToolsMacClipboard', 'ZToolsPathAccessBroker', 'ZToolsMacVision', 'ZToolsMacAudio', 'ZToolsMacInputLock', 'ZToolsMacDns', 'ZToolsMacHosts', 'ZToolsMacHotkeys', 'ZToolsMacStartup', 'ZToolsMacDisplay']) {
     if (!Array.isArray(verification?.machoFiles) || !verification.machoFiles.includes(`Contents/Resources/native/${helper}`)) {
       throw new Error('REQUIRED_MAC_HELPER_MACHO_MISSING')
     }
@@ -457,6 +519,7 @@ export async function stageMacUniversal({
     runtimeTargetManifestPath,
     helperPath,
     visionHelperPath,
+    audioHelperPath,
     pathAccessHelperPath,
     nativeHostMode: 'disabled',
     minimumOs,

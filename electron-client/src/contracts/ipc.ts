@@ -102,7 +102,11 @@ export function parseRequest(value: unknown): ZToolsRequest {
   // 调用方显式设置的时限仍按原规则校验并保留。
   const timeoutMs = value.timeoutMs === undefined && userDialogMethods.has(value.method)
     ? INFINITE_TIMEOUT
-    : value.timeoutMs
+    : value.timeoutMs === undefined && value.method === 'wifi_get_password'
+      ? 35_000 // 留出 30 秒系统授权和结果传输时间。
+      : value.timeoutMs === undefined && value.method === 'wifi_get_profiles'
+        ? 15_000
+        : value.timeoutMs
   const maxTimeoutMs = value.method === 'network_http_request'
     ? MAX_NETWORK_REQUEST_IPC_TIMEOUT_MS
     : MAX_TIMEOUT_MS

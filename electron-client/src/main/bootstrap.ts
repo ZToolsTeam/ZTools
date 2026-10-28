@@ -55,6 +55,7 @@ import { createWindowsSystemPlatformAdapter } from './platform/windows/system.js
 import { createPlatformWindowLifecyclePolicy } from './platform/window-lifecycle.js'
 import { ApplicationLifecycle, runCleanupActions } from './application-lifecycle.js'
 import { createAndAttachElectronReferenceRuntime } from './platform/electron-reference-runtime.js'
+import { closeDesktopNotifications, showDesktopNotification } from './platform/desktop-notification.js'
 
 if (process.platform === 'darwin') configureMacosUserDataPath(app)
 import { RuntimeLock } from './runtime/runtime-lock.js'
@@ -189,6 +190,8 @@ let closeConfirmationPending = false
 let runtimeLock: RuntimeLock | null = null
 let healthCheckExitCode: number | undefined
 let launchIntentReady = false
+let pendingWakeTarget: 'main' | 'launcher' | undefined
+let lastActiveSurface: 'dashboard' | 'launcher' | null = null
 let removeNativeThemeListener: (() => void) | undefined
 let startupAnalyticsReported = false
 const pendingLaunchIntents: LaunchIntent[] = []
@@ -306,6 +309,7 @@ const refreshResumedPermissions = (): void => {
 let permissionRefreshListenersInstalled = false
 
 function stopApplication(): Promise<void> {
+  pendingWakeTarget = undefined
   return applicationLifecycle.stop(async () => {
     if (permissionRefreshListenersInstalled) {
       permissionRefreshListenersInstalled = false
@@ -340,6 +344,7 @@ function stopApplication(): Promise<void> {
         () => ownedPanel?.stop(),
         () => ownedRouter?.stop(),
         () => ownedServices?.stop(),
+        () => closeDesktopNotifications(),
         async () => { try { await runtimeLock?.release() } finally { runtimeLock = null } },
         () => {
           if (ownedWindow && !ownedWindow.isDestroyed()) ownedWindow.destroy()
@@ -408,45 +413,58 @@ function runHealthCheck(): Record<string, unknown> {
 
 function toggleMainWindow(): void {
   if (applicationLifecycle.cancellationRequested) return
-  void (async () => {
-    let pref = 'dashboard'
-    try {
-      pref = services?.config.getCachedWakePreference() ?? 'dashboard'
-    } catch {
-      pref = 'dashboard'
-    }
+  let pref = 'dashboard'
+  try {
+    pref = services?.config.getCachedWakePreference() ?? 'dashboard'
+  } catch {
+    pref = 'dashboard'
+  }
+  if (!launchIntentReady) {
+    pendingWakeTarget = pref === 'launcher' ? 'launcher' : 'main'
+    return
+  }
 
-    if (pref === 'launcher' && launcher) {
-      launcher.toggle()
-      return
-    }
+  // 若悬浮条当前可见，按下全局快捷键应直接收起悬浮条，绝不能把大工作台弹出来
+  if (launcher && launcher.isVisible()) {
+    launcher.hide()
+    return
+  }
 
-    if (launcher && launcher.isVisible()) {
-      launcher.hide()
+  if ((pref === 'launcher' || lastActiveSurface === 'launcher') && launcher) {
+    launcher.toggle()
+    return
+  }
+
+  if (!mainWindow || mainWindow.isDestroyed()) {
+    if (lifecyclePolicy.reopenMainWindowOnActivate && router && services) {
+      createMainWindowInstance()
     }
-    if (!mainWindow || mainWindow.isDestroyed()) {
-      if (lifecyclePolicy.reopenMainWindowOnActivate && router && services) {
-        createMainWindowInstance()
-      }
-      return
-    }
-    if (mainWindow.isMinimized()) {
-      mainWindow.restore()
-      mainWindow.show()
-      mainWindow.focus()
-      return
-    }
-    if (mainWindow.isVisible()) {
-      mainWindow.hide()
-      return
-    }
+    return
+  }
+  if (mainWindow.isMinimized()) {
+    lastActiveSurface = 'dashboard'
+    mainWindow.restore()
     mainWindow.show()
     mainWindow.focus()
-  })()
+    return
+  }
+  if (mainWindow.isVisible()) {
+    mainWindow.hide()
+    return
+  }
+  lastActiveSurface = 'dashboard'
+  mainWindow.show()
+  mainWindow.focus()
 }
 
 function showMainWindow(): void {
   if (applicationLifecycle.cancellationRequested) return
+  // Dock 与第二实例可能在异步初始化期间唤醒，必须等窗口依赖全部就绪。
+  if (!launchIntentReady) {
+    pendingWakeTarget = 'main'
+    return
+  }
+  lastActiveSurface = 'dashboard'
   if (launcher && launcher.isVisible()) {
     launcher.hide()
   }
@@ -487,9 +505,7 @@ function openMainWindowAt(route: string): void {
 function openLauncherWindow(): void {
   if (applicationLifecycle.cancellationRequested) return
   if (launcher) {
-    if (mainWindow && !mainWindow.isDestroyed() && mainWindow.isVisible()) {
-      mainWindow.hide()
-    }
+    lastActiveSurface = 'launcher'
     launcher.show()
     return
   }
@@ -537,7 +553,8 @@ function createMainWindowInstance(): BrowserWindow {
   if (!mainApplicationIcon) throw new Error('Application icon is not ready')
   const window = createMainWindow({
     icon: mainApplicationIcon, webRoot: activeWebRoot(), registry,
-    showOnReady: initialLaunchIntent?.autostart !== true, darkMode: nativeTheme.shouldUseDarkColors,
+    // 冷启动由就绪后的唤醒目标决定显示；重开窗口才使用自动显示。
+    showOnReady: launchIntentReady, darkMode: nativeTheme.shouldUseDarkColors,
     ...(initialMainWindowSize ? { initialSize: initialMainWindowSize } : {}),
     persistNormalBounds: bounds => { void services?.config.setMainWindowSize(bounds.width, bounds.height).catch(error => console.warn('保存主窗口尺寸失败', error)) },
     onToggleLauncher: () => {
@@ -901,6 +918,7 @@ if (!app.requestSingleInstanceLock()) {
       nativeRuntime.nativeInput ?? null,
       resources
     )
+    services.focus.setNotificationHandler(showDesktopNotification)
     await nativeRuntime.start(signal)
     if (!applicationLifecycle.canContinueStartup()) return
 
@@ -1034,6 +1052,9 @@ if (!app.requestSingleInstanceLock()) {
       registry,
       showMainWindow,
       navigateMainWindow,
+      onShow: () => {
+        lastActiveSurface = 'launcher'
+      },
       hideMainWindow: () => {
         if (mainWindow && !mainWindow.isDestroyed() && mainWindow.isVisible()) {
           mainWindow.hide()
@@ -1075,6 +1096,12 @@ if (!app.requestSingleInstanceLock()) {
     signalDeploymentReady(initialLaunchIntent)
     if (initialLaunchIntent) acceptLaunchIntent(initialLaunchIntent)
     else showMainWindow()
+    if (pendingWakeTarget) {
+      const wakeTarget = pendingWakeTarget
+      pendingWakeTarget = undefined
+      if (wakeTarget === 'launcher') openLauncherWindow()
+      else showMainWindow()
+    }
     drainLaunchIntents()
     lifecycleLog('INFO', 'Application bootstrap completed', {
       durationMs: Date.now() - processStartedAt,

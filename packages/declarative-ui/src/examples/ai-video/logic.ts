@@ -135,8 +135,8 @@ export const INITIAL_AI_VIDEO_FILES: AiVideoFileItem[] = [
   {
     id: 'ai-vid-3',
     name: 'Vintage_Tech_Keynote_Archive_720p.mov',
-    path: 'C:\\Users\\Geek\\Videos\\Vintage_Tech_Keynote_Archive_720p.mov',
-    parentDir: 'C:\\Users\\Geek\\Videos',
+    path: 'D:\\Workspace\\Videos\\Vintage_Tech_Keynote_Archive_720p.mov',
+    parentDir: 'D:\\Workspace\\Videos',
     extension: '.mov',
     sizeBytes: 420 * 1024 * 1024,
     sourceFps: 30,
@@ -145,8 +145,8 @@ export const INITIAL_AI_VIDEO_FILES: AiVideoFileItem[] = [
   {
     id: 'ai-vid-4',
     name: 'Night_City_Drone_Aerial_LowLight.mp4',
-    path: 'C:\\Users\\Geek\\Downloads\\Night_City_Drone_Aerial_LowLight.mp4',
-    parentDir: 'C:\\Users\\Geek\\Downloads',
+    path: 'D:\\Workspace\\Downloads\\Night_City_Drone_Aerial_LowLight.mp4',
+    parentDir: 'D:\\Workspace\\Downloads',
     extension: '.mp4',
     sizeBytes: 510 * 1024 * 1024,
     sourceFps: 30,

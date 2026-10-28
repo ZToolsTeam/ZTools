@@ -229,7 +229,7 @@ export function decodeTextBufferWithEncoding(bytes: Uint8Array, encoding: string
 
 export function inspectFileFromBuffer(
   bytes: Uint8Array,
-  filePath = 'sample.csv',
+  filePath = 'unknown',
   overridePreviewEncoding?: string
 ): FileDiagnosticResult {
   const fileName = filePath.split(/[\\/]/).pop() || filePath

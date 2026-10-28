@@ -3,6 +3,7 @@ import fs from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 import test from 'node:test'
+import { execFileSync } from 'node:child_process'
 import type { CallerIdentity } from '../../src/contracts/capabilities.js'
 import { errorCodes, ZToolsError } from '../../src/contracts/errors.js'
 import { fileCapabilityResponse } from '../../src/main/protocol/file-capability.js'
@@ -684,6 +685,89 @@ test('cleans cancelled, expired, zero-byte and renderer-destroyed write sessions
   }
 })
 
+test('分块提交等待关闭文件时仍可被窗口关闭、取消和停止撤销，并清理临时文件', async t => {
+  for (const reason of ['window', 'signal', 'cancel', 'stop', 'complete'] as const) {
+    await t.test(reason, async child => {
+      const context = await createContext(), controller = new AbortController()
+      let release!: () => void, entered!: () => void
+      const gate = new Promise<void>(resolve => { release = resolve })
+      const closing = new Promise<void>(resolve => { entered = resolve })
+      const open = fs.open
+      child.mock.method(fs, 'open', async (...args: Parameters<typeof fs.open>) => {
+        const file = await open(...args)
+        if (String(args[0]).startsWith(context.root) && String(args[0]).endsWith('.tmp')) {
+          const close = file.close.bind(file)
+          file.close = async () => { entered(); await gate; await close() }
+        }
+        return file
+      })
+      try {
+        const target = path.join(context.root, 'retained.txt')
+        await fs.writeFile(target, 'original')
+        await context.service.grantSavePath(target, mainCaller)
+        const { handle } = await context.service.startWrite({ path: target, totalSize: 3 }, mainCaller)
+        await context.service.writeChunk({ handle, offset: 0, content: Buffer.from('new').toString('base64') }, mainCaller)
+        const pending = context.service.finishWrite(handle, mainCaller, controller.signal)
+        const checked = reason === 'complete'
+          ? pending.then(result => assert.deepEqual(result, { success: true, size: 3 }))
+          : assert.rejects(pending, (error: unknown) => error instanceof ZToolsError && error.code ===
+            (reason === 'window' ? errorCodes.permissionDenied : reason === 'stop' ? errorCodes.appStopping : errorCodes.callerDestroyed))
+        await closing
+        assert.equal(await fs.readFile(target, 'utf8'), 'original')
+        await assert.rejects(context.service.finishWrite(handle, mainCaller), { code: errorCodes.invalidRequest })
+        let cleanup: Promise<unknown> | undefined, cleanupDone = false
+        if (reason === 'window') context.remove(mainCaller.webContentsId)
+        if (reason === 'signal') controller.abort()
+        if (reason === 'cancel') cleanup = context.service.cancelWrite(handle, mainCaller)
+        if (reason === 'stop') cleanup = context.service.stop()
+        void cleanup?.then(() => { cleanupDone = true })
+        await new Promise<void>(resolve => setImmediate(resolve))
+        assert.equal(cleanupDone, false)
+        assert.equal(await fs.readFile(target, 'utf8'), 'original')
+        release(); await checked; await cleanup
+        assert.equal(await fs.readFile(target, 'utf8'), reason === 'complete' ? 'new' : 'original')
+        assert.equal((await fs.readdir(context.root)).some(name => name.endsWith('.tmp')), false)
+      } finally { release(); child.mock.restoreAll(); await dispose(context) }
+    })
+  }
+})
+
+test('分块写入重试原子替换前再次检查取消，不重试已撤销的提交', async t => {
+  const context = await createContext(), controller = new AbortController()
+  const target = path.join(context.root, 'retry.txt')
+  try {
+    await fs.writeFile(target, 'original')
+    await context.service.grantSavePath(target, mainCaller)
+    const { handle } = await context.service.startWrite({ path: target, totalSize: 0 }, mainCaller)
+    let attempts = 0
+    t.mock.method(fs, 'rename', async () => { attempts++; controller.abort(); throw Object.assign(new Error('busy'), { code: 'EBUSY' }) })
+    await assert.rejects(context.service.finishWrite(handle, mainCaller, controller.signal), { code: errorCodes.callerDestroyed })
+    assert.equal(attempts, 1)
+    assert.equal(await fs.readFile(target, 'utf8'), 'original')
+    assert.equal((await fs.readdir(context.root)).some(name => name.endsWith('.tmp')), false)
+  } finally { t.mock.restoreAll(); await dispose(context) }
+})
+
+test('分块写入已进入原子提交时停止会等待真实结果，不把已落盘的内容称为撤销', async t => {
+  const context = await createContext(), target = path.join(context.root, 'committed.txt')
+  let release!: () => void, entered!: () => void
+  const gate = new Promise<void>(resolve => { release = resolve }), committed = new Promise<void>(resolve => { entered = resolve })
+  const rename = fs.rename
+  try {
+    await fs.writeFile(target, 'original'); await context.service.grantSavePath(target, mainCaller)
+    const { handle } = await context.service.startWrite({ path: target, totalSize: 0 }, mainCaller)
+    t.mock.method(fs, 'rename', async (...args: Parameters<typeof fs.rename>) => { await rename(...args); entered(); await gate })
+    const pending = context.service.finishWrite(handle, mainCaller)
+    await committed
+    let stopped = false
+    const stopping = context.service.stop().then(() => { stopped = true })
+    await new Promise<void>(resolve => setImmediate(resolve))
+    assert.equal(stopped, false); assert.equal(await fs.readFile(target, 'utf8'), '')
+    release(); assert.deepEqual(await pending, { success: true, size: 0 }); await stopping
+    assert.equal((await fs.readdir(context.root)).some(name => name.endsWith('.tmp')), false)
+  } finally { release(); t.mock.restoreAll(); await dispose(context) }
+})
+
 test('search-result grants expire and cannot be restored after the requesting window closes', async () => {
   let now = 0
   const context = await createContext(() => now)
@@ -701,4 +785,61 @@ test('search-result grants expire and cannot be restored after the requesting wi
   } finally {
     await dispose(context)
   }
+})
+
+test('另存副本的取消在授权结束后、原子提交前生效，原文件与现有目标保留', async () => {
+  const context = await createContext()
+  try {
+    const target = path.join(context.root, 'cancelled-copy.docx')
+    await context.service.grantSavePath(target, mainCaller)
+    const controller = new AbortController(); controller.abort()
+    await assert.rejects(context.service.writeFile({ path: target, encoding: 'base64', content: Buffer.from('data').toString('base64'), overwrite: false }, mainCaller, controller.signal))
+    await assert.rejects(fs.stat(target), { code: 'ENOENT' })
+    assert.equal((await fs.readdir(context.root)).some(name => name.endsWith('.tmp')), false)
+  } finally { await dispose(context) }
+})
+
+
+test('文件读取接受取消信号，已取消调用不读取内容；普通文件仍正常读取', async () => {
+  const context = await createContext()
+  try {
+    const file = path.join(context.root, 'cancel.txt')
+    await fs.writeFile(file, '原始内容'); await context.service.grantOpenPath(file, mainCaller)
+    const controller = new AbortController(); controller.abort()
+    await assert.rejects(context.service.readFile({ path: file, encoding: 'utf8' }, mainCaller, controller.signal), { code: errorCodes.callerDestroyed })
+    assert.equal((await context.service.readFile({ path: file, encoding: 'utf8' }, mainCaller, new AbortController().signal)).content, '原始内容')
+  } finally { await dispose(context) }
+})
+
+test('命名管道读取立即拒绝，不在打开时等待其他进程写入', { skip: process.platform === 'win32', timeout: 5000 }, async () => {
+  const context = await createContext()
+  try {
+    const fifo = path.join(context.root, 'not-a-regular-file')
+    execFileSync('mkfifo', [fifo])
+    await context.service.grantOpenPath(fifo, mainCaller)
+    await assert.rejects(context.service.readFile({ path: fifo, encoding: 'utf8' }, mainCaller, new AbortController().signal), { code: errorCodes.fileError })
+  } finally { await dispose(context) }
+})
+
+test('无效 UTF-8 明确提示编码限制，保留原字节且不泄露文件路径', async () => {
+  const context = await createContext()
+  try {
+    const file = path.join(context.root, 'private-encoding-fixture.txt')
+    for (const bytes of [Buffer.from([0xff, 0xfe, 0x61, 0]), Buffer.from([0xc0, 0xaf]), Buffer.from([0xe4, 0xb8])]) {
+      await fs.writeFile(file, bytes)
+      await context.service.grantOpenPath(file, mainCaller)
+      await assert.rejects(context.service.readFile({ path: file, encoding: 'utf8' }, mainCaller), error => {
+        assert.ok(error instanceof ZToolsError)
+        assert.equal(error.code, errorCodes.fileError)
+        assert.match(error.message, /UTF-8/)
+        assert.ok(!error.message.includes(file))
+        return true
+      })
+      const binary = await context.service.readFile({ path: file, encoding: 'base64' }, mainCaller)
+      assert.deepEqual(Buffer.from(binary.content, 'base64'), bytes)
+      assert.deepEqual(await fs.readFile(file), bytes)
+    }
+    await fs.writeFile(file, '中文\n')
+    assert.equal((await context.service.readFile({ path: file, encoding: 'utf8' }, mainCaller)).content, '中文\n')
+  } finally { await dispose(context) }
 })

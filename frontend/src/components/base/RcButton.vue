@@ -1,4 +1,5 @@
 <script setup>
+import { LoadingOutlined } from '@ant-design/icons-vue'
 import { computed } from 'vue'
 import ShortcutKeys from './ShortcutKeys.vue'
 
@@ -13,7 +14,7 @@ const props = defineProps({
     default: 'sm',
     validator: (v) => ['xs', 'sm', 'md'].includes(v)
   },
-  icon: { type: String, default: '' },
+  icon: { type: [Object, Function], default: null },
   kbd: { type: String, default: '' },
   loading: { type: Boolean, default: false },
   disabled: { type: Boolean, default: false }
@@ -65,8 +66,8 @@ const handleClick = (e) => {
     :disabled="disabled || loading"
     @click="handleClick"
   >
-    <i v-if="loading" class="fa fa-spinner fa-spin text-xs"></i>
-    <i v-else-if="icon && icon.startsWith('fa')" :class="['fa', icon]"></i>
+    <LoadingOutlined v-if="loading" class="text-xs" />
+    <component :is="icon" v-else-if="icon" aria-hidden="true" />
     <slot></slot>
     <ShortcutKeys v-if="kbd" :combo="kbd" />
   </button>

@@ -191,9 +191,9 @@ export class ProcessService {
   readonly #terminator: ProcessTerminator
 
   /** 结束本机任意进程；权限闸门在路由层（requirePluginPermission('process')） */
-  async terminatePid(params: ProcessTerminatePidParams, signal: AbortSignal): Promise<ProcessTerminateResult> {
+  async terminatePid(params: ProcessTerminatePidParams, signal: AbortSignal, beforeSignal?: (pid: number) => Promise<void>): Promise<ProcessTerminateResult> {
     try {
-      return await this.#terminator.terminate(params, signal)
+      return await this.#terminator.terminate(params, signal, beforeSignal)
     } finally {
       this.#cachedMonitorSnapshot = undefined
     }

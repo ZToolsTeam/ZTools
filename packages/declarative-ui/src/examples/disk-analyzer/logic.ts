@@ -479,7 +479,7 @@ export async function fetchDiskAnalysisSnapshot(hostOverride?: any): Promise<Dis
   const drives: DiskDriveItem[] = rawDrives.map(d => ({
     drive: d.drive,
     label: d.drive === 'C:' ? '系统主分区 (C:)' : `本地数据卷 (${d.drive})`,
-    fileSystem: 'NTFS',
+    fileSystem: '未知',
     totalBytes: d.totalBytes,
     usedBytes: d.usedBytes,
     availableBytes: d.availableBytes,

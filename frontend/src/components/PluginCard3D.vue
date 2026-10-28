@@ -1,4 +1,5 @@
 <script setup>
+import { AppleOutlined, DeleteOutlined, DownloadOutlined, GlobalOutlined, GithubOutlined, ReloadOutlined, SafetyCertificateOutlined, StarFilled, StarOutlined, StopOutlined, WarningOutlined, WindowsOutlined } from '@ant-design/icons-vue'
 import { computed, ref } from 'vue'
 import { downloadPluginUpdate } from '@/api/apiserver'
 import { usePluginsStore } from '@/stores/plugins'
@@ -32,16 +33,24 @@ const isRevoked = computed(() =>
 const revokedReason = computed(() =>
   props.plugin.revoked_reason || props.plugin.revokedReason || pluginsStore.getRevokedReason(props.plugin.pluginId) || '该插件已被官方下架禁用'
 )
+// 插件目录里的新版本不再支持当前系统时也会禁用，文案与官方下架区分开
+const isPlatformUnsupported = computed(() =>
+  !props.plugin.revoked && pluginsStore.getRevokedKind(props.plugin.pluginId) === 'platform'
+)
+const revokedLabel = computed(() => (isPlatformUnsupported.value ? '不支持当前系统' : '已下架'))
+const uninstallHint = computed(() =>
+  isPlatformUnsupported.value ? '当前系统已不再支持该插件，可以卸载' : '该插件已被官方下架，建议立即安全卸载'
+)
 const isOfficial = computed(() =>
   isOfficialPluginItem(props.plugin) || isOfficialPlugin(props.plugin.pluginId || props.plugin.id)
 )
 const platformLabel = computed(() => getPluginPlatformLabel(props.plugin))
 const platformIcon = computed(() => {
   switch (platformLabel.value) {
-    case '跨平台': return 'fa-globe'
-    case '仅 Windows': return 'fa-windows'
-    case '仅 macOS': return 'fa-apple'
-    default: return ''
+    case '跨平台': return GlobalOutlined
+    case '仅 Windows': return WindowsOutlined
+    case '仅 macOS': return AppleOutlined
+    default: return null
   }
 })
 const installError = computed(() =>
@@ -134,7 +143,7 @@ const { pluginIcon, pluginGlyph, displayIconUrl, iconFailed, showImgOverlay, onI
             title="官方自营"
             aria-label="官方自营"
           >
-            <i class="fa fa-shield" aria-hidden="true"></i>
+            <SafetyCertificateOutlined  aria-hidden="true" />
           </span>
           <span
             v-if="platformIcon"
@@ -143,7 +152,7 @@ const { pluginIcon, pluginGlyph, displayIconUrl, iconFailed, showImgOverlay, onI
             :title="platformLabel"
             :aria-label="platformLabel"
           >
-            <i class="fa" :class="platformIcon" aria-hidden="true"></i>
+            <component :is="platformIcon" aria-hidden="true" />
           </span>
         </div>
 
@@ -158,9 +167,9 @@ const { pluginIcon, pluginGlyph, displayIconUrl, iconFailed, showImgOverlay, onI
               v-if="isRevoked"
               class="card-mark-status is-revoked"
               :title="revokedReason"
-              aria-label="已下架"
+              :aria-label="revokedLabel"
             >
-              <i class="fa fa-ban" aria-hidden="true"></i>
+              <StopOutlined  aria-hidden="true" />
             </span>
             <span
               v-else-if="isIncompatible"
@@ -168,7 +177,7 @@ const { pluginIcon, pluginGlyph, displayIconUrl, iconFailed, showImgOverlay, onI
               :title="incompatReason || '需升级'"
               aria-label="需升级"
             >
-              <i class="fa fa-exclamation-triangle" aria-hidden="true"></i>
+              <WarningOutlined  aria-hidden="true" />
             </span>
           </div>
           <p class="card-desc">{{ plugin.description || '暂无描述' }}</p>
@@ -188,7 +197,7 @@ const { pluginIcon, pluginGlyph, displayIconUrl, iconFailed, showImgOverlay, onI
             title="查看源码仓库"
             @click.stop
           >
-            <i class="fa fa-github"></i>
+            <GithubOutlined  />
           </a>
 
           <button
@@ -198,7 +207,7 @@ const { pluginIcon, pluginGlyph, displayIconUrl, iconFailed, showImgOverlay, onI
             :title="isFavorite ? '取消收藏' : '添加收藏'"
             @click.stop="handleToggleFavorite"
           >
-            <i :class="isFavorite ? 'fa fa-star' : 'fa fa-star-o'"></i>
+            <component :is="isFavorite ? StarFilled : StarOutlined" aria-hidden="true" />
           </button>
 
           <button
@@ -209,7 +218,7 @@ const { pluginIcon, pluginGlyph, displayIconUrl, iconFailed, showImgOverlay, onI
             :disabled="isUpdating"
             @click.stop="handleUpdate"
           >
-            <i class="fa fa-refresh" :class="{ 'fa-spin': isUpdating }"></i>
+            <ReloadOutlined  :class="{ 'fa-spin': isUpdating }" />
           </button>
 
           <!-- 已下架插件：禁用启动，标红提示 [已下架]，引导一键安全卸载 -->
@@ -218,8 +227,8 @@ const { pluginIcon, pluginGlyph, displayIconUrl, iconFailed, showImgOverlay, onI
               v-if="isInstalled"
               size="xs"
               variant="danger"
-              icon="fa-trash-o"
-              title="该插件已被官方下架，建议立即安全卸载"
+              :icon="DeleteOutlined"
+              :title="uninstallHint"
               @click.stop="handleUninstall"
             >
               卸载
@@ -229,11 +238,11 @@ const { pluginIcon, pluginGlyph, displayIconUrl, iconFailed, showImgOverlay, onI
               size="xs"
               variant="ghost"
               :disabled="true"
-              icon="fa-ban"
+              :icon="StopOutlined"
               style="opacity: 0.6; color: var(--rc-error)"
               :title="revokedReason"
             >
-              已下架
+              {{ revokedLabel }}
             </RcButton>
           </template>
           <RcButton
@@ -248,7 +257,7 @@ const { pluginIcon, pluginGlyph, displayIconUrl, iconFailed, showImgOverlay, onI
             v-else-if="installFailed && !isInstalled"
             size="xs"
             variant="danger"
-            icon="fa-refresh"
+            :icon="ReloadOutlined"
             :title="installError || '安装失败，点击重试'"
             @click.stop="handleActionClick"
           >
@@ -266,7 +275,7 @@ const { pluginIcon, pluginGlyph, displayIconUrl, iconFailed, showImgOverlay, onI
             v-else
             size="xs"
             variant="secondary"
-            icon="fa-download"
+            :icon="DownloadOutlined"
             @click.stop="handleActionClick"
           >
             安装

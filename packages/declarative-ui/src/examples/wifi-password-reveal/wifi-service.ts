@@ -770,7 +770,7 @@ export async function fetchSavedWifiProfiles(
       return results.length > 0 ? results : fallback ? [...SAMPLE_WIFI_PROFILES] : []
     }
   } catch {
-    if (fallback) {
+    if (!realHost && fallback) {
       return [...SAMPLE_WIFI_PROFILES]
     }
     throw new Error('WIFI_COMMAND_EXECUTION_FAILED')

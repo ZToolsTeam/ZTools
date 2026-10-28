@@ -29,6 +29,9 @@ test('native clipboard builds both slices with explicit deployment policy and au
     for (const [tool, argv, options] of calls.slice(0, 2)) {
       assert.equal(tool, '/usr/bin/xcrun')
       assert.ok(argv.includes('-mmacosx-version-min=13.0'))
+      assert.ok(argv.some(arg => arg.endsWith('/paste_session.mm')))
+      assert.ok(argv.includes('ApplicationServices'))
+      assert.ok(argv.includes('Carbon'))
       assert.equal(options.shell, false)
       assert.equal(options.timeout, 120000)
     }
@@ -36,6 +39,12 @@ test('native clipboard builds both slices with explicit deployment policy and au
     assert.equal(fs.readFileSync(result.executable, 'utf8'), 'fixture binary')
     assert.throws(() => buildMacClipboard({ platform: 'darwin', outputRoot, minimumOs: '13.0' }), /EEXIST/)
   } finally { fs.rmSync(root, { recursive: true, force: true }) }
+})
+
+test('普通开发构建包含剪贴板辅助程序，避免旧产物缺少 paste-session', () => {
+  const build = fs.readFileSync(new URL('./build.mjs', import.meta.url), 'utf8')
+  assert.match(build, /import \{ buildDevelopmentClipboard \} from '\.\/build-macos-clipboard\.mjs'/)
+  assert.match(build, /^buildDevelopmentClipboard\(root\)$/m)
 })
 
 test('native clipboard refuses thin output and compile failures; no success artifact returned', () => {

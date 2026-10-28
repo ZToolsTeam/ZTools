@@ -13,6 +13,7 @@
  */
 import bundledConfig from '../config/bundledPlugins.generated.js'
 import { isBundledPlugin, isStoreOfficialPlugin, BUNDLED_PLUGIN_REPLACEMENTS } from './bundledPlugins.js'
+import { COMMUNITY_EXTENSION_IDS } from './storeCatalogManager.js'
 import { OFFICIAL_PLUGINS_MAP, OFFICIAL_PLUGIN_ALIASES } from './officialPlugins.js'
 
 const UNRELEASED_OFFICIAL_IDS = new Set((bundledConfig.unreleasedOfficialIds || []).map((id) => String(id).toLowerCase()))
@@ -43,6 +44,14 @@ export function isPluginVisible(value) {
   if (Object.hasOwn(BUNDLED_PLUGIN_REPLACEMENTS, id)) return false
   if (UNRELEASED_OFFICIAL_IDS.has(id)) return false
   if (isStoreOfficialPlugin(id)) return true
+  if (COMMUNITY_EXTENSION_IDS.has(id)) return true
+  // 旧内置声明式实现自带 isDeclarative 与 version，必须先于“已安装”判断排除，否则示例数据插件会重新出现
   if (isLegacyBuiltin(id)) return false
+  const isInstalledOrDeclarative = Boolean(
+    value &&
+    typeof value === 'object' &&
+    (value.isDeclarative || value.isInstalledDeclarative || value.entry || value.version)
+  )
+  if (isInstalledOrDeclarative) return true
   return !hasOfficialAuthor(value)
 }

@@ -1,4 +1,5 @@
 <script setup>
+import { ReloadOutlined, WarningOutlined } from '@ant-design/icons-vue'
 import { ref, computed, onMounted, onBeforeUnmount } from 'vue'
 import { createScreenPermissionController } from '@/utils/screenPermissionController'
 
@@ -116,7 +117,7 @@ onBeforeUnmount(() => {
           :disabled="!canQuery"
           @click="controller?.refresh()"
         >
-          <i class="fa fa-refresh mr-1" :class="{ 'fa-spin': state.loading }"></i>
+          <ReloadOutlined class="mr-1" :class="{ 'fa-spin': state.loading }" />
           重新检查
         </a-button>
       </div>
@@ -140,7 +141,7 @@ onBeforeUnmount(() => {
 
       <!-- macOS 权限异常时的极简引导 -->
       <div v-if="isMac && state.snapshot?.osPermission === 'denied'" class="flex items-center gap-2 px-3 py-2 rounded-lg bg-[var(--rc-warning-subtle)] border border-[var(--rc-border)] text-xs text-[var(--rc-warning)] my-1">
-        <i class="fa fa-exclamation-triangle"></i>
+        <WarningOutlined  />
         <span>请前往“系统设置 > 隐私与安全性 > 屏幕录制”允许 ZTools</span>
       </div>
 
@@ -149,7 +150,7 @@ onBeforeUnmount(() => {
         <div class="flex items-center justify-between mb-2">
           <span class="text-xs font-semibold text-[var(--rc-text-primary)]">已授权插件</span>
           <a-button size="small" :loading="grantState.loading" @click="refreshGrants">
-            <i class="fa fa-refresh mr-1" :class="{ 'fa-spin': grantState.loading }"></i>
+            <ReloadOutlined class="mr-1" :class="{ 'fa-spin': grantState.loading }" />
             刷新
           </a-button>
         </div>

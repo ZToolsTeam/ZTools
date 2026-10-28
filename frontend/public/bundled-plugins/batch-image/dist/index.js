@@ -1,77 +1,16 @@
 import { List, ActionPanel, Action, Icon, Color, Clipboard, useState, useEffect, useRef, showToast, Toast, confirmAlert, FilterBar } from '@ztools/declarative-ui';
-import { IMAGE_WORKSHOP_PRESETS, formatBytes, estimateCompressedBytes, fetchRealImageWorkspace, invokeNativeCapability, openImageFileLocation, trashImageFileItem } from './logic.js';
-import { isRealElectronHost, readRealClipboardText } from './native-ipc.js';
+import { FORMAT_OPTIONS, IMAGE_WORKSHOP_PRESETS, QUALITY_OPTIONS, RESIZE_OPTIONS, SCAN_TOP_N_PER_DIR, describeOutcomeDetail, describeOutcomeTag, fetchRealImageWorkspace, formatBytes, makeImageItem, openImageFileLocation, parseClipboardImagePaths, processImageBatch, readImageFileSize, summarizeOutcomes, trashImageFileItem } from './logic.js';
 export * from './logic.js';
-const INITIAL_SAMPLE_IMAGES = [
-    {
-        id: 'img-sample-1',
-        name: '产品发布会主视觉海报_4K_原图.png',
-        path: 'D:\\Pictures\\Design\\产品发布会主视觉海报_4K_原图.png',
-        parentDir: 'D:\\Pictures\\Design',
-        extension: '.png',
-        sizeBytes: Math.round(4.2 * 1024 * 1024),
-        dimensionsText: '3840×2160',
-        estimatedCompressedBytes: Math.round(1.1 * 1024 * 1024)
-    },
-    {
-        id: 'img-sample-2',
-        name: '财务报销凭证_高拍仪扫描件_01.jpg',
-        path: 'C:\\Users\\Geek\\Pictures\\财务报销凭证_高拍仪扫描件_01.jpg',
-        parentDir: 'C:\\Users\\Geek\\Pictures',
-        extension: '.jpg',
-        sizeBytes: Math.round(3.8 * 1024 * 1024),
-        dimensionsText: '2560×1440',
-        estimatedCompressedBytes: Math.round(420 * 1024)
-    },
-    {
-        id: 'img-sample-3',
-        name: '架构设计评审白板拍照_IMG_9082.jpeg',
-        path: 'C:\\Users\\Geek\\Downloads\\架构设计评审白板拍照_IMG_9082.jpeg',
-        parentDir: 'C:\\Users\\Geek\\Downloads',
-        extension: '.jpeg',
-        sizeBytes: Math.round(3.1 * 1024 * 1024),
-        dimensionsText: '2560×1440',
-        estimatedCompressedBytes: Math.round(580 * 1024)
-    },
-    {
-        id: 'img-sample-4',
-        name: 'Snipaste_2026-10-22_客户端双栏对比截图.png',
-        path: 'C:\\Users\\Geek\\Desktop\\Snipaste_2026-10-22_客户端双栏对比截图.png',
-        parentDir: 'C:\\Users\\Geek\\Desktop',
-        extension: '.png',
-        sizeBytes: Math.round(1.9 * 1024 * 1024),
-        dimensionsText: '1920×1080',
-        estimatedCompressedBytes: Math.round(540 * 1024)
-    },
-    {
-        id: 'img-sample-5',
-        name: '营业执照正本扫描件_政务网上传用.png',
-        path: 'D:\\Pictures\\Certs\\营业执照正本扫描件_政务网上传用.png',
-        parentDir: 'D:\\Pictures\\Certs',
-        extension: '.png',
-        sizeBytes: Math.round(1.4 * 1024 * 1024),
-        dimensionsText: '1920×1080',
-        estimatedCompressedBytes: Math.round(260 * 1024)
-    },
-    {
-        id: 'img-sample-6',
-        name: '官网首屏英雄区插画素材_Banner.webp',
-        path: 'D:\\Pictures\\Web\\官网首屏英雄区插画素材_Banner.webp',
-        parentDir: 'D:\\Pictures\\Web',
-        extension: '.webp',
-        sizeBytes: Math.round(860 * 1024),
-        dimensionsText: '1920×1080',
-        estimatedCompressedBytes: Math.round(290 * 1024)
-    }
-];
+/** 插件入口子命令 → 处理方案 */
 const FEATURE_TO_PRESET_ID = {
     'preset-lossless': 'preset-smart-lossless',
     'preset-gov-limit': 'preset-extreme-300k',
     'preset-to-jpg': 'preset-to-jpg',
-    'preset-strip-exif': 'preset-strip-exif',
-    'preset-merge-pdf': 'preset-merge-pdf',
     'preset-doc-bw': 'preset-doc-grayscale'
 };
+function errorText(err) {
+    return err instanceof Error ? err.message : String(err);
+}
 export function BatchImageCommand() {
     const launchCtx = (globalThis.window || globalThis).__ztoolsLaunchContext;
     const initialFeature = launchCtx && (!launchCtx.pluginId || launchCtx.pluginId === 'batch-image') ? String(launchCtx.featureCode || '').trim() : '';
@@ -81,14 +20,12 @@ export function BatchImageCommand() {
     const [activePresetId, setActivePresetId] = useState(initialPreset.id);
     const [outputFormat, setOutputFormat] = useState(initialPreset.defaultFormat);
     const [qualityTier, setQualityTier] = useState(initialPreset.defaultQuality);
-    const [maxEdgePreset, setMaxEdgePreset] = useState(initialPreset.defaultMaxEdge);
-    const [stripExif, setStripExif] = useState(true);
-    const isRealHost = isRealElectronHost();
-    const initialImages = isRealHost ? [] : INITIAL_SAMPLE_IMAGES;
-    const [files, setFiles] = useState(initialImages);
-    const [checkedIds, setCheckedIds] = useState(initialImages.map((f) => f.id));
+    const [resizePreset, setResizePreset] = useState(initialPreset.defaultResize);
+    const [files, setFiles] = useState([]);
+    const [checkedIds, setCheckedIds] = useState([]);
     const [presets, setPresets] = useState(IMAGE_WORKSHOP_PRESETS);
     const [isLoading, setIsLoading] = useState(false);
+    const [scanTruncated, setScanTruncated] = useState(false);
     const runningRef = useRef(false);
     const scanningRef = useRef(false);
     async function refreshWorkspace(showIndicator = false) {
@@ -101,25 +38,21 @@ export function BatchImageCommand() {
             if (showIndicator) {
                 progressToast = await showToast({
                     style: Toast.Style.Animated,
-                    title: '正在扫描本机图片素材...',
-                    message: '检索 Pictures / Downloads / Desktop 目录下的图片'
+                    title: '正在扫描图片...',
+                    message: '扫描图片、下载、桌面目录'
                 });
             }
             const ws = await fetchRealImageWorkspace();
-            const nextFiles = isRealElectronHost()
-                ? ws.files
-                : ws.files.length > 0
-                    ? ws.files
-                    : INITIAL_SAMPLE_IMAGES;
-            setFiles(nextFiles);
-            setCheckedIds(nextFiles.map((f) => f.id));
+            setFiles(ws.files);
+            setCheckedIds(ws.files.map((f) => f.id));
             setPresets(ws.presets);
+            setScanTruncated(ws.truncated);
             if (showIndicator) {
                 await progressToast?.hide();
                 await showToast({
                     style: Toast.Style.Success,
                     title: '图片队列已刷新',
-                    message: `已加载 ${nextFiles.length} 张待处理图片`
+                    message: `找到 ${ws.files.length} 张图片`
                 });
             }
         }
@@ -127,8 +60,8 @@ export function BatchImageCommand() {
             await progressToast?.hide();
             await showToast({
                 style: Toast.Style.Failure,
-                title: '扫描图片队列失败',
-                message: err instanceof Error ? err.message : String(err)
+                title: '扫描图片失败',
+                message: errorText(err)
             });
         }
         finally {
@@ -146,146 +79,152 @@ export function BatchImageCommand() {
         if (found) {
             setOutputFormat(found.defaultFormat);
             setQualityTier(found.defaultQuality);
-            setMaxEdgePreset(found.defaultMaxEdge);
+            setResizePreset(found.defaultResize);
         }
     }
     const activePreset = presets.find((p) => p.id === activePresetId) || IMAGE_WORKSHOP_PRESETS[0];
-    const baseRatio = qualityTier === '70L'
-        ? 0.22
-        : qualityTier === '95L'
-            ? 0.76
-            : activePreset.ratioMultiplier || 0.34;
-    const scaleFactor = maxEdgePreset === '1080'
-        ? 0.65
-        : maxEdgePreset === '1280'
-            ? 0.75
-            : maxEdgePreset === '1920'
-                ? 0.88
-                : 1;
-    const effectiveRatio = Math.min(0.95, Math.max(0.12, baseRatio * scaleFactor));
-    async function executeBatchProcess(targetFiles, forceMergePdf = false) {
+    async function executeBatchProcess(targetFiles) {
         if (runningRef.current)
             return;
         if (targetFiles.length === 0) {
             await showToast({
                 style: Toast.Style.Failure,
-                title: '请先勾选至少 1 张待处理的图片'
+                title: '请先勾选至少 1 张图片'
             });
             return;
         }
-        const methodToCall = forceMergePdf || outputFormat === 'pdf' ? 'MergeImagesToPdf' : activePreset.method;
-        const formatToUse = forceMergePdf ? 'pdf' : outputFormat;
-        const maxEdgeNum = maxEdgePreset === 'source' ? 0 : Number(maxEdgePreset);
+        const settings = {
+            method: activePreset.method,
+            outputFormat,
+            qualityTier,
+            resizePreset,
+            grayscale: activePreset.grayscale,
+            sizeLimitBytes: activePreset.sizeLimitBytes
+        };
         runningRef.current = true;
+        setIsLoading(true);
         let progressToast = null;
         try {
             progressToast = await showToast({
                 style: Toast.Style.Animated,
-                title: formatToUse === 'pdf'
-                    ? `正在将 ${targetFiles.length} 张图片合并为 PDF...`
-                    : `正在批量无损处理 ${targetFiles.length} 张图片...`,
-                message: `${activePreset.title} · 画质档位 ${qualityTier}`
+                title: `正在处理 ${targetFiles.length} 张图片...`,
+                message: activePreset.title
             });
-            const res = await invokeNativeCapability(methodToCall, {
-                files: targetFiles.map((f) => f.path),
-                format: formatToUse,
-                qualityTier,
-                maxEdge: maxEdgeNum,
-                stripExif,
-                grayscale: activePreset.id === 'preset-doc-grayscale'
+            const outcomes = await processImageBatch(targetFiles, settings, {
+                onItem: (id, outcome) => {
+                    setFiles((prev) => prev.map((item) => {
+                        if (item.id !== id)
+                            return item;
+                        const knownSize = item.sizeBytes ?? (outcome.status === 'done' ? outcome.originalBytes : null);
+                        return { ...item, sizeBytes: knownSize, result: outcome };
+                    }));
+                }
             });
             await progressToast?.hide();
-            if (!res.ok) {
+            const summary = summarizeOutcomes(outcomes.values());
+            if (summary.done === 0) {
                 await showToast({
                     style: Toast.Style.Failure,
-                    title: '图片批处理未完成',
-                    message: res.error || '宿主图像引擎返回错误'
+                    title: summary.total > 1 ? `${summary.total} 张图片全部处理失败` : '图片处理失败',
+                    message: summary.firstError || '宿主图片处理返回失败'
                 });
                 return;
             }
-            const payload = (res.data ?? {});
-            const itemResults = Array.isArray(payload.results)
-                ? payload.results
-                : [];
-            if (itemResults.length > 0) {
-                const resultMap = new Map();
-                for (const r of itemResults) {
-                    if (typeof r.inputPath === 'string') {
-                        resultMap.set(r.inputPath.toLowerCase(), r);
-                    }
-                }
-                setFiles((prev) => prev.map((item) => {
-                    const matched = resultMap.get(item.path.toLowerCase());
-                    if (!matched)
-                        return item;
-                    const compBytes = Number(matched.compressedBytes ?? item.estimatedCompressedBytes);
-                    return {
-                        ...item,
-                        lastCompressedBytes: compBytes,
-                        lastOutputPath: typeof matched.outputPath === 'string' ? matched.outputPath : item.lastOutputPath,
-                        zeroRegressionTriggered: Boolean(matched.zeroRegressionTriggered)
-                    };
-                }));
+            if (summary.failed > 0) {
+                await showToast({
+                    style: Toast.Style.Failure,
+                    title: `已处理 ${summary.done} 张，${summary.failed} 张失败`,
+                    message: summary.firstError
+                });
+                return;
             }
-            const savedText = typeof payload.savedText === 'string' ? payload.savedText : '';
-            const savePercent = typeof payload.savePercent === 'number' ? payload.savePercent : 0;
+            if (summary.overLimit > 0 && settings.sizeLimitBytes) {
+                await showToast({
+                    style: Toast.Style.Failure,
+                    title: `已处理 ${summary.done} 张，${summary.overLimit} 张仍超过 ${formatBytes(settings.sizeLimitBytes)}`,
+                    message: '超过限额的图片已在队列中标出'
+                });
+                return;
+            }
+            const savedText = summary.comparableOriginalBytes > 0
+                ? `，节省 ${formatBytes(summary.savedBytes)} (-${summary.savePercent}%)`
+                : '';
+            const notSmallerText = summary.notSmaller > 0 ? `；${summary.notSmaller} 张未变小` : '';
             await showToast({
                 style: Toast.Style.Success,
-                title: formatToUse === 'pdf'
-                    ? `已合成单份 PDF (${targetFiles.length} 张图片)`
-                    : `已完成 ${targetFiles.length} 张图片压缩与转换`,
-                message: savedText ? `共节省 ${savedText} (-${savePercent}%) · 原图已安全保留` : '已输出至源同级目录 (*_min)'
+                title: `已处理 ${summary.done} 张图片`,
+                message: `输出共 ${formatBytes(summary.outputBytes)}${savedText}${notSmallerText}。结果另存为 *_opt 文件，原图未改动`
             });
         }
         catch (err) {
             await progressToast?.hide();
             await showToast({
                 style: Toast.Style.Failure,
-                title: '图片批处理异常',
-                message: err instanceof Error ? err.message : String(err)
+                title: '图片处理异常',
+                message: errorText(err)
             });
         }
         finally {
             await progressToast?.hide();
             runningRef.current = false;
+            setIsLoading(false);
         }
     }
-    async function handlePasteImageFromClipboard() {
-        const clipText = (await readRealClipboardText()).trim();
-        if (clipText && /\.(?:png|jpg|jpeg|webp|bmp)$/i.test(clipText)) {
-            const cleanPath = clipText.replace(/^["']|["']$/g, '');
-            const fileName = cleanPath.split(/[\\/]/).pop() || 'Clipboard_Image.png';
-            const parentDir = cleanPath.slice(0, Math.max(0, cleanPath.length - fileName.length - 1)) || 'C:\\Users\\Clipboard';
-            const ext = fileName.slice(fileName.lastIndexOf('.')).toLowerCase();
-            const newItem = {
-                id: `img-clip-${Date.now()}`,
-                name: fileName,
-                path: cleanPath,
-                parentDir,
-                extension: ext,
-                sizeBytes: 920 * 1024,
-                dimensionsText: '1920×1080',
-                estimatedCompressedBytes: estimateCompressedBytes(920 * 1024, effectiveRatio, outputFormat, maxEdgePreset)
-            };
-            setFiles((prev) => [newItem, ...prev.filter((p) => p.path.toLowerCase() !== cleanPath.toLowerCase())]);
-            setCheckedIds((prev) => Array.from(new Set([newItem.id, ...prev])));
+    async function handleAddFromClipboard() {
+        let clipText = '';
+        try {
+            clipText = await Clipboard.readText();
+        }
+        catch (err) {
             await showToast({
-                style: Toast.Style.Success,
-                title: '已从剪贴板导入图片路径',
-                message: fileName
+                style: Toast.Style.Failure,
+                title: '读取剪贴板失败',
+                message: errorText(err)
             });
             return;
         }
+        const paths = parseClipboardImagePaths(clipText);
+        if (paths.length === 0) {
+            await showToast({
+                style: Toast.Style.Failure,
+                title: '剪贴板中没有图片文件路径',
+                message: '在资源管理器中右键图片，选择「复制为路径」后再添加（支持 PNG / JPG / WebP / BMP）'
+            });
+            return;
+        }
+        const existing = new Set(files.map((f) => f.path.toLowerCase()));
+        const fresh = paths.filter((p) => !existing.has(p.toLowerCase()));
+        if (fresh.length === 0) {
+            await showToast({
+                style: Toast.Style.Failure,
+                title: '这些图片已在队列中',
+                message: paths[0]
+            });
+            return;
+        }
+        const stamp = Date.now();
+        const newItems = [];
+        for (let i = 0; i < fresh.length; i++) {
+            const p = fresh[i];
+            const size = await readImageFileSize(p);
+            newItems.push(makeImageItem(`img-clip-${stamp}-${i}`, p, size));
+        }
+        setFiles((prev) => [...newItems, ...prev]);
+        setCheckedIds((prev) => Array.from(new Set([...newItems.map((it) => it.id), ...prev])));
+        const unknownSize = newItems.filter((it) => it.sizeBytes === null).length;
         await showToast({
-            style: Toast.Style.Failure,
-            title: '剪贴板中未检测到图片文件路径',
-            message: '请先在资源管理器中复制图片文件或路径后再按 Ctrl+V'
+            style: Toast.Style.Success,
+            title: `已从剪贴板添加 ${newItems.length} 张图片`,
+            message: unknownSize > 0 ? `${unknownSize} 张大小未识别，处理后显示实际大小` : newItems[0].name
         });
     }
     async function handleTrashOriginalImage(file) {
+        const outputNote = file.result?.status === 'done'
+            ? `已生成的输出文件不受影响：${file.result.outputPath}`
+            : '这张图片还没有生成输出文件。';
         const confirmed = await confirmAlert({
             title: '确认将原图移入系统回收站？',
-            message: `文件名: ${file.name}\n大小: ${formatBytes(file.sizeBytes)}\n路径: ${file.path}\n\n原图将移入系统回收站，已生成的 *_min 压缩件不受影响。`,
+            message: `文件名: ${file.name}\n大小: ${file.sizeBytes === null ? '未识别' : formatBytes(file.sizeBytes)}\n路径: ${file.path}\n\n${outputNote}`,
             primaryAction: { title: '移入回收站', style: 'destructive' }
         });
         if (!confirmed)
@@ -307,33 +246,99 @@ export function BatchImageCommand() {
             message: file.name
         });
     }
+    async function handleRevealInFolder(file) {
+        const target = file.result?.status === 'done' ? file.result.outputPath : file.path;
+        const ok = await openImageFileLocation(target);
+        if (!ok) {
+            await showToast({
+                style: Toast.Style.Failure,
+                title: '无法在资源管理器中显示',
+                message: target
+            });
+        }
+    }
     const q = searchText.trim().toLowerCase();
     const filteredFiles = files.filter((f) => !q ||
         f.name.toLowerCase().includes(q) ||
         f.path.toLowerCase().includes(q) ||
         f.extension.toLowerCase().includes(q));
     const selectedFiles = files.filter((f) => checkedIds.includes(f.id));
-    const totalOriginalBytes = selectedFiles.reduce((acc, f) => acc + f.sizeBytes, 0);
-    const totalEstimatedBytes = selectedFiles.reduce((acc, f) => acc +
-        (f.lastCompressedBytes ??
-            estimateCompressedBytes(f.sizeBytes, effectiveRatio, outputFormat, maxEdgePreset)), 0);
-    const totalSavedBytes = Math.max(0, totalOriginalBytes - totalEstimatedBytes);
-    const totalSavePercent = totalOriginalBytes > 0 ? Math.max(0, Math.round((totalSavedBytes / totalOriginalBytes) * 100)) : 0;
-    const maxImageBytes = Math.max(1, filteredFiles[0]?.sizeBytes || 1);
-    const outExtLabel = outputFormat === 'keep' ? '原格式' : outputFormat.toUpperCase();
+    const selectedKnownBytes = selectedFiles.reduce((acc, f) => acc + (f.sizeBytes ?? 0), 0);
+    const selectedUnknown = selectedFiles.filter((f) => f.sizeBytes === null).length;
+    const resultSummary = summarizeOutcomes(files.map((f) => f.result).filter((r) => Boolean(r)));
+    const hasResults = resultSummary.total > 0;
+    const maxImageBytes = Math.max(1, ...files.map((f) => f.sizeBytes ?? 0));
+    const outExtLabel = outputFormat === 'keep' ? '原扩展名' : outputFormat;
+    const selectedSizeText = `${formatBytes(selectedKnownBytes)}${selectedUnknown > 0 ? `（${selectedUnknown} 张大小未识别）` : ''}`;
+    const resultText = hasResults ? ` · 已输出 ${resultSummary.done} 张，失败 ${resultSummary.failed} 张` : '';
+    const truncatedText = scanTruncated ? ` · 每个目录最多列出体积最大的 ${SCAN_TOP_N_PER_DIR} 张` : '';
     const rightQueueItems = filteredFiles.map((f) => {
         const isChecked = checkedIds.includes(f.id);
-        const estOut = f.lastCompressedBytes ??
-            estimateCompressedBytes(f.sizeBytes, effectiveRatio, outputFormat, maxEdgePreset);
-        const itemSavePct = f.sizeBytes > 0 ? Math.max(0, Math.round(((f.sizeBytes - estOut) / f.sizeBytes) * 100)) : 0;
-        const volRatio = Math.max(8, Math.min(100, Math.round((f.sizeBytes / maxImageBytes) * 100)));
-        const statusBadge = f.zeroRegressionTriggered
-            ? '已达最优·保留原件'
-            : `→ ~${formatBytes(estOut)} (-${itemSavePct}%)`;
+        const accessories = [];
+        if (f.sizeBytes !== null) {
+            accessories.push({
+                progress: { value: Math.max(8, Math.min(100, Math.round((f.sizeBytes / maxImageBytes) * 100))) }
+            });
+        }
+        accessories.push({ tag: { value: describeOutcomeTag(f.result) } });
+        accessories.push({ text: f.sizeBytes === null ? '大小未识别' : formatBytes(f.sizeBytes) });
+        const doneResult = f.result?.status === 'done' ? f.result : null;
+        const actionChildren = [
+            Action({
+                title: `开始处理已选图片 (${selectedFiles.length} 张)`,
+                icon: Icon.Bolt,
+                onAction: () => executeBatchProcess(selectedFiles)
+            }),
+            Action({
+                title: doneResult ? '在资源管理器中显示输出文件' : '在资源管理器中显示原图',
+                icon: Icon.Folder,
+                shortcut: { modifiers: ['ctrl'], key: 'enter' },
+                onAction: () => handleRevealInFolder(f)
+            }),
+            Action({
+                title: '仅处理这张图片',
+                icon: Icon.Play,
+                shortcut: { modifiers: ['ctrl'], key: 's' },
+                onAction: () => executeBatchProcess([f])
+            })
+        ];
+        if (doneResult) {
+            actionChildren.push(Action({
+                title: '复制输出文件路径',
+                icon: Icon.CopyClipboard,
+                shortcut: { modifiers: ['ctrl', 'shift'], key: 'c' },
+                onAction: async () => {
+                    try {
+                        await Clipboard.copy(doneResult.outputPath);
+                        await showToast({ style: Toast.Style.Success, title: '已复制输出文件路径', message: doneResult.outputPath });
+                    }
+                    catch (err) {
+                        await showToast({ style: Toast.Style.Failure, title: '复制失败', message: errorText(err) });
+                    }
+                }
+            }));
+        }
+        actionChildren.push(Action({
+            title: filteredFiles.length > 0 && filteredFiles.every((item) => checkedIds.includes(item.id))
+                ? '取消全选当前列表'
+                : '全选当前列表',
+            icon: Icon.CheckCircle,
+            shortcut: { modifiers: ['ctrl'], key: 'a' },
+            onAction: () => {
+                const allSelected = filteredFiles.length > 0 && filteredFiles.every((item) => checkedIds.includes(item.id));
+                setCheckedIds(allSelected ? [] : filteredFiles.map((item) => item.id));
+            }
+        }), Action({
+            title: '将原图移入系统回收站',
+            icon: Icon.Trash,
+            style: Action.Style.Destructive,
+            shortcut: { modifiers: [], key: 'delete' },
+            onAction: () => handleTrashOriginalImage(f)
+        }));
         return List.Item({
             id: f.id,
             title: f.name,
-            subtitle: `${f.dimensionsText} · ${f.parentDir}`,
+            subtitle: describeOutcomeDetail(f.result, f.parentDir),
             checkable: true,
             checked: isChecked,
             onCheckChange: (checked) => {
@@ -348,120 +353,47 @@ export function BatchImageCommand() {
                 source: Icon.Image,
                 tintColor: Color.SecondaryText
             },
-            accessories: [
-                {
-                    progress: {
-                        value: volRatio
-                    }
-                },
-                {
-                    tag: {
-                        value: statusBadge
-                    }
-                },
-                { text: formatBytes(f.sizeBytes) }
-            ],
+            accessories,
             actions: ActionPanel({
                 title: f.name,
-                children: [
-                    Action({
-                        title: `开始批量处理 (${selectedFiles.length}项)`,
-                        icon: Icon.Bolt,
-                        onAction: () => executeBatchProcess(selectedFiles, false)
-                    }),
-                    Action({
-                        title: '在资源管理器定位',
-                        icon: Icon.Folder,
-                        shortcut: { modifiers: ['ctrl'], key: 'enter' },
-                        onAction: async () => {
-                            await openImageFileLocation(f.lastOutputPath || f.path);
-                        }
-                    }),
-                    Action({
-                        title: '粘贴剪贴板截图入列',
-                        icon: Icon.Clipboard,
-                        shortcut: { modifiers: ['ctrl'], key: 'v' },
-                        onAction: handlePasteImageFromClipboard
-                    }),
-                    Action({
-                        title: '复制压缩后图片路径到剪贴板',
-                        icon: Icon.CopyClipboard,
-                        shortcut: { modifiers: ['ctrl', 'shift'], key: 'c' },
-                        onAction: async () => {
-                            const targetOut = f.lastOutputPath ||
-                                f.path.replace(/(\.[^.]+)$/, `_min.${outputFormat === 'keep' ? f.extension.slice(1) : outputFormat}`);
-                            await Clipboard.copy(targetOut);
-                            await showToast({ style: Toast.Style.Success, title: '已复制输出文件路径', message: targetOut });
-                        }
-                    }),
-                    Action({
-                        title: `仅处理当前聚焦图片 (${f.name})`,
-                        icon: Icon.Play,
-                        shortcut: { modifiers: ['ctrl'], key: 's' },
-                        onAction: () => executeBatchProcess([f], false)
-                    }),
-                    Action({
-                        title: `多图合并导出为单份 PDF (${selectedFiles.length}项)`,
-                        icon: Icon.Document,
-                        shortcut: { modifiers: ['ctrl'], key: 'm' },
-                        onAction: () => executeBatchProcess(selectedFiles.length > 0 ? selectedFiles : [f], true)
-                    }),
-                    Action({
-                        title: filteredFiles.length > 0 && filteredFiles.every((item) => checkedIds.includes(item.id))
-                            ? '取消全选当前列表'
-                            : '全选当前列表',
-                        icon: Icon.CheckCircle,
-                        shortcut: { modifiers: ['ctrl'], key: 'a' },
-                        onAction: () => {
-                            const allSelected = filteredFiles.length > 0 && filteredFiles.every((item) => checkedIds.includes(item.id));
-                            setCheckedIds(allSelected ? [] : filteredFiles.map((item) => item.id));
-                        }
-                    }),
-                    Action({
-                        title: '将原图移入系统回收站',
-                        icon: Icon.Trash,
-                        style: Action.Style.Destructive,
-                        shortcut: { modifiers: [], key: 'delete' },
-                        onAction: () => handleTrashOriginalImage(f)
-                    })
-                ]
+                children: actionChildren
             })
         });
     });
     return List({
-        searchBarPlaceholder: '搜索队列图片名称、目录或后缀 (PNG / JPG / WebP / BMP)...',
+        searchBarPlaceholder: '搜索图片名称、目录或后缀 (PNG / JPG / WebP / BMP)...',
         onSearchTextChange: setSearchText,
         isShowingDetail: false,
         isLoading,
         searchBarAccessory: List.Dropdown({
-            tooltip: '选择 8 大办公与政务图片批处理预设方案',
+            tooltip: '选择处理方案',
             value: activePresetId,
             onChange: (val) => handleSelectPreset(val),
             children: presets.map((p) => List.Dropdown.Item({
-                title: `预设: ${p.tag}`,
+                title: `方案: ${p.tag}`,
                 value: p.id
             }))
         }),
         filterBar: FilterBar({
-            summaryText: `队列已选 ${selectedFiles.length}/${files.length} 张图片 (原始 ${formatBytes(totalOriginalBytes)}) · 预计瘦身后 ~${formatBytes(totalEstimatedBytes)} (节省 ${formatBytes(totalSavedBytes)} / -${totalSavePercent}%)`,
+            summaryText: `已选 ${selectedFiles.length}/${files.length} 张 · 原图 ${selectedSizeText}${resultText}${truncatedText}`,
             actions: [
                 {
                     id: 'paste-clipboard-image',
-                    label: '粘贴剪贴板图片',
+                    label: '从剪贴板添加',
                     style: 'secondary',
-                    onAction: handlePasteImageFromClipboard
+                    onAction: handleAddFromClipboard
                 },
                 {
                     id: 'rescan-images',
-                    label: '重新扫描队列',
+                    label: '重新扫描',
                     style: 'secondary',
                     onAction: () => refreshWorkspace(true)
                 }
             ]
         }),
         workbenchPanel: {
-            title: '图片压缩与转换参数工作台',
-            subtitle: '零负优化防线 · 原图保护',
+            title: '处理参数',
+            subtitle: activePreset.subtitle,
             fields: [
                 {
                     id: 'wb-format',
@@ -469,12 +401,7 @@ export function BatchImageCommand() {
                     type: 'select',
                     value: outputFormat,
                     onChange: (val) => setOutputFormat(val),
-                    options: [
-                        { label: '保持原格式 (智能优化)', value: 'keep' },
-                        { label: 'JPG (通用白底/报销高兼容)', value: 'jpg' },
-                        { label: 'PNG (无损透明通道)', value: 'png' },
-                        { label: '合并为单份扫描件 PDF', value: 'pdf' }
-                    ]
+                    options: FORMAT_OPTIONS
                 },
                 {
                     id: 'wb-quality',
@@ -482,54 +409,53 @@ export function BatchImageCommand() {
                     type: 'select',
                     value: qualityTier,
                     onChange: (val) => setQualityTier(val),
-                    options: [
-                        { label: '85% 视觉无损 (推荐)', value: '85L' },
-                        { label: '70% 政务/OA附件极限瘦身', value: '70L' },
-                        { label: '95% 印刷级高保真', value: '95L' }
-                    ]
+                    options: QUALITY_OPTIONS
                 },
                 {
                     id: 'wb-scale',
                     label: '尺寸约束',
                     type: 'select',
-                    value: maxEdgePreset,
-                    onChange: (val) => setMaxEdgePreset(val),
-                    options: [
-                        { label: '保持原始分辨率', value: 'source' },
-                        { label: '最长边限制 1920px (FHD)', value: '1920' },
-                        { label: '最长边限制 1280px (HD)', value: '1280' },
-                        { label: '最长边限制 1080px (移动端)', value: '1080' }
-                    ]
-                },
-                {
-                    id: 'wb-exif',
-                    label: '抹除 EXIF 隐私',
-                    type: 'toggle',
-                    value: stripExif,
-                    onChange: (val) => setStripExif(Boolean(val))
+                    value: resizePreset,
+                    onChange: (val) => setResizePreset(val),
+                    options: RESIZE_OPTIONS
                 },
                 {
                     id: 'wb-outdir',
                     label: '输出位置',
                     type: 'info',
-                    value: `源同级目录 (*_min.${outExtLabel}) · 绝不覆写原图`
+                    value: `原图同目录，另存为 <文件名>_opt.${outExtLabel}；已有同名文件时自动换名，不覆盖原图`
+                },
+                {
+                    id: 'wb-limits',
+                    label: '已知限制',
+                    type: 'info',
+                    value: 'WebP 图片需要本机已安装 ffmpeg；重新编码不保留照片方向标记，部分竖拍照片输出后可能显示为横向'
                 }
             ],
             previewCard: {
-                title: '批量瘦身与空间释放预估',
-                badge: `预计省 ${totalSavePercent}%`,
+                title: '处理结果',
+                badge: hasResults ? `已输出 ${resultSummary.done} 张` : '未处理',
                 subtitle: `当前方案: ${activePreset.title}`,
                 metrics: [
-                    { label: '原始总体积', value: formatBytes(totalOriginalBytes) },
-                    { label: '预计输出体积', value: `~${formatBytes(totalEstimatedBytes)}` },
-                    { label: '预计节省空间', value: formatBytes(totalSavedBytes) },
-                    { label: '已选待处理', value: `${selectedFiles.length} / ${files.length} 张` }
+                    { label: '已选图片', value: `${selectedFiles.length} / ${files.length} 张` },
+                    { label: '已选原图大小', value: selectedSizeText },
+                    {
+                        label: '输出总大小',
+                        value: hasResults && resultSummary.done > 0 ? formatBytes(resultSummary.outputBytes) : '—'
+                    },
+                    {
+                        label: '实际节省',
+                        value: resultSummary.comparableOriginalBytes > 0
+                            ? `${formatBytes(resultSummary.savedBytes)} (-${resultSummary.savePercent}%)`
+                            : '—'
+                    },
+                    { label: '失败', value: hasResults ? `${resultSummary.failed} 张` : '—' }
                 ]
             }
         },
         subList: {
-            title: '待处理图片队列 (按体积降序，勾选或按 ↵ 立即开始批量压缩)',
-            subtitle: `${filteredFiles.length} 张图片 · 原始 ${formatBytes(totalOriginalBytes)} → 预计 ~${formatBytes(totalEstimatedBytes)}`,
+            title: '待处理图片 (勾选后按 Enter 开始处理)',
+            subtitle: `${filteredFiles.length} 张图片`,
             checkable: filteredFiles.length > 0,
             checked: filteredFiles.length > 0 && filteredFiles.every((f) => checkedIds.includes(f.id))
                 ? true
@@ -539,12 +465,14 @@ export function BatchImageCommand() {
             onCheckChange: (checked) => {
                 setCheckedIds(checked ? filteredFiles.map((f) => f.id) : []);
             },
-            emptyText: '当前未找到匹配的图片素材',
+            emptyText: q
+                ? '没有匹配的图片'
+                : '未在图片、下载、桌面目录找到图片。可在资源管理器中「复制为路径」后点「从剪贴板添加」',
             items: rightQueueItems
         },
         children: [
             List.Section({
-                title: `待处理图片素材队列 (${filteredFiles.length})`,
+                title: `待处理图片 (${filteredFiles.length})`,
                 children: rightQueueItems
             })
         ]

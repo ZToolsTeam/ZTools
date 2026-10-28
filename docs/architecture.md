@@ -91,7 +91,7 @@ IPC 契约对两种版本相同：`user_get_info`、`user_set_token`、`user_log
 | `ztools-indexer/` | Windows | 文件索引与快速检索 |
 | `ztools-uiaccess/` | Windows | 读取其他程序中选中的文本等跨权限操作 |
 | `ZToolsPathAccess/` | Windows、macOS | 插件读写用户选定文件时的受控文件访问 |
-| `ZToolsMacClipboard/`、`ZToolsMacVision/` | macOS | 剪贴板读写、图片文字识别 |
+| `ZToolsMacClipboard/`、`ZToolsMacVision/`、`ZToolsMacAudio/`、`ZToolsMacInputLock/`、`ZToolsMacDns/` | macOS | 剪贴板读写、图片文字识别与系统字体字形绘制、按设备控制音频输入与输出、限时键盘清洁输入拦截、持有系统配置锁的 DNS 修改 |
 | `ZToolsMacNative/` | macOS | macOS 原生插件宿主的接口与策略（尚未启用） |
 
 原生组件都作为独立进程运行，通过管道与主进程通信，崩溃不会拖垮主进程。没有编译原生组件时，相关功能不可用，其余功能照常运行。

@@ -12,7 +12,12 @@ function installFakeHost() {
       return { success: true, data: { data: db.get(params.key) } }
     }
     if (method === 'db_put') { db.set(params.key, params.data ?? params.value); return { success: true, data: true } }
-    return { success: true, data: null }
+    if (method === 'db_compare_and_set') {
+      const matches = (db.has(params.key) ? db.get(params.key) : null) === params.expectedValue
+      if (matches) db.set(params.key, params.value)
+      return { success: true, data: { data: matches } }
+    }
+    throw new Error(`测试宿主未实现 ${method}`)
   }
   window.__ztoolsElectron = { transport: { methods: new Proxy({}, { get: (_t, m) => (req) => call(m, req) }) } }
   window.ztools = { clipboard: { writeText: vi.fn().mockResolvedValue(true) } }
@@ -60,5 +65,21 @@ describe('主搜索框即时计算（与内置计算器插件共用引擎）', (
     expect(calcDb, '应写入 calculator 插件的存储空间').toBeTruthy()
     const stored = [...calcDb.values()].map((v) => (typeof v === 'string' ? JSON.parse(v) : v)).flat()
     expect(stored.some((h) => h?.expression === '6 * 7' && h?.answer === '42')).toBe(true)
+  })
+
+  it('主搜索框并发保存两条计算，经过原子冲突重试后均保留', async () => {
+    const dbs = installFakeHost()
+    await Promise.all(['6 * 7', '8 * 9'].map(query => evaluateInlineCommandItem(query).action()))
+    const rows = JSON.parse(dbs.get('calculator').get('ls:ztools-calculator-history-v1'))
+    expect(rows.map(row => row.answer).sort()).toEqual(['42', '72'])
+  })
+
+  it('历史损坏时保留原值，结果仍能复制但不会覆写历史', async () => {
+    const dbs = installFakeHost()
+    const raw = '{待恢复的历史'
+    dbs.set('calculator', new Map([['ls:ztools-calculator-history-v1', raw]]))
+    await evaluateInlineCommandItem('6 * 7').action()
+    expect(window.ztools.clipboard.writeText).toHaveBeenCalledWith('42')
+    expect(dbs.get('calculator').get('ls:ztools-calculator-history-v1')).toBe(raw)
   })
 })

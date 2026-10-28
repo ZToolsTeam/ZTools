@@ -2,7 +2,7 @@
 defineProps({
   title: { type: String, required: true },
   description: { type: String, default: '' },
-  icon: { type: String, default: '' }
+  icon: { type: [Object, Function], default: null }
 })
 </script>
 
@@ -13,7 +13,7 @@ defineProps({
         v-if="icon"
         class="w-7 h-7 rounded-md flex items-center justify-center text-[var(--rc-text-secondary)] bg-[var(--rc-surface-subtle)] border border-[var(--rc-border)] flex-shrink-0"
       >
-        <i :class="['fa', icon, 'text-xs']"></i>
+        <component :is="icon" class="text-xs" aria-hidden="true" />
       </div>
       <div class="flex flex-col min-w-0">
         <span class="text-xs font-semibold text-[var(--rc-text-primary)] leading-snug">

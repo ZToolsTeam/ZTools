@@ -58,7 +58,7 @@ const selectOption = (opt) => {
       ]"
       @click="selectOption(opt)"
     >
-      <i v-if="opt.icon" :class="['fa', opt.icon, 'text-[11px]']"></i>
+      <component :is="opt.icon" v-if="opt.icon" class="text-[11px]" aria-hidden="true" />
       <span>{{ opt.label }}</span>
       <span
         v-if="opt.count !== undefined"

@@ -1,6 +1,6 @@
 /**
  * ZTools 统一快捷键分发器 (Unified Keymap Dispatcher)
- * 严格按照优先级分发按键：动作面板 (action_panel) > 声明式舞台 (declarative) > 页面 (page) > 全局 (global)
+ * 按优先级分发：动作面板 > 声明式舞台 > 搜索候选 > 页面 > 全局
  * 保证每个按键只处理一次并 stopPropagation()
  *
  * 核心键位契约：
@@ -17,6 +17,7 @@ import { onUnmounted, getCurrentInstance } from 'vue'
 export const KEYMAP_SCOPES = Object.freeze({
   ACTION_PANEL: 'action_panel',
   DECLARATIVE: 'declarative',
+  SEARCH: 'search',
   PAGE: 'page',
   GLOBAL: 'global'
 })
@@ -24,6 +25,7 @@ export const KEYMAP_SCOPES = Object.freeze({
 const SCOPE_ORDER = Object.freeze([
   KEYMAP_SCOPES.ACTION_PANEL,
   KEYMAP_SCOPES.DECLARATIVE,
+  KEYMAP_SCOPES.SEARCH,
   KEYMAP_SCOPES.PAGE,
   KEYMAP_SCOPES.GLOBAL
 ])
@@ -193,7 +195,7 @@ export function teardownKeymapListener() {
 
 /**
  * 向指定作用域注册快捷键处理器
- * @param {'action_panel' | 'declarative' | 'page' | 'global'} scope 
+ * @param {'action_panel' | 'declarative' | 'search' | 'page' | 'global'} scope
  * @param {Function | Record<string, Function>} handler 
  * @param {object} [options]
  * @param {boolean} [options.enabled=true]

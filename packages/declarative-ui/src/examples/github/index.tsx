@@ -1,3 +1,4 @@
+import { isRealElectronHost } from '../shared/native-ipc.js';
 import React from "../../index.js";
 import {
   List,
@@ -424,7 +425,7 @@ ${item.body}
  * GitHub 仪表盘主命令 (现代纯正 TSX 模式)
  */
 export default function GithubDashboardCommand() {
-  const [items, setItems] = useState<GithubDashboardItem[]>(SAMPLE_GITHUB_ITEMS);
+  const [items, setItems] = useState<GithubDashboardItem[]>(isRealElectronHost() ? [] : SAMPLE_GITHUB_ITEMS);
   const [category, setCategory] = useState<string>("all");
   const [subFilter, setSubFilter] = useState<string>("all");
   const [searchText, setSearchText] = useState<string>("");

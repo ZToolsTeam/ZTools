@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { setActivePinia, createPinia } from 'pinia'
 import { usePluginsStore, sanitizeRecentUsedAt } from '../plugins'
+import PluginAPI from '../../../public/js/cef-ipc/src/api/plugin.js'
 
 // mock API
 const apiMocks = vi.hoisted(() => ({
@@ -563,7 +564,7 @@ describe('usePluginsStore', () => {
       const gone = { pluginId: 'gone-tool', revoked: true, revokedReason: '已撤回', category: '办公效率' }
       store.installedSet = new Set(['gone-tool'])
       store.installedPlugins = [{ pluginId: 'gone-tool', enabled: true }]
-      window.ztools.plugin = { toggle: vi.fn().mockResolvedValue(true) }
+      window.ztools.plugin = { revoke: vi.fn().mockResolvedValue(true) }
       if (source === '市场分页') {
         store._getCatalogManager = () => ({
           _catalog: [gone, { pluginId: 'visible', category: '系统工具' }],
@@ -577,7 +578,7 @@ describe('usePluginsStore', () => {
       expect(store.isRevoked('gone-tool')).toBe(true)
       expect(store.getRevokedReason('gone-tool')).toBe('已撤回')
       expect(store.installedPlugins[0].enabled).toBe(false)
-      expect(window.ztools.plugin.toggle).toHaveBeenCalledWith('gone-tool', false)
+      expect(window.ztools.plugin.revoke).toHaveBeenCalledWith('gone-tool', '已撤回')
       await expect(store.openPlugin('gone-tool')).rejects.toThrow('下架')
     })
   })
@@ -607,5 +608,198 @@ describe('usePluginsStore', () => {
       expect(compatMocks.checkCompat).toHaveBeenCalledWith(downloadInfo, '2.0.0', '1.0.0')
       expect(apiMocks.installPluginNative).not.toHaveBeenCalled()
     })
+  })
+
+  describe('安装任务与下架真实 SDK 契约', () => {
+    const pid = 'operation-fixture'
+    function installBus(store) {
+      const listeners = new Set()
+      window.ztools.events = {
+        subscribe: vi.fn().mockResolvedValue({ success: true }),
+        on: (_type, handler) => listeners.add(handler),
+        off: (_type, handler) => listeners.delete(handler)
+      }
+      // 真实全局事件转发与局部安装等待器同时存在。
+      window.ztools.events.on('plugin_install_complete', event => store.onInstallComplete(event.payload))
+      window.ztools.plugin = { getInstallStatus: vi.fn() }
+      return {
+        listeners,
+        emit: (payload) => { for (const handler of [...listeners]) handler({ payload: { pluginId: pid, ...payload } }) }
+      }
+    }
+    beforeEach(() => {
+      apiMocks.getDownloadSign.mockResolvedValue({ downloadUrl: 'https://cdn.example.com/plugin.zip', version: '1.0.0' })
+      apiMocks.installPluginNative.mockResolvedValue({ success: true, operationId: 'current-op' })
+    })
+
+    it.each([true, false])('重复下架固定禁用并持久化原因（原启用=%s）', async enabled => {
+      const state = { enabled, revoked: false }
+      const call = vi.fn(async (method, params) => {
+        expect(method).toBe('plugin_revoke')
+        Object.assign(state, { enabled: false, revoked: params.revoked, reason: params.reason })
+        return { success: true }
+      })
+      window.ztools.plugin = new PluginAPI({ call })
+      const store = usePluginsStore()
+      store.installedSet.add(pid)
+      store.installedPlugins = [{ pluginId: pid, enabled }]
+      const catalog = [{ pluginId: pid, revoked: true, revokedReason: '已撤回' }]
+      store._applyRevocations(catalog)
+      store._applyRevocations(catalog)
+      await Promise.resolve()
+      expect(call).toHaveBeenCalledTimes(2)
+      expect(call).toHaveBeenLastCalledWith('plugin_revoke', { pluginId: pid, revoked: true, reason: '已撤回' })
+      expect(state).toEqual({ enabled: false, revoked: true, reason: '已撤回' })
+      await expect(store.openPlugin(pid)).rejects.toThrow('下架')
+    })
+
+    it.each([true, false])('安装响应之前到达的完成事件正确结算（成功=%s）', async success => {
+      const store = usePluginsStore()
+      const { emit, listeners } = installBus(store)
+      apiMocks.installPluginNative.mockImplementation(async () => {
+        emit({ operationId: 'current-op', success, error: '校验失败' })
+        return { success: true, operationId: 'current-op' }
+      })
+      const result = store.installPlugin(pid, { autoOpen: false })
+      if (success) await expect(result).resolves.toMatchObject({ success: true })
+      else await expect(result).rejects.toThrow('校验失败')
+      expect(store.installedSet.has(pid)).toBe(success)
+      expect(store.installFailedSet.has(pid)).toBe(!success)
+      expect(store.installingSet.has(pid)).toBe(false)
+      expect(listeners.size).toBe(1)
+    })
+
+    it('旧任务、其他插件和畸形通知不能结束正在安装的任务', async () => {
+      const store = usePluginsStore()
+      const { emit, listeners } = installBus(store)
+      const result = store.installPlugin(pid, { autoOpen: false })
+      await vi.advanceTimersByTimeAsync(0)
+      emit({ operationId: 'old-op', success: true })
+      emit({ operationId: 'current-op', success: true, pluginId: 'another-plugin' })
+      emit({ operationId: 'current-op' })
+      expect(store.installingSet.has(pid)).toBe(true)
+      expect(store.installedSet.has(pid)).toBe(false)
+      emit({ operationId: 'current-op', success: true })
+      await expect(result).resolves.toMatchObject({ success: true })
+      expect(listeners.size).toBe(1)
+    })
+
+    it('通知丢失时查询真实终态，运行超过90秒也不误报失败', async () => {
+      const store = usePluginsStore()
+      const { listeners } = installBus(store)
+      const getStatus = window.ztools.plugin.getInstallStatus
+      getStatus.mockResolvedValue({ pluginId: pid, operationId: 'current-op', status: 'running' })
+      const result = store.installPlugin(pid, { autoOpen: false })
+      await vi.advanceTimersByTimeAsync(90_001)
+      expect(getStatus).toHaveBeenCalledTimes(3)
+      expect(store.isInstallFailed(pid)).toBe(false)
+      expect(store.installingSet.has(pid)).toBe(true)
+      getStatus.mockResolvedValue({ pluginId: pid, operationId: 'current-op', status: 'completed', success: true })
+      await vi.advanceTimersByTimeAsync(30_000)
+      await expect(result).resolves.toMatchObject({ success: true })
+      expect(store.downloadingSet.has(pid)).toBe(false)
+      expect(listeners.size).toBe(1)
+    })
+
+    it('宿主查询确认失败时展示失败原因', async () => {
+      const store = usePluginsStore()
+      const { listeners } = installBus(store)
+      window.ztools.plugin.getInstallStatus.mockResolvedValue({
+        pluginId: pid, operationId: 'current-op', status: 'completed', success: false, error: '磁盘空间不足'
+      })
+      const result = store.installPlugin(pid, { autoOpen: false }).catch(error => error)
+      await vi.advanceTimersByTimeAsync(30_001)
+      expect((await result).message).toBe('磁盘空间不足')
+      expect(store.isInstallFailed(pid)).toBe(true)
+      expect(listeners.size).toBe(1)
+    })
+
+    it('查询不可用时只提示结果待确认，迟到完成事件仍可同步', async () => {
+      const store = usePluginsStore()
+      const { listeners, emit } = installBus(store)
+      window.ztools.plugin.getInstallStatus.mockRejectedValue(new Error('IPC 断开'))
+      const result = store.installPlugin(pid, { autoOpen: false })
+      await vi.advanceTimersByTimeAsync(30_001)
+      await expect(result).resolves.toMatchObject({ success: false, pending: true })
+      expect(store.isInstallFailed(pid)).toBe(false)
+      expect(store.installedSet.has(pid)).toBe(false)
+      expect(listeners.size).toBe(1)
+      emit({ operationId: 'current-op', success: true })
+      expect(store.installedSet.has(pid)).toBe(true)
+    })
+
+    it('订阅失败时不发起安装并释放监听', async () => {
+      const store = usePluginsStore()
+      const { listeners } = installBus(store)
+      window.ztools.events.subscribe.mockRejectedValue(new Error('订阅失败'))
+      await expect(store.installPlugin(pid)).rejects.toThrow('订阅失败')
+      expect(apiMocks.installPluginNative).not.toHaveBeenCalled()
+      expect(listeners.size).toBe(1)
+      expect(store.installingSet.has(pid)).toBe(false)
+    })
+
+    it('发起安装失败时释放监听和互斥', async () => {
+      const store = usePluginsStore()
+      const { listeners } = installBus(store)
+      apiMocks.installPluginNative.mockRejectedValue(new Error('权限不足'))
+      await expect(store.installPlugin(pid)).rejects.toThrow('权限不足')
+      expect(listeners.size).toBe(1)
+      expect(store.installingSet.has(pid)).toBe(false)
+    })
+  })
+})
+
+describe('插件目录里的新版本不再支持当前系统', () => {
+  const winOnly = [{ id: 'windows-electron-any', platform: 'windows', runtime: 'electron', arch: 'any' }]
+  const both = [...winOnly, { id: 'macos-electron-any', platform: 'macos', runtime: 'electron', arch: 'any' }]
+  beforeEach(() => {
+    setActivePinia(createPinia())
+    globalThis.__ZTOOLS_PLATFORM_OVERRIDE__ = 'darwin'
+  })
+  afterEach(() => {
+    delete globalThis.__ZTOOLS_PLATFORM_OVERRIDE__
+  })
+
+  it('Mac 上目录改为仅 Windows：已装副本标为不支持当前系统并阻止启动，不写主进程下架状态；目录恢复支持后自动解除', async () => {
+    const call = vi.fn(async () => ({ success: true }))
+    window.ztools.plugin = new PluginAPI({ call })
+    const store = usePluginsStore()
+    store.installedSet.add('legacy-win-tool')
+    store.installedPlugins = [{ pluginId: 'legacy-win-tool', enabled: true }]
+    store._applyPlatformSupport([{ pluginId: 'legacy-win-tool', targets: winOnly }])
+    expect(store.isRevoked('legacy-win-tool')).toBe(true)
+    expect(store.getRevokedKind('legacy-win-tool')).toBe('platform')
+    expect(store.getRevokedReason('legacy-win-tool')).toBe('插件目录里的新版本仅 Windows，当前系统已不再支持')
+    expect(call).not.toHaveBeenCalled()
+    await expect(store.openPlugin('legacy-win-tool')).rejects.toThrow('无法启动：插件目录里的新版本仅 Windows，当前系统已不再支持')
+
+    store._applyPlatformSupport([{ pluginId: 'legacy-win-tool', targets: both }])
+    expect(store.isRevoked('legacy-win-tool')).toBe(false)
+  })
+
+  it('[边界] 官方下架优先于平台标记；客户端自带的插件、未声明平台或声明为空的条目不处理；目录先于已装列表返回也能标记', () => {
+    const store = usePluginsStore()
+    store.revokedMap = { gone: { revoked: true, reason: '安全问题' } }
+    store._applyPlatformSupport([
+      { pluginId: 'gone', targets: winOnly },
+      { pluginId: 'calculator', targets: winOnly },
+      { pluginId: 'no-declare' },
+      { pluginId: 'empty-declare', targets: [] },
+      { pluginId: 'not-installed-yet', targets: winOnly },
+      null,
+      { targets: winOnly }
+    ])
+    expect(store.getRevokedKind('gone')).toBe('revoked')
+    expect(store.getRevokedReason('gone')).toBe('安全问题')
+    expect(store.isRevoked('calculator')).toBe(false)
+    expect(store.isRevoked('no-declare')).toBe(false)
+    expect(store.isRevoked('empty-declare')).toBe(false)
+    expect(store.getRevokedKind('not-installed-yet')).toBe('platform')
+
+    // 之后目录把它正式下架：下架原因覆盖平台标记
+    store._applyRevocations([{ pluginId: 'not-installed-yet', revoked: true, revokedReason: '已合并' }])
+    expect(store.getRevokedKind('not-installed-yet')).toBe('revoked')
+    store._applyPlatformSupport([{ pluginId: 'not-installed-yet', targets: both }])
+    expect(store.isRevoked('not-installed-yet'), '平台恢复支持不能解除官方下架').toBe(true)
   })
 })

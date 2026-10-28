@@ -549,6 +549,67 @@ describe('MyPage Component', () => {
       expect(pluginsStore.uninstallPlugin).toHaveBeenCalledWith('plugin-1')
     })
 
+    it('卸载结果如实提示：成功、抛错、宿主返回 success:false 三种情况', async () => {
+      await mountPage({ installedPlugins: basePlugins })
+
+      pluginsStore.uninstallPlugin = vi.fn().mockResolvedValue({ success: true })
+      wrapper.vm.handleUninstallPlugin('plugin-1')
+      await flushPromises()
+      expect(toastSpies.toastSuccess).toHaveBeenCalledWith('插件已卸载')
+
+      pluginsStore.uninstallPlugin = vi.fn().mockRejectedValue(new Error('当前平台不支持桌面快捷方式'))
+      wrapper.vm.handleUninstallPlugin('plugin-2')
+      await flushPromises()
+      expect(toastSpies.toastError).toHaveBeenCalledWith('卸载失败: 当前平台不支持桌面快捷方式')
+
+      toastSpies.toastSuccess.mockClear()
+      pluginsStore.uninstallPlugin = vi.fn().mockResolvedValue({ success: false, error: '插件正在执行其他操作' })
+      wrapper.vm.handleUninstallPlugin('plugin-3')
+      await flushPromises()
+      expect(toastSpies.toastError).toHaveBeenCalledWith('卸载失败: 插件正在执行其他操作')
+      expect(toastSpies.toastSuccess).not.toHaveBeenCalled()
+    })
+
+    it('内置插件：Delete 不弹卸载确认框，右键菜单里也没有卸载项', async () => {
+      const bundled = { pluginId: 'calculator', name: '计算器' }
+      await mountPage({ installedPlugins: [...basePlugins, bundled] })
+      Modal.confirm.mockClear()
+
+      wrapper.vm.selectedPlugin = bundled
+      wrapper.vm.handleKeyDown({ key: 'Delete', ctrlKey: false, preventDefault: vi.fn() })
+      await flushPromises()
+      expect(Modal.confirm).not.toHaveBeenCalled()
+      expect(pluginsStore.uninstallPlugin).not.toHaveBeenCalled()
+      expect(toastSpies.toastError).toHaveBeenCalledWith('内置插件随客户端提供，不能卸载')
+      expect(wrapper.vm.selectedPlugin).toEqual(bundled)
+
+      wrapper.vm.showPluginMenu(bundled, { preventDefault() {}, clientX: 10, clientY: 10 })
+      await flushPromises()
+      expect(wrapper.find('.context-menu').exists()).toBe(true)
+      expect(wrapper.find('.context-menu .menu-item.danger').exists()).toBe(false)
+
+      wrapper.vm.showPluginMenu(basePlugins[0], { preventDefault() {}, clientX: 10, clientY: 10 })
+      await flushPromises()
+      expect(wrapper.find('.context-menu .menu-item.danger').text()).toContain('卸载')
+    })
+
+    it('插件市场分发的官方插件（kill-process）装在插件目录里，可以从“我的”页面卸载', async () => {
+      const storeOfficial = { pluginId: 'kill-process', name: '结束进程' }
+      await mountPage({ installedPlugins: [...basePlugins, storeOfficial] })
+      Modal.confirm.mockClear()
+      pluginsStore.uninstallPlugin = vi.fn().mockResolvedValue({ success: true })
+
+      wrapper.vm.showPluginMenu(storeOfficial, { preventDefault() {}, clientX: 10, clientY: 10 })
+      await flushPromises()
+      expect(wrapper.find('.context-menu .menu-item.danger').text()).toContain('卸载')
+
+      wrapper.vm.handleUninstallPlugin('kill-process')
+      await flushPromises()
+      expect(Modal.confirm).toHaveBeenCalled()
+      expect(pluginsStore.uninstallPlugin).toHaveBeenCalledWith('kill-process')
+      expect(toastSpies.toastSuccess).toHaveBeenCalledWith('插件已卸载')
+    })
+
     it('[破坏性] 卸载确认框打开时，回车和 Delete 不会再打开或卸载列表里的插件', async () => {
       await mountPage({ installedPlugins: basePlugins })
       wrapper.vm.selectedPlugin = basePlugins[0]
@@ -802,5 +863,27 @@ describe('MyPage Component', () => {
       expect(wrapper.find('.loading-container').exists()).toBe(true)
     })
   })
+  it.each(['pending', 'busy'])('安装%s时不误报完成', async state => {
+    await mountPage({ installedPlugins: basePlugins })
+    pluginsStore.installPlugin = vi.fn().mockResolvedValue({ success: false, [state]: true, message: '安装结果待确认' })
+    await wrapper.vm.handleDownload('remote-only')
+    expect(toastSpies.toastSuccess).not.toHaveBeenCalledWith('插件安装完成')
+    expect(toastSpies.toastWarning).toHaveBeenCalledWith('安装结果待确认')
+  })
+
+  it('本窗口安装期间忽略页面旁路收到的旧任务通知', async () => {
+    await mountPage({ installedPlugins: basePlugins })
+    await flushPromises()
+    pluginsStore.installingSet.add('plugin-1')
+    for (const success of [true, false]) {
+      await wrapper.vm.handlePluginInstalled({ payload: { pluginId: 'plugin-1', operationId: 'old-operation', success, isUpdate: true, error: '旧任务失败' } })
+    }
+    expect(toastSpies.toastSuccess).not.toHaveBeenCalled()
+    expect(toastSpies.toastError).not.toHaveBeenCalled()
+    pluginsStore.installingSet.delete('plugin-1')
+    await wrapper.vm.handlePluginInstalled({ payload: { pluginId: 'plugin-1', operationId: 'external-update', success: true, isUpdate: true } })
+    expect(toastSpies.toastSuccess).toHaveBeenCalled()
+  })
+
 })
 

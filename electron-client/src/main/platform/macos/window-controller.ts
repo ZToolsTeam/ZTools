@@ -2,7 +2,8 @@ import { execFile, spawn } from 'node:child_process'
 import { promisify } from 'node:util'
 import { clipboard } from 'electron'
 import { errorCodes, ZToolsError } from '../../../contracts/errors.js'
-import type { ClipboardMacPasteAdapter } from '../../services/clipboard-service.js'
+
+export { createMacPasteAdapter } from './paste-session.js'
 
 const execFileAsync = promisify(execFile)
 
@@ -39,7 +40,8 @@ export const MACOS_ACCESSIBILITY_ERROR_MESSAGE =
   '请在系统设置 -> 隐私与安全性 -> 辅助功能中授权 ZTools'
 
 function isTccAccessibilityDeniedError(err: unknown): boolean {
-  const text = err instanceof Error ? `${err.message} ${(err as any).stderr || ''}` : String(err)
+  const stderr = typeof err === 'object' && err !== null && 'stderr' in err ? String(err.stderr) : ''
+  const text = err instanceof Error ? `${err.message} ${stderr}` : String(err)
   return /not allowed assistive access|-1719|-25211|not allowed to send keystrokes|辅助功能|accessibility/i.test(
     text
   )
@@ -51,58 +53,6 @@ export function macAccessibilityDeniedError(): ZToolsError {
     `已复制，但无法自动粘贴：${MACOS_ACCESSIBILITY_ERROR_MESSAGE}`,
     { hostCode: 'ACCESSIBILITY_PERMISSION_DENIED' }
   )
-}
-
-export type MacKeystrokeRunner = (
-  file: string,
-  args: string[],
-  options: { timeout: number; encoding: 'utf8'; signal?: AbortSignal }
-) => Promise<unknown>
-
-const PASTE_KEYSTROKE_SCRIPT = 'tell application "System Events" to keystroke "v" using command down'
-
-/**
- * 通过 System Events 向当前前台应用发送 ⌘V（依赖系统辅助功能授权）。
- * 失败时抛出带稳定错误码的 ZToolsError：权限被拒 PERMISSION_DENIED、超时 REQUEST_TIMEOUT、取消 CALLER_DESTROYED。
- */
-export async function sendPasteKeystrokeOnMac(
-  signal?: AbortSignal,
-  run: MacKeystrokeRunner = execFileAsync as unknown as MacKeystrokeRunner,
-  timeoutMs = 3000
-): Promise<void> {
-  if (signal?.aborted) throw new ZToolsError(errorCodes.callerDestroyed, '粘贴操作已取消')
-  try {
-    await run('/usr/bin/osascript', ['-e', PASTE_KEYSTROKE_SCRIPT], {
-      timeout: timeoutMs,
-      encoding: 'utf8',
-      ...(signal ? { signal } : {})
-    })
-  } catch (err) {
-    if (signal?.aborted) throw new ZToolsError(errorCodes.callerDestroyed, '粘贴操作已取消')
-    if (isTccAccessibilityDeniedError(err)) throw macAccessibilityDeniedError()
-    const failure = err as { killed?: boolean; signal?: string | null } | null
-    if (failure?.killed || failure?.signal === 'SIGTERM') {
-      throw new ZToolsError(errorCodes.requestTimeout, '已复制，但发送粘贴按键超时，请手动粘贴')
-    }
-    throw new ZToolsError(errorCodes.nativeHostError, '已复制，但发送粘贴按键失败，请手动粘贴')
-  }
-}
-
-/**
- * 组装 ClipboardService 在 macOS 上使用的「回到上一个应用并粘贴」适配器。
- */
-export function createMacPasteAdapter(electron: {
-  app: { hide(): void; show(): void }
-  systemPreferences: { isTrustedAccessibilityClient(prompt: boolean): boolean }
-}): ClipboardMacPasteAdapter {
-  return {
-    isTrusted: () => {
-      try { return electron.systemPreferences.isTrustedAccessibilityClient(false) } catch { return false }
-    },
-    hideApplication: () => electron.app.hide(),
-    showApplication: () => electron.app.show(),
-    sendPaste: (signal) => sendPasteKeystrokeOnMac(signal)
-  }
 }
 
 /**

@@ -56,7 +56,6 @@ import {
   FileInspectorCommand,
   MediaMetadataCommand,
   IdWatermarkCommand,
-  TableConverterCommand,
   PomodoroFocusCommand,
   VscodeProjectsCommand,
   HostsSwitcherCommand,
@@ -112,6 +111,7 @@ import {
   RecordCommand
 } from '@ztools/declarative-ui'
 import { isBundledPlugin, isStoreOfficialPlugin } from './bundledPlugins.js'
+import { COMMUNITY_EXTENSION_IDS } from './storeCatalogManager.js'
 
 /**
  * 官方标杆应用唯一标识清单
@@ -188,7 +188,6 @@ export const OFFICIAL_PLUGIN_IDS = Object.freeze({
   FILE_INSPECTOR: 'file-inspector',
   MEDIA_METADATA: 'media-metadata',
   ID_WATERMARK: 'id-watermark',
-  TABLE_CONVERTER: 'table-converter',
   POMODORO_FOCUS: 'pomodoro-focus',
   VSCODE_PROJECTS: 'vscode-projects',
   HOSTS_SWITCHER: 'hosts-switcher',
@@ -754,7 +753,7 @@ export const OFFICIAL_PLUGINS_MAP = Object.freeze({
     pluginId: 'clean-keyboard',
     name: '键盘锁',
     title: '键盘锁',
-    description: '擦拭键盘、清洁屏幕或防宠物踩踏时一键锁定全键盘输入，实时统计拦截误触次数并支持 Ctrl+U 紧急解锁',
+    description: 'Mac 系统键盘清洁锁，可同时拦截鼠标，支持 5～300 秒倒计时、⌘/Ctrl+U 紧急解除与失联自动解除',
     category: '系统工具',
     keyword: 'clean keyboard lock 键盘 清洁 防误触 锁定 擦键盘 猫咪 clean-keyboard',
     faIcon: 'fa-keyboard-o',
@@ -1566,7 +1565,7 @@ export const OFFICIAL_PLUGINS_MAP = Object.freeze({
     pluginId: 'browser-bookmarks',
     name: '浏览器书签搜索',
     title: '浏览器书签搜索',
-    description: '毫秒级聚合检索本机 Chrome、Edge、Brave、Arc 与 Firefox 收藏夹书签，按回车一键直达',
+    description: '只读检索本机 Chrome、Edge、Brave、Firefox 与 Safari 等浏览器书签，支持多个配置与拼音搜索',
     category: '办公效率',
     keyword: '书签 收藏夹 浏览器书签 chrome书签 edge书签 firefox书签 bookmarks browser-bookmarks',
     faIcon: 'fa-bookmark',
@@ -1703,24 +1702,6 @@ export const OFFICIAL_PLUGINS_MAP = Object.freeze({
     isDeclarative: true,
     enabled: true,
     command: IdWatermarkCommand
-  }),
-
-  [OFFICIAL_PLUGIN_IDS.TABLE_CONVERTER]: Object.freeze({
-    id: 'table-converter',
-    pluginId: 'table-converter',
-    name: '表格互转',
-    title: '表格互转',
-    description: '从 Excel、网页或聊天里复制表格，转成 Markdown、CSV、JSON、SQL 或 HTML',
-    category: '办公效率',
-    keyword: '表格转换 excel转markdown csv转json json转excel 表格转sql table-converter',
-    faIcon: 'fa-table',
-    version: '1.0.0',
-    author: 'ZTools Official',
-    badge: '万能互转',
-    isBuiltin: true,
-    isDeclarative: true,
-    enabled: true,
-    command: TableConverterCommand
   }),
 
   [OFFICIAL_PLUGIN_IDS.POMODORO_FOCUS]: Object.freeze({
@@ -2066,6 +2047,8 @@ export function isOfficialPlugin(pluginId) {
   const { normalized, resolved } = resolveOfficialId(pluginId)
   // 与内置原版插件同 ID 的旧实现让位给原版
   if (isBundledPlugin(normalized) || isBundledPlugin(resolved)) return false
+  // 社区插件以插件市场安装的真实实现为准，同名旧实现不再算作官方插件
+  if (COMMUNITY_EXTENSION_IDS.has(normalized) || COMMUNITY_EXTENSION_IDS.has(resolved)) return false
   return Boolean(
     ownLookup(OFFICIAL_PLUGINS_MAP, resolved) ||
     ownLookup(OFFICIAL_PLUGINS_MAP, pluginId.trim())
@@ -2083,7 +2066,18 @@ export function getOfficialPlugin(pluginId) {
   // 内置插件与插件市场分发的官方插件都以 plugins 仓库的真实实现为准，不再返回同名的旧示例实现
   if (isBundledPlugin(normalized) || isBundledPlugin(resolved)) return undefined
   if (isStoreOfficialPlugin(normalized) || isStoreOfficialPlugin(resolved)) return undefined
+  if (COMMUNITY_EXTENSION_IDS.has(normalized) || COMMUNITY_EXTENSION_IDS.has(resolved)) return undefined
   return ownLookup(OFFICIAL_PLUGINS_MAP, resolved) || ownLookup(OFFICIAL_PLUGINS_MAP, pluginId.trim())
+}
+
+/**
+ * 是否随客户端提供：内置插件，或由客户端自身实现的官方应用。这类插件没有安装目录，不能卸载、不能生成桌面快捷方式。
+ * 插件市场分发的官方插件（storeOfficialIds）装在插件目录里，可以正常卸载，不算在内（isOfficialPlugin 会把它们也算进去）。
+ * @param {string} pluginId
+ * @returns {boolean}
+ */
+export function isClientProvidedPlugin(pluginId) {
+  return isBundledPlugin(pluginId) || Boolean(getOfficialPlugin(pluginId))
 }
 
 /**
@@ -2091,7 +2085,8 @@ export function getOfficialPlugin(pluginId) {
  * @returns {Array<typeof OFFICIAL_PLUGINS_MAP[string]>}
  */
 export function getOfficialPluginsList() {
-  return OFFICIAL_PLUGINS_LIST.filter((p) => !isBundledPlugin(p.pluginId) && !isStoreOfficialPlugin(p.pluginId))
+  // 社区插件由插件市场分发，不能用同名的旧内置实现冒充“已安装”
+  return OFFICIAL_PLUGINS_LIST.filter((p) => !isBundledPlugin(p.pluginId) && !isStoreOfficialPlugin(p.pluginId) && !COMMUNITY_EXTENSION_IDS.has(p.pluginId))
 }
 
 

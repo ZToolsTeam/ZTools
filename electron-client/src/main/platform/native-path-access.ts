@@ -24,6 +24,7 @@ interface Pending {
 /** Fixed main-owned executable only. Cancelling a request invalidates this entire broker generation. */
 export class NativePathAccessAdapter implements PathAccessAdapter {
   readonly platform: 'win32' | 'darwin'
+  get ownedProcessId(): number | undefined { return this.#exited ? undefined : this.#child?.pid }
   readonly #generation = randomUUID()
   #child?: ChildProcessWithoutNullStreams
   #exited = false
@@ -292,6 +293,30 @@ export class NativePathAccessAdapter implements PathAccessAdapter {
     return { state: result[0] === 1 ? 'staging' : result[0] === 2 ? 'committed-object' : 'unresolved', size: Number(result.readBigUInt64LE(1)) }
   }
 
+  async trash(object: AnchoredPathObject, signal: AbortSignal): Promise<PathMutationResult> {
+    if (object.kind === 'save' || signal.aborted) throw failure()
+    try {
+      const result = await this.#call(Buffer.concat([Buffer.from([23]), u32(this.#handle(object))]), signal)
+      if (result.length !== 1 || result[0] !== 1) { this.#fail(); await this.stop(); throw failure() }
+      return { status: 'committed' }
+    } catch (error) {
+      if (!this.#dead && error instanceof ZToolsError) throw error
+      throw new ZToolsError(errorCodes.fileWriteOutcomeUnknown, '回收结果未确认，请检查系统回收站与备份目录')
+    }
+  }
+
+  async rename(object: AnchoredPathObject, name: string, signal: AbortSignal): Promise<PathMutationResult> {
+    if (this.platform !== 'darwin' || object.kind === 'save' || !name || name === '.' || name === '..' || /[\0/]/.test(name) || signal.aborted) throw failure()
+    try {
+      const result = await this.#call(Buffer.concat([Buffer.from([24]), u32(this.#handle(object)), string(name)]), signal)
+      if (result.length !== 1 || result[0] !== 1) { this.#fail(); await this.stop(); throw failure() }
+      return { status: 'committed' }
+    } catch (error) {
+      if (!this.#dead && error instanceof ZToolsError) throw error
+      throw new ZToolsError(errorCodes.fileWriteOutcomeUnknown, '改名结果未确认，请检查原名称和新名称，勿重复操作')
+    }
+  }
+
   async remove(directory: AnchoredPathObject, segments: readonly string[], isDirectory: boolean, signal: AbortSignal): Promise<PathMutationResult> {
     if (directory.kind !== 'directory' || !segments.length || segments.length > 64 || typeof isDirectory !== 'boolean' || signal.aborted) throw failure()
     try {
@@ -330,9 +355,9 @@ export class NativePathAccessAdapter implements PathAccessAdapter {
     }
   }
 
-  async list(object: AnchoredPathObject, segments: readonly string[], signal: AbortSignal): Promise<PathDirectoryEntry[]> {
+  async list(object: AnchoredPathObject, segments: readonly string[], signal: AbortSignal, strict = false): Promise<PathDirectoryEntry[]> {
     if (object.kind !== 'directory' || segments.length > 64) throw failure()
-    const data = await this.#call(Buffer.concat([Buffer.from([4]), u32(this.#handle(object)), u32(segments.length), ...segments.map(string)]), signal)
+    const data = await this.#call(Buffer.concat([Buffer.from([strict ? 22 : 4]), u32(this.#handle(object)), u32(segments.length), ...segments.map(string)]), signal)
     try {
       if (data.length < 4) throw failure()
       const count = data.readUInt32LE(); if (count > 10_000) throw failure()

@@ -1,4 +1,11 @@
+import { MacAudioController, macAudioHelperPath, type AudioController, type SystemAudioDevice } from '../platform/macos/audio-controller.js'
+export type { SystemAudioDevice } from '../platform/macos/audio-controller.js'
+import { readWifiProfiles, readWifiPassword, type SystemWifiProfile } from './wifi-service.js'
+export type { SystemWifiProfile } from './wifi-service.js'
 import { readHardwareSummary } from './hardware-summary.js'
+import { readSystemBatteryStatus, type SystemBatteryStatus } from './battery-status.js'
+export { readSystemBatteryStatus, parseMacBatteryStatusOutput, parseWindowsBatteryStatusOutput, type SystemBatteryStatus } from './battery-status.js'
+import { PowerSessionService } from './power-session-service.js'
 import { execFile, spawn, type ChildProcess } from 'node:child_process'
 import fsSync from 'node:fs'
 import fs from 'node:fs/promises'
@@ -15,6 +22,7 @@ import type {
   SystemPathName,
   SystemPathParams,
   SystemPreventSleepParams,
+  SystemPowerSessionParams,
   SystemShutdownParams
 } from '../../contracts/method-params.js'
 import { FileSystemService } from './file-system-service.js'
@@ -31,11 +39,6 @@ export interface CommonFolder {
   exists: boolean
 }
 
-export interface SystemBatteryStatus {
-  percent: number
-  isCharging: boolean
-  timeRemaining: number
-}
 
 export type SystemPowerAction =
   | 'shutdown'
@@ -67,21 +70,8 @@ export interface SystemShortcutItem {
   folder?: string | undefined
 }
 
-export interface SystemAudioDevice {
-  id: string
-  name: string
-  type: 'output' | 'input'
-  isDefault: boolean
-  volume?: number | undefined
-  muted?: boolean | undefined
-  transport?: string | undefined
-}
 
-export interface SystemWifiProfile {
-  ssid: string
-  current?: boolean | undefined
-  security?: string | undefined
-}
+
 
 export interface BrewPackageInfo {
   name: string
@@ -92,6 +82,10 @@ export interface BrewPackageInfo {
 }
 
 /** 解析 brew info --json=v2 --installed，保留 formula/cask 与升级状态。 */
+function emptyBrewSearchResult() {
+  return { success: true as const, action: 'search' as const, stdout: '', stderr: '', items: [] }
+}
+
 export function parseInstalledBrewPackages(output: string): BrewPackageInfo[] {
   const raw: unknown = JSON.parse(output)
   if (!raw || typeof raw !== 'object') throw new Error('Homebrew 软件包信息格式无效')
@@ -156,7 +150,7 @@ export interface SystemAdapter {
   getFileIcon(filePath: string): Promise<string>
   getNativeId(): Promise<string>
   getBatteryStatus?: () => Promise<SystemBatteryStatus>
-  startPreventSleep(): number
+  startPreventSleep(mode?: 'display' | 'system'): number
   stopPreventSleep(id: number): void
 }
 
@@ -210,39 +204,6 @@ export function resolveSystemVolumePath(
     return volumePath
   }
   throw new ZToolsError(errorCodes.notSupported, `当前系统不支持磁盘查询: ${platform}`)
-}
-
-const BATTERY_STATUS_SCRIPT = [
-  "Add-Type -TypeDefinition @'",
-  'using System;',
-  'using System.Runtime.InteropServices;',
-  'public static class ZToolsPowerStatus {',
-  '  [StructLayout(LayoutKind.Sequential)]',
-  '  public struct SYSTEM_POWER_STATUS {',
-  '    public byte ACLineStatus;',
-  '    public byte BatteryFlag;',
-  '    public byte BatteryLifePercent;',
-  '    public byte Reserved;',
-  '    public uint BatteryLifeTime;',
-  '    public uint BatteryFullLifeTime;',
-  '  }',
-  '  [DllImport("kernel32.dll")]',
-  '  public static extern bool GetSystemPowerStatus(out SYSTEM_POWER_STATUS status);',
-  '}',
-  "'@",
-  '$status = New-Object ZToolsPowerStatus+SYSTEM_POWER_STATUS',
-  'if (-not [ZToolsPowerStatus]::GetSystemPowerStatus([ref]$status)) { exit 1 }',
-  '$timeRemaining = [int64]$status.BatteryLifeTime',
-  'if ($status.BatteryLifeTime -eq [uint32]::MaxValue) { $timeRemaining = -1 }',
-  '[pscustomobject]@{',
-  '  percent = [int]$status.BatteryLifePercent',
-  '  isCharging = $status.ACLineStatus -eq 1',
-  '  timeRemaining = $timeRemaining',
-  '} | ConvertTo-Json -Compress'
-].join('\n')
-
-function unknownBatteryStatus(): SystemBatteryStatus {
-  return { percent: 255, isCharging: false, timeRemaining: -1 }
 }
 
 function windowsSystemExecutable(name: string): string {
@@ -477,80 +438,13 @@ export function createSystemPowerAdapter(
   }
 }
 
-export async function readSystemBatteryStatus(platform: NodeJS.Platform = process.platform): Promise<SystemBatteryStatus> {
-  if (platform === 'darwin') {
-    try {
-      const { stdout } = await execFileAsync('/usr/bin/pmset', ['-g', 'batt'], {
-        encoding: 'utf8',
-        timeout: 4_000,
-        maxBuffer: 64 * 1024
-      })
-      const text = String(stdout ?? '')
-      const percentMatch = text.match(/(\d{1,3})%/)
-      if (!percentMatch) return unknownBatteryStatus()
-      const percent = Math.max(0, Math.min(100, Number.parseInt(percentMatch[1] ?? '0', 10)))
-      const isCharging = /AC Power|charging|charged/i.test(text) && !/discharging/i.test(text)
-      const timeMatch = text.match(/(\d+):(\d+)\s+remaining/i)
-      const timeRemaining = timeMatch
-        ? (Number.parseInt(timeMatch[1] ?? '0', 10) * 3600 + Number.parseInt(timeMatch[2] ?? '0', 10) * 60)
-        : -1
-      return { percent, isCharging, timeRemaining }
-    } catch {
-      return unknownBatteryStatus()
-    }
-  }
-  if (platform !== 'win32') return unknownBatteryStatus()
-  const executable = path.join(
-    process.env.SystemRoot ?? 'C:\\Windows',
-    'System32',
-    'WindowsPowerShell',
-    'v1.0',
-    'powershell.exe'
-  )
-  try {
-    const result = await execFileAsync(executable, [
-      '-NoLogo',
-      '-NoProfile',
-      '-NonInteractive',
-      '-Command',
-      BATTERY_STATUS_SCRIPT
-    ], {
-      encoding: 'utf8',
-      timeout: 5_000,
-      maxBuffer: 64 * 1024,
-      windowsHide: true
-    })
-    const stdout = String(result.stdout)
-    const value: unknown = JSON.parse(stdout.trim())
-    if (
-      typeof value !== 'object' || value === null ||
-      !('percent' in value) || !('isCharging' in value) || !('timeRemaining' in value) ||
-      typeof value.percent !== 'number' || !Number.isInteger(value.percent) ||
-      (value.percent < 0 || value.percent > 100) && value.percent !== 255 ||
-      typeof value.isCharging !== 'boolean' ||
-      typeof value.timeRemaining !== 'number' ||
-      !Number.isSafeInteger(value.timeRemaining) ||
-      value.timeRemaining < -1
-    ) {
-      return unknownBatteryStatus()
-    }
-    return {
-      percent: value.percent,
-      isCharging: value.isCharging,
-      timeRemaining: value.timeRemaining
-    }
-  } catch {
-    return unknownBatteryStatus()
-  }
-}
-
 export class SystemService {
+  readonly #powerSessions: PowerSessionService
   readonly #preventSleepCallers = new Set<number>()
   readonly #removeListener: () => void
   #preventSleepId: number | undefined
   #caffeinateProcess: ChildProcess | null = null
   #cpuTimes = currentCpuTimes()
-  #winAudioCache: { devices: SystemAudioDevice[]; timestamp: number } | null = null
   #winBrewListCache: {
     stdout: string
     items: Array<{
@@ -574,15 +468,19 @@ export class SystemService {
     private readonly adapter: SystemAdapter,
     private readonly runtimePlatform: NodeJS.Platform = process.platform,
     private readonly power: SystemPowerAdapter = createSystemPowerAdapter(undefined, runtimePlatform),
-    private readonly browser: SystemBrowserUrlAdapter = createSystemBrowserUrlAdapter(undefined, runtimePlatform)
+    private readonly browser: SystemBrowserUrlAdapter = createSystemBrowserUrlAdapter(undefined, runtimePlatform),
+    private readonly audio: AudioController = new MacAudioController(macAudioHelperPath(!adapter.isDev, process.resourcesPath ?? ''), runtimePlatform)
   ) {
+    this.#powerSessions = new PowerSessionService(adapter)
     this.#removeListener = registry.onRemoved((webContentsId) => {
+      this.#powerSessions.releaseWindow(webContentsId)
       this.#preventSleepCallers.delete(webContentsId)
       this.#syncPreventSleep()
     })
   }
 
   stop(): void {
+    this.#powerSessions.stop()
     this.#removeListener()
     this.#preventSleepCallers.clear()
     this.#syncPreventSleep()
@@ -803,6 +701,14 @@ export class SystemService {
     else this.#preventSleepCallers.delete(caller.webContentsId)
     this.#syncPreventSleep()
     return { success: true }
+  }
+
+  managePowerSession(params: SystemPowerSessionParams, caller: CallerIdentity) {
+    return this.#powerSessions.execute(params, caller)
+  }
+
+  releasePluginPowerSessions(pluginId: string): void {
+    this.#powerSessions.releasePlugin(pluginId)
   }
 
   getHardwareSummary() { return { success: true as const, data: readHardwareSummary(this.runtimePlatform, this.runtimePlatform === 'darwin' ? this.readMacosProductVersion() : undefined) } }
@@ -1330,398 +1236,35 @@ export class SystemService {
    * 获取系统输入/输出音频设备列表及当前音量状态
    */
   async getAudioDevices(): Promise<SystemAudioDevice[]> {
-    const devices: SystemAudioDevice[] = []
-    if (this.runtimePlatform === 'darwin') {
-      const volSettings = await this.#readMacosVolumeSettings()
-      const switchAudioBin = this.#resolveSwitchAudioSourcePath()
-
-      if (switchAudioBin) {
-        for (const type of ['output', 'input'] as const) {
-          try {
-            const [{ stdout: allOut }, { stdout: currentOut }] = await Promise.all([
-              execFileAsync(switchAudioBin, ['-a', '-t', type], { encoding: 'utf8', timeout: 4_000 }),
-              execFileAsync(switchAudioBin, ['-c', '-t', type], { encoding: 'utf8', timeout: 4_000 }).catch(() => ({ stdout: '' }))
-            ])
-            const currentName = String(currentOut ?? '').trim()
-            const lines = String(allOut ?? '').split(/\r?\n/).map((l) => l.trim()).filter(Boolean)
-            for (const line of lines) {
-              const name = line.replace(/\s*\((output|input)\)\s*$/i, '').trim()
-              if (!name) continue
-              const isDefault = name === currentName
-              devices.push({
-                id: `${type}:${name}`,
-                name,
-                type,
-                isDefault,
-                volume: type === 'output' ? volSettings.outputVolume : volSettings.inputVolume,
-                muted: type === 'output' ? volSettings.outputMuted : undefined
-              })
-            }
-          } catch {
-            // fallback below
-          }
-        }
-      }
-
-      if (devices.length === 0) {
-        try {
-          const { stdout } = await execFileAsync('/usr/sbin/system_profiler', ['SPAudioDataType', '-json'], {
-            encoding: 'utf8',
-            timeout: 6_000,
-            maxBuffer: 2 * 1024 * 1024
-          })
-          const parsed = JSON.parse(String(stdout ?? '{}')) as Record<string, unknown>
-          const rootList = Array.isArray(parsed.SPAudioDataType) ? parsed.SPAudioDataType : []
-          for (const section of rootList) {
-            const items = (section && typeof section === 'object' && Array.isArray((section as Record<string, unknown>)._items))
-              ? ((section as Record<string, unknown>)._items as Array<Record<string, unknown>>)
-              : []
-            for (const item of items) {
-              const name = String(item._name ?? '').trim()
-              if (!name) continue
-              const isOutput = Boolean(item.coreaudio_device_output) || item.coreaudio_default_audio_output_device === 'spaudio_yes'
-              const isInput = Boolean(item.coreaudio_device_input) || item.coreaudio_default_audio_input_device === 'spaudio_yes'
-              const transport = typeof item.coreaudio_device_transport === 'string'
-                ? item.coreaudio_device_transport.replace(/^spaudio_transport_/, '')
-                : undefined
-              if (isOutput || !isInput) {
-                devices.push({
-                  id: `output:${name}`,
-                  name,
-                  type: 'output',
-                  isDefault: item.coreaudio_default_audio_output_device === 'spaudio_yes',
-                  volume: volSettings.outputVolume,
-                  muted: volSettings.outputMuted,
-                  transport
-                })
-              }
-              if (isInput) {
-                devices.push({
-                  id: `input:${name}`,
-                  name,
-                  type: 'input',
-                  isDefault: item.coreaudio_default_audio_input_device === 'spaudio_yes',
-                  volume: volSettings.inputVolume,
-                  transport
-                })
-              }
-            }
-          }
-        } catch {
-          // ignore
-        }
-      }
-
-      if (devices.length === 0) {
-        devices.push({
-          id: 'output:MacBook Speakers',
-          name: 'Built-in Output',
-          type: 'output',
-          isDefault: true,
-          volume: volSettings.outputVolume,
-          muted: volSettings.outputMuted
-        })
-      }
-      return devices
-    }
-
-    if (this.runtimePlatform === 'win32') {
-      if (this.#winAudioCache && Date.now() - this.#winAudioCache.timestamp < 15_000) {
-        return this.#winAudioCache.devices
-      }
-      try {
-        const psCmd = "[Console]::OutputEncoding = [System.Text.Encoding]::UTF8; $ErrorActionPreference = 'SilentlyContinue'; Get-CimInstance Win32_SoundDevice | Select-Object Name, DeviceID, Status, Manufacturer | ConvertTo-Json -Compress"
-        const { stdout } = await execFileAsync(windowsSystemExecutable('WindowsPowerShell\\v1.0\\powershell.exe'), [
-          '-NoProfile',
-          '-NonInteractive',
-          '-Command',
-          psCmd
-        ], { encoding: 'utf8', timeout: 5_000, windowsHide: true })
-        const rawText = String(stdout ?? '').trim()
-        if (rawText) {
-          const parsed = JSON.parse(rawText) as unknown
-          const list = Array.isArray(parsed) ? parsed : [parsed]
-          let outputCount = 0
-          let inputCount = 0
-          for (const entry of list) {
-            if (!entry || typeof entry !== 'object') continue
-            const rec = entry as Record<string, unknown>
-            const devName = String(rec.Name ?? '').trim()
-            if (!devName) continue
-            const devId = String(rec.DeviceID ?? devName).trim()
-            const transport = /nvidia|amd|intel.*display|hdmi/i.test(devName)
-              ? 'HDMI / DisplayPort'
-              : /usb/i.test(`${devName} ${devId}`)
-                ? 'USB'
-                : /bluetooth|airpods|hands-free|headset/i.test(devName)
-                  ? 'Bluetooth'
-                  : 'Built-in'
-            const isMicOnly = /microphone|麦克风|input|capture/i.test(devName) && !/speaker|扬声器|output/i.test(devName)
-            if (!isMicOnly) {
-              devices.push({
-                id: `output:${devId}`,
-                name: /speaker|扬声器|output|audio/i.test(devName) ? devName : `${devName} (扬声器 / 输出)`,
-                type: 'output',
-                isDefault: outputCount === 0,
-                volume: 65,
-                muted: false,
-                transport
-              })
-              outputCount++
-            }
-            if (isMicOnly) {
-              devices.push({
-                id: `input:${devId}`,
-                name: devName,
-                type: 'input',
-                isDefault: inputCount === 0,
-                volume: 80,
-                muted: false,
-                transport
-              })
-              inputCount++
-            }
-          }
-          if (devices.length > 0) {
-            this.#winAudioCache = { devices, timestamp: Date.now() }
-            return devices
-          }
-        }
-      } catch {
-        // fallback below
-      }
-    }
-
-    // Windows / fallback
-    return [
-      {
-        id: 'output:default',
-        name: 'Default Audio Output',
-        type: 'output',
-        isDefault: true,
-        volume: 65,
-        muted: false
-      },
-      {
-        id: 'input:default',
-        name: 'Default Microphone Input',
-        type: 'input',
-        isDefault: true,
-        volume: 80,
-        muted: false
-      }
-    ]
+    return this.audio.list()
   }
 
-  /**
-   * 切换默认音频输入/输出设备
-   */
-  async setDefaultAudioDevice(
-    idOrName: string,
-    type: 'output' | 'input' = 'output'
-  ): Promise<{ success: boolean; device: string; type: 'output' | 'input'; message?: string }> {
-    const clean = String(idOrName ?? '').replace(/^(output|input):/i, '').trim()
-    if (!clean) {
-      throw new ZToolsError(errorCodes.invalidRequest, '音频设备标识不能为空')
-    }
-
-    if (this.runtimePlatform === 'darwin') {
-      const switchAudioBin = this.#resolveSwitchAudioSourcePath()
-      if (switchAudioBin) {
-        try {
-          await execFileAsync(switchAudioBin, ['-s', clean, '-t', type], {
-            encoding: 'utf8',
-            timeout: 5_000
-          })
-          return { success: true, device: clean, type }
-        } catch (err) {
-          return {
-            success: false,
-            device: clean,
-            type,
-            message: err instanceof Error ? err.message : String(err)
-          }
-        }
-      }
-      return {
-        success: false,
-        device: clean,
-        type,
-        message: '可通过 brew install switchaudio-osx 解锁命令行多声道设备无缝切换'
-      }
-    }
-
-    return { success: true, device: clean, type }
+  async setDefaultAudioDevice(id: string, type: 'output' | 'input' = 'output') {
+    const details = await this.audio.change({ version: 1, operation: 'default', type, id })
+    return { success: true, device: details.id, type, details }
   }
 
-  /**
-   * 设置系统输入/输出音量 (0-100)
-   */
-  async setAudioVolume(
-    volume: number,
-    type: 'output' | 'input' = 'output'
-  ): Promise<{ success: boolean; volume: number; type: 'output' | 'input'; error?: string }> {
-    const clamped = Math.max(0, Math.min(100, Math.round(Number(volume) || 0)))
-    if (this.runtimePlatform === 'darwin') {
-      const targetProp = type === 'input' ? 'input volume' : 'output volume'
-      try {
-        await execFileAsync('/usr/bin/osascript', [
-          '-e',
-          `set volume ${targetProp} ${clamped}`
-        ], { timeout: 4_000 })
-      } catch (err) {
-        return {
-          success: false,
-          volume: clamped,
-          type,
-          error: err instanceof Error ? err.message : String(err)
-        }
-      }
-    }
-    return { success: true, volume: clamped, type }
+  async setAudioVolume(volume: number, type: 'output' | 'input' = 'output', id?: string) {
+    if (!Number.isFinite(volume) || volume < 0 || volume > 100) throw new ZToolsError(errorCodes.invalidRequest, '音量必须在 0 到 100 之间')
+    const details = await this.audio.change({ version: 1, operation: 'volume', type, volume, ...(id === undefined ? {} : { id }) })
+    return { success: true, volume: details.volume, type, details }
   }
 
-  /**
-   * 切换或设置系统静音状态
-   */
-  async toggleAudioMute(muted?: boolean): Promise<{ success: boolean; muted: boolean; error?: string }> {
-    if (this.runtimePlatform === 'darwin') {
-      const currentSettings = await this.#readMacosVolumeSettings()
-      const targetMuted = typeof muted === 'boolean' ? muted : !currentSettings.outputMuted
-      try {
-        await execFileAsync('/usr/bin/osascript', [
-          '-e',
-          `set volume output muted ${targetMuted ? 'true' : 'false'}`
-        ], { timeout: 4_000 })
-        return { success: true, muted: targetMuted }
-      } catch (err) {
-        return {
-          success: false,
-          muted: currentSettings.outputMuted,
-          error: err instanceof Error ? err.message : String(err)
-        }
-      }
-    }
-    return { success: true, muted: Boolean(muted ?? true) }
+  async toggleAudioMute(muted?: boolean, type: 'output' | 'input' = 'output', id?: string) {
+    const details = await this.audio.change({ version: 1, operation: 'mute', type, ...(id === undefined ? {} : { id }), ...(muted === undefined ? {} : { muted }) })
+    return { success: true, muted: details.muted, type, details }
   }
 
   /**
    * 获取已保存的 Wi-Fi 配置文件列表
    */
   async getWifiProfiles(): Promise<SystemWifiProfile[]> {
-    if (this.runtimePlatform === 'darwin') {
-      const device = await this.#resolveMacosWifiDevice()
-      let currentSsid = ''
-      try {
-        const { stdout } = await execFileAsync('/usr/sbin/networksetup', [
-          '-getairportnetwork',
-          device
-        ], { encoding: 'utf8', timeout: 4_000 })
-        const match = String(stdout ?? '').match(/Current Wi-Fi Network:\s*(.+)$/i)
-        if (match && match[1]) {
-          currentSsid = match[1].trim()
-        }
-      } catch {
-        // ignore
-      }
-
-      try {
-        const { stdout } = await execFileAsync('/usr/sbin/networksetup', [
-          '-listpreferredwirelessnetworks',
-          device
-        ], { encoding: 'utf8', timeout: 5_000 })
-        const lines = String(stdout ?? '')
-          .split(/\r?\n/)
-          .slice(1)
-          .map((l) => l.trim())
-          .filter(Boolean)
-        return lines.map((ssid) => ({
-          ssid,
-          current: ssid === currentSsid,
-          security: 'WPA2/WPA3 Personal'
-        }))
-      } catch {
-        return currentSsid ? [{ ssid: currentSsid, current: true, security: 'WPA2/WPA3' }] : []
-      }
-    }
-
-    if (this.runtimePlatform === 'win32') {
-      const profiles: SystemWifiProfile[] = []
-      try {
-        const { stdout } = await execFileAsync(windowsSystemExecutable('netsh.exe'), [
-          'wlan',
-          'show',
-          'profiles'
-        ], { encoding: 'utf8', timeout: 5_000, windowsHide: true })
-        for (const line of String(stdout ?? '').split(/\r?\n/)) {
-          const match = line.match(/:\s+(.+)$/)
-          if (match && match[1] && (/All User Profile|所有用户配置文件/i.test(line))) {
-            const ssid = match[1].trim()
-            if (ssid) profiles.push({ ssid, security: 'WPA2-Personal' })
-          }
-        }
-      } catch {
-        // ignore when wireless NIC or wlan service is unavailable
-      }
-
-      return profiles
-    }
-
-    return []
+    return readWifiProfiles(this.runtimePlatform)
   }
 
-  /**
-   * 查询指定 Wi-Fi SSID 的明文密码（macOS 触发 Keychain 授权，Windows 调用 netsh key=clear）
-   */
-  async getWifiPassword(ssid: string): Promise<{ ssid: string; password?: string; error?: string }> {
-    const cleanSsid = String(ssid ?? '').trim()
-    if (!cleanSsid) {
-      throw new ZToolsError(errorCodes.invalidRequest, 'Wi-Fi SSID 不能为空')
-    }
-
-    if (this.runtimePlatform === 'darwin') {
-      try {
-        const { stdout } = await execFileAsync('/usr/bin/security', [
-          'find-generic-password',
-          '-D',
-          'AirPort network password',
-          '-a',
-          cleanSsid,
-          '-w'
-        ], { encoding: 'utf8', timeout: 15_000 })
-        return {
-          ssid: cleanSsid,
-          password: String(stdout ?? '').trim()
-        }
-      } catch (err) {
-        return {
-          ssid: cleanSsid,
-          error: err instanceof Error ? err.message : '无法从系统钥匙串读取该 Wi-Fi 密码或用户取消了授权'
-        }
-      }
-    }
-
-    if (this.runtimePlatform === 'win32') {
-      try {
-        const { stdout } = await execFileAsync(windowsSystemExecutable('netsh.exe'), [
-          'wlan',
-          'show',
-          'profile',
-          `name=${cleanSsid}`,
-          'key=clear'
-        ], { encoding: 'utf8', timeout: 6_000, windowsHide: true })
-        const match = String(stdout ?? '').match(/(?:Key Content|关键内容)\s*:\s*(.+)$/im)
-        if (match && match[1]) {
-          return { ssid: cleanSsid, password: match[1].trim() }
-        }
-      } catch {
-        // ignore netsh error and return not found below
-      }
-
-      return { ssid: cleanSsid, error: '未找到该 Wi-Fi 的明文密钥记录' }
-    }
-
-    return { ssid: cleanSsid, error: '当前系统平台不支持查询 Wi-Fi 密码' }
+  /** 查询用户选中的无线网络密码，系统授权失败直接返回错误。 */
+  async getWifiPassword(ssid: string): Promise<{ ssid: string; password: string }> {
+    return readWifiPassword(ssid, this.runtimePlatform)
   }
 
   /**
@@ -1824,15 +1367,8 @@ export class SystemService {
       }
     } catch (err) {
       const errText = `${(err as { stderr?: unknown })?.stderr ?? ''} ${err instanceof Error ? err.message : String(err)}`
-      if (action === 'search' && /No (?:formulae|casks|formulae or casks) found/i.test(errText)) {
-        return {
-          success: true,
-          action,
-          stdout: '',
-          stderr: '',
-          items: []
-        }
-      }
+      // brew search 无结果时以非零退出码报告，这是确定的空结果而不是失败
+      if (action === 'search' && /No (?:formulae|casks|formulae or casks) found/i.test(errText)) return emptyBrewSearchResult()
       return {
         success: false,
         action,
@@ -2026,49 +1562,10 @@ export class SystemService {
     return this.runtimePlatform === 'darwin' || this.runtimePlatform === 'linux' ? 'brew' : null
   }
 
-  #resolveSwitchAudioSourcePath(): string | null {
-    const candidates = [
-      '/opt/homebrew/bin/SwitchAudioSource',
-      '/usr/local/bin/SwitchAudioSource'
-    ]
-    for (const candidate of candidates) {
-      if (fsSync.existsSync(candidate)) {
-        return candidate
-      }
-    }
-    return null
-  }
-
   async #readMacosOutputVolume(): Promise<number> {
-    const settings = await this.#readMacosVolumeSettings()
-    return settings.outputVolume
-  }
-
-  async #readMacosVolumeSettings(): Promise<{
-    outputVolume: number
-    inputVolume: number
-    outputMuted: boolean
-  }> {
-    if (this.runtimePlatform !== 'darwin') {
-      return { outputVolume: 65, inputVolume: 80, outputMuted: false }
-    }
-    try {
-      const { stdout } = await execFileAsync('/usr/bin/osascript', [
-        '-e',
-        'get volume settings'
-      ], { encoding: 'utf8', timeout: 3_000 })
-      const raw = String(stdout ?? '')
-      const outMatch = raw.match(/output volume:(\d+)/i)
-      const inMatch = raw.match(/input volume:(\d+)/i)
-      const mutedMatch = raw.match(/output muted:(true|false)/i)
-      return {
-        outputVolume: outMatch ? Number.parseInt(outMatch[1] ?? '65', 10) : 65,
-        inputVolume: inMatch ? Number.parseInt(inMatch[1] ?? '80', 10) : 80,
-        outputMuted: mutedMatch ? mutedMatch[1]?.toLowerCase() === 'true' : false
-      }
-    } catch {
-      return { outputVolume: 65, inputVolume: 80, outputMuted: false }
-    }
+    const device = (await this.audio.list()).find(item => item.type === 'output' && item.isDefault)
+    if (device?.volume === undefined) throw new ZToolsError(errorCodes.notSupported, '当前默认输出设备不提供音量状态')
+    return device.volume
   }
 
   async #resolveMacosWifiDevice(): Promise<string> {

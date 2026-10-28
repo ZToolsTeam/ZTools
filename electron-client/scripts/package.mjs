@@ -13,6 +13,7 @@ import {
   WINDOWS_ELECTRON_VERSION
 } from './windows-package-contract.mjs'
 import { stageWindowsPathAccessBroker } from './windows-path-access-broker.mjs'
+import { assertWindowsExecutableBranding } from './windows-executable-branding.mjs'
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const packageJson = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8'))
@@ -89,28 +90,6 @@ function createPrivilegedManifest() {
   ].join('\n')
 }
 
-function powershellLiteral(value) {
-  return `'${value.replaceAll("'", "''")}'`
-}
-
-function iconFingerprint(file, _executable) {
-  const iconExpression = `[Drawing.Icon]::ExtractAssociatedIcon(${powershellLiteral(file)})`
-  const script = [
-    '$ErrorActionPreference="Stop"',
-    'Add-Type -AssemblyName System.Drawing',
-    `$icon=${iconExpression}`,
-    'if($null -eq $icon){throw "无法读取图标"}',
-    '$bitmap=$icon.ToBitmap()',
-    '$stream=[IO.MemoryStream]::new()',
-    '$sha=[Security.Cryptography.SHA256]::Create()',
-    'try{$bitmap.Save($stream,[Drawing.Imaging.ImageFormat]::Png);[BitConverter]::ToString($sha.ComputeHash($stream.ToArray())).Replace("-","")}finally{$sha.Dispose();$stream.Dispose();$bitmap.Dispose();$icon.Dispose()}'
-  ].join(';')
-  return execFileSync('powershell.exe', ['-NoProfile', '-Command', script], {
-    encoding: 'utf8',
-    windowsHide: true
-  }).trim()
-}
-
 function prunePackagedApplication(applicationPath) {
   const localesDirectory = path.join(applicationPath, 'locales')
   if (!fs.existsSync(localesDirectory) || !fs.statSync(localesDirectory).isDirectory()) {
@@ -148,7 +127,6 @@ if (!fs.existsSync(privilegedManifestSource)) {
   throw new Error(`ZToolsService 生产特权清单不存在: ${privilegedManifestSource}`)
 }
 if (!fs.existsSync(applicationIcon)) throw new Error(`应用图标不存在: ${applicationIcon}`)
-const expectedApplicationIconFingerprint = iconFingerprint(applicationIcon, false)
 const nativeHostManifest = readNativeHostManifest(root)
 const privilegedManifest = createPrivilegedManifest()
 if (hostOnly) {
@@ -184,9 +162,7 @@ for (const applicationPath of applicationPaths) {
     `(${(pruneResult.removedLocaleBytes / 1048576).toFixed(2)} MB)`
   )
   const applicationExecutable = path.join(applicationPath, 'ZTools.exe')
-  if (iconFingerprint(applicationExecutable, true) !== expectedApplicationIconFingerprint) {
-    throw new Error(`Electron 主程序图标与原版 ZTools 图标不一致: ${applicationExecutable}`)
-  }
+  assertWindowsExecutableBranding(applicationExecutable, { icon: applicationIcon, version: packageJson.version })
   const nativeDirectory = path.join(applicationPath, 'resources', 'native')
   fs.mkdirSync(nativeDirectory, { recursive: true })
   fs.copyFileSync(nativeHostSource, path.join(nativeDirectory, 'ZToolsNativeHost32.exe'))

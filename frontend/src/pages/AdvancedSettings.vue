@@ -1,4 +1,5 @@
 <script setup>
+import { CloseOutlined, ExportOutlined, RightOutlined } from '@ant-design/icons-vue'
 import {
   ref,
   reactive,
@@ -51,7 +52,8 @@ import { buildLaunchHotkeyMap } from '@/utils/launchHotkeyTargets'
 
 const { success, error } = useToast()
 const themeStore = useThemeStore()
-const { isDark } = storeToRefs(themeStore)
+const { isDark, mode: themeMode } = storeToRefs(themeStore)
+const themeSaving = ref(false)
 const router = useRouter()
 const route = useRoute()
 const hotkeyPlatform = ref('unknown')
@@ -85,7 +87,6 @@ const settings = reactive({
   autostart: false,
   hotkey: 'Ctrl+Shift+Z',
   wakePreference: windowModeState.wakePreference || 'dashboard',
-  theme: 'light',
   minimizeToTray: true,
   closeConfirm: true,
   superPanel: {
@@ -192,9 +193,6 @@ const loadSettings = async () => {
     }
     const hotkey = await getHotkey()
     settings.hotkey = hotkey || 'Ctrl+Shift+Z'
-    settings.theme = document.documentElement.classList.contains('dark')
-      ? 'dark'
-      : 'light'
     try {
       settings.minimizeToTray = await getMinimizeToTray()
     } catch {}
@@ -223,6 +221,7 @@ const loadSettings = async () => {
 }
 
 const themeOptions = [
+  { value: 'system', label: '跟随系统' },
   { value: 'light', label: '浅色' },
   { value: 'dark', label: '深色' }
 ]
@@ -238,10 +237,16 @@ const builtinShortcuts = [
   { label: '打开设置', combo: 'Ctrl+,' },
   { label: '返回主页', combo: 'Escape' }
 ]
-const pickTheme = (value) => {
-  if (settings.theme === value) return
-  settings.theme = value
-  changeTheme()
+const pickTheme = async (value) => {
+  if (themeMode.value === value || themeSaving.value) return
+  themeSaving.value = true
+  try {
+    await themeStore.setTheme(value)
+  } catch (err) {
+    error('主题设置保存失败：' + (err?.message || '未知错误'))
+  } finally {
+    themeSaving.value = false
+  }
 }
 
 const onWakePreferenceChange = (val) => {
@@ -448,16 +453,6 @@ const cancelSuperPanelRecording = () => {
   superPanelKeyRecordingText.value = ''
 }
 
-const changeTheme = () => {
-  themeStore.setTheme(settings.theme)
-  saveSettings()
-}
-
-// 监听 themeStore.isDark 变化，同步到本地 settings.theme
-watch(isDark, (val) => {
-  settings.theme = val ? 'dark' : 'light'
-})
-
 /** 从 Delphi 端加载插件和本地软件的启动快捷键数据并缓存 */
 async function loadPluginHotkeyCount() {
   try {
@@ -613,11 +608,12 @@ onBeforeUnmount(() => {
                 type="button"
                 role="radio"
                 class="theme-btn"
-                :class="{ active: settings.theme === option.value }"
-                :aria-checked="settings.theme === option.value"
+                :class="{ active: themeMode === option.value }"
+                :aria-checked="themeMode === option.value"
+                :disabled="themeSaving"
                 @click="pickTheme(option.value)"
               >
-                <div class="theme-preview" :class="`${option.value}-preview`" aria-hidden="true">
+                <div class="theme-preview" :class="`${option.value === 'system' ? (isDark ? 'dark' : 'light') : option.value}-preview`" aria-hidden="true">
                   <div class="preview-bar"><span class="preview-mark"></span></div>
                   <div class="preview-line" style="width: 70%"></div>
                   <div class="preview-line" style="width: 45%"></div>
@@ -719,7 +715,7 @@ onBeforeUnmount(() => {
                     @blur="hotkeyRecording = false; hotkeyRecordingText = ''"
                   />
                   <span v-if="hotkeyRecording" class="recording-text">
-                    <i class="fa fa-circle recording-dot"></i>
+                    <span class="recording-dot" aria-hidden="true"></span>
                     {{
                       hotkeyRecordingText ||
                       getHotkeyWaitText(hotkeyPlatform, supportsDoubleModifierHotkeys)
@@ -743,7 +739,7 @@ onBeforeUnmount(() => {
                   @click="clearHotkey"
                   title="清除"
                 >
-                  <i class="fa fa-times"></i>
+                  <CloseOutlined  />
                 </button>
               </div>
             </div>
@@ -777,7 +773,7 @@ onBeforeUnmount(() => {
               </div>
               <span style="font-size: 12px; color: var(--zt-text-secondary)">
                 已配置 {{ pluginHotkeyCount }} 个快捷键
-                <i class="fa fa-chevron-right" style="margin-left: 4px; font-size: 10px"></i>
+                <RightOutlined  style="margin-left: 4px; font-size: 10px" />
               </span>
             </div>
 
@@ -794,7 +790,7 @@ onBeforeUnmount(() => {
               </div>
               <span style="font-size: 12px; color: var(--zt-text-secondary)">
                 已配置 {{ pluginFeatureHotkeyCount }} 个快捷键
-                <i class="fa fa-chevron-right" style="margin-left: 4px; font-size: 10px"></i>
+                <RightOutlined  style="margin-left: 4px; font-size: 10px" />
               </span>
             </div>
 
@@ -856,7 +852,7 @@ onBeforeUnmount(() => {
                           v-if="superPanelKeyRecording"
                           class="recording-text small"
                         >
-                          <i class="fa fa-circle recording-dot"></i>
+                          <span class="recording-dot" aria-hidden="true"></span>
                           {{ superPanelKeyRecordingText || getHotkeyWaitText(hotkeyPlatform, false) }}
                         </span>
                         <div v-else class="hotkey-keys">
@@ -883,7 +879,7 @@ onBeforeUnmount(() => {
                         @click="clearSuperPanelHotkey"
                         title="清除"
                       >
-                        <i class="fa fa-times"></i>
+                        <CloseOutlined  />
                       </button>
                     </div>
                   </div>
@@ -1011,7 +1007,7 @@ onBeforeUnmount(() => {
                   </div>
                   <span style="font-size: 12px; color: var(--zt-text-secondary)">
                     已配置 {{ shortcutCount }} 个快捷方式
-                    <i class="fa fa-chevron-right" style="margin-left: 4px; font-size: 10px"></i>
+                    <RightOutlined  style="margin-left: 4px; font-size: 10px" />
                   </span>
                 </div>
               </div>
@@ -1053,7 +1049,7 @@ onBeforeUnmount(() => {
                 </div>
               </div>
               <button class="open-btn" @click="openDevTools()">
-                <i class="fa fa-external-link"></i>
+                <ExportOutlined  />
                 打开
               </button>
             </div>
@@ -1064,12 +1060,12 @@ onBeforeUnmount(() => {
                 <div class="setting-text">
                   <span class="setting-label">开源插件生态大仓 (ZTools-extensions)</span>
                   <span class="setting-desc"
-                    >34款核心扩展源码全量开源，开放投稿即 PR，免运维静态分发</span
+                    >官方扩展源码开源，支持通过 PR 投稿，审核后由官方发布</span
                   >
                 </div>
               </div>
               <button class="open-btn" @click="openExternalUrl('https://github.com/ZToolsTeam/ZTools-extensions')">
-                <i class="fa fa-external-link"></i>
+                <ExportOutlined  />
                 访问
               </button>
             </div>
@@ -1085,7 +1081,7 @@ onBeforeUnmount(() => {
                 </div>
               </div>
               <button class="open-btn" @click="openExternalUrl('https://github.com/ZToolsTeam/ZTools-extensions#5-%E5%88%86%E9%92%9F%E8%B4%A1%E7%8C%AE%E4%BD%A0%E7%9A%84%E9%A6%96%E6%AC%BE%E6%8F%92%E4%BB%B6')">
-                <i class="fa fa-external-link"></i>
+                <ExportOutlined  />
                 阅读
               </button>
             </div>
@@ -1103,7 +1099,7 @@ onBeforeUnmount(() => {
 </template>
 
 <style scoped>
-/* 主题选择：两张预览卡，选中项用余烬橙方块标记（与设计稿一致） */
+/* 主题选择：选中项用余烬橙方块标记 */
 .theme-switcher {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
@@ -1300,7 +1296,11 @@ onBeforeUnmount(() => {
 }
 
 .recording-dot {
-  font-size: 6px;
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: currentColor;
   animation: pulse 1s infinite;
 }
 

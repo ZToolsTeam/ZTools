@@ -3,6 +3,7 @@ import type { CallerIdentity } from '../../contracts/capabilities.js'
 import { errorCodes, ZToolsError } from '../../contracts/errors.js'
 import { IPC_EVENT_CHANNEL } from '../../contracts/ipc.js'
 import { RUNTIME_PERMISSION_CHANGED_EVENT } from '../../contracts/runtime-capability.js'
+import { ACCOUNT_EVENT_TYPES } from './account-events.js'
 import type { EventEnvelope, EventEnvelopeParams, EventKeyParams } from '../../contracts/method-params.js'
 
 const MAX_SUBSCRIPTIONS_PER_CALLER = 256
@@ -420,7 +421,8 @@ export class EventService {
   }
 
   #assertRendererMayPublish(type: string): void {
-    if (type === RUNTIME_PERMISSION_CHANGED_EVENT || type === 'plugin_out' || type === 'plugin_enter') {
+    if (type === RUNTIME_PERMISSION_CHANGED_EVENT || type === 'plugin_out' || type === 'plugin_enter' ||
+        ACCOUNT_EVENT_TYPES.has(type)) {
       throw new ZToolsError(errorCodes.permissionDenied, '该事件仅允许宿主发布')
     }
   }

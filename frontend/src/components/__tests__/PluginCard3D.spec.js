@@ -105,13 +105,13 @@ describe('PluginCard3D', () => {
       [[t('windows')], '仅 Windows'],
       [[t('macos')], '仅 macOS']
     ]
-    const icons = ['fa-globe', 'fa-windows', 'fa-apple']
+    const icons = ['anticon-global', 'anticon-windows', 'anticon-apple']
     for (const [index, [targets, label]] of cases.entries()) {
       const wrapper = mount(PluginCard3D, { props: { plugin: { pluginId: 'p', name: 'P', targets } } })
       const mark = wrapper.find('.card-mark-platform')
       expect(mark.attributes('title')).toBe(label)
       expect(mark.attributes('aria-label')).toBe(label)
-      expect(mark.find('i').classes()).toContain(icons[index])
+      expect(mark.find('.anticon').classes()).toContain(icons[index])
       expect(wrapper.text()).not.toContain(label)
       wrapper.unmount()
     }

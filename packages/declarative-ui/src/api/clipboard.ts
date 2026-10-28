@@ -36,21 +36,21 @@ export const Clipboard = {
   },
 
   /**
-   * 复制并直接粘贴到当前前台活跃应用程序 (Raycast 原生标准能力)
+   * 复制并向原输入位置发送粘贴请求。返回只表示按键已发送，不代表目标应用已接收文本。
+   * 需要出队或删除内容的插件应保留可恢复记录；发送结果未确认时不要自动重试。
    */
   async paste(content: string | number | { text?: string }): Promise<void> {
     const text = typeof content === "object" && content !== null ? content.text ?? "" : String(content);
-    await this.copy(text);
-
     const bridge = getDeclarativeBridge();
     if (bridge?.pasteToActive) {
+      // 宿主负责复制与粘贴的完整操作；提前复制会覆盖另一窗口仍在粘贴的内容。
       await bridge.pasteToActive(text);
+      memoryClipboard = text;
       return;
     }
-    if (bridge) {
-      // 宿主不支持粘贴到前台应用：内容已复制，但不能让插件以为已经粘贴
-      throw Object.assign(new Error("当前宿主不支持粘贴到前台应用，内容已复制到剪贴板"), { code: "NOT_SUPPORTED" });
-    }
+    await this.copy(text);
+    // 宿主不支持粘贴到前台应用：内容已复制，但不能让插件以为已经粘贴。
+    throw Object.assign(new Error("当前宿主不支持粘贴到前台应用，内容已复制到剪贴板"), { code: "NOT_SUPPORTED" });
   },
 
   /**

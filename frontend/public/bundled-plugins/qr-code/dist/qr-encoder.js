@@ -1,7 +1,7 @@
 /**
  * 标准二维码编码器（ISO/IEC 18004，字节模式，版本 1–40，纠错等级 L/M/Q/H）
  *
- * 算法结构参照 Project Nayuki 的 QR Code generator（MIT 许可）：
+ * 改编自 Project Nayuki 的 QR Code generator library（MIT 许可，原许可声明见下方）：
  * 选最小可用版本 → 拼数据位流 → 按块计算 Reed-Solomon 纠错码并交织 → 放置功能图形与数据 →
  * 8 种掩码逐一评分取最优 → 写入格式信息与版本信息。
  */

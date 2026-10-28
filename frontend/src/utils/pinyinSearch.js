@@ -769,11 +769,11 @@ export function matchItemWithQuery(item, query) {
     score += 100
   }
 
-  // 6. 描述文本匹配（字面或拼音）
+  // 6. 描述文本匹配（字面或拼音，短缩写词不扫长描述中间的拼音首字母以免产生噪音）
   if (desc.includes(q)) {
     matched = true
     score += 50
-  } else if (findPinyinMatchInText(rawDesc, q).matched) {
+  } else if (q.length >= 3 && findPinyinMatchInText(rawDesc, q).matched) {
     matched = true
     score += 40
   }

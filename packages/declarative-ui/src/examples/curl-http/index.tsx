@@ -1,3 +1,4 @@
+import { isRealElectronHost } from '../shared/native-ipc.js'
 import React, {
   List,
   ActionPanel,
@@ -24,7 +25,7 @@ const DEFAULT_CURL_SAMPLE =
   'curl -X POST "https://httpbin.org/post" -H "Content-Type: application/json" -H "X-Client: ZTools" -d \'{"query":"declarative-ui","limit":10}\''
 
 export function CurlHttpCommand() {
-  const [rawCurl, setRawCurl] = useState<string>(DEFAULT_CURL_SAMPLE)
+  const [rawCurl, setRawCurl] = useState<string>(isRealElectronHost() ? '' : DEFAULT_CURL_SAMPLE)
   const [targetLang, setTargetLang] = useState<CodeTargetLang>('fetch')
   const [responseSnap, setResponseSnap] = useState<HttpResponseSnapshot | null>(null)
   const [isSending, setIsSending] = useState<boolean>(false)

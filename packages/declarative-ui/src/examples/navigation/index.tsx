@@ -69,7 +69,7 @@ export const DEFAULT_NAVIGATION_WINDOWS: readonly NavigationWindowItem[] = Objec
   {
     id: "win-terminal-zsh",
     handle: "hwnd-1003",
-    title: "hopob@MacBook-Pro: ~/git/ZTools (zsh — 120×40)",
+    title: "geek@MacBook-Pro: ~/git/ZTools (zsh — 120×40)",
     appName: "Terminal",
     pid: 9640,
     bundleId: "com.apple.Terminal",

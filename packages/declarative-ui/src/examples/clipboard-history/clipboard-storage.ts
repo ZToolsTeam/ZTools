@@ -504,7 +504,7 @@ export async function getClipboardHistory(hostOverride?: any): Promise<Clipboard
     }
     return typeof raw === "string" ? JSON.parse(raw) : (raw as unknown as ClipboardItem[]);
   } catch {
-    return SAMPLE_CLIPBOARD_ITEMS;
+    return realHost ? [] : SAMPLE_CLIPBOARD_ITEMS;
   }
 }
 
@@ -561,7 +561,7 @@ export async function toggleClipboardItemPin(id: string, hostOverride?: any): Pr
   if (typeof window !== "undefined" && (window as any).ztools?.clipboard_history_toggle_pin) {
     try {
       return await (window as any).ztools.clipboard_history_toggle_pin({ id });
-    } catch {}
+    } catch { /* ignore unsupported channel error */ }
   }
   if (hostOverride || isRealElectronHost(hostOverride)) {
     try {
@@ -577,7 +577,7 @@ export async function toggleClipboardItemPin(id: string, hostOverride?: any): Pr
   if (bridge?.clipboardHistory?.togglePin) {
     try {
       return await bridge.clipboardHistory.togglePin(id);
-    } catch {}
+    } catch { /* ignore unsupported channel error */ }
   }
   // 3. LocalStorage fallback
   try {
@@ -606,7 +606,7 @@ export async function deleteClipboardItem(id: string, hostOverride?: any): Promi
   if (typeof window !== "undefined" && (window as any).ztools?.clipboard_history_delete) {
     try {
       return await (window as any).ztools.clipboard_history_delete({ id });
-    } catch {}
+    } catch { /* ignore unsupported channel error */ }
   }
   if (hostOverride || isRealElectronHost(hostOverride)) {
     try {
@@ -622,7 +622,7 @@ export async function deleteClipboardItem(id: string, hostOverride?: any): Promi
   if (bridge?.clipboardHistory?.delete) {
     try {
       return await bridge.clipboardHistory.delete(id);
-    } catch {}
+    } catch { /* ignore unsupported channel error */ }
   }
   // 3. LocalStorage fallback
   try {
@@ -643,7 +643,7 @@ export async function clearUnpinnedClipboardHistory(hostOverride?: any): Promise
   if (typeof window !== "undefined" && (window as any).ztools?.clipboard_history_clear_unpinned) {
     try {
       return await (window as any).ztools.clipboard_history_clear_unpinned();
-    } catch {}
+    } catch { /* ignore unsupported channel error */ }
   }
   if (hostOverride || isRealElectronHost(hostOverride)) {
     try {
@@ -659,7 +659,7 @@ export async function clearUnpinnedClipboardHistory(hostOverride?: any): Promise
   if (bridge?.clipboardHistory?.clearUnpinned) {
     try {
       return await bridge.clipboardHistory.clearUnpinned();
-    } catch {}
+    } catch { /* ignore unsupported channel error */ }
   }
   // 3. LocalStorage fallback
   try {
@@ -692,7 +692,7 @@ export async function pasteSequentialClipboard(
           offset: res.sequenceIndex || 0
         };
       }
-    } catch {}
+    } catch { /* ignore unsupported channel error */ }
   }
 
   // 2. Bridge 调度
@@ -708,7 +708,7 @@ export async function pasteSequentialClipboard(
           offset: res.sequenceIndex || 0
         };
       }
-    } catch {}
+    } catch { /* ignore unsupported channel error */ }
   }
 
   // 3. 本地状态机模拟回贴
@@ -741,13 +741,13 @@ export async function resetPasteSequence(): Promise<void> {
   if (typeof window !== "undefined" && (window as any).ztools?.clipboard_history_reset_sequence) {
     try {
       await (window as any).ztools.clipboard_history_reset_sequence();
-    } catch {}
+    } catch { /* ignore unsupported channel error */ }
   }
   const bridge = getDeclarativeBridge();
   if (bridge?.clipboardHistory?.resetSequence) {
     try {
       await bridge.clipboardHistory.resetSequence();
-    } catch {}
+    } catch { /* ignore unsupported channel error */ }
   }
   pasteSequenceManager.reset();
 }

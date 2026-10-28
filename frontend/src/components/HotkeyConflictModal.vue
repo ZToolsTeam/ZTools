@@ -1,4 +1,5 @@
 <script setup>
+import { WarningOutlined } from '@ant-design/icons-vue'
 /**
  * 快捷键冲突提醒弹窗
  * 支持两种冲突数据：
@@ -117,7 +118,7 @@ defineExpose({ show })
   >
     <div class="conflict-content">
       <div class="conflict-icon">
-        <i class="fa fa-exclamation-triangle"></i>
+        <WarningOutlined  />
       </div>
       <p class="conflict-desc">{{ descText }}</p>
 

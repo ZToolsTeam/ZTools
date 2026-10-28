@@ -584,7 +584,7 @@ export async function fetchWechatCleanSnapshot(hostOverride?: any): Promise<Wech
     const seenSubdirTotals = new Set<string>()
     const scanResults = await Promise.all(deepTargets.map(t => scanRealDirectoryTree(t.dir, 150, hostOverride)))
 
-    // 先从 xwechat_files / WeChat Files 子目录提取本机微信号账号目录 (如 liaoguobo_7f67)
+    // 先从 xwechat_files / WeChat Files 子目录提取本机微信号账号目录 (如 geek_user_7f67)
     for (let i = 0; i < Math.min(2, deepTargets.length); i++) {
       const res = scanResults[i]
       if (!res) continue

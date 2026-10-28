@@ -59,7 +59,7 @@ const WINDOWS_PROTECTED_NAMES = new Set([
   'lsass', 'winlogon', 'fontdrvhost', 'dwm', 'spoolsv'
 ])
 // 结束 loginwindow 会注销当前用户；WindowServer / kernel_task / launchd 普通用户本来也会 EPERM，先拦截给出明确提示
-const MACOS_PROTECTED_NAMES = new Set(['launchd', 'kernel_task', 'windowserver', 'loginwindow'])
+const MACOS_PROTECTED_NAMES = new Set(['launchd', 'kernel_task', 'windowserver', 'loginwindow', 'ztoolspathaccessbroker'])
 
 /** 进程名规范化：去掉路径、忽略大小写，Windows 忽略 .exe；process_list 与结束进程共用 */
 export function normalizeProcessName(name: string, platform: NodeJS.Platform): string {
@@ -128,7 +128,7 @@ export class ProcessTerminator {
     this.#hostPpid = deps.hostPpid ?? process.ppid
   }
 
-  async terminate(params: ProcessTerminatePidParams, signal: AbortSignal): Promise<ProcessTerminateResult> {
+  async terminate(params: ProcessTerminatePidParams, signal: AbortSignal, beforeSignal?: (pid: number) => Promise<void>): Promise<ProcessTerminateResult> {
     const { pid, mode } = params
     const tree = params.tree === true
     if (!Number.isInteger(pid) || pid < 2 || pid > 0xffff_ffff) {
@@ -213,6 +213,7 @@ export class ProcessTerminator {
     if (platform === 'win32') {
       const pids = order.filter(item => !byPid.get(item)?.zombie)
       const args = [...(mode === 'force' ? ['/F'] : []), ...pids.flatMap(item => ['/PID', String(item)])]
+      for (const item of pids) await beforeSignal?.(item)
       if (signal.aborted) throw abortFailure(signal)
       const outcome = await this.#runTaskkill(args, signal)
       taskkillRejected = !outcome.ok
@@ -225,6 +226,9 @@ export class ProcessTerminator {
           exited.push(item)
           continue
         }
+        // 内部调用方可在实际发信号前复核启动身份和目标占用；不接受 Renderer 提供回调。
+        await beforeSignal?.(item)
+        if (signal.aborted) throw abortFailure(signal)
         try {
           this.#kill(item, posixSignal)
           waiting.add(item)

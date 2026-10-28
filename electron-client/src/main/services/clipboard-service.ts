@@ -32,8 +32,9 @@ const MAX_EVENT_FILE_GRANTS = 1_024
 
 export interface ClipboardImage {
   isEmpty(): boolean
-  getSize(): { width: number; height: number }
-  toPNG(): Buffer
+  getSize(scaleFactor?: number): { width: number; height: number }
+  toPNG(options?: { scaleFactor?: number }): Buffer
+  toBitmap(options?: { scaleFactor?: number }): Buffer
   /** Electron nativeImage 提供；用于生成剪贴板历史列表缩略图 */
   resize?(options: { width?: number; height?: number; quality?: 'good' | 'better' | 'best' }): ClipboardImage
 }
@@ -67,6 +68,8 @@ export interface ClipboardAdapter {
   readText(): string
   writeImage(image: ClipboardImage): void
   writeText(text: string): void
+  write?(data: { text: string; html: string }): void
+  readHTML?(): string
 }
 
 export interface ClipboardImageFactory {
@@ -91,14 +94,16 @@ export interface ClipboardHostWindow {
 }
 
 /**
- * macOS「回到上一个应用并粘贴」适配器：隐藏 ZTools 让前一个应用重新成为前台，再用 System Events 发送 ⌘V。
+ * macOS 粘贴适配器：隐藏前锁定应用与输入位置，隐藏后定向发送并核对目标。
  * 依赖系统辅助功能授权；未授权时直接报错，不隐藏窗口。
  */
 export interface ClipboardMacPasteAdapter {
   isTrusted(): boolean
+  preparePaste(signal: AbortSignal): Promise<number>
   hideApplication(): void
   showApplication(): void
-  sendPaste(signal: AbortSignal): Promise<void>
+  sendPaste(signal: AbortSignal, token: number): Promise<void>
+  stop(): Promise<void>
   /** 隐藏后等待前一个应用激活的时间，默认 120ms */
   activationDelayMs?: number
   /** 测试替身注入；默认 BrowserWindow.fromWebContents */
@@ -146,7 +151,9 @@ function waitFor(ms: number, signal: AbortSignal): Promise<void> {
 
 function clipboardFailure(error: unknown): ZToolsError {
   if (error instanceof ZToolsError) {
-    if (error.code === errorCodes.clipboardError) {
+    if (error.code === errorCodes.clipboardError && !['CLIPBOARD_BUSY', 'CLIPBOARD_CHANGED', 'CLIPBOARD_RICH_TEXT_UNCONFIRMED', 'PASTE_TARGET_CHANGED',
+      'PASTE_TARGET_UNAVAILABLE', 'PASTE_RESULT_UNCONFIRMED', 'PASTE_HOST_NOT_ACTIVE', 'PASTE_TARGET_APP_UNAVAILABLE',
+      'PASTE_TARGET_WINDOW_UNAVAILABLE', 'PASTE_TARGET_ELEMENT_UNAVAILABLE', 'PASTE_FOCUS_OBSERVER_UNAVAILABLE'].includes(error.details?.hostCode || '')) {
       return new ZToolsError(errorCodes.clipboardError, '剪贴板操作失败')
     }
     return error
@@ -168,6 +175,13 @@ function limitedHash(parts: Array<string | Buffer>): string {
     hash.update(buffer)
   }
   return hash.digest('base64url')
+}
+
+function clipboardImageSize(image: ClipboardImage): { width: number; height: number } {
+  const size = image.getSize(1)
+  if (!Number.isSafeInteger(size.width) || !Number.isSafeInteger(size.height) || size.width <= 0 || size.height <= 0 ||
+      size.width * size.height > MAX_IMAGE_PIXELS) throw new ZToolsError(errorCodes.fileTooLarge, '剪贴板图片尺寸超出上限')
+  return size
 }
 
 export function decodeBmp(buffer: Buffer): { bitmap: Buffer; width: number; height: number } {
@@ -228,8 +242,12 @@ export class ClipboardService {
   #restoredFingerprint = ''
   #restoredFilesKey = ''
   #restoreInFlight = 0
+  #clipboardBusy = false
+  #pendingClipboardOperation: Promise<void> = Promise.resolve()
+  readonly #clipboardStop = new AbortController()
   #stopped = false
   #pendingPoll: Promise<void> = Promise.resolve()
+  #sensitiveCopy: { fingerprint?: string; pendingHashes: Set<string>; attempts: number; timer: NodeJS.Timeout | undefined } | undefined
 
   constructor(
     private readonly files: FileSystemService,
@@ -257,26 +275,69 @@ export class ClipboardService {
   }
 
   async stop(): Promise<void> {
-    if (this.#stopped) {
-      await this.#pendingPoll
-      return
+    if (!this.#stopped) {
+      this.#stopped = true
+      this.#clipboardStop.abort()
+      this.#removeSubscriptionListener()
+      this.#setMonitoring(false)
     }
-    this.#stopped = true
-    this.#removeSubscriptionListener()
-    this.#setMonitoring(false)
+    await this.macPaste?.stop()
+    await this.#pendingClipboardOperation
+    for (let attempt = 0; attempt < 3 && this.#sensitiveCopy; attempt++) this.#expireSensitiveCopy()
     await this.#pendingPoll
   }
 
-  async copyText(params: ClipboardCopyTextParams, caller: CallerIdentity, signal?: AbortSignal): Promise<{ success: true }> {
+  async copyText(params: ClipboardCopyTextParams, caller: CallerIdentity, signal?: AbortSignal): Promise<{ success: true; clearAfterMs?: number }> {
+    return this.#withClipboardOperation(signal, activeSignal => this.#copyText(params, caller, activeSignal))
+  }
+
+  async copyRichText(data: { text: string; html: string }, signal?: AbortSignal): Promise<{ success: true }> {
+    return this.#withClipboardOperation(signal, async activeSignal => {
+      if (!this.clipboard.write || !this.clipboard.readHTML) throw new ZToolsError(errorCodes.notSupported, '当前剪贴板不支持富文本复制')
+      if (Buffer.byteLength(data.text, 'utf8') + Buffer.byteLength(data.html, 'utf8') > MAX_TEXT_BYTES) {
+        throw new ZToolsError(errorCodes.responseTooLarge, '富文本剪贴板内容超过 8 MiB 上限')
+      }
+      this.#assertTextWriteActive(activeSignal)
+      this.clipboard.write(data)
+      if (this.clipboard.readText() !== data.text || !this.clipboard.availableFormats().includes('text/html') ||
+          !this.clipboard.readHTML().replace(/\r\n/g, '\n').includes(data.html.replace(/\r\n/g, '\n'))) {
+        throw new ZToolsError(errorCodes.clipboardError, '未能确认富文本已写入剪贴板', { hostCode: 'CLIPBOARD_RICH_TEXT_UNCONFIRMED' })
+      }
+      this.#cancelSensitiveCopy()
+      this.#rememberCurrentClipboard()
+      return { success: true }
+    })
+  }
+
+  async #copyText(params: ClipboardCopyTextParams, caller: CallerIdentity, signal?: AbortSignal): Promise<{ success: true; clearAfterMs?: number }> {
     try {
       this.#assertTextWriteActive(signal)
       const text = params.tempFile
-        ? (await this.files.readFile({ path: params.tempFile, encoding: 'utf8' }, caller)).content
+        ? (await this.files.readFile({ path: params.tempFile, encoding: 'utf8' }, caller, signal)).content
         : params.text as string
       if (Buffer.byteLength(text, 'utf8') > MAX_TEXT_BYTES) {
         throw new ZToolsError(errorCodes.responseTooLarge, '剪贴板文本超过 8 MiB 上限')
       }
+      // 写入前登记：即使写入后的系统读回失败，也保留到期清除和采集屏蔽。
+      this.#assertTextWriteActive(signal)
+      if (params.sensitive === true) this.#prepareSensitiveCopy(text)
       this.#writeVerifiedText(text, signal)
+      if (params.sensitive === true) {
+        const pending = this.#sensitiveCopy!
+        const formats = this.clipboard.availableFormats().slice().sort((a, b) => a.localeCompare(b))
+        const fingerprint = `text:${limitedHash([formats.join('\n'), text])}`
+        if (this.#fingerprint() !== fingerprint) throw new ZToolsError(errorCodes.clipboardError, '敏感内容已被其他剪贴板内容替换')
+        pending.fingerprint = fingerprint
+        pending.pendingHashes.clear()
+        pending.attempts = 0
+        this.#lastFingerprint = this.#restoredFingerprint = fingerprint
+        this.#restoredFilesKey = ''
+        if (pending.timer) clearTimeout(pending.timer)
+        pending.timer = setTimeout(() => this.#expireSensitiveCopy(), 30_000)
+        pending.timer.unref()
+        return { success: true, clearAfterMs: 30_000 }
+      }
+      this.#cancelSensitiveCopy()
       return { success: true }
     } catch (error) {
       throw clipboardFailure(error)
@@ -284,6 +345,11 @@ export class ClipboardService {
   }
 
   copyImage(params: ClipboardImageParams): { success: true } {
+    const release = this.#beginClipboardOperation()
+    try { return this.#copyImage(params) } finally { release() }
+  }
+
+  #copyImage(params: ClipboardImageParams): { success: true } {
     try {
       const encoded = params.image.startsWith('data:')
         ? params.image.slice(params.image.indexOf(',') + 1)
@@ -324,6 +390,10 @@ export class ClipboardService {
   }
 
   async copyFiles(params: ClipboardFilesParams, caller: CallerIdentity, signal: AbortSignal): Promise<{ success: true; count: number }> {
+    return this.#withClipboardOperation(signal, activeSignal => this.#copyFiles(params, caller, activeSignal))
+  }
+
+  async #copyFiles(params: ClipboardFilesParams, caller: CallerIdentity, signal: AbortSignal): Promise<{ success: true; count: number }> {
     try {
       const resolved: string[] = []
       for (const item of params.filePaths) {
@@ -334,6 +404,7 @@ export class ClipboardService {
         }
         resolved.push(target)
       }
+      this.#assertTextWriteActive(signal)
       await this.fileClipboard.writeFiles(resolved, signal)
       this.#rememberCurrentClipboard()
       return { success: true, count: resolved.length }
@@ -347,9 +418,11 @@ export class ClipboardService {
     caller: CallerIdentity,
     signal: AbortSignal
   ): Promise<{ success: true }> {
-    await this.copyText(params, caller)
-    await this.#hideAndPaste(caller, signal)
-    return { success: true }
+    return this.#withClipboardOperation(signal, async activeSignal => {
+      await this.#copyText(params, caller, activeSignal)
+      await this.#hideAndPaste(caller, activeSignal)
+      return { success: true }
+    })
   }
 
   async hideAndPasteImage(
@@ -357,13 +430,11 @@ export class ClipboardService {
     caller: CallerIdentity,
     signal: AbortSignal
   ): Promise<{ success: true }> {
-    try {
-      this.copyImage(params)
-      await this.#hideAndPaste(caller, signal)
+    return this.#withClipboardOperation(signal, async activeSignal => {
+      this.#copyImage(params)
+      await this.#hideAndPaste(caller, activeSignal)
       return { success: true }
-    } catch (error) {
-      throw clipboardFailure(error)
-    }
+    })
   }
 
   async hideAndPasteFile(
@@ -371,9 +442,11 @@ export class ClipboardService {
     caller: CallerIdentity,
     signal: AbortSignal
   ): Promise<{ success: true; count: number }> {
-    const copied = await this.copyFile(params, caller, signal)
-    await this.#hideAndPaste(caller, signal)
-    return copied
+    return this.#withClipboardOperation(signal, async activeSignal => {
+      const copied = await this.#copyFiles({ filePaths: [params.filePath] }, caller, activeSignal)
+      await this.#hideAndPaste(caller, activeSignal)
+      return copied
+    })
   }
 
   /**
@@ -387,12 +460,20 @@ export class ClipboardService {
     signal: AbortSignal,
     paste = false
   ): Promise<{ success: true }> {
+    return this.#withClipboardOperation(signal, async activeSignal => {
+      await this.#restoreHistoryEntry(entry, activeSignal)
+      if (paste) await this.#hideAndPaste(caller, activeSignal)
+      return { success: true }
+    })
+  }
+
+  async #restoreHistoryEntry(entry: ClipboardHistoryEntry, signal: AbortSignal): Promise<{ success: true }> {
     this.#assertTextWriteActive(signal)
     this.#restoreInFlight += 1
     try {
       let restoredFiles: string[] | undefined
       if (entry.type === 'image') {
-        this.copyImage({ image: entry.image })
+        this.#copyImage({ image: entry.image })
       } else if (entry.type === 'files') {
         restoredFiles = await this.#writeHistoryFiles(entry.files, signal)
       } else {
@@ -410,7 +491,6 @@ export class ClipboardService {
       this.#restoreInFlight -= 1
     }
     this.#assertTextWriteActive(signal)
-    if (paste) await this.#hideAndPaste(caller, signal)
     return { success: true }
   }
 
@@ -442,10 +522,10 @@ export class ClipboardService {
     caller: CallerIdentity,
     signal: AbortSignal
   ): Promise<{ success: true }> {
-    return this.#hideAndInput(caller, signal, async (_target, input) => {
-      await input.injectText(text, signal)
+    return this.#withClipboardOperation(signal, activeSignal => this.#hideAndInput(caller, activeSignal, async (_target, input) => {
+      await input.injectText(text, activeSignal)
       return { success: true }
-    })
+    }))
   }
 
   readText(): { success: true; text: string } {
@@ -490,6 +570,10 @@ export class ClipboardService {
   }
 
   async copyImageReference(value: unknown, caller: CallerIdentity, signal: AbortSignal): Promise<{ success: true }> {
+    return this.#withClipboardOperation(signal, activeSignal => this.#copyImageReference(value, caller, activeSignal))
+  }
+
+  async #copyImageReference(value: unknown, caller: CallerIdentity, signal: AbortSignal): Promise<{ success: true }> {
     const active = () => { if (this.#stopped || signal.aborted) throw new ZToolsError(errorCodes.callerDestroyed, '剪贴板操作已取消') }
     active()
     if (!value || typeof value !== 'object' || Array.isArray(value) || Object.getPrototypeOf(value) !== Object.prototype) throw new ZToolsError(errorCodes.invalidRequest, '剪贴板图片参数无效')
@@ -498,7 +582,7 @@ export class ClipboardService {
     if (keys[0] === 'image') {
       validateMethodParams('clipboard_copy_image', value)
       if (typeof params.image !== 'string' || Buffer.byteLength(params.image) > 700 * 1024) throw new ZToolsError(errorCodes.fileTooLarge, '大图请使用FileRef')
-      active(); return this.copyImage(value as ClipboardImageParams)
+      active(); return this.#copyImage(value as ClipboardImageParams)
     }
     if (keys[0] !== 'fileGrantId') throw new ZToolsError(errorCodes.invalidRequest, '请使用图片FileRef而非路径')
     const id = grantId(params.fileGrantId)
@@ -513,6 +597,10 @@ export class ClipboardService {
   }
 
   async copyTextReference(value: unknown, caller: CallerIdentity, signal: AbortSignal): Promise<{ success: true }> {
+    return this.#withClipboardOperation(signal, activeSignal => this.#copyTextReference(value, caller, activeSignal))
+  }
+
+  async #copyTextReference(value: unknown, caller: CallerIdentity, signal: AbortSignal): Promise<{ success: true }> {
     const params = parseReferenceClipboardText(value)
     try {
       this.#assertTextWriteActive(signal)
@@ -552,10 +640,8 @@ export class ClipboardService {
   #imageSnapshot(): { size: { width: number; height: number }; png: Buffer } | undefined {
     const image = this.clipboard.readImage()
     if (image.isEmpty()) return undefined
-    const size = image.getSize()
-    if (!Number.isSafeInteger(size.width) || !Number.isSafeInteger(size.height) || size.width <= 0 || size.height <= 0 ||
-        size.width * size.height > MAX_IMAGE_PIXELS) throw new ZToolsError(errorCodes.fileTooLarge, '剪贴板图片尺寸超出上限')
-    const png = image.toPNG()
+    const size = clipboardImageSize(image)
+    const png = image.toPNG({ scaleFactor: 1 })
     if (!Buffer.isBuffer(png) || png.byteLength > MAX_IMAGE_BYTES) throw new ZToolsError(errorCodes.fileTooLarge, '剪贴板图片超过16MiB上限')
     return { size, png }
   }
@@ -580,28 +666,119 @@ export class ClipboardService {
   }
 
   clear(): { success: true } {
+    const release = this.#beginClipboardOperation()
     try {
       this.clipboard.clear()
+      if (this.#sensitiveCopy && this.#isSensitiveClipboard(this.#fingerprint())) {
+        throw new ZToolsError(errorCodes.clipboardError, '无法确认敏感内容已清除')
+      }
+      this.#cancelSensitiveCopy()
       this.#rememberCurrentClipboard()
       return { success: true }
     } catch (error) {
       throw clipboardFailure(error)
-    }
+    } finally { release() }
   }
 
   unsupported(method: string): never {
     throw new ZToolsError(errorCodes.notSupported, `${method} 需要 M5 NativeHost 输入注入能力`)
   }
 
+  #prepareSensitiveCopy(text: string): void {
+    if (!this.#sensitiveCopy) {
+      const timer = setTimeout(() => this.#expireSensitiveCopy(), 30_000)
+      timer.unref()
+      this.#sensitiveCopy = { pendingHashes: new Set(), attempts: 0, timer }
+    }
+    if (this.#sensitiveCopy.pendingHashes.size >= 32) throw new ZToolsError(errorCodes.clipboardError, '系统剪贴板持续不可用，请稍后重试')
+    this.#sensitiveCopy.pendingHashes.add(limitedHash([text]))
+    if (!this.#sensitiveCopy.timer) {
+      this.#sensitiveCopy.attempts = 0
+      this.#sensitiveCopy.timer = setTimeout(() => this.#expireSensitiveCopy(), 30_000)
+      this.#sensitiveCopy.timer.unref()
+    }
+  }
+
+  #isSensitiveClipboard(fingerprint: string): boolean {
+    const pending = this.#sensitiveCopy
+    if (!pending) return false
+    if (pending.fingerprint === fingerprint) return true
+    return pending.pendingHashes.size > 0 && !isFileClipboard(this.clipboard.availableFormats(), this.clipboard) &&
+      this.clipboard.readImage().isEmpty() && pending.pendingHashes.has(limitedHash([this.clipboard.readText()]))
+  }
+
+  #cancelSensitiveCopy(): void {
+    if (this.#sensitiveCopy?.timer) clearTimeout(this.#sensitiveCopy.timer)
+    this.#sensitiveCopy = undefined
+  }
+
+  #expireSensitiveCopy(): void {
+    const pending = this.#sensitiveCopy
+    if (!pending) return
+    if (pending.timer) clearTimeout(pending.timer)
+    pending.timer = undefined
+    if (this.#clipboardBusy) {
+      if (!this.#stopped) {
+        pending.timer = setTimeout(() => this.#expireSensitiveCopy(), 1000)
+        pending.timer.unref()
+      }
+      return
+    }
+    try {
+      if (this.#isSensitiveClipboard(this.#fingerprint())) {
+        this.clipboard.clear()
+        if (this.#isSensitiveClipboard(this.#fingerprint())) throw new Error('无法确认敏感内容已清除')
+      }
+      this.#cancelSensitiveCopy()
+      this.#rememberCurrentClipboard()
+    } catch {
+      // 暂时失败时保留保护状态；有界重试后，客户端停止时仍会再次清理。
+      pending.attempts++
+      if (!this.#stopped && pending.attempts < 3) {
+        pending.timer = setTimeout(() => this.#expireSensitiveCopy(), 1000)
+        pending.timer.unref()
+      } else console.warn('[ClipboardService] 敏感剪贴板清除未完成，系统剪贴板暂不可用')
+    }
+  }
+
   /** 剪贴板已写好后：隐藏调用方窗口，回到上一个前台应用并发送平台粘贴组合键。 */
   async #hideAndPaste(caller: CallerIdentity, signal: AbortSignal): Promise<void> {
-    if (!this.input && this.macPaste) return this.#hideAndPasteOnMac(this.macPaste, caller, signal)
+    const fingerprint = this.#fingerprint()
+    const verifyClipboard = (): void => {
+      this.#assertTextWriteActive(signal)
+      if (this.#fingerprint() !== fingerprint) {
+        throw new ZToolsError(errorCodes.clipboardError, '剪贴板已变化，已停止自动粘贴，请重新选择内容', { hostCode: 'CLIPBOARD_CHANGED' })
+      }
+    }
+    if (!this.input && this.macPaste) return this.#hideAndPasteOnMac(this.macPaste, caller, signal, verifyClipboard)
     await this.#hideAndInput(caller, signal, async (_target, input) => {
+      verifyClipboard()
       await input.injectKeyCombo('CTRL+V', signal)
     })
   }
 
-  async #hideAndPasteOnMac(mac: ClipboardMacPasteAdapter, caller: CallerIdentity, signal: AbortSignal): Promise<void> {
+  #beginClipboardOperation(signal?: AbortSignal): () => void {
+    this.#assertTextWriteActive(signal)
+    if (this.#clipboardBusy) throw new ZToolsError(errorCodes.clipboardError, '剪贴板操作正在进行，请完成后重试', { hostCode: 'CLIPBOARD_BUSY' })
+    this.#clipboardBusy = true
+    let settled: () => void = () => {}
+    this.#pendingClipboardOperation = new Promise<void>(resolve => { settled = resolve })
+    return () => {
+      this.#clipboardBusy = false
+      if (this.#stopped && this.#sensitiveCopy) this.#expireSensitiveCopy()
+      settled()
+    }
+  }
+
+  async #withClipboardOperation<T>(signal: AbortSignal | undefined, operation: (activeSignal: AbortSignal) => Promise<T>): Promise<T> {
+    const release = this.#beginClipboardOperation(signal)
+    const activeSignal = signal ? AbortSignal.any([signal, this.#clipboardStop.signal]) : this.#clipboardStop.signal
+    try { return await operation(activeSignal) }
+    catch (error) { throw clipboardFailure(error) }
+    finally { release() }
+  }
+
+  async #hideAndPasteOnMac(mac: ClipboardMacPasteAdapter, caller: CallerIdentity, signal: AbortSignal, verifyClipboard: () => void): Promise<void> {
     const contents = this.registry?.getWebContents(caller.webContentsId)
     const window = contents
       ? (mac.resolveWindow ? mac.resolveWindow(contents) : BrowserWindow.fromWebContents(contents))
@@ -615,11 +792,14 @@ export class ClipboardService {
         { hostCode: 'ACCESSIBILITY_PERMISSION_DENIED' }
       )
     }
+    const token = await mac.preparePaste(signal)
+    this.#assertTextWriteActive(signal)
     window.hide()
     try {
       mac.hideApplication()
       await waitFor(mac.activationDelayMs ?? 120, signal)
-      await mac.sendPaste(signal)
+      verifyClipboard()
+      await mac.sendPaste(signal, token)
     } catch (error) {
       if (!window.isDestroyed()) {
         try { mac.showApplication() } catch { /* 恢复窗口时仍尝试 show */ }
@@ -696,7 +876,7 @@ export class ClipboardService {
         ? await this.#readFilePaths(monitoring.signal)
         : undefined
       if (monitoring.signal.aborted || this.#stopped || this.#monitorAbort !== monitoring) return
-      if (fingerprint === this.#lastFingerprint) return
+      if (fingerprint === this.#lastFingerprint || this.#isSensitiveClipboard(fingerprint)) return
       // 历史恢复正在写剪贴板：等写完记住指纹后再看，避免把恢复内容当成新复制
       if (this.#restoreInFlight > 0) return
       if (filePaths && this.#restoredFilesKey && JSON.stringify(filePaths) === this.#restoredFilesKey) {
@@ -720,14 +900,15 @@ export class ClipboardService {
       const payload = await this.#captureChangePayload(monitoring.signal, owners, filePaths)
       if (monitoring.signal.aborted || this.#stopped || this.#monitorAbort !== monitoring ||
           this.#restoreInFlight > 0 || fingerprint === this.#lastFingerprint ||
-          this.#fingerprint() !== fingerprint) return
+          this.#fingerprint() !== fingerprint || this.#isSensitiveClipboard(fingerprint)) return
       if (persistHistory && payload?.hasData && this.recordHistory) {
         const entry: ClipboardHistoryEntry = payload.type === 'files'
           ? { type: 'files', files: payload.files as string[] }
           : payload.type === 'image' ? { type: 'image', image: payload.image as string }
             : { type: 'text', text: payload.text as string }
         await this.recordHistory(entry)
-        if (monitoring.signal.aborted || this.#stopped || this.#monitorAbort !== monitoring) return
+        if (monitoring.signal.aborted || this.#stopped || this.#monitorAbort !== monitoring ||
+            this.#fingerprint() !== fingerprint || this.#isSensitiveClipboard(fingerprint)) return
       }
       this.#lastFingerprint = fingerprint
       if (payload?.type === 'image' && Number(payload.size) > EVENT_IMAGE_BYTES) {
@@ -828,7 +1009,15 @@ export class ClipboardService {
       return `files:${limitedHash([...formats, ...data])}`
     }
     const image = this.clipboard.readImage()
-    if (!image.isEmpty()) return `image:${limitedHash([formats.join('\n'), image.toPNG()])}`
+    if (!image.isEmpty()) {
+      const size = clipboardImageSize(image)
+      // 每次重新读取完整像素，保留即时变化检测；不要在轮询中反复压缩未变化的大图。
+      const bitmap = image.toBitmap({ scaleFactor: 1 })
+      if (!Buffer.isBuffer(bitmap) || bitmap.byteLength === 0 || bitmap.byteLength > MAX_IMAGE_PIXELS * 4) {
+        throw new ZToolsError(errorCodes.clipboardError, '剪贴板图片像素数据无效或超过上限')
+      }
+      return `image:${limitedHash([formats.join('\n'), String(size.width), String(size.height), bitmap])}`
+    }
     const text = this.clipboard.readText()
     if (text !== '') return `text:${limitedHash([formats.join('\n'), text])}`
     return `empty:${limitedHash(formats)}`
@@ -857,8 +1046,8 @@ export class ClipboardService {
     }
     const image = this.clipboard.readImage()
     if (!image.isEmpty()) {
-      const size = image.getSize()
-      const png = image.toPNG()
+      const size = clipboardImageSize(image)
+      const png = image.toPNG({ scaleFactor: 1 })
       const imageLimit = supportsHistoryPlatform() && this.recordHistory ? (MAX_IMAGE_BYTES - 1024) * 3 / 4 : EVENT_IMAGE_BYTES
       if (png.byteLength <= imageLimit && size.width * size.height <= MAX_IMAGE_PIXELS) {
         return {

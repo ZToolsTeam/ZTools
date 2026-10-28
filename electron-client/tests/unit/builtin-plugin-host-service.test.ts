@@ -11,7 +11,24 @@ import {
   isSupportedPlugin,
   normalizePluginName
 } from '../../src/main/services/builtin-plugin-host-service.js'
-import { buildMultiPagePdfFromStreams, fileUrlToLocalPath, isFullyQualifiedPath } from '../../src/main/services/host-plugins/shared-utils.js'
+import { buildMultiPagePdfFromStreams, fileUrlToLocalPath, isFullyQualifiedPath, PowerShellError, type HostPluginContext } from '../../src/main/services/host-plugins/shared-utils.js'
+import { MediaOcrHostPluginHandler, type MediaOcrHostDeps } from '../../src/main/services/host-plugins/media-ocr-host.js'
+
+/** 插件不能再传 __simulate* 参数伪造“没有 ffmpeg / 抓屏失败”；改由构造参数注入替身，生产代码不保留测试开关 */
+const mediaCtx = { clipboard: null, processService: null, windowControl: null, authorizeExistingPath: async (p: string) => p, authorizeOutputPath: async (p: string) => p } as HostPluginContext
+function mediaHandlerWithoutFfmpeg(extra: Partial<MediaOcrHostDeps> = {}) {
+  const calls: string[] = []
+  const handler = new MediaOcrHostPluginHandler(mediaCtx, {
+    runCommand: async (command, args) => {
+      calls.push([command, ...args].join(' '))
+      return command === 'ffmpeg' ? { stdout: '', stderr: 'command not found: ffmpeg', exitCode: 127 } : { stdout: '', stderr: `未预设命令: ${command}`, exitCode: 1 }
+    },
+    runPowerShell: async () => { throw new PowerShellError(1, '未预设 PowerShell') },
+    captureScreenToPng: async () => false,
+    ...extra
+  })
+  return { handler, calls }
+}
 
 test('BuiltinPluginHostService recognizes all 18 original and 13 newly added builtin plugin aliases ([P-3])', () => {
   const host = new BuiltinPluginHostService()
@@ -414,34 +431,72 @@ test('PdfPlugin preserves multi-page PDF content on compress/merge and never ove
 })
 
 test('RecordPlugin returns { ok: false, error } when recording/capture produces no output file and never creates 320x180 gray fake PNG ([S-1])', async () => {
-  const host = new BuiltinPluginHostService()
   const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'ztools-record-test-'))
   const missingOutputPath = path.join(tempDir, 'failed-capture.png')
+  const { handler: host, calls } = mediaHandlerWithoutFfmpeg()
 
   try {
-    const startRes = (await host.handlePluginCall('RecordPlugin', 'startRecording', {
+    // PNG 单帧模式在开始阶段就抓帧：注入的抓屏替身返回 false 时直接失败，不进入录制状态（以前这里会先报 recording:true 成功）
+    const startRes = (await host.handleRecord('startRecording', {
       type: 'video',
-      outputPath: missingOutputPath,
-      __simulateCaptureFailure: true
+      outputPath: missingOutputPath
     })) as {
       ok: boolean
+      success: boolean
       recording: boolean
-      sessionId: string
+      sessionId?: string
+      error?: string
     }
-    assert.equal(startRes.ok, true)
+    assert.equal(startRes.ok, false)
+    assert.equal(startRes.success, false)
+    assert.equal(startRes.recording, false)
+    assert.equal(startRes.sessionId, undefined)
+    assert.match(String(startRes.error), /屏幕录制或抓图失败/)
     assert.equal(fsSync.existsSync(missingOutputPath), false, 'Must not write fake 320x180 gray PNG on startRecording')
+    assert.deepEqual(fsSync.readdirSync(tempDir), [], '抓帧失败不能留下临时文件')
+    // PNG 抓帧不依赖 ffmpeg
+    assert.deepEqual(calls, [])
 
-    const stopRes = (await host.handlePluginCall('RecordPlugin', 'stopRecording', {
-      sessionId: startRes.sessionId
-    })) as {
+    const statusRes = (await host.handleRecord('status', {})) as { recording: boolean; sessions: unknown[] }
+    assert.equal(statusRes.recording, false)
+    assert.deepEqual(statusRes.sessions, [])
+
+    // 没有会话时停止录制如实失败，不能把任何文件报成录制结果
+    const stopRes = (await host.handleRecord('stopRecording', {})) as {
       ok: boolean
       success: boolean
       error?: string
     }
     assert.equal(stopRes.ok, false)
     assert.equal(stopRes.success, false)
-    assert.match(String(stopRes.error), /屏幕录制或抓图失败/)
+    assert.match(String(stopRes.error), /没有正在进行的录制/)
     assert.equal(fsSync.existsSync(missingOutputPath), false, 'Must not write fake 320x180 gray PNG on stopRecording')
+
+    // 抓屏成功：开始时帧已写出，停止时返回同一文件
+    const okOutputPath = path.join(tempDir, 'captured.png')
+    const { handler: okHost } = mediaHandlerWithoutFfmpeg({
+      captureScreenToPng: async (p) => {
+        await fs.writeFile(p, 'REAL_PNG_FRAME')
+        return true
+      }
+    })
+    const okStart = (await okHost.handleRecord('startRecording', { type: 'video', outputPath: okOutputPath })) as {
+      ok: boolean
+      recording: boolean
+      sessionId: string
+    }
+    assert.equal(okStart.ok, true)
+    assert.equal(okStart.recording, true)
+    assert.equal(fsSync.readFileSync(okOutputPath, 'utf8'), 'REAL_PNG_FRAME')
+    const okStop = (await okHost.handleRecord('stopRecording', { sessionId: okStart.sessionId })) as {
+      ok: boolean
+      outputPath: string
+      sizeBytes: number
+    }
+    assert.equal(okStop.ok, true)
+    assert.equal(okStop.outputPath, okOutputPath)
+    assert.equal(okStop.sizeBytes, 'REAL_PNG_FRAME'.length)
+    assert.deepEqual(fsSync.readdirSync(tempDir), ['captured.png'])
   } finally {
     await host.stop()
     await fs.rm(tempDir, { recursive: true, force: true })
@@ -449,7 +504,7 @@ test('RecordPlugin returns { ok: false, error } when recording/capture produces 
 })
 
 test('BatchVideoPlugin / BatchAudioPlugin / AiVideoPlugin fail honestly when ffmpeg is missing or transcode fails without copying source ([P-1])', async () => {
-  const host = new BuiltinPluginHostService()
+  const { handler } = mediaHandlerWithoutFfmpeg()
   const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'ztools-batchmedia-test-'))
   const srcVideo = path.join(tempDir, 'input.mov')
   const outMp4 = path.join(tempDir, 'output.mp4')
@@ -458,11 +513,10 @@ test('BatchVideoPlugin / BatchAudioPlugin / AiVideoPlugin fail honestly when ffm
 
   try {
     // 1. Transcoding without ffmpeg must return { ok: false, error } and NOT copy input.mov to output.mp4
-    const failRes = (await host.handlePluginCall('BatchVideoPlugin', 'transcode', {
+    const failRes = (await handler.handleBatchMedia('BatchVideoPlugin', 'transcode', {
       files: [srcVideo],
       format: 'mp4',
-      outputPath: outMp4,
-      __simulateNoFfmpeg: true
+      outputPath: outMp4
     })) as {
       ok: boolean
       success: boolean
@@ -476,12 +530,11 @@ test('BatchVideoPlugin / BatchAudioPlugin / AiVideoPlugin fail honestly when ffm
     assert.equal(fsSync.existsSync(outMp4), false, 'Must not copy un-transcoded source file to output path')
 
     // 2. Explicit same-format lossless copy (mode: 'copy' + same extension) is allowed
-    const copyRes = (await host.handlePluginCall('BatchVideoPlugin', 'copyStream', {
+    const copyRes = (await handler.handleBatchMedia('BatchVideoPlugin', 'copyStream', {
       files: [srcVideo],
       format: 'mov',
       mode: 'copy',
-      outputPath: copyOutMov,
-      __simulateNoFfmpeg: true
+      outputPath: copyOutMov
     })) as {
       ok: boolean
       success: boolean
@@ -563,15 +616,21 @@ test('BatchRenamePlugin, CleanerPlugin, and HardwareInfoPlugin execute real host
     assert.equal(cleanRes.deletedCount, 1)
     assert.equal(fsSync.existsSync(renamedFile), false)
 
-    // 3. HardwareInfoPlugin returns real OS CPU and memory metrics
+    // 3. HardwareInfoPlugin 旧接口已停用：不再返回拼凑的 CPU / 磁盘数据，提示更新插件改走通用系统接口
     const hwRes = (await host.handlePluginCall('HardwareInfoPlugin', 'GetHardwareInfo', {})) as {
       ok: boolean
-      cpu: { cores: number }
-      memory: { totalBytes: number }
+      success: boolean
+      errorCode?: string
+      error?: string
+      cpu?: unknown
+      disks?: unknown
     }
-    assert.equal(hwRes.ok, true)
-    assert.ok(hwRes.cpu.cores > 0)
-    assert.ok(hwRes.memory.totalBytes > 0)
+    assert.equal(hwRes.ok, false)
+    assert.equal(hwRes.success, false)
+    assert.equal(hwRes.errorCode, 'UNSUPPORTED_ACTION')
+    assert.match(String(hwRes.error), /请更新硬件信息插件/)
+    assert.equal(hwRes.cpu, undefined)
+    assert.equal(hwRes.disks, undefined)
   } finally {
     await fs.rm(tempDir, { recursive: true, force: true })
   }
@@ -645,14 +704,10 @@ test('NetworkAdapterPlugin, NetworkRescuePlugin, and BoostPlugin return real sys
   assert.ok(boostRes.totalMemoryBytes > 0)
   assert.ok(boostRes.cpuCount > 0)
 
-  const startupRes = (await host.handlePluginCall('BoostPlugin', 'getStartupItems', {})) as {
-    ok: boolean
-    items: unknown[]
-    startupItems: unknown[]
-  }
-  assert.equal(startupRes.ok, true)
-  assert.ok(Array.isArray(startupRes.items))
-  assert.ok(Array.isArray(startupRes.startupItems))
+  // 开机启动项统一由 StartupManagerPlugin 处理，BoostPlugin 不再提供另一份实现
+  const startupRes = (await host.handlePluginCall('BoostPlugin', 'getStartupItems', {})) as { ok: boolean; error?: string }
+  assert.equal(startupRes.ok, false)
+  assert.match(String(startupRes.error), /Unsupported BoostPlugin function/)
 
   const unknownBoostFn = (await host.handlePluginCall('BoostPlugin', 'unknownBoostMethod', {})) as {
     ok: boolean
@@ -792,21 +847,15 @@ test('SystemRegistryHost plugins enforce strict method contracts, real WMI therm
     }
     assert.equal(badWxFn.ok, false)
 
-    // 3. HardwareInfoPlugin getTemperature never returns hardcoded 48/45/39
+    // 3. HardwareInfoPlugin getTemperature 不再把 ACPI 热区温度当 CPU 温度返回，也不返回任何温度数值
     const tempRes = (await host.handlePluginCall('HardwareInfoPlugin', 'getTemperature', {})) as {
       ok: boolean
-      sensorAvailable: boolean
-      cpuTempCelsius: number | null
-      gpuTempCelsius: number | null
-      ssdTempCelsius: number | null
+      errorCode?: string
+      cpuTempCelsius?: unknown
     }
-    assert.equal(tempRes.ok, true)
-    assert.equal(typeof tempRes.sensorAvailable, 'boolean')
-    assert.equal(tempRes.gpuTempCelsius, null)
-    assert.equal(tempRes.ssdTempCelsius, null)
-    if (!tempRes.sensorAvailable) {
-      assert.equal(tempRes.cpuTempCelsius, null)
-    }
+    assert.equal(tempRes.ok, false)
+    assert.equal(tempRes.errorCode, 'UNSUPPORTED_ACTION')
+    assert.equal(tempRes.cpuTempCelsius, undefined)
 
     // 4. SoftwareManagerPlugin cleanResiduals deletes residual files and blocks unknown fn
     const cleanRes = (await host.handlePluginCall('SoftwareManagerPlugin', 'cleanResiduals', {
@@ -969,24 +1018,23 @@ test('MediaOcrHost plugins enforce no-fake-fallback on ColorPicker, Record, Batc
   const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'ztools-media-contract-'))
 
   try {
+    const { handler: media } = mediaHandlerWithoutFfmpeg()
     // 1. ColorPickerPlugin fails honestly when sampling fails (never returns #3B82F6 fake blue)
-    const badPick = (await host.handlePluginCall('ColorPickerPlugin', 'pickColor', {
-      __simulateSampleFailure: true
-    })) as {
+    //    非 Windows 直接失败；Windows 上注入的 PowerShell 采样失败也必须如实失败
+    const badPick = (await media.handleColorPicker('pickColor', {})) as {
       ok: boolean
       error?: string
       hex?: string
     }
     assert.equal(badPick.ok, false)
     assert.equal(badPick.hex, undefined)
-    assert.match(String(badPick.error), /屏幕像素采样失败/)
+    assert.match(String(badPick.error), /屏幕像素采样失败|采样/)
 
     // 2. RecordPlugin startRecording for video/audio without ffmpeg immediately returns { ok: false, recording: false }
-    const badRecStart = (await host.handlePluginCall('RecordPlugin', 'startRecording', {
+    const badRecStart = (await media.handleRecord('startRecording', {
       sourceModeId: 'fullscreen_video',
       codecContainer: 'mp4',
-      saveDir: tempDir,
-      __simulateNoFfmpeg: true
+      saveDir: tempDir
     })) as {
       ok: boolean
       recording: boolean
@@ -996,15 +1044,30 @@ test('MediaOcrHost plugins enforce no-fake-fallback on ColorPicker, Record, Batc
     assert.equal(badRecStart.recording, false)
     assert.match(String(badRecStart.error), /ffmpeg/)
 
+    // 2b. AudioDevicePlugin 旧接口经宿主路由统一提示更新插件（新插件走 audio_* 接口），不再返回编造的设备与音量
+    for (const fn of ['listDevices', 'setDefault', 'setVolume', 'setMute']) {
+      const audioRes = (await host.handlePluginCall('AudioDevicePlugin', fn, { id: 'win-out-1', volume: 30, muted: true })) as {
+        ok: boolean
+        errorCode?: string
+        error?: string
+        devices?: unknown
+        volume?: unknown
+      }
+      assert.equal(audioRes.ok, false)
+      assert.equal(audioRes.errorCode, 'UNSUPPORTED_ACTION')
+      assert.match(String(audioRes.error), /请更新音频设备插件/)
+      assert.equal(audioRes.devices, undefined)
+      assert.equal(audioRes.volume, undefined)
+    }
+
     // 3. BatchAudioPlugin normalizes 'mp3_320k' -> '.mp3' and returns top-level outputPath & sizeBytes
     const srcMp3 = path.join(tempDir, 'track.mp3')
     await fs.writeFile(srcMp3, 'MOCK_MP3_AUDIO_STREAM_BYTES', 'utf8')
-    const audioCopyRes = (await host.handlePluginCall('BatchAudioPlugin', 'copyAudio', {
+    const audioCopyRes = (await media.handleBatchMedia('BatchAudioPlugin', 'copyAudio', {
       files: [srcMp3],
       outputFormat: 'mp3_320k',
       mode: 'copy',
-      outputDir: tempDir,
-      __simulateNoFfmpeg: true
+      outputDir: tempDir
     })) as {
       ok: boolean
       outputPath: string

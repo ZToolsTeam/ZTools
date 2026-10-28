@@ -225,6 +225,9 @@ export function createScopedHostBridge(holder, realBridge) {
       const pending = holder.pending
       if (pending) await pending
       const token = holder.token
+      if (!token && name === 'system_power_session') {
+        throw Object.assign(new Error('插件会话尚未就绪，请重新打开插件后重试'), { code: 'PLUGIN_SESSION_REQUIRED' })
+      }
       if (!token) return original(envelope)
       return holder.track(() => original({ ...envelope, pluginSession: token }))
     }
@@ -254,6 +257,7 @@ export function createScopedHostBridge(holder, realBridge) {
  */
 export function createScopedWindow(realWindow, scopedBridge) {
   const bound = new WeakMap()
+  const scopedApis = new WeakMap()
   const target = {}
   let proxy
   const handler = {
@@ -261,6 +265,24 @@ export function createScopedWindow(realWindow, scopedBridge) {
       if (key === '__ztoolsElectron') return scopedBridge
       if (key === 'window' || key === 'self' || key === 'globalThis') return proxy
       const value = Reflect.get(realWindow, key)
+      if (key === 'ztools' && value?.sys && typeof value.sys.managePowerSession === 'function') {
+        if (!scopedApis.has(value)) {
+          // 只为新增的会话型 API 绑定插件通道，不改变已有 SDK 方法的返回契约。
+          const transport = { call: async (method, params) => {
+            const call = scopedBridge?.transport?.methods?.[method]
+            if (typeof call !== 'function') throw new Error(`宿主不支持方法: ${method}`)
+            return call({ params })
+          } }
+          const sys = Object.create(value.sys)
+          Object.defineProperty(sys, 'managePowerSession', {
+            value: options => value.sys.managePowerSession.call({ transport }, options)
+          })
+          const sdk = Object.create(value)
+          Object.defineProperty(sdk, 'sys', { value: sys })
+          scopedApis.set(value, sdk)
+        }
+        return scopedApis.get(value)
+      }
       if (typeof value === 'function' && !('prototype' in value)) {
         let wrapped = bound.get(value)
         if (!wrapped) {

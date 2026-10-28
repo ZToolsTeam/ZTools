@@ -50,31 +50,60 @@ const OFFICIAL_AUTHORS = new Set([
  * 将这些开源社区扩展归类到「社区精选 (community)」，确保开源版与官方版客户端的「社区精选」Tab 均可正常浏览与安装。
  */
 export const COMMUNITY_EXTENSION_IDS = new Set([
-  'base64image',
+  'audio-device',
   'batch-text-convert',
   'browser-bookmarks',
   'browser-history',
+  'caffeine',
   'calendar',
   'chinese-number-converter',
-  'crypto-tool',
-  'file-compare',
-  'google-auth',
+  'chmod-cidr-calc',
+  'clean-keyboard',
+  'curl-http',
+  'dns-benchmark',
+  'docker-manager',
+  'env-manager',
+  'everything-file-search',
+  'file-inspector',
+  'file-unlock',
+  'folder-sync',
+  'font-manager',
+  'git-helper',
+  'hosts-switcher',
+  'hotkey-radar',
+  'id-watermark',
   'image-editor',
   'image-tool',
-  'lan-share',
-  'memo',
+  'jwt-url-codec',
+  'lan-scanner',
+  'linux-http-dict',
+  'md-to-office',
+  'media-metadata',
+  'mock-data',
+  'monitor-control',
+  'office-slim',
+  'password-vault',
+  'paste-stack',
+  'pomodoro-focus',
   'port-manager',
   'quick-folders',
-  'record',
-  'screen-color-picker',
-  'shredder',
-  'sqlite-plugin',
+  'quicklinks',
+  'regex-cron',
+  'shutdown-timer',
+  'snippets',
+  'speedtest',
+  'sql-helper',
+  'ssh-proxy-helper',
+  'ssl-domain-check',
+  'startup-manager',
   'super-markdown',
+  'svg-icon-studio',
+  'table-converter',
   'text-formatter',
-  'timestamp',
-  'todo',
   'unit-converter',
   'uuid-generator',
+  'vscode-projects',
+  'wifi-password-reveal',
   'world-clock'
 ])
 
@@ -411,6 +440,18 @@ export class StoreCatalogManager {
         if (normalizeCategoryNames(builtinMatch.category).length) normalizedItem.category = getPluginCategories(builtinMatch.category)
         if (Array.isArray(builtinMatch.platforms)) normalizedItem.platforms = builtinMatch.platforms
         else delete normalizedItem.platforms
+        // 版本、平台声明与图标同样以内置为准；内置插件不从插件市场下载，也不受目录里最低客户端版本的限制。
+        // 下架标记照常保留：目录里的下架记录仍可作为紧急开关禁用同 ID 的内置插件
+        normalizedItem.version = builtinMatch.version || normalizedItem.version
+        if (Array.isArray(builtinMatch.targets)) normalizedItem.targets = builtinMatch.targets
+        else delete normalizedItem.targets
+        if (builtinMatch.icon) {
+          normalizedItem.icon = builtinMatch.icon
+          normalizedItem.logo = builtinMatch.logo || builtinMatch.icon
+        }
+        for (const key of ['downloadUrl', 'download_url', 'sha256', 'size', 'minAppVersion', 'min_app_version']) {
+          delete normalizedItem[key]
+        }
       }
 
       // 提取下架标记

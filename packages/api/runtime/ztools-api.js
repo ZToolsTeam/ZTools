@@ -5101,6 +5101,13 @@
         return r && r.success === true
       }
 
+      /** 管理当前窗口及插件的定时防休眠；离开插件页面后仍由主进程保持。 */
+      async managePowerSession(options) {
+        const r = await this.transport.call('system_power_session', options)
+        if (!r?.success) throw new Error(r?.error?.message || r?.error || '防休眠操作失败')
+        return r.data ?? r
+      }
+
       // ============ Phase 1.4: 键鼠模拟 ============
 
       /**
@@ -5806,6 +5813,16 @@
        */
       async toggle(pluginId) {
         return await this.transport.call('plugin_toggle', { pluginId })
+      }
+
+      /** 持久化官方下架状态；重复调用保持禁用。 */
+      async revoke(pluginId, reason) {
+        return await this.transport.call('plugin_revoke', { pluginId, revoked: true, reason })
+      }
+
+      /** 查询指定安装任务，避免遗漏完成事件后误报失败。 */
+      async getInstallStatus(pluginId, operationId) {
+        return await this.transport.call('plugin_install_status', { pluginId, operationId })
       }
 
       /**

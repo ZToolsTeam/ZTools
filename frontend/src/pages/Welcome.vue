@@ -8,7 +8,6 @@ import SkeletonCard from '@/components/SkeletonCard.vue'
 import { usePluginsStore } from '@/stores/plugins'
 import {
   getMarketPlugins,
-  openPlugin as apiOpenPlugin,
   batchCheckPlugins,
   getDownloadSign,
   installPluginNative,
@@ -102,7 +101,9 @@ const goDetails = (id) => {
 }
 const openApp = async (id) => {
   try {
-    const res = await apiOpenPlugin(id)
+    const res = await pluginsStore.openPlugin(getPluginId(id))
+
+    if (res?.cancelled || res?.isDeclarative) return
 
     // 检查是否需要导航到详情页（插件已卸载的情况）
     if (res?.action === 'navigate_to_detail') {

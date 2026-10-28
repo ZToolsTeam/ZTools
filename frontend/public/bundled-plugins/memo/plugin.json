@@ -1,15 +1,17 @@
 {
   "id": "memo",
   "name": "便签",
-  "description": "轻量随手记便签，支持 Markdown 排版、分类标签筛选与全文快速搜索",
-  "version": "1.0.3",
+  "description": "轻量随手记便签，正文支持 Markdown，可加标签，按标题、正文或标签搜索",
+  "version": "1.0.6",
   "author": "ZTools Team",
   "entry": "dist/index.js",
   "icon": "icon.svg",
   "category": [
     "效率工具"
   ],
-  "permissions": [],
+  "permissions": [
+    "clipboard"
+  ],
   "targets": [
     {
       "id": "windows-electron-any",
@@ -31,5 +33,6 @@
     "便签",
     "笔记",
     "备忘"
-  ]
+  ],
+  "minAppVersion": "1.1.8.3"
 }

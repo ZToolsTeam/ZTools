@@ -1,338 +1,341 @@
 import { List, ActionPanel, Action, Icon, Color, Clipboard, useState, useEffect, useRef, showToast, Toast, FilterBar } from '@ztools/declarative-ui';
-import { LANGUAGE_PAIR_OPTIONS, buildTranslationVariants, formatIdentifierCase, translateTextWithHost, fetchTranslationHistoryFromHost } from './logic.js';
-import { readRealClipboardText, isRealElectronHost } from './native-ipc.js';
+import { NOT_IN_CLIENT_MESSAGE, buildDirectNamingResult, describeTranslateError, englishTextOf, fetchTranslationHistoryFromHost, formatIdentifierCase, languageName, translateTextWithHost } from './logic.js';
+import { isRealElectronHost } from './native-ipc.js';
 export * from './logic.js';
-const DEFAULT_SAMPLE_TEXT = 'Please find attached the quarterly financial report for your review.';
-const INITIAL_HISTORY = [
-    {
-        id: 'hist-init-1',
-        originalText: 'Please find attached the quarterly financial report for your review.',
-        translatedText: '随信附上本季度财务报告，请您审阅。',
-        sourceLanguage: 'en',
-        targetLanguage: 'zh-CN',
-        timestampText: '10:30'
-    },
-    {
-        id: 'hist-init-2',
-        originalText: '期待您的回复',
-        translatedText: 'Looking forward to your reply',
-        sourceLanguage: 'zh-CN',
-        targetLanguage: 'en',
-        timestampText: '09:45'
-    }
-];
-function buildDetailMarkdown(variant) {
-    const glossaryLines = variant.glossaryNotes.map((n) => `- ${n}`).join('\n');
+function readLaunchFeature() {
+    const scope = (globalThis.window || globalThis);
+    const ctx = scope.__ztoolsLaunchContext;
+    if (!ctx || (ctx.pluginId && ctx.pluginId !== 'translator'))
+        return '';
+    return String(ctx.featureCode || '').trim();
+}
+function quoteLines(text) {
+    return text
+        .split('\n')
+        .map((line) => `> ${line}`)
+        .join('\n');
+}
+function buildDetailMarkdown(result) {
     return [
-        `### 译文结果 (${variant.badge})`,
+        '### 译文',
         '',
-        `> ${variant.translatedText}`,
-        '',
-        '---',
-        '',
-        `### 原文对照 (${variant.sourceLanguage} → ${variant.targetLanguage})`,
-        '',
-        `${variant.originalText}`,
+        quoteLines(result.translatedText),
         '',
         '---',
         '',
-        '### 专业术语与表达拆解',
+        `### 原文（${languageName(result.sourceLanguage)}）`,
         '',
-        glossaryLines
+        quoteLines(result.originalText)
     ].join('\n');
 }
-function reorderVariantsForFeature(list, featureCode) {
-    if (!featureCode || list.length <= 1)
-        return list;
-    const preferredId = featureCode === 'translate-business'
-        ? 'variant-business'
-        : featureCode === 'translate-dict' || featureCode === 'translate-naming'
-            ? 'variant-concise'
-            : 'variant-standard';
-    const idx = list.findIndex((item) => item.id === preferredId);
-    if (idx <= 0)
-        return list;
-    const picked = list[idx];
-    return [picked, ...list.slice(0, idx), ...list.slice(idx + 1)];
+async function copyWithToast(text, successTitle, message) {
+    try {
+        await Clipboard.copy(text);
+    }
+    catch (err) {
+        await showToast({
+            style: Toast.Style.Failure,
+            title: '复制失败',
+            message: err instanceof Error ? err.message : String(err)
+        });
+        return;
+    }
+    await showToast({ style: Toast.Style.Success, title: successTitle, ...(message ? { message } : {}) });
+}
+function namingActions(english) {
+    const camel = formatIdentifierCase(english, 'camel');
+    const snake = formatIdentifierCase(english, 'snake');
+    const constant = formatIdentifierCase(english, 'constant');
+    return {
+        camel: Action({
+            title: '复制 camelCase 变量名',
+            icon: Icon.Code,
+            onAction: () => copyWithToast(camel, '已复制 camelCase 变量名', camel)
+        }),
+        snake: Action({
+            title: '复制 snake_case 变量名',
+            icon: Icon.Code,
+            onAction: () => copyWithToast(snake, '已复制 snake_case 变量名', snake)
+        }),
+        constant: Action({
+            title: '复制 CONSTANT_CASE 常量名',
+            icon: Icon.Code,
+            onAction: () => copyWithToast(constant, '已复制 CONSTANT_CASE 常量名', constant)
+        })
+    };
+}
+function buildResultItem(result, namingMode) {
+    const english = englishTextOf(result);
+    const hasIdentifier = Boolean(english && formatIdentifierCase(english, 'camel'));
+    const isDirect = result.sourceLanguage === result.targetLanguage;
+    const copyTranslation = Action({
+        title: isDirect ? '复制原文' : '复制译文',
+        icon: Icon.CopyClipboard,
+        onAction: () => copyWithToast(result.translatedText, isDirect ? '已复制原文' : '已复制译文', result.translatedText)
+    });
+    const copyBilingual = Action({
+        title: '复制原文与译文',
+        icon: Icon.Clipboard,
+        onAction: () => copyWithToast(`${result.originalText}\n${result.translatedText}`, '已复制原文与译文')
+    });
+    const children = [];
+    if (hasIdentifier) {
+        const naming = namingActions(english);
+        if (namingMode) {
+            children.push(naming.camel, naming.snake, naming.constant, copyTranslation);
+            if (!isDirect)
+                children.push(copyBilingual);
+        }
+        else {
+            children.push(copyTranslation);
+            if (!isDirect)
+                children.push(copyBilingual);
+            children.push(naming.camel, naming.snake);
+        }
+    }
+    else {
+        children.push(copyTranslation);
+        if (!isDirect)
+            children.push(copyBilingual);
+    }
+    const metadata = [
+        List.Item.Detail.Metadata.Label({
+            title: '方向',
+            text: isDirect ? languageName(result.sourceLanguage) : `${languageName(result.sourceLanguage)} → ${languageName(result.targetLanguage)}`
+        }),
+        List.Item.Detail.Metadata.Label({ title: '来源', text: result.engineLabel })
+    ];
+    if (hasIdentifier) {
+        metadata.push(List.Item.Detail.Metadata.Separator(), List.Item.Detail.Metadata.Label({ title: 'camelCase', text: formatIdentifierCase(english, 'camel') }), List.Item.Detail.Metadata.Label({ title: 'snake_case', text: formatIdentifierCase(english, 'snake') }));
+    }
+    return List.Item({
+        id: 'translation-result',
+        title: namingMode && hasIdentifier ? formatIdentifierCase(english, 'camel') : result.translatedText,
+        subtitle: result.originalText,
+        icon: { source: Icon.Text, tintColor: Color.SecondaryText },
+        accessories: [{ tag: { value: isDirect ? '未翻译' : `${languageName(result.sourceLanguage)}→${languageName(result.targetLanguage)}` } }],
+        detail: List.Item.Detail({
+            markdown: buildDetailMarkdown(result),
+            metadata: List.Item.Detail.Metadata({ children: metadata })
+        }),
+        actions: ActionPanel({ title: '译文', children })
+    });
+}
+function buildHistoryItems(history, historyError) {
+    return historyError
+        ? [
+            List.Item({
+                id: 'history-failed',
+                title: '读取翻译记录失败',
+                subtitle: historyError,
+                icon: { source: Icon.ExclamationMark, tintColor: Color.SecondaryText }
+            })
+        ]
+        : history.map((h) => List.Item({
+            id: h.id,
+            title: h.translatedText,
+            subtitle: h.originalText,
+            icon: { source: Icon.Clock, tintColor: Color.SecondaryText },
+            accessories: [
+                { tag: { value: `${languageName(h.sourceLanguage)}→${languageName(h.targetLanguage)}` } },
+                ...(h.timestampText ? [{ text: h.timestampText }] : [])
+            ],
+            detail: List.Item.Detail({
+                markdown: ['### 译文', '', quoteLines(h.translatedText), '', '---', '', '### 原文', '', quoteLines(h.originalText)].join('\n')
+            }),
+            actions: ActionPanel({
+                title: '翻译记录',
+                children: [
+                    Action({
+                        title: '复制译文',
+                        icon: Icon.CopyClipboard,
+                        onAction: () => copyWithToast(h.translatedText, '已复制译文', h.translatedText)
+                    }),
+                    Action({
+                        title: '复制原文与译文',
+                        icon: Icon.Clipboard,
+                        onAction: () => copyWithToast(`${h.originalText}\n${h.translatedText}`, '已复制原文与译文')
+                    })
+                ]
+            })
+        }));
 }
 export function TranslatorCommand() {
-    const launchCtx = (globalThis.window || globalThis).__ztoolsLaunchContext;
-    const initialFeature = launchCtx && (!launchCtx.pluginId || launchCtx.pluginId === 'translator') ? String(launchCtx.featureCode || '').trim() : '';
-    const initialPairId = initialFeature === 'translate-naming' ? 'zh-CN->en' : LANGUAGE_PAIR_OPTIONS[0].id;
+    const inClient = isRealElectronHost();
+    const namingMode = readLaunchFeature() === 'translate-naming';
     const [searchText, setSearchText] = useState('');
-    const [pairOptionId, setPairOptionId] = useState(initialPairId);
-    const [variants, setVariants] = useState(() => isRealElectronHost()
-        ? []
-        : reorderVariantsForFeature(buildTranslationVariants(DEFAULT_SAMPLE_TEXT, '随信附上本季度财务报告，请您审阅。', 'en', 'zh-CN', '本地离线神经词库'), initialFeature));
-    const [history, setHistory] = useState(() => isRealElectronHost()
-        ? []
-        : INITIAL_HISTORY);
+    const [result, setResult] = useState(null);
+    const [errorText, setErrorText] = useState('');
+    const [history, setHistory] = useState([]);
+    const [historyError, setHistoryError] = useState('');
     const [isLoading, setIsLoading] = useState(false);
-    const translatingRef = useRef(false);
-    async function runTranslate(inputText, pairId, showToastOnDone = false) {
-        const targetText = inputText.trim() || DEFAULT_SAMPLE_TEXT;
-        if (translatingRef.current)
+    // 每次输入都会发起翻译；只采用最后一次请求的结果，避免较慢的旧请求覆盖新输入的译文
+    const seqRef = useRef(0);
+    function rememberHistory(r) {
+        setHistory((prev) => [
+            {
+                id: `hist-${Date.now()}`,
+                originalText: r.originalText,
+                translatedText: r.translatedText,
+                sourceLanguage: r.sourceLanguage,
+                targetLanguage: r.targetLanguage,
+                timestampText: '刚刚'
+            },
+            ...prev.filter((h) => h.originalText !== r.originalText)
+        ].slice(0, 15));
+    }
+    async function runTranslate(inputText) {
+        const text = inputText.trim();
+        const seq = ++seqRef.current;
+        if (!inClient || !text) {
+            setResult(null);
+            setErrorText('');
+            setIsLoading(false);
             return;
-        translatingRef.current = true;
-        setIsLoading(true);
-        try {
-            const res = await translateTextWithHost(targetText, pairId);
-            if (res.ok && res.variants.length > 0) {
-                const ordered = reorderVariantsForFeature(res.variants, initialFeature);
-                setVariants(ordered);
-                const primary = ordered[0];
-                if (inputText.trim()) {
-                    setHistory((prev) => {
-                        const filtered = prev.filter((h) => h.originalText !== primary.originalText);
-                        return [
-                            {
-                                id: `hist-${Date.now()}`,
-                                originalText: primary.originalText,
-                                translatedText: primary.translatedText,
-                                sourceLanguage: primary.sourceLanguage,
-                                targetLanguage: primary.targetLanguage,
-                                timestampText: '刚刚'
-                            },
-                            ...filtered
-                        ].slice(0, 15);
-                    });
-                }
-                if (showToastOnDone) {
-                    await showToast({
-                        style: Toast.Style.Success,
-                        title: '已完成多语体精译',
-                        message: `${primary.sourceLanguage} → ${primary.targetLanguage}`
-                    });
-                }
+        }
+        if (namingMode) {
+            const direct = buildDirectNamingResult(text);
+            if (direct) {
+                setResult(direct);
+                setErrorText('');
+                setIsLoading(false);
+                return;
             }
         }
-        finally {
-            translatingRef.current = false;
-            setIsLoading(false);
+        setIsLoading(true);
+        const outcome = await translateTextWithHost(text);
+        if (seq !== seqRef.current)
+            return;
+        setIsLoading(false);
+        if (outcome.ok) {
+            setResult(outcome.result);
+            setErrorText('');
+            rememberHistory(outcome.result);
+        }
+        else {
+            setResult(null);
+            setErrorText(outcome.error);
         }
     }
     useEffect(() => {
-        ;
+        if (!inClient)
+            return;
         (async () => {
-            const hostHist = await fetchTranslationHistoryFromHost();
-            if (hostHist.length > 0) {
-                setHistory(hostHist);
+            const res = await fetchTranslationHistoryFromHost();
+            if (res.ok) {
+                // 本次打开后新翻译的条目排在前面，客户端已有的记录接在后面，按原文去重
+                setHistory((prev) => {
+                    const seen = new Set(prev.map((h) => h.originalText));
+                    const merged = [...prev];
+                    for (const h of res.items) {
+                        if (seen.has(h.originalText))
+                            continue;
+                        seen.add(h.originalText);
+                        merged.push(h);
+                    }
+                    return merged.slice(0, 15);
+                });
+                setHistoryError('');
+            }
+            else {
+                setHistoryError(res.error || '读取翻译记录失败');
             }
         })();
     }, []);
     useEffect(() => {
-        runTranslate(searchText, pairOptionId, false);
-    }, [searchText, pairOptionId]);
+        runTranslate(searchText);
+    }, [searchText]);
     async function handlePasteAndTranslate() {
-        const clip = (await readRealClipboardText()).trim();
-        if (!clip) {
+        let clip = '';
+        try {
+            clip = String((await Clipboard.readText()) ?? '').trim();
+        }
+        catch (err) {
             await showToast({
                 style: Toast.Style.Failure,
-                title: '剪贴板为空',
-                message: '请先复制需要翻译的单词或段落'
+                title: '读取剪贴板失败',
+                message: err instanceof Error ? err.message : String(err)
             });
             return;
         }
+        if (!clip) {
+            await showToast({ style: Toast.Style.Failure, title: '剪贴板里没有文字', message: '请先复制要翻译的文字' });
+            return;
+        }
+        if (clip === searchText.trim()) {
+            await runTranslate(clip);
+            return;
+        }
         setSearchText(clip);
-        await runTranslate(clip, pairOptionId, true);
     }
-    function handleSwapLanguageDirection() {
-        const nextId = pairOptionId === 'auto->en' ? 'auto->zh-CN' : 'auto->en';
-        setPairOptionId(nextId);
+    const placeholder = namingMode ? '输入中文，翻译成英文变量名（英文原文直接转换）' : '输入要翻译的中文或英文';
+    if (!inClient) {
+        return List({
+            searchBarPlaceholder: placeholder,
+            children: [
+                List.Section({
+                    title: '翻译',
+                    children: [
+                        List.Item({
+                            id: 'translator-client-required',
+                            title: NOT_IN_CLIENT_MESSAGE,
+                            subtitle: '翻译由 ZTools 客户端的翻译接口完成',
+                            icon: { source: Icon.Info }
+                        })
+                    ]
+                })
+            ]
+        });
     }
-    const activeSource = variants[0]?.sourceLanguage || 'en';
-    const activeTarget = variants[0]?.targetLanguage || 'zh-CN';
-    const activeOriginal = variants[0]?.originalText || DEFAULT_SAMPLE_TEXT;
+    let resultItem;
+    if (result) {
+        resultItem = buildResultItem(result, namingMode);
+    }
+    else if (errorText) {
+        resultItem = List.Item({
+            id: 'translation-failed',
+            title: '未能翻译',
+            subtitle: describeTranslateError(errorText),
+            icon: { source: Icon.ExclamationMark, tintColor: Color.SecondaryText },
+            detail: List.Item.Detail({ markdown: `### 未能翻译\n\n${describeTranslateError(errorText)}` })
+        });
+    }
+    else {
+        resultItem = List.Item({
+            id: 'translation-empty',
+            title: namingMode ? '输入中文，翻译成英文变量名' : '输入中文或英文开始翻译',
+            subtitle: '只查客户端内置的少量中英常用词与办公短语，也可以点“翻译剪贴板”',
+            icon: { source: Icon.Info, tintColor: Color.SecondaryText },
+            detail: List.Item.Detail({
+                markdown: '### 中英互译\n\n输入含中文时译为英语，其余译为中文。翻译只查客户端内置的离线词库，收录有限，未收录的内容会提示无法翻译。'
+            })
+        });
+    }
+    const historyChildren = buildHistoryItems(history, historyError);
     return List({
-        searchBarPlaceholder: '输入或粘贴待翻译单词、外贸邮件、技术文档段落 (自动检测中英日韩互译)...',
+        searchText,
+        searchBarPlaceholder: placeholder,
         onSearchTextChange: setSearchText,
         isShowingDetail: true,
         isLoading,
-        searchBarAccessory: List.Dropdown({
-            tooltip: '选择源语言与目标语言方向',
-            value: pairOptionId,
-            onChange: (val) => setPairOptionId(val),
-            children: LANGUAGE_PAIR_OPTIONS.map((opt) => List.Dropdown.Item({
-                title: opt.title,
-                value: opt.id
-            }))
-        }),
         filterBar: FilterBar({
-            summaryText: `识别语种: ${activeSource} → ${activeTarget} · 原文 ${activeOriginal.length} 字符 · 提供 3 种办公语体对照`,
+            summaryText: result
+                ? `${result.sourceLanguage === result.targetLanguage ? '原文已是英文' : `${languageName(result.sourceLanguage)} → ${languageName(result.targetLanguage)}`} · ${result.engineLabel}`
+                : '中英互译 · 只查客户端内置的离线词库，收录有限',
             actions: [
                 {
                     id: 'paste-translate-btn',
                     label: '翻译剪贴板',
                     style: 'secondary',
                     onAction: handlePasteAndTranslate
-                },
-                {
-                    id: 'swap-lang-btn',
-                    label: '反转语种',
-                    style: 'secondary',
-                    onAction: handleSwapLanguageDirection
                 }
             ]
         }),
         children: [
-            List.Section({
-                title: '多语体精译与专业词典版本 (3)',
-                children: variants.map((v) => List.Item({
-                    id: v.id,
-                    title: v.title,
-                    subtitle: `${v.sourceLanguage} → ${v.targetLanguage} · ${v.engineLabel}`,
-                    icon: {
-                        source: Icon.Text,
-                        tintColor: Color.SecondaryText
-                    },
-                    accessories: [{ tag: { value: v.badge } }],
-                    detail: List.Item.Detail({
-                        markdown: buildDetailMarkdown(v),
-                        metadata: List.Item.Detail.Metadata({
-                            children: [
-                                List.Item.Detail.Metadata.Label({
-                                    title: '语体风格',
-                                    text: v.badge
-                                }),
-                                List.Item.Detail.Metadata.Label({
-                                    title: '语种方向',
-                                    text: `${v.sourceLanguage} → ${v.targetLanguage}`
-                                }),
-                                List.Item.Detail.Metadata.Label({
-                                    title: '翻译引擎',
-                                    text: v.engineLabel
-                                }),
-                                List.Item.Detail.Metadata.Separator(),
-                                List.Item.Detail.Metadata.Label({
-                                    title: 'camelCase 命名',
-                                    text: formatIdentifierCase(v.translatedText, 'camel')
-                                }),
-                                List.Item.Detail.Metadata.Label({
-                                    title: 'snake_case 命名',
-                                    text: formatIdentifierCase(v.translatedText, 'snake')
-                                })
-                            ]
-                        })
-                    }),
-                    actions: ActionPanel({
-                        title: v.badge,
-                        children: [
-                            Action({
-                                title: '复制当前译文到剪贴板',
-                                icon: Icon.CopyClipboard,
-                                onAction: async () => {
-                                    await Clipboard.copy(v.translatedText);
-                                    await showToast({
-                                        style: Toast.Style.Success,
-                                        title: `已复制「${v.badge}」译文`,
-                                        message: v.translatedText
-                                    });
-                                }
-                            }),
-                            Action({
-                                title: '复制双语对照文本 (原文 + 译文)',
-                                icon: Icon.Clipboard,
-                                shortcut: { modifiers: ['ctrl'], key: 'enter' },
-                                onAction: async () => {
-                                    const bilingual = `${v.originalText}\n${v.translatedText}`;
-                                    await Clipboard.copy(bilingual);
-                                    await showToast({
-                                        style: Toast.Style.Success,
-                                        title: '已复制双语对照段落'
-                                    });
-                                }
-                            }),
-                            Action({
-                                title: '粘贴并翻译剪贴板文本',
-                                icon: Icon.Clipboard,
-                                shortcut: { modifiers: ['ctrl'], key: 'v' },
-                                onAction: handlePasteAndTranslate
-                            }),
-                            Action({
-                                title: '反转源语言与目标语言方向',
-                                icon: Icon.ArrowRight,
-                                shortcut: { modifiers: ['ctrl'], key: 's' },
-                                onAction: handleSwapLanguageDirection
-                            }),
-                            Action({
-                                title: '复制为 camelCase 编程标识符',
-                                icon: Icon.Code,
-                                shortcut: { modifiers: ['ctrl'], key: 'u' },
-                                onAction: async () => {
-                                    const idStr = formatIdentifierCase(v.translatedText, 'camel');
-                                    await Clipboard.copy(idStr);
-                                    await showToast({
-                                        style: Toast.Style.Success,
-                                        title: '已复制 camelCase 变量名',
-                                        message: idStr
-                                    });
-                                }
-                            })
-                        ]
-                    })
-                }))
-            }),
-            List.Section({
-                title: `最近翻译历史记录 (${history.length})`,
-                children: history.map((h) => List.Item({
-                    id: h.id,
-                    title: h.translatedText,
-                    subtitle: h.originalText,
-                    icon: {
-                        source: Icon.Clock,
-                        tintColor: Color.SecondaryText
-                    },
-                    accessories: [
-                        { tag: { value: `${h.sourceLanguage}→${h.targetLanguage}` } },
-                        { text: h.timestampText }
-                    ],
-                    detail: List.Item.Detail({
-                        markdown: [
-                            '### 历史译文',
-                            '',
-                            `> ${h.translatedText}`,
-                            '',
-                            '---',
-                            '',
-                            '### 历史原文',
-                            '',
-                            h.originalText
-                        ].join('\n')
-                    }),
-                    actions: ActionPanel({
-                        title: '历史记录操作',
-                        children: [
-                            Action({
-                                title: '复制历史译文',
-                                icon: Icon.CopyClipboard,
-                                onAction: async () => {
-                                    await Clipboard.copy(h.translatedText);
-                                    await showToast({ style: Toast.Style.Success, title: '已复制历史译文' });
-                                }
-                            }),
-                            Action({
-                                title: '复制双语对照 (原文 + 译文)',
-                                icon: Icon.Clipboard,
-                                shortcut: { modifiers: ['ctrl'], key: 'enter' },
-                                onAction: async () => {
-                                    await Clipboard.copy(`${h.originalText}\n${h.translatedText}`);
-                                    await showToast({ style: Toast.Style.Success, title: '已复制双语对照' });
-                                }
-                            }),
-                            Action({
-                                title: '清空翻译历史记录',
-                                icon: Icon.Trash,
-                                style: Action.Style.Destructive,
-                                shortcut: { modifiers: [], key: 'delete' },
-                                onAction: async () => {
-                                    setHistory([]);
-                                    await showToast({ style: Toast.Style.Success, title: '已清空翻译历史记录' });
-                                }
-                            })
-                        ]
-                    })
-                }))
-            })
+            List.Section({ title: namingMode ? '变量命名' : '翻译结果', children: [resultItem] }),
+            ...(historyChildren.length > 0
+                ? [List.Section({ title: historyError ? '最近翻译' : `最近翻译（${history.length}）`, children: historyChildren })]
+                : [])
         ]
     });
 }

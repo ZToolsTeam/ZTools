@@ -43,6 +43,18 @@ export interface ScreenshotsServiceOptions {
 const IMAGE_EXTENSIONS = new Set(['.png', '.jpg', '.jpeg', '.bmp', '.webp', '.heic', '.tiff'])
 const MACOS_DESKTOP_SCREENSHOT_NAME_RE = /^(screen\s*shot|screenshot|截屏|屏幕截图|cleanshot|ishot|xnip|snipaste)/i
 
+function screenshotReadError(error: unknown, target: string, kind: '目录' | '文件'): ZToolsError {
+  if (error instanceof ZToolsError) return error
+  const hostCode = (error as NodeJS.ErrnoException)?.code
+  const denied = hostCode === 'EACCES' || hostCode === 'EPERM'
+  const reason = denied ? '没有访问权限' : hostCode === 'ENOTDIR' ? '路径不是文件夹' : '读取失败，请重试'
+  return new ZToolsError(
+    denied ? errorCodes.permissionDenied : errorCodes.fileError,
+    `无法读取截图${kind}“${path.basename(target)}”：${reason}`,
+    { ...(hostCode ? { hostCode } : {}), path: target }
+  )
+}
+
 /** 截图 id：完整路径的 SHA-256 前 24 位十六进制，同目录不同文件不会撞 id */
 export function screenshotIdForPath(fullPath: string): string {
   return `screenshot-${createHash('sha256').update(fullPath).digest('hex').slice(0, 24)}`
@@ -178,14 +190,14 @@ export class ScreenshotsService {
           modifiedAt: stat.mtimeMs,
           pinned: this.pinnedPaths.has(fullPath)
         })
-      } catch {
-        // 忽略单个文件状态读取异常
+      } catch (error) {
+        // 扫描期间被移走的文件可以跳过；权限和磁盘错误不能冒充不存在。
+        if ((error as NodeJS.ErrnoException)?.code !== 'ENOENT') throw screenshotReadError(error, fullPath, '文件')
       }
     }
 
     for (const dir of dirsToScan) {
       try {
-        if (!fs.existsSync(dir)) continue
         const isMacDesktop = !usingCustomDirs && macDesktopDir && path.resolve(dir) === macDesktopDir
         const entries = fs.readdirSync(dir, { withFileTypes: true })
         for (const entry of entries) {
@@ -200,8 +212,9 @@ export class ScreenshotsService {
             }
           }
         }
-      } catch {
-        // 忽略无法访问的目录
+      } catch (error) {
+        // 尚未创建或已移除的可选目录不含截图；其余失败必须交给界面显示，保留上次缓存。
+        if ((error as NodeJS.ErrnoException)?.code !== 'ENOENT') throw screenshotReadError(error, dir, '目录')
       }
     }
 
@@ -225,8 +238,10 @@ export class ScreenshotsService {
             addFileRecord(filePath, path.basename(filePath))
           }
         }
-      } catch {
-        // 忽略 mdfind 不可用或超时
+      } catch (error) {
+        // Spotlight 本身是可选来源，但已经找到的文件读取失败不能被当作索引不可用。
+        if (error instanceof ZToolsError) throw error
+        console.warn('[ScreenshotsService] Spotlight 查询不可用:', error)
       }
     }
 

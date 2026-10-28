@@ -18,8 +18,10 @@ import DeclarativePage from '@/pages/DeclarativePage.vue'
 import * as apiServer from '@/api/apiserver'
 import { resolvePluginGlyph } from '@/utils/brandIcons'
 import { _resetKeymapForTesting } from '@/utils/keymap'
-import { BUNDLED_PLUGIN_IDS } from '@/utils/bundledPlugins'
+import { BUNDLED_PLUGIN_IDS, isStoreOfficialPlugin } from '@/utils/bundledPlugins'
+import { COMMUNITY_EXTENSION_IDS } from '@/utils/storeCatalogManager'
 import { isPluginVisible } from '@/utils/pluginVisibility'
+import { isPluginSupportedOnCurrentPlatform } from '@/utils/platform'
 
 /**
  * 模拟客户端的静态资源服务：bundled-plugins/ 下的请求直接读取 public/bundled-plugins 里的真实插件产物，
@@ -35,6 +37,8 @@ function bundledFetch(url) {
 }
 
 async function settle() {
+  // 窗口 API 按需 import，先等模块就绪再断言后续路由和界面状态。
+  await vi.dynamicImportSettled()
   for (let i = 0; i < 10; i++) {
     await flushPromises()
     await nextTick()
@@ -104,13 +108,12 @@ describe('官方标杆声明式应用注册表与端到端集成测试', () => {
   })
 
   describe('1. 注册表完整性与规范断言 (Registry Completeness)', () => {
-    it('必须完整包含 10 款核心标杆应用定义，且字段完备合规', () => {
-      // json-format、qr-code、color-picker 已由 plugins 仓库的原版内置插件接管，见下一个用例
+    it('保留的旧内置应用定义字段完备合规', () => {
+      // 内置原版与市场真实插件另行验证，不能要求它们继续返回旧示例实现。
       const requiredBenchmarkIds = [
         'github',
         'google-translate',
         'obsidian',
-        'speedtest',
         'winget',
         'currency-exchange'
       ]
@@ -156,6 +159,61 @@ describe('官方标杆声明式应用注册表与端到端集成测试', () => {
   })
 
   describe('2. Pinia Store 集成与已安装列表合并', () => {
+    it.each(['darwin', 'win32'])('网络测速使用市场真实实现，仅 macOS 开放入口（%s）', async (platform) => {
+      vi.stubGlobal('__ZTOOLS_PLATFORM_OVERRIDE__', platform)
+      const installed = {
+        pluginId: 'speedtest', name: '网络测速', author: 'ZTools Community',
+        entry: 'dist/index.js', isDeclarative: true
+      }
+      vi.mocked(apiServer.getLocalPlugins).mockResolvedValue([installed])
+      const store = usePluginsStore()
+      await store.fetchInstalledPlugins()
+
+      // 网络测速归为社区插件，经插件市场分发
+      expect(isStoreOfficialPlugin('speedtest')).toBe(false)
+      expect(COMMUNITY_EXTENSION_IDS.has('speedtest')).toBe(true)
+      expect(getOfficialPlugin('speedtest')).toBeUndefined()
+      expect(getOfficialPluginsList().some(p => p.pluginId === 'speedtest')).toBe(false)
+      expect(isPluginVisible(' SPEEDTEST ')).toBe(true)
+      expect(isPluginSupportedOnCurrentPlatform(' SPEEDTEST ')).toBe(platform === 'darwin')
+      const installedSpeedtest = store.installedPlugins.filter(p => p.pluginId === 'speedtest')
+      mockPush.mockClear()
+      if (platform === 'darwin') {
+        expect(installedSpeedtest).toHaveLength(1)
+        expect(installedSpeedtest[0]).toMatchObject(installed)
+        await expect(store.openPlugin('speedtest')).resolves.toMatchObject({ success: true, isDeclarative: true })
+        expect(mockPush).toHaveBeenCalledWith(expect.objectContaining({
+          name: 'declarative', params: { pluginId: 'speedtest' }
+        }))
+      } else {
+        expect(installedSpeedtest).toEqual([])
+        await expect(store.openPlugin(' SPEEDTEST ')).rejects.toThrow('当前系统上暂不可用')
+        expect(mockPush).not.toHaveBeenCalled()
+      }
+      expect(apiServer.openPlugin).not.toHaveBeenCalled()
+    })
+
+    it('表格互转安装后显示真实社区插件，旧内置实现不能抢占入口或改写作者', async () => {
+      const installed = {
+        pluginId: 'table-converter', name: '表格互转', author: 'ZTools Community',
+        version: '1.0.0', entry: 'dist/index.js', isDeclarative: true
+      }
+      vi.mocked(apiServer.getLocalPlugins).mockResolvedValue([installed])
+      const store = usePluginsStore()
+      await store.fetchInstalledPlugins()
+
+      expect(store.installedPlugins.filter((p) => p.pluginId === installed.pluginId)).toEqual([installed])
+      expect(getOfficialPlugin(installed.pluginId)).toBeUndefined()
+      expect(isOfficialPlugin(installed.pluginId)).toBe(false)
+      expect(isPluginVisible(' TABLE-CONVERTER ')).toBe(true)
+      const result = await store.openPlugin(installed.pluginId)
+      expect(result.isDeclarative).toBe(true)
+      expect(mockPush).toHaveBeenCalledWith(expect.objectContaining({
+        name: 'declarative', params: { pluginId: installed.pluginId }
+      }))
+      expect(apiServer.openPlugin).not.toHaveBeenCalled()
+    })
+
     it('fetchInstalledPlugins：官方插件展示内置原版与插件市场安装的，旧内置实现与草稿隐藏，社区插件照常展示', async () => {
       vi.mocked(apiServer.getLocalPlugins).mockResolvedValue([
         { pluginId: 'legacy-demo', name: '社区插件', lastUsedTime: 100 },
@@ -212,12 +270,28 @@ describe('官方标杆声明式应用注册表与端到端集成测试', () => {
 
     it('严禁卸载内置插件', async () => {
       const store = usePluginsStore()
-      await expect(store.uninstallPlugin('json-format')).rejects.toThrow('官方内置核心扩展不可卸载')
+      await expect(store.uninstallPlugin('json-format')).rejects.toThrow('内置插件随客户端提供，不能卸载')
 
       // onUninstallComplete 事件静默保护
       store.installedSet.add('json-format')
       store.onUninstallComplete({ pluginId: 'json-format' })
       expect(store.installedSet.has('json-format')).toBe(true)
+    })
+
+    it('插件市场分发的官方插件（如 kill-process）装在插件目录里，可以正常卸载', async () => {
+      const store = usePluginsStore()
+      const uninstall = vi.fn().mockResolvedValue({ success: true })
+      const previous = window.ztools
+      window.ztools = { ...(previous || {}), plugin: { uninstall } }
+      store.fetchInstalledPlugins = vi.fn().mockResolvedValue(undefined)
+      try {
+        store.installedSet.add('kill-process')
+        await expect(store.uninstallPlugin('kill-process')).resolves.toEqual({ success: true })
+        expect(uninstall).toHaveBeenCalledWith('kill-process')
+        expect(store.installedSet.has('kill-process')).toBe(false)
+      } finally {
+        window.ztools = previous
+      }
     })
 
     it('插件市场（远端不可达时）只列出内置插件，并支持分类与搜索', async () => {
@@ -344,6 +418,7 @@ describe('官方标杆声明式应用注册表与端到端集成测试', () => {
       const popoutBtn = wrapper.find('.declarative-popout-btn')
       expect(popoutBtn.exists()).toBe(true)
       await popoutBtn.trigger('click')
+      await settle()
 
       // 在测试环境 (无 Electron 原生窗口句柄) 下，平滑降级跳转至 popout 独立路由
       expect(mockPush).toHaveBeenCalledWith(
@@ -417,7 +492,7 @@ describe('官方标杆声明式应用注册表与端到端集成测试', () => {
     it('[破坏性] 未开放的插件即使绕过列表直接打开也会被拒绝，且不跳转', async () => {
       const store = usePluginsStore()
       mockPush.mockClear()
-      for (const id of ['github', ' SPEEDTEST ', 'trial-nudges', 'clipboard-history']) {
+      for (const id of ['github', 'trial-nudges', 'clipboard-history']) {
         await expect(store.openPlugin(id)).rejects.toThrow('暂未开放')
       }
       expect(mockPush).not.toHaveBeenCalled()

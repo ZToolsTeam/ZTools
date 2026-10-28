@@ -65,7 +65,7 @@ export function createWindowsPackagerOptions({ clientRoot, outputRoot, applicati
     arch: WINDOWS_TARGET.arch,
     electronVersion: WINDOWS_ELECTRON_VERSION,
     icon: applicationIcon,
-    asar: true,
+    asar: { unpackDir: '**/node_modules/exiftool-vendored.*' },
     overwrite: false,
     prune: true,
     ignore: [...ignoredWindowsPackagingPaths]

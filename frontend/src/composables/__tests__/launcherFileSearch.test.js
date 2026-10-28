@@ -106,4 +106,42 @@ describe('悬浮条真实文件结果与异步状态', () => {
     expect(truncatePath('C:\\Users\\someone\\a-long-folder-name\\another-long-folder-name\\image.png')).toContain('\\')
     expect(resolveItemGlyph({ type: 'file', faIcon: 'fa-file-image-o', isDir: false })).toBe('image')
   })
+
+  it('已安装应用（如微信、Antigravity）按匹配度排在弱描述匹配的插件之前，普通文件保持在后', async () => {
+    const { usePluginsStore } = await import('@/stores/plugins')
+    const pluginsStore = usePluginsStore()
+    pluginsStore.installedPlugins = [
+      {
+        pluginId: 'weak-desc-plugin',
+        name: '通用效率工具',
+        description: '支持导出到微信或 Antigravity 的辅助说明',
+        entry: 'dist/index.js',
+        isDeclarative: true
+      }
+    ]
+    searchFiles.mockResolvedValue({
+      files: [
+        {
+          name: 'WeChat.app',
+          display_name: '微信',
+          path: '/Applications/WeChat.app',
+          kind: 'application',
+          is_dir: true,
+          acronym: 'wx wc',
+          pinyin: 'weixin wechat'
+        },
+        {
+          name: '微信账单.csv',
+          path: '/Users/demo/Downloads/微信账单.csv',
+          is_dir: false
+        }
+      ]
+    })
+    const state = create()
+    state.search('微信')
+    await flush()
+    expect(state.filteredItems.value[0]?.name).toBe('微信')
+    expect(state.filteredItems.value[0]?.isApplication).toBe(true)
+    expect(state.filteredItems.value.at(-1)?.name).toBe('微信账单.csv')
+  })
 })

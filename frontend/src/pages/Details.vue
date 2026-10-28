@@ -1,4 +1,5 @@
 <script setup>
+import { ArrowLeftOutlined, ReloadOutlined, WarningOutlined } from '@ant-design/icons-vue'
 import { ref, watch, onMounted, onBeforeUnmount, computed, nextTick } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { Modal } from 'ant-design-vue'
@@ -22,12 +23,13 @@ import {
   getPluginVersionIncompatibleMessage
 } from '@/api/apiserver'
 import { useToast } from '@/composables/useToast'
+import { usePluginInstall } from '@/composables/usePluginInstall'
 import { useVersionCompat } from '@/composables/useVersionCompat'
 import { ROUTES, routeUtils } from '@/router/routes'
 import { getPluginFeatureHotkeyItemByTrigger } from '@/utils/pluginFeatureHotkeys'
-import { isPluginSupportedOnCurrentPlatform } from '@/utils/platform'
+import { isPluginSupportedOnCurrentPlatform, isWindows } from '@/utils/platform'
 import { pluginDetailTabs, auth, onAuthRequired, track } from '@edition'
-import { getOfficialPlugin, isOfficialPlugin } from '@/utils/officialPlugins'
+import { getOfficialPlugin, isClientProvidedPlugin } from '@/utils/officialPlugins'
 import { getBundledPluginEntry, isBundledPlugin } from '@/utils/bundledPlugins'
 import { loadInstalledDeclarativePlugin } from '@/utils/declarativePluginLoader'
 
@@ -35,6 +37,7 @@ const route = useRoute()
 const router = useRouter()
 const nav = useNavStore()
 const pluginsStore = usePluginsStore()
+const { installWithFeedback } = usePluginInstall()
 
 const plugin = ref({})
 const loading = ref(true)
@@ -81,12 +84,17 @@ const subtitle = computed(() => {
   return `v${p.version || ''} · ${p.category || ''} · ${p.size || '未知'}`
 })
 
-// 使用 Store 中的安装状态（官方内置插件始终视为已安装，避免异步同步前按钮从“安装”跳变到“打开”）
+// 使用 Store 中的安装状态（随客户端提供的插件始终视为已安装，避免异步同步前按钮从“安装”跳变到“打开”；
+// 插件市场分发的官方插件以实际安装状态为准）
 const isInstalled = computed(() =>
   pluginsStore.installedSet.has(pluginId.value) ||
-  isOfficialPlugin(pluginId.value) ||
-  isBundledPlugin(pluginId.value)
+  isClientProvidedPlugin(pluginId.value)
 )
+
+// 随客户端提供的插件没有安装目录，不能卸载，也生成不了桌面快捷方式（主进程会报插件不存在），这里不给入口
+const canUninstall = computed(() => !isClientProvidedPlugin(pluginId.value))
+// 桌面快捷方式只有 Windows 支持
+const canCreateShortcut = computed(() => isWindows() && canUninstall.value)
 
 // 详情页会缓存“有更新/快捷键”等仅对已安装插件有效的本地状态；
 // 当前插件被卸载后需要立即清空，避免页面残留“有更新”标记。
@@ -440,40 +448,11 @@ const toggleFavorite = async () => {
   }
 }
 
-const downloadPlugin = async () => {
-  const pid = pluginId.value
-  if (!pid) return
-
-  // 官方下架拦截
-  if (isRevoked.value) {
-    toastError('无法安装：' + (revokedReason.value || '该插件已被官方下架禁用'))
-    return
-  }
-
-  // 防止重复并发安装
-  if (pluginsStore.isInstalling(pid)) {
-    toastWarning('该插件正在安装中，请稍候...')
-    return
-  }
-
-  try {
-    // 官方版安装前要求登录（未登录时提示并打开登录框）；开源版没有账号，直接安装
-    if (!(await auth.ensureCanInstall())) return
-
-    track('plugin_clickinstall', pid)
-    toastSuccess('正在安装插件，请稍候...')
-
-    // 一键静默安装，底层复用 plugin-install-service，装完直接进入内嵌声明式舞台
-    await pluginsStore.installPlugin(pid, { autoOpen: true })
-    toastSuccess('插件安装完成')
-  } catch (e) {
-    if (typeof isPluginVersionIncompatibleError === 'function' && isPluginVersionIncompatibleError(e)) {
-      toastWarning(typeof getPluginVersionIncompatibleMessage === 'function' ? getPluginVersionIncompatibleMessage(e) : '插件版本不兼容')
-    } else if (!onAuthRequired(e, { action: 'install' })) {
-      toastError('安装失败: ' + (e.message || e))
-    }
-  }
-}
+const downloadPlugin = () => installWithFeedback(pluginId.value, async () => {
+  if (!(await auth.ensureCanInstall())) return false
+  track('plugin_clickinstall', pluginId.value)
+  return true
+})
 
 const updatePlugin = async () => {
   Modal.confirm({
@@ -509,6 +488,10 @@ const updatePlugin = async () => {
 }
 
 const uninstall = async () => {
+  if (!canUninstall.value) {
+    toastError('内置插件随客户端提供，不能卸载')
+    return
+  }
   Modal.confirm({
     title: '确定要卸载该插件吗？',
     content: '卸载后插件文件将被删除。',
@@ -593,6 +576,7 @@ const handleDownloadProgress = (envelope) => {
 const handleInstallComplete = async (envelope) => {
   try {
     const payload = envelope?.payload || {}
+    if (!pluginsStore.acceptsInstallEvent(payload)) return
     const pid = payload.pluginId
 
     if (String(pid) === pluginId.value) {
@@ -668,7 +652,7 @@ onBeforeUnmount(() => {
     <!-- 返回按钮 -->
     <div class="back-nav">
       <button class="back-btn" @click="goBack">
-        <i class="fa fa-arrow-left"></i>
+        <ArrowLeftOutlined  />
         <span>返回</span>
       </button>
     </div>
@@ -691,12 +675,12 @@ onBeforeUnmount(() => {
     <!-- 错误状态 -->
     <div v-else-if="error" class="error-container">
       <div class="error-icon">
-        <i class="fa fa-exclamation-triangle"></i>
+        <WarningOutlined  />
       </div>
       <h3 class="error-title">加载失败</h3>
       <p class="error-message">{{ error }}</p>
       <button class="retry-btn" @click="load">
-        <i class="fa fa-refresh"></i>
+        <ReloadOutlined  />
         重试
       </button>
     </div>
@@ -707,6 +691,8 @@ onBeforeUnmount(() => {
         :plugin="plugin"
         :subtitle="subtitle"
         :isInstalled="isInstalled"
+        :canUninstall="canUninstall"
+        :canCreateShortcut="canCreateShortcut"
         :hasUpdate="hasUpdate"
         :downloading="downloading"
         :installFailed="installFailed"

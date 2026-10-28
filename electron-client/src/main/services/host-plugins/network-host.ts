@@ -1,5 +1,4 @@
 import crypto from 'node:crypto'
-import dgram from 'node:dgram'
 import dns from 'node:dns/promises'
 import fsSync from 'node:fs'
 import fs from 'node:fs/promises'
@@ -15,14 +14,27 @@ import {
   fileUrlToLocalPath,
   formatBytes,
   guessMimeType,
-  runCommand,
-  runPowerShell,
+  resolveHostSystemCommands,
   type HostPluginContext,
+  type HostSystemCommands,
   type LanShareServerState
 } from './shared-utils.js'
 
+/** TCP 连通探测结果：ok 为能否建立连接，latencyMs 为建立连接（或放弃）所用毫秒数 */
+type TcpProbe = (host: string, port: number, timeoutMs: number) => Promise<{ ok: boolean; latencyMs: number }>
+
+/** 网络处理器的系统依赖：生产用真实实现，测试经构造参数注入替身（插件调用参数无法切换） */
+export interface NetworkHostDeps extends HostSystemCommands {
+  probeTcp: TcpProbe
+  /** 系统 hosts 文件路径（旧接口只读取）；未注入时按当前平台取系统路径 */
+  hostsPath: string | undefined
+}
+
 export class NetworkHostPluginHandler {
   readonly #ctx: HostPluginContext
+  readonly #sys: HostSystemCommands
+  readonly #probeTcp: TcpProbe
+  readonly #hostsPathOverride: string | undefined
   #lanShareStarting: Promise<void> | null = null
   readonly #lanShare: LanShareServerState = {
     server: null,
@@ -49,8 +61,11 @@ export class NetworkHostPluginHandler {
     }
   >()
 
-  constructor(ctx: HostPluginContext) {
+  constructor(ctx: HostPluginContext, deps: Partial<NetworkHostDeps> = {}) {
     this.#ctx = ctx
+    this.#sys = resolveHostSystemCommands(deps)
+    this.#probeTcp = deps.probeTcp ?? ((host, port, timeoutMs) => this.#probeTcpEndpoint(host, port, timeoutMs))
+    this.#hostsPathOverride = deps.hostsPath
   }
 
   async stop(): Promise<void> {
@@ -435,8 +450,9 @@ export class NetworkHostPluginHandler {
       const unit = m[2].toLowerCase()
       if (unit === 'gbps') return Math.round(val * 1000)
       if (unit === 'mbps') return Math.round(val)
-      if (unit === 'kbps') return Math.max(1, Math.round(val / 1000))
-      if (unit === 'bps') return Math.max(1, Math.round(val / 1_000_000))
+      // 不足 1 Mbps 的正速率记为 1；已禁用、未连接的网卡报 “0 bps”，不能显示成 1 Mbps
+      if (unit === 'kbps') return val > 0 ? Math.max(1, Math.round(val / 1000)) : 0
+      if (unit === 'bps') return val > 0 ? Math.max(1, Math.round(val / 1_000_000)) : 0
     }
     const num = Number(raw)
     return Number.isFinite(num) ? num : 0
@@ -466,8 +482,10 @@ export class NetworkHostPluginHandler {
       const adapters: Array<Record<string, unknown>> = []
 
       if (process.platform === 'win32') {
+        // Get-NetAdapter 本身失败（CIM 损坏、被策略禁止）必须报错，不能退回填充数据；单块网卡读不到 IP 配置属正常，字段留空
         const psScript = `
-          Get-NetAdapter -ErrorAction SilentlyContinue | ForEach-Object {
+          $netAdapters = @(Get-NetAdapter -ErrorAction Stop)
+          $list = @($netAdapters | ForEach-Object {
             $ifIndex = $_.ifIndex
             $ipInfo = Get-NetIPConfiguration -InterfaceIndex $ifIndex -ErrorAction SilentlyContinue
             $ipv4 = ($ipInfo.IPv4Address | Select-Object -First 1).IPAddress
@@ -488,12 +506,23 @@ export class NetworkHostPluginHandler {
               dns = if ($dns) { $dns } else { '' }
               dnsServers = $dnsList
             }
-          } | ConvertTo-Json -Compress
+          })
+          # 已禁用或没有 IP 配置的网卡会让 Get-NetIPConfiguration 写非终止错误（属正常情况）；结果存进变量后单独输出，
+          # 最后一条语句不再是带非终止错误的管道，退出码不会因此变成 1
+          ConvertTo-Json -InputObject $list -Compress -Depth 4
         `
-        const raw = await runPowerShell(psScript, 10_000, signal)
-        if (raw) {
-          try {
-            const parsed = JSON.parse(raw)
+        let raw: string
+        try {
+          raw = await this.#sys.runPowerShell(psScript, 10_000, signal)
+        } catch (error) {
+          return { ok: false, success: false, errorCode: 'ADAPTER_LIST_FAILED', error: `读取网卡列表失败：${error instanceof Error ? error.message : String(error)}` }
+        }
+        {
+          let parsed: unknown
+          try { parsed = JSON.parse(raw.trim() || '[]') } catch {
+            return { ok: false, success: false, errorCode: 'ADAPTER_LIST_FAILED', error: '读取网卡列表失败：系统返回的数据无法解析' }
+          }
+          {
             const list = Array.isArray(parsed) ? parsed : [parsed]
             for (const item of list) {
               if (item && typeof item === 'object') {
@@ -508,10 +537,10 @@ export class NetworkHostPluginHandler {
                 })
               }
             }
-          } catch {
-            // fallback to os.networkInterfaces()
           }
         }
+        // Windows 以 Get-NetAdapter 的结果为准：确实没有网卡就返回空列表，不用 os.networkInterfaces() 填充状态与 MAC
+        return { ok: true, success: true, adapters }
       }
 
       if (adapters.length === 0) {
@@ -541,11 +570,11 @@ export class NetworkHostPluginHandler {
 
     if (lowerFn === 'flushdns') {
       if (process.platform === 'win32') {
-        const res = await runCommand('ipconfig', ['/flushdns'], 10_000, signal)
+        const res = await this.#sys.runCommand('ipconfig', ['/flushdns'], 10_000, signal)
         return { ok: res.exitCode === 0, success: res.exitCode === 0, output: res.stdout || res.stderr }
       }
       if (process.platform === 'darwin') {
-        const res = await runCommand('dscacheutil', ['-flushcache'], 10_000, signal)
+        const res = await this.#sys.runCommand('dscacheutil', ['-flushcache'], 10_000, signal)
         return { ok: res.exitCode === 0, success: res.exitCode === 0, output: res.stdout || res.stderr || 'DNS cache flushed' }
       }
       return { ok: false, success: false, error: '当前平台不支持刷新 DNS 缓存' }
@@ -561,7 +590,7 @@ export class NetworkHostPluginHandler {
         const args = primaryDns
           ? ['interface', 'ip', 'set', 'dns', `name=${adapterName}`, 'static', primaryDns]
           : ['interface', 'ip', 'set', 'dns', `name=${adapterName}`, 'dhcp']
-        const res = await runCommand('netsh', args, 10_000, signal)
+        const res = await this.#sys.runCommand('netsh', args, 10_000, signal)
         return {
           ok: res.exitCode === 0,
           success: res.exitCode === 0,
@@ -648,7 +677,7 @@ export class NetworkHostPluginHandler {
       }
 
       // 3. ping-gateway-dns (公网骨干 TCP 连通性)
-      const tcpProbe = await this.#probeTcpEndpoint('223.5.5.5', 53, 3000)
+      const tcpProbe = await this.#probeTcp('223.5.5.5', 53, 3000)
       checks.push({
         id: 'ping-gateway-dns',
         name: '网关与公共 DNS 连通性 (223.5.5.5:53)',
@@ -737,7 +766,7 @@ export class NetworkHostPluginHandler {
 
       if (targetId === 'flush-dns') {
         if (process.platform === 'win32') {
-          const res = await runCommand('ipconfig', ['/flushdns'], 10_000, signal)
+          const res = await this.#sys.runCommand('ipconfig', ['/flushdns'], 10_000, signal)
           const ok = res.exitCode === 0
           return {
             ok,
@@ -749,7 +778,7 @@ export class NetworkHostPluginHandler {
           }
         }
         if (process.platform === 'darwin') {
-          const res = await runCommand('dscacheutil', ['-flushcache'], 10_000, signal)
+          const res = await this.#sys.runCommand('dscacheutil', ['-flushcache'], 10_000, signal)
           const ok = res.exitCode === 0
           return {
             ok,
@@ -765,7 +794,7 @@ export class NetworkHostPluginHandler {
 
       if (targetId === 'clear-proxy') {
         if (process.platform === 'win32') {
-          const regRes = await runCommand(
+          const regRes = await this.#sys.runCommand(
             'reg',
             [
               'add',
@@ -792,8 +821,8 @@ export class NetworkHostPluginHandler {
           }
         }
         if (process.platform === 'darwin') {
-          const webRes = await runCommand('networksetup', ['-setwebproxystate', 'Wi-Fi', 'off'], 8_000, signal)
-          const secRes = await runCommand('networksetup', ['-setsecurewebproxystate', 'Wi-Fi', 'off'], 8_000, signal)
+          const webRes = await this.#sys.runCommand('networksetup', ['-setwebproxystate', 'Wi-Fi', 'off'], 8_000, signal)
+          const secRes = await this.#sys.runCommand('networksetup', ['-setsecurewebproxystate', 'Wi-Fi', 'off'], 8_000, signal)
           const ok = webRes.exitCode === 0 && secRes.exitCode === 0
           return {
             ok,
@@ -809,7 +838,7 @@ export class NetworkHostPluginHandler {
 
       if (targetId === 'reset-winsock') {
         if (process.platform === 'win32') {
-          const res = await runCommand('netsh', ['winsock', 'reset'], 10_000, signal)
+          const res = await this.#sys.runCommand('netsh', ['winsock', 'reset'], 10_000, signal)
           const ok = res.exitCode === 0
           return {
             ok,
@@ -855,7 +884,7 @@ export class NetworkHostPluginHandler {
 
       if (targetId === 'renew-dhcp') {
         if (process.platform === 'win32') {
-          const res = await runCommand('ipconfig', ['/renew'], 15_000, signal)
+          const res = await this.#sys.runCommand('ipconfig', ['/renew'], 15_000, signal)
           const ok = res.exitCode === 0
           return {
             ok,
@@ -870,7 +899,7 @@ export class NetworkHostPluginHandler {
       }
 
       if (targetId === 'ping-gateway-dns') {
-        const probe = await this.#probeTcpEndpoint('223.5.5.5', 53, 3500)
+        const probe = await this.#probeTcp('223.5.5.5', 53, 3500)
         if (probe.ok) {
           return {
             ok: true,
@@ -905,7 +934,7 @@ export class NetworkHostPluginHandler {
 
       if (targetId === 'reset-firewall') {
         if (process.platform === 'win32') {
-          const res = await runCommand('netsh', ['advfirewall', 'reset'], 10_000, signal)
+          const res = await this.#sys.runCommand('netsh', ['advfirewall', 'reset'], 10_000, signal)
           const ok = res.exitCode === 0
           return {
             ok,
@@ -921,7 +950,7 @@ export class NetworkHostPluginHandler {
 
       if (targetId === 'restart-nla') {
         if (process.platform === 'win32') {
-          const res = await runCommand(
+          const res = await this.#sys.runCommand(
             'powershell.exe',
             ['-NoProfile', '-NonInteractive', '-Command', 'Restart-Service -Name NlaSvc -Force -ErrorAction Stop'],
             15_000,
@@ -1097,9 +1126,17 @@ export class NetworkHostPluginHandler {
   async handleWifiPassword(
     fn: string,
     params: Record<string, unknown>,
-    signal?: AbortSignal
+    _signal?: AbortSignal
   ): Promise<unknown> {
     const lowerFn = (fn ?? '').trim().toLowerCase()
+    // 旧接口一次性批量返回全部明文密码、编造频段/信号/加密方式且不检查 netsh 退出码；
+    // 真实读取改由 wifi_get_profiles（只列配置）与 wifi_get_password（按名称单独读取）完成。
+    const wifiPluginOutdated = () => ({
+      ok: false,
+      success: false,
+      errorCode: 'UNSUPPORTED_ACTION',
+      error: '请更新 Wi-Fi 密码查看插件，通过新版接口读取已保存网络，并在需要时单独读取密码'
+    })
 
     if (
       lowerFn === 'listsavednetworks' ||
@@ -1107,136 +1144,7 @@ export class NetworkHostPluginHandler {
       lowerFn === 'getprofiles' ||
       lowerFn === 'list'
     ) {
-      if (params.simulateNoAdapter === true) {
-        return {
-          ok: true,
-          success: true,
-          profiles: [],
-          adapterMissing: true
-        }
-      }
-
-      if (Array.isArray(params.mockProfiles)) {
-        const profiles = params.mockProfiles
-          .filter((p): p is Record<string, unknown> => Boolean(p && typeof p === 'object'))
-          .map((p, idx) => ({
-            id: String(p.id ?? `wifi-${idx + 1}`),
-            ssid: String(p.ssid ?? p.name ?? ''),
-            password: typeof p.password === 'string' ? p.password : '',
-            authType: String(p.authType ?? 'WPA2-Personal'),
-            cipher: String(p.cipher ?? 'CCMP (AES)'),
-            band: String(p.band ?? '5 GHz'),
-            isConnected: Boolean(p.isConnected),
-            isOpenNetwork: Boolean(p.isOpenNetwork),
-            isEnterprise: Boolean(p.isEnterprise),
-            signalPercent: typeof p.signalPercent === 'number' ? p.signalPercent : 90,
-            interfaceName: String(p.interfaceName ?? 'WLAN'),
-            lastConnected: String(p.lastConnected ?? '已保存')
-          }))
-          .filter((p) => Boolean(p.ssid))
-        return {
-          ok: true,
-          success: true,
-          profiles
-        }
-      }
-
-      const profiles: Array<{
-        id: string
-        ssid: string
-        password?: string
-        authType: string
-        cipher: string
-        band: string
-        isConnected: boolean
-        isOpenNetwork: boolean
-        isEnterprise: boolean
-        signalPercent: number
-        interfaceName: string
-        lastConnected: string
-      }> = []
-
-      if (process.platform === 'win32' && params.skipSystemScan !== true) {
-        const ifaceRes = await runCommand('netsh', ['wlan', 'show', 'interfaces'], 5_000, signal)
-        const ifaceOut = ifaceRes.stdout
-        let currentSsid = ''
-        if (ifaceOut) {
-          const m = ifaceOut.match(/^\s*SSID\s*:\s*(.+)$/m)
-          if (m?.[1]) currentSsid = m[1].trim()
-        }
-
-        const rawListRes = await runCommand('netsh', ['wlan', 'show', 'profiles'], 6_000, signal)
-        const rawList = rawListRes.stdout
-        if (rawList) {
-          const lines = rawList.split(/\r?\n/)
-          const ssids: string[] = []
-          for (const line of lines) {
-            if (line.includes('All User Profile') || line.includes('所有用户配置文件') || line.includes('用户配置文件')) {
-              const idx = line.indexOf(':')
-              const cnIdx = line.indexOf('：')
-              const splitIdx = idx >= 0 ? idx : cnIdx
-              if (splitIdx >= 0) {
-                const name = line.slice(splitIdx + 1).trim()
-                if (name && !ssids.includes(name)) ssids.push(name)
-              }
-            }
-          }
-
-          for (let i = 0; i < Math.min(ssids.length, 25); i++) {
-            const ssid = ssids[i]!
-            let password = ''
-            let authType = 'WPA2-Personal'
-            let isOpen = false
-            let isEnterprise = false
-            const detailRes = await runCommand(
-              'netsh',
-              ['wlan', 'show', 'profile', `name=${ssid}`, 'key=clear'],
-              4_000,
-              signal
-            )
-            const detail = detailRes.stdout
-            if (detail) {
-              const keyMatch = detail.match(/(?:Key Content|关键内容)\s*[:：]\s*(.+)/i)
-              if (keyMatch?.[1]) {
-                password = keyMatch[1].trim()
-              }
-              const authMatch = detail.match(/(?:Authentication|身份验证)\s*[:：]\s*(.+)/i)
-              if (authMatch?.[1]) {
-                const rawAuth = authMatch[1].trim()
-                if (/open|开放/i.test(rawAuth)) {
-                  authType = 'Open'
-                  isOpen = true
-                } else if (/enterprise|企业|802\.1x/i.test(rawAuth)) {
-                  authType = 'WPA2-Enterprise'
-                  isEnterprise = true
-                } else if (/wpa3/i.test(rawAuth)) {
-                  authType = 'WPA3-Personal'
-                }
-              }
-            }
-            profiles.push({
-              id: `win-wifi-${ssid}`,
-              ssid,
-              password,
-              authType,
-              cipher: isOpen ? 'None' : 'CCMP (AES)',
-              band: /5g/i.test(ssid) ? '5 GHz' : 'Dual-Band (2.4/5 GHz)',
-              isConnected: ssid === currentSsid,
-              isOpenNetwork: isOpen,
-              isEnterprise,
-              signalPercent: ssid === currentSsid ? 96 : 85,
-              interfaceName: 'WLAN',
-              lastConnected: ssid === currentSsid ? '当前已连接' : '已保存配置'
-            })
-          }
-        }
-      }
-
-      return {
-        ok: true,
-        success: true,
-        profiles
-      }
+      return wifiPluginOutdated()
     }
 
     if (lowerFn === 'getpassword' || lowerFn === 'revealpassword') {
@@ -1250,37 +1158,7 @@ export class NetworkHostPluginHandler {
         }
       }
 
-      if (typeof params.mockPassword === 'string') {
-        return {
-          ok: true,
-          success: true,
-          ssid,
-          password: params.mockPassword
-        }
-      }
-
-      if (process.platform === 'win32') {
-        const detailRes = await runCommand(
-          'netsh',
-          ['wlan', 'show', 'profile', `name=${ssid}`, 'key=clear'],
-          5_000,
-          signal
-        )
-        const keyMatch = detailRes.stdout.match(/(?:Key Content|关键内容)\s*[:：]\s*(.+)/i)
-        return {
-          ok: true,
-          success: true,
-          ssid,
-          password: keyMatch?.[1]?.trim() ?? ''
-        }
-      }
-
-      return {
-        ok: true,
-        success: true,
-        ssid,
-        password: ''
-      }
+      return wifiPluginOutdated()
     }
 
     return {
@@ -1292,7 +1170,62 @@ export class NetworkHostPluginHandler {
   }
 
   // ==================== 09. DNS 测速与一键切换 (DnsBenchmarkPlugin) ====================
-  readonly #adapterDnsOverrides = new Map<string, string[]>()
+  /** netsh / ipconfig 失败：区分需要管理员权限、超时与其他失败，并带上命令输出 */
+  static #netshFailure(action: string, res: { stdout: string; stderr: string; exitCode: number }) {
+    const output = `${res.stderr} ${res.stdout}`.trim()
+    const errorCode = res.exitCode === 124 ? 'TIMEOUT' : /管理员|提升|elevat|administrator|拒绝访问|Access is denied/i.test(output) ? 'ADMIN_PRIVILEGE_REQUIRED' : 'NETSH_FAILED'
+    return { ok: false as const, success: false as const, errorCode, error: `${errorCode}: ${action}失败${output ? `：${output.slice(0, 300)}` : `（退出码 ${res.exitCode}）`}` }
+  }
+
+  /** 读取 Windows 每块已连接网卡的 IPv4、DNS 与是否由 DHCP 下发 */
+  async #readWindowsDnsAdapters(signal?: AbortSignal): Promise<Array<{ name: string; description: string; ipv4: string; isDhcp: boolean; currentDns: string[] }>> {
+    const ps = `
+      $ErrorActionPreference = 'Stop'
+      $list = @(Get-NetIPConfiguration | Where-Object { $_.IPv4Address -and $_.NetAdapter.Status -eq 'Up' } | ForEach-Object {
+        $alias = $_.InterfaceAlias
+        $dnsInfo = Get-DnsClientServerAddress -InterfaceAlias $alias -AddressFamily IPv4
+        $iface = Get-NetIPInterface -InterfaceAlias $alias -AddressFamily IPv4
+        $dhcpDns = $false
+        try {
+          $guid = $_.NetAdapter.InterfaceGuid
+          $reg = Get-ItemProperty -Path ("HKLM:\\SYSTEM\\CurrentControlSet\\Services\\Tcpip\\Parameters\\Interfaces\\" + $guid)
+          $dhcpDns = [string]::IsNullOrWhiteSpace([string]$reg.NameServer)
+        } catch { $dhcpDns = ($iface.Dhcp -eq 'Enabled') }
+        [PSCustomObject]@{
+          name = $alias
+          description = [string]$_.InterfaceDescription
+          ipv4 = [string]($_.IPv4Address | Select-Object -First 1).IPAddress
+          isDhcp = [bool]$dhcpDns
+          currentDns = @($dnsInfo.ServerAddresses)
+        }
+      })
+      @{ adapters = $list } | ConvertTo-Json -Compress -Depth 5
+    `
+    const parsed = JSON.parse(await this.#sys.runPowerShell(ps, 15_000, signal)) as { adapters?: unknown }
+    if (!parsed || !Array.isArray(parsed.adapters)) throw new Error('网卡信息格式无效')
+    return (parsed.adapters as Array<Record<string, unknown>>).map(item => ({
+      name: String(item.name ?? ''),
+      description: String(item.description ?? item.name ?? ''),
+      ipv4: String(item.ipv4 ?? ''),
+      isDhcp: item.isDhcp === true,
+      currentDns: Array.isArray(item.currentDns) ? (item.currentDns as unknown[]).map(String).filter(ip => NetworkHostPluginHandler.#isValidIpv4(ip)) : []
+    })).filter(item => item.name)
+  }
+
+  /** 修改后重新读取系统里的实际 DNS 作为结果，并单独报告刷新缓存是否成功 */
+  async #dnsChangeResult(adapterName: string, signal?: AbortSignal) {
+    const flush = await this.#sys.runCommand('ipconfig', ['/flushdns'], 10_000, signal)
+    let adapter: { isDhcp: boolean; currentDns: string[] } | undefined
+    try { adapter = (await this.#readWindowsDnsAdapters(signal)).find(item => item.name === adapterName) } catch { adapter = undefined }
+    return {
+      ok: true,
+      success: true,
+      adapterName,
+      ...(adapter ? { currentDns: adapter.currentDns, isDhcp: adapter.isDhcp } : { currentDnsUnknown: true }),
+      flushed: flush.exitCode === 0,
+      ...(flush.exitCode === 0 ? {} : { flushError: NetworkHostPluginHandler.#netshFailure('刷新 DNS 缓存', flush).error })
+    }
+  }
 
   static #isValidIpv4(ip: string): boolean {
     if (typeof ip !== 'string') return false
@@ -1325,34 +1258,6 @@ export class NetworkHostPluginHandler {
       lowerFn === 'listadapters' ||
       lowerFn === 'getadapters'
     ) {
-      if (Array.isArray(params.mockAdapters)) {
-        const adapters = params.mockAdapters
-          .filter((a): a is Record<string, unknown> => Boolean(a && typeof a === 'object'))
-          .map((a) => {
-            const name = String(a.name ?? 'WLAN')
-            const overrideDns = this.#adapterDnsOverrides.get(name)
-            const currentDns =
-              overrideDns !== undefined
-                ? overrideDns
-                : Array.isArray(a.currentDns)
-                  ? a.currentDns.map(String)
-                  : []
-            return {
-              name,
-              description: String(a.description ?? name),
-              ipv4: String(a.ipv4 ?? '192.168.1.100'),
-              isDhcp: currentDns.length === 0,
-              currentDns
-            }
-          })
-        return {
-          ok: true,
-          success: true,
-          adapters
-        }
-      }
-
-      const osNets = os.networkInterfaces()
       const adapters: Array<{
         name: string
         description: string
@@ -1360,76 +1265,35 @@ export class NetworkHostPluginHandler {
         isDhcp: boolean
         currentDns: string[]
       }> = []
-      const sysDns = dns
-        .getServers()
-        .map((s: string) => s.replace(/^\[|\]:\d+$/g, ''))
-        .filter((s: string) => NetworkHostPluginHandler.#isValidIpv4(s))
-
-      for (const [name, addrs] of Object.entries(osNets)) {
-        if (/vmware|vbox|hyper-v|wsl|vethernet|loopback/i.test(name)) continue
-        const ipv4 = (addrs ?? []).find((a) => a.family === 'IPv4' && !a.internal)
-        if (!ipv4) continue
-        const overrideDns = this.#adapterDnsOverrides.get(name)
-        const currentDns = overrideDns !== undefined ? overrideDns : sysDns.slice(0, 2)
-        adapters.push({
-          name,
-          description: name,
-          ipv4: ipv4.address,
-          isDhcp: overrideDns !== undefined ? overrideDns.length === 0 : false,
-          currentDns
-        })
-      }
-
-      if (adapters.length === 0) {
-        const fallbackName = process.platform === 'darwin' ? 'Wi-Fi' : 'WLAN'
-        const overrideDns = this.#adapterDnsOverrides.get(fallbackName)
-        const currentDns = overrideDns !== undefined ? overrideDns : sysDns.slice(0, 2)
-        adapters.push({
-          name: fallbackName,
-          description: 'Primary Wireless Adapter',
-          ipv4: '192.168.1.101',
-          isDhcp: currentDns.length === 0,
-          currentDns
-        })
+      if (process.platform === 'win32') {
+        // 每块网卡自己的 DNS 与是否由 DHCP 下发；读取失败如实报错，不编造网卡
+        try {
+          for (const item of await this.#readWindowsDnsAdapters(signal)) adapters.push(item)
+        } catch (err) {
+          return { ok: false, success: false, errorCode: 'ADAPTER_READ_FAILED', error: `ADAPTER_READ_FAILED: 读取网卡 DNS 配置失败：${err instanceof Error ? err.message : String(err)}` }
+        }
+      } else {
+        const sysDns = dns
+          .getServers()
+          .map((s: string) => s.replace(/^\[|\]:\d+$/g, ''))
+          .filter((s: string) => NetworkHostPluginHandler.#isValidIpv4(s))
+        for (const [name, addrs] of Object.entries(os.networkInterfaces())) {
+          if (/vmware|vbox|loopback/i.test(name)) continue
+          const ipv4 = (addrs ?? []).find((a) => a.family === 'IPv4' && !a.internal)
+          if (!ipv4) continue
+          adapters.push({ name, description: name, ipv4: ipv4.address, isDhcp: false, currentDns: sysDns.slice(0, 2) })
+        }
       }
 
       return {
         ok: true,
         success: true,
-        adapters
+        adapters,
+        ...(adapters.length === 0 ? { message: '未找到已连接且可修改 DNS 的网卡' } : {})
       }
     }
 
     if (lowerFn === 'benchmarkdns' || lowerFn === 'probedns' || lowerFn === 'testdns') {
-      if (params.simulateOffline === true) {
-        const servers = Array.isArray(params.servers) ? params.servers : []
-        const results = servers
-          .filter((s): s is Record<string, unknown> => Boolean(s && typeof s === 'object'))
-          .map((s) => ({
-            id: String(s.id ?? s.primary ?? ''),
-            primary: String(s.primary ?? ''),
-            secondary: String(s.secondary ?? ''),
-            avgMs: 1500,
-            primaryMs: null,
-            secondaryMs: null,
-            timeout: true
-          }))
-        return {
-          ok: true,
-          success: true,
-          offline: true,
-          results
-        }
-      }
-
-      if (Array.isArray(params.mockResults)) {
-        return {
-          ok: true,
-          success: true,
-          results: params.mockResults
-        }
-      }
-
       const rawServers = Array.isArray(params.servers) ? params.servers : []
       const timeoutMs = Math.max(200, Math.min(3000, Number(params.timeoutMs) || 1200))
 
@@ -1453,9 +1317,9 @@ export class NetworkHostPluginHandler {
               }
             }
             const [probePrimary, probeSecondary] = await Promise.all([
-              this.#probeTcpEndpoint(primary, 53, timeoutMs),
+              this.#probeTcp(primary, 53, timeoutMs),
               NetworkHostPluginHandler.#isValidIpv4(secondary)
-                ? this.#probeTcpEndpoint(secondary, 53, timeoutMs)
+                ? this.#probeTcp(secondary, 53, timeoutMs)
                 : Promise.resolve({ ok: false, latencyMs: timeoutMs })
             ])
             const primaryMs = probePrimary.ok ? probePrimary.latencyMs : null
@@ -1510,48 +1374,22 @@ export class NetworkHostPluginHandler {
         }
       }
 
-      if (params.simulatePermissionDenied === true) {
-        return {
-          ok: false,
-          success: false,
-          errorCode: 'ADMIN_PRIVILEGE_REQUIRED',
-          error: 'ADMIN_PRIVILEGE_REQUIRED: 修改系统网卡 DNS 需要管理员权限'
+      if (params.executeSystemModify !== true) {
+        return { ok: false, success: false, errorCode: 'NOT_EXECUTED', error: 'NOT_EXECUTED: 未执行系统修改（executeSystemModify 未开启），DNS 未改变' }
+      }
+      if (process.platform !== 'win32') {
+        return { ok: false, success: false, errorCode: 'UNSUPPORTED_PLATFORM', error: '此入口仅用于 Windows；macOS 请使用新版 DNS 测速插件' }
+      }
+      const setPrimary = await this.#sys.runCommand('netsh', ['interface', 'ip', 'set', 'dns', `name=${adapterName}`, 'static', primary, 'validate=no'], 10_000, signal)
+      if (setPrimary.exitCode !== 0) return NetworkHostPluginHandler.#netshFailure('修改主 DNS', setPrimary)
+      if (secondary) {
+        const addSecondary = await this.#sys.runCommand('netsh', ['interface', 'ip', 'add', 'dns', `name=${adapterName}`, secondary, 'index=2', 'validate=no'], 10_000, signal)
+        if (addSecondary.exitCode !== 0) {
+          const failure = NetworkHostPluginHandler.#netshFailure('添加备用 DNS', addSecondary)
+          return { ...failure, errorCode: 'SECONDARY_DNS_FAILED', error: `SECONDARY_DNS_FAILED: 主 DNS 已改为 ${primary}，但${failure.error}` }
         }
       }
-
-      const dnsPair = secondary ? [primary, secondary] : [primary]
-      this.#adapterDnsOverrides.set(adapterName, dnsPair)
-
-      if (params.executeSystemModify === true) {
-        if (process.platform === 'win32') {
-          await runCommand(
-            'netsh',
-            ['interface', 'ip', 'set', 'dns', `name=${adapterName}`, 'static', primary],
-            6_000,
-            signal
-          )
-          if (secondary) {
-            await runCommand(
-              'netsh',
-              ['interface', 'ip', 'add', 'dns', `name=${adapterName}`, secondary, 'index=2'],
-              6_000,
-              signal
-            )
-          }
-          await runCommand('ipconfig', ['/flushdns'], 5_000, signal)
-        } else if (process.platform === 'darwin') {
-          await runCommand('networksetup', ['-setdnsservers', adapterName, ...dnsPair], 6_000, signal)
-          await runCommand('dscacheutil', ['-flushcache'], 5_000, signal)
-        }
-      }
-
-      return {
-        ok: true,
-        success: true,
-        adapterName,
-        currentDns: dnsPair,
-        flushed: true
-      }
+      return this.#dnsChangeResult(adapterName, signal)
     }
 
     if (lowerFn === 'resetdhcp' || lowerFn === 'resetdns') {
@@ -1564,47 +1402,28 @@ export class NetworkHostPluginHandler {
           error: 'INVALID_ADAPTER_NAME: 网卡名称不合法'
         }
       }
-      if (params.simulatePermissionDenied === true) {
-        return {
-          ok: false,
-          success: false,
-          errorCode: 'ADMIN_PRIVILEGE_REQUIRED',
-          error: 'ADMIN_PRIVILEGE_REQUIRED: 恢复 DHCP 自动获取 DNS 需要管理员权限'
-        }
+      if (params.executeSystemModify !== true) {
+        return { ok: false, success: false, errorCode: 'NOT_EXECUTED', error: 'NOT_EXECUTED: 未执行系统修改（executeSystemModify 未开启），DNS 未改变' }
       }
-
-      this.#adapterDnsOverrides.set(adapterName, [])
-      if (params.executeSystemModify === true) {
-        if (process.platform === 'win32') {
-          await runCommand(
-            'netsh',
-            ['interface', 'ip', 'set', 'dns', `name=${adapterName}`, 'dhcp'],
-            6_000,
-            signal
-          )
-          await runCommand('ipconfig', ['/flushdns'], 5_000, signal)
-        } else if (process.platform === 'darwin') {
-          await runCommand('networksetup', ['-setdnsservers', adapterName, 'Empty'], 6_000, signal)
-          await runCommand('dscacheutil', ['-flushcache'], 5_000, signal)
-        }
+      if (process.platform !== 'win32') {
+        return { ok: false, success: false, errorCode: 'UNSUPPORTED_PLATFORM', error: '此入口仅用于 Windows；macOS 请使用新版 DNS 测速插件' }
       }
-
-      return {
-        ok: true,
-        success: true,
-        adapterName,
-        isDhcp: true,
-        currentDns: [],
-        flushed: true
-      }
+      const reset = await this.#sys.runCommand('netsh', ['interface', 'ip', 'set', 'dns', `name=${adapterName}`, 'dhcp'], 10_000, signal)
+      if (reset.exitCode !== 0) return NetworkHostPluginHandler.#netshFailure('恢复自动获取 DNS', reset)
+      return this.#dnsChangeResult(adapterName, signal)
     }
 
     if (lowerFn === 'flushcache' || lowerFn === 'flushdns') {
-      if (process.platform === 'win32' && params.skipSystemExec !== true) {
-        await runCommand('ipconfig', ['/flushdns'], 5_000, signal)
-      } else if (process.platform === 'darwin' && params.skipSystemExec !== true) {
-        await runCommand('dscacheutil', ['-flushcache'], 5_000, signal)
+      if (params.skipSystemExec === true) {
+        return { ok: false, success: false, errorCode: 'NOT_EXECUTED', error: 'NOT_EXECUTED: 未执行刷新' }
       }
+      const res = process.platform === 'win32'
+        ? await this.#sys.runCommand('ipconfig', ['/flushdns'], 10_000, signal)
+        : process.platform === 'darwin'
+          ? await this.#sys.runCommand('dscacheutil', ['-flushcache'], 10_000, signal)
+          : null
+      if (!res) return { ok: false, success: false, errorCode: 'UNSUPPORTED_PLATFORM', error: '当前平台不支持刷新 DNS 缓存' }
+      if (res.exitCode !== 0) return NetworkHostPluginHandler.#netshFailure('刷新 DNS 缓存', res)
       return {
         ok: true,
         success: true,
@@ -1622,250 +1441,24 @@ export class NetworkHostPluginHandler {
   }
 
   // ==================== 13. 网络测速与多节点诊断 (SpeedtestPlugin) ====================
+  /**
+   * 旧接口不再测速：原实现下载测不到时按延迟推算带宽、上传取下载的 30%、只有一个探测时抖动填固定值、
+   * 本机 IP 缺省写死、网关按 x.x.x.1 猜测，节点不可达时把超时时间当延迟、连通即报 200，都属于编造数据。
+   * 测速与节点检测统一走新版 network_speedtest 接口；这里不再执行任何探测或网络请求。
+   */
   async handleSpeedtest(
     fn: string,
-    params: Record<string, unknown>,
-    signal?: AbortSignal
+    _params: Record<string, unknown>,
+    _signal?: AbortSignal
   ): Promise<unknown> {
     const lowerFn = (fn ?? '').trim().toLowerCase()
-
-    if (lowerFn === 'probenodes' || lowerFn === 'pingnodes' || lowerFn === 'probe') {
-      if (params.simulateOffline === true) {
-        const nodes = Array.isArray(params.nodes) ? params.nodes : []
-        return {
-          ok: true,
-          success: true,
-          offline: true,
-          probes: nodes
-            .filter((n): n is Record<string, unknown> => Boolean(n && typeof n === 'object'))
-            .map((n) => ({
-              id: String(n.id ?? n.host ?? ''),
-              name: String(n.name ?? n.host ?? ''),
-              host: String(n.host ?? ''),
-              region: String(n.region ?? 'domestic'),
-              regionLabel: String(n.regionLabel ?? '国内节点'),
-              categoryDesc: String(n.categoryDesc ?? ''),
-              reachable: false,
-              latencyMs: 2500,
-              statusCode: 0,
-              errorCode: 'ENETUNREACH'
-            }))
-        }
-      }
-
-      if (Array.isArray(params.mockProbes)) {
-        return {
-          ok: true,
-          success: true,
-          probes: params.mockProbes
-        }
-      }
-
-      const rawNodes = Array.isArray(params.nodes) ? params.nodes : []
-      const timeoutMs = Math.max(200, Math.min(4000, Number(params.timeoutMs) || 2000))
-
-      const probes = await Promise.all(
-        rawNodes
-          .filter((n): n is Record<string, unknown> => Boolean(n && typeof n === 'object'))
-          .map(async (n) => {
-            const id = String(n.id ?? n.host ?? '')
-            const name = String(n.name ?? n.host ?? '')
-            const host = String(n.host ?? '').trim()
-            const port = Number(n.port) || 443
-            const region = String(n.region ?? 'domestic')
-            const regionLabel = String(n.regionLabel ?? (region === 'global' ? '国际节点' : region === 'lan' ? '局域网网关' : '国内核心'))
-            const categoryDesc = String(n.categoryDesc ?? host)
-
-            if (n.simulateTimeout === true || !host || /[;&|`$<>\\"\r\n\0]/.test(host)) {
-              return {
-                id,
-                name,
-                host,
-                region,
-                regionLabel,
-                categoryDesc,
-                reachable: false,
-                latencyMs: timeoutMs,
-                statusCode: 0,
-                errorCode: 'ETIMEDOUT'
-              }
-            }
-
-            if (typeof n.mockLatencyMs === 'number') {
-              return {
-                id,
-                name,
-                host,
-                region,
-                regionLabel,
-                categoryDesc,
-                reachable: n.mockLatencyMs < timeoutMs,
-                latencyMs: n.mockLatencyMs,
-                statusCode: 200
-              }
-            }
-
-            const tcpRes = await this.#probeTcpEndpoint(host, port, timeoutMs)
-            return {
-              id,
-              name,
-              host,
-              region,
-              regionLabel,
-              categoryDesc,
-              reachable: tcpRes.ok,
-              latencyMs: tcpRes.ok ? tcpRes.latencyMs : timeoutMs,
-              statusCode: tcpRes.ok ? 200 : 0,
-              ...(tcpRes.ok ? {} : { errorCode: 'ETIMEDOUT' })
-            }
-          })
-      )
-
+    const legacyFns = ['probenodes', 'pingnodes', 'probe', 'runbandwidthtest', 'speedtest', 'measurebandwidth']
+    if (legacyFns.includes(lowerFn)) {
       return {
-        ok: true,
-        success: true,
-        probes
-      }
-    }
-
-    if (lowerFn === 'runbandwidthtest' || lowerFn === 'speedtest' || lowerFn === 'measurebandwidth') {
-      if (signal?.aborted) {
-        return {
-          ok: false,
-          success: false,
-          errorCode: 'ABORTED',
-          error: 'ABORTED: 测速已被用户主动中止'
-        }
-      }
-
-      if (params.simulateOffline === true) {
-        return {
-          ok: false,
-          success: false,
-          offline: true,
-          errorCode: 'ENETUNREACH',
-          error: 'ENETUNREACH: 网络已断开：本机无法连接路由器网关，请检查 Wi-Fi 或网线连接'
-        }
-      }
-
-      const osNets = os.networkInterfaces()
-      let localIp = '192.168.1.101'
-      for (const addrs of Object.values(osNets)) {
-        const found = (addrs ?? []).find((a) => a.family === 'IPv4' && !a.internal)
-        if (found) {
-          localIp = found.address
-          break
-        }
-      }
-      const parts = localIp.split('.')
-      const gatewayIp = parts.length === 4 ? `${parts[0]}.${parts[1]}.${parts[2]}.1` : '192.168.1.1'
-
-      if (params.mockBandwidth && typeof params.mockBandwidth === 'object') {
-        const mb = params.mockBandwidth as Record<string, unknown>
-        const downloadMbps = Math.max(0, Number(mb.downloadMbps ?? 0) || 0)
-        const uploadMbps = Math.max(0, Number(mb.uploadMbps ?? 0) || 0)
-        const pingMs = Math.max(1, Number(mb.pingMs ?? 12) || 12)
-        const jitterMs = Math.max(0, Number(mb.jitterMs ?? 2) || 2)
-        return {
-          ok: true,
-          success: true,
-          downloadMbps,
-          downloadMBps: Math.round((downloadMbps / 8) * 10) / 10,
-          uploadMbps,
-          uploadMBps: Math.round((uploadMbps / 8) * 10) / 10,
-          pingMs,
-          jitterMs,
-          localIp: String(mb.localIp ?? localIp),
-          gatewayIp: String(mb.gatewayIp ?? gatewayIp)
-        }
-      }
-
-      // Measure real TCP latency to domestic CDN IP (223.5.5.5:53 and 119.29.29.29:53)
-      const [p1, p2] = await Promise.all([
-        this.#probeTcpEndpoint('223.5.5.5', 53, 1500),
-        this.#probeTcpEndpoint('119.29.29.29', 53, 1500)
-      ])
-      if (!p1.ok && !p2.ok) {
-        return {
-          ok: false,
-          success: false,
-          offline: true,
-          errorCode: 'ENETUNREACH',
-          error: 'ENETUNREACH: 网络已断开：本机无法连接外部网络'
-        }
-      }
-
-      const validPings = [p1.ok ? p1.latencyMs : null, p2.ok ? p2.latencyMs : null].filter(
-        (v): v is number => v !== null
-      )
-      const pingMs = Math.max(
-        1,
-        Math.round(validPings.reduce((a, b) => a + b, 0) / validPings.length)
-      )
-      const jitterMs =
-        validPings.length >= 2 ? Math.abs(validPings[0]! - validPings[1]!) : 2
-
-      // Measure real HTTP download/upload throughput with fallback to socket RTT estimate when CDN is unreachable
-      let downloadMbps = 0
-      let uploadMbps = 0
-      try {
-        const dlStart = performance.now()
-        const dlCtrl = new AbortController()
-        const dlTimer = setTimeout(() => dlCtrl.abort(), 3200)
-        const dlRes = await fetch('https://speed.cloudflare.com/__down?bytes=1500000', {
-          method: 'GET',
-          signal: dlCtrl.signal,
-          headers: { 'Cache-Control': 'no-cache' }
-        })
-        if (dlRes.ok) {
-          const buf = await dlRes.arrayBuffer()
-          clearTimeout(dlTimer)
-          const elapsedSec = Math.max(0.05, (performance.now() - dlStart) / 1000)
-          if (buf.byteLength > 0) {
-            downloadMbps = Math.round(((buf.byteLength * 8) / (elapsedSec * 1_000_000)) * 10) / 10
-          }
-        } else {
-          clearTimeout(dlTimer)
-        }
-      } catch {
-        // Fallback handled below
-      }
-      if (downloadMbps <= 0) {
-        downloadMbps = Math.max(10, Math.round((1000 / Math.max(2, pingMs)) * 6.5 * 10) / 10)
-      }
-      try {
-        const ulPayload = new Uint8Array(200_000)
-        const ulStart = performance.now()
-        const ulCtrl = new AbortController()
-        const ulTimer = setTimeout(() => ulCtrl.abort(), 2200)
-        const ulRes = await fetch('https://speed.cloudflare.com/__up', {
-          method: 'POST',
-          body: ulPayload,
-          signal: ulCtrl.signal
-        })
-        clearTimeout(ulTimer)
-        if (ulRes.ok) {
-          const elapsedSec = Math.max(0.05, (performance.now() - ulStart) / 1000)
-          uploadMbps = Math.round(((ulPayload.byteLength * 8) / (elapsedSec * 1_000_000)) * 10) / 10
-        }
-      } catch {
-        // Fallback handled below
-      }
-      if (uploadMbps <= 0) {
-        uploadMbps = Math.max(5, Math.round(downloadMbps * 0.3 * 10) / 10)
-      }
-
-      return {
-        ok: true,
-        success: true,
-        downloadMbps,
-        downloadMBps: Math.round((downloadMbps / 8) * 10) / 10,
-        uploadMbps,
-        uploadMBps: Math.round((uploadMbps / 8) * 10) / 10,
-        pingMs,
-        jitterMs,
-        localIp,
-        gatewayIp
+        ok: false,
+        success: false,
+        errorCode: 'UNSUPPORTED_ACTION',
+        error: '请更新网络测速插件，通过新版接口测量带宽与检测节点（新版接口目前仅支持 macOS）'
       }
     }
 
@@ -1884,14 +1477,15 @@ export class NetworkHostPluginHandler {
     signal?: AbortSignal
   ): Promise<unknown> {
     const lowerFn = (fn ?? '').trim().toLowerCase()
+    if (process.platform === 'darwin' && (!['read', 'readsystemhosts'].includes(lowerFn) || Object.keys(params).length)) {
+      return { ok: false, success: false, errorCode: 'UPGRADE_REQUIRED', error: '请更新域名映射插件，使用带备份和系统授权的 Hosts 安全管理入口' }
+    }
     const defaultHostsPath =
       process.platform === 'win32'
         ? path.join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'drivers', 'etc', 'hosts')
         : '/etc/hosts'
-    const targetPath =
-      typeof params.customHostsPath === 'string' && params.customHostsPath.trim()
-        ? path.resolve(params.customHostsPath.trim())
-        : defaultHostsPath
+    // 只读取系统 hosts：调用方不能指定其他路径，否则会借主进程权限读取任意文件（测试只能经构造参数替换）
+    const targetPath = this.#hostsPathOverride ?? defaultHostsPath
 
     if (lowerFn === 'read' || lowerFn === 'readsystemhosts') {
       try {
@@ -1908,59 +1502,25 @@ export class NetworkHostPluginHandler {
     }
 
     if (lowerFn === 'apply' || lowerFn === 'applycombinedhosts') {
-      if (params.simulateAccessDenied === true) {
-        return {
-          ok: false,
-          success: false,
-          errorCode: 'EACCES',
-          error: 'EACCES: 写入系统 hosts 需要管理员权限，请以管理员身份运行或检查杀毒软件拦截'
-        }
-      }
-      const content = String(params.content ?? '')
-      try {
-        if (fsSync.existsSync(targetPath)) {
-          const bakPath = `${targetPath}.ztools.bak`
-          await fs.copyFile(targetPath, bakPath).catch(() => undefined)
-        }
-        await fs.writeFile(targetPath, content, 'utf8')
-        if (params.skipFlushDns !== true && process.platform === 'win32') {
-          await runCommand('ipconfig', ['/flushdns'], 3000, signal).catch(() => undefined)
-        }
-        return { ok: true, success: true, hostsPath: targetPath }
-      } catch (err) {
-        const code = (err as NodeJS.ErrnoException)?.code
-        return {
-          ok: false,
-          success: false,
-          errorCode: code === 'EPERM' || code === 'EACCES' ? 'EACCES' : 'WRITE_FAILED',
-          error:
-            code === 'EPERM' || code === 'EACCES'
-              ? 'EACCES: 权限不足，无法写入系统 hosts 文件'
-              : err instanceof Error
-                ? err.message
-                : '写入 hosts 失败'
-        }
+      // 旧接口用调用方给的完整内容整体覆盖系统 hosts，没有授权确认与可恢复的备份；Windows 版插件已下线重做，
+      // 但已安装的旧版仍会调用这里，写入一律拒绝（macOS 在上面已要求更新插件）
+      return {
+        ok: false,
+        success: false,
+        errorCode: 'UNSUPPORTED_ACTION',
+        error: process.platform === 'win32' ? 'Windows 版域名映射正在重做，暂不支持写入系统 hosts' : '当前系统不支持通过旧接口写入系统 hosts'
       }
     }
 
     if (lowerFn === 'flushdns') {
-      if (params.simulateTimeout === true) {
-        return {
-          ok: false,
-          success: false,
-          errorCode: 'TIMEOUT',
-          error: 'TIMEOUT: 刷新 DNS 缓存超时 (超过 3000ms 保护阈值)'
-        }
+      if (params.dryRun === true) return { ok: true, success: true, dryRun: true, output: '预览：将执行 ipconfig /flushdns，未实际刷新' }
+      if (process.platform !== 'win32') {
+        return { ok: false, success: false, errorCode: 'UNSUPPORTED_PLATFORM', error: '此入口仅用于 Windows，未刷新 DNS 缓存' }
       }
-      if (process.platform === 'win32' && params.dryRun !== true) {
-        const res = await runCommand('ipconfig', ['/flushdns'], 3000, signal)
-        return {
-          ok: res.exitCode === 0,
-          success: res.exitCode === 0,
-          output: res.stdout || res.stderr || '已刷新本地 DNS 缓存'
-        }
-      }
-      return { ok: true, success: true, output: '已刷新本地 DNS 缓存' }
+      // 超时（124）、取消（130）或其他非零退出都如实报错，不能报告“已刷新”
+      const res = await this.#sys.runCommand('ipconfig', ['/flushdns'], 3000, signal)
+      if (res.exitCode !== 0) return NetworkHostPluginHandler.#netshFailure('刷新 DNS 缓存', res)
+      return { ok: true, success: true, output: res.stdout || '已刷新本地 DNS 缓存' }
     }
 
     return { ok: false, success: false, error: `Unsupported HostsSwitcherPlugin function: ${fn}` }
@@ -1980,17 +1540,8 @@ export class NetworkHostPluginHandler {
   ): Promise<unknown> {
     const lowerFn = (fn ?? '').trim().toLowerCase()
 
-    if (params.simulateDaemonOffline === true) {
-      return {
-        ok: false,
-        success: false,
-        errorCode: 'DAEMON_OFFLINE',
-        error: 'DAEMON_OFFLINE: 未检测到正在运行的 Docker 引擎，请先启动 Docker Desktop / OrbStack'
-      }
-    }
-
     if (lowerFn === 'ping' || lowerFn === 'pingdockerdaemon') {
-      const res = await runCommand('docker', ['info', '--format', '{{.ServerVersion}}'], 3000, signal)
+      const res = await this.#sys.runCommand('docker', ['info', '--format', '{{.ServerVersion}}'], 3000, signal)
       const online = res.exitCode === 0 && Boolean(res.stdout.trim())
       return {
         ok: online,
@@ -2002,10 +1553,7 @@ export class NetworkHostPluginHandler {
     }
 
     if (lowerFn === 'list' || lowerFn === 'listcontainers') {
-      if (Array.isArray(params.rawContainers)) {
-        return { ok: true, success: true, containers: params.rawContainers }
-      }
-      const res = await runCommand('docker', ['ps', '-a', '--format', '{{json .}}'], 4000, signal)
+      const res = await this.#sys.runCommand('docker', ['ps', '-a', '--format', '{{json .}}'], 4000, signal)
       if (res.exitCode !== 0) {
         return {
           ok: false,
@@ -2042,7 +1590,7 @@ export class NetworkHostPluginHandler {
       if (params.dryRun === true) {
         return { ok: true, success: true, id, action: dockerSub, command: `docker ${dockerSub} ${id}` }
       }
-      const res = await runCommand('docker', [dockerSub, id], 8000, signal)
+      const res = await this.#sys.runCommand('docker', [dockerSub, id], 8000, signal)
       return {
         ok: res.exitCode === 0,
         success: res.exitCode === 0,
@@ -2055,17 +1603,10 @@ export class NetworkHostPluginHandler {
     if (lowerFn === 'logs' || lowerFn === 'getcontainertaillogs') {
       const id = String(params.id ?? '').trim()
       const lines = Math.max(1, Math.min(500, Number(params.lines) || 100))
-      if (typeof params.rawLogs === 'string') {
-        return {
-          ok: true,
-          success: true,
-          logs: NetworkHostPluginHandler.#stripAnsiCodes(params.rawLogs)
-        }
-      }
       if (!/^[a-zA-Z0-9_.-]{1,64}$/.test(id)) {
         return { ok: false, success: false, errorCode: 'INVALID_CONTAINER_ID', error: '容器 ID 非法' }
       }
-      const res = await runCommand('docker', ['logs', '--tail', String(lines), id], 5000, signal)
+      const res = await this.#sys.runCommand('docker', ['logs', '--tail', String(lines), id], 5000, signal)
       return {
         ok: res.exitCode === 0,
         success: res.exitCode === 0,
@@ -2094,60 +1635,24 @@ export class NetworkHostPluginHandler {
   async handleLanScanner(
     fn: string,
     params: Record<string, unknown>,
-    signal?: AbortSignal
+    _signal?: AbortSignal
   ): Promise<unknown> {
+    if (process.platform === 'darwin') return { success: false, error: 'Mac 局域网扫描旧接口不支持，请升级插件与客户端' }
     const lowerFn = (fn ?? '').trim().toLowerCase()
+    // 旧接口的真实分支把非 /24 网段一律当 /24、只回原始 arp 文本、唤醒不核对网卡；真实扫描与唤醒改由 lan_network 新接口完成
+    const lanPluginOutdated = () => ({
+      ok: false,
+      success: false,
+      errorCode: 'UNSUPPORTED_ACTION',
+      error: '请更新局域网扫描插件，通过新版接口扫描与唤醒'
+    })
 
-    if (lowerFn === 'interfaces' || lowerFn === 'detectactiveinterfaces') {
-      if (params.simulateOffline === true) {
-        return { ok: true, success: true, offline: true, interfaces: [] }
-      }
-      const osNets = os.networkInterfaces()
-      const interfaces: Array<{
-        name: string
-        ip: string
-        subnetMask: string
-        subnetDisplay: string
-        broadcastIp: string
-      }> = []
-      for (const [name, addrs] of Object.entries(osNets)) {
-        if (/vmware|vbox|hyper-v|wsl|vethernet|loopback|docker/i.test(name)) continue
-        const ipv4 = (addrs ?? []).find((a) => a.family === 'IPv4' && !a.internal)
-        if (!ipv4) continue
-        const parts = ipv4.address.split('.')
-        const prefix = parts.slice(0, 3).join('.')
-        interfaces.push({
-          name,
-          ip: ipv4.address,
-          subnetMask: ipv4.netmask || '255.255.255.0',
-          subnetDisplay: `${prefix}.0/24`,
-          broadcastIp: `${prefix}.255`
-        })
-      }
-      return { ok: true, success: true, interfaces }
-    }
-
-    if (lowerFn === 'scan' || lowerFn === 'scansubnet') {
-      if (params.simulateOffline === true) {
-        return {
-          ok: false,
-          success: false,
-          errorCode: 'NETWORK_OFFLINE',
-          error: 'NETWORK_OFFLINE: 未连接局域网，找不到可用物理网卡'
-        }
-      }
-      const arpRes = await runCommand('arp', ['-a'], 4000, signal)
-      return {
-        ok: true,
-        success: true,
-        arpRaw: arpRes.stdout || ''
-      }
+    if (lowerFn === 'interfaces' || lowerFn === 'detectactiveinterfaces' || lowerFn === 'scan' || lowerFn === 'scansubnet') {
+      return lanPluginOutdated()
     }
 
     if (lowerFn === 'wol' || lowerFn === 'sendwakeonlan') {
       const mac = String(params.mac ?? '').trim()
-      const broadcastIp = String(params.broadcastIp ?? '255.255.255.255').trim()
-      const port = Number(params.port ?? 9) || 9
       let packet: Buffer
       try {
         packet = NetworkHostPluginHandler.buildWolMagicPacket(mac)
@@ -2169,179 +1674,32 @@ export class NetworkHostPluginHandler {
         }
       }
 
-      await new Promise<void>((resolve, reject) => {
-        const client = dgram.createSocket('udp4')
-        client.once('error', (err) => {
-          client.close()
-          reject(err)
-        })
-        client.bind(0, () => {
-          client.setBroadcast(true)
-          client.send(packet, 0, packet.byteLength, port, broadcastIp, (err) => {
-            client.close()
-            if (err) reject(err)
-            else resolve()
-          })
-        })
-      })
-
-      return {
-        ok: true,
-        success: true,
-        byteLength: packet.byteLength,
-        packetHex: packet.toString('hex')
-      }
+      return lanPluginOutdated()
     }
 
     return { ok: false, success: false, error: `Unsupported LanScannerPlugin function: ${fn}` }
   }
 
   // ==================== 31. SSH 与开发代理管家 (SshProxyHelperPlugin) ====================
-  #devProxyState: { isEnabled: boolean; port: number; isGitSet: boolean; isNpmSet: boolean } = {
-    isEnabled: false,
-    port: 7890,
-    isGitSet: false,
-    isNpmSet: false
-  }
-  #devProxyTouched = false
-
   async handleSshProxyHelper(
     fn: string,
-    params: Record<string, unknown>,
-    signal?: AbortSignal
+    _params: Record<string, unknown>,
+    _signal?: AbortSignal
   ): Promise<unknown> {
     const lowerFn = (fn ?? '').trim().toLowerCase()
-
-    if (lowerFn === 'readconfig' || lowerFn === 'parsesshconfigfile') {
-      const configPath =
-        typeof params.customConfigPath === 'string' && params.customConfigPath.trim()
-          ? path.resolve(params.customConfigPath.trim())
-          : path.join(os.homedir(), '.ssh', 'config')
-      try {
-        if (!fsSync.existsSync(configPath)) {
-          return { ok: true, success: true, exists: false, content: '', configPath }
-        }
-        const content = await fs.readFile(configPath, 'utf8')
-        return { ok: true, success: true, exists: true, content, configPath }
-      } catch (err) {
-        return {
-          ok: false,
-          success: false,
-          errorCode: 'READ_SSH_CONFIG_FAILED',
-          error: err instanceof Error ? err.message : '读取 ~/.ssh/config 失败'
-        }
-      }
-    }
-
-    if (lowerFn === 'proxystatus' || lowerFn === 'getproxystatus') {
-      const candidatePorts = [7890, 10808, 10809, 6152, 1080]
-      const detectedPorts: number[] = []
-      if (Array.isArray(params.mockListeningPorts)) {
-        detectedPorts.push(...params.mockListeningPorts.map(Number).filter((n) => n > 0))
-      } else if (params.skipPortProbe !== true) {
-        const checks = await Promise.all(
-          candidatePorts.map(async (p) => {
-            const res = await this.#probeTcpEndpoint('127.0.0.1', p, 180)
-            return res.ok ? p : null
-          })
-        )
-        for (const p of checks) {
-          if (p !== null) detectedPorts.push(p)
-        }
-      }
-
-      if (
-        !this.#devProxyTouched &&
-        !Array.isArray(params.mockListeningPorts) &&
-        params.skipSystemQuery !== true
-      ) {
-        try {
-          const gitRes = await runCommand('git', ['config', '--global', '--get', 'http.proxy'], 1500, signal)
-          const gitProxy = gitRes.exitCode === 0 ? gitRes.stdout.trim() : ''
-          if (gitProxy) {
-            const portMatch = /:(\d+)\/?$/.exec(gitProxy)
-            const parsedPort = portMatch ? Number(portMatch[1]) : 7890
-            this.#devProxyState = {
-              isEnabled: true,
-              port: parsedPort,
-              isGitSet: true,
-              isNpmSet: this.#devProxyState.isNpmSet
-            }
-          } else if (detectedPorts.length > 0 && !this.#devProxyState.isEnabled) {
-            this.#devProxyState = {
-              ...this.#devProxyState,
-              port: detectedPorts[0] ?? 7890
-            }
-          }
-        } catch {
-          // ignore git query error
-        }
-      }
-
+    // 旧接口从不写 NPM、吞掉 Git 失败、不备份原代理、初始状态假装已启用，且可读任意路径；
+    // 真实读取与修改改由 ssh_proxy 新接口完成（先预览、备份、写入后读回核验）。
+    if (
+      lowerFn === 'readconfig' || lowerFn === 'parsesshconfigfile' ||
+      lowerFn === 'proxystatus' || lowerFn === 'getproxystatus' ||
+      lowerFn === 'setproxy' || lowerFn === 'setdevtoolsproxy' ||
+      lowerFn === 'unsetproxy' || lowerFn === 'unsetdevtoolsproxy'
+    ) {
       return {
-        ok: true,
-        success: true,
-        ...this.#devProxyState,
-        detectedPorts
-      }
-    }
-
-    if (lowerFn === 'setproxy' || lowerFn === 'setdevtoolsproxy') {
-      const port = Number(params.port ?? 7890)
-      if (!Number.isInteger(port) || port < 1 || port > 65535) {
-        return { ok: false, success: false, errorCode: 'INVALID_PORT', error: '代理端口号必须在 1 ~ 65535 之间' }
-      }
-      if (params.requireListening === true) {
-        const isListening =
-          Array.isArray(params.mockListeningPorts)
-            ? params.mockListeningPorts.includes(port)
-            : (await this.#probeTcpEndpoint('127.0.0.1', port, 250)).ok
-        if (!isListening) {
-          return {
-            ok: false,
-            success: false,
-            errorCode: 'PROXY_PORT_NOT_LISTENING',
-            error: `本地端口 ${port} 未处于监听状态，请确保已启动 Clash 或对应代理软件`
-          }
-        }
-      }
-
-      const proxyUrl = `http://127.0.0.1:${port}`
-      this.#devProxyTouched = true
-      this.#devProxyState = {
-        isEnabled: true,
-        port,
-        isGitSet: true,
-        isNpmSet: true
-      }
-      if (params.applySystemGit === true) {
-        await runCommand('git', ['config', '--global', 'http.proxy', proxyUrl], 3000, signal).catch(() => undefined)
-        await runCommand('git', ['config', '--global', 'https.proxy', proxyUrl], 3000, signal).catch(() => undefined)
-      }
-      return {
-        ok: true,
-        success: true,
-        ...this.#devProxyState,
-        proxyUrl
-      }
-    }
-
-    if (lowerFn === 'unsetproxy' || lowerFn === 'unsetdevtoolsproxy') {
-      this.#devProxyTouched = true
-      this.#devProxyState = {
-        isEnabled: false,
-        port: this.#devProxyState.port,
-        isGitSet: false,
-        isNpmSet: false
-      }
-      if (params.applySystemGit === true) {
-        await runCommand('git', ['config', '--global', '--unset', 'http.proxy'], 3000, signal).catch(() => undefined)
-        await runCommand('git', ['config', '--global', '--unset', 'https.proxy'], 3000, signal).catch(() => undefined)
-      }
-      return {
-        ok: true,
-        success: true,
-        ...this.#devProxyState
+        ok: false,
+        success: false,
+        errorCode: 'UNSUPPORTED_ACTION',
+        error: '请更新主机与代理插件，通过新版接口读取 SSH 主机并管理 Git、NPM 代理'
       }
     }
 

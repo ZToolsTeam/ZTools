@@ -32,7 +32,7 @@ function runtimeFixture() {
 function fixture(platform: NodeJS.Platform = 'win32') {
   const controller = new AbortController()
   const attached: ReferenceRuntimeAttachment[] = []
-  const image = { isEmpty: () => true, getSize: () => ({ width: 0, height: 0 }), toPNG: () => Buffer.alloc(0) }
+  const image = { isEmpty: () => true, getSize: () => ({ width: 0, height: 0 }), toPNG: () => Buffer.alloc(0), toBitmap: () => Buffer.alloc(0) }
   const clipboard: ClipboardAdapter = {
     availableFormats: () => [], clear() {}, has: () => false,
     readImage: () => image, readText: () => '', writeImage() {}, writeText() {}

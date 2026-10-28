@@ -1,4 +1,5 @@
 <script setup>
+import { CloseOutlined } from '@ant-design/icons-vue'
 import { computed, nextTick, ref } from 'vue'
 import { message } from 'ant-design-vue'
 import { getHotkey, openPlugin as apiOpenPlugin } from '@/api/apiserver'
@@ -563,7 +564,7 @@ defineExpose({ show, hide, configuredCount })
             title="清除快捷键"
             @click.stop="clearHotkey(item)"
           >
-            <i class="fa fa-times"></i>
+            <CloseOutlined  />
           </button>
         </div>
       </div>

@@ -4,7 +4,8 @@ import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
 import fs from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
-import { collectSpotlightPaths } from '../../src/main/platform/macos/spotlight-search.js'
+import { batchMacosApplicationNames, collectSpotlightPaths } from '../../src/main/platform/macos/spotlight-search.js'
+import * as spotlightSearch from '../../src/main/platform/macos/spotlight-search.js'
 import { rankSearchFiles, scanLocalRecentFiles, searchFilesOnMacos, computePinyinMeta } from '../../src/main/platform/macos/file-indexer.js'
 import type { FileRecord } from '../../src/main/services/sidecar-manager.js'
 
@@ -131,4 +132,65 @@ test('local fallback preserves macOS application semantics without labelling ord
   } finally {
     await fs.rm(root, { recursive: true, force: true })
   }
+})
+
+test('batchMacosApplicationNames resolves localized Chinese app names from InfoPlist.strings and CamelCase acronyms', async () => {
+  const metaWeChat = computePinyinMeta('WeChat.app')
+  assert.equal(metaWeChat.acronym, 'wc')
+  assert.equal(metaWeChat.pinyin, 'wechat')
+
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'ztools-app-lproj-'))
+  try {
+    const wechatApp = path.join(root, 'WeChat.app')
+    const lprojDir = path.join(wechatApp, 'Contents', 'Resources', 'zh-Hans.lproj')
+    await fs.mkdir(lprojDir, { recursive: true })
+    await fs.writeFile(
+      path.join(lprojDir, 'InfoPlist.strings'),
+      '"CFBundleDisplayName" = "微信";\n"CFBundleName" = "微信";\n',
+      'utf8'
+    )
+    const antigravityApp = path.join(root, 'Antigravity.app')
+    await fs.mkdir(path.join(antigravityApp, 'Contents'), { recursive: true })
+
+    const names = await batchMacosApplicationNames([wechatApp, antigravityApp])
+    assert.equal(names.get(wechatApp), '微信')
+    assert.equal(names.get(antigravityApp), 'Antigravity')
+  } finally {
+    await fs.rm(root, { recursive: true, force: true })
+  }
+})
+
+test('损坏的 UTF-16 应用名称不能阻断同批健康应用的解析', async t => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'ztools-malformed-app-name-'))
+  t.after(() => fs.rm(root, { recursive: true, force: true }))
+  t.mock.method(console, 'warn', () => {})
+  const brokenApp = path.join(root, 'Broken.app')
+  const healthyApp = path.join(root, 'Healthy.app')
+  for (const app of [brokenApp, healthyApp]) {
+    await fs.mkdir(path.join(app, 'Contents/Resources/zh-Hans.lproj'), { recursive: true })
+  }
+  await fs.writeFile(path.join(brokenApp, 'Contents/Resources/zh-Hans.lproj/InfoPlist.strings'), Buffer.from([0xfe, 0xff, 0x00]))
+  await fs.writeFile(path.join(healthyApp, 'Contents/Resources/zh-Hans.lproj/InfoPlist.strings'), '"CFBundleDisplayName" = "健康应用";')
+  const names = await batchMacosApplicationNames([brokenApp, healthyApp])
+  assert.equal(names.get(brokenApp), 'Broken')
+  assert.equal(names.get(healthyApp), '健康应用')
+})
+
+test('单字查询已有浅层命中时仍补充 Spotlight 深层结果，并保留部分失败状态', { skip: process.platform !== 'darwin' }, async t => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'ztools-search-coverage-'))
+  t.after(() => fs.rm(root, { recursive: true, force: true }))
+  t.mock.method(os, 'homedir', () => root)
+  t.mock.method(process, 'cwd', () => root)
+  const shallow = path.join(root, 'Downloads/缁浅层.txt')
+  const deep = path.join(root, 'Documents/nested/deeper/缁深层.txt')
+  for (const file of [shallow, deep]) {
+    await fs.mkdir(path.dirname(file), { recursive: true })
+    await fs.writeFile(file, 'search fixture')
+  }
+  const collect = t.mock.method(spotlightSearch, 'collectSpotlightPaths', async () => ({ paths: [deep], degraded: true }))
+  const result = await searchFilesOnMacos('缁', 10)
+  assert.equal(collect.mock.calls[0]?.arguments[0], '缁')
+  assert.deepEqual(new Set(result.files.map(file => file.path)), new Set([shallow, deep]))
+  assert.equal(result.degraded, true)
+  assert.equal(result.source, 'macos-spotlight')
 })

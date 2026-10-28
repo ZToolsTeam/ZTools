@@ -49,7 +49,6 @@
             class="launcher-input"
             autocomplete="off"
             spellcheck="false"
-            @input="onQueryChange"
           />
           <button
             v-if="query"
@@ -113,10 +112,7 @@
                   {{ item.description || item.subtitle }}
                 </span>
               </div>
-              <span v-if="activeIndex === index" class="launcher-row-tag is-active">
-                {{ item.actionLabel || '打开' }} <ShortcutKeys combo="Enter" />
-              </span>
-              <span v-else-if="item.badge" class="launcher-row-tag">{{ item.badge }}</span>
+              <span v-if="item.badge" class="launcher-row-tag">{{ item.badge }}</span>
             </div>
           </template>
 
@@ -523,11 +519,11 @@ function scrollToActiveItem() {
   })
 }
 
-function onQueryChange() {
+watch(query, (newVal) => {
   activeIndex.value = 0
   scrollToActiveItem()
-  search(query.value)
-}
+  search(newVal)
+})
 
 function clearQuery() {
   clearSearch()
@@ -636,6 +632,14 @@ function handleKeyDown(e) {
 }
 
 let fileActionPending = false
+let externalPluginPending = false
+
+function finishExternalLaunch(searchAtStart) {
+  // 打开期间用户可能已经开始下一次搜索，旧请求不能清空或关闭新的搜索。
+  if (query.value !== searchAtStart) return
+  clearQuery()
+  hideLauncher()
+}
 
 async function copyFileText(text, label) {
   const copied = await copyInlineAnswerToClipboard(text)
@@ -645,6 +649,7 @@ async function copyFileText(text, label) {
 async function runFileAction(filePath, action, failureMessage) {
   if (fileActionPending) return
   fileActionPending = true
+  const searchAtStart = query.value
   try {
     const bridge = typeof window.__ztoolsLauncher?.[action] === 'function'
       ? window.__ztoolsLauncher : window.ztools?.shell
@@ -653,7 +658,7 @@ async function runFileAction(filePath, action, failureMessage) {
     if (result !== true && result?.success !== true) {
       throw new Error(result?.error?.message || result?.error || failureMessage)
     }
-    hideLauncher()
+    finishExternalLaunch(searchAtStart)
   } catch (error) {
     console.warn('[LauncherBar] 文件操作失败:', error)
     showNoViewFeedback(error?.message || failureMessage, true)
@@ -724,17 +729,17 @@ async function launchPlugin(pluginId, options = {}) {
   // 已合并进内置插件的旧插件（如 notes → memo, dictionary → translator:translate-dict）直接打开保留的那个
   const rawPluginId = String(pluginId || '').trim()
   const pid = resolveBundledReplacement(rawPluginId)
-  if (!pid) return
+  if (!pid) return { success: false, error: '插件标识符不存在' }
 
   const featureCode = resolveBundledReplacementFeature(rawPluginId, options.featureCode)
   if (!isPluginVisible(pid)) {
     declarativeLoadError.value = '该插件暂未开放'
-    return
+    return { success: false, error: declarativeLoadError.value }
   }
   // 别名跳转、历史记录可能指向当前系统不支持的插件（例如只声明了 Windows 的内置插件）
   if (!isPluginSupportedOnCurrentPlatform(pid)) {
     declarativeLoadError.value = '该插件在当前系统上暂不可用'
-    return
+    return { success: false, error: declarativeLoadError.value }
   }
   const official = getOfficialPlugin(pid)
   if (official) {
@@ -743,8 +748,9 @@ async function launchPlugin(pluginId, options = {}) {
     loadingDeclarative.value = false
     declarativeLoadError.value = ''
     activeDeclarativePlugin.value = featureCode ? { ...official, featureCode } : official
+    clearQuery()
     pluginsStore.markRecent?.(pid)?.catch?.(() => {})
-    return
+    return { success: true }
   }
 
   // 第三方已安装 V2 声明式插件：直接在悬浮条内通过安全沙箱加载并原位渲染
@@ -756,12 +762,15 @@ async function launchPlugin(pluginId, options = {}) {
 
     try {
       const loaded = await loadInstalledDeclarativePlugin(pid, { featureCode })
-      if (token !== declarativeLoadToken) return
+      if (token !== declarativeLoadToken) return { success: false, cancelled: true }
       activeDeclarativePlugin.value = loaded
+      clearQuery()
       pluginsStore.markRecent?.(pid)?.catch?.(() => {})
+      return { success: true }
     } catch (err) {
-      if (token !== declarativeLoadToken) return
+      if (token !== declarativeLoadToken) return { success: false, cancelled: true }
       declarativeLoadError.value = err?.message || String(err) || '加载声明式扩展失败'
+      return { success: false, error: declarativeLoadError.value }
     } finally {
       if (token === declarativeLoadToken) {
         loadingDeclarative.value = false
@@ -770,11 +779,23 @@ async function launchPlugin(pluginId, options = {}) {
     return
   }
 
-  hideLauncher()
+  if (externalPluginPending) return { success: false, busy: true }
+  externalPluginPending = true
+  const searchAtStart = query.value
   try {
-    await pluginsStore.openPlugin(pid)
+    const result = await pluginsStore.openPlugin(pid)
+    if (result?.success === true && !result.isDeclarative) {
+      finishExternalLaunch(searchAtStart)
+    } else if (result?.success !== true && !result?.cancelled) {
+      showNoViewFeedback(result?.error?.message || result?.error || '启动插件失败，请重试', true)
+    }
+    return result
   } catch (err) {
     console.error('[Launcher] 启动插件失败:', err)
+    showNoViewFeedback(err?.message || '启动插件失败，请重试', true)
+    return { success: false, error: err?.message || '启动插件失败' }
+  } finally {
+    externalPluginPending = false
   }
 }
 
@@ -870,18 +891,32 @@ function hideLauncher() {
   }
 }
 
+function handleWindowFocus() {
+  actionPanelVisible.value = false
+  if (!activeDeclarativePlugin.value && !loadingDeclarative.value && !declarativeLoadError.value) {
+    inputRef.value?.focus()
+    inputRef.value?.select?.()
+  }
+}
+
 onMounted(async () => {
   window.__ztoolsOpenLauncherDeclarative = (pluginId, options = {}) => {
-    launchPlugin(pluginId, { ...options, isDeclarative: true })
+    return launchPlugin(pluginId, { ...options, isDeclarative: true })
+  }
+  if (typeof window !== 'undefined') {
+    window.addEventListener('focus', handleWindowFocus)
   }
 
   if (windowModeState.launcherInitialQuery) {
     query.value = windowModeState.launcherInitialQuery
   }
 
+  inputRef.value?.focus()
   await pluginsStore.init()
   await nextTick()
-  inputRef.value?.focus()
+  if (!activeDeclarativePlugin.value && !loadingDeclarative.value && !declarativeLoadError.value) {
+    inputRef.value?.focus()
+  }
 })
 
 onBeforeUnmount(() => {
@@ -891,6 +926,7 @@ onBeforeUnmount(() => {
     noViewStatusTimer = null
   }
   if (typeof window !== 'undefined') {
+    window.removeEventListener('focus', handleWindowFocus)
     delete window.__ztoolsOpenLauncherDeclarative
   }
 })
@@ -900,7 +936,6 @@ watch(
   (val) => {
     if (val) {
       query.value = val
-      onQueryChange()
     }
   }
 )
@@ -998,11 +1033,25 @@ watch(
 .launcher-list {
   flex: 1;
   overflow-y: auto;
+  scrollbar-width: auto;
+  scrollbar-color: auto;
   padding: 6px 8px;
   display: flex;
   flex-direction: column;
   gap: 1px;
   outline: none;
+}
+
+.launcher-list::-webkit-scrollbar {
+  width: 14px;
+}
+
+.launcher-list::-webkit-scrollbar-thumb {
+  border: 4px solid transparent;
+  border-top: 0;
+  border-bottom: 0;
+  border-radius: 7px;
+  background-clip: padding-box;
 }
 
 .launcher-row {
@@ -1061,6 +1110,7 @@ watch(
 }
 
 .launcher-row-title mark {
+  padding: 0;
   background: transparent;
   color: var(--rc-accent-text);
 }
@@ -1082,10 +1132,6 @@ watch(
   gap: 6px;
   font-size: 12px;
   color: var(--rc-text-faint);
-}
-
-.launcher-row-tag.is-active {
-  color: var(--rc-text-secondary);
 }
 
 .launcher-empty {

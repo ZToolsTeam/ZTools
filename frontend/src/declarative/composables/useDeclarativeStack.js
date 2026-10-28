@@ -126,6 +126,7 @@ export function useDeclarativeStack(initialRoot, options = {}) {
   const currentDescriptor = shallowRef(null);
   const activeIndex = computed(() => stack.value.length - 1);
   const currentLevel = computed(() => stack.value[activeIndex.value] || null);
+  let disposed = false;
 
   // 当前 Toast：与 Raycast 一致，同一时间只显示一条，新提示替换旧提示（避免加载提示叠在一起）
   const toasts = ref([]);
@@ -198,13 +199,14 @@ export function useDeclarativeStack(initialRoot, options = {}) {
   }
 
   function push(target) {
+    if (disposed) return;
     let descriptor = null;
     let component = null;
     let root = null;
 
     // 记下当前页面的搜索词与选中项，pop 回来时原样恢复（存在栈帧原始对象上）
     const below = stack.value[stack.value.length - 1];
-    if (below && captureViewState) {
+    if (below?.root && captureViewState) {
       try {
         const snapshot = captureViewState();
         below.savedViewState = snapshot && typeof snapshot === "object" ? { ...snapshot, fromStack: true } : null;
@@ -226,17 +228,20 @@ export function useDeclarativeStack(initialRoot, options = {}) {
       // 交接初值只属于根页面（栈为空时推入的那一页），用过即清，推入的二级页面与换根后都不再使用
       const handoffSeed = stack.value.length === 0 ? pendingHandoffSeed : null;
       if (handoffSeed) pendingHandoffSeed = null;
+      const startIndex = stack.value.length;
       try {
         const node = {
           descriptor: null,
           component,
           root: null
         };
+        // 首次渲染会同步执行 useEffect；先登记父层，effect 推入的子层才能留在栈顶。
+        stack.value.push(node);
         root = renderDeclarativeRoot(targetFn, {
           onUpdate: (newDesc) => {
             node.descriptor = newDesc;
             const top = stack.value[stack.value.length - 1];
-            if (top && (toRaw(top) === node || top.root === root || toRaw(top?.root) === root)) {
+            if (top && toRaw(top) === node) {
               currentDescriptor.value = newDesc;
             }
           },
@@ -251,18 +256,27 @@ export function useDeclarativeStack(initialRoot, options = {}) {
             if (top && toRaw(top) === node) currentDescriptor.value = latest;
           },
           navigation: {
-            push,
-            pop
+            push: (next) => {
+              if (!disposed && toRaw(stack.value[stack.value.length - 1]) === node) push(next);
+            },
+            pop: () => {
+              if (!disposed && toRaw(stack.value[stack.value.length - 1]) === node) return pop();
+              return false;
+            }
           },
           ...(handoffSeed ? { handoffSeed } : {})
         });
+        if (!stack.value.some((frame) => toRaw(frame) === node)) {
+          root.unmount();
+          return;
+        }
         descriptor = root.getLatest();
         node.descriptor = descriptor;
         node.root = root;
-        stack.value.push(node);
-        currentDescriptor.value = descriptor;
+        if (toRaw(stack.value[stack.value.length - 1]) === node) currentDescriptor.value = descriptor;
         return;
       } catch (e) {
+        for (const frame of stack.value.splice(startIndex).reverse()) toRaw(frame)?.root?.unmount();
         console.error("[DeclarativeStack] Error executing target component:", e);
       }
     } else {
@@ -387,8 +401,9 @@ export function useDeclarativeStack(initialRoot, options = {}) {
       }
       if (typeof navigator !== "undefined" && navigator.clipboard) {
         await navigator.clipboard.writeText(String(text));
-        console.warn("[DeclarativeStack] 当前宿主不支持自动粘贴到活动窗口，仅写入剪贴板");
+        throw Object.assign(new Error("当前宿主不支持自动粘贴，内容已复制，请手动粘贴"), { code: "NOT_SUPPORTED" });
       }
+      throw Object.assign(new Error("当前宿主不支持自动粘贴"), { code: "NOT_SUPPORTED" });
     },
     manageWindow: async (action) => {
       const methods = getElectronMethods();
@@ -507,6 +522,7 @@ export function useDeclarativeStack(initialRoot, options = {}) {
   }
 
   onUnmounted(() => {
+    disposed = true;
     clearToastTimer();
     clear();
   });

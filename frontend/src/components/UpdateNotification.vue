@@ -4,7 +4,7 @@
       <!-- 顶部：图标 + 标题 + 版本标签 + 关闭 -->
       <div class="update-header">
         <div class="update-icon">
-          <i class="fa fa-arrow-circle-up"></i>
+          <UpCircleOutlined  />
         </div>
         <span class="update-title">发现新版本</span>
         <span class="update-tag">{{
@@ -17,7 +17,7 @@
           @click="dismiss"
           aria-label="关闭"
         >
-          <i class="fa fa-times"></i>
+          <CloseOutlined  />
         </button>
       </div>
 
@@ -63,6 +63,7 @@
 </template>
 
 <script setup>
+import { CloseOutlined, UpCircleOutlined } from '@ant-design/icons-vue'
 import { ref, computed, onMounted, onBeforeUnmount } from 'vue'
 import { useUpdateStore } from '@/stores/update'
 import { useAppUpdate } from '@/composables/useAppUpdate'

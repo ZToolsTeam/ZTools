@@ -1,12 +1,10 @@
-import { List, Form, ActionPanel, Action, Icon, Clipboard, useState, useEffect, useNavigation, showToast, Toast, LocalStorage, confirmAlert } from '@ztools/declarative-ui';
+import { List, Form, ActionPanel, Action, Icon, Clipboard, useState, useEffect, useRef, useNavigation, showToast, Toast, LocalStorage, confirmAlert } from '@ztools/declarative-ui';
 import { createMemo, applyMemoMutation, isWritableMemoStore, filterMemos, sanitizeStoredMemos, readLegacyMemos, readLegacyNotes, MEMOS_STORAGE_KEY } from './logic.js';
 const CORRUPT_MESSAGE = '存储的便签数据已损坏，为避免覆盖原数据已停止保存';
-// 同一窗口内的写入排队执行，避免两次保存交错读写
-let writeQueue = Promise.resolve();
-function enqueueWrite(task) {
-    const run = writeQueue.then(task, task);
-    writeQueue = run.catch(() => undefined);
-    return run;
+function requireAtomicStorage() {
+    if (typeof LocalStorage.updateItem !== 'function' || typeof LocalStorage.compareAndSet !== 'function') {
+        throw new Error('当前客户端不支持原子存储，请升级 ZTools 后再保存便签');
+    }
 }
 /**
  * 新建 / 编辑便签表单
@@ -17,13 +15,22 @@ export function MemoForm({ memo, onSave }) {
     const [content, setContent] = useState(memo?.content ?? '');
     const [tag, setTag] = useState(memo?.tag ?? '');
     const [error, setError] = useState(undefined);
+    const submitting = useRef(false);
     const submit = async () => {
         if (!title.trim() && !content.trim()) {
             setError('标题和正文不能都为空');
             return;
         }
-        if (await onSave(title, content, tag))
-            pop();
+        if (submitting.current)
+            return;
+        submitting.current = true;
+        try {
+            if (await onSave(title, content, tag))
+                pop();
+        }
+        finally {
+            submitting.current = false;
+        }
     };
     return Form({
         navigationTitle: memo ? '编辑便签' : '新建便签',
@@ -71,16 +78,30 @@ export default function MemoCommand() {
                 const seen = new Set();
                 const legacy = [...readLegacyMemos(), ...readLegacyNotes()].filter(m => (seen.has(m.id) ? false : (seen.add(m.id), true)));
                 if (legacy.length > 0) {
-                    await LocalStorage.setItem(MEMOS_STORAGE_KEY, legacy);
-                    await showToast(Toast.Style.Success, `已迁移 ${legacy.length} 条旧便签`);
+                    if (cancelled)
+                        return;
+                    requireAtomicStorage();
+                    if (!await LocalStorage.compareAndSet(MEMOS_STORAGE_KEY, undefined, legacy)) {
+                        const current = await LocalStorage.getItem(MEMOS_STORAGE_KEY);
+                        if (!isWritableMemoStore(current)) {
+                            if (!cancelled)
+                                setLoadError({ message: CORRUPT_MESSAGE, resettable: true, raw: current });
+                        }
+                        else if (!cancelled)
+                            setMemos(sanitizeStoredMemos(current));
+                        return;
+                    }
+                    if (!cancelled)
+                        await showToast(Toast.Style.Success, `已迁移 ${legacy.length} 条旧便签`);
                 }
                 if (!cancelled)
                     setMemos(legacy);
             }
             catch (err) {
+                const message = err instanceof Error ? err.message : String(err);
                 if (!cancelled)
-                    setLoadError({ message: err?.message || String(err), resettable: false });
-                await showToast(Toast.Style.Failure, '读取便签失败', err?.message || String(err));
+                    setLoadError({ message, resettable: false });
+                await showToast(Toast.Style.Failure, '读取便签失败', message);
             }
             finally {
                 if (!cancelled)
@@ -94,31 +115,27 @@ export default function MemoCommand() {
     // 保存时先读存储里的最新列表，只套用本次这一条改动再写回：
     // 另一个窗口（独立窗口 / 主窗口）刚写入的便签不会被本窗口的旧快照覆盖。
     // 最新值读不出来或已损坏时不写入。写入成功后才更新界面
-    const commit = (mutation) => enqueueWrite(async () => {
-        let latest;
+    const commit = async (mutation) => {
+        let damaged;
         try {
-            latest = await LocalStorage.getItem(MEMOS_STORAGE_KEY);
+            requireAtomicStorage();
+            const next = await LocalStorage.updateItem(MEMOS_STORAGE_KEY, latest => {
+                if (!isWritableMemoStore(latest)) {
+                    damaged = { message: CORRUPT_MESSAGE, resettable: true, raw: latest };
+                    throw new Error(CORRUPT_MESSAGE);
+                }
+                return applyMemoMutation(latest, mutation);
+            });
+            setMemos(sanitizeStoredMemos(next));
+            return true;
         }
         catch (err) {
-            await showToast(Toast.Style.Failure, '保存失败', `读取最新便签失败：${err?.message || String(err)}`);
+            if (damaged)
+                setLoadError(damaged);
+            await showToast(Toast.Style.Failure, '保存失败', err instanceof Error ? err.message : String(err));
             return false;
         }
-        if (!isWritableMemoStore(latest)) {
-            setLoadError({ message: CORRUPT_MESSAGE, resettable: true, raw: latest });
-            await showToast(Toast.Style.Failure, '保存失败', CORRUPT_MESSAGE);
-            return false;
-        }
-        const next = applyMemoMutation(latest, mutation);
-        try {
-            await LocalStorage.setItem(MEMOS_STORAGE_KEY, next);
-        }
-        catch (err) {
-            await showToast(Toast.Style.Failure, '保存失败', err?.message || String(err));
-            return false;
-        }
-        setMemos(sanitizeStoredMemos(next));
-        return true;
-    });
+    };
     const retry = () => setReloadKey(reloadKey + 1);
     // 数据损坏时：先把原值完整备份到新键，再从空列表重新开始（需确认）
     const backupAndReset = async (error) => {
@@ -130,15 +147,20 @@ export default function MemoCommand() {
         });
         if (!confirmed)
             return;
-        const backupKey = `${MEMOS_STORAGE_KEY}.backup-${Date.now()}`;
         try {
-            await enqueueWrite(async () => {
-                await LocalStorage.setItem(backupKey, error.raw);
-                await LocalStorage.setItem(MEMOS_STORAGE_KEY, []);
-            });
+            requireAtomicStorage();
+            const current = await LocalStorage.getItem(MEMOS_STORAGE_KEY);
+            if (JSON.stringify(current) !== JSON.stringify(error.raw))
+                throw new Error('便签数据已变化，请重试读取；不会覆盖新数据');
+            const backupKey = `${MEMOS_STORAGE_KEY}.backup-${Date.now()}-${globalThis.crypto.randomUUID()}`;
+            await LocalStorage.setItem(backupKey, current);
+            if (JSON.stringify(await LocalStorage.getItem(backupKey)) !== JSON.stringify(current))
+                throw new Error('备份读回核验失败');
+            if (!await LocalStorage.compareAndSet(MEMOS_STORAGE_KEY, current, []))
+                throw new Error('备份期间便签数据已变化，请重试读取；不会覆盖新数据');
         }
         catch (err) {
-            await showToast(Toast.Style.Failure, '备份失败，原数据未改动', err?.message || String(err));
+            await showToast(Toast.Style.Failure, '备份或重置失败，原数据未改动', err instanceof Error ? err.message : String(err));
             return;
         }
         await showToast(Toast.Style.Success, '已备份原数据，便签已重新开始');
@@ -186,8 +208,7 @@ export default function MemoCommand() {
         onSave: async (title, content, tag) => {
             const ok = await commit({
                 type: 'update',
-                id: memo.id,
-                fallback: memo,
+                expected: memo,
                 updates: { title: title.trim() || '无标题便签', content: content.trim(), tag: tag.trim() }
             });
             if (ok)
@@ -204,7 +225,7 @@ export default function MemoCommand() {
         });
         if (!confirmed)
             return;
-        if (await commit({ type: 'delete', id: memo.id }))
+        if (await commit({ type: 'delete', expected: memo }))
             await showToast(Toast.Style.Success, '已删除便签');
     };
     const filtered = filterMemos(memos, searchText);

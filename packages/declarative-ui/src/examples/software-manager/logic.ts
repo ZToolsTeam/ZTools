@@ -728,7 +728,7 @@ export async function probeSoftwareAppDataResiduals(
       {
         id: 'res-chrome-cache',
         folderName: 'Google',
-        fullPath: 'C:\\Users\\Demo\\AppData\\Local\\Google',
+        fullPath: 'D:\\Workspace\\AppData\\Local\\Google',
         scope: 'AppData\\Local',
         sizeBytes: 340 * 1024 * 1024,
         fileCount: 412,
@@ -739,7 +739,7 @@ export async function probeSoftwareAppDataResiduals(
       {
         id: 'res-orphan-old',
         folderName: 'OldUninstalledAppCache',
-        fullPath: 'C:\\Users\\Demo\\AppData\\Roaming\\OldUninstalledAppCache',
+        fullPath: 'D:\\Workspace\\AppData\\Roaming\\OldUninstalledAppCache',
         scope: 'AppData\\Roaming',
         sizeBytes: 85 * 1024 * 1024,
         fileCount: 96,

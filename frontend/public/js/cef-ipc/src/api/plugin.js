@@ -122,6 +122,16 @@ class PluginAPI {
     return await this.transport.call('plugin_toggle', { pluginId })
   }
 
+  /** 持久化官方下架状态；重复调用保持禁用。 */
+  async revoke(pluginId, reason) {
+    return await this.transport.call('plugin_revoke', { pluginId, revoked: true, reason })
+  }
+
+  /** 查询指定安装任务，避免遗漏完成事件后误报失败。 */
+  async getInstallStatus(pluginId, operationId) {
+    return await this.transport.call('plugin_install_status', { pluginId, operationId })
+  }
+
   /**
    * 关闭插件窗口
    * @param {string} pluginId - 插件ID

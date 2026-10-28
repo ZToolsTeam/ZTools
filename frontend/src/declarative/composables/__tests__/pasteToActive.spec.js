@@ -28,6 +28,7 @@ describe('声明式 Bridge pasteToActive（粘贴到前台应用）', () => {
   })
   afterEach(() => {
     delete window.__ztoolsElectron
+    vi.unstubAllGlobals()
   })
 
   it('宿主粘贴成功时正常返回', async () => {
@@ -45,6 +46,16 @@ describe('声明式 Bridge pasteToActive（粘贴到前台应用）', () => {
       code: 'PERMISSION_DENIED',
       message: expect.stringContaining('辅助功能')
     })
+  })
+
+  it('缺少宿主自动粘贴方法时即使已复制也必须报不支持', async () => {
+    delete window.__ztoolsElectron
+    const writeText = vi.fn().mockResolvedValue(undefined)
+    vi.stubGlobal('navigator', { clipboard: { writeText } })
+    await expect(getDeclarativeBridge().pasteToActive('手动粘贴')).rejects.toMatchObject({ code: 'NOT_SUPPORTED' })
+    expect(writeText).toHaveBeenCalledWith('手动粘贴')
+    vi.stubGlobal('navigator', {})
+    await expect(getDeclarativeBridge().pasteToActive('未复制')).rejects.toMatchObject({ code: 'NOT_SUPPORTED' })
   })
 
   it('宿主返回无法识别的信封或 IPC 抛错时同样报告失败', async () => {

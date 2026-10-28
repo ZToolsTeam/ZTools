@@ -91,7 +91,7 @@ const FALLBACK_WECHAT_INSTANCES: WechatInstanceItem[] = [
     role: 'main',
     roleLabel: '微信主进程',
     executablePath: DEFAULT_WECHAT_PATH,
-    dataDir: `${DEFAULT_WECHAT_DATA_DIR}\\wxid_geek_primary`,
+    dataDir: `${DEFAULT_WECHAT_DATA_DIR}\\wechat_profile_default`,
     memoryBytes: 428 * 1024 * 1024,
     cpuPercent: 1.4,
     uptimeText: '已运行 04:18:22',

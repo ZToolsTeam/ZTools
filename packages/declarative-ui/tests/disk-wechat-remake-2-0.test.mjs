@@ -185,16 +185,16 @@ describe('Declarative UI 2.0 重制版集成与破坏性异常测试: DiskAnalyz
       const ownerIds = OFFICIAL_WECHAT_OWNER_RULES.map(r => r.ownerId)
       assert.deepEqual(ownerIds, [107, 115, 113, 112, 111, 114, 109, 108, 110, 999])
 
-      const knownAccounts = ['liaoguobo_7f67', 'wxid_geek001']
+      const knownAccounts = ['geek_user_7f67', 'wxid_geek001']
 
       // 聊天核心数据库必须强制归入 999 且 isProtected === true
       const dbCls = classifyWechatFilePath(
-        'C:\\Users\\hopob\\Documents\\xwechat_files\\liaoguobo_7f67\\db_storage\\message\\message_0.db',
+        'C:\\Users\\Geek\\Documents\\xwechat_files\\geek_user_7f67\\db_storage\\message\\message_0.db',
         knownAccounts
       )
       assert.equal(dbCls.ownerId, 999)
       assert.equal(dbCls.isProtected, true)
-      assert.equal(dbCls.accountId, 'liaoguobo_7f67')
+      assert.equal(dbCls.accountId, 'geek_user_7f67')
 
       // 朋友圈缓存 -> 107
       const snsCls = classifyWechatFilePath(
@@ -206,14 +206,14 @@ describe('Declarative UI 2.0 重制版集成与破坏性异常测试: DiskAnalyz
 
       // 小程序与 XPlugin -> 115
       const xplugCls = classifyWechatFilePath(
-        'C:\\Users\\hopob\\AppData\\Roaming\\Tencent\\xwechat\\xplugin\\Plugins\\WeChatAppEx\\8555\\WeChatAppEx.exe',
+        'C:\\Users\\Geek\\AppData\\Roaming\\Tencent\\xwechat\\xplugin\\Plugins\\WeChatAppEx\\8555\\WeChatAppEx.exe',
         knownAccounts
       )
       assert.equal(xplugCls.ownerId, 115)
 
       // XLog 运行跟踪日志 -> 113
       const logCls = classifyWechatFilePath(
-        'C:\\Users\\hopob\\AppData\\Roaming\\Tencent\\xwechat\\log\\mm_20261015.xlog',
+        'C:\\Users\\Geek\\AppData\\Roaming\\Tencent\\xwechat\\log\\mm_20261015.xlog',
         knownAccounts
       )
       assert.equal(logCls.ownerId, 113)
@@ -223,9 +223,9 @@ describe('Declarative UI 2.0 重制版集成与破坏性异常测试: DiskAnalyz
       const mockHost = {
         system_get_path: async ({ name }) => {
           const map = {
-            documents: 'C:\\Users\\hopob\\Documents',
-            appData: 'C:\\Users\\hopob\\AppData\\Roaming',
-            temp: 'C:\\Users\\hopob\\AppData\\Local\\Temp'
+            documents: 'C:\\Users\\Geek\\Documents',
+            appData: 'C:\\Users\\Geek\\AppData\\Roaming',
+            temp: 'C:\\Users\\Geek\\AppData\\Local\\Temp'
           }
           return { success: true, data: { path: map[name] || '' } }
         },
@@ -242,21 +242,21 @@ describe('Declarative UI 2.0 重制版集成与破坏性异常测试: DiskAnalyz
                 files: [
                   {
                     name: 'message_0.db',
-                    path: 'C:\\Users\\hopob\\Documents\\xwechat_files\\liaoguobo_7f67\\db_storage\\message\\message_0.db',
+                    path: 'C:\\Users\\Geek\\Documents\\xwechat_files\\geek_user_7f67\\db_storage\\message\\message_0.db',
                     is_dir: false,
                     size: 25 * 1024 * 1024,
                     mtime: 1710000000
                   },
                   {
                     name: 'sticker.gif',
-                    path: 'C:\\Users\\hopob\\Documents\\xwechat_files\\liaoguobo_7f67\\resource\\emoticon\\sticker.gif',
+                    path: 'C:\\Users\\Geek\\Documents\\xwechat_files\\geek_user_7f67\\resource\\emoticon\\sticker.gif',
                     is_dir: false,
                     size: 5 * 1024 * 1024,
                     mtime: 1700000000
                   },
                   {
                     name: 'chat_video.mp4',
-                    path: 'C:\\Users\\hopob\\Documents\\xwechat_files\\wxid_second\\msg\\video\\chat_video.mp4',
+                    path: 'C:\\Users\\Geek\\Documents\\xwechat_files\\wxid_second\\msg\\video\\chat_video.mp4',
                     is_dir: false,
                     size: 80 * 1024 * 1024,
                     mtime: 1690000000
@@ -265,8 +265,8 @@ describe('Declarative UI 2.0 重制版集成与破坏性异常测试: DiskAnalyz
                 total_matches: 3,
                 total_bytes: 110 * 1024 * 1024,
                 subdirs: [
-                  { name: 'liaoguobo_7f67', path: 'C:\\Users\\hopob\\Documents\\xwechat_files\\liaoguobo_7f67', fileCount: 2, totalBytes: 30 * 1024 * 1024 },
-                  { name: 'wxid_second', path: 'C:\\Users\\hopob\\Documents\\xwechat_files\\wxid_second', fileCount: 1, totalBytes: 80 * 1024 * 1024 }
+                  { name: 'geek_user_7f67', path: 'C:\\Users\\Geek\\Documents\\xwechat_files\\geek_user_7f67', fileCount: 2, totalBytes: 30 * 1024 * 1024 },
+                  { name: 'wxid_second', path: 'C:\\Users\\Geek\\Documents\\xwechat_files\\wxid_second', fileCount: 1, totalBytes: 80 * 1024 * 1024 }
                 ]
               }
             }
@@ -276,7 +276,7 @@ describe('Declarative UI 2.0 重制版集成与破坏性异常测试: DiskAnalyz
       }
 
       const snap = await fetchWechatCleanSnapshot(mockHost)
-      assert.ok(snap.detectedAccounts.includes('liaoguobo_7f67'))
+      assert.ok(snap.detectedAccounts.includes('geek_user_7f67'))
       assert.ok(snap.detectedAccounts.includes('wxid_second'))
       assert.equal(snap.protectedDbBytes, 25 * 1024 * 1024)
       assert.equal(snap.totalScannableBytes, 85 * 1024 * 1024)
@@ -315,16 +315,16 @@ describe('Declarative UI 2.0 重制版集成与破坏性异常测试: DiskAnalyz
 
       const res = await executeWechatCleanup(
         [
-          'C:\\Users\\hopob\\Documents\\xwechat_files\\liaoguobo_7f67\\db_storage\\message\\message_0.db',
-          'C:\\Users\\hopob\\Documents\\WeChat Files\\wxid_123\\Msg\\Multi\\MSG0.db',
-          'C:\\Users\\hopob\\AppData\\Roaming\\Tencent\\xwechat\\log\\mm_20261015.xlog'
+          'C:\\Users\\Geek\\Documents\\xwechat_files\\geek_user_7f67\\db_storage\\message\\message_0.db',
+          'C:\\Users\\Geek\\Documents\\WeChat Files\\wxid_123\\Msg\\Multi\\MSG0.db',
+          'C:\\Users\\Geek\\AppData\\Roaming\\Tencent\\xwechat\\log\\mm_20261015.xlog'
         ],
         mockTrashHost
       )
 
       // 两个核心数据库必须被安全防线拦截，仅 .xlog 被移入回收站
       assert.deepEqual(res.deletedPaths, [
-        'C:\\Users\\hopob\\AppData\\Roaming\\Tencent\\xwechat\\log\\mm_20261015.xlog'
+        'C:\\Users\\Geek\\AppData\\Roaming\\Tencent\\xwechat\\log\\mm_20261015.xlog'
       ])
       assert.equal(res.skippedPaths.length, 2)
       assert.equal(trashedPaths.length, 1)
@@ -350,10 +350,10 @@ describe('Declarative UI 2.0 重制版集成与破坏性异常测试: DiskAnalyz
       assert.deepEqual(groupIds, [203, 201, 208, 202, 209, 211, 205, 206, 207, 212, 204, 213, 999])
 
       // Msg3.0.db 必须归入 999 且 isProtected === true
-      const msgDb = classifyQQFilePath('C:\\Users\\hopob\\Documents\\Tencent Files\\19982507\\Msg3.0.db')
+      const msgDb = classifyQQFilePath('C:\\Users\\Geek\\Documents\\Tencent Files\\10086001\\Msg3.0.db')
       assert.equal(msgDb.groupId, 999)
       assert.equal(msgDb.isProtected, true)
-      assert.equal(msgDb.accountId, '19982507')
+      assert.equal(msgDb.accountId, '10086001')
 
       // QQ.tlg.1 -> 203 日志
       const tlg = classifyQQFilePath('D:\\Local\\Roaming\\Tencent\\Logs\\QQ.tlg.1')
@@ -361,12 +361,12 @@ describe('Declarative UI 2.0 重制版集成与破坏性异常测试: DiskAnalyz
       assert.equal(tlg.isProtected, false)
 
       // MiscHead.db -> 208 头像缓存
-      const head = classifyQQFilePath('C:\\Users\\hopob\\Documents\\Tencent Files\\19982507\\MiscHead.db')
+      const head = classifyQQFilePath('C:\\Users\\Geek\\Documents\\Tencent Files\\10086001\\MiscHead.db')
       assert.equal(head.groupId, 208)
-      assert.equal(head.accountId, '19982507')
+      assert.equal(head.accountId, '10086001')
 
       // CustomFace.dbc -> 212 收藏表情
-      const fav = classifyQQFilePath('C:\\Users\\hopob\\Documents\\Tencent Files\\19982507\\CustomFace.dbc')
+      const fav = classifyQQFilePath('C:\\Users\\Geek\\Documents\\Tencent Files\\10086001\\CustomFace.dbc')
       assert.equal(fav.groupId, 212)
     })
 
@@ -374,10 +374,10 @@ describe('Declarative UI 2.0 重制版集成与破坏性异常测试: DiskAnalyz
       const mockHost = {
         system_get_path: async ({ name }) => {
           const map = {
-            documents: 'C:\\Users\\hopob\\Documents',
-            appData: 'C:\\Users\\hopob\\AppData\\Roaming',
-            home: 'C:\\Users\\hopob',
-            temp: 'C:\\Users\\hopob\\AppData\\Local\\Temp'
+            documents: 'C:\\Users\\Geek\\Documents',
+            appData: 'C:\\Users\\Geek\\AppData\\Roaming',
+            home: 'C:\\Users\\Geek',
+            temp: 'C:\\Users\\Geek\\AppData\\Local\\Temp'
           }
           return { success: true, data: { path: map[name] || '' } }
         },
@@ -394,14 +394,14 @@ describe('Declarative UI 2.0 重制版集成与破坏性异常测试: DiskAnalyz
                 files: [
                   {
                     name: 'Msg3.0.db',
-                    path: 'C:\\Users\\hopob\\Documents\\Tencent Files\\19982507\\Msg3.0.db',
+                    path: 'C:\\Users\\Geek\\Documents\\Tencent Files\\10086001\\Msg3.0.db',
                     is_dir: false,
                     size: 10 * 1024 * 1024,
                     mtime: 1710000000
                   },
                   {
                     name: 'MiscHead.db',
-                    path: 'C:\\Users\\hopob\\Documents\\Tencent Files\\19982507\\MiscHead.db',
+                    path: 'C:\\Users\\Geek\\Documents\\Tencent Files\\10086001\\MiscHead.db',
                     is_dir: false,
                     size: 20 * 1024 * 1024,
                     mtime: 1710000000
@@ -410,7 +410,7 @@ describe('Declarative UI 2.0 重制版集成与破坏性异常测试: DiskAnalyz
                 total_matches: 2,
                 total_bytes: 30 * 1024 * 1024,
                 subdirs: [
-                  { name: '19982507', path: 'C:\\Users\\hopob\\Documents\\Tencent Files\\19982507', fileCount: 2, totalBytes: 30 * 1024 * 1024 }
+                  { name: '10086001', path: 'C:\\Users\\Geek\\Documents\\Tencent Files\\10086001', fileCount: 2, totalBytes: 30 * 1024 * 1024 }
                 ]
               }
             }
@@ -422,7 +422,7 @@ describe('Declarative UI 2.0 重制版集成与破坏性异常测试: DiskAnalyz
                 files: [
                   {
                     name: 'QQ.tlg.1',
-                    path: 'C:\\Users\\hopob\\AppData\\Roaming\\Tencent\\Logs\\QQ.tlg.1',
+                    path: 'C:\\Users\\Geek\\AppData\\Roaming\\Tencent\\Logs\\QQ.tlg.1',
                     is_dir: false,
                     size: 105 * 1024 * 1024,
                     mtime: 1710000000
@@ -439,7 +439,7 @@ describe('Declarative UI 2.0 重制版集成与破坏性异常测试: DiskAnalyz
       }
 
       const snap = await fetchQQCleanSnapshot(mockHost)
-      assert.ok(snap.detectedAccounts.includes('19982507'))
+      assert.ok(snap.detectedAccounts.includes('10086001'))
       assert.equal(snap.protectedDbBytes, 10 * 1024 * 1024)
       assert.equal(snap.totalScannableBytes, 125 * 1024 * 1024)
     })
@@ -472,18 +472,18 @@ describe('Declarative UI 2.0 重制版集成与破坏性异常测试: DiskAnalyz
 
       const res = await executeQQCleanup(
         [
-          'C:\\Users\\hopob\\Documents\\Tencent Files\\19982507\\Msg3.0.db',
-          'C:\\Users\\hopob\\Documents\\Tencent Files\\19982507\\Registry.db',
-          'C:\\Users\\hopob\\AppData\\Roaming\\Tencent\\Logs\\QQ.tlg.1'
+          'C:\\Users\\Geek\\Documents\\Tencent Files\\10086001\\Msg3.0.db',
+          'C:\\Users\\Geek\\Documents\\Tencent Files\\10086001\\Registry.db',
+          'C:\\Users\\Geek\\AppData\\Roaming\\Tencent\\Logs\\QQ.tlg.1'
         ],
         mockTrashHost
       )
 
       assert.deepEqual(res.deletedPaths, [
-        'C:\\Users\\hopob\\AppData\\Roaming\\Tencent\\Logs\\QQ.tlg.1'
+        'C:\\Users\\Geek\\AppData\\Roaming\\Tencent\\Logs\\QQ.tlg.1'
       ])
       assert.equal(res.skippedPaths.length, 2)
-      assert.equal(validateQQPayload('CleanQQ', { path: 'C:\\Tencent Files\\19982507\\Msg3.0.db' }).valid, false)
+      assert.equal(validateQQPayload('CleanQQ', { path: 'C:\\Tencent Files\\10086001\\Msg3.0.db' }).valid, false)
     })
   })
 })

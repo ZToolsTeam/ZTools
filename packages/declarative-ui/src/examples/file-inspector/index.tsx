@@ -31,7 +31,7 @@ export interface FileInspectorCommandProps {
 export function FileInspectorCommand(props: FileInspectorCommandProps = {}) {
   const [rawBytes, setRawBytes] = useState<Uint8Array | null>(props.initialRawBytes ?? null)
   const [selectedFilePath, setSelectedFilePath] = useState<string>(
-    props.initialDiagnostic?.filePath || 'sample.csv'
+    props.initialDiagnostic?.filePath || ''
   )
   const [previewEncoding, setPreviewEncoding] = useState<string>(
     props.initialDiagnostic?.detectedEncoding || 'UTF-8'

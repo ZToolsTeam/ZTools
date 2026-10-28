@@ -1,7 +1,6 @@
 <script setup>
 import { ref, watch, onMounted, onUnmounted, computed, nextTick } from 'vue'
 import ShortcutKeys from '@/components/base/ShortcutKeys.vue'
-import { useRouter } from 'vue-router'
 import { useUIStore } from '@/stores/ui'
 import { usePluginsStore } from '@/stores/plugins'
 import { useCommandSearch } from '@/composables/useCommandSearch'
@@ -9,8 +8,6 @@ import { getHighlightPartsWithPinyin } from '@/utils/pinyinSearch'
 import { useToast } from '@/composables/useToast'
 import { useKeymap, KEYMAP_SCOPES } from '@/utils/keymap'
 import { switchWindowMode, WINDOW_MODES } from '@/utils/windowMode'
-import { routeUtils } from '@/router/routes'
-import { isOfficialPlugin } from '@/utils/officialPlugins'
 import { RcSquircle } from '@/components/base'
 import { resolveItemGlyph } from '@/utils/brandIcons'
 import { currentGlobalWakeHotkey } from '@/utils/globalWakeHotkey'
@@ -23,10 +20,9 @@ const props = defineProps({
 })
 const emit = defineEmits(['update:modelValue', 'search'])
 
-const router = useRouter()
 const uiStore = useUIStore()
 const pluginsStore = usePluginsStore()
-const { success: toastSuccess } = useToast()
+const { success: toastSuccess, error: toastError } = useToast()
 
 const localValue = ref(props.modelValue || '')
 const inputRef = ref(null)
@@ -39,14 +35,16 @@ let debounceTimer = null
 const {
   query: searchQuery,
   matchedPlugins,
+  filteredItems,
   search,
   clearSearch,
   recordUsage
-} = useCommandSearch({ enableFileSearch: false })
+} = useCommandSearch({ enableFileSearch: true })
 
-// 候选命令列表（最多展示前 8 条）
+// 候选命令列表（最多展示前 8 条，包含插件命令、本地应用与文件）
 const candidateCommands = computed(() => {
-  return (matchedPlugins.value || []).slice(0, 8)
+  const source = filteredItems?.value ?? matchedPlugins?.value ?? []
+  return source.slice(0, 8)
 })
 
 // 防抖搜索与内核同步
@@ -95,9 +93,9 @@ const onFocus = () => {
 }
 
 const onBlur = () => {
+  isFocused.value = false
   // 延时关闭以允许点击候选条目
   setTimeout(() => {
-    isFocused.value = false
     isDropdownOpen.value = false
   }, 220)
 }
@@ -122,28 +120,40 @@ function highlightParts(text) {
   return getHighlightPartsWithPinyin(text, localValue.value)
 }
 
-function executeCandidate(item) {
+async function executeCandidate(item) {
   if (!item) return
+  clearTimeout(debounceTimer)
+  debounceTimer = null
   if (!item.omitFromFrecencyTracking) {
     recordUsage(item.key || item.pluginId)
   }
   isDropdownOpen.value = false
 
-  if (item.type === 'inline-calculator' || item.type === 'inline-color') {
-    Promise.resolve(item.action?.()).then(() => {
+  try {
+    if (item.type === 'inline-calculator' || item.type === 'inline-color') {
+      const copied = await item.action?.()
+      if (copied === false) throw new Error('复制结果失败，请重试')
       toastSuccess?.(`已复制结果: ${item.answer}`)
-    })
-    return
-  }
-
-  if (item.pluginId && isOfficialPlugin(item.pluginId)) {
-    router.push(routeUtils.toDeclarative(item.pluginId))
-    uiStore.focusDeclarative()
-  } else if (item.pluginId) {
-    pluginsStore.openPlugin(item.pluginId)
-    uiStore.focusGrid()
-  } else if (typeof item.action === 'function') {
-    item.action()
+    } else if (item.type === 'file') {
+      const bridge = typeof window.__ztoolsLauncher?.openPath === 'function'
+        ? window.__ztoolsLauncher
+        : window.ztools?.shell
+      if (typeof bridge?.openPath !== 'function') throw new Error('文件打开接口不可用')
+      const res = await bridge.openPath(item.path)
+      if (res !== true && res?.success !== true) {
+        throw new Error(res?.error?.message || res?.error || '打开文件失败')
+      }
+    } else if (item.pluginId) {
+      const result = await pluginsStore.openPlugin(item.pluginId, { featureCode: item.featureCode })
+      if (result?.cancelled) return
+      if (result?.success === false) throw new Error(result.error?.message || result.error || result.message || '启动插件失败，请重试')
+      if (result?.isDeclarative) uiStore.focusDeclarative()
+      else uiStore.focusGrid()
+    } else if (typeof item.action === 'function') {
+      await item.action()
+    }
+  } catch (error) {
+    toastError?.(error?.message || '执行命令失败，请重试')
   }
 }
 
@@ -155,26 +165,26 @@ useKeymap(KEYMAP_SCOPES.GLOBAL, {
   }
 })
 
-useKeymap(KEYMAP_SCOPES.PAGE, {
+useKeymap(KEYMAP_SCOPES.SEARCH, {
   'ArrowDown': () => {
-    if (!isDropdownOpen.value || candidateCommands.value.length === 0) return false
+    if (!isFocused.value || !isDropdownOpen.value || candidateCommands.value.length === 0) return false
     activeIndex.value = (activeIndex.value + 1) % candidateCommands.value.length
     return true
   },
   'ArrowUp': () => {
-    if (!isDropdownOpen.value || candidateCommands.value.length === 0) return false
+    if (!isFocused.value || !isDropdownOpen.value || candidateCommands.value.length === 0) return false
     activeIndex.value = (activeIndex.value - 1 + candidateCommands.value.length) % candidateCommands.value.length
     return true
   },
   'Enter': () => {
-    if (isDropdownOpen.value && candidateCommands.value.length > 0 && candidateCommands.value[activeIndex.value]) {
+    if (isFocused.value && isDropdownOpen.value && candidateCommands.value[activeIndex.value]) {
       executeCandidate(candidateCommands.value[activeIndex.value])
       return true
     }
     return false
   },
   'Escape': () => {
-    if (isDropdownOpen.value) {
+    if (isFocused.value && isDropdownOpen.value) {
       isDropdownOpen.value = false
       uiStore.focusGrid()
       inputRef.value?.blur?.()
@@ -260,7 +270,7 @@ defineExpose({ focusInput })
                 :size="24"
               />
               <div class="flex items-baseline gap-1.5 min-w-0">
-                <span class="font-medium text-[13px] truncate" style="color: var(--rc-text-primary)"><template v-for="(part, partIdx) in highlightParts(item.name || item.title)" :key="partIdx"><mark v-if="part.hit" class="bg-transparent text-[var(--rc-accent-text)] font-semibold">{{ part.text }}</mark><template v-else>{{ part.text }}</template></template></span>
+                <span class="font-medium text-[13px] truncate" style="color: var(--rc-text-primary)"><template v-for="(part, partIdx) in highlightParts(item.name || item.title)" :key="partIdx"><mark v-if="part.hit" class="p-0 bg-transparent text-[var(--rc-accent-text)] font-semibold">{{ part.text }}</mark><template v-else>{{ part.text }}</template></template></span>
                 <span v-if="item.description" class="text-[11px] truncate opacity-70 max-w-[280px]">
                   {{ item.description }}
                 </span>

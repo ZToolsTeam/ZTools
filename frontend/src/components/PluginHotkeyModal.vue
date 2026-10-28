@@ -1,4 +1,5 @@
 <script setup>
+import { AppstoreAddOutlined, CloseOutlined, DesktopOutlined } from '@ant-design/icons-vue'
 /**
  * 启动快捷键管理弹窗
  * 展示所有已安装插件和已加入面板的本地软件，支持设置/修改/清除全局快捷键
@@ -509,7 +510,7 @@ defineExpose({ show, hide, updateMap, configuredCount })
             :alt="target.name"
           />
           <div v-else class="plugin-icon-placeholder">
-            <i :class="target.kind === 'localApp' ? 'fa fa-desktop' : 'fa fa-puzzle-piece'"></i>
+            <component :is="target.kind === 'localApp' ? DesktopOutlined : AppstoreAddOutlined" aria-hidden="true" />
           </div>
         </div>
 
@@ -542,7 +543,7 @@ defineExpose({ show, hide, updateMap, configuredCount })
               >{{ k || '...' }}</span>
             </span>
             <span v-else class="recording-text">
-              <i class="fa fa-circle recording-dot"></i>
+              <span class="recording-dot" aria-hidden="true"></span>
               {{ getHotkeyWaitText(hotkeyPlatform, supportsDoubleModifierHotkeys) }}
             </span>
           </div>
@@ -571,7 +572,7 @@ defineExpose({ show, hide, updateMap, configuredCount })
             title="清除快捷键"
             @click.stop="clearHotkey(target.id)"
           >
-            <i class="fa fa-times"></i>
+            <CloseOutlined  />
           </button>
         </div>
       </div>
@@ -738,7 +739,11 @@ defineExpose({ show, hide, updateMap, configuredCount })
 }
 
 .recording-dot {
-  font-size: 6px;
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: currentColor;
   animation: pulse 1s infinite;
 }
 

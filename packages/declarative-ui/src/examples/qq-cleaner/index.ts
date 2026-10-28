@@ -46,11 +46,11 @@ const INIT_QQ_FILES: QQScannedFileEntry[] = [
   {
     id: 'qq-init-201',
     name: 'GroupPic_Cache_8942.png',
-    path: 'C:\\Users\\Admin\\Documents\\Tencent Files\\19982507\\Image\\Group\\GroupPic_Cache_8942.png',
-    parentDir: 'C:\\Users\\Admin\\Documents\\Tencent Files\\19982507\\Image\\Group',
+    path: 'C:\\Users\\Admin\\Documents\\Tencent Files\\10086001\\Image\\Group\\GroupPic_Cache_8942.png',
+    parentDir: 'C:\\Users\\Admin\\Documents\\Tencent Files\\10086001\\Image\\Group',
     groupId: 201,
     groupName: '聊天图片 (Image/Pic)',
-    accountId: '19982507',
+    accountId: '10086001',
     clientType: 'ClassicQQ',
     sizeBytes: 168 * 1024 * 1024,
     mtime: 1710000000,
@@ -59,11 +59,11 @@ const INIT_QQ_FILES: QQScannedFileEntry[] = [
   {
     id: 'qq-init-208',
     name: 'MiscHead.db',
-    path: 'C:\\Users\\Admin\\Documents\\Tencent Files\\19982507\\MiscHead.db',
-    parentDir: 'C:\\Users\\Admin\\Documents\\Tencent Files\\19982507',
+    path: 'C:\\Users\\Admin\\Documents\\Tencent Files\\10086001\\MiscHead.db',
+    parentDir: 'C:\\Users\\Admin\\Documents\\Tencent Files\\10086001',
     groupId: 208,
     groupName: '头像缓存 (Head/MiscHead)',
-    accountId: '19982507',
+    accountId: '10086001',
     clientType: 'ClassicQQ',
     sizeBytes: 64 * 1024 * 1024,
     mtime: 1710000000,
@@ -72,11 +72,11 @@ const INIT_QQ_FILES: QQScannedFileEntry[] = [
   {
     id: 'qq-init-999',
     name: 'Msg3.0.db',
-    path: 'C:\\Users\\Admin\\Documents\\Tencent Files\\19982507\\Msg3.0.db',
-    parentDir: 'C:\\Users\\Admin\\Documents\\Tencent Files\\19982507',
+    path: 'C:\\Users\\Admin\\Documents\\Tencent Files\\10086001\\Msg3.0.db',
+    parentDir: 'C:\\Users\\Admin\\Documents\\Tencent Files\\10086001',
     groupId: 999,
     groupName: '核心聊天数据库 (受保护)',
-    accountId: '19982507',
+    accountId: '10086001',
     clientType: 'ClassicQQ',
     sizeBytes: 120 * 1024 * 1024,
     mtime: 1710000000,
@@ -128,16 +128,16 @@ export default function QQCleanerCommand() {
   const [allFiles, setAllFiles] = useState<QQScannedFileEntry[]>(() =>
     inRealHost ? [] : INIT_QQ_FILES
   )
-  const [accounts, setAccounts] = useState<string[]>(() => (inRealHost ? [] : ['19982507']))
+  const [accounts, setAccounts] = useState<string[]>(() => (inRealHost ? [] : ['10086001']))
   const [accountStats, setAccountStats] = useState<QQAccountStat[]>(() =>
     inRealHost
       ? []
       : [
           {
-            accountId: '19982507',
-            label: 'QQ 号 (UIN): 19982507',
+            accountId: '10086001',
+            label: 'QQ 号 (UIN): 10086001',
             clientType: 'ClassicQQ / TIM',
-            rootDir: 'C:\\Users\\Admin\\Documents\\Tencent Files\\19982507',
+            rootDir: 'C:\\Users\\Admin\\Documents\\Tencent Files\\10086001',
             fileCount: 3,
             totalBytes: 352 * 1024 * 1024
           }

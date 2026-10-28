@@ -97,6 +97,10 @@ test('plugin window close remains on the stable Main handler for both supported 
   })
 })
 
+test('无路径参数的电源会话在两种SDK通道都路由到同一宿主实现', () => {
+  for (const lane of [1, 2] as const) assert.equal(selectSdkMethodRoute('system_power_session', lane, 2).route, 'legacy')
+})
+
 test('versioned credential APIs remain on the existing host transport on both SDK lanes', () => {
   for (const method of ['credential_v1_status', 'credential_v1_set', 'credential_v1_get', 'credential_v1_delete'] as const) {
     assert.ok(STABLE_LEGACY_ONLY_METHODS.includes(method))

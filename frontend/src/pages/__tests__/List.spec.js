@@ -122,6 +122,31 @@ describe('List page', () => {
     vi.clearAllMocks()
   })
 
+  it.each(['declarative', 'cancelled', 'failure'])('已安装卡片通过统一启动入口处理 %s', async (outcome) => {
+    const plugin = { pluginId: 'quick-folders', name: '常用文件夹', entry: 'dist/index.js' }
+    apiMocks.getMarketPlugins.mockResolvedValue({ list: [plugin], total: 1 })
+    const launch = vi.spyOn(pluginsStore, 'openPlugin')
+    if (outcome === 'failure') launch.mockRejectedValue(new Error('插件已下架'))
+    else launch.mockResolvedValue(outcome === 'cancelled' ? { cancelled: true } : { success: true, isDeclarative: true })
+    wrapper = mount(List, {
+      global: { plugins: [router], stubs: {
+        PluginCard3D: {
+          props: ['plugin'], emits: ['open-app'],
+          template: '<button class="launch-test" @click="$emit(\'open-app\', plugin.pluginId)">打开</button>'
+        },
+        SkeletonCard: true, APagination: true, AButton: true
+      } }
+    })
+    await flushPromises()
+    await wrapper.find('.launch-test').trigger('click')
+    await flushPromises()
+    expect(launch).toHaveBeenCalledWith('quick-folders')
+    expect(apiMocks.openPlugin).not.toHaveBeenCalled()
+    expect(toastSpies.toastSuccess).not.toHaveBeenCalled()
+    if (outcome === 'failure') expect(toastSpies.toastError).toHaveBeenCalledWith(expect.stringContaining('插件已下架'))
+    else expect(toastSpies.toastError).not.toHaveBeenCalled()
+  })
+
   it('keeps the latest search results when older requests resolve later', async () => {
     const firstRequest = createDeferred()
     const secondRequest = createDeferred()
@@ -192,7 +217,7 @@ describe('List page', () => {
   })
 
   it('开源版没有账号：安装不要求登录，直接安装并上报点击', async () => {
-    pluginsStore.installPlugin = vi.fn().mockResolvedValue(undefined)
+    pluginsStore.installPlugin = vi.fn().mockResolvedValue({ success: true })
     wrapper = mount(List, {
       global: {
         plugins: [router],
@@ -563,5 +588,28 @@ describe('List page', () => {
     await flushPromises()
     expect(wrapper.find('.market-title').text()).toBe('搜索「json」')
   })
+  it.each(['pending', 'busy'])('安装%s时不误报完成', async state => {
+    pluginsStore.installPlugin = vi.fn().mockResolvedValue({ success: false, [state]: true, message: '安装结果待确认' })
+    wrapper = mount(List, { global: { plugins: [router], stubs: { PluginCard3D: true, SkeletonCard: true, APagination: true, AButton: true } } })
+    await flushPromises()
+    await wrapper.vm.handleDownload('public-plugin')
+    expect(toastSpies.toastSuccess).not.toHaveBeenCalledWith('插件安装完成')
+    expect(toastSpies.toastWarning).toHaveBeenCalledWith('安装结果待确认')
+  })
+
+  it('本窗口安装期间忽略页面旁路收到的旧任务通知', async () => {
+    wrapper = mount(List, { global: { plugins: [router], stubs: { PluginCard3D: true, SkeletonCard: true, APagination: true, AButton: true } } })
+    await flushPromises()
+    pluginsStore.installingSet.add('public-plugin')
+    for (const success of [true, false]) {
+      await wrapper.vm.handleInstallComplete({ payload: { pluginId: 'public-plugin', operationId: 'old-operation', success, isUpdate: true, error: '旧任务失败' } })
+    }
+    expect(toastSpies.toastSuccess).not.toHaveBeenCalled()
+    expect(toastSpies.toastError).not.toHaveBeenCalled()
+    pluginsStore.installingSet.delete('public-plugin')
+    await wrapper.vm.handleInstallComplete({ payload: { pluginId: 'public-plugin', operationId: 'external-update', success: true, isUpdate: true } })
+    expect(toastSpies.toastSuccess).toHaveBeenCalled()
+  })
+
 })
 

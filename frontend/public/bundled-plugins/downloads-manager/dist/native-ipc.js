@@ -315,7 +315,7 @@ function makeScanResult(files, totalFiles, totalBytes, subdirs, meta = {}) {
     };
 }
 /**
- * 调用本机 Rust NTFS MFT 硬件级索引引擎 (ztools-indexer) 毫秒级检索真实文件
+ * 调用客户端的原生文件索引组件 (ztools-indexer) 检索文件
  */
 export async function searchRealIndexedFiles(query, limit = 40, hostOverride) {
     if (!query || !query.trim())
@@ -637,7 +637,7 @@ export async function listDirectChildren(dirPath, hostOverride) {
     return { entries: [], partial: false, error: error || DIRECTORY_EMPTY_OR_UNREADABLE };
 }
 /**
- * 获取真实文件字节大小（优先命中 MFT 硬件级索引实时缓存，再走 filesystem_get_file_size）
+ * 获取真实文件字节大小（优先用扫描结果里的大小，再走 filesystem_get_file_size）；读不到时返回 0
  */
 export async function getRealFileSize(filePath, hostOverride) {
     if (!filePath)
@@ -648,9 +648,11 @@ export async function getRealFileSize(filePath, hostOverride) {
             return cached;
     }
     const res = await callHostTransport('filesystem_get_file_size', { path: filePath }, hostOverride);
-    if (res.ok && typeof res.data === 'number' && Number.isFinite(res.data) && res.data >= 0) {
-        realFileSizeCache.set(filePath, res.data);
-        return res.data;
+    // 客户端返回 { success, size }（目录时 size 为 -1），旧的测试替身直接返回数字
+    const size = typeof res.data === 'number' ? res.data : res.data?.size;
+    if (res.ok && typeof size === 'number' && Number.isFinite(size) && size >= 0) {
+        realFileSizeCache.set(filePath, size);
+        return size;
     }
     return 0;
 }
@@ -793,9 +795,7 @@ export async function invokeDllPluginCapability(pluginName, method, params = {},
     }
     const ipcRes = await callHostTransport('dllplugin_call', {
         plugin: pluginName,
-        pluginName,
         func: trimmedMethod,
-        method: trimmedMethod,
         params
     }, hostBridge);
     if (ipcRes.ok && ipcRes.data !== undefined && ipcRes.data !== null) {
@@ -832,7 +832,7 @@ export async function invokeDllPluginCapability(pluginName, method, params = {},
             fromFallback: true
         };
     }
-    const unavailableMsg = ipcRes.error || `HOST_UNAVAILABLE: ${pluginName}.${trimmedMethod} 宿主接口未就绪`;
+    const unavailableMsg = `HOST_UNAVAILABLE: ${pluginName}.${trimmedMethod} 宿主接口未就绪`;
     return {
         ok: false,
         code: -1,
@@ -841,7 +841,7 @@ export async function invokeDllPluginCapability(pluginName, method, params = {},
         error: unavailableMsg,
         pluginName,
         method: trimmedMethod,
-        fromFallback: false
+        fromFallback: true
     };
 }
 export function formatBytes(bytes, decimals = 1) {
@@ -1221,7 +1221,7 @@ export async function computeRealFileSha256(filePath, hostOverride) {
     if (!filePath || !filePath.trim())
         return '';
     const target = filePath.trim();
-    const shaRes = await callHostTransport('filesearch_sha256', { fullPath: target, filePath: target, path: target }, hostOverride);
+    const shaRes = await callHostTransport('filesearch_sha256', { fullPath: target }, hostOverride);
     if (shaRes.ok && shaRes.data) {
         const hash = typeof shaRes.data === 'string' ? shaRes.data : String(shaRes.data?.sha256 || shaRes.data?.hash || '');
         if (/^[0-9a-f]{64}$/i.test(hash))

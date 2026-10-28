@@ -26,7 +26,7 @@ class PinnedPath {
   std::vector<unsigned char> ReadRange(const std::vector<std::string>& segments,
     std::uint64_t offset, std::size_t length, const std::function<bool()>& cancelled = {}) const;
   std::vector<DirectoryEntry> List(const std::vector<std::string>& segments,
-    const std::function<bool()>& cancelled = {}) const;
+    const std::function<bool()>& cancelled = {}, bool strict = false) const;
   // Save grants authorize a basename slot in an existing pinned parent, never an existing inode.
   void Save(const std::vector<unsigned char>& bytes, bool replace,
     const std::function<bool()>& cancelled = {}) const;
@@ -34,6 +34,8 @@ class PinnedPath {
   PinnedPath ReadChild(const std::vector<std::string>& segments) const;
   PinnedPath DirectoryChild(const std::vector<std::string>& segments) const;
   Metadata Describe() const;
+  void Trash() const;
+  void Rename(const std::string& name) const;
   std::uint64_t CopyFrom(const PinnedPath& source, bool replace,
     const std::function<bool()>& cancelled = {}) const;
   // Directory write scope authorizes current child name slots; exact read-file grants cannot mutate them.

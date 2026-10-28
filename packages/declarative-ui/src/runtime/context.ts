@@ -77,7 +77,18 @@ export class DeclarativeRenderInstance {
     this.onUpdateCallback = options?.onUpdate;
     this.onRenderEmptyCallback = options?.onRenderEmpty;
     this.onRenderEventCallback = options?.onRenderEvent;
-    this.navigationHandler = options?.navigation;
+    const navigation = options?.navigation;
+    if (navigation) {
+      this.navigationHandler = {
+        push: target => navigation.push(target),
+        pop: () => {
+          const removed = navigation.pop();
+          // 首次渲染时宿主尚未拿到 root；用明确回执同步卸载，防止继续执行后续 effect。
+          if (removed === true) this.unmount();
+          return removed;
+        }
+      };
+    }
     const seed = options?.handoffSeed;
     if (seed && typeof seed === "object" && !Array.isArray(seed)) {
       // 拷一份 key 表：宿主传入的对象不会被改动，也不受原型链上的属性影响
@@ -173,9 +184,7 @@ export class DeclarativeRenderInstance {
     currentInstance = this;
     this.currentHookIndex = 0;
 
-    if (this.navigationHandler) {
-      setActiveNavigation(this.navigationHandler);
-    }
+    const previousNavigation = setActiveNavigation(this.navigationHandler ?? null);
 
     try {
       let rawResult = this.component();
@@ -214,29 +223,34 @@ export class DeclarativeRenderInstance {
       return this.latestDescriptor ?? newDescriptor;
     } finally {
       currentInstance = prevInstance;
-      setActiveNavigation(null);
+      setActiveNavigation(previousNavigation);
     }
   }
 
   private runPendingEffects(): void {
     for (const hook of this.hooks) {
+      if (!this.isMounted) break;
       if (hook.type === "effect" && typeof hook.value === "function") {
         const effectFn = hook.value as EffectCallback;
         hook.value = null;
         // 如果有之前的清理函数，先执行
         if (typeof hook.cleanup === "function") {
+          const cleanup = hook.cleanup;
+          hook.cleanup = undefined;
           try {
-            hook.cleanup();
+            cleanup();
           } catch (err) {
             console.error("[RaycastCompat] Error during effect cleanup:", err);
           }
-          hook.cleanup = undefined;
         }
 
+        if (!this.isMounted) break;
         try {
           const cleanup = effectFn();
           if (typeof cleanup === "function") {
-            hook.cleanup = cleanup;
+            // effect 可能同步关闭自身；此时 hook 已脱离实例，必须立即释放资源。
+            if (this.isMounted) hook.cleanup = cleanup;
+            else cleanup();
           }
         } catch (err) {
           console.error("[RaycastCompat] Error running effect:", err);
@@ -246,11 +260,14 @@ export class DeclarativeRenderInstance {
   }
 
   unmount(): void {
+    if (!this.isMounted) return;
     this.isMounted = false;
     for (const hook of this.hooks) {
       if (hook.type === "effect" && typeof hook.cleanup === "function") {
+        const cleanup = hook.cleanup;
+        hook.cleanup = undefined;
         try {
-          hook.cleanup();
+          cleanup();
         } catch (err) {
           console.error("[RaycastCompat] Error unmounting effect:", err);
         }

@@ -19,11 +19,11 @@ vi.mock('@/composables/useCommandSearch', async importOriginal => ({
     fileResults: ref([]),
     filteredItems: computed(() => items.value),
     search: vi.fn(),
-    clearSearch: vi.fn(),
+    clearSearch: () => { searchQuery.value = '' },
     recordUsage: vi.fn()
   })
 }))
-const openPlugin = vi.fn().mockResolvedValue()
+const openPlugin = vi.fn().mockResolvedValue({ success: true })
 vi.mock('@/stores/plugins', () => ({
   usePluginsStore: () => ({ init: vi.fn().mockResolvedValue(), openPlugin })
 }))
@@ -37,6 +37,7 @@ vi.mock('@/utils/windowMode', () => ({
 import LauncherBar from '../LauncherBar.vue'
 import ActionPanelModal from '@/declarative/components/ActionPanelModal.vue'
 import ShellAPI from '../../../public/js/cef-ipc/src/api/shell.js'
+import * as declarativeLoader from '@/utils/declarativePluginLoader'
 
 const Empty = { template: '<div />' }
 
@@ -67,6 +68,42 @@ async function openPanel(wrapper) {
 }
 
 const pick = (panel, title) => panel.props('actions').find((a) => a.props.title === title)
+
+describe('LauncherBar 子命令桥接结果', () => {
+  beforeEach(() => { setActivePinia(createPinia()); searchQuery.value = '原搜索' })
+  afterEach(() => { vi.restoreAllMocks(); document.body.innerHTML = '' })
+
+  it('加载失败返回失败原因；成功才返回成功并保留功能码', async () => {
+    const load = vi.spyOn(declarativeLoader, 'loadInstalledDeclarativePlugin').mockRejectedValueOnce(new Error('插件文件损坏'))
+    const { wrapper } = await mountLauncher()
+    try {
+      expect(await window.__ztoolsOpenLauncherDeclarative('bridge-probe', { featureCode: 'second' })).toEqual({ success: false, error: '插件文件损坏' })
+      expect(wrapper.text()).toContain('插件文件损坏')
+      expect(searchQuery.value).toBe('原搜索')
+      load.mockResolvedValueOnce({ pluginId: 'bridge-probe', featureCode: 'second', command: () => null })
+      expect(await window.__ztoolsOpenLauncherDeclarative('bridge-probe', { featureCode: 'second' })).toEqual({ success: true })
+      expect(load).toHaveBeenLastCalledWith('bridge-probe', { featureCode: 'second' })
+      expect(searchQuery.value).toBe('')
+    } finally { wrapper.unmount() }
+  })
+
+  it('另一个命令先加载完成后，旧请求返回取消且不会覆盖新页面', async () => {
+    let finishOld
+    const newCommand = () => null
+    vi.spyOn(declarativeLoader, 'loadInstalledDeclarativePlugin')
+      .mockReturnValueOnce(new Promise(resolve => { finishOld = resolve }))
+      .mockResolvedValueOnce({ pluginId: 'bridge-probe', featureCode: 'new', command: newCommand })
+    const { wrapper } = await mountLauncher()
+    try {
+      const old = window.__ztoolsOpenLauncherDeclarative('bridge-probe', { featureCode: 'old' })
+      expect(await window.__ztoolsOpenLauncherDeclarative('bridge-probe', { featureCode: 'new' })).toEqual({ success: true })
+      finishOld({ pluginId: 'bridge-probe', featureCode: 'old', command: () => null })
+      expect(await old).toEqual({ success: false, cancelled: true })
+      await flushPromises()
+      expect(wrapper.findComponent({ name: 'DeclarativeView' }).props('rootComponent')).toBe(newCommand)
+    } finally { wrapper.unmount() }
+  })
+})
 
 describe('LauncherBar 悬浮条动作面板', () => {
   beforeEach(() => {
@@ -140,6 +177,7 @@ describe('LauncherBar 悬浮条动作面板', () => {
 describe('LauncherBar 文件搜索结果执行', () => {
   beforeEach(() => {
     setActivePinia(createPinia())
+    searchQuery.value = 'sample'
     items.value = [{ key: 'file:sample', type: 'file', name: 'sample.txt', path: '/search/sample.txt' }]
   })
   afterEach(() => {
@@ -158,9 +196,11 @@ describe('LauncherBar 文件搜索结果执行', () => {
     await wrapper.find('.launcher-row').trigger('click')
     expect(openPath).toHaveBeenCalledTimes(1)
     expect(hide).not.toHaveBeenCalled()
+    expect(searchQuery.value).toBe('sample')
     complete({ success: true, data: { success: true } })
     await flushPromises()
     expect(hide).toHaveBeenCalledOnce()
+    expect(searchQuery.value).toBe('')
     wrapper.unmount()
   })
 
@@ -177,10 +217,26 @@ describe('LauncherBar 文件搜索结果执行', () => {
     await flushPromises()
     expect(hide).not.toHaveBeenCalled()
     expect(wrapper.text()).toContain(error.message)
+    expect(searchQuery.value).toBe('sample')
     openPath.mockResolvedValue({ success: true })
     await wrapper.find('.launcher-row').trigger('click')
     await flushPromises()
     expect(hide).toHaveBeenCalledOnce()
+    expect(searchQuery.value).toBe('')
+    wrapper.unmount()
+  })
+
+  it('等待文件打开时开始了新搜索，旧结果返回后不关闭或清空新输入', async () => {
+    let complete
+    const hide = vi.fn().mockResolvedValue()
+    window.__ztoolsLauncher = { openPath: () => new Promise(resolve => { complete = resolve }), hide }
+    const { wrapper } = await mountLauncher()
+    await wrapper.find('.launcher-row').trigger('click')
+    await wrapper.find('#launcherQuery').setValue('新搜索')
+    complete({ success: true })
+    await flushPromises()
+    expect(searchQuery.value).toBe('新搜索')
+    expect(hide).not.toHaveBeenCalled()
     wrapper.unmount()
   })
 
@@ -201,6 +257,87 @@ describe('LauncherBar 文件搜索结果执行', () => {
     await flushPromises()
     expect(wrapper.text()).toContain('文件操作接口不可用')
     expect(hide).not.toHaveBeenCalled()
+    wrapper.unmount()
+  })
+})
+
+describe('LauncherBar 外部插件打开', () => {
+  beforeEach(() => {
+    setActivePinia(createPinia())
+    searchQuery.value = '插件搜索'
+    items.value = [{ key: 'external-test-plugin', pluginId: 'external-test-plugin', name: '测试插件' }]
+    openPlugin.mockReset()
+  })
+  afterEach(() => {
+    delete window.__ztoolsLauncher
+    vi.restoreAllMocks()
+    document.body.innerHTML = ''
+  })
+
+  it('成功后清空并收起，等待期间阻止重复打开', async () => {
+    let complete
+    openPlugin.mockReturnValue(new Promise(resolve => { complete = resolve }))
+    const hide = vi.fn().mockResolvedValue()
+    window.__ztoolsLauncher = { hide }
+    const { wrapper } = await mountLauncher()
+    await wrapper.find('.launcher-row').trigger('click')
+    await wrapper.find('.launcher-row').trigger('click')
+    expect(openPlugin).toHaveBeenCalledTimes(1)
+    expect(hide).not.toHaveBeenCalled()
+    expect(searchQuery.value).toBe('插件搜索')
+    complete({ success: true })
+    await flushPromises()
+    expect(searchQuery.value).toBe('')
+    expect(hide).toHaveBeenCalledOnce()
+    wrapper.unmount()
+  })
+
+  it.each(['returned', 'thrown'])('打开失败保留搜索和窗口，显示失败原因：%s', async mode => {
+    vi.spyOn(console, 'error').mockImplementation(() => {})
+    if (mode === 'returned') openPlugin.mockResolvedValue({ success: false, error: '插件暂不可用' })
+    else openPlugin.mockRejectedValue(new Error('插件暂不可用'))
+    const hide = vi.fn().mockResolvedValue()
+    window.__ztoolsLauncher = { hide }
+    const { wrapper } = await mountLauncher()
+    await wrapper.find('.launcher-row').trigger('click')
+    await flushPromises()
+    expect(searchQuery.value).toBe('插件搜索')
+    expect(hide).not.toHaveBeenCalled()
+    expect(wrapper.text()).toContain('插件暂不可用')
+    wrapper.unmount()
+  })
+
+  it('旧插件打开完成时不关闭用户新开始的搜索', async () => {
+    let complete
+    openPlugin.mockReturnValue(new Promise(resolve => { complete = resolve }))
+    const hide = vi.fn().mockResolvedValue()
+    window.__ztoolsLauncher = { hide }
+    const { wrapper } = await mountLauncher()
+    await wrapper.find('.launcher-row').trigger('click')
+    await wrapper.find('#launcherQuery').setValue('下一次搜索')
+    complete({ success: true })
+    await flushPromises()
+    expect(searchQuery.value).toBe('下一次搜索')
+    expect(hide).not.toHaveBeenCalled()
+    wrapper.unmount()
+  })
+
+  it('宿主识别为悬浮条内运行的插件时保留插件界面', async () => {
+    searchQuery.value = ''
+    const command = () => null
+    vi.spyOn(declarativeLoader, 'loadInstalledDeclarativePlugin')
+      .mockResolvedValue({ pluginId: 'bridge-probe', command })
+    openPlugin.mockImplementation(async () => {
+      const result = await window.__ztoolsOpenLauncherDeclarative('bridge-probe')
+      return { ...result, isDeclarative: true }
+    })
+    const hide = vi.fn().mockResolvedValue()
+    window.__ztoolsLauncher = { hide }
+    const { wrapper } = await mountLauncher()
+    await wrapper.find('.launcher-row').trigger('click')
+    await flushPromises()
+    expect(hide).not.toHaveBeenCalled()
+    expect(wrapper.findComponent({ name: 'DeclarativeView' }).props('rootComponent')).toBe(command)
     wrapper.unmount()
   })
 })

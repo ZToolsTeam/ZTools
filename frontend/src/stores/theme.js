@@ -1,139 +1,119 @@
-/**
- * 主题状态管理
- * 采用 CSS 变量 + class 切换的方案
- * 主题状态通过 document.documentElement 的 .dark 类来控制
- */
+/** 主题偏好与当前显示颜色分开保存，跟随系统时不固定深浅色。 */
 import { defineStore } from 'pinia'
+
+const THEME_MODES = ['system', 'light', 'dark']
+
+function systemPrefersDark() {
+  return window.matchMedia?.('(prefers-color-scheme: dark)').matches ?? false
+}
 
 export const useThemeStore = defineStore('theme', {
   state: () => ({
+    mode: 'system',
     isDark: false,
-    _initialized: false
+    _initialized: false,
+    _revision: 0,
+    _colorRevision: 0
   }),
 
   actions: {
-    /**
-     * 初始化主题
-     * 从后端配置或系统信息读取主题设置
-     */
     async init() {
       if (this._initialized) return
       this._initialized = true
+      const revision = this._revision
+
+      // 浏览器预览也支持跟随系统；Electron 窗口还会收到宿主的主题变化事件。
+      const media = window.matchMedia?.('(prefers-color-scheme: dark)')
+      media?.addEventListener?.('change', (event) => {
+        if (this.mode === 'system') {
+          this._colorRevision++
+          this._applyTheme(event.matches)
+        }
+      })
 
       try {
         let localTheme = null
         try {
           localTheme = localStorage.getItem('ztools_theme')
-        } catch (e) {
-          console.warn('[ThemeStore] 读取本地主题缓存失败:', e)
+        } catch (error) {
+          console.warn('[ThemeStore] 读取本地主题缓存失败:', error)
         }
-
-        // 优先从用户配置读取
-        let theme = null
-        if (window.ztools?.config?.get) {
-          theme = await window.ztools.config.get('ui.theme', null, 'user_settings.json')
+        const savedTheme = window.ztools?.config?.get
+          ? await window.ztools.config.get('ui.theme', null, 'user_settings.json')
+          : null
+        if (revision !== this._revision) return
+        const preference = savedTheme || localTheme
+        this.mode = THEME_MODES.includes(preference) ? preference : 'system'
+        // 旧版本可能只保存了本地缓存，需要同步给宿主，避免界面和原生窗口颜色不一致。
+        if (!savedTheme && THEME_MODES.includes(localTheme) && window.ztools?.config?.set) {
+          const migrated = await window.ztools.config.set('ui.theme', localTheme, true, 'user_settings.json')
+          if (!migrated) console.warn('[ThemeStore] 旧主题偏好同步失败')
+          if (revision !== this._revision) return
         }
-        if (!theme) {
-          theme = localTheme
-        }
-
-        if (theme) {
-          const isDark = theme === 'dark'
-          this._applyTheme(isDark)
-          if (window.ztools?.sys?.setDarkMode) {
-            await window.ztools.sys.setDarkMode(isDark).catch((err) => console.warn('[ThemeStore] 同步主题配置失败:', err))
-          }
+        if (this.mode !== 'system') {
+          this._applyTheme(this.mode === 'dark')
           return
         }
-
-        // 其次从系统信息获取
-        if (window.ztools?.sys?.getInfo) {
-          const info = await window.ztools.sys.getInfo()
-          if (info?.darkMode !== undefined) {
-            this._applyTheme(info.darkMode)
-            if (window.ztools?.sys?.setDarkMode) {
-              await window.ztools.sys.setDarkMode(info.darkMode).catch((err) => console.warn('[ThemeStore] 同步主题配置失败:', err))
-            }
-            return
-          }
+        const colorRevision = this._colorRevision
+        const info = await window.ztools?.sys?.getInfo?.()
+        if (revision !== this._revision || colorRevision !== this._colorRevision) return
+        this._applyTheme(typeof info?.darkMode === 'boolean' ? info.darkMode : systemPrefersDark())
+      } catch (error) {
+        console.warn('[ThemeStore] 初始化主题失败:', error)
+        if (revision === this._revision) {
+          this._applyTheme(this.mode === 'system' ? systemPrefersDark() : this.mode === 'dark')
         }
-
-        // 最后使用系统偏好
-        if (window.matchMedia) {
-          const prefersDark = window.matchMedia(
-            '(prefers-color-scheme: dark)'
-          ).matches
-          this._applyTheme(prefersDark)
-          if (window.ztools?.sys?.setDarkMode) {
-            await window.ztools.sys.setDarkMode(prefersDark).catch((err) => console.warn('[ThemeStore] 同步主题配置失败:', err))
-          }
-        }
-      } catch (err) {
-        console.error('[ThemeStore] 初始化主题失败:', err)
-        this._applyTheme(false)
       }
     },
 
-    /**
-     * 切换主题
-     */
     async toggle() {
-      const newDark = !this.isDark
-      this._applyTheme(newDark)
-      await this._saveTheme(newDark)
+      await this.setTheme(this.isDark ? 'light' : 'dark')
     },
 
-    /**
-     * 设置主题
-     * @param {'light' | 'dark'} theme
-     */
-    async setTheme(theme) {
-      const isDark = theme === 'dark'
+    /** @param {'system' | 'light' | 'dark'} mode */
+    async setTheme(mode) {
+      if (!THEME_MODES.includes(mode)) throw new Error('不支持的主题模式')
+      const revision = ++this._revision
+      if (window.ztools?.config?.set) {
+        const saved = await window.ztools.config.set('ui.theme', mode, true, 'user_settings.json')
+        if (!saved) throw new Error('主题设置未保存')
+      } else if (mode !== 'system' && window.ztools?.sys?.setDarkMode) {
+        const saved = await window.ztools.sys.setDarkMode(mode === 'dark')
+        if (!saved) throw new Error('主题设置未保存')
+      }
+      if (revision !== this._revision) return
+      this.mode = mode
+      try {
+        localStorage.setItem('ztools_theme', mode)
+      } catch (error) {
+        console.warn('[ThemeStore] 写入本地主题缓存失败:', error)
+      }
+      if (mode === 'system') {
+        let info
+        const colorRevision = this._colorRevision
+        try {
+          info = await window.ztools?.sys?.getInfo?.()
+        } catch (error) {
+          console.warn('[ThemeStore] 读取系统主题失败:', error)
+        }
+        if (revision !== this._revision || colorRevision !== this._colorRevision) return
+        this._applyTheme(typeof info?.darkMode === 'boolean' ? info.darkMode : systemPrefersDark())
+      } else {
+        this._applyTheme(mode === 'dark')
+      }
+    },
+
+    handleSystemThemeChange(isDark, mode) {
+      this._colorRevision++
+      if (THEME_MODES.includes(mode)) this.mode = mode
       this._applyTheme(isDark)
-      await this._saveTheme(isDark)
     },
 
-    /**
-     * 处理系统主题变化事件
-     * @param {boolean} isDark
-     */
-    handleSystemThemeChange(isDark) {
-      this._applyTheme(isDark)
-    },
-
-    /**
-     * 应用主题到 DOM
-     * @private
-     */
     _applyTheme(isDark) {
       this.isDark = isDark
       document.documentElement.classList.toggle('dark', isDark)
-    },
-
-    /**
-     * 保存主题设置
-     * @private
-     */
-    async _saveTheme(isDark) {
-      const theme = isDark ? 'dark' : 'light'
-      try {
-        try {
-          localStorage.setItem('ztools_theme', theme)
-        } catch (e) {
-          console.warn('[ThemeStore] 写入本地主题缓存失败:', e)
-        }
-        if (window.ztools?.sys?.setDarkMode) {
-          await window.ztools.sys.setDarkMode(isDark).catch((err) => console.warn('[ThemeStore] 同步主题配置失败:', err))
-        }
-        if (window.ztools?.config?.set) {
-          await window.ztools.config.set('ui.theme', theme, true, 'user_settings.json').catch((err) => console.warn('[ThemeStore] 同步主题配置失败:', err))
-        }
-      } catch (err) {
-        console.warn('[ThemeStore] 保存主题失败:', err)
-      }
     }
   }
 })
 
-// 兼容旧的 load 方法名
 useThemeStore.prototype.load = useThemeStore.prototype.init

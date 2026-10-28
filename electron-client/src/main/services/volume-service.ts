@@ -69,19 +69,27 @@ export async function listSystemVolumes(platform: NodeJS.Platform = process.plat
   if (platform === 'win32') {
     const executable = path.win32.join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe')
     const text = await deps.run(executable, ['-NoProfile', '-NonInteractive', '-Command', "[Console]::OutputEncoding = [System.Text.Encoding]::UTF8; @(Get-CimInstance Win32_Volume | Where-Object { $_.Name -and $_.Name -notlike '\\\\?\\Volume*' -and $_.Capacity -gt 0 } | Select-Object Name,Label,FileSystem,Capacity,FreeSpace,DeviceID) | ConvertTo-Json -Compress"])
-    const parsed: unknown = JSON.parse(text.replace(/^\uFEFF/, ''))
+    const body = text.replace(/^\uFEFF/, '').trim()
+    // PowerShell 5.1 对空数组 ConvertTo-Json 不输出任何内容
+    if (!body) throw new Error('没有读取到已挂载卷')
+    let parsed: unknown
+    try { parsed = JSON.parse(body) } catch { throw new Error('挂载卷列表输出不是有效 JSON') }
     const rows: unknown[] = Array.isArray(parsed) ? parsed : parsed ? [parsed] : []
     const volumes: SystemVolume[] = []
+    const errors: string[] = []
     for (const value of rows) {
-      if (!value || typeof value !== 'object') throw new Error('挂载卷数据无效')
+      if (!value || typeof value !== 'object') { errors.push('挂载卷数据无效'); continue }
       const row = value as Record<string, unknown>
       if (typeof row.Name === 'string' && /^\\\\[?.]\\volume\{/i.test(row.Name)) continue
-      const totalBytes = Number(row.Capacity), availableBytes = Number(row.FreeSpace)
-      if (typeof row.Name !== 'string' || !path.win32.isAbsolute(row.Name) || !Number.isFinite(totalBytes) || totalBytes <= 0 || !Number.isFinite(availableBytes) || availableBytes < 0 || availableBytes > totalBytes) throw new Error('挂载卷容量无效')
-      volumes.push({ path: row.Name, label: String(row.Label || row.Name), fileSystem: String(row.FileSystem || ''), totalBytes, availableBytes, usedBytes: totalBytes - availableBytes, capacityGroup: String(row.DeviceID || row.Name) })
+      // null（如 BitLocker 锁定卷读不到剩余空间）不能按 0 处理，否则会显示成“已用 100%”
+      const totalBytes = typeof row.Capacity === 'number' ? row.Capacity : Number.NaN, availableBytes = typeof row.FreeSpace === 'number' ? row.FreeSpace : Number.NaN
+      const name = typeof row.Name === 'string' ? row.Name : ''
+      if (!name || !path.win32.isAbsolute(name)) { errors.push('挂载卷路径无效'); continue }
+      if (!Number.isFinite(totalBytes) || totalBytes <= 0 || !Number.isFinite(availableBytes) || availableBytes < 0 || availableBytes > totalBytes) { errors.push(`${name}: 卷容量读取失败`); continue }
+      volumes.push({ path: name, label: String(row.Label || name), fileSystem: String(row.FileSystem || ''), totalBytes, availableBytes, usedBytes: totalBytes - availableBytes, capacityGroup: String(row.DeviceID || name) })
     }
-    if (!volumes.length) throw new Error('没有读取到已挂载卷')
-    return { volumes, partial: false, errors: [] }
+    if (!volumes.length) throw new Error(errors.join('；') || '没有读取到已挂载卷')
+    return { volumes, partial: errors.length > 0, errors }
   }
   if (platform !== 'darwin') throw new Error('当前平台不支持挂载卷枚举')
   const plist = await deps.run('/usr/sbin/diskutil', ['list', '-plist'])

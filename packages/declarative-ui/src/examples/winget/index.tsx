@@ -1,3 +1,4 @@
+import { isRealElectronHost } from '../shared/native-ipc.js';
 import React from "../../index.js";
 import {
   List,
@@ -179,7 +180,7 @@ ${pkg.tags.map((t) => `\`#${t}\``).join(" ")}
  * Winget 包管理器前端主命令 (现代纯正 TSX 模式)
  */
 export default function WingetCommand() {
-  const [packages, setPackages] = useState<WingetPackage[]>(SAMPLE_WINGET_PACKAGES);
+  const [packages, setPackages] = useState<WingetPackage[]>(isRealElectronHost() ? [] : SAMPLE_WINGET_PACKAGES);
   const [filterType, setFilterType] = useState<string>("all");
   const [searchText, setSearchText] = useState<string>("");
   const [isShowingDetail, setIsShowingDetail] = useState<boolean>(true);

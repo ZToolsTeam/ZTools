@@ -1,8 +1,8 @@
 {
   "id": "translator",
   "name": "划词翻译",
-  "description": "支持中英日韩法德多语种互译、英汉词典释义、商务邮件润色与代码变量命名转换",
-  "version": "1.1.2",
+  "description": "中英互译常用词与办公短语（只查客户端内置的离线词库，收录有限），并把英文转成 camelCase / snake_case 变量名",
+  "version": "2.0.2",
   "author": "ZTools Team",
   "entry": "dist/index.js",
   "icon": "icon.svg",
@@ -21,50 +21,35 @@
     "划词翻译",
     "词典",
     "中英互译",
-    "商务英语"
+    "变量命名"
   ],
   "features": [
     {
       "code": "translate-standard",
-      "explain": "中英日韩多语种互译",
+      "explain": "中英互译（客户端离线词库，收录有限）",
       "mode": "view",
       "cmds": [
         "翻译",
         "划词翻译",
         "中英互译",
         "英文翻译",
-        "日文翻译",
         "translate"
       ]
     },
     {
-      "code": "translate-business",
-      "explain": "外贸与商务邮件得体润色",
-      "mode": "view",
-      "cmds": [
-        "商务英语",
-        "邮件润色",
-        "英文邮件",
-        "外贸翻译",
-        "商务翻译"
-      ]
-    },
-    {
       "code": "translate-dict",
-      "explain": "专业术语词典与词根拆解",
+      "explain": "查中英常用词的译文（客户端离线词库，收录有限）",
       "mode": "view",
       "cmds": [
         "词典",
         "查词",
         "单词",
-        "术语拆解",
-        "英汉词典",
         "dictionary"
       ]
     },
     {
       "code": "translate-naming",
-      "explain": "代码变量命名翻译 (驼峰/下划线)",
+      "explain": "中文翻译成英文变量名（camelCase / snake_case）",
       "mode": "view",
       "cmds": [
         "变量命名",

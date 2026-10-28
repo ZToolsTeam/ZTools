@@ -86,11 +86,11 @@ describe('ZTools GitOps 规范与安全扫描自测套件', () => {
 
     it('id 不能与客户端内置功能重名（否则客户端会隐藏插件）；已下架的历史条目不受影响', () => {
       const base = { name: '测试', version: '1.0.0', description: '测试', author: 'dev', entry: 'index.html', icon: 'icon.png', permissions: [] }
-      const hit = validatePluginManifest({ ...base, id: 'translator' })
+      const hit = validatePluginManifest({ ...base, id: 'github' })
       assert.ok(hit.errors.some(e => e.includes('与客户端内置功能重名')))
-      const revoked = validatePluginManifest({ ...base, id: 'translator', revoked: true, revokedReason: '已下架' })
+      const revoked = validatePluginManifest({ ...base, id: 'github', revoked: true, revokedReason: '已下架' })
       assert.ok(!revoked.errors.some(e => e.includes('与客户端内置功能重名')))
-      assert.ok(!validatePluginManifest({ ...base, id: 'my-translator' }).errors.some(e => e.includes('与客户端内置功能重名')))
+      assert.ok(!validatePluginManifest({ ...base, id: 'my-github' }).errors.some(e => e.includes('与客户端内置功能重名')))
     })
 
     it('id 不允许下划线（与插件编译脚本一致，避免清单校验通过却编译失败）', () => {
@@ -358,6 +358,45 @@ describe('ZTools GitOps 规范与安全扫描自测套件', () => {
       } finally {
         fs.rmSync(base, { recursive: true, force: true })
         fs.rmSync(out, { recursive: true, force: true })
+      }
+    })
+
+    it('官方标记只看官方名单：名单内才是官方；作者名、目录名都不能换来官方标记，冒用官方作者名的插件被拦下', async () => {
+      const copyFixture = (base, rel, patch) => {
+        const dir = path.join(base, rel)
+        fs.cpSync(path.join(fixturesDir, 'compliant-plugin'), dir, { recursive: true })
+        const manifest = JSON.parse(fs.readFileSync(path.join(dir, 'plugin.json'), 'utf8'))
+        fs.writeFileSync(path.join(dir, 'plugin.json'), JSON.stringify({ ...manifest, ...patch }))
+      }
+      const flat = path.join(rootDir, 'dist/test-official-src')
+      const nested = path.join(rootDir, 'dist/test-official-nested-src')
+      const out = path.join(rootDir, 'dist/test-official-out')
+      const outNested = path.join(rootDir, 'dist/test-official-nested-out')
+      for (const d of [flat, nested, out, outNested]) fs.rmSync(d, { recursive: true, force: true })
+      try {
+        copyFixture(flat, 'calculator', { id: 'calculator', author: 'ZTools Team' })
+        copyFixture(flat, 'community-tool', { id: 'community-tool', author: 'ZTools Community' })
+        copyFixture(flat, 'dev-tool', { id: 'dev-tool', author: 'ztools-dev' })
+        copyFixture(flat, 'fake-official', { id: 'fake-official', author: 'ZTools Team' })
+        const res = await buildPluginsRelease({ pluginsDir: flat, outputDir: out, cdnBaseUrl: 'https://cdn.example.com' })
+        assert.equal(res.rejectedCount, 1, '冒用官方作者名的插件必须被拦下')
+        const catalog = JSON.parse(fs.readFileSync(path.join(out, 'catalog.json'), 'utf8'))
+        const byId = Object.fromEntries(catalog.plugins.map((p) => [p.id, p]))
+        assert.equal(byId['fake-official'], undefined)
+        assert.equal(byId.calculator.is_official, true)
+        assert.equal(byId.calculator.official_badge, '官方自营')
+        for (const id of ['community-tool', 'dev-tool']) {
+          assert.equal(byId[id].is_official, false, `${id} 作者名含 ZTools 也不能算官方`)
+          assert.equal(byId[id].official_badge, '')
+        }
+
+        // 两级目录 official/<id> 的目录名同样不能换来官方标记
+        copyFixture(nested, 'official/other-tool', { id: 'other-tool', author: 'dev' })
+        await buildPluginsRelease({ pluginsDir: nested, outputDir: outNested, cdnBaseUrl: 'https://cdn.example.com' })
+        const nestedCatalog = JSON.parse(fs.readFileSync(path.join(outNested, 'catalog.json'), 'utf8'))
+        assert.equal(nestedCatalog.plugins.find((p) => p.id === 'other-tool').is_official, false)
+      } finally {
+        for (const d of [flat, nested, out, outNested]) fs.rmSync(d, { recursive: true, force: true })
       }
     })
 

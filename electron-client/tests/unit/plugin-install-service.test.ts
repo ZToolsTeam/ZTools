@@ -7,6 +7,8 @@ import { errorCodes, ZToolsError } from '../../src/contracts/errors.js'
 import type { LibraryMetadataSource, RawLibraryMetadata } from '../../src/main/services/library-integrity-pins.js'
 import { PluginInstallService } from '../../src/main/services/plugin-install-service.js'
 import { verifyWindowsPluginNativeFiles } from '../../src/main/services/plugin-native-file-integrity.js'
+import { canCall } from '../../src/contracts/capabilities.js'
+import { validateMethodParams } from '../../src/contracts/method-params.js'
 
 interface ZipEntry {
   name: string
@@ -207,6 +209,45 @@ function installParams(archive: Buffer, version: string) {
     fileSize: archive.length
   }
 }
+
+for (const success of [true, false]) {
+  test(`安装终态查询保留真实结果并区分任务：${success}`, async context => {
+    const root = runtimeRoot(`operation-status-${success}`)
+    const events: PublishedEvent[] = []
+    const archive = pluginZip('1.0.0', [], {
+      targets: [{ id: 'win-x64', platform: 'windows', runtime: 'electron', arch: 'x64' }], nativeComponents: []
+    })
+    let releaseFetch!: () => void
+    const fetchGate = new Promise<void>(resolve => { releaseFetch = resolve })
+    const service = new PluginInstallService(root, createPublisher(events), {
+      runtimeTarget: windowsX64Electron,
+      fetchImpl: async () => { await fetchGate; return response(success ? archive : Buffer.from('broken')) }
+    })
+    context.after(async () => { releaseFetch(); await service.stop(); await fs.rm(root, { recursive: true, force: true }) })
+    const task = await service.startInstall(installParams(archive, '1.0.0'), false)
+    assert.equal((await service.getInstallStatus('plugin.test', task.operationId)).status, 'running')
+    assert.equal((await service.getInstallStatus('plugin.test', 'old-operation')).status, 'unknown')
+    releaseFetch()
+    await service.waitForIdle()
+    const result = await service.getInstallStatus('plugin.test', task.operationId)
+    assert.equal(result.status, 'completed')
+    assert.deepEqual(result, { ...events.find(event => event.type === 'plugin_install_complete')?.payload, status: 'completed' })
+    assert.equal('success' in result && result.success, success)
+    assert.equal((await service.getInstallStatus('different-plugin', task.operationId)).status, 'unknown')
+    result.pluginId = 'changed-by-caller'
+    assert.equal((await service.getInstallStatus('plugin.test', task.operationId)).pluginId, 'plugin.test')
+  })
+}
+
+test('安装结果查询只允许宿主并严格校验任务参数', () => {
+  assert.equal(canCall('plugin_install_status', { type: 'main', webContentsId: 1 }), true)
+  assert.equal(canCall('plugin_install_status', { type: 'plugin', pluginId: 'plugin.test', webContentsId: 2 }), false)
+  assert.doesNotThrow(() => validateMethodParams('plugin_install_status', { pluginId: 'plugin.test', operationId: 'operation-1' }))
+  for (const params of [
+    { pluginId: '../escape', operationId: 'op' }, { pluginId: 'plugin.test', operationId: '' },
+    { pluginId: 'plugin.test', operationId: 1 }, { pluginId: 'plugin.test', operationId: 'op', extra: true }
+  ]) assert.throws(() => validateMethodParams('plugin_install_status', params))
+})
 
 for (const failure of ['none', 'hash', 'host-hash', 'machine', 'unknown-machine', 'classification', 'data-pe', 'missing', 'zero', 'truncated', 'offset', 'symlink', 'extra-lib'] as const) {
   test(`Windows payload ZIP integrity and old-install preservation: ${failure}`, async context => {

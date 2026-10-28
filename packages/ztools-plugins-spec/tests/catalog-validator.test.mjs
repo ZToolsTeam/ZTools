@@ -11,7 +11,9 @@ import {
   validateCatalogPluginItem,
   validateStoreCatalog,
   PERMISSIONS,
-  HIGH_RISK_PERMISSIONS
+  HIGH_RISK_PERMISSIONS,
+  OFFICIAL_PLUGIN_IDS,
+  isOfficialAuthorName
 } from '../src/validator.js'
 
 describe('Store Catalog & Plugin Item Validator (Beyond Happy Path)', () => {
@@ -210,7 +212,7 @@ describe('Store Catalog & Plugin Item Validator (Beyond Happy Path)', () => {
           name: '端口管理',
           version: '1.0.2',
           description: '结束占用端口的进程',
-          author: { name: 'ZTools' },
+          author: { name: 'Plugin Dev' },
           entry: 'dist/index.js',
           icon: 'icon.png',
           permissions: ['system', 'process'],
@@ -244,7 +246,7 @@ describe('Store Catalog & Plugin Item Validator (Beyond Happy Path)', () => {
           name: '演示插件',
           version: '1.0.0',
           description: '标准跨平台插件',
-          author: { name: 'ZTools' },
+          author: { name: 'Plugin Dev' },
           entry: 'dist/index.js',
           icon: 'icon.png',
           permissions: ['clipboard', 'network'],
@@ -275,7 +277,7 @@ describe('Store Catalog & Plugin Item Validator (Beyond Happy Path)', () => {
           name: '模式插件',
           version: '1.0.0',
           description: '校验 mode 取值',
-          author: { name: 'ZTools' },
+          author: { name: 'Plugin Dev' },
           entry: 'dist/index.js',
           icon: 'icon.png',
           permissions: [],
@@ -323,6 +325,40 @@ describe('Store Catalog & Plugin Item Validator (Beyond Happy Path)', () => {
       assert.ok(res.errors.some((e) => e.includes('未知的权限声明')))
       assert.ok(res.errors.some((e) => e.includes('重复声明的权限')))
       assert.ok(res.errors.some((e) => e.includes('缺少必填字段: targets')))
+    })
+  })
+
+  describe('官方名单与官方作者名', () => {
+    const base = { name: '测试', version: '1.0.0', description: '测试', entry: 'dist/index.js', icon: 'icon.svg', permissions: [], targets: buildPlatformTargets(['windows']), nativeComponents: [] }
+    const authorErrors = (manifest) => validatePluginManifest(manifest).errors.filter((e) => e.includes('官方名称'))
+
+    it('名单来自 official-ids.json：51 个 ID、无重复、格式合法', () => {
+      const raw = JSON.parse(fs.readFileSync(new URL('../official-ids.json', import.meta.url), 'utf8'))
+      assert.equal(raw.ids.length, 51)
+      assert.equal(new Set(raw.ids).size, raw.ids.length)
+      assert.deepEqual([...raw.ids].sort(), raw.ids, '名单按字母排序，方便审核 diff')
+      for (const id of raw.ids) assert.match(id, /^[a-z][a-z0-9-]{1,63}$/, id)
+      assert.equal(OFFICIAL_PLUGIN_IDS.size, 51)
+    })
+
+    it('官方作者名识别：大小写、空格、连字符变体都算；ZTools Community、普通名字不算', () => {
+      for (const a of ['ZTools Team', 'ztools-team', ' ZTOOLS_TEAM ', 'ZTools', 'ZTools 官方', '官方', 'ZTools Official Team', 'Official', { name: 'ZTools Team' }, 'ZTools 团队']) {
+        assert.equal(isOfficialAuthorName(a), true, JSON.stringify(a))
+      }
+      for (const a of ['ZTools Community', 'Plugin Dev', 'alice', 'ztools-fan-club', '', '   ', null, undefined, 42, {}, { name: 7 }]) {
+        assert.equal(isOfficialAuthorName(a), false, JSON.stringify(a))
+      }
+    })
+
+    it('名单外的插件用官方作者名被拒；名单内允许；已下架的历史条目不受影响', () => {
+      assert.equal(authorErrors({ ...base, id: 'my-tool', author: 'ZTools Team' }).length, 1)
+      assert.equal(authorErrors({ ...base, id: 'my-tool', author: { name: 'ZTools 官方' } }).length, 1)
+      assert.equal(authorErrors({ ...base, id: 'my-tool', author: 'Plugin Dev' }).length, 0)
+      assert.equal(authorErrors({ ...base, id: 'my-tool', author: 'ZTools Community' }).length, 0)
+      const listed = [...OFFICIAL_PLUGIN_IDS][0]
+      assert.equal(authorErrors({ ...base, id: listed, author: 'ZTools Team' }).length, 0)
+      assert.equal(authorErrors({ ...base, id: 'hosts', author: 'ZTools Team', revoked: true, revokedReason: '已下架' }).length, 0)
+      assert.equal(authorErrors({ ...base, id: 'hosts', author: 'ZTools Team', revoked: false }).length, 1, 'revoked 必须是 true 才豁免')
     })
   })
 })

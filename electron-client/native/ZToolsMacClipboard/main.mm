@@ -3,6 +3,7 @@
 #include <unistd.h>
 #include <cstring>
 #include "validation.hpp"
+#include "paste_session.h"
 
 static constexpr NSUInteger limit = ztools::clipboard::max_message_bytes;
 
@@ -45,6 +46,7 @@ static int selfTest() {
 int main(int argc, const char *argv[]) {
     @autoreleasepool {
         if (argc == 2 && std::strcmp(argv[1], "--self-test") == 0) return selfTest();
+        if (argc == 2 && std::strcmp(argv[1], "--paste-session") == 0) return runPasteSession();
         if (argc != 1) return 2;
         NSMutableData *input = [NSMutableData data];
         unsigned char buffer[4096];

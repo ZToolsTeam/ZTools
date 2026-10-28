@@ -1,4 +1,5 @@
 <script setup>
+import { PlusOutlined } from '@ant-design/icons-vue'
 /**
  * 快捷方式设置弹窗
  * 管理超级面板快捷方式前缀与插件的映射关系
@@ -279,7 +280,7 @@ defineExpose({ open: () => emit('update:open', true) })
       <!-- 新增按钮 -->
       <div class="add-btn-row">
         <a-button type="dashed" block @click="startAdd" :disabled="adding">
-          <i class="fa fa-plus" style="margin-right: 6px"></i>新增快捷方式
+          <PlusOutlined  style="margin-right: 6px" />新增快捷方式
         </a-button>
       </div>
     </div>

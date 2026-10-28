@@ -1,4 +1,5 @@
 <script setup>
+import { GithubOutlined, RightOutlined, SearchOutlined } from '@ant-design/icons-vue'
 import { ref, computed, onMounted, onBeforeUnmount, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 
@@ -9,7 +10,6 @@ import { useNavStore } from '@/stores/nav'
 import { usePluginsStore } from '@/stores/plugins'
 import { useCategoriesStore } from '@/stores/categories'
 import {
-  openPlugin as apiOpenPlugin,
   batchCheckPlugins,
   getDownloadSign,
   installPluginNative,
@@ -18,17 +18,17 @@ import {
 } from '@/api/apiserver'
 import { auth, onAuthRequired, track } from '@edition'
 import { useToast } from '@/composables/useToast'
+import { usePluginInstall } from '@/composables/usePluginInstall'
 import { useVersionCompat } from '@/composables/useVersionCompat'
 import { useUIStore } from '@/stores/ui'
 import { routeUtils, ROUTES } from '@/router/routes'
 import { isPluginSupportedOnCurrentPlatform } from '@/utils/platform'
-import { isOfficialPlugin } from '@/utils/officialPlugins'
-import { isBundledPlugin } from '@/utils/bundledPlugins'
 import { useKeymap, KEYMAP_SCOPES } from '@/utils/keymap'
 
 const nav = useNavStore()
 const uiStore = useUIStore()
 const pluginsStore = usePluginsStore()
+const { installWithFeedback } = usePluginInstall()
 const categoriesStore = useCategoriesStore()
 const route = useRoute()
 const router = useRouter()
@@ -340,16 +340,10 @@ const openApp = async (id) => {
     return
   }
 
-  if (isBundledPlugin(pluginId) || isOfficialPlugin(pluginId)) {
-    try {
-      await pluginsStore.openPlugin(pluginId)
-    } catch (e) {
-      toastError('启动失败: ' + (e.message || e))
-    }
-    return
-  }
   try {
-    const res = await apiOpenPlugin(id)
+    const res = await pluginsStore.openPlugin(pluginId)
+
+    if (res?.cancelled || res?.isDeclarative) return
 
     // 检查是否需要导航到详情页（插件已卸载的情况）
     if (res?.action === 'navigate_to_detail') {
@@ -469,37 +463,13 @@ useKeymap(KEYMAP_SCOPES.PAGE, {
   }
 })
 
-const handleDownload = async (id) => {
+const handleDownload = (id) => {
   const pid = getPluginId(id)
-  if (!pid) return
-
-  if (pluginsStore.isRevoked(pid)) {
-    const reason = pluginsStore.getRevokedReason(pid) || '该插件已被官方下架禁用'
-    toastError('无法安装：' + reason)
-    return
-  }
-
-  // 防止重复下载
-  if (pluginsStore.isInstalling(pid)) {
-    toastWarning('该插件正在安装中，请稍候...')
-    return
-  }
-
-  try {
-    // 官方版安装前要求登录（未登录时提示并打开登录框）；开源版没有账号，直接安装
-    if (!(await auth.ensureCanInstall())) return
-
+  return installWithFeedback(pid, async () => {
+    if (!(await auth.ensureCanInstall())) return false
     track('plugin_clickinstall', pid)
-    toastSuccess('正在安装插件，请稍候...')
-    await pluginsStore.installPlugin(pid, { autoOpen: true })
-    toastSuccess('插件安装完成')
-  } catch (e) {
-    if (typeof isPluginVersionIncompatibleError === 'function' && isPluginVersionIncompatibleError(e)) {
-      toastWarning(typeof getPluginVersionIncompatibleMessage === 'function' ? getPluginVersionIncompatibleMessage(e) : '插件版本不兼容')
-    } else if (!onAuthRequired(e, { action: 'install' })) {
-      toastError('安装失败: ' + (e.message || e))
-    }
-  }
+    return true
+  })
 }
 
 const onPluginUpdated = async (pluginId) => {
@@ -524,6 +494,7 @@ const handleFavoriteChanged = async (envelope) => {
 const handleInstallComplete = async (envelope) => {
   try {
     const payload = envelope?.payload || {}
+    if (!pluginsStore.acceptsInstallEvent(payload)) return
     const pid = payload.pluginId
 
     if (payload.success) {
@@ -699,7 +670,7 @@ onBeforeUnmount(() => {
             @click="goCategory(group.name)"
           >
             <span>全部</span>
-            <i class="fa fa-angle-right text-[10px]"></i>
+            <RightOutlined class="text-[10px]" />
           </button>
         </div>
         <!-- 该分类下的插件网格 -->
@@ -744,10 +715,10 @@ onBeforeUnmount(() => {
         color: var(--color-text-secondary);
       "
     >
-      <i
-        class="fa fa-search"
+      <SearchOutlined
+
         style="font-size: 36px; opacity: 0.3; margin-bottom: 12px"
-      ></i>
+       />
       <p style="font-size: var(--font-size-body-l); font-weight: 500; margin: 0 0 4px">
         {{ route.query.q ? `未找到与 "${route.query.q}" 相关的插件` : '暂无插件' }}
       </p>
@@ -768,7 +739,7 @@ onBeforeUnmount(() => {
         </div>
         <div class="flex items-center gap-2">
           <a-button type="primary" size="small" @click="openExtensionsRepo">
-            <template #icon><i class="fa fa-github mr-1"></i></template>
+            <template #icon><GithubOutlined class="mr-1" /></template>
             访问 ZTools-extensions 大仓
           </a-button>
           <a-button size="small" @click="openDevGuide">

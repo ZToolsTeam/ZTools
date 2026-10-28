@@ -1,15 +1,14 @@
 /**
- * 全能解压缩与包内透视工作台业务逻辑层 (ArchiveManager 1.0 Logic)
+ * ZIP 压缩包查看与解压业务逻辑
  *
- * 核心能力：
- * 1. 免解压秒级透视 .zip 内部文件树、CRC32 摘要、压缩率与文件分类
- * 2. 自动识别 UTF-8 与 GBK/GB18030 编码，彻底解决 Windows 与 macOS 互传中文名乱码
- * 3. 智能解压（防套娃 & 防桌面散落）+ 按勾选只提取包内需要的单个办公文档
- * 4. 严密 Zip Slip 路径穿越 (`../`) 安全拦截与加密包预检
+ * 1. 经客户端读取 .zip 目录：文件列表、CRC32、压缩率与文件分类（文件名由客户端识别 UTF-8 / GBK 编码）
+ * 2. 整包解压（只有一个顶层文件夹时解压到压缩包所在目录，否则解压到同名文件夹）或只提取勾选的文件
+ * 3. 含 `../` 或绝对路径的条目不提取；含加密条目的压缩包客户端拒绝解压
  */
 import { getRealSystemPath, invokeDllPluginCapability, scanRealDirectoryTree, showRealItemInFolder, trashRealItem } from './native-ipc.js';
 export { formatBytes } from './native-ipc.js';
 export const DLL_PLUGIN_NAME = 'ArchiveManagerPlugin';
+export const NOT_IN_CLIENT_MESSAGE = '需要在 ZTools 客户端中使用';
 export const FORBIDDEN_TARGET_PATTERN = new RegExp('\\\\Windows\\\\System32|\\.\\.\\\\|\\.\\./', 'i');
 export const FORBIDDEN_REASON = '归档提取目标路径不可指向系统受保护目录或包含路径穿越 (Zip Slip)';
 export const ARCHIVE_CATEGORY_GROUPS = [
@@ -282,4 +281,72 @@ export async function trashArchiveFile(archivePath, hostOverride) {
         return { ok: false, error: FORBIDDEN_REASON };
     }
     return trashRealItem(archivePath, hostOverride);
+}
+function pathSeparatorOf(p) {
+    return p.includes('\\') ? '\\' : '/';
+}
+export function parentDirOf(p) {
+    const clean = String(p || '').replace(/[\\/]+$/, '');
+    const idx = Math.max(clean.lastIndexOf('\\'), clean.lastIndexOf('/'));
+    return idx > 0 ? clean.slice(0, idx) : clean;
+}
+/**
+ * 与客户端的解压规则一致，给出文件实际会写到哪个文件夹，用于解压前的确认提示：
+ * - 整包解压且包内只有一个顶层文件夹：解压到压缩包所在目录，文件落在这个顶层文件夹里
+ * - 其余情况（含只提取勾选的文件）：解压到压缩包旁的同名文件夹
+ */
+export function describeExtractTarget(archivePath, meta, selective) {
+    const sep = pathSeparatorOf(archivePath);
+    const parent = parentDirOf(archivePath);
+    const fileName = String(archivePath || '').split(/[\\/]/).pop() || '';
+    const dot = fileName.lastIndexOf('.');
+    const baseName = dot > 0 ? fileName.slice(0, dot) : fileName;
+    if (!selective && meta.hasSingleRootFolder && meta.singleRootFolderName) {
+        return `${parent}${sep}${meta.singleRootFolderName}`;
+    }
+    return `${parent}${sep}${baseName}`;
+}
+/**
+ * 客户端的“校验”只读取压缩包目录、检查越界路径与加密标记，并计算整个文件的 SHA-256，
+ * 不会逐个解压校验各文件的 CRC32。提示文字按这个事实写。
+ */
+export function summarizeVerifyResult(data) {
+    const record = (data && typeof data === 'object' ? data : {});
+    const sha = typeof record.sha256 === 'string' ? record.sha256 : '';
+    if (!/^[0-9a-f]{64}$/i.test(sha)) {
+        return { ok: false, title: '校验结果无法识别', message: '客户端没有返回压缩包的 SHA-256' };
+    }
+    const risk = Math.max(0, Number(record.traversalRiskCount ?? 0) || 0);
+    const fileCount = Math.max(0, Number(record.fileCount ?? 0) || 0);
+    const encrypted = Boolean(record.isEncrypted);
+    const shaText = `SHA-256：${sha.slice(0, 16)}…`;
+    if (risk > 0) {
+        return {
+            ok: false,
+            title: `发现 ${risk} 个越界条目`,
+            message: `含 ../ 或绝对路径的条目不会被提取 · ${shaText}`
+        };
+    }
+    return {
+        ok: true,
+        title: '已读取压缩包目录，没有越界路径',
+        message: `${fileCount} 个文件${encrypted ? ' · 含加密条目，暂不支持解压' : ''} · ${shaText} · 未逐个校验文件 CRC32`
+    };
+}
+export function summarizeExtractResult(res) {
+    if (!res.ok)
+        return { ok: false, title: '解压失败', message: res.error || '客户端没有说明原因' };
+    if (res.extractedCount <= 0) {
+        return {
+            ok: false,
+            title: '没有解压出任何文件',
+            message: res.blockedEntries.length > 0 ? `${res.blockedEntries.length} 个越界条目被拒绝` : '所选条目可能已不在压缩包里'
+        };
+    }
+    const blocked = res.blockedEntries.length > 0 ? ` · ${res.blockedEntries.length} 个越界条目未提取` : '';
+    return {
+        ok: true,
+        title: `已解压 ${res.extractedCount} 个文件${blocked}`,
+        message: res.targetDir || ''
+    };
 }

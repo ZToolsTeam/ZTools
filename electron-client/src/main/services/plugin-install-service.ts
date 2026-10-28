@@ -84,6 +84,16 @@ interface ActiveOperation {
   promise: Promise<void>
 }
 
+interface InstallResult {
+  pluginId: string
+  operationId: string
+  success: boolean
+  isUpdate: boolean
+  version?: string
+  errorCode?: string
+  error?: string
+}
+
 export interface PluginInstallServiceOptions {
   preparePluginReplace?: (manifest: PluginManifest, signal: AbortSignal) => Promise<() => void>
   fetchImpl?: typeof fetch
@@ -267,6 +277,7 @@ export class PluginInstallService implements PluginDirectoryProvider {
   readonly #pluginState: PluginStateService
   readonly #analytics: PluginInstallServiceOptions['analytics']
   readonly #operations = new Map<string, ActiveOperation>()
+  readonly #installResults = new Map<string, { result: InstallResult; completedAt: number }>()
   readonly #pluginLocks = new Set<string>()
   readonly #pluginReaders = new Map<string, number>()
   readonly #maintenanceOperations = new Set<Promise<void>>()
@@ -541,7 +552,7 @@ export class PluginInstallService implements PluginDirectoryProvider {
         .then((version) => {
           // #install has completed its cleanup before this terminal notification.
           if (this.#operations.get(key)?.operationId === operationId) this.#pluginLocks.delete(key)
-          this.#publish('plugin_install_complete', {
+          this.#completeInstall({
             pluginId: params.pluginId, operationId, success: true, isUpdate, version
           })
           try {
@@ -553,7 +564,7 @@ export class PluginInstallService implements PluginDirectoryProvider {
           if (this.#operations.get(key)?.operationId === operationId) this.#pluginLocks.delete(key)
           console.error(`插件 ${params.pluginId} ${isUpdate ? '更新' : '安装'}失败:`, error)
           const failure = operationError(error)
-          this.#publish('plugin_install_complete', {
+          this.#completeInstall({
             pluginId: params.pluginId, operationId, success: false, isUpdate,
             errorCode: failure.code, error: failure.message
           })
@@ -568,6 +579,36 @@ export class PluginInstallService implements PluginDirectoryProvider {
       this.#pluginLocks.delete(key)
       throw error
     }
+  }
+
+  #pruneInstallResults(): void {
+    const cutoff = Date.now() - 10 * 60_000
+    for (const [id, entry] of this.#installResults) {
+      if (entry.completedAt < cutoff || this.#installResults.size > 128) this.#installResults.delete(id)
+    }
+  }
+
+  #completeInstall(result: InstallResult): void {
+    // 先记录终态再通知页面，支持通知早于安装响应以及漏收通知后的核对。
+    this.#installResults.set(result.operationId, { result, completedAt: Date.now() })
+    this.#pruneInstallResults()
+    this.#publish('plugin_install_complete', result)
+  }
+
+  async getInstallStatus(pluginId: string, operationId: string): Promise<
+    { status: 'running' | 'unknown'; pluginId: string; operationId: string } |
+    (InstallResult & { status: 'completed' })
+  > {
+    await this.#ready
+    this.#requireRunning()
+    validateIdentifier(pluginId, 'pluginId')
+    this.#pruneInstallResults()
+    const completed = this.#installResults.get(operationId)?.result
+    if (completed?.pluginId.toLowerCase() === pluginId.toLowerCase()) {
+      return { ...completed, status: 'completed' }
+    }
+    const running = this.#operations.get(pluginId.toLowerCase())?.operationId === operationId
+    return { status: running ? 'running' : 'unknown', pluginId, operationId }
   }
 
   async uninstall(params: PluginKeyParams): Promise<{ success: true }> {

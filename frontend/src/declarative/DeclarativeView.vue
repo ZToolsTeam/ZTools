@@ -644,7 +644,7 @@ async function executeAction(action) {
         throw Object.assign(new Error("当前系统不支持粘贴到前台应用"), { code: "NOT_SUPPORTED" });
       }
       props?.onPaste?.(content);
-      showToast?.({ title: "已粘贴到活动窗口", message: content.slice(0, 64), style: "SUCCESS" });
+      showToast?.({ title: "已发送粘贴请求", message: content.slice(0, 64), style: "SUCCESS" });
     } else if (type === "Action.OpenInBrowser") {
       if (props?.url) {
         if (electronMethods?.shell_open_external) {
@@ -692,9 +692,8 @@ async function executeAction(action) {
   } catch (err) {
     console.error("[DeclarativeView] Error executing action:", err);
     // 失败一律如实提示，不能让用户以为操作已经成功
-    const copiedButNotPasted = type === "Action.Paste" && err?.code && err.code !== "EMPTY_CONTENT" && err.code !== "INVALID_PARAMS";
     showToast?.({
-      title: copiedButNotPasted ? "已复制，但无法粘贴" : "操作失败",
+      title: type === "Action.Paste" ? "粘贴失败" : "操作失败",
       message: failureMessage(err),
       style: "FAILURE"
     });

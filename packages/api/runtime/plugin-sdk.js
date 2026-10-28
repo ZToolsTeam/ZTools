@@ -84,7 +84,9 @@
       if (global.matchMedia) {
         return global.matchMedia('(prefers-color-scheme: dark)').matches
       }
-    } catch (_) {}
+    } catch (error) {
+      console.warn('[PluginSDK] 读取系统主题失败:', error)
+    }
     return false
   }
 

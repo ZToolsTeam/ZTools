@@ -7,14 +7,18 @@ import { secureWebPreferences } from './main-window.js'
 import type { WindowRegistry } from './window-registry.js'
 import { calculateCenteredBounds } from './display-bounds.js'
 import { FrameSyncManager } from '../services/frame-sync-manager.js'
+import { prewarmMacosApplicationCache } from '../platform/macos/file-indexer.js'
 
 export const LAUNCHER_CALL_CHANNEL = 'ztools:launcher_call' as const
+const LAUNCHER_SIZE = { width: 750, height: 480 }
 
 export interface LauncherControllerOptions {
   icon: Electron.NativeImage
   registry: WindowRegistry
   showMainWindow(): void
   hideMainWindow(): void
+  /** 记录最近一次主动打开的窗口形态 */
+  onShow?(): void
   /** 让主窗口跳到指定页面（hash 路由，如 /details/foo） */
   navigateMainWindow?(route: string): void
   sidecars?: {
@@ -113,10 +117,11 @@ export class LauncherController {
   }
 
   /**
-   * 后台静默预热极客悬浮窗（避免用户首次按下快捷键时承受 BrowserWindow 创建与页面冷启动延迟）
+   * 后台静默预热极客悬浮窗与应用索引（避免用户首次按下快捷键时承受 BrowserWindow 创建与页面冷启动延迟）
    */
   prewarm(): void {
     try {
+      prewarmMacosApplicationCache()
       this.#ensureWindow()
     } catch (error) {
       console.error('极客悬浮窗后台预热失败:', error)
@@ -128,10 +133,11 @@ export class LauncherController {
   }
 
   show(): void {
-    this.options.hideMainWindow()
+    this.options.onShow?.()
     const window = this.#ensureWindow()
     this.#positionWindow(window)
     if (this.#frameSyncManager) {
+      this.options.hideMainWindow()
       void this.#frameSyncManager.showWindow().catch((error: unknown) => {
         console.error('悬浮条显示失败:', error)
       })
@@ -139,6 +145,7 @@ export class LauncherController {
       if (window.isMinimized()) window.restore()
       window.show()
       window.focus()
+      this.options.hideMainWindow()
     }
   }
 
@@ -146,7 +153,7 @@ export class LauncherController {
     if (this.#window && !this.#window.isDestroyed()) {
       if (this.#frameSyncManager) {
         this.#frameSyncManager.hideWindow()
-      } else {
+      } else if (this.#window.isVisible()) {
         this.#window.hide()
       }
     }
@@ -187,8 +194,7 @@ export class LauncherController {
 
     const window = new BrowserWindow({
       icon: this.options.icon,
-      width: 680,
-      height: 480,
+      ...LAUNCHER_SIZE,
       frame: false,
       transparent: true,
       alwaysOnTop: true,
@@ -264,13 +270,21 @@ export class LauncherController {
     const display = typeof screen?.getDisplayNearestPoint === 'function'
       ? (screen.getDisplayNearestPoint(point) || (typeof screen?.getPrimaryDisplay === 'function' ? screen.getPrimaryDisplay() : undefined))
       : undefined
-    if (display) {
-      // 居中偏上（Raycast / uTools 黄金高度，距离顶部 18%），自动考虑多屏负坐标与工作区边界 clamp
-      const bounds = calculateCenteredBounds({ width: 680, height: 480 }, display, 0.18)
-      window.setBounds(bounds)
-    } else {
-      window.setBounds({ x: 0, y: 0, width: 680, height: 480 })
+    const targetBounds = display
+      ? calculateCenteredBounds(LAUNCHER_SIZE, display, 0.12)
+      : { x: 0, y: 0, ...LAUNCHER_SIZE }
+    if (typeof window.getBounds === 'function') {
+      const cur = window.getBounds()
+      if (
+        cur.x === targetBounds.x &&
+        cur.y === targetBounds.y &&
+        cur.width === targetBounds.width &&
+        cur.height === targetBounds.height
+      ) {
+        return
+      }
     }
+    window.setBounds(targetBounds)
   }
 
   stop(): void {

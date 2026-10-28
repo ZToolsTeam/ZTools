@@ -500,9 +500,18 @@ export function rgbToOklch(rgb) {
  * 调色板 LocalStorage 持久化操作
  */
 function sanitizePalette(list) {
-    return Array.isArray(list)
-        ? list.filter((c) => c && typeof c.id === "string" && typeof c.hex === "string" && /^#[0-9A-Fa-f]{6}(?:[0-9A-Fa-f]{2})?$/.test(c.hex))
-        : [];
+    if (list === undefined)
+        return [];
+    if (!Array.isArray(list) || list.some(c => !c || typeof c.id !== "string" || !c.id || typeof c.name !== "string" ||
+        typeof c.savedAt !== "string" || typeof c.hex !== "string" || !/^#[0-9A-Fa-f]{6}(?:[0-9A-Fa-f]{2})?$/.test(c.hex)) ||
+        new Set(list.map(c => c.id)).size !== list.length)
+        throw new Error("调色板数据损坏，原数据已保留，请先恢复数据后重试");
+    return list;
+}
+async function changePalette(update) {
+    if (typeof LocalStorage.updateItem !== "function")
+        throw new Error("请升级 ZTools 以安全保存调色板");
+    return LocalStorage.updateItem(PALETTE_STORAGE_KEY, raw => update(sanitizePalette(raw)));
 }
 /** 读取调色板；存储读失败时抛错（写入前必须用这个，避免读失败后把空列表覆盖回去） */
 async function loadPaletteStrict() {
@@ -517,26 +526,23 @@ function paletteHex(hex) {
     return norm.length === 9 && !norm.endsWith("FF") ? norm : norm.slice(0, 7);
 }
 export async function saveColorToPalette(name, hex) {
-    const current = await loadPaletteStrict();
-    if (current.length >= 100)
-        throw new Error("调色板最多保存 100 个颜色，请先删除一些");
     const newItem = {
         id: `color_${globalThis.crypto.randomUUID()}`,
         name: name || hex,
         hex: paletteHex(hex),
         savedAt: new Date().toLocaleString()
     };
-    const updated = [newItem, ...current.filter((c) => c.hex !== newItem.hex)];
-    await LocalStorage.setItem(PALETTE_STORAGE_KEY, updated);
-    return updated;
+    return changePalette(current => {
+        const rest = current.filter(c => c.hex !== newItem.hex);
+        if (rest.length >= 100)
+            throw new Error("调色板最多保存 100 个颜色，请先删除一些");
+        return [newItem, ...rest];
+    });
 }
 export async function clearPalette() {
-    await LocalStorage.removeItem(PALETTE_STORAGE_KEY);
+    await changePalette(() => []);
 }
 export async function removeFromPalette(id) {
-    const current = await loadPaletteStrict();
-    const updated = current.filter((c) => c.id !== id);
-    await LocalStorage.setItem(PALETTE_STORAGE_KEY, updated);
-    return updated;
+    return changePalette(current => current.filter(c => c.id !== id));
 }
 export const convertColor = parseColor;

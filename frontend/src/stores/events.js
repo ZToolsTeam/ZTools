@@ -111,7 +111,7 @@ export const useEventsStore = defineStore('events', {
           payload.enabled ??
           payload.value
         )
-        themeStore.handleSystemThemeChange(isDark)
+        themeStore.handleSystemThemeChange(isDark, payload.mode)
       } catch (e) {
         console.error('[EventsStore] 处理系统主题变更失败:', e)
       }

@@ -30,6 +30,8 @@ test('Mac path broker builds maintained core and broker for both slices with str
     assert.equal(options.timeout, 120000); assert.ok(argv.includes('-Werror')); assert.ok(argv.includes('-mmacosx-version-min=13.0'))
     assert.ok(argv.some(arg => arg.endsWith('ZToolsPathAccess/path_access.cpp') || arg.endsWith('ZToolsPathAccess\\path_access.cpp')))
     assert.ok(argv.some(arg => arg.endsWith('ZToolsPathAccess/broker.cpp') || arg.endsWith('ZToolsPathAccess\\broker.cpp')))
+    assert.ok(argv.some(arg => arg.endsWith('ZToolsPathAccess/trash_mac.mm')))
+    assert.ok(argv.includes('Foundation')); assert.ok(argv.includes('-fobjc-arc'))
   }
   assert.deepEqual(audits.map(item => item[1]), ['arm64', 'x86_64'])
   assert.throws(() => buildMacPathAccess({ platform: 'darwin', outputRoot, minimumOs: '13.0' }), /EEXIST/)

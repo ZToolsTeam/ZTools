@@ -8,6 +8,9 @@
 #include <random>
 #include <stdexcept>
 #include <utility>
+#ifdef __APPLE__
+void TrashPinnedMacFile(int descriptor);
+#endif
 #ifdef _WIN32
 #define WIN32_LEAN_AND_MEAN
 #define NOMINMAX
@@ -522,6 +525,40 @@ Metadata PinnedPath::Describe() const {
   return {identity.directory, size, modified};
 }
 
+void PinnedPath::Trash() const {
+  if (!impl_ || impl_->kind == Kind::save || impl_->chain.size() < 2) Fail();
+  const std::lock_guard<std::mutex> lock(impl_->mutex);
+  impl_->Validate();
+#ifdef __APPLE__
+  TrashPinnedMacFile(impl_->chain.back().handle.value);
+#else
+  throw std::runtime_error("PATH_TRASH_UNAVAILABLE");
+#endif
+}
+
+void PinnedPath::Rename(const std::string& name) const {
+  if (!impl_ || impl_->kind == Kind::save || impl_->chain.size() < 2) Fail();
+  UserSegment(name);
+  const std::lock_guard<std::mutex> lock(impl_->mutex);
+  impl_->Validate();
+#ifdef __APPLE__
+  const auto& leaf = impl_->chain.back();
+  const auto parent = impl_->chain[impl_->chain.size() - 2].handle.value;
+  if (leaf.name == name || Inspect(parent).device != leaf.identity.device) Fail();
+  // RENAME_EXCL 由内核保证不覆盖同名条目；不能先 exists 再普通 rename。
+  if (renameatx_np(parent, leaf.name.c_str(), parent, name.c_str(), RENAME_EXCL) != 0) {
+    if (errno == EEXIST || errno == ENOTEMPTY) throw std::runtime_error("PATH_OUTPUT_EXISTS");
+    Fail();
+  }
+  try {
+    Owned committed(OpenChild(parent, name, leaf.identity.directory));
+    if (!Same(Inspect(committed.value), leaf.identity) || fsync(parent) != 0) Fail();
+  } catch (...) { throw std::runtime_error("PATH_COMMIT_UNCONFIRMED"); }
+#else
+  throw std::runtime_error("PATH_RENAME_UNAVAILABLE");
+#endif
+}
+
 void PinnedPath::Save(const std::vector<unsigned char>& bytes, bool replace, const std::function<bool()>& cancelled) const {
   if (bytes.size() > 16 * 1024 * 1024) Fail();
   SaveProduced(bytes.size(), [&](const ByteSink& write_bytes) { write_bytes(bytes.data(), bytes.size()); }, replace, cancelled);
@@ -759,7 +796,7 @@ void PinnedPath::SaveProduced(std::size_t expected_size, const std::function<voi
 }
 
 std::vector<DirectoryEntry> PinnedPath::List(const std::vector<std::string>& segments,
-  const std::function<bool()>& cancelled) const {
+  const std::function<bool()>& cancelled, bool strict) const {
   if (!impl_ || impl_->kind != Kind::directory || segments.size() > 64) Fail();
   const std::lock_guard<std::mutex> lock(impl_->mutex);
   const auto check = [&] { if (cancelled && cancelled()) throw std::runtime_error("PATH_ACCESS_CANCELLED"); };
@@ -774,7 +811,8 @@ std::vector<DirectoryEntry> PinnedPath::List(const std::vector<std::string>& seg
   std::vector<DirectoryEntry> result;
   std::size_t name_bytes = 0;
   const auto append = [&](std::string name, bool is_directory, std::uint64_t size) {
-    if (name == "." || name == ".." || InternalName(name)) return;
+    if (name == "." || name == "..") return;
+    if (InternalName(name)) { if (strict) Fail(); return; }
     Segment(name);
     if (result.size() >= 10'000 || name.size() > 1024 * 1024 - name_bytes || size > 9'007'199'254'740'991ULL) {
       throw std::runtime_error("PATH_ACCESS_TOO_LARGE");
@@ -798,6 +836,7 @@ std::vector<DirectoryEntry> PinnedPath::List(const std::vector<std::string>& seg
       if (offset > buffer.size() - header) Fail();
       const auto* entry = reinterpret_cast<const FILE_ID_BOTH_DIR_INFO*>(buffer.data() + offset);
       if (entry->FileNameLength % sizeof(wchar_t) || entry->FileNameLength > buffer.size() - offset - header || entry->FileNameLength > 4096) Fail();
+      if (strict && (entry->FileAttributes & FILE_ATTRIBUTE_REPARSE_POINT)) Fail();
       if (!(entry->FileAttributes & FILE_ATTRIBUTE_REPARSE_POINT)) {
         const int length = static_cast<int>(entry->FileNameLength / sizeof(wchar_t));
         const int bytes = WideCharToMultiByte(CP_UTF8, WC_ERR_INVALID_CHARS, entry->FileName, length, nullptr, 0, nullptr, nullptr);
@@ -806,6 +845,11 @@ std::vector<DirectoryEntry> PinnedPath::List(const std::vector<std::string>& seg
         if (WideCharToMultiByte(CP_UTF8, WC_ERR_INVALID_CHARS, entry->FileName, length, name.data(), bytes, nullptr, nullptr) != bytes) Fail();
         const bool folder = (entry->FileAttributes & FILE_ATTRIBUTE_DIRECTORY) != 0;
         if (entry->EndOfFile.QuadPart < 0) Fail();
+        if (strict && name != "." && name != "..") {
+          Owned current(OpenUserChild(directory, name, folder));
+          const auto actual = Inspect(current.value);
+          if (actual.directory != folder) Fail();
+        }
         append(std::move(name), folder, folder ? 0 : static_cast<std::uint64_t>(entry->EndOfFile.QuadPart));
       }
       if (!entry->NextEntryOffset) break;
@@ -828,10 +872,10 @@ std::vector<DirectoryEntry> PinnedPath::List(const std::vector<std::string>& seg
     if (name == "." || name == "..") continue;
     struct stat info{};
     if (fstatat(directory, name.c_str(), &info, AT_SYMLINK_NOFOLLOW) != 0) {
-      if (errno == ENOENT) continue;
+      if (errno == ENOENT && !strict) continue;
       Fail();
     }
-    if (!S_ISDIR(info.st_mode) && !S_ISREG(info.st_mode)) continue;
+    if (!S_ISDIR(info.st_mode) && !S_ISREG(info.st_mode)) { if (strict) Fail(); continue; }
     if (info.st_size < 0) Fail();
     append(name, S_ISDIR(info.st_mode), S_ISDIR(info.st_mode) ? 0 : static_cast<std::uint64_t>(info.st_size));
   }

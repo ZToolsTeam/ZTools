@@ -69,7 +69,6 @@ export const UNAVAILABLE_PLUGIN_IDS = new Set([
   // 独立 Store 扩展（通过插件市场按需安装配置）
   'github',
   'obsidian',
-  'speedtest',
   'currency-exchange'
 ])
 
@@ -133,6 +132,8 @@ export function isPluginSupportedOnCurrentPlatform(plugin) {
   const normalizedId = String(pluginId).trim().toLowerCase()
 
   if (UNAVAILABLE_PLUGIN_IDS.has(normalizedId)) return false
+  // 网络测速的 Mac 实现已接入；Windows 入口继续保持原来的隐藏状态。
+  if (normalizedId === 'speedtest' && !isMacOS()) return false
 
   // On macOS, Tier 4 Windows-exclusive plugins are never supported
   if (isMacOS() && WINDOWS_EXCLUSIVE_PLUGIN_IDS.has(normalizedId)) {

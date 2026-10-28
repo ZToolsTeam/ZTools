@@ -1,4 +1,5 @@
 <script setup>
+import { PictureOutlined } from '@ant-design/icons-vue'
 import { computed } from 'vue'
 
 const props = defineProps({
@@ -23,7 +24,7 @@ const gridClass = computed(() => {
   <!-- 插件截图区 -->
   <div v-if="screenshots && screenshots.length > 0" class="screenshots-section">
     <h3 class="section-title">
-      <i class="fa fa-picture-o"></i>
+      <PictureOutlined  />
       插件截图
     </h3>
     <div class="screenshots-grid" :class="gridClass">
@@ -51,13 +52,13 @@ const gridClass = computed(() => {
   <!-- 截图占位（如果没有截图） -->
   <div v-else class="screenshots-section">
     <h3 class="section-title">
-      <i class="fa fa-picture-o"></i>
+      <PictureOutlined  />
       插件截图
     </h3>
     <div class="empty-screenshots">
       <div v-for="i in 3" :key="i" class="empty-item">
         <div class="empty-icon">
-          <i class="fa fa-image"></i>
+          <PictureOutlined  />
         </div>
         <p>暂无截图</p>
       </div>
@@ -84,7 +85,7 @@ const gridClass = computed(() => {
   margin: 0 0 12px;
 }
 
-.section-title i {
+.section-title :deep(.anticon) {
   color: var(--zt-primary);
 }
 
@@ -199,7 +200,7 @@ const gridClass = computed(() => {
   justify-content: center;
 }
 
-.empty-icon i {
+.empty-icon :deep(.anticon) {
   font-size: 20px;
   color: var(--zt-text-disabled);
 }

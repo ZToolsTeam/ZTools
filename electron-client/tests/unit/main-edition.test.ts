@@ -211,3 +211,23 @@ test('router keeps the shared IPC names; saving a login without account support 
     assert.match(routerSource, new RegExp(`async ${method}\\(`), method)
   }
 })
+
+// 路由的接线：行为测试在 plugin-uninstall-flow.test 与 account-events.test，这里守住路由确实接到了这两处
+test('router wiring: account events after saving / clearing credentials, uninstall through the cleanup flow', async () => {
+  const routerSource = await fsp.readFile(path.resolve('src', 'main', 'ipc', 'router.ts'), 'utf8')
+  const handlerOf = (method: string) =>
+    new RegExp(`async ${method}\\(params\\) \\{[\\s\\S]*?\\n      \\},`).exec(routerSource)?.[0] ??
+    new RegExp(`async ${method}\\(\\) \\{[\\s\\S]*?\\n      \\},`).exec(routerSource)?.[0] ?? ''
+
+  const setToken = handlerOf('user_set_token')
+  assert.match(setToken, /if \(saved\) notifyAccountChanged\('user\.login'\)/, '只有真正保存后才通知登录')
+  const logout = handlerOf('user_logout')
+  assert.match(logout, /await services\.user\.logout\(\)[\s\S]*notifyAccountChanged\('user\.logout'\)/, '清除凭据后才通知退出')
+  assert.match(routerSource, /publishAccountChanged\(events, type\)/)
+
+  const uninstall = handlerOf('plugin_uninstall')
+  assert.match(uninstall, /return uninstallPluginWithCleanup\(input\.pluginId, \{/)
+  assert.match(uninstall, /planShortcutCleanup: \(pluginId\) => pluginShortcuts\.planUninstallCleanup\(pluginId\)/)
+  assert.doesNotMatch(uninstall, /pluginShortcuts\.remove\(/, '卸载不能再先删快捷方式（macOS 会直接抛不支持）')
+  assert.doesNotMatch(uninstall, /await triggers\.removePlugin\(/, '快捷键只能在卸载成功后由清理流程删除')
+})

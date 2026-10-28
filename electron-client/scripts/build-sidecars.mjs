@@ -11,35 +11,37 @@ const nativeDir = path.join(rootDir, 'native')
 const outputBinDir = path.join(rootDir, 'out', 'native', 'win32-x64', 'bin')
 const outputBuildDir = path.join(rootDir, 'out', 'native', 'win32-x64', 'build-sidecars')
 
-function findCmake() {
-  const candidates = [
-    'D:\\Program Files\\CMake\\bin\\cmake.exe',
-    'C:\\Program Files\\CMake\\bin\\cmake.exe',
-    'C:\\Program Files (x86)\\CMake\\bin\\cmake.exe',
-    'cmake'
-  ]
-  for (const c of candidates) {
-    if (c === 'cmake') {
-      const probe = spawnSync('where', ['cmake'], { encoding: 'utf8', shell: true })
-      if (probe.status === 0 && probe.stdout) {
-        const found = probe.stdout.trim().split(/\r?\n/)[0]
-        if (found && fs.existsSync(found)) return found
-      }
-    } else if (fs.existsSync(c)) {
-      return c
-    }
-  }
-  return 'D:\\Program Files\\CMake\\bin\\cmake.exe'
+function assertCommandSucceeded(result, description) {
+  if (!result.error && !result.signal && result.status === 0) return
+  if (result.stdout) console.error(result.stdout)
+  if (result.stderr) console.error(result.stderr)
+  const reason = result.error?.message || (result.signal
+    ? `terminated by ${result.signal}`
+    : `exited with ${result.status ?? 'no exit status'}`)
+  throw new Error(`${description}: ${reason}`, result.error ? { cause: result.error } : undefined)
+}
+
+export function findCmake() {
+  const powershell = path.join(process.env.SystemRoot ?? 'C:\\Windows', 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe')
+  const resolver = path.join(__dirname, 'resolve-cmake.ps1').replaceAll("'", "''")
+  const command = `$ErrorActionPreference = 'Stop'; $ProgressPreference = 'SilentlyContinue'; [Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false); . '${resolver}'; Resolve-ZToolsCMake`
+  const result = spawnSync(powershell, [
+    '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-OutputFormat', 'Text',
+    '-Command', command
+  ], { encoding: 'utf8', windowsHide: true, shell: false, timeout: 15000 })
+  assertCommandSucceeded(result, 'CMake discovery failed')
+  return result.stdout.trim()
 }
 
 export function buildSidecar(name, sourceDir, options = {}) {
   const cmake = options.cmake || findCmake()
+  const run = options.run ?? spawnSync
   const buildDir = path.join(outputBuildDir, name)
   fs.mkdirSync(buildDir, { recursive: true })
   fs.mkdirSync(outputBinDir, { recursive: true })
 
   console.log(`[build-sidecars] Configuring ${name}...`)
-  const configRes = spawnSync(cmake, [
+  const configRes = run(cmake, [
     '-S', sourceDir,
     '-B', buildDir,
     '-G', 'Visual Studio 17 2022',
@@ -49,31 +51,25 @@ export function buildSidecar(name, sourceDir, options = {}) {
   ], {
     encoding: 'utf8',
     windowsHide: true,
+    shell: false,
     env: process.env
   })
 
-  if (configRes.status !== 0) {
-    console.error(configRes.stdout)
-    console.error(configRes.stderr)
-    throw new Error(`Failed to configure ${name}: cmake exited with ${configRes.status}`)
-  }
+  assertCommandSucceeded(configRes, `Failed to configure ${name} (${cmake})`)
 
   console.log(`[build-sidecars] Building ${name} (Release)...`)
-  const buildRes = spawnSync(cmake, [
+  const buildRes = run(cmake, [
     '--build', buildDir,
     '--config', 'Release',
     '--target', name
   ], {
     encoding: 'utf8',
     windowsHide: true,
+    shell: false,
     env: process.env
   })
 
-  if (buildRes.status !== 0) {
-    console.error(buildRes.stdout)
-    console.error(buildRes.stderr)
-    throw new Error(`Failed to build ${name}: cmake exited with ${buildRes.status}`)
-  }
+  assertCommandSucceeded(buildRes, `Failed to build ${name} (${cmake})`)
 
   const exePath = path.join(outputBinDir, `${name}.exe`)
   if (!fs.existsSync(exePath)) {

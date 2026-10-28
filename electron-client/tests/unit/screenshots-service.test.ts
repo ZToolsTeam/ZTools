@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict'
+import childProcess from 'node:child_process'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
@@ -26,6 +27,80 @@ function writeShot(dir: string, name: string, mtime: string): string {
 function hasCode(code: string) {
   return (error: { code?: string }) => error.code === code
 }
+
+test('扫描不存在或空目录可返回空列表，目录读取失败必须明确报错', (t) => {
+  const { root, shots } = fixtureDir(t)
+  const service = new ScreenshotsService({ searchDirectories: [shots, path.join(root, 'missing')] })
+  assert.deepEqual(service.scanScreenshots(true), [])
+  const invalid = path.join(root, 'not-a-directory')
+  fs.writeFileSync(invalid, '不是目录')
+  service.setSearchDirectories([invalid])
+  assert.throws(() => service.scanScreenshots(true), (error: { code?: string; message?: string }) => {
+    assert.equal(error.code, 'FILE_ERROR')
+    assert.match(error.message ?? '', /not-a-directory.*路径不是文件夹/)
+    return true
+  })
+})
+
+test('真实目录无权限时报告拒绝访问，恢复权限后可以重新扫描', (t) => {
+  if (process.platform === 'win32' || process.getuid?.() === 0) {
+    t.skip('该用例要求非 root 的 POSIX 目录权限')
+    return
+  }
+  const { shots } = fixtureDir(t)
+  const file = writeShot(shots, 'Screenshot retained.png', '2026-10-20T10:00:00Z')
+  const service = new ScreenshotsService({ searchDirectories: [shots] })
+  fs.chmodSync(shots, 0)
+  try {
+    assert.throws(() => service.scanScreenshots(true), (error: { code?: string; message?: string }) => {
+      assert.equal(error.code, 'PERMISSION_DENIED')
+      assert.match(error.message ?? '', /Screenshots.*没有访问权限/)
+      return true
+    })
+  } finally {
+    fs.chmodSync(shots, 0o700)
+  }
+  assert.deepEqual(service.scanScreenshots(true).map((r) => r.path), [file])
+  assert.equal(fs.readFileSync(file, 'utf8'), 'image Screenshot retained.png')
+})
+
+test('部分目录读取失败不返回残缺成功结果，失败不覆盖上次缓存且恢复后可重试', (t) => {
+  const { root, shots, outside } = fixtureDir(t)
+  const first = writeShot(shots, 'Screenshot first.png', '2026-10-20T10:00:00Z')
+  const second = writeShot(outside, 'Screenshot second.png', '2026-10-21T10:00:00Z')
+  const service = new ScreenshotsService({ searchDirectories: [shots, outside] })
+  const previous = service.scanScreenshots(true)
+  assert.equal(previous.length, 2)
+  const retainedDirectory = path.join(root, 'retained-directory')
+  fs.renameSync(outside, retainedDirectory)
+  fs.writeFileSync(outside, '临时替代目录')
+  assert.throws(() => service.scanScreenshots(true), hasCode('FILE_ERROR'))
+  assert.strictEqual(service.scanScreenshots(), previous, '失败不能把已有缓存替换为半份结果')
+  fs.unlinkSync(outside)
+  fs.renameSync(retainedDirectory, outside)
+  assert.deepEqual(service.scanScreenshots(true).map((r) => r.path).sort(), [first, second].sort())
+})
+
+test('截图文件读取错误不能被目录或 Spotlight 的异常处理吞掉', (t) => {
+  const { shots } = fixtureDir(t)
+  const file = writeShot(shots, 'Screenshot unreadable.png', '2026-10-20T10:00:00Z')
+  const originalStat = fs.statSync
+  t.mock.method(fs, 'statSync', ((...args: Parameters<typeof fs.statSync>) => {
+    if (args[0] === file) throw Object.assign(new Error('test read denied'), { code: 'EACCES' })
+    return originalStat(...args)
+  }) as typeof fs.statSync)
+  const service = new ScreenshotsService({ searchDirectories: [shots] })
+  assert.throws(() => service.scanScreenshots(true), hasCode('PERMISSION_DENIED'))
+  if (process.platform === 'darwin') {
+    const indexed = new ScreenshotsService()
+    t.mock.method(indexed, 'getDefaultLocations', () => [])
+    t.mock.method(childProcess, 'execFileSync', ((command: string) => {
+      assert.equal(command, '/usr/bin/mdfind')
+      return file + '\n'
+    }) as typeof childProcess.execFileSync)
+    assert.throws(() => indexed.scanScreenshots(true), hasCode('PERMISSION_DENIED'))
+  }
+})
 
 test('同一目录的多张截图 id 各不相同，且同一路径的 id 稳定', (t) => {
   const { shots } = fixtureDir(t)

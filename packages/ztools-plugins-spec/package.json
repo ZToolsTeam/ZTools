@@ -12,6 +12,7 @@
   "files": [
     "plugin.schema.json",
     "reserved-ids.json",
+    "official-ids.json",
     "src"
   ],
   "scripts": {

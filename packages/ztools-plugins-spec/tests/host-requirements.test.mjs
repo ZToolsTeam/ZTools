@@ -49,6 +49,28 @@ describe('最低客户端版本（minAppVersion）', () => {
     for (const item of HOST_API_REQUIREMENTS) assert.notEqual(compareAppVersion(item.minAppVersion, '1.0.0.0'), null, item.api)
   })
 
+  it('依赖 1.1.8.5 新宿主能力的安装包要求 1.1.8.5（v1.1.8.4 安装包不带这些接口），且不被旧清单要求降级', (t) => {
+    const methods = [
+      'browser_bookmarks_scan', 'browser_bookmarks_cancel', 'system_power_session',
+      'keyboard_lock', 'dns_benchmark', 'docker_manager', 'downloads_manager',
+      'environment_manager', 'file_unlock',
+      'folder_sync', 'folder_sync_cancel', 'font_manager', 'font_manager_cancel', 'hosts_manager',
+      'hotkey_probe', 'lan_network', 'markdown_document', 'media_metadata', 'media_metadata_cancel',
+      'monitor_control', 'network_speedtest', 'office_document', 'office_cancel', 'recent_projects',
+      'ssh_proxy', 'startup_manager', 'tls_inspect'
+    ]
+    for (const method of methods) {
+      const dir = makePlugin({ 'dist/host-service.js': `callHostTransport('${method}', {})` })
+      t.after(() => fs.rmSync(dir, { recursive: true, force: true }))
+      assert.equal(resolvePluginMinAppVersion(dir).minAppVersion, '1.1.8.5', method)
+      assert.equal(resolvePluginMinAppVersion(dir, { minAppVersion: '1.1.8.4' }).minAppVersion, '1.1.8.5', method, '手写 1.1.8.4 的旧清单不能把要求降下来')
+      assert.equal(resolvePluginMinAppVersion(dir, { minAppVersion: '1.2.0' }).minAppVersion, '1.2.0', method)
+    }
+    const dir = makePlugin({ 'dist/index.js': "'get_keyboard_lock_status'; 'not_downloads_manager'; 'office_documents_x'; 'my_tls_inspector'" })
+    t.after(() => fs.rmSync(dir, { recursive: true, force: true }))
+    assert.equal(resolvePluginMinAppVersion(dir).minAppVersion, undefined)
+  })
+
   it('清单与目录条目里的 minAppVersion 格式不对时报错', () => {
     const manifest = { id: 'demo-tool', name: 'Demo', version: '1.0.0', description: 'd', author: 'a', entry: 'dist/index.js', icon: 'icon.svg', permissions: [], minAppVersion: 'latest' }
     assert.ok(validatePluginManifest(manifest).errors.some((e) => e.includes('minAppVersion')))

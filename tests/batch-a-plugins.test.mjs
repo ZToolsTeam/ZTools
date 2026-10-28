@@ -48,10 +48,13 @@ import {
   formatCleanDuration
 } from '../packages/declarative-ui/dist/examples/clean-keyboard/index.js'
 
-function createHostBridge(hostService, extraByFunc = {}) {
+// fakeByFunc：在测试桥上直接替换宿主某个函数的返回值（测试替身），不再把 mock*/simulate* 参数传给宿主——
+// 宿主已不接受这类参数，任何插件都不能借它伪造宿主结果。
+function createHostBridge(hostService, extraByFunc = {}, fakeByFunc = {}) {
   return {
     async dllplugin_call({ plugin, func, params }) {
       const merged = { ...(params || {}), ...(extraByFunc[func] || {}) }
+      if (fakeByFunc[func]) return { success: true, data: await fakeByFunc[func](merged) }
       const data = await hostService.handlePluginCall(plugin, func, merged)
       return { success: true, data }
     }
@@ -60,40 +63,41 @@ function createHostBridge(hostService, extraByFunc = {}) {
 
 test('04-monitor-control: 多显示器枚举、筛选、亮度步进与多屏同步集成测试', async () => {
   const hostService = new BuiltinPluginHostService()
-  const bridge = createHostBridge(hostService, {
-    listDisplays: {
-      mockDisplays: [
-        {
-          id: 'disp-internal-1',
-          name: '内置 Retina 显示屏',
-          isPrimary: true,
-          protocol: 'wmi',
-          brightness: 70,
-          contrast: null,
-          resolution: '2560x1600'
-        },
-        {
-          id: 'disp-dell-4k',
-          name: 'Dell U2723QE (DP)',
-          isPrimary: false,
-          protocol: 'ddcci',
-          brightness: 60,
-          contrast: 75,
-          resolution: '3840x2160'
-        },
-        {
-          id: 'disp-legacy-hdmi',
-          name: 'Legacy Projector (HDMI)',
-          isPrimary: false,
-          protocol: 'unsupported',
-          brightness: null,
-          contrast: null,
-          resolution: '1920x1080'
-        }
-      ]
+  // 宿主旧接口已不再枚举显示器（真实读取走 monitor_control 新接口），列表由测试桥直接提供
+  const displays = [
+    {
+      id: 'disp-internal-1',
+      name: '内置 Retina 显示屏',
+      isPrimary: true,
+      protocol: 'wmi',
+      brightness: 70,
+      contrast: null,
+      resolution: '2560x1600'
     },
+    {
+      id: 'disp-dell-4k',
+      name: 'Dell U2723QE (DP)',
+      isPrimary: false,
+      protocol: 'ddcci',
+      brightness: 60,
+      contrast: 75,
+      resolution: '3840x2160'
+    },
+    {
+      id: 'disp-legacy-hdmi',
+      name: 'Legacy Projector (HDMI)',
+      isPrimary: false,
+      protocol: 'unsupported',
+      brightness: null,
+      contrast: null,
+      resolution: '1920x1080'
+    }
+  ]
+  const bridge = createHostBridge(hostService, {
     setBrightness: { dryRun: true },
     sleepMonitors: { dryRun: true }
+  }, {
+    listDisplays: async () => ({ ok: true, success: true, displays })
   })
 
   const scanRes = await listMonitorDisplays(bridge)
@@ -237,7 +241,7 @@ test('05-caffeine: 定时防休眠生命周期、重复开启单例收敛与到�
   }
 })
 
-test('05-caffeine: 异常测试 — 负数/NaN 时长、非法模式与底层进程启动失败回滚', async () => {
+test('05-caffeine: 异常测试 — 负数/NaN 时长、非法模式拦截且失败后不激活', async () => {
   const hostService = new BuiltinPluginHostService()
   const bridge = createHostBridge(hostService)
 
@@ -256,12 +260,7 @@ test('05-caffeine: 异常测试 — 负数/NaN 时长、非法模式与底层进
   assert.equal(badModeRes.ok, false)
   assert.equal(badModeRes.errorCode, 'INVALID_MODE')
 
-  const failStart = await startCaffeineSession(30, 'display', bridge, {
-    simulateFailure: true
-  })
-  assert.equal(failStart.ok, false)
-  assert.equal(failStart.errorCode, 'EXECUTION_STATE_FAILED')
-
+  // 原“simulateFailure 模拟底层失败”用例已删除：它只验证宿主按参数返回的模拟失败，没有真实逻辑
   const statusAfterFail = await getCaffeineStatus(bridge)
   assert.equal(statusAfterFail.status?.active, false)
 })
@@ -300,8 +299,12 @@ test('06-audio-device: 声卡枚举、主输出切换、音量调节与异常设
       transportType: 'USB'
     }
   ]
-  const bridge = createHostBridge(hostService, {
-    listDevices: { mockDevices }
+  // 宿主的 AudioDevicePlugin 旧接口已停用（音频设备插件改走 audio_* 新接口，旧接口统一提示更新插件），
+  // 这里只验证示例管理器自身的状态与回滚逻辑：列表、切换、调音量的成功结果都由测试桥直接提供
+  const bridge = createHostBridge(hostService, {}, {
+    listDevices: async () => ({ ok: true, success: true, devices: structuredClone(mockDevices) }),
+    setDefault: async (params) => ({ ok: true, success: true, id: params.id, type: params.type }),
+    setVolume: async (params) => ({ ok: true, success: true, id: params.id, volume: params.volume })
   })
 
   const mgr = new AudioDeviceManager([])
@@ -326,15 +329,29 @@ test('06-audio-device: 声卡枚举、主输出切换、音量调节与异常设
   assert.equal(notFound.errorCode, 'DEVICE_NOT_FOUND')
 
   // 异常 2：模拟蓝牙设备中途断开，验证默认状态回滚到 out-airpods
-  const disconnectBridge = createHostBridge(hostService, {
-    setDefault: { simulateDisconnected: true }
+  const disconnectBridge = createHostBridge(hostService, {}, {
+    setDefault: async (params) => ({ ok: false, success: false, errorCode: 'DEVICE_DISCONNECTED', error: `DEVICE_DISCONNECTED: 目标音频设备 (${params.id}) 已断开连接` })
   })
   const discRes = await mgr.setDefaultDevice('out-speakers', disconnectBridge)
   assert.equal(discRes.success, false)
   assert.equal(discRes.errorCode, 'DEVICE_DISCONNECTED')
   assert.equal(mgr.getDefaultOutputDevice()?.id, 'out-airpods')
 
-  // 异常 3：非法音量 NaN
+  // 异常 3：真实宿主旧接口不再编造“切换/调音量成功”，返回 UNSUPPORTED_ACTION，管理器回滚到操作前状态
+  const legacyHostBridge = createHostBridge(hostService)
+  const legacySwitch = await mgr.setDefaultDevice('out-speakers', legacyHostBridge)
+  assert.equal(legacySwitch.success, false)
+  assert.match(legacySwitch.error, /请更新音频设备插件/)
+  assert.equal(mgr.getDefaultOutputDevice()?.id, 'out-airpods')
+  const legacyVolume = await mgr.setDeviceVolume('out-airpods', 20, legacyHostBridge)
+  assert.equal(legacyVolume.success, false)
+  assert.match(legacyVolume.error, /请更新音频设备插件/)
+  assert.equal(mgr.getAllDevices().find((d) => d.id === 'out-airpods')?.volume, 80)
+  const legacyList = await hostService.handlePluginCall('AudioDevicePlugin', 'listDevices', { mockDevices })
+  assert.equal(legacyList.errorCode, 'UNSUPPORTED_ACTION')
+  assert.equal(legacyList.devices, undefined)
+
+  // 异常 4：非法音量 NaN
   const nanVol = await mgr.setDeviceVolume('out-airpods', Number.NaN, bridge)
   assert.equal(nanVol.success, false)
   assert.equal(nanVol.errorCode, 'INVALID_VOLUME')
@@ -404,8 +421,8 @@ test('07-wifi-password-reveal: 中英文 netsh 解析、QR 协议特殊字符转
 
   // 异常 3：宿主无无线网卡返回空数组
   const hostService = new BuiltinPluginHostService()
-  const noAdapterBridge = createHostBridge(hostService, {
-    listSavedNetworks: { simulateNoAdapter: true }
+  const noAdapterBridge = createHostBridge(hostService, {}, {
+    listSavedNetworks: async () => ({ ok: true, success: true, profiles: [], adapterMissing: true })
   })
   const emptyList = await fetchSavedWifiProfiles({ hostOverride: noAdapterBridge })
   assert.deepEqual(emptyList, [])

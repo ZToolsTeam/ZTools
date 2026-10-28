@@ -340,7 +340,7 @@ export function evaluateMathExpression(input) {
             expression: trimmed,
             answer: null,
             formattedAnswer: "",
-            error: err.message || String(err)
+            error: err instanceof Error ? err.message : String(err)
         };
     }
 }
@@ -988,64 +988,51 @@ export function evaluateCalculatorQuery(input, options = {}) {
 // 7. Calculator History & Pinning Persistence
 // =========================================================================
 export async function getCalculatorHistory() {
-    try {
-        const raw = await LocalStorage.getItem(HISTORY_STORAGE_KEY);
-        if (Array.isArray(raw)) {
-            return raw;
-        }
-    }
-    catch {
-        // fallback
-    }
-    return [];
+    return parseCalculatorHistory(await LocalStorage.getItem(HISTORY_STORAGE_KEY));
 }
-/**
- * 修改历史前读取：读失败直接抛出，不能当成空列表，否则保存时会把已有历史（含置顶项）整体覆盖掉。
- * 存储里的值损坏（不是数组）时按空列表处理。
- */
-async function readHistoryForUpdate() {
-    const raw = await LocalStorage.getItem(HISTORY_STORAGE_KEY);
-    return Array.isArray(raw) ? raw : [];
+/** 只有首次使用才返回空数组；损坏值保留，不能在它上面继续写入。 */
+function parseCalculatorHistory(raw) {
+    if (raw === undefined)
+        return [];
+    if (!Array.isArray(raw) || raw.some(item => !item || typeof item.id !== "string" || !item.id || typeof item.expression !== "string" ||
+        typeof item.answer !== "string" || !["math", "unit", "currency", "date", "color"].includes(item.type) ||
+        typeof item.timestamp !== "number" || !Number.isFinite(item.timestamp) || (item.pinned !== undefined && typeof item.pinned !== "boolean")) ||
+        new Set(raw.map(item => item.id)).size !== raw.length)
+        throw new Error("计算历史数据损坏，原数据已保留，请先恢复数据后重试");
+    return raw;
 }
-export async function saveCalculatorHistory(items) {
-    await LocalStorage.setItem(HISTORY_STORAGE_KEY, items);
+async function changeCalculatorHistory(update) {
+    if (typeof LocalStorage.updateItem !== "function")
+        throw new Error("请升级 ZTools 以安全保存计算历史");
+    return LocalStorage.updateItem(HISTORY_STORAGE_KEY, raw => update(parseCalculatorHistory(raw)));
+}
+export async function saveCalculatorHistory(items, expected = []) {
+    parseCalculatorHistory(items);
+    await changeCalculatorHistory(current => {
+        if (JSON.stringify(current) !== JSON.stringify(expected))
+            throw new Error("计算历史已变化，请重新读取后重试");
+        return items;
+    });
 }
 export async function addCalculatorHistory(expression, answer, type) {
-    const current = await readHistoryForUpdate();
-    // 同一算式只留一条并移到最前；已有条目保留原 id 与置顶状态，只更新结果和时间
-    const existing = current.find(item => item.expression === expression);
-    const others = current.filter(item => item.expression !== expression);
-    const newItem = {
-        id: existing?.id || `calc-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
-        expression,
-        answer,
-        type,
-        pinned: existing?.pinned === true,
-        timestamp: Date.now()
-    };
-    // 只淘汰未置顶的旧历史：置顶项全部保留，未置顶最多 MAX_RECENT_HISTORY 条
-    let recentCount = 0;
-    const updated = [newItem, ...others].filter(item => item.pinned || ++recentCount <= MAX_RECENT_HISTORY);
-    await saveCalculatorHistory(updated);
-    return updated;
+    if (typeof globalThis.crypto?.randomUUID !== 'function') {
+        throw new Error('无法生成唯一标识，请重启客户端后重试');
+    }
+    const id = `calc-${Date.now()}-${globalThis.crypto.randomUUID()}`, timestamp = Date.now();
+    return changeCalculatorHistory(current => {
+        // 同一算式保留最新 id 与置顶状态；只淘汰超过上限的未置顶历史。
+        const existing = current.find(item => item.expression === expression);
+        const newItem = { id: existing?.id || id, expression, answer, type, pinned: existing?.pinned === true, timestamp };
+        let recentCount = 0;
+        return [newItem, ...current.filter(item => item.expression !== expression)].filter(item => item.pinned || ++recentCount <= MAX_RECENT_HISTORY);
+    });
 }
 export async function togglePinCalculatorHistory(id) {
-    const current = await readHistoryForUpdate();
-    const updated = current.map(item => {
-        if (item.id === id) {
-            return { ...item, pinned: !item.pinned };
-        }
-        return item;
-    });
-    await saveCalculatorHistory(updated);
-    return updated;
+    return changeCalculatorHistory(current => current.map(item => item.id === id ? { ...item, pinned: !item.pinned } : item));
 }
 export async function deleteCalculatorHistory(id) {
-    const current = await readHistoryForUpdate();
-    const updated = current.filter(item => item.id !== id);
-    await saveCalculatorHistory(updated);
-    return updated;
+    return changeCalculatorHistory(current => current.filter(item => item.id !== id));
 }
 export async function clearCalculatorHistory() {
-    await LocalStorage.removeItem(HISTORY_STORAGE_KEY);
+    await changeCalculatorHistory(() => []);
 }

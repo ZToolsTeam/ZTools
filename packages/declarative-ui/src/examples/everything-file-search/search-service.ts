@@ -120,7 +120,7 @@ export const SAMPLE_FILES: FileRecord[] = [
   },
   {
     name: "launcher-interaction-design-notes.md",
-    path: "C:\\Users\\Demo\\Documents\\Notes\\launcher-interaction-design-notes.md",
+    path: "D:\\Workspace\\Documents\\Notes\\launcher-interaction-design-notes.md",
     isDir: false,
     size: 25451,
     mtime: Date.now() - 3600000 * 5,
@@ -142,7 +142,7 @@ export const SAMPLE_FILES: FileRecord[] = [
   },
   {
     name: "architecture-diagram.png",
-    path: "C:\\Users\\Demo\\Documents\\Notes\\images\\architecture-diagram.png",
+    path: "D:\\Workspace\\Documents\\Notes\\images\\architecture-diagram.png",
     isDir: false,
     size: 382910,
     mtime: Date.now() - 3600000 * 8,
@@ -186,7 +186,7 @@ export const SAMPLE_FILES: FileRecord[] = [
   },
   {
     name: "indexer.rs",
-    path: "C:\\Users\\Demo\\Projects\\indexer\\src\\main.rs",
+    path: "D:\\Workspace\\Projects\\indexer\\src\\main.rs",
     isDir: false,
     size: 14208,
     mtime: Date.now() - 3600000 * 3,

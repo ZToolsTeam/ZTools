@@ -151,32 +151,38 @@ export function generateQrPngBase64(text, level = "M", scale = 10) {
 }
 // ---------- 生成历史 ----------
 function sanitizeHistory(list) {
-    if (!Array.isArray(list))
+    if (list === undefined)
         return [];
-    return list.filter((it) => it && typeof it.id === "string" && typeof it.content === "string" && it.content.length > 0 && ["L", "M", "Q", "H"].includes(it.level));
+    if (!Array.isArray(list) || list.some(it => !it || typeof it.id !== "string" || !it.id || typeof it.title !== "string" ||
+        typeof it.content !== "string" || !it.content || typeof it.createdAt !== "string" || !["L", "M", "Q", "H"].includes(it.level) ||
+        (it.favorite !== undefined && typeof it.favorite !== "boolean")) || new Set(list.map(it => it.id)).size !== list.length) {
+        throw new Error("二维码历史数据损坏，原数据已保留，请先恢复数据后重试");
+    }
+    return list;
+}
+async function changeQrHistory(update) {
+    if (typeof LocalStorage.updateItem !== "function")
+        throw new Error("请升级 ZTools 以安全保存二维码历史");
+    return LocalStorage.updateItem(QR_STORAGE_KEY, raw => update(sanitizeHistory(raw)));
 }
 /** 读取历史；存储读失败时抛错，写入前必须用这个，避免把空列表覆盖回去 */
 export async function getQrHistory() {
     return sanitizeHistory(await LocalStorage.getItem(QR_STORAGE_KEY));
 }
 export async function saveQrItem(item) {
-    const current = await getQrHistory();
-    const previous = current.find((it) => it.content === item.content);
-    const merged = previous ? { ...item, favorite: previous.favorite } : item;
-    const updated = [merged, ...current.filter((it) => it.id !== item.id && it.content !== item.content)].slice(0, 100);
-    await LocalStorage.setItem(QR_STORAGE_KEY, updated);
-    return updated;
+    sanitizeHistory([item]);
+    return changeQrHistory(current => {
+        const previous = current.find(it => it.content === item.content);
+        const merged = previous ? { ...item, favorite: previous.favorite } : item;
+        return [merged, ...current.filter(it => it.id !== item.id && it.content !== item.content)].slice(0, 100);
+    });
 }
 export async function toggleFavoriteQrItem(id) {
-    const updated = (await getQrHistory()).map((it) => (it.id === id ? { ...it, favorite: !it.favorite } : it));
-    await LocalStorage.setItem(QR_STORAGE_KEY, updated);
-    return updated;
+    return changeQrHistory(current => current.map(it => it.id === id ? { ...it, favorite: !it.favorite } : it));
 }
 export async function deleteQrItem(id) {
-    const updated = (await getQrHistory()).filter((it) => it.id !== id);
-    await LocalStorage.setItem(QR_STORAGE_KEY, updated);
-    return updated;
+    return changeQrHistory(current => current.filter(it => it.id !== id));
 }
 export async function clearQrHistory() {
-    await LocalStorage.removeItem(QR_STORAGE_KEY);
+    await changeQrHistory(() => []);
 }

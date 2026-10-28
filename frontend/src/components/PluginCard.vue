@@ -1,4 +1,5 @@
 <script setup>
+import { AppstoreAddOutlined, DeleteOutlined, DownloadOutlined, GithubOutlined, LoadingOutlined, PlayCircleOutlined, ReloadOutlined, SafetyCertificateOutlined, StarFilled, StarOutlined, StopOutlined } from '@ant-design/icons-vue'
 import { computed, ref } from 'vue'
 
 import { downloadPluginUpdate } from '@/api/apiserver'
@@ -27,6 +28,14 @@ const isRevoked = computed(() =>
 )
 const revokedReason = computed(() =>
   props.plugin.revoked_reason || props.plugin.revokedReason || pluginsStore.getRevokedReason(props.plugin.pluginId) || '该插件已被官方下架禁用'
+)
+// 插件目录里的新版本不再支持当前系统时也会禁用，文案与官方下架区分开
+const isPlatformUnsupported = computed(() =>
+  !props.plugin.revoked && pluginsStore.getRevokedKind(props.plugin.pluginId) === 'platform'
+)
+const revokedLabel = computed(() => (isPlatformUnsupported.value ? '不支持当前系统' : '已下架'))
+const uninstallHint = computed(() =>
+  isPlatformUnsupported.value ? '当前系统已不再支持该插件，可以卸载' : '该插件已被官方下架，建议立即安全卸载'
 )
 const isOfficial = computed(() =>
   Boolean(props.plugin.is_official || props.plugin.isOfficial || props.plugin.isBuiltin || props.plugin.author === 'ZTools Official')
@@ -163,11 +172,11 @@ const onIconError = () => { iconFailed.value = true }
           "
         >
           <!-- FA 图标始终作为底层，图片加载成功后叠加覆盖 -->
-          <i
-            class="fa fa-puzzle-piece"
+          <AppstoreAddOutlined
+
             style="font-size: 24px; color: var(--color-text-secondary)"
             :style="showImgOverlay ? 'opacity:0' : ''"
-          ></i>
+           />
           <img
             v-if="displayIconUrl && !iconFailed"
             :src="displayIconUrl"
@@ -216,7 +225,7 @@ const onIconError = () => { iconFailed.value = true }
               "
               :title="revokedReason"
             >
-              已下架
+              {{ revokedLabel }}
             </span>
             <span
               v-else-if="hasUpdate"
@@ -254,7 +263,7 @@ const onIconError = () => { iconFailed.value = true }
             title="查看源码仓库"
             @click.stop
           >
-            <i class="fa fa-github text-base"></i>
+            <GithubOutlined class="text-base" />
           </a>
           <span
             v-else-if="isOfficial"
@@ -262,7 +271,7 @@ const onIconError = () => { iconFailed.value = true }
             style="width: 32px; height: 32px"
             title="官方自营认证 · 官方技术支持"
           >
-            <i class="fa fa-shield text-sm"></i>
+            <SafetyCertificateOutlined class="text-sm" />
           </span>
 
           <!-- 收藏按钮 -->
@@ -280,7 +289,7 @@ const onIconError = () => { iconFailed.value = true }
             :title="isFavorite ? '取消收藏' : '添加收藏'"
             @click.stop="handleToggleFavorite"
           >
-            <i :class="isFavorite ? 'fa fa-star' : 'fa fa-star-o'"></i>
+            <component :is="isFavorite ? StarFilled : StarOutlined" aria-hidden="true" />
           </button>
 
           <!-- 更新按钮 -->
@@ -293,7 +302,7 @@ const onIconError = () => { iconFailed.value = true }
             title="更新插件"
             @click.stop="handleUpdate"
           >
-            <i class="fa fa-refresh"></i>
+            <ReloadOutlined  />
           </button>
 
           <!-- 已下架插件：禁用启动，标红提示 [已下架]，引导一键安全卸载 -->
@@ -301,10 +310,10 @@ const onIconError = () => { iconFailed.value = true }
             <button
               v-if="isInstalled"
               class="flex items-center justify-center rounded px-2.5 py-1 text-xs text-[var(--rc-error)] border border-[var(--rc-error)] hover:bg-[var(--rc-error-subtle)] transition-colors"
-              title="该插件已被官方下架，建议立即安全卸载"
+              :title="uninstallHint"
               @click.stop="handleUninstall"
             >
-              <i class="fa fa-trash-o mr-1"></i> 安全卸载
+              <DeleteOutlined class="mr-1" /> 安全卸载
             </button>
             <button
               v-else
@@ -313,7 +322,7 @@ const onIconError = () => { iconFailed.value = true }
               disabled
               :title="revokedReason"
             >
-              <i class="fa fa-ban"></i>
+              <StopOutlined  />
             </button>
           </template>
           <button
@@ -331,10 +340,10 @@ const onIconError = () => { iconFailed.value = true }
             :title="downloading ? '安装中...' : installFailed ? (installError || '安装失败，点击重试') : isInstalled ? '打开' : '安装'"
             @click.stop="handleActionClick"
           >
-            <i v-if="downloading" class="fa fa-spinner fa-spin"></i>
-            <i v-else-if="installFailed" class="fa fa-refresh" style="color: var(--rc-error)"></i>
-            <i v-else-if="!isInstalled" class="fa fa-download"></i>
-            <i v-else class="fa fa-play"></i>
+            <LoadingOutlined v-if="downloading"  />
+            <ReloadOutlined v-else-if="installFailed"  style="color: var(--rc-error)" />
+            <DownloadOutlined v-else-if="!isInstalled"  />
+            <PlayCircleOutlined v-else  />
           </button>
         </div>
       </div>

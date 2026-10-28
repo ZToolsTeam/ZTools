@@ -12,17 +12,37 @@ import {
   computeFileSha256,
   formatBytes,
   isProtectedSystemPath,
+  resolveHostSystemCommands,
   runCommand,
-  runPowerShell,
-  type HostPluginContext
+  type HostPluginContext,
+  type HostSystemCommands
 } from './shared-utils.js'
+
+/** 清空回收站：清空前后各数一次当前用户回收站的项目数，以清空后的实际数量判断结果 */
+const EMPTY_RECYCLE_BIN_SCRIPT = `
+  $ErrorActionPreference = 'Stop'
+  $bin = (New-Object -ComObject Shell.Application).Namespace(10)
+  if ($null -eq $bin) { throw '无法打开系统回收站' }
+  $before = [int]$bin.Items().Count
+  if ($before -gt 0) {
+    # 空回收站或某个盘没有回收站目录时，Clear-RecycleBin 在 5.1 上会报“找不到路径”的非终止错误；
+    # 这里忽略它，是否清空以下面重新数到的数量为准
+    Clear-RecycleBin -Force -ErrorAction SilentlyContinue
+  }
+  $binAfter = (New-Object -ComObject Shell.Application).Namespace(10)
+  $after = [int]$binAfter.Items().Count
+  [PSCustomObject]@{ before = $before; after = $after } | ConvertTo-Json -Compress
+`
 
 export class StorageHostPluginHandler {
   readonly #ctx: HostPluginContext
+  readonly #sys: HostSystemCommands
   #sqlJsPromise: Promise<SqlJsStatic> | null = null
 
-  constructor(ctx: HostPluginContext) {
+  /** deps 只供测试注入命令替身，插件调用参数无法切换 */
+  constructor(ctx: HostPluginContext, deps: Partial<HostSystemCommands> = {}) {
     this.#ctx = ctx
+    this.#sys = resolveHostSystemCommands(deps)
   }
 
   async #getSqlJs(): Promise<SqlJsStatic> {
@@ -1162,17 +1182,42 @@ export class StorageHostPluginHandler {
 
     if (lowerFn === 'emptyrecyclebin' || lowerFn === 'clearrecyclebin') {
       if (process.platform === 'win32') {
-        const out = await runPowerShell(
-          `Clear-RecycleBin -Force -ErrorAction SilentlyContinue; Write-Output 'OK'`,
-          10_000
-        )
-        const ok = out.includes('OK')
+        // 旧实现无论 Clear-RecycleBin 成败都输出 OK，清空失败也报告“已清空”
+        let counts: { before?: unknown; after?: unknown }
+        try {
+          counts = JSON.parse(await this.#sys.runPowerShell(EMPTY_RECYCLE_BIN_SCRIPT, 60_000)) as { before?: unknown; after?: unknown }
+        } catch (err) {
+          return {
+            ok: false,
+            success: false,
+            plugin: pluginName,
+            errorCode: 'RECYCLE_BIN_FAILED',
+            error: `清空回收站失败：${err instanceof Error ? err.message : String(err)}`
+          }
+        }
+        const before = typeof counts?.before === 'number' ? counts.before : NaN
+        const after = typeof counts?.after === 'number' ? counts.after : NaN
+        if (!Number.isInteger(before) || !Number.isInteger(after) || before < 0 || after < 0) {
+          return { ok: false, success: false, plugin: pluginName, errorCode: 'RECYCLE_BIN_FAILED', error: '清空回收站失败：无法确认回收站剩余项目数' }
+        }
+        if (after > 0) {
+          return {
+            ok: false,
+            success: false,
+            plugin: pluginName,
+            errorCode: 'RECYCLE_BIN_NOT_EMPTY',
+            removedCount: Math.max(0, before - after),
+            remainingCount: after,
+            error: `回收站仍有 ${after} 项未清空（可能被占用或权限不足）`
+          }
+        }
         return {
-          ok,
-          success: ok,
+          ok: true,
+          success: true,
           plugin: pluginName,
-          message: ok ? '已清空系统回收站' : undefined,
-          ...(ok ? {} : { error: '清空回收站失败' })
+          removedCount: before,
+          remainingCount: 0,
+          message: before === 0 ? '回收站已经是空的' : `已清空系统回收站（${before} 项）`
         }
       }
       return { ok: false, success: false, error: '当前系统不支持 Clear-RecycleBin' }
@@ -2186,401 +2231,8 @@ export class StorageHostPluginHandler {
   }
 
   // ==================== 11. 目录增量同步 (FolderSyncPlugin) ====================
-  static readonly #DEV_JUNK_NAMES = new Set([
-    'node_modules',
-    '.git',
-    '.svn',
-    '.hg',
-    'dist',
-    '.ds_store',
-    'thumbs.db',
-    'desktop.ini'
-  ])
-
-  static #isJunkEntry(name: string, ignoreDevJunk: boolean): boolean {
-    if (!ignoreDevJunk) return false
-    const lower = name.toLowerCase()
-    if (StorageHostPluginHandler.#DEV_JUNK_NAMES.has(lower)) return true
-    if (lower.startsWith('~$')) return true
-    return false
-  }
-
-  static #areNestedOrSameDirs(dirA: string, dirB: string): boolean {
-    const resA = path.resolve(dirA)
-    const resB = path.resolve(dirB)
-    const normA = process.platform === 'win32' ? resA.toLowerCase() : resA
-    const normB = process.platform === 'win32' ? resB.toLowerCase() : resB
-    if (normA === normB) return true
-    const sep = path.sep
-    const prefixA = normA.endsWith(sep) ? normA : `${normA}${sep}`
-    const prefixB = normB.endsWith(sep) ? normB : `${normB}${sep}`
-    return normB.startsWith(prefixA) || normA.startsWith(prefixB)
-  }
-
-  async #scanSyncTree(
-    rootDir: string,
-    ignoreDevJunk: boolean,
-    maxFiles = 5000
-  ): Promise<Map<string, { relPath: string; fullPath: string; sizeBytes: number; mtimeMs: number }>> {
-    const map = new Map<string, { relPath: string; fullPath: string; sizeBytes: number; mtimeMs: number }>()
-    if (!fsSync.existsSync(rootDir)) return map
-
-    const walk = async (currentDir: string, relPrefix: string) => {
-      if (map.size >= maxFiles) return
-      let entries: fsSync.Dirent[] = []
-      try {
-        entries = await fs.readdir(currentDir, { withFileTypes: true })
-      } catch {
-        return
-      }
-      for (const entry of entries) {
-        if (map.size >= maxFiles) break
-        if (entry.isSymbolicLink()) continue
-        if (StorageHostPluginHandler.#isJunkEntry(entry.name, ignoreDevJunk)) continue
-        const relPath = relPrefix ? `${relPrefix}/${entry.name}` : entry.name
-        const fullPath = path.join(currentDir, entry.name)
-        if (entry.isDirectory()) {
-          await walk(fullPath, relPath)
-        } else if (entry.isFile()) {
-          try {
-            const st = await fs.stat(fullPath)
-            map.set(relPath, {
-              relPath,
-              fullPath,
-              sizeBytes: st.size,
-              mtimeMs: st.mtimeMs
-            })
-          } catch {
-            // ignore unreadable file
-          }
-        }
-      }
-    }
-
-    await walk(rootDir, '')
-    return map
-  }
-
-  async handleFolderSync(
-    fn: string,
-    params: Record<string, unknown>,
-    caller?: CallerIdentity
-  ): Promise<unknown> {
-    const lowerFn = (fn ?? '').trim().toLowerCase()
-    const rawSource = String(params.sourceDir ?? params.srcDir ?? '').trim()
-    const rawTarget = String(params.targetDir ?? params.dstDir ?? '').trim()
-    const syncMode = String(params.syncMode ?? 'incremental').toLowerCase() as
-      | 'incremental'
-      | 'mirror'
-      | 'two-way'
-    const ignoreDevJunk = params.ignoreDevJunk !== false
-
-    if (lowerFn === 'comparedirs' || lowerFn === 'compare' || lowerFn === 'scandiff') {
-      if (!rawSource || !rawTarget) {
-        return {
-          ok: false,
-          success: false,
-          errorCode: 'EMPTY_DIRECTORY_PATH',
-          error: 'EMPTY_DIRECTORY_PATH: 请先选择源目录与目标目录'
-        }
-      }
-
-      if (StorageHostPluginHandler.#areNestedOrSameDirs(rawSource, rawTarget)) {
-        return {
-          ok: false,
-          success: false,
-          errorCode: 'NESTED_DIRECTORY_FORBIDDEN',
-          error: 'NESTED_DIRECTORY_FORBIDDEN: 源目录与目标目录不能相同或互相包含（防止无限递归复制）'
-        }
-      }
-
-      const sourceDir = await this.#ctx.authorizeExistingPath(rawSource, caller, 'read')
-      const targetDir = path.resolve(rawTarget)
-
-      if (!fsSync.existsSync(sourceDir)) {
-        return {
-          ok: false,
-          success: false,
-          errorCode: 'SOURCE_NOT_FOUND',
-          error: `SOURCE_NOT_FOUND: 源目录不存在 (${sourceDir})`
-        }
-      }
-
-      const [srcMap, dstMap] = await Promise.all([
-        this.#scanSyncTree(sourceDir, ignoreDevJunk),
-        this.#scanSyncTree(targetDir, ignoreDevJunk)
-      ])
-
-      const diffs: Array<{
-        relPath: string
-        diffType: 'added' | 'modified' | 'reverse-add' | 'orphan'
-        direction: 'src-to-dst' | 'dst-to-src' | 'delete-dst'
-        actionBadge: string
-        reasonText: string
-        sizeBytes: number
-        sourceMtimeMs: number | null
-        targetMtimeMs: number | null
-        sourceFullPath: string
-        targetFullPath: string
-      }> = []
-
-      // 1. Check files in sourceDir
-      for (const [relPath, srcFile] of srcMap.entries()) {
-        const dstFile = dstMap.get(relPath)
-        const dstFull = path.join(targetDir, ...relPath.split('/'))
-        if (!dstFile) {
-          diffs.push({
-            relPath,
-            diffType: 'added',
-            direction: 'src-to-dst',
-            actionBadge: '+ 新增到目标',
-            reasonText: `目标目录缺失 · 将从源目录复制 (${formatBytes(srcFile.sizeBytes)})`,
-            sizeBytes: srcFile.sizeBytes,
-            sourceMtimeMs: srcFile.mtimeMs,
-            targetMtimeMs: null,
-            sourceFullPath: srcFile.fullPath,
-            targetFullPath: dstFull
-          })
-          continue
-        }
-
-        const timeDiffMs = srcFile.mtimeMs - dstFile.mtimeMs
-        const isDifferentTime = Math.abs(timeDiffMs) > 2000
-        const isDifferentSize = srcFile.sizeBytes !== dstFile.sizeBytes
-
-        if (!isDifferentTime && !isDifferentSize) {
-          continue
-        }
-
-        if (syncMode === 'two-way' && timeDiffMs < -2000) {
-          diffs.push({
-            relPath,
-            diffType: 'modified',
-            direction: 'dst-to-src',
-            actionBadge: '← 反向更新源',
-            reasonText: `目标端文件较新 (${Math.round(Math.abs(timeDiffMs) / 1000)}秒) · 反向同步回源目录`,
-            sizeBytes: dstFile.sizeBytes,
-            sourceMtimeMs: srcFile.mtimeMs,
-            targetMtimeMs: dstFile.mtimeMs,
-            sourceFullPath: srcFile.fullPath,
-            targetFullPath: dstFile.fullPath
-          })
-        } else if (timeDiffMs > 2000 || isDifferentSize) {
-          diffs.push({
-            relPath,
-            diffType: 'modified',
-            direction: 'src-to-dst',
-            actionBadge: '↑ 覆盖更新',
-            reasonText: `源端已修改 · 覆盖目标旧文件 (${formatBytes(srcFile.sizeBytes)})`,
-            sizeBytes: srcFile.sizeBytes,
-            sourceMtimeMs: srcFile.mtimeMs,
-            targetMtimeMs: dstFile.mtimeMs,
-            sourceFullPath: srcFile.fullPath,
-            targetFullPath: dstFile.fullPath
-          })
-        }
-      }
-
-      // 2. Check files only in targetDir
-      for (const [relPath, dstFile] of dstMap.entries()) {
-        if (srcMap.has(relPath)) continue
-        const srcFull = path.join(sourceDir, ...relPath.split('/'))
-        if (syncMode === 'mirror') {
-          diffs.push({
-            relPath,
-            diffType: 'orphan',
-            direction: 'delete-dst',
-            actionBadge: '- 目标多余(移入回收站)',
-            reasonText: `源目录已不存在 · 镜像模式下移入系统回收站`,
-            sizeBytes: dstFile.sizeBytes,
-            sourceMtimeMs: null,
-            targetMtimeMs: dstFile.mtimeMs,
-            sourceFullPath: srcFull,
-            targetFullPath: dstFile.fullPath
-          })
-        } else if (syncMode === 'two-way') {
-          diffs.push({
-            relPath,
-            diffType: 'reverse-add',
-            direction: 'dst-to-src',
-            actionBadge: '← 反向补齐',
-            reasonText: `仅目标端存在 · 双向合并补齐至源目录`,
-            sizeBytes: dstFile.sizeBytes,
-            sourceMtimeMs: null,
-            targetMtimeMs: dstFile.mtimeMs,
-            sourceFullPath: srcFull,
-            targetFullPath: dstFile.fullPath
-          })
-        }
-      }
-
-      const transferBytes = diffs
-        .filter((d) => d.direction !== 'delete-dst')
-        .reduce((acc, d) => acc + d.sizeBytes, 0)
-
-      let realFreeBytes = 50 * 1024 * 1024 * 1024
-      if (typeof params.mockTargetFreeBytes === 'number') {
-        realFreeBytes = params.mockTargetFreeBytes
-      } else {
-        try {
-          const stFs = await fs.statfs(fsSync.existsSync(targetDir) ? targetDir : path.dirname(targetDir))
-          const computed = Number(stFs.bavail) * Number(stFs.bsize)
-          if (Number.isFinite(computed) && computed > 0) {
-            realFreeBytes = computed
-          }
-        } catch {
-          // keep fallback if statfs unsupported on virtual fs
-        }
-      }
-      const targetFreeBytes = realFreeBytes
-
-      return {
-        ok: true,
-        success: true,
-        sourceDir,
-        targetDir,
-        syncMode,
-        ignoreDevJunk,
-        diffs,
-        totalDiffs: diffs.length,
-        transferBytes,
-        targetFreeBytes
-      }
-    }
-
-    if (lowerFn === 'executesync' || lowerFn === 'sync' || lowerFn === 'runsync') {
-      if (!rawSource || !rawTarget) {
-        return {
-          ok: false,
-          success: false,
-          errorCode: 'EMPTY_DIRECTORY_PATH',
-          error: 'EMPTY_DIRECTORY_PATH: 源目录与目标目录不能为空'
-        }
-      }
-
-      if (StorageHostPluginHandler.#areNestedOrSameDirs(rawSource, rawTarget)) {
-        return {
-          ok: false,
-          success: false,
-          errorCode: 'NESTED_DIRECTORY_FORBIDDEN',
-          error: 'NESTED_DIRECTORY_FORBIDDEN: 源目录与目标目录不能相同或互相包含'
-        }
-      }
-
-      const compareRes = (await this.handleFolderSync(
-        'compareDirs',
-        params,
-        caller
-      )) as Record<string, unknown>
-      if (!compareRes.ok) {
-        return compareRes
-      }
-
-      const allDiffs = (compareRes.diffs as Array<Record<string, unknown>>) || []
-      const selectedSet = Array.isArray(params.selectedRelPaths)
-        ? new Set(params.selectedRelPaths.map(String))
-        : null
-      const itemsToSync = selectedSet
-        ? allDiffs.filter((d) => selectedSet.has(String(d.relPath)))
-        : allDiffs
-
-      const requiredBytes = itemsToSync
-        .filter((d) => d.direction !== 'delete-dst')
-        .reduce((acc, d) => acc + Number(d.sizeBytes ?? 0), 0)
-      const targetFreeBytes = Number(compareRes.targetFreeBytes ?? 50 * 1024 * 1024 * 1024)
-
-      if (requiredBytes > targetFreeBytes) {
-        return {
-          ok: false,
-          success: false,
-          errorCode: 'INSUFFICIENT_DISK_SPACE',
-          error: `INSUFFICIENT_DISK_SPACE: 目标磁盘剩余空间不足（需 ${formatBytes(requiredBytes)}，仅剩 ${formatBytes(targetFreeBytes)}）`
-        }
-      }
-
-      const lockedSet = new Set<string>(
-        Array.isArray(params.simulateLockedRelPaths)
-          ? params.simulateLockedRelPaths.map(String)
-          : []
-      )
-
-      let syncedCount = 0
-      let deletedCount = 0
-      let transferredBytes = 0
-      const failures: Array<{ relPath: string; errorCode: string; error: string }> = []
-
-      for (const item of itemsToSync) {
-        const relPath = String(item.relPath ?? '')
-        if (!relPath || relPath.includes('..') || path.isAbsolute(relPath)) {
-          failures.push({
-            relPath,
-            errorCode: 'UNSAFE_RELATIVE_PATH',
-            error: `拒绝越界相对路径: ${relPath}`
-          })
-          continue
-        }
-
-        if (lockedSet.has(relPath)) {
-          failures.push({
-            relPath,
-            errorCode: 'EBUSY',
-            error: `EBUSY: 文件正在被其他程序占用，跳过同步 (${relPath})`
-          })
-          continue
-        }
-
-        const direction = String(item.direction ?? 'src-to-dst')
-        const srcFull = String(item.sourceFullPath ?? '')
-        const dstFull = String(item.targetFullPath ?? '')
-
-        try {
-          if (direction === 'delete-dst') {
-            const recycleDir = path.join(os.tmpdir(), 'ztools-folder-sync-recycle', String(Date.now()))
-            await fs.mkdir(path.dirname( path.join(recycleDir, relPath) ), { recursive: true }).catch(() => undefined)
-            await fs.copyFile(dstFull, path.join(recycleDir, relPath)).catch(() => undefined)
-            await fs.rm(dstFull, { recursive: true, force: true })
-            deletedCount += 1
-          } else if (direction === 'src-to-dst') {
-            await fs.mkdir(path.dirname(dstFull), { recursive: true })
-            await fs.copyFile(srcFull, dstFull)
-            const st = await fs.stat(srcFull)
-            await fs.utimes(dstFull, st.atime, st.mtime)
-            syncedCount += 1
-            transferredBytes += st.size
-          } else if (direction === 'dst-to-src') {
-            await fs.mkdir(path.dirname(srcFull), { recursive: true })
-            await fs.copyFile(dstFull, srcFull)
-            const st = await fs.stat(dstFull)
-            await fs.utimes(srcFull, st.atime, st.mtime)
-            syncedCount += 1
-            transferredBytes += st.size
-          }
-        } catch (err) {
-          failures.push({
-            relPath,
-            errorCode: 'IO_SYNC_ERROR',
-            error: err instanceof Error ? err.message : String(err)
-          })
-        }
-      }
-
-      return {
-        ok: failures.length === 0,
-        success: syncedCount > 0 || deletedCount > 0 || itemsToSync.length === 0,
-        syncedCount,
-        deletedCount,
-        transferredBytes,
-        failures,
-        ...(failures.length > 0 ? { errorCode: failures[0]!.errorCode, error: failures[0]!.error } : {})
-      }
-    }
-
-    return {
-      ok: false,
-      success: false,
-      errorCode: 'UNSUPPORTED_ACTION',
-      error: `Unsupported FolderSyncPlugin function: ${fn}`
-    }
+  async handleFolderSync(_fn: string, _params: Record<string, unknown>, _caller?: CallerIdentity): Promise<unknown> {
+    return { ok: false, success: false, errorCode: 'UPGRADE_REQUIRED', error: '旧目录同步接口已停止，请更新目录同步插件后重新选择文件夹' }
   }
 
   #pasteStackItems: Array<{

@@ -3,6 +3,8 @@ import fs from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 import test from 'node:test'
+import { EventEmitter } from 'node:events'
+import { showDesktopNotification } from '../../src/main/platform/desktop-notification.js'
 import type { CallerIdentity } from '../../src/contracts/capabilities.js'
 import { errorCodes, ZToolsError } from '../../src/contracts/errors.js'
 import { FileSystemService } from '../../src/main/services/file-system-service.js'
@@ -134,6 +136,21 @@ test('system service exposes compatible queries and cleans caller-owned blockers
     assert.equal((await service.getInfo(mainCaller)).darkMode, true)
     await service.notify({ title: 'Test', message: 'message', modal: false }, mainCaller)
     assert.deepEqual(notifications, ['message'])
+    const notification = Object.assign(new EventEmitter(), { show() {}, close() {} })
+    adapter.showNotification = params => showDesktopNotification(params.title || 'ZTools', params.message, {
+      isSupported: () => true, create: () => notification
+    })
+    let delivered = false
+    const pendingNotice = service.notify({ title: '通知测试', message: '等待系统确认', modal: false }, mainCaller).then(result => {
+      delivered = true
+      return result
+    })
+    await Promise.resolve()
+    assert.equal(delivered, false)
+    notification.emit('failed', {}, '系统拒绝通知')
+    await assert.rejects(pendingNotice, { code: errorCodes.nativeHostError })
+    assert.equal(delivered, false)
+    assert.deepEqual(notification.eventNames(), [])
     assert.deepEqual(await service.readCurrentBrowserUrl(), {
       success: true,
       url: 'https://example.test/page',

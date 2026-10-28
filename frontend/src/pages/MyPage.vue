@@ -16,6 +16,7 @@ import { usePluginsStore } from '@/stores/plugins'
 import { useUserStore, cloudSync, onAuthRequired } from '@edition'
 import { useRouter } from 'vue-router'
 import { useToast } from '@/composables/useToast'
+import { usePluginInstall } from '@/composables/usePluginInstall'
 import { useUIStore } from '@/stores/ui'
 import PluginCard3D from '@/components/PluginCard3D.vue'
 import PluginTile from '@/components/PluginTile.vue'
@@ -28,20 +29,19 @@ import { getPluginFeatureHotkeyItemByTrigger } from '@/utils/pluginFeatureHotkey
 import { Empty, Button, Modal, Spin } from 'ant-design-vue'
 import { RocketOutlined, AppstoreOutlined } from '@ant-design/icons-vue'
 import {
-  openPlugin as apiOpenPlugin,
   getDownloadSign,
   installPluginNative,
   isPluginVersionIncompatibleError,
   getPluginVersionIncompatibleMessage
 } from '@/api/apiserver'
 import { routeUtils } from '@/router/routes'
+import { isClientProvidedPlugin } from '@/utils/officialPlugins'
 import { getHotkeyHostPlatform } from '@/utils/hotkeyRecorder'
-import { isOfficialPlugin } from '@/utils/officialPlugins'
-import { isBundledPlugin } from '@/utils/bundledPlugins'
 import { useKeymap, KEYMAP_SCOPES, dispatchKeyEvent, isModalOpen } from '@/utils/keymap'
 
 // Stores
 const pluginsStore = usePluginsStore()
+const { installWithFeedback } = usePluginInstall()
 const userStore = useUserStore()
 const uiStore = useUIStore()
 const router = useRouter()
@@ -616,16 +616,10 @@ async function openApp(id) {
     return
   }
 
-  if (isBundledPlugin(pluginId) || isOfficialPlugin(pluginId)) {
-    try {
-      await pluginsStore.openPlugin(pluginId)
-    } catch (e) {
-      toastError('启动失败: ' + (e.message || e))
-    }
-    return
-  }
   try {
-    const res = await apiOpenPlugin(id)
+    const res = await pluginsStore.openPlugin(pluginId)
+
+    if (res?.cancelled || res?.isDeclarative) return
 
     // 检查是否需要导航到详情页（插件已卸载的情况）
     if (res?.action === 'navigate_to_detail') {
@@ -645,33 +639,8 @@ async function openApp(id) {
 }
 
 // 一键静默安装插件（支持并发互斥与自动进舞台）
-async function handleDownload(id) {
-  const pid = getPluginId(id)
-  if (!pid) return
-
-  if (pluginsStore.isRevoked(pid)) {
-    const reason = pluginsStore.getRevokedReason(pid) || '该插件已被官方下架禁用'
-    toastError('无法安装：' + reason)
-    return
-  }
-
-  // 防止重复下载
-  if (pluginsStore.isInstalling(pid)) {
-    toastWarning('该插件正在安装中，请稍候...')
-    return
-  }
-
-  try {
-    toastSuccess('正在安装插件，请稍候...')
-    await pluginsStore.installPlugin(pid, { autoOpen: true })
-    toastSuccess('插件安装完成')
-  } catch (e) {
-    if (isPluginVersionIncompatibleError(e)) {
-      toastWarning(getPluginVersionIncompatibleMessage(e))
-    } else if (!onAuthRequired(e, { level: 'error' })) {
-      toastError('安装失败: ' + (e.message || e))
-    }
-  }
+function handleDownload(id) {
+  return installWithFeedback(getPluginId(id))
 }
 
 // 插件更新完成回调（保留兼容性，实际由 handlePluginInstalled 处理）
@@ -696,15 +665,34 @@ async function handleToggleFavorite(pluginId) {
   }
 }
 
+// 随客户端提供的插件不能卸载；插件市场分发的官方插件可以正常卸载
+function canUninstallPlugin(pluginId) {
+  return Boolean(pluginId) && !isClientProvidedPlugin(pluginId)
+}
+
 function handleUninstallPlugin(pluginId) {
+  if (!canUninstallPlugin(pluginId)) {
+    // 键盘 Delete 触发时菜单并没有打开，不能顺手清掉当前选中的插件
+    if (showMenu.value) hideMenu()
+    toastError('内置插件随客户端提供，不能卸载')
+    return
+  }
   Modal.confirm({
     title: '确认卸载',
     content: '确定要卸载此插件吗？',
     okText: '卸载',
     cancelText: '取消',
-    onOk() {
-      pluginsStore.uninstallPlugin(pluginId)
+    async onOk() {
       hideMenu()
+      try {
+        const result = await pluginsStore.uninstallPlugin(pluginId)
+        if (!result?.success) {
+          throw new Error(result?.error || result?.message || '未知错误')
+        }
+        toastSuccess('插件已卸载')
+      } catch (e) {
+        toastError('卸载失败: ' + (e?.message || e))
+      }
     }
   })
 }
@@ -725,6 +713,7 @@ function getEventPayload(eventOrEnvelope) {
 
 function handlePluginInstalled(event) {
   const payload = getEventPayload(event)
+  if (!pluginsStore.acceptsInstallEvent(payload)) return
   const pluginId = payload.pluginId
   if (pluginId) {
     if (payload.success) {
@@ -1155,6 +1144,7 @@ onUnmounted(() => {
               :focused="focusedCardIndex === index"
               :pinned="isPinned(getPluginId(plugin))"
               :revoked="pluginsStore.isRevoked(getPluginId(plugin))"
+              :revokedText="pluginsStore.getRevokedKind(getPluginId(plugin)) === 'platform' ? '不支持当前系统' : '已下架'"
               :hasUpdate="hasUsableUpdate(getPluginId(plugin))"
               :hotkey="launchHotkeys[getPluginId(plugin)] || ''"
               :installed="installedSet.has(getPluginId(plugin))"
@@ -1241,7 +1231,7 @@ onUnmounted(() => {
           style="opacity: 0.5; cursor: not-allowed; color: var(--rc-error);"
           :title="pluginsStore.getRevokedReason(getPluginId(selectedPlugin))"
         >
-          已下架（禁止启动）
+          {{ pluginsStore.getRevokedKind(getPluginId(selectedPlugin)) === 'platform' ? '不支持当前系统（禁止启动）' : '已下架（禁止启动）' }}
         </div>
         <div
           v-else
@@ -1270,13 +1260,15 @@ onUnmounted(() => {
               : '固定到最前'
           }}
         </div>
-        <div class="menu-divider"></div>
-        <div
-          class="menu-item danger"
-          @click="handleUninstallPlugin(getPluginId(selectedPlugin))"
-        >
-          卸载
-        </div>
+        <template v-if="canUninstallPlugin(getPluginId(selectedPlugin))">
+          <div class="menu-divider"></div>
+          <div
+            class="menu-item danger"
+            @click="handleUninstallPlugin(getPluginId(selectedPlugin))"
+          >
+            卸载
+          </div>
+        </template>
       </div>
 
       <!-- 同步状态 -->

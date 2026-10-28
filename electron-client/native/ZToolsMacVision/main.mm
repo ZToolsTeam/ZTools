@@ -5,6 +5,7 @@
 #include <cstdio>
 #include <cstring>
 #include <cmath>
+NSDictionary *DispatchFonts(NSDictionary *value);
 
 static const NSUInteger MaxBytes = 16 * 1024 * 1024;
 static NSDictionary *Failure(NSString *code) { return @{ @"version": @1, @"success": @NO, @"code": code }; }
@@ -60,6 +61,7 @@ static NSDictionary *Dispatch(id input) API_AVAILABLE(macos(10.15)) {
   if (![input isKindOfClass:[NSDictionary class]]) return Failure(@"INVALID_REQUEST");
   NSDictionary *value = input;
   if (![value[@"version"] isKindOfClass:[NSNumber class]] || CFGetTypeID((__bridge CFTypeRef)value[@"version"]) == CFBooleanGetTypeID() || ![value[@"version"] isEqual:@1] || ![value[@"operation"] isKindOfClass:[NSString class]]) return Failure(@"INVALID_REQUEST");
+  if ([value[@"operation"] hasPrefix:@"fonts-"]) return DispatchFonts(value);
   if ([value[@"operation"] isEqual:@"languages"]) {
     if (!ExactKeys(value, @[@"version", @"operation"])) return Failure(@"INVALID_REQUEST");
     VNRecognizeTextRequest *request = [[VNRecognizeTextRequest alloc] init];

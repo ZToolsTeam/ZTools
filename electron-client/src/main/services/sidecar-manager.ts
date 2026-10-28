@@ -841,7 +841,12 @@ export class SidecarManager {
       }
     }
 
-    // 2. 若 Rust Indexer 侧车运行中且有非空关键词，优先调用硬件级索引
+    // 2. macOS 优先走原生应用缓存（含 InfoPlist.strings / mdls 本地化中文名称与双语拼音）+ 本地目录 / Spotlight 检索
+    if (process.platform === 'darwin') {
+      return await searchFilesOnMacos(trimmed, safeLimit, this.fallbackFiles)
+    }
+
+    // 3. 若 Windows Indexer 侧车运行中且有非空关键词，优先调用硬件级索引
     if (trimmed && this.indexerProcess.state === 'running') {
       try {
         const rpcRes = await this.indexerProcess.sendRequest<SearchFilesResult>('search_files', {
@@ -854,11 +859,6 @@ export class SidecarManager {
       } catch (err) {
         console.warn('[SidecarManager] searchFiles RPC failed, falling back:', err)
       }
-    }
-
-    // 3. macOS 走 Spotlight mdfind + 本地用户目录回退
-    if (process.platform === 'darwin') {
-      return await searchFilesOnMacos(trimmed, safeLimit, this.fallbackFiles)
     }
 
     // 4. 空查询或 Windows 侧车未返回结果时，扫描本机真实用户目录（Downloads/Desktop/Documents/cwd）

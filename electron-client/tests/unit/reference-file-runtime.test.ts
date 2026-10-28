@@ -42,7 +42,7 @@ function fixture(failStop = false) {
     registry, events, authorize: () => true, legacyFiles: {} as FileSystemService,
     dialogProvider: { select: async () => ({ canceled: false, selections: [{ absolutePath: 'E:/synthetic/selected.txt', kind: 'file' }] }) },
     clipboard: { availableFormats: () => [], clear() {}, has: () => false, readText: () => '', writeText() {}, writeImage() {},
-      readImage: () => ({ isEmpty: () => true, getSize: () => ({ width: 0, height: 0 }), toPNG: () => Buffer.alloc(0) }) },
+      readImage: () => ({ isEmpty: () => true, getSize: () => ({ width: 0, height: 0 }), toPNG: () => Buffer.alloc(0), toBitmap: () => Buffer.alloc(0) }) },
     images: { createFromBuffer: () => { throw new Error('unused image port') },
       createFromDataURL: () => { throw new Error('unused image port') }, createFromBitmap: () => { throw new Error('unused image port') } },
     fileClipboard: { readFiles: async () => [], writeFiles: async () => {} },

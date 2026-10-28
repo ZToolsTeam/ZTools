@@ -1,121 +1,42 @@
 /**
- * 多引擎划词与商务文档对照翻译中枢业务逻辑层 (Translator 1.0 Logic)
+ * 翻译插件业务逻辑
  *
- * 核心能力：
- * 1. 对接宿主原生 `translator_translate` / `translator_detect_language` / `translator_get_history` IPC 通道
- * 2. 自动语种识别与智能翻转（当检测到输入语言与目标语言相同时自动翻转为中英互译）
- * 3. 3 大办公语体版本生成（标准精准直译、商务邮件得体润色、专业术语与词典拆解）
- * 4. 极客命名格式一键转换（camelCase / snake_case / CONSTANT_CASE）与中英双语对照导出
+ * - 翻译只走客户端的 `translator_translate` 接口，插件自己不带词库、不编造译文
+ * - 方向固定为中英互译：输入含中文时译为英语，其余译为中文
+ * - 变量命名：把英文（原文或译文）转成 camelCase / snake_case / CONSTANT_CASE
  */
 import { callHostTransport, isRealElectronHost } from './native-ipc.js';
-export const LANGUAGE_PAIR_OPTIONS = [
-    {
-        id: 'auto->zh-CN',
-        title: '智能中英互译 (自动检测 ⇄ 简体中文/English)',
-        sourceLang: 'auto',
-        targetLang: 'zh-CN'
-    },
-    {
-        id: 'auto->en',
-        title: '自动检测 → 英语 (English)',
-        sourceLang: 'auto',
-        targetLang: 'en'
-    },
-    {
-        id: 'auto->ja',
-        title: '自动检测 → 日语 (日本語)',
-        sourceLang: 'auto',
-        targetLang: 'ja'
-    },
-    {
-        id: 'auto->ko',
-        title: '自动检测 → 韩语 (한국어)',
-        sourceLang: 'auto',
-        targetLang: 'ko'
-    },
-    {
-        id: 'auto->fr',
-        title: '自动检测 → 法语 (Français)',
-        sourceLang: 'auto',
-        targetLang: 'fr'
-    },
-    {
-        id: 'auto->de',
-        title: '自动检测 → 德语 (Deutsch)',
-        sourceLang: 'auto',
-        targetLang: 'de'
-    }
-];
-const LOCAL_OFFICE_PHRASE_DICT = {
-    'hello world': {
-        zh: '你好，世界',
-        en: 'Hello, World',
-        businessEn: 'Greetings to all stakeholders',
-        notes: ['hello: 问候/致意', 'world: 世界/全域']
-    },
-    'please find attached the quarterly financial report for your review.': {
-        zh: '随信附上本季度财务报告，请您审阅。',
-        en: 'Please find attached the quarterly financial report for your review.',
-        businessEn: 'Enclosed herewith is the Q3 financial statement for your kind perusal and approval.',
-        notes: [
-            'please find attached: 商务信函高频固定搭配“随信附上/请查收附件”',
-            'quarterly financial report: 季度财务报告',
-            'for your review: 供您审阅/批示'
-        ]
-    },
-    '随信附上本季度财务报告，请您审阅。': {
-        zh: '随信附上本季度财务报告，请您审阅。',
-        en: 'Please find attached the quarterly financial report for your review.',
-        businessEn: 'I have attached the quarterly financial report for your review and feedback.',
-        notes: [
-            '随信附上: Please find attached / Enclosed please find',
-            '季度财务报告: quarterly financial report',
-            '审阅: review / perusal'
-        ]
-    },
-    '请查收附件': {
-        zh: '请查收附件',
-        en: 'Please find attached',
-        businessEn: 'Please find the requested documents attached herewith.',
-        notes: ['attachment: 附件', 'attached herewith: 随函附上（正式商务用语）']
-    },
-    '期待您的回复': {
-        zh: '期待您的回复',
-        en: 'Looking forward to your reply',
-        businessEn: 'I look forward to hearing from you at your earliest convenience.',
-        notes: ['look forward to: 期待', 'at your earliest convenience: 在您方便时尽早']
-    }
+export const NOT_IN_CLIENT_MESSAGE = '需要在 ZTools 客户端中使用';
+const LANGUAGE_NAMES = {
+    'zh-CN': '中文',
+    en: '英语',
+    ja: '日语',
+    ko: '韩语',
+    ru: '俄语'
 };
+export function languageName(code) {
+    return LANGUAGE_NAMES[code] || code;
+}
 export function detectLanguageLocal(text) {
     const clean = String(text || '').trim();
     if (!clean)
         return 'en';
-    if (/[\u3040-\u30ff]/.test(clean))
+    if (/[぀-ヿ]/.test(clean))
         return 'ja';
-    if (/[\uac00-\ud7af]/.test(clean))
+    if (/[가-힯]/.test(clean))
         return 'ko';
-    if (/[\u0400-\u04ff]/.test(clean))
+    if (/[Ѐ-ӿ]/.test(clean))
         return 'ru';
-    if (/[\u4e00-\u9fa5]/.test(clean))
+    if (/[一-龥]/.test(clean))
         return 'zh-CN';
     return 'en';
 }
 /**
- * 自动语种冲突翻转（Auto-Flip Language Pair）：
- * 当处于 auto 检测模式且识别到的源语言与目标语言相同时，自动在中英之间对向翻转。
+ * 中英互译方向：输入是中文时译为英语，其余译为中文。
  */
-export function resolveEffectiveLanguagePair(text, pairOptionId) {
-    const opt = LANGUAGE_PAIR_OPTIONS.find((o) => o.id === pairOptionId) || LANGUAGE_PAIR_OPTIONS[0];
-    const detected = detectLanguageLocal(text);
-    let target = opt.targetLang;
-    if (opt.sourceLang === 'auto' && detected === target) {
-        target = detected === 'zh-CN' ? 'en' : 'zh-CN';
-    }
-    return {
-        sourceLanguage: detected,
-        targetLanguage: target,
-        pairLabel: `${detected} → ${target}`
-    };
+export function resolveLanguagePair(text) {
+    const sourceLanguage = detectLanguageLocal(text);
+    return { sourceLanguage, targetLanguage: sourceLanguage === 'zh-CN' ? 'en' : 'zh-CN' };
 }
 export function formatIdentifierCase(text, style) {
     const words = String(text || '')
@@ -125,143 +46,103 @@ export function formatIdentifierCase(text, style) {
         .filter(Boolean)
         .map((w) => w.toLowerCase());
     if (words.length === 0)
-        return text.trim();
+        return '';
     if (style === 'snake')
         return words.join('_');
     if (style === 'constant')
         return words.map((w) => w.toUpperCase()).join('_');
-    return words
-        .map((w, idx) => (idx === 0 ? w : w.charAt(0).toUpperCase() + w.slice(1)))
-        .join('');
+    return words.map((w, idx) => (idx === 0 ? w : w.charAt(0).toUpperCase() + w.slice(1))).join('');
 }
-export function buildTranslationVariants(originalText, baseTranslatedText, sourceLanguage, targetLanguage, engineLabel = '本地离线神经词库') {
-    const cleanOrig = String(originalText || '').trim();
-    const lowerKey = cleanOrig.toLowerCase();
-    const matchedPreset = LOCAL_OFFICE_PHRASE_DICT[lowerKey] || LOCAL_OFFICE_PHRASE_DICT[cleanOrig];
-    const isTargetEn = targetLanguage === 'en';
-    const standardText = matchedPreset
-        ? isTargetEn
-            ? matchedPreset.en
-            : matchedPreset.zh
-        : baseTranslatedText || cleanOrig;
-    const businessText = matchedPreset
-        ? isTargetEn
-            ? matchedPreset.businessEn
-            : `您好，${matchedPreset.zh} 如有任何疑问请随时沟通。`
-        : isTargetEn
-            ? `Kindly note: ${standardText}`
-            : `尊敬的合作伙伴：${standardText}`;
-    const glossaryNotes = matchedPreset?.notes ?? [
-        `原文语种: ${sourceLanguage} (${cleanOrig.length} 字符)`,
-        `目标语种: ${targetLanguage} (${standardText.length} 字符)`,
-        `建议命名标识符: ${formatIdentifierCase(isTargetEn ? standardText : cleanOrig, 'camel')}`
-    ];
-    const dictionaryText = isTargetEn
-        ? `${standardText} [Identifier: ${formatIdentifierCase(standardText, 'camel')} / ${formatIdentifierCase(standardText, 'snake')}]`
-        : `${standardText}（核心释义与专业术语对照）`;
-    return [
-        {
-            id: 'variant-standard',
-            styleKey: 'standard',
-            title: standardText,
-            badge: '标准直译',
-            originalText: cleanOrig,
-            translatedText: standardText,
-            sourceLanguage,
-            targetLanguage,
-            engineLabel,
-            glossaryNotes
-        },
-        {
-            id: 'variant-business',
-            styleKey: 'business',
-            title: businessText,
-            badge: '商务润色',
-            originalText: cleanOrig,
-            translatedText: businessText,
-            sourceLanguage,
-            targetLanguage,
-            engineLabel: `${engineLabel} · 商务语体`,
-            glossaryNotes
-        },
-        {
-            id: 'variant-dictionary',
-            styleKey: 'dictionary',
-            title: dictionaryText,
-            badge: '术语精解',
-            originalText: cleanOrig,
-            translatedText: standardText,
-            sourceLanguage,
-            targetLanguage,
-            engineLabel: `${engineLabel} · 词典解析`,
-            glossaryNotes
-        }
-    ];
+/**
+ * 结果里可用来生成变量名的英文：译文是英语时取译文，原文是英语时取原文，都不是返回空串。
+ */
+export function englishTextOf(result) {
+    if (result.targetLanguage === 'en')
+        return result.translatedText;
+    if (result.sourceLanguage === 'en')
+        return result.originalText;
+    return '';
 }
-export async function translateTextWithHost(text, pairOptionId = 'auto->zh-CN', hostOverride) {
+/**
+ * 原文已经是英文时，变量命名不需要翻译，直接用原文生成。
+ */
+export function buildDirectNamingResult(text) {
     const clean = String(text ?? '').trim();
-    if (!clean) {
-        return {
-            ok: false,
-            variants: [],
-            sourceLanguage: 'auto',
-            targetLanguage: 'zh-CN',
-            error: '翻译内容不能为空'
-        };
-    }
-    const { sourceLanguage, targetLanguage } = resolveEffectiveLanguagePair(clean, pairOptionId);
-    const ipcRes = await callHostTransport('translator_translate', {
-        text: clean,
-        sourceLanguage,
-        targetLanguage
-    }, hostOverride);
-    if (ipcRes.ok && ipcRes.data && typeof ipcRes.data.translatedText === 'string') {
-        const engineLabel = ipcRes.data.engine === 'ai'
-            ? 'AI 大模型引擎'
-            : ipcRes.data.engine === 'web'
-                ? '云端神经翻译引擎'
-                : '本地离线词库引擎';
-        const variants = buildTranslationVariants(clean, ipcRes.data.translatedText, ipcRes.data.sourceLanguage || sourceLanguage, ipcRes.data.targetLanguage || targetLanguage, engineLabel);
-        return {
-            ok: true,
-            variants,
-            sourceLanguage: ipcRes.data.sourceLanguage || sourceLanguage,
-            targetLanguage: ipcRes.data.targetLanguage || targetLanguage
-        };
-    }
-    const realHost = Boolean(hostOverride) || isRealElectronHost(hostOverride) || isRealElectronHost();
-    const lowerKey = clean.toLowerCase();
-    const matchedPreset = Boolean(LOCAL_OFFICE_PHRASE_DICT[lowerKey] || LOCAL_OFFICE_PHRASE_DICT[clean]);
-    if (realHost && !matchedPreset) {
-        return {
-            ok: false,
-            variants: [],
-            sourceLanguage,
-            targetLanguage,
-            error: ipcRes.error || '翻译服务调用失败，且本地离线词库未命中'
-        };
-    }
-    const fallbackVariants = buildTranslationVariants(clean, clean, sourceLanguage, targetLanguage, '本地离线词库引擎');
+    if (!clean || detectLanguageLocal(clean) !== 'en' || !formatIdentifierCase(clean, 'camel'))
+        return null;
+    return {
+        originalText: clean,
+        translatedText: clean,
+        sourceLanguage: 'en',
+        targetLanguage: 'en',
+        engineLabel: '原文已是英文，未翻译'
+    };
+}
+function engineLabelOf(engine) {
+    if (engine === 'offline')
+        return '客户端离线词库';
+    if (engine === 'web')
+        return '在线翻译';
+    if (engine === 'ai')
+        return 'AI 翻译';
+    return '客户端翻译接口';
+}
+export async function translateTextWithHost(text, hostOverride) {
+    const clean = String(text ?? '').trim();
+    if (!clean)
+        return { ok: false, error: '翻译内容不能为空' };
+    if (!hostOverride && !isRealElectronHost())
+        return { ok: false, error: NOT_IN_CLIENT_MESSAGE };
+    const { sourceLanguage, targetLanguage } = resolveLanguagePair(clean);
+    const ipcRes = await callHostTransport('translator_translate', { text: clean, sourceLanguage, targetLanguage }, hostOverride);
+    if (!ipcRes.ok)
+        return { ok: false, error: ipcRes.error || '翻译接口调用失败' };
+    const data = ipcRes.data;
+    const translated = data && typeof data.translatedText === 'string' ? data.translatedText.trim() : '';
+    if (!translated)
+        return { ok: false, error: '客户端返回的翻译结果格式无法识别' };
     return {
         ok: true,
-        variants: fallbackVariants,
-        sourceLanguage,
-        targetLanguage
+        result: {
+            originalText: clean,
+            translatedText: translated,
+            sourceLanguage: typeof data.sourceLanguage === 'string' && data.sourceLanguage ? data.sourceLanguage : sourceLanguage,
+            targetLanguage: typeof data.targetLanguage === 'string' && data.targetLanguage ? data.targetLanguage : targetLanguage,
+            engineLabel: engineLabelOf(data.engine)
+        }
     };
 }
 export async function fetchTranslationHistoryFromHost(hostOverride) {
+    if (!hostOverride && !isRealElectronHost())
+        return { ok: false, items: [], error: NOT_IN_CLIENT_MESSAGE };
     const res = await callHostTransport('translator_get_history', {}, hostOverride);
-    if (!res.ok || !res.data || !Array.isArray(res.data.items)) {
-        return [];
+    if (!res.ok)
+        return { ok: false, items: [], error: res.error || '读取翻译记录失败' };
+    if (!res.data || !Array.isArray(res.data.items)) {
+        return { ok: false, items: [], error: '客户端返回的翻译记录格式无法识别' };
     }
-    return res.data.items.slice(0, 15).map((item, idx) => ({
+    const items = res.data.items
+        .filter((item) => typeof item?.originalText === 'string' && typeof item?.translatedText === 'string')
+        .slice(0, 15)
+        .map((item, idx) => ({
         id: String(item.id ?? `hist-${idx}`),
-        originalText: String(item.originalText ?? ''),
-        translatedText: String(item.translatedText ?? ''),
-        sourceLanguage: String(item.sourceLanguage ?? 'en'),
-        targetLanguage: String(item.targetLanguage ?? 'zh-CN'),
+        originalText: String(item.originalText),
+        translatedText: String(item.translatedText),
+        sourceLanguage: String(item.sourceLanguage ?? ''),
+        targetLanguage: String(item.targetLanguage ?? ''),
         timestampText: typeof item.timestamp === 'number'
             ? new Date(item.timestamp).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })
-            : '刚刚'
+            : ''
     }));
+    return { ok: true, items };
+}
+/**
+ * 把客户端的报错整理成给用户看的说明。客户端离线词库查不到时只返回通用的内部错误，插件无法与其他失败区分，
+ * 所以在原因后面说明词库收录有限。
+ */
+export function describeTranslateError(error) {
+    const reason = String(error || '').trim() || '未知原因';
+    if (reason === NOT_IN_CLIENT_MESSAGE || reason === '翻译内容不能为空')
+        return reason;
+    return `客户端返回：${reason}。当前只查客户端内置的少量中英词条，未收录的内容无法翻译`;
 }

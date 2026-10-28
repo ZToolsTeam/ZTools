@@ -1,6 +1,18 @@
 <script setup>
+import { ArrowUpOutlined, DeleteOutlined, DownloadOutlined, EllipsisOutlined, ExportOutlined, LoadingOutlined, MessageOutlined, PlayCircleOutlined, ReloadOutlined, StarFilled, StarOutlined, StopOutlined } from '@ant-design/icons-vue'
+import BrandGlyph from '@/components/base/BrandGlyph.vue'
 defineProps({
   isInstalled: Boolean,
+  // 内置插件随客户端提供，不能卸载
+  canUninstall: {
+    type: Boolean,
+    default: true
+  },
+  // 桌面快捷方式只有 Windows 支持
+  canCreateShortcut: {
+    type: Boolean,
+    default: true
+  },
   hasUpdate: Boolean,
   downloading: Boolean,
   creatingShortcut: Boolean,
@@ -50,7 +62,7 @@ defineEmits([
   <div class="flex flex-wrap items-center justify-end gap-2">
     <a-tooltip v-if="commentsCount !== null" title="查看留言" placement="top">
       <a-button type="default" @click="$emit('show-comments')">
-        <i class="fa fa-comments-o mr-1"></i>
+        <MessageOutlined class="mr-1" />
         <span>{{ commentsCount }}</span>
       </a-button>
     </a-tooltip>
@@ -62,7 +74,7 @@ defineEmits([
         disabled
         style="opacity: 0.6; color: var(--rc-error); border-color: var(--rc-error);"
       >
-        <i class="fa fa-ban mr-2"></i> 已下架
+        <StopOutlined class="mr-2" /> 已下架
       </a-button>
     </a-tooltip>
 
@@ -72,7 +84,7 @@ defineEmits([
       type="primary"
       @click="$emit('open')"
     >
-      <i class="fa fa-play mr-2"></i> 打开
+      <PlayCircleOutlined class="mr-2" /> 打开
     </a-button>
 
     <!-- 已安装且有更新：更新 -->
@@ -82,7 +94,7 @@ defineEmits([
       :loading="downloading"
       @click="$emit('update')"
     >
-      <i v-if="!downloading" class="fa fa-arrow-up mr-2"></i>
+      <ArrowUpOutlined v-if="!downloading" class="mr-2" />
       {{
         downloading
           ? downloadPhase === 'library'
@@ -101,7 +113,7 @@ defineEmits([
         danger
         @click="$emit('download')"
       >
-        <i class="fa fa-refresh mr-2"></i> 重试
+        <ReloadOutlined class="mr-2" /> 重试
       </a-button>
     </a-tooltip>
 
@@ -112,7 +124,7 @@ defineEmits([
       :loading="downloading"
       @click="$emit('download')"
     >
-      <i v-if="!downloading" class="fa fa-download mr-2"></i>
+      <DownloadOutlined v-if="!downloading" class="mr-2" />
       {{
         downloading
           ? downloadPhase === 'library'
@@ -128,33 +140,31 @@ defineEmits([
       :class="{ 'is-favorite': isFavorite }"
       @click="$emit('toggle-favorite')"
     >
-      <i class="fa" :class="isFavorite ? 'fa-star' : 'fa-star-o'"></i>
+      <component :is="isFavorite ? StarFilled : StarOutlined" aria-hidden="true" />
     </a-button>
     <a-dropdown v-if="isInstalled" :trigger="['click']" placement="bottomRight">
       <a-button type="default" title="更多操作">
-        <i class="fa fa-ellipsis-h"></i>
+        <EllipsisOutlined  />
       </a-button>
       <template #overlay>
         <a-menu class="plugin-actions-menu min-w-[180px]">
           <a-menu-item key="hotkey" @click="$emit('set-hotkey')">
-            <i class="fa fa-keyboard-o mr-2"></i>
+            <BrandGlyph kind="keyboard" :size="14" class="mr-2" />
             <span>{{ hotkeyText ? `快捷键：${hotkeyText}` : '设置快捷键' }}</span>
           </a-menu-item>
           <a-menu-item
+            v-if="canCreateShortcut"
             key="shortcut"
             :disabled="creatingShortcut"
             @click="$emit('create-shortcut')"
           >
-            <i
-              class="fa mr-2"
-              :class="creatingShortcut ? 'fa-spinner fa-spin' : 'fa-share-square-o'"
-            ></i>
+            <component :is="creatingShortcut ? LoadingOutlined : ExportOutlined" class="mr-2" aria-hidden="true" />
             <span>{{ creatingShortcut ? '正在生成...' : '生成桌面快捷方式' }}</span>
           </a-menu-item>
-          <a-menu-divider />
-          <a-menu-item key="uninstall" @click="$emit('uninstall')">
+          <a-menu-divider v-if="canUninstall" />
+          <a-menu-item v-if="canUninstall" key="uninstall" @click="$emit('uninstall')">
             <span class="text-[var(--rc-error)]">
-              <i class="fa fa-trash-o mr-2"></i>
+              <DeleteOutlined class="mr-2" />
               卸载
             </span>
           </a-menu-item>
@@ -166,7 +176,7 @@ defineEmits([
 
 <style scoped>
 /* 已收藏：星标点亮为余烬橙，按钮本身保持中性 */
-.is-favorite :deep(.fa) {
+.is-favorite :deep(.anticon) {
   color: var(--rc-accent);
 }
 

@@ -1,3 +1,14 @@
+import { buildDevelopmentStartup } from './build-macos-startup.mjs'
+import { buildDevelopmentNetwork } from './build-macos-network.mjs'
+import { buildDevelopmentHotkeys } from './build-macos-hotkeys.mjs'
+import { buildDevelopmentHosts } from './build-macos-hosts.mjs'
+import { buildDevelopmentPathAccess } from './build-macos-path-access.mjs'
+import { buildDevelopmentVision } from './build-macos-vision.mjs'
+import { buildDevelopmentAudio } from './build-macos-audio.mjs'
+import { buildDevelopmentDisplay } from './build-macos-display.mjs'
+import { buildDevelopmentDns } from './build-macos-dns.mjs'
+import { buildDevelopmentInputLock } from './build-macos-input-lock.mjs'
+import { buildDevelopmentClipboard } from './build-macos-clipboard.mjs'
 import { spawnSync } from 'node:child_process'
 import { readNativeHostManifest } from './native-host-manifest.mjs'
 import { buildRuntimeCapabilityPromptPreload, buildSandboxPreload } from './build-sandbox-preload.mjs'
@@ -39,6 +50,17 @@ for (const removed of removeStaleEditionOutputs(root)) {
 
 // 先编译主进程，构建期后台地址解析复用编译后的 runtime/build-config.js，保证与运行时校验规则一致
 run(['exec', '--', 'tsc', '-p', 'tsconfig.json'], root)
+buildDevelopmentAudio(root)
+buildDevelopmentDisplay(root)
+buildDevelopmentInputLock(root)
+buildDevelopmentClipboard(root)
+buildDevelopmentDns(root)
+buildDevelopmentHosts(root)
+buildDevelopmentStartup(root)
+buildDevelopmentNetwork(root)
+buildDevelopmentHotkeys(root)
+buildDevelopmentVision(root)
+buildDevelopmentPathAccess(root)
 
 // 官方构建：闭源主进程产物原地压缩并去掉注释与源码映射，发行包不带可直接阅读的闭源源码
 if (hasCommercialMainSource(root)) {

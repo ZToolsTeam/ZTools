@@ -15,6 +15,7 @@ export interface ZToolsDeclarativeBridge {
   /** 清空系统剪贴板 */
   clearClipboard?: () => Promise<void>;
   readClipboardText?: () => Promise<string>;
+  /** 宿主负责复制并粘贴；无法发送粘贴时必须拒绝，不能仅复制后返回成功。 */
   pasteToActive?: (text: string | number) => Promise<void>;
   manageWindow?: (action: string) => Promise<boolean>;
   storageGetItem?: (key: string) => Promise<any>;

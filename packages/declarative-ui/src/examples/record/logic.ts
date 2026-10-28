@@ -125,8 +125,8 @@ export const INITIAL_RECORDED_VIDEOS: RecordedVideoItem[] = [
   {
     id: 'rec-vid-3',
     name: 'Bug_Repro_Window_Snap_Animation.gif',
-    path: 'C:\\Users\\Geek\\Videos\\Bug_Repro_Window_Snap_Animation.gif',
-    parentDir: 'C:\\Users\\Geek\\Videos',
+    path: 'D:\\Workspace\\Videos\\Bug_Repro_Window_Snap_Animation.gif',
+    parentDir: 'D:\\Workspace\\Videos',
     extension: '.gif',
     sizeBytes: 14 * 1024 * 1024,
     durationText: '00:16',
@@ -147,8 +147,8 @@ export const INITIAL_RECORDED_VIDEOS: RecordedVideoItem[] = [
   {
     id: 'rec-vid-5',
     name: 'Terminal_MFT_Search_Benchmark_Clip.mp4',
-    path: 'C:\\Users\\Geek\\Desktop\\Terminal_MFT_Search_Benchmark_Clip.mp4',
-    parentDir: 'C:\\Users\\Geek\\Desktop',
+    path: 'D:\\Workspace\\Desktop\\Terminal_MFT_Search_Benchmark_Clip.mp4',
+    parentDir: 'D:\\Workspace\\Desktop',
     extension: '.mp4',
     sizeBytes: 42 * 1024 * 1024,
     durationText: '01:12',

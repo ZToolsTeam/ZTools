@@ -114,6 +114,8 @@ function hostError(code, message = code) {
 }
 
 async function settle() {
+  // 同窗口兜底会懒加载窗口 API；仅清空 Promise 队列不保证模块已加载完成。
+  await vi.dynamicImportSettled()
   for (let i = 0; i < 8; i++) {
     await flushPromises()
     await nextTick()

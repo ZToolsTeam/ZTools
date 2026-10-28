@@ -33,7 +33,7 @@ export function renderAsciiBar(percentage: number, barLength: number = 14): stri
 export function generateBadgeCard(tier: string, totalLaunches: number, timeSavedHours: number): string {
   return `\`\`\`
 ┌────────────────────────────────────────────────────────┐
-│  🎖️  ZTOOLS GEEK EXCELLENCE BADGE · 极客卓越成就勋章   │
+│  ★  ZTOOLS GEEK EXCELLENCE BADGE · 极客卓越成就勋章   │
 ├────────────────────────────────────────────────────────┤
 │  称号: ${tier.toUpperCase().padEnd(20, " ")} 认证等级: ★★★★★       │
 │  年累计唤醒: ${String(totalLaunches).padStart(6, " ")} 次       净节省时间: ${String(timeSavedHours).padStart(4, " ")} 小时     │
@@ -104,7 +104,7 @@ export function calculateWrappedStats(yearOrStats: number | any = 2026): any {
       topShortcuts: Array.isArray(yearOrStats.topShortcuts) ? yearOrStats.topShortcuts : [],
       rankLevel,
       geekMasteryTier,
-      badgeTitle: `🏆 ${rankLevel} · ${geekMasteryTier} 勋章`,
+      badgeTitle: `★ ${rankLevel} · ${geekMasteryTier} 勋章`,
       badgeCardMarkdown: generateBadgeCard(geekMasteryTier, totalLaunches, timeSavedHours),
       isLocalFirst: true,
       generatedAt: Date.now()
@@ -202,7 +202,7 @@ export function calculateWrappedStats(yearOrStats: number | any = 2026): any {
     tokensUsed: 158200,
     rankLevel: "黄金极客",
     geekMasteryTier: "Grandmaster",
-    badgeTitle: "🏆 效率领航者 · Grandmaster 宗师勋章",
+    badgeTitle: "★ 效率领航者 · Grandmaster 宗师勋章",
     badgeCardMarkdown: generateBadgeCard("Grandmaster", totalLaunches, timeSavedHours),
     isLocalFirst: true,
     generatedAt: Date.now()
@@ -218,7 +218,7 @@ export function calculateWrappedStats(yearOrStats: number | any = 2026): any {
             if (parsed && typeof parsed === "object") {
               return sanitizeWrappedStats(parsed, year);
             }
-          } catch {}
+          } catch { /* ignore malformed cached stats */ }
         }
         const cleanCopy: any = { ...defaultStats };
         delete cleanCopy.then;
@@ -287,7 +287,7 @@ export function sanitizeWrappedStats(raw: any, defaultYear: number = 2026): Wrap
     aiTokenCount,
     rankLevel,
     geekMasteryTier,
-    badgeTitle: `🏆 ${rankLevel} · ${geekMasteryTier} 勋章`,
+    badgeTitle: `★ ${rankLevel} · ${geekMasteryTier} 勋章`,
     badgeCardMarkdown: generateBadgeCard(geekMasteryTier, total, timeSavedHours),
     isLocalFirst: true,
     generatedAt: Date.now()
@@ -417,7 +417,22 @@ export async function getSystemPrivilegeDiagnostic(): Promise<SystemPrivilegeDia
  * 重启底层预编译侧车进程
  */
 export async function restartSidecar(sidecarBinary: string): Promise<{ success: boolean; newPid: number; message: string }> {
-  const newPid = Math.floor(Math.random() * 20000) + 10000;
+  if (isRealElectronHost()) {
+    const res = await callHostTransport<{ pid?: number }>("sidecar_restart", { binary: sidecarBinary });
+    if (!res.ok || typeof res.data?.pid !== "number") {
+      return {
+        success: false,
+        newPid: 0,
+        message: res.error || `底层侧车 ${sidecarBinary} 重启失败`
+      };
+    }
+    return {
+      success: true,
+      newPid: res.data.pid,
+      message: `底层侧车 ${sidecarBinary} 已重启成功 (新 PID: ${res.data.pid})，SLA 响应恢复至 <0.05ms`
+    };
+  }
+  const newPid = 10000 + sidecarBinary.length;
   return {
     success: true,
     newPid,

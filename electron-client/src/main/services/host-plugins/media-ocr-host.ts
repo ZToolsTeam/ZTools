@@ -1,4 +1,4 @@
-import { spawn } from 'node:child_process'
+import { spawn, type ChildProcess, type SpawnOptions } from 'node:child_process'
 import fsSync from 'node:fs'
 import fs from 'node:fs/promises'
 import os from 'node:os'
@@ -15,31 +15,174 @@ import {
   mergePdfBuffers,
   optimizePdfBuffer,
   processSingleImageFile,
-  runCommand,
-  runPowerShell,
+  resolveHostSystemCommands,
   type ActiveRecordingSession,
-  type HostPluginContext
+  type HostPluginContext,
+  type HostSystemCommands,
+  escapePsSingleQuoted
 } from './shared-utils.js'
+
+/** 媒体与识别处理器的系统依赖：生产用真实实现，测试经构造参数注入替身（插件调用参数无法切换） */
+export interface MediaOcrHostDeps extends HostSystemCommands {
+  /** 截取整屏并保存为 PNG，返回是否真的写出了文件 */
+  captureScreenToPng: typeof captureScreenToPng
+  /** 启动长时间运行的 ffmpeg 录制进程 */
+  spawnProcess: (command: string, args: readonly string[], options: SpawnOptions) => ChildProcess
+  /** 调用方窗口关闭时回调 onClosed，返回取消监听的函数（用于插件窗口关闭后收尾录制） */
+  watchCallerClosed: (caller: CallerIdentity | undefined, onClosed: () => void) => () => void
+}
+
+/** 批量图片旧接口真实支持的缩放预设（JS PNG 路径、GDI+ 脚本、ffmpeg 兜底三处都实现了），其余取值一律拒绝 */
+const IMAGE_RESIZE_PRESETS = new Set(['source', 'scale50', 'max1920', 'max1280', 'ico256'])
+/** 调用方可指定的输出格式 → 输出扩展名（ico 沿用旧行为：输出 256 以内的 PNG） */
+const IMAGE_OUTPUT_FORMAT_EXT: Readonly<Record<string, string>> = {
+  png: '.png',
+  jpg: '.jpg',
+  jpeg: '.jpg',
+  webp: '.webp',
+  bmp: '.bmp',
+  gif: '.gif',
+  tif: '.tiff',
+  tiff: '.tiff',
+  ico: '.png'
+}
+/** GDI+ 能编码的扩展名 → 脚本里的编码器标识；不在表里的（webp）只能交给 ffmpeg */
+const GDI_IMAGE_ENCODERS: Readonly<Record<string, string>> = {
+  '.png': 'png',
+  '.jpg': 'jpeg',
+  '.jpeg': 'jpeg',
+  '.bmp': 'bmp',
+  '.gif': 'gif',
+  '.tif': 'tiff',
+  '.tiff': 'tiff'
+}
+/** ffmpeg 兜底额外支持编码的扩展名 */
+const FFMPEG_ONLY_IMAGE_EXTS = new Set(['.webp'])
+
+function isSupportedImageOutputExt(ext: string): boolean {
+  return ext in GDI_IMAGE_ENCODERS || FFMPEG_ONLY_IMAGE_EXTS.has(ext)
+}
+
+/** 同一种格式的不同写法视为一致（.jpeg 与 .jpg、.tif 与 .tiff） */
+function canonicalImageExt(ext: string): string {
+  const lower = ext.toLowerCase()
+  return lower === '.jpeg' ? '.jpg' : lower === '.tif' ? '.tiff' : lower
+}
+
+/** ffmpeg 兜底时按同样的缩放预设、灰阶与画质参数编码，不能只做格式转换却报告已按预设处理 */
+function buildFfmpegImageArgs(
+  src: string,
+  out: string,
+  options: { resizePreset: string; isGrayscale: boolean; targetExt: string; jpegQuality: number }
+): string[] {
+  const filters: string[] = []
+  // 参数直接经 spawn 传给 ffmpeg（不经 shell），滤镜参数里的逗号按 ffmpeg 语法写成 \,
+  if (options.resizePreset === 'scale50') {
+    filters.push('scale=w=max(1\\,trunc(iw/2)):h=max(1\\,trunc(ih/2))')
+  } else if (options.resizePreset === 'max1920' || options.resizePreset === 'max1280') {
+    const edge = options.resizePreset === 'max1920' ? 1920 : 1280
+    filters.push(`scale=w=min(iw\\,${edge}):h=min(ih\\,${edge}):force_original_aspect_ratio=decrease`)
+  } else if (options.resizePreset === 'ico256') {
+    filters.push('scale=w=min(iw\\,256):h=min(ih\\,256)')
+  }
+  if (options.isGrayscale) filters.push('hue=s=0')
+  const args = ['-y', '-hide_banner', '-loglevel', 'error', '-i', src]
+  if (filters.length > 0) args.push('-vf', filters.join(','))
+  const ext = canonicalImageExt(options.targetExt)
+  if (ext === '.jpg') {
+    // mjpeg 的 -q:v 取 2~31，越小画质越高
+    const q = options.jpegQuality >= 100 ? 1 : options.jpegQuality >= 95 ? 2 : options.jpegQuality >= 85 ? 3 : 6
+    args.push('-q:v', String(q))
+  } else if (ext === '.webp') {
+    args.push('-q:v', String(options.jpegQuality))
+  }
+  args.push('-frames:v', '1', out)
+  return args
+}
+
+/** 默认的调用方窗口关闭监听：Electron 主进程里按 webContentsId 监听 destroyed；拿不到 Electron（单元测试）时不监听 */
+function watchCallerWebContentsClosed(caller: CallerIdentity | undefined, onClosed: () => void): () => void {
+  const noop = (): void => undefined
+  if (!caller || !Number.isInteger(caller.webContentsId) || caller.webContentsId <= 0) return noop
+  let electronModule: typeof import('electron') | undefined
+  try {
+    electronModule = require('electron') as typeof import('electron')
+  } catch (err) {
+    console.warn('[MediaOcrHost] 无法加载 Electron，录制不会随调用方窗口关闭自动收尾:', err)
+    return noop
+  }
+  const fromId = electronModule?.webContents?.fromId
+  if (typeof fromId !== 'function') return noop
+  const contents = fromId.call(electronModule.webContents, caller.webContentsId)
+  if (!contents || contents.isDestroyed()) {
+    // 调用方窗口已经不在了：立即收尾，不能让录制无人停止
+    setImmediate(onClosed)
+    return noop
+  }
+  contents.once('destroyed', onClosed)
+  return () => {
+    contents.removeListener('destroyed', onClosed)
+  }
+}
+
+/** ffmpeg 启动后观察这么久仍在运行才算录制已开始（参数或输出格式错误时 ffmpeg 会立即退出） */
+const FFMPEG_START_PROBE_MS = 800
+/** 发送 q 后等待 ffmpeg 写完文件尾并退出的时间 */
+const FFMPEG_STOP_TIMEOUT_MS = 5_000
+/** 宿主关闭时等待录制收尾的时间 */
+const FFMPEG_SHUTDOWN_TIMEOUT_MS = 3_000
+
+/** 正在运行的 ffmpeg 录制：先写同目录临时文件，正常结束后才替换目标文件 */
+interface FfmpegRecordingRun {
+  child: ChildProcess
+  tempPath: string
+  /** 进程退出或启动失败时完成，不会 reject */
+  exit: Promise<{ code: number | null; error?: string }>
+  stderrTail: () => string
+}
+
+function errorText(err: unknown): string {
+  return err instanceof Error ? err.message : String(err)
+}
+
+/** 在限定时间内等待 promise，超时返回 null，并清掉计时器（不让悬挂的定时器拖住进程） */
+async function waitWithin<T>(promise: Promise<T>, ms: number): Promise<T | null> {
+  let timer: NodeJS.Timeout | undefined
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<null>((resolve) => {
+        timer = setTimeout(() => resolve(null), ms)
+      })
+    ])
+  } finally {
+    clearTimeout(timer)
+  }
+}
 
 export class MediaOcrHostPluginHandler {
   readonly #ctx: HostPluginContext
+  readonly #sys: HostSystemCommands
+  readonly #captureScreenToPng: typeof captureScreenToPng
+  readonly #spawnProcess: MediaOcrHostDeps['spawnProcess']
+  readonly #watchCallerClosed: MediaOcrHostDeps['watchCallerClosed']
   readonly #activeRecordings = new Map<string, ActiveRecordingSession>()
+  readonly #ffmpegRuns = new Map<string, FfmpegRecordingRun>()
+  /** 录制会话对应的“调用方窗口关闭”监听的取消函数 */
+  readonly #callerWatches = new Map<string, () => void>()
 
-  constructor(ctx: HostPluginContext) {
+  constructor(ctx: HostPluginContext, deps: Partial<MediaOcrHostDeps> = {}) {
     this.#ctx = ctx
+    this.#sys = resolveHostSystemCommands(deps)
+    this.#captureScreenToPng = deps.captureScreenToPng ?? captureScreenToPng
+    this.#spawnProcess = deps.spawnProcess ?? ((command, args, options) => spawn(command, [...args], options))
+    this.#watchCallerClosed = deps.watchCallerClosed ?? watchCallerWebContentsClosed
   }
 
   async stop(): Promise<void> {
-    for (const session of this.#activeRecordings.values()) {
-      if (session.childProcess) {
-        try {
-          session.childProcess.kill('SIGINT')
-        } catch {
-          // ignore
-        }
-      }
-    }
-    this.#activeRecordings.clear()
+    // 宿主关闭时让 ffmpeg 正常收尾（直接结束进程会留下缺少文件尾、无法播放的视频）
+    const sessions = Array.from(this.#activeRecordings.values())
+    await Promise.all(sessions.map((session) => this.#finalizeRecording(session, FFMPEG_SHUTDOWN_TIMEOUT_MS)))
   }
 
   async handleOcr(
@@ -65,7 +208,7 @@ export class MediaOcrHostPluginHandler {
 
       if (isCaptureAndRecognize && !rawImagePath) {
         const tempCapturePath = path.join(os.tmpdir(), `ztools_ocr_capture_${Date.now()}.png`)
-        const captured = await captureScreenToPng(tempCapturePath, signal)
+        const captured = await this.#captureScreenToPng(tempCapturePath, signal)
         if (!captured || !fsSync.existsSync(tempCapturePath)) {
           return {
             ok: false,
@@ -114,10 +257,11 @@ export class MediaOcrHostPluginHandler {
               : rawLang.replace(/[^a-zA-Z0-9-]/g, '')
         : ''
 
+      let windowsOcrIssue = ''
       try {
         if (process.platform === 'win32') {
-          const escapedPath = targetPath.replace(/'/g, "''")
-          const escapedLang = normalizedWinLang.replace(/'/g, "''")
+          const escapedPath = escapePsSingleQuoted(targetPath)
+          const escapedLang = escapePsSingleQuoted(normalizedWinLang)
           const psScript = `
             $ErrorActionPreference = 'Stop'
             Add-Type -AssemblyName System.Runtime.WindowsRuntime
@@ -159,7 +303,13 @@ export class MediaOcrHostPluginHandler {
               lines = $lines
             } | ConvertTo-Json -Compress
           `
-          const out = await runPowerShell(psScript, 20_000, signal)
+          // Windows.Media.Ocr 失败（脚本报错、超时、输出异常）只记下原因，继续尝试 tesseract，不能直接抛给调用方
+          let out = ''
+          try {
+            out = await this.#sys.runPowerShell(psScript, 20_000, signal)
+          } catch (err) {
+            windowsOcrIssue = errorText(err)
+          }
           if (out) {
             try {
               const parsed = JSON.parse(out) as { text?: string; lines?: string[] }
@@ -173,14 +323,16 @@ export class MediaOcrHostPluginHandler {
                   engine: 'Windows.Media.Ocr'
                 }
               }
+              windowsOcrIssue = '未识别到文字'
             } catch (err) {
               console.warn('[MediaOcrHost] Windows.Media.Ocr output JSON parse failed:', err)
-              return {
-                ok: false,
-                success: false,
-                error: 'OCR 引擎输出格式异常'
-              }
+              windowsOcrIssue = `输出格式异常（${errorText(err)}）`
             }
+          } else if (!windowsOcrIssue) {
+            windowsOcrIssue = '没有输出'
+          }
+          if (signal?.aborted) {
+            return { ok: false, success: false, error: 'OCR 识别已取消' }
           }
         }
 
@@ -189,7 +341,7 @@ export class MediaOcrHostPluginHandler {
             ? 'eng'
             : 'chi_sim+eng'
           : 'chi_sim+eng'
-        const tesseract = await runCommand('tesseract', [targetPath, 'stdout', '-l', tesseractLang], 15_000, signal)
+        const tesseract = await this.#sys.runCommand('tesseract', [targetPath, 'stdout', '-l', tesseractLang], 15_000, signal)
         if (tesseract.exitCode === 0 && tesseract.stdout.trim()) {
           const text = tesseract.stdout.trim()
           return {
@@ -200,11 +352,18 @@ export class MediaOcrHostPluginHandler {
             engine: 'Tesseract-CLI'
           }
         }
+        const tesseractIssue =
+          tesseract.exitCode === 0
+            ? '未识别到文字'
+            : `退出码 ${tesseract.exitCode}${tesseract.stderr.trim() ? `：${tesseract.stderr.trim().slice(0, 300)}` : ''}`
+        const reasons = [windowsOcrIssue ? `Windows.Media.Ocr：${windowsOcrIssue}` : '', `Tesseract：${tesseractIssue}`]
+          .filter(Boolean)
+          .join('；')
 
         return {
           ok: false,
           success: false,
-          error: '未检测到有效文字区域或 OCR 识别失败'
+          error: `未检测到有效文字区域或 OCR 识别失败（${reasons}）`
         }
       } finally {
         if (tempCreated) {
@@ -228,7 +387,7 @@ export class MediaOcrHostPluginHandler {
   ): Promise<unknown> {
     const lowerFn = fn.toLowerCase()
     if (lowerFn === 'pickcolor' || lowerFn === 'getcursorcolor' || lowerFn === 'samplepixel' || lowerFn === 'pick') {
-      if (process.platform !== 'win32' || params.__simulateSampleFailure === true) {
+      if (process.platform !== 'win32') {
         return {
           ok: false,
           success: false,
@@ -239,6 +398,10 @@ export class MediaOcrHostPluginHandler {
       const reqX = Number(params.x ?? 0)
       const reqY = Number(params.y ?? 0)
       const hasCoord = typeof params.x === 'number' && typeof params.y === 'number'
+      // 坐标取整后插入脚本，只接受有限数字；NaN / Infinity 如实报错，不能改取鼠标位置冒充指定坐标的颜色
+      if (hasCoord && (!Number.isFinite(reqX) || !Number.isFinite(reqY))) {
+        return { ok: false, success: false, error: '屏幕像素采样失败：坐标必须是有限数字' }
+      }
       const psScript = `
         $ErrorActionPreference = 'Stop'
         Add-Type -AssemblyName System.Windows.Forms
@@ -258,7 +421,13 @@ export class MediaOcrHostPluginHandler {
           b = [int]$pixel.B
         } | ConvertTo-Json -Compress
       `
-      const raw = await runPowerShell(psScript, 8_000, signal)
+      // PowerShell 失败（非零退出、超时）同样如实返回采样失败，不能抛给调用方当成未知异常
+      let raw: string
+      try {
+        raw = await this.#sys.runPowerShell(psScript, 8_000, signal)
+      } catch (err) {
+        return { ok: false, success: false, error: `屏幕像素采样失败：${err instanceof Error ? err.message : String(err)}` }
+      }
       if (!raw) {
         return {
           ok: false,
@@ -273,14 +442,15 @@ export class MediaOcrHostPluginHandler {
       let g: number
       let b: number
       try {
-        const parsed = JSON.parse(raw) as { x?: number; y?: number; r?: number; g?: number; b?: number }
+        const parsed = JSON.parse(raw) as { x?: unknown; y?: unknown; r?: unknown; g?: unknown; b?: unknown }
+        // 坐标同样只取采样脚本实际读到的值：缺失时不能拿请求坐标或 0 顶替
+        const isFiniteNumber = (v: unknown): v is number => typeof v === 'number' && Number.isFinite(v)
         if (
-          typeof parsed.r !== 'number' ||
-          typeof parsed.g !== 'number' ||
-          typeof parsed.b !== 'number' ||
-          !Number.isFinite(parsed.r) ||
-          !Number.isFinite(parsed.g) ||
-          !Number.isFinite(parsed.b)
+          !isFiniteNumber(parsed.r) ||
+          !isFiniteNumber(parsed.g) ||
+          !isFiniteNumber(parsed.b) ||
+          !isFiniteNumber(parsed.x) ||
+          !isFiniteNumber(parsed.y)
         ) {
           return {
             ok: false,
@@ -288,8 +458,8 @@ export class MediaOcrHostPluginHandler {
             error: '屏幕像素采样失败'
           }
         }
-        x = Number(parsed.x ?? reqX)
-        y = Number(parsed.y ?? reqY)
+        x = parsed.x
+        y = parsed.y
         r = parsed.r
         g = parsed.g
         b = parsed.b
@@ -340,30 +510,17 @@ export class MediaOcrHostPluginHandler {
           : path.join(baseOutDir, `screenshot-${Date.now()}.png`)
       const resolvedOutput = await this.#ctx.authorizeOutputPath(rawOutputPath, caller)
       await fs.mkdir(path.dirname(resolvedOutput), { recursive: true })
-      await captureScreenToPng(resolvedOutput, signal)
-      // [S-1] 严禁在抓屏失败时写入 320x180 灰色假 PNG
-      if (!fsSync.existsSync(resolvedOutput)) {
-        return {
-          ok: false,
-          success: false,
-          error: '屏幕录制或抓图失败，未生成有效输出文件'
-        }
-      }
-      const stat = await fs.stat(resolvedOutput)
-      if (stat.size === 0) {
-        await fs.unlink(resolvedOutput).catch(() => undefined)
-        return {
-          ok: false,
-          success: false,
-          error: '屏幕录制或抓图失败，未生成有效输出文件'
-        }
+      // [S-1] 严禁在抓屏失败时写入 320x180 灰色假 PNG；目标位置已有的旧文件也不能当成本次截图结果
+      const frame = await this.#captureFrameTo(resolvedOutput, signal)
+      if (!frame.ok) {
+        return { ok: false, success: false, error: frame.error }
       }
       return {
         ok: true,
         success: true,
         outputPath: resolvedOutput,
-        sizeBytes: stat.size,
-        sizeText: formatBytes(stat.size)
+        sizeBytes: frame.sizeBytes,
+        sizeText: formatBytes(frame.sizeBytes)
       }
     }
 
@@ -397,51 +554,90 @@ export class MediaOcrHostPluginHandler {
       await fs.mkdir(path.dirname(resolvedOutput), { recursive: true })
       const fps = Number(params.fps) || 30
       const sessionId = `rec-${Date.now()}`
-      const isPngSingleCapture = resolvedOutput.toLowerCase().endsWith('.png')
+      const startFailed = (error: string, errorCode?: string) => ({
+        ok: false,
+        success: false,
+        recording: false,
+        outputPath: resolvedOutput,
+        ...(errorCode ? { errorCode } : {}),
+        error
+      })
 
-      let childProcess: ReturnType<typeof spawn> | undefined
-      const disableFfmpeg =
-        params.__simulateCaptureFailure === true ||
-        params.__simulateNoFfmpeg === true ||
-        process.env.ZTOOLS_DISABLE_FFMPEG === '1'
-
-      if (!disableFfmpeg) {
-        const ffmpegCheck = await runCommand('ffmpeg', ['-version'], 4_000, signal)
-        if (ffmpegCheck.exitCode === 0 && process.platform === 'win32') {
-          try {
-            childProcess = spawn(
-              'ffmpeg',
-              ['-y', '-f', 'gdigrab', '-framerate', String(fps), '-i', 'desktop', '-t', '60', resolvedOutput],
-              { windowsHide: true, stdio: 'ignore' }
-            )
-          } catch {
-            childProcess = undefined
-          }
-        }
-
-        if (!childProcess && isPngSingleCapture) {
-          await captureScreenToPng(resolvedOutput, signal)
-        }
-      }
-
-      if (!childProcess && !isPngSingleCapture) {
+      // PNG 单帧模式：开始时就抓一帧，失败直接返回错误，不进入录制状态，也不留下临时文件
+      if (resolvedOutput.toLowerCase().endsWith('.png')) {
+        const frame = await this.#captureFrameTo(resolvedOutput, signal)
+        if (!frame.ok) return startFailed(frame.error)
+        this.#activeRecordings.set(sessionId, { id: sessionId, type, outputPath: resolvedOutput, startedAt: Date.now(), fps })
         return {
-          ok: false,
-          success: false,
-          recording: false,
-          error: '本机未检测到 ffmpeg，无法启动屏幕视频或音频录制'
+          ok: true,
+          success: true,
+          recording: true,
+          sessionId,
+          outputPath: resolvedOutput,
+          sizeBytes: frame.sizeBytes,
+          startedAt: new Date().toISOString()
         }
       }
 
-      // [S-1] 彻底移除 320x180 灰色假 PNG 兜底逻辑
+      // gdigrab 只能抓屏幕画面，旧接口从未实现录音；以前会“开始成功”，到停止时才因输出无效失败
+      if (type === 'audio') {
+        return startFailed('旧录制接口只能录制屏幕画面，不支持单独录音', 'UNSUPPORTED_ACTION')
+      }
+      const ffmpegCheck =
+        process.env.ZTOOLS_DISABLE_FFMPEG === '1'
+          ? { exitCode: 1, stdout: '', stderr: 'disabled' }
+          : await this.#sys.runCommand('ffmpeg', ['-version'], 4_000, signal)
+      if (ffmpegCheck.exitCode !== 0) {
+        return startFailed('本机未检测到 ffmpeg，无法启动屏幕视频或音频录制')
+      }
+      if (process.platform !== 'win32') {
+        return startFailed('旧录制接口只支持在 Windows 上用 ffmpeg 录制屏幕视频')
+      }
+
+      const parsedOut = path.parse(resolvedOutput)
+      const tempPath = path.join(parsedOut.dir, `.${parsedOut.name}.ztools-recording-${Date.now()}${parsedOut.ext}`)
+      // 不加 -t 时长上限：以前带 -t 60，超过 60 秒的录制被截断，停止时却按墙钟时间报告时长并成功。
+      // 结束统一靠发送 q：调用方停止、调用方窗口关闭（见下方监听）或宿主退出（stop()）时收尾
+      const run = this.#startFfmpegRun(
+        ['-y', '-hide_banner', '-loglevel', 'error', '-f', 'gdigrab', '-framerate', String(fps), '-i', 'desktop', tempPath],
+        tempPath
+      )
+      if ('error' in run) return startFailed(run.error)
+      // ffmpeg 参数、设备或输出格式有误时会立即退出：观察片刻仍在运行才报告录制已开始
+      const early = await waitWithin(run.exit, FFMPEG_START_PROBE_MS)
+      if (early) {
+        await fs.rm(tempPath, { force: true }).catch(() => undefined)
+        const tail = run.stderrTail()
+        return startFailed(
+          `ffmpeg 录制进程启动后立即退出（${early.error ?? `退出码 ${early.code ?? '未知'}`}）${tail ? `：${tail}` : ''}`
+        )
+      }
+
+      this.#ffmpegRuns.set(sessionId, run)
       this.#activeRecordings.set(sessionId, {
         id: sessionId,
         type,
         outputPath: resolvedOutput,
         startedAt: Date.now(),
         fps,
-        childProcess
+        childProcess: run.child
       })
+      // 插件窗口关闭后没人会再调用停止：自动发送 q 收尾并保存文件，不让 ffmpeg 一直录到宿主退出
+      try {
+        const unwatch = this.#watchCallerClosed(caller, () => {
+          const session = this.#activeRecordings.get(sessionId)
+          if (!session) return
+          void this.#finalizeRecording(session, FFMPEG_STOP_TIMEOUT_MS).then((result) => {
+            if (result.ok) console.info('[MediaOcrHost] 调用方窗口已关闭，录制已收尾保存:', result.outputPath)
+            else console.warn('[MediaOcrHost] 调用方窗口已关闭，录制收尾失败:', result.error)
+          })
+        })
+        // 监听回调可能已同步触发并结束了会话，此时直接取消监听
+        if (this.#activeRecordings.has(sessionId)) this.#callerWatches.set(sessionId, unwatch)
+        else unwatch()
+      } catch (err) {
+        console.warn('[MediaOcrHost] 无法监听调用方窗口关闭，录制只能由停止指令或宿主退出收尾:', err)
+      }
 
       return {
         ok: true,
@@ -454,80 +650,21 @@ export class MediaOcrHostPluginHandler {
     }
 
     if (lowerFn === 'stoprecording' || lowerFn === 'stop') {
-      const sessionId = String(params.sessionId ?? '')
-      const active =
-        (sessionId ? this.#activeRecordings.get(sessionId) : undefined) ??
-        Array.from(this.#activeRecordings.values())[0]
-
-      if (active) {
-        this.#activeRecordings.delete(active.id)
-        if (active.childProcess) {
-          try {
-            active.childProcess.kill('SIGINT')
-          } catch {
-            // ignore
-          }
-          await new Promise((r) => setTimeout(r, 300))
-        }
-        const durationMs = Date.now() - active.startedAt
-        // [S-1] 若输出文件不存在或为空，必须如实返回 { ok: false, error: ... }，绝不伪造文件
-        if (!fsSync.existsSync(active.outputPath)) {
-          return {
-            ok: false,
-            success: false,
-            recording: false,
-            sessionId: active.id,
-            outputPath: active.outputPath,
-            error: '屏幕录制或抓图失败，未生成有效输出文件'
-          }
-        }
-        const stat = await fs.stat(active.outputPath)
-        if (stat.size === 0) {
-          await fs.unlink(active.outputPath).catch(() => undefined)
-          return {
-            ok: false,
-            success: false,
-            recording: false,
-            sessionId: active.id,
-            outputPath: active.outputPath,
-            error: '屏幕录制或抓图失败，未生成有效输出文件'
-          }
-        }
+      // 指定了会话却找不到时不能去结束别的会话；也不再把调用方给的任意已有文件报成录制结果
+      const sessionId = String(params.sessionId ?? '').trim()
+      const active = sessionId
+        ? this.#activeRecordings.get(sessionId)
+        : Array.from(this.#activeRecordings.values())[0]
+      if (!active) {
         return {
-          ok: true,
-          success: true,
+          ok: false,
+          success: false,
           recording: false,
-          sessionId: active.id,
-          outputPath: active.outputPath,
-          durationMs,
-          sizeBytes: stat.size,
-          sizeText: formatBytes(stat.size)
+          ...(sessionId ? { sessionId } : {}),
+          error: sessionId ? `录制会话不存在或已结束：${sessionId}` : '当前没有正在进行的录制'
         }
       }
-
-      if (typeof params.outputPath === 'string' && params.outputPath.trim()) {
-        const resolvedOut = await this.#ctx.authorizeExistingPath(params.outputPath.trim(), caller, 'read').catch(() => '')
-        if (resolvedOut && fsSync.existsSync(resolvedOut)) {
-          const stat = await fs.stat(resolvedOut)
-          if (stat.size > 0) {
-            return {
-              ok: true,
-              success: true,
-              recording: false,
-              outputPath: resolvedOut,
-              sizeBytes: stat.size,
-              sizeText: formatBytes(stat.size)
-            }
-          }
-        }
-      }
-
-      return {
-        ok: false,
-        success: false,
-        recording: false,
-        error: '屏幕录制或抓图失败，未生成有效输出文件'
-      }
+      return this.#finalizeRecording(active, FFMPEG_STOP_TIMEOUT_MS)
     }
 
     return {
@@ -541,6 +678,147 @@ export class MediaOcrHostPluginHandler {
         startedAt: s.startedAt,
         fps: s.fps
       }))
+    }
+  }
+
+  /**
+   * 抓取整屏写到 outputPath：先写同目录临时文件，确认非空后再替换目标。
+   * 抓屏返回失败、抛错或写出空文件时，目标位置保持原样（旧文件不会被当成本次结果），临时文件一律删除。
+   */
+  async #captureFrameTo(
+    outputPath: string,
+    signal?: AbortSignal
+  ): Promise<{ ok: true; sizeBytes: number } | { ok: false; error: string }> {
+    const tempPath = `${outputPath}.ztools-capture-${Date.now()}.png`
+    try {
+      let captured: boolean
+      try {
+        captured = await this.#captureScreenToPng(tempPath, signal)
+      } catch (err) {
+        return { ok: false, error: `屏幕录制或抓图失败：${errorText(err)}` }
+      }
+      const stat = captured ? await fs.stat(tempPath).catch(() => null) : null
+      if (!stat || !stat.isFile() || stat.size === 0) {
+        return { ok: false, error: '屏幕录制或抓图失败，未生成有效输出文件' }
+      }
+      try {
+        await fs.rename(tempPath, outputPath)
+      } catch (err) {
+        return { ok: false, error: `屏幕截图保存失败：${errorText(err)}` }
+      }
+      return { ok: true, sizeBytes: stat.size }
+    } finally {
+      await fs.rm(tempPath, { force: true }).catch(() => undefined)
+    }
+  }
+
+  #startFfmpegRun(args: string[], tempPath: string): FfmpegRecordingRun | { error: string } {
+    let child: ChildProcess
+    try {
+      // stdin 用来发送 q 让 ffmpeg 正常写完文件尾；stderr 必须持续读取，否则管道写满会卡住 ffmpeg
+      child = this.#spawnProcess('ffmpeg', args, { windowsHide: true, stdio: ['pipe', 'ignore', 'pipe'] })
+    } catch (err) {
+      return { error: `启动 ffmpeg 录制进程失败：${errorText(err)}` }
+    }
+    let tail = ''
+    child.stderr?.on('data', (chunk: Buffer | string) => {
+      tail = (tail + String(chunk)).slice(-2_000)
+    })
+    // 进程已退出后再写 stdin 会触发 EPIPE；没有监听的 error 事件会变成主进程未捕获异常
+    child.stdin?.on('error', (err) => {
+      tail = `${tail}\n${err.message}`.slice(-2_000)
+    })
+    const exit = new Promise<{ code: number | null; error?: string }>((resolve) => {
+      child.once('error', (err) => resolve({ code: null, error: err.message }))
+      child.once('close', (code) => resolve({ code }))
+    })
+    return { child, tempPath, exit, stderrTail: () => tail.trim() }
+  }
+
+  /** 结束录制并核对结果：ffmpeg 必须正常退出（退出码 0）且写出非空文件，才把临时文件替换为目标文件 */
+  async #finalizeRecording(active: ActiveRecordingSession, stopTimeoutMs: number): Promise<Record<string, unknown>> {
+    this.#activeRecordings.delete(active.id)
+    const unwatch = this.#callerWatches.get(active.id)
+    this.#callerWatches.delete(active.id)
+    try {
+      unwatch?.()
+    } catch (err) {
+      console.warn('[MediaOcrHost] 取消调用方窗口关闭监听失败:', err)
+    }
+    const run = this.#ffmpegRuns.get(active.id)
+    this.#ffmpegRuns.delete(active.id)
+    const durationMs = Date.now() - active.startedAt
+    const failed = (error: string) => ({
+      ok: false,
+      success: false,
+      recording: false,
+      sessionId: active.id,
+      outputPath: active.outputPath,
+      error
+    })
+
+    if (run) {
+      // 发送 q 让 ffmpeg 正常收尾；Windows 上 kill('SIGINT') 实际是强制结束进程，视频会缺少文件尾而无法播放
+      try {
+        run.child.stdin?.end('q')
+      } catch (err) {
+        console.warn('[MediaOcrHost] 向 ffmpeg 发送结束指令失败:', err)
+      }
+      let exit = await waitWithin(run.exit, stopTimeoutMs)
+      const forced = !exit
+      if (!exit) {
+        try {
+          run.child.kill()
+        } catch (err) {
+          console.warn('[MediaOcrHost] 结束 ffmpeg 录制进程失败:', err)
+        }
+        exit = await waitWithin(run.exit, 2_000)
+      }
+      if (forced || !exit || exit.code !== 0) {
+        await fs.rm(run.tempPath, { force: true }).catch(() => undefined)
+        const tail = run.stderrTail()
+        const reason = forced
+          ? 'ffmpeg 未能在限定时间内正常结束，录制文件可能不完整，已丢弃'
+          : `ffmpeg 录制异常退出（${exit?.error ?? `退出码 ${exit?.code ?? '未知'}`}）${tail ? `：${tail}` : ''}`
+        return failed(`屏幕录制失败：${reason}`)
+      }
+      const stat = await fs.stat(run.tempPath).catch(() => null)
+      if (!stat || !stat.isFile() || stat.size === 0) {
+        await fs.rm(run.tempPath, { force: true }).catch(() => undefined)
+        return failed('屏幕录制或抓图失败，未生成有效输出文件')
+      }
+      try {
+        await fs.rename(run.tempPath, active.outputPath)
+      } catch (err) {
+        await fs.rm(run.tempPath, { force: true }).catch(() => undefined)
+        return failed(`录制文件保存失败：${errorText(err)}`)
+      }
+      return {
+        ok: true,
+        success: true,
+        recording: false,
+        sessionId: active.id,
+        outputPath: active.outputPath,
+        durationMs,
+        sizeBytes: stat.size,
+        sizeText: formatBytes(stat.size)
+      }
+    }
+
+    // PNG 单帧模式：开始录制时已抓好并写入目标文件，这里只核对文件仍然有效
+    const stat = await fs.stat(active.outputPath).catch(() => null)
+    if (!stat || !stat.isFile() || stat.size === 0) {
+      return failed('屏幕录制或抓图失败，未生成有效输出文件')
+    }
+    return {
+      ok: true,
+      success: true,
+      recording: false,
+      sessionId: active.id,
+      outputPath: active.outputPath,
+      durationMs,
+      sizeBytes: stat.size,
+      sizeText: formatBytes(stat.size)
     }
   }
 
@@ -770,11 +1048,10 @@ export class MediaOcrHostPluginHandler {
         params.format ?? params.outputFormat ?? params.outputContainer ?? params.container ?? fallbackExt
       const defaultExt = MediaOcrHostPluginHandler.#normalizeMediaExtension(rawFmt, fallbackExt)
 
-      const simulateNoFfmpeg =
-        params.__simulateNoFfmpeg === true || process.env.ZTOOLS_DISABLE_FFMPEG === '1'
-      const ffmpegCheck = simulateNoFfmpeg
+      const ffmpegDisabled = process.env.ZTOOLS_DISABLE_FFMPEG === '1'
+      const ffmpegCheck = ffmpegDisabled
         ? { exitCode: 1, stdout: '', stderr: 'disabled' }
-        : await runCommand('ffmpeg', ['-version'], 4_000, signal)
+        : await this.#sys.runCommand('ffmpeg', ['-version'], 4_000, signal)
       const hasFfmpeg = ffmpegCheck.exitCode === 0
 
       const results: Array<Record<string, unknown>> = []
@@ -827,7 +1104,7 @@ export class MediaOcrHostPluginHandler {
         }
 
         const args = ['-y', '-i', resolvedSrc, outPath]
-        const res = await runCommand('ffmpeg', args, 60_000, signal)
+        const res = await this.#sys.runCommand('ffmpeg', args, 60_000, signal)
         if (res.exitCode !== 0 || !fsSync.existsSync(outPath)) {
           if (fsSync.existsSync(outPath)) {
             await fs.unlink(outPath).catch(() => undefined)
@@ -918,6 +1195,21 @@ export class MediaOcrHostPluginHandler {
       }
     }
 
+    // PDF 转图片没有渲染引擎：以前会落到下面“处理现有 PDF”的分支，输出一份 PDF 却报转换成功
+    if (
+      effectiveOp.includes('pdftoimage') ||
+      effectiveOp.includes('pdftopng') ||
+      effectiveOp.includes('pdftojpg') ||
+      effectiveOp.includes('pdftojpeg')
+    ) {
+      return {
+        ok: false,
+        success: false,
+        errorCode: 'UNSUPPORTED_ACTION',
+        error: `当前宿主没有 PDF 渲染组件，不支持将 PDF 转换为图片 (${params.operation ?? fn})`
+      }
+    }
+
     if (lowerFn === 'inspectpdf' || lowerFn === 'getpdfinfo' || lowerFn === 'inspect') {
       if (!rawFiles[0]) {
         return { ok: false, success: false, error: '未提供 PDF 文件路径' }
@@ -960,10 +1252,15 @@ export class MediaOcrHostPluginHandler {
       const literalMatches = Array.from(raw.matchAll(/\(([^()\\]*(?:\\.[^()\\]*)*)\)\s*Tj/g)).map((m) =>
         (m[1] ?? '').replace(/\\([()\\])/g, '$1')
       )
-      const extractedText =
-        literalMatches.length > 0
-          ? literalMatches.join('\n')
-          : `PDF Document: ${path.basename(resolvedFile)} (${formatBytes(buf.byteLength)})`
+      // 读不到文字就如实失败，不能用“PDF Document: 文件名 (大小)”冒充提取结果写进输出文件
+      if (literalMatches.length === 0) {
+        return {
+          ok: false,
+          success: false,
+          error: '未能从 PDF 中提取到文字：可能是扫描件，或文字经过压缩/字体编码，旧接口无法解析'
+        }
+      }
+      const extractedText = literalMatches.join('\n')
       const isHtml = lowerFn === 'pdftohtml' || effectiveOp === 'pdftohtml'
       const defaultExt = isHtml ? '.html' : '.txt'
       const outFile =
@@ -1005,25 +1302,48 @@ export class MediaOcrHostPluginHandler {
           : rawFiles[0]
             ? path.join(path.dirname(rawFiles[0]), `${path.parse(rawFiles[0]).name}_output.pdf`)
             : path.join(os.tmpdir(), `ztools_pdf_${Date.now()}.pdf`)
-      const resolvedOutPdf = await this.#ctx.authorizeOutputPath(rawOutPdf, caller)
-      await fs.mkdir(path.dirname(resolvedOutPdf), { recursive: true })
-
+      // 旧接口只能把少量 ASCII 纯文本写进单页 PDF：图片、Word、Excel 等以前只写入“Source File: 文件名”一行就报转换成功，
+      // 中文会被替换成 ?、超过 45 行会被截掉，空内容会写成“Empty Document”。这些情况现在一律如实失败。
+      const unsupportedInputs = rawFiles.filter((f) => !['.txt', '.md'].includes(path.extname(f).toLowerCase()))
+      if (unsupportedInputs.length > 0) {
+        return {
+          ok: false,
+          success: false,
+          errorCode: 'UNSUPPORTED_ACTION',
+          error: `当前宿主不支持将这些文件转换为 PDF（只支持 .txt / .md 纯文本）：${unsupportedInputs.map((f) => path.basename(f)).join('、')}`
+        }
+      }
       const contentLines: string[] = []
       if (typeof params.text === 'string' && params.text.trim()) {
         contentLines.push(...params.text.trim().split(/\r?\n/))
       }
       for (const f of rawFiles) {
         const resolvedInput = await this.#ctx.authorizeExistingPath(f, caller, 'read')
-        const st = await fs.stat(resolvedInput)
-        const ext = path.extname(resolvedInput).toLowerCase()
-        if (ext === '.txt' || ext === '.md') {
-          const txt = await fs.readFile(resolvedInput, 'utf8')
-          contentLines.push(...txt.split(/\r?\n/))
-        } else {
-          contentLines.push(`Source File: ${path.basename(resolvedInput)} (${formatBytes(st.size)})`)
+        const txt = await fs.readFile(resolvedInput, 'utf8')
+        contentLines.push(...txt.split(/\r?\n/))
+      }
+      if (contentLines.every((line) => !line.trim())) {
+        return { ok: false, success: false, error: '没有可写入 PDF 的文本内容' }
+      }
+      if (contentLines.some((line) => /[^\x20-\x7E\t]/.test(line))) {
+        return {
+          ok: false,
+          success: false,
+          errorCode: 'UNSUPPORTED_ACTION',
+          error: '当前宿主生成 PDF 时没有内嵌中文等非 ASCII 字体，这些字符会变成问号，已停止生成'
         }
       }
-      const pdfBuf = buildMinimalValidPdf(contentLines.length > 0 ? contentLines : ['Empty Document'])
+      if (contentLines.length > 45) {
+        return {
+          ok: false,
+          success: false,
+          errorCode: 'UNSUPPORTED_ACTION',
+          error: `当前宿主只能生成单页 PDF（最多 45 行），本次内容有 ${contentLines.length} 行，已停止生成以免截断`
+        }
+      }
+      const resolvedOutPdf = await this.#ctx.authorizeOutputPath(rawOutPdf, caller)
+      await fs.mkdir(path.dirname(resolvedOutPdf), { recursive: true })
+      const pdfBuf = buildMinimalValidPdf(contentLines.map((line) => line.replace(/\t/g, '    ')))
       await fs.writeFile(resolvedOutPdf, pdfBuf)
       const outStat = await fs.stat(resolvedOutPdf)
       return {
@@ -1211,8 +1531,26 @@ export class MediaOcrHostPluginHandler {
 
     const qualityTier = String(params.qualityTier ?? params.quality ?? 'q85').toLowerCase()
     const jpegQuality = qualityTier === 'q70' ? 70 : qualityTier === 'q95' ? 95 : qualityTier === 'lossless' ? 100 : 85
-    const resizePreset = String(params.resizePreset ?? params.resize ?? 'source').toLowerCase()
+    // 缩放预设与输出格式会进入 PowerShell 脚本和 ffmpeg 参数：只接受白名单取值，其余如实拒绝（不再原样拼进脚本）
+    const resizePreset = String(params.resizePreset ?? params.resize ?? 'source').trim().toLowerCase() || 'source'
+    if (!IMAGE_RESIZE_PRESETS.has(resizePreset)) {
+      return {
+        ok: false,
+        success: false,
+        errorCode: 'INVALID_PARAMS',
+        error: `不支持的缩放预设：${resizePreset.slice(0, 40)}（可选：${Array.from(IMAGE_RESIZE_PRESETS).join(' / ')}）`
+      }
+    }
     const rawOutFmt = String(params.outputFormat ?? params.format ?? 'keep').trim().toLowerCase().replace(/^\./, '')
+    const isKeepFormatToken = !rawOutFmt || rawOutFmt === 'keep' || rawOutFmt === 'source'
+    if (!isKeepFormatToken && !(rawOutFmt in IMAGE_OUTPUT_FORMAT_EXT)) {
+      return {
+        ok: false,
+        success: false,
+        errorCode: 'INVALID_PARAMS',
+        error: `不支持的输出格式：${rawOutFmt.slice(0, 40)}（可选：keep / ${Object.keys(IMAGE_OUTPUT_FORMAT_EXT).join(' / ')}）`
+      }
+    }
     const isGrayscale =
       lowerFn.includes('grayscale') ||
       lowerFn.includes('enhancedoc') ||
@@ -1236,28 +1574,36 @@ export class MediaOcrHostPluginHandler {
         }
         const parsed = path.parse(resolvedSrc)
         const srcExt = parsed.ext.toLowerCase()
-        const keepSameFormat = !rawOutFmt || rawOutFmt === 'keep' || rawOutFmt === 'source' || `.${rawOutFmt}` === srcExt
-        const targetExt = keepSameFormat
-          ? srcExt || '.png'
-          : rawOutFmt === 'jpg' || rawOutFmt === 'jpeg'
-            ? '.jpg'
-            : rawOutFmt === 'webp'
-              ? '.webp'
-              : rawOutFmt === 'bmp'
-                ? '.bmp'
-                : rawOutFmt === 'ico'
-                  ? '.png'
-                  : '.png'
+        const keepSameFormat = isKeepFormatToken || `.${rawOutFmt}` === srcExt
+        const targetExt = keepSameFormat ? srcExt || '.png' : IMAGE_OUTPUT_FORMAT_EXT[rawOutFmt]!
+        // 保持原格式时扩展名来自源文件名，同样只接受能真实编码的格式（GDI+ 或 ffmpeg），其余如实报不支持
+        if (!isSupportedImageOutputExt(targetExt)) {
+          errors.push({
+            file: src,
+            error: `不支持输出 ${targetExt.slice(0, 20)} 格式的图片，请指定输出格式（png / jpg / webp / bmp / gif / tiff）`
+          })
+          continue
+        }
+        const explicitOutPath =
+          typeof params.outputPath === 'string' && params.outputPath.trim() && rawFiles.length === 1
+            ? params.outputPath.trim()
+            : ''
+        // 编码器按输出格式选择：显式输出路径的扩展名与之不一致时拒绝，避免内容与扩展名不符
+        const explicitOutExt = path.extname(explicitOutPath)
+        if (explicitOutExt && canonicalImageExt(explicitOutExt) !== canonicalImageExt(targetExt)) {
+          errors.push({
+            file: src,
+            error: `输出路径扩展名 ${explicitOutExt.slice(0, 20)} 与输出格式 ${targetExt} 不一致`
+          })
+          continue
+        }
 
         const outDir =
           typeof params.outputDir === 'string' && params.outputDir.trim()
             ? await this.#ctx.authorizeOutputPath(params.outputDir.trim(), caller)
             : parsed.dir
         await fs.mkdir(outDir, { recursive: true })
-        const rawOutPath =
-          typeof params.outputPath === 'string' && params.outputPath.trim() && rawFiles.length === 1
-            ? params.outputPath.trim()
-            : path.join(outDir, `${parsed.name}_opt${targetExt}`)
+        const rawOutPath = explicitOutPath || path.join(outDir, `${parsed.name}_opt${targetExt}`)
         const outPath = await this.#ctx.authorizeOutputPath(rawOutPath, caller)
 
         let outWidth = 0
@@ -1320,63 +1666,12 @@ export class MediaOcrHostPluginHandler {
           outHeight = targetH
           outBytes = encodedBuf.length
         } else if (process.platform === 'win32') {
-          const escapedSrc = resolvedSrc.replace(/'/g, "''")
-          const escapedOut = outPath.replace(/'/g, "''")
-          const psScript = `
-            $ErrorActionPreference = 'Stop'
-            Add-Type -AssemblyName System.Drawing
-            $srcBmp = New-Object System.Drawing.Bitmap('${escapedSrc}')
-            try {
-              $w = [int]$srcBmp.Width
-              $h = [int]$srcBmp.Height
-              $preset = '${resizePreset}'
-              if ($preset -eq 'scale50') {
-                $w = [Math]::Max(1, [int]($w * 0.5))
-                $h = [Math]::Max(1, [int]($h * 0.5))
-              } elseif ($preset -eq 'max1920' -and [Math]::Max($w, $h) -gt 1920) {
-                $s = 1920.0 / [Math]::Max($w, $h)
-                $w = [Math]::Max(1, [int]($w * $s))
-                $h = [Math]::Max(1, [int]($h * $s))
-              } elseif ($preset -eq 'max1280' -and [Math]::Max($w, $h) -gt 1280) {
-                $s = 1280.0 / [Math]::Max($w, $h)
-                $w = [Math]::Max(1, [int]($w * $s))
-                $h = [Math]::Max(1, [int]($h * $s))
-              }
-              $dstBmp = New-Object System.Drawing.Bitmap($w, $h)
-              try {
-                $g = [System.Drawing.Graphics]::FromImage($dstBmp)
-                try {
-                  $g.InterpolationMode = [System.Drawing.Drawing2D.InterpolationMode]::HighQualityBicubic
-                  $g.SmoothingMode = [System.Drawing.Drawing2D.SmoothingMode]::HighQuality
-                  $g.DrawImage($srcBmp, 0, 0, $w, $h)
-                } finally {
-                  $g.Dispose()
-                }
-                if ('${targetExt}' -eq '.jpg') {
-                  $codec = [System.Drawing.Imaging.ImageCodecInfo]::GetImageEncoders() | Where-Object { $_.MimeType -eq 'image/jpeg' } | Select-Object -First 1
-                  $encParams = New-Object System.Drawing.Imaging.EncoderParameters(1)
-                  $encParams.Param[0] = New-Object System.Drawing.Imaging.EncoderParameter([System.Drawing.Imaging.Encoder]::Quality, [long]${jpegQuality})
-                  $dstBmp.Save('${escapedOut}', $codec, $encParams)
-                } elseif ('${targetExt}' -eq '.bmp') {
-                  $dstBmp.Save('${escapedOut}', [System.Drawing.Imaging.ImageFormat]::Bmp)
-                } else {
-                  $dstBmp.Save('${escapedOut}', [System.Drawing.Imaging.ImageFormat]::Png)
-                }
-                [PSCustomObject]@{ width = $w; height = $h } | ConvertTo-Json -Compress
-              } finally {
-                $dstBmp.Dispose()
-              }
-            } finally {
-              $srcBmp.Dispose()
-            }
-          `
-          const out = await runPowerShell(psScript, 20_000, signal)
-          if (!fsSync.existsSync(outPath)) {
-            const ff = await runCommand('ffmpeg', ['-y', '-i', resolvedSrc, outPath], 25_000, signal)
-            if (ff.exitCode !== 0 || !fsSync.existsSync(outPath)) {
-              throw new Error(`图片编码转换失败: ${path.basename(resolvedSrc)}`)
-            }
-          }
+          const encoded = await this.#encodeImageOnWindows(
+            resolvedSrc,
+            outPath,
+            { targetExt, resizePreset, isGrayscale, jpegQuality },
+            signal
+          )
           const outStat = await fs.stat(outPath)
           if (keepSameFormat && resizePreset === 'source' && !isGrayscale && outStat.size > srcStat.size) {
             await fs.copyFile(resolvedSrc, outPath)
@@ -1384,14 +1679,8 @@ export class MediaOcrHostPluginHandler {
           } else {
             outBytes = outStat.size
           }
-          try {
-            const parsedJson = JSON.parse(out) as { width?: number; height?: number }
-            outWidth = Number(parsedJson.width) || 0
-            outHeight = Number(parsedJson.height) || 0
-          } catch {
-            outWidth = 0
-            outHeight = 0
-          }
+          outWidth = encoded.width
+          outHeight = encoded.height
         } else {
           const info = await processSingleImageFile(resolvedSrc, outPath, 'compress', 1)
           outWidth = info.width
@@ -1443,6 +1732,148 @@ export class MediaOcrHostPluginHandler {
       savedBytes: totalSavedBytes,
       results,
       errors
+    }
+  }
+
+  /**
+   * Windows 上编码一张图片：先用 GDI+ 写同目录临时文件；GDI+ 打不开源图（webp / heic 等）或不能编码目标格式（webp）时交给 ffmpeg。
+   * 两者都失败才抛错并带上两边的原因；成功后才把临时文件替换为目标文件，失败时目标位置保持原样。
+   */
+  async #encodeImageOnWindows(
+    resolvedSrc: string,
+    outPath: string,
+    options: { targetExt: string; resizePreset: string; isGrayscale: boolean; jpegQuality: number },
+    signal?: AbortSignal
+  ): Promise<{ width: number; height: number; engine: 'GDI+' | 'ffmpeg' }> {
+    const parsedOut = path.parse(outPath)
+    await fs.mkdir(parsedOut.dir, { recursive: true })
+    // 临时文件保留目标扩展名：ffmpeg 按扩展名选择输出格式
+    const tempPath = path.join(parsedOut.dir, `.${parsedOut.name}.ztools-image-${Date.now()}${options.targetExt}`)
+    const tempHasOutput = async (): Promise<boolean> => {
+      const st = await fs.stat(tempPath).catch(() => null)
+      return !!st && st.isFile() && st.size > 0
+    }
+    try {
+      let gdiIssue: string
+      const gdiEncoder = GDI_IMAGE_ENCODERS[options.targetExt]
+      if (gdiEncoder) {
+        const escapedSrc = escapePsSingleQuoted(resolvedSrc)
+        const escapedOut = escapePsSingleQuoted(tempPath)
+        const psScript = `
+          $ErrorActionPreference = 'Stop'
+          Add-Type -AssemblyName System.Drawing
+          $format = '${escapePsSingleQuoted(gdiEncoder)}'
+          $preset = '${escapePsSingleQuoted(options.resizePreset)}'
+          $grayscale = ${options.isGrayscale ? '$true' : '$false'}
+          $srcBmp = New-Object System.Drawing.Bitmap('${escapedSrc}')
+          try {
+            $w = [int]$srcBmp.Width
+            $h = [int]$srcBmp.Height
+            if ($preset -eq 'scale50') {
+              $w = [Math]::Max(1, [int]($w * 0.5))
+              $h = [Math]::Max(1, [int]($h * 0.5))
+            } elseif ($preset -eq 'max1920' -and [Math]::Max($w, $h) -gt 1920) {
+              $s = 1920.0 / [Math]::Max($w, $h)
+              $w = [Math]::Max(1, [int]($w * $s))
+              $h = [Math]::Max(1, [int]($h * $s))
+            } elseif ($preset -eq 'max1280' -and [Math]::Max($w, $h) -gt 1280) {
+              $s = 1280.0 / [Math]::Max($w, $h)
+              $w = [Math]::Max(1, [int]($w * $s))
+              $h = [Math]::Max(1, [int]($h * $s))
+            } elseif ($preset -eq 'ico256') {
+              $w = [Math]::Min(256, $w)
+              $h = [Math]::Min(256, $h)
+            }
+            $dstBmp = New-Object System.Drawing.Bitmap($w, $h)
+            try {
+              $g = [System.Drawing.Graphics]::FromImage($dstBmp)
+              try {
+                $g.InterpolationMode = [System.Drawing.Drawing2D.InterpolationMode]::HighQualityBicubic
+                $g.SmoothingMode = [System.Drawing.Drawing2D.SmoothingMode]::HighQuality
+                if ($grayscale) {
+                  $cm = New-Object System.Drawing.Imaging.ColorMatrix
+                  $cm.Matrix00 = 0.299; $cm.Matrix01 = 0.299; $cm.Matrix02 = 0.299
+                  $cm.Matrix10 = 0.587; $cm.Matrix11 = 0.587; $cm.Matrix12 = 0.587
+                  $cm.Matrix20 = 0.114; $cm.Matrix21 = 0.114; $cm.Matrix22 = 0.114
+                  $attr = New-Object System.Drawing.Imaging.ImageAttributes
+                  try {
+                    $attr.SetColorMatrix($cm)
+                    $g.DrawImage($srcBmp, (New-Object System.Drawing.Rectangle(0, 0, $w, $h)), 0, 0, [int]$srcBmp.Width, [int]$srcBmp.Height, [System.Drawing.GraphicsUnit]::Pixel, $attr)
+                  } finally {
+                    $attr.Dispose()
+                  }
+                } else {
+                  $g.DrawImage($srcBmp, 0, 0, $w, $h)
+                }
+              } finally {
+                $g.Dispose()
+              }
+              if ($format -eq 'jpeg') {
+                $codec = [System.Drawing.Imaging.ImageCodecInfo]::GetImageEncoders() | Where-Object { $_.MimeType -eq 'image/jpeg' } | Select-Object -First 1
+                $encParams = New-Object System.Drawing.Imaging.EncoderParameters(1)
+                $encParams.Param[0] = New-Object System.Drawing.Imaging.EncoderParameter([System.Drawing.Imaging.Encoder]::Quality, [long]${Math.round(options.jpegQuality)})
+                $dstBmp.Save('${escapedOut}', $codec, $encParams)
+              } elseif ($format -eq 'bmp') {
+                $dstBmp.Save('${escapedOut}', [System.Drawing.Imaging.ImageFormat]::Bmp)
+              } elseif ($format -eq 'gif') {
+                $dstBmp.Save('${escapedOut}', [System.Drawing.Imaging.ImageFormat]::Gif)
+              } elseif ($format -eq 'tiff') {
+                $dstBmp.Save('${escapedOut}', [System.Drawing.Imaging.ImageFormat]::Tiff)
+              } elseif ($format -eq 'png') {
+                $dstBmp.Save('${escapedOut}', [System.Drawing.Imaging.ImageFormat]::Png)
+              } else {
+                throw "不支持的编码格式：$format"
+              }
+              [PSCustomObject]@{ width = $w; height = $h } | ConvertTo-Json -Compress
+            } finally {
+              $dstBmp.Dispose()
+            }
+          } finally {
+            $srcBmp.Dispose()
+          }
+        `
+        try {
+          const out = await this.#sys.runPowerShell(psScript, 20_000, signal)
+          if (await tempHasOutput()) {
+            let width = 0
+            let height = 0
+            try {
+              const parsedJson = JSON.parse(out) as { width?: number; height?: number }
+              width = Number(parsedJson.width) || 0
+              height = Number(parsedJson.height) || 0
+            } catch {
+              // 尺寸只用于展示：读不到时报 0（未知），文件本身已由 GDI+ 写出
+            }
+            await fs.rename(tempPath, outPath)
+            return { width, height, engine: 'GDI+' }
+          }
+          gdiIssue = '未生成输出文件'
+        } catch (err) {
+          gdiIssue = errorText(err)
+        }
+      } else {
+        gdiIssue = `不支持编码 ${options.targetExt} 格式`
+      }
+
+      if (signal?.aborted) {
+        throw new Error(`图片编码转换已取消: ${path.basename(resolvedSrc)}`)
+      }
+      await fs.rm(tempPath, { force: true }).catch(() => undefined)
+      const ff = await this.#sys.runCommand('ffmpeg', buildFfmpegImageArgs(resolvedSrc, tempPath, options), 25_000, signal)
+      if (ff.exitCode === 0 && (await tempHasOutput())) {
+        await fs.rename(tempPath, outPath)
+        return { width: 0, height: 0, engine: 'ffmpeg' }
+      }
+      const ffStderr = ff.stderr.trim()
+      const ffIssue =
+        ff.exitCode === 0
+          ? '未生成输出文件'
+          : /ENOENT/.test(ffStderr)
+            ? '本机未检测到 ffmpeg'
+            : `退出码 ${ff.exitCode}${ffStderr ? `：${ffStderr.slice(-300)}` : ''}`
+      throw new Error(`图片编码转换失败: ${path.basename(resolvedSrc)}（GDI+：${gdiIssue}；ffmpeg：${ffIssue}）`)
+    } finally {
+      await fs.rm(tempPath, { force: true }).catch(() => undefined)
     }
   }
 
@@ -1764,243 +2195,19 @@ export class MediaOcrHostPluginHandler {
   }
 
   // ==================== 06. 音频输入输出设备一键切换 (AudioDevicePlugin) ====================
-  #audioDefaultOverrides = new Map<'output' | 'input', string>()
-  #audioVolumeOverrides = new Map<string, number>()
-  #audioMuteOverrides = new Map<string, boolean>()
-
+  // 旧接口编造设备状态：音量固定 80/75、把枚举到的第一个设备当默认、静音固定 false，
+  // setDefault / setVolume / setMute 只改进程内存却报成功，skipSystemScan 时返回空列表成功，脚本还用了 PowerShell 5.1 不支持的 ??。
+  // 音频设备插件已改走 audio_get_devices、audio_set_default_device、audio_set_volume、audio_toggle_mute 新接口（由系统服务真实读写并回读确认）。
   async handleAudioDevice(
-    fn: string,
-    params: Record<string, unknown>,
-    signal?: AbortSignal
+    _fn: string,
+    _params: Record<string, unknown>,
+    _signal?: AbortSignal
   ): Promise<unknown> {
-    const lowerFn = (fn ?? '').trim().toLowerCase()
-
-    if (
-      lowerFn === 'listdevices' ||
-      lowerFn === 'getdevices' ||
-      lowerFn === 'list'
-    ) {
-      const devices: Array<{
-        id: string
-        uid: string
-        name: string
-        type: 'output' | 'input'
-        isDefault: boolean
-        isCommunicationDefault: boolean
-        volume: number
-        isMuted: boolean
-        transportType: string
-      }> = []
-
-      if (Array.isArray(params.mockDevices)) {
-        for (const raw of params.mockDevices) {
-          if (!raw || typeof raw !== 'object') continue
-          const rec = raw as Record<string, unknown>
-          const id = String(rec.id ?? rec.uid ?? `dev-${devices.length + 1}`).trim()
-          const type: 'output' | 'input' =
-            String(rec.type ?? 'output').toLowerCase() === 'input' || rec.isInput === true
-              ? 'input'
-              : 'output'
-          const defaultOverride = this.#audioDefaultOverrides.get(type)
-          const isDefault =
-            defaultOverride !== undefined ? defaultOverride === id : Boolean(rec.isDefault)
-          const volume =
-            this.#audioVolumeOverrides.get(id) ??
-            (typeof rec.volume === 'number' && Number.isFinite(rec.volume)
-              ? Math.max(0, Math.min(100, Math.round(rec.volume)))
-              : 75)
-          const isMuted =
-            this.#audioMuteOverrides.get(id) ?? Boolean(rec.isMuted ?? rec.muted ?? false)
-          devices.push({
-            id,
-            uid: String(rec.uid ?? id),
-            name: String(rec.name ?? `音频设备 ${devices.length + 1}`),
-            type,
-            isDefault,
-            isCommunicationDefault: isDefault,
-            volume,
-            isMuted,
-            transportType: String(rec.transportType ?? 'BuiltIn')
-          })
-        }
-        return {
-          ok: true,
-          success: true,
-          devices
-        }
-      }
-
-      if (process.platform === 'win32' && params.skipSystemScan !== true) {
-        const ps = `
-          $ErrorActionPreference = 'SilentlyContinue'
-          $out = @()
-          $pnp = Get-PnpDevice -Class AudioEndpoint -Status OK -ErrorAction SilentlyContinue
-          if ($pnp) {
-            $outIdx = 0
-            $inIdx = 0
-            foreach ($dev in $pnp) {
-              $n = [string]($dev.FriendlyName ?? $dev.Name ?? "Audio Endpoint")
-              $uid = [string]($dev.InstanceId ?? "")
-              $isInput = ($n -match '麦克风|Microphone|Mic|Input|Line In|立体声混音|Stereo Mix') -or ($uid -match '\\{0\\.0\\.1\\.')
-              $tr = if ($n -match 'Bluetooth|AirPods|WH-|Hands-Free') { 'Bluetooth' } elseif ($n -match 'USB|DAC') { 'USB' } elseif ($n -match 'HDMI|DisplayPort|NVIDIA|AMD') { 'DisplayPort' } else { 'BuiltIn' }
-              if ($isInput) {
-                $inIdx++
-                $out += [pscustomobject]@{
-                  id = "win-in-$inIdx"
-                  uid = if ($uid) { $uid } else { "win-in-$inIdx" }
-                  name = $n
-                  type = 'input'
-                  isDefault = ($inIdx -eq 1)
-                  volume = 80
-                  isMuted = $false
-                  transportType = $tr
-                }
-              } else {
-                $outIdx++
-                $out += [pscustomobject]@{
-                  id = "win-out-$outIdx"
-                  uid = if ($uid) { $uid } else { "win-out-$outIdx" }
-                  name = $n
-                  type = 'output'
-                  isDefault = ($outIdx -eq 1)
-                  volume = 75
-                  isMuted = $false
-                  transportType = $tr
-                }
-              }
-            }
-          }
-          if ($out.Count -eq 0) {
-            $endpoints = Get-CimInstance Win32_SoundDevice | Where-Object { $_.Status -eq 'OK' -or $_.StatusInfo -eq 3 }
-            $idx = 0
-            foreach ($ep in $endpoints) {
-              $idx++
-              $n = [string]($ep.Name ?? "Audio Endpoint #$idx")
-              $idOut = "win-out-$idx"
-              $out += [pscustomobject]@{
-                id = $idOut
-                uid = [string]($ep.DeviceID ?? $idOut)
-                name = $n
-                type = 'output'
-                isDefault = ($idx -eq 1)
-                volume = 75
-                isMuted = $false
-                transportType = if ($n -match 'Bluetooth|AirPods|WH-') { 'Bluetooth' } elseif ($n -match 'USB|DAC') { 'USB' } elseif ($n -match 'HDMI|DisplayPort|NVIDIA|AMD') { 'DisplayPort' } else { 'BuiltIn' }
-              }
-            }
-          }
-          $out | ConvertTo-Json -Compress
-        `
-        const raw = await runPowerShell(ps, 5_000, signal)
-        if (raw) {
-          try {
-            const parsed = JSON.parse(raw)
-            const list = Array.isArray(parsed) ? parsed : [parsed]
-            for (const item of list) {
-              if (!item || typeof item !== 'object') continue
-              const rec = item as Record<string, unknown>
-              const id = String(rec.id ?? `win-dev-${devices.length + 1}`)
-              const type: 'output' | 'input' = rec.type === 'input' ? 'input' : 'output'
-              const defaultOverride = this.#audioDefaultOverrides.get(type)
-              const isDefault =
-                defaultOverride !== undefined ? defaultOverride === id : Boolean(rec.isDefault)
-              devices.push({
-                id,
-                uid: String(rec.uid ?? id),
-                name: String(rec.name ?? 'Audio Device'),
-                type,
-                isDefault,
-                isCommunicationDefault: isDefault,
-                volume: this.#audioVolumeOverrides.get(id) ?? Number(rec.volume ?? 75),
-                isMuted: this.#audioMuteOverrides.get(id) ?? Boolean(rec.isMuted),
-                transportType: String(rec.transportType ?? 'BuiltIn')
-              })
-            }
-          } catch {
-            // ignore
-          }
-        }
-      }
-
-      return {
-        ok: true,
-        success: true,
-        devices
-      }
-    }
-
-    if (lowerFn === 'setdefault' || lowerFn === 'setdefaultdevice') {
-      const id = String(params.id ?? params.deviceId ?? '').trim()
-      if (!id) {
-        return {
-          ok: false,
-          success: false,
-          errorCode: 'DEVICE_NOT_FOUND',
-          error: 'DEVICE_NOT_FOUND: 设备 ID 不能为空'
-        }
-      }
-      if (params.simulateDisconnected === true) {
-        return {
-          ok: false,
-          success: false,
-          errorCode: 'DEVICE_DISCONNECTED',
-          error: `DEVICE_DISCONNECTED: 目标音频设备 (${id}) 已断开连接`
-        }
-      }
-      const type: 'output' | 'input' =
-        String(params.type ?? 'output').toLowerCase() === 'input' ? 'input' : 'output'
-      this.#audioDefaultOverrides.set(type, id)
-      return {
-        ok: true,
-        success: true,
-        id,
-        type
-      }
-    }
-
-    if (lowerFn === 'setvolume') {
-      const id = String(params.id ?? params.deviceId ?? 'default').trim()
-      const rawVolume = Number(params.volume ?? params.level)
-      if (!Number.isFinite(rawVolume)) {
-        return {
-          ok: false,
-          success: false,
-          errorCode: 'INVALID_VOLUME',
-          error: 'INVALID_VOLUME: 音量值必须为有效数字 (0-100)'
-        }
-      }
-      const volume = Math.max(0, Math.min(100, Math.round(rawVolume)))
-      this.#audioVolumeOverrides.set(id, volume)
-      if (volume > 0) {
-        this.#audioMuteOverrides.set(id, false)
-      }
-      return {
-        ok: true,
-        success: true,
-        id,
-        volume
-      }
-    }
-
-    if (lowerFn === 'setmute' || lowerFn === 'togglemute') {
-      const id = String(params.id ?? params.deviceId ?? 'default').trim()
-      const current = this.#audioMuteOverrides.get(id) ?? false
-      const nextMuted =
-        typeof params.muted === 'boolean' ? params.muted : !current
-      this.#audioMuteOverrides.set(id, nextMuted)
-      return {
-        ok: true,
-        success: true,
-        id,
-        muted: nextMuted
-      }
-    }
-
     return {
       ok: false,
       success: false,
       errorCode: 'UNSUPPORTED_ACTION',
-      error: `Unsupported AudioDevicePlugin function: ${fn}`
+      error: '请更新音频设备插件，通过新版接口读取和切换音频设备、调节音量与静音'
     }
   }
 }

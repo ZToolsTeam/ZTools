@@ -202,6 +202,17 @@ export interface HardwareSummary {
   totalMemory: number
   fieldAvailability: Readonly<{ cpuModels: boolean; logicalCpuCount: boolean; totalMemory: boolean; osVersion: boolean }>
 }
+export interface PowerSessionStatus {
+  success: true
+  active: boolean
+  mode: 'display' | 'system'
+  durationMinutes: number
+  startedAtMs: number | null
+  expiresAtMs: number | null
+  remainingMs: number | null
+  sessionId: number
+}
+
 export interface SystemAPI {
   getHardwareSummary(): Promise<Readonly<HardwareSummary>>
   notify(title: string, message: string, options?: { modal?: boolean }): Promise<boolean>
@@ -230,6 +241,7 @@ export interface SystemAPI {
   sleep(): Promise<unknown>
   hibernate(): Promise<unknown>
   preventSleep(enable: boolean): Promise<unknown>
+  managePowerSession(options: { action: 'status' | 'start' | 'stop' | 'toggle'; mode?: 'display' | 'system'; durationMinutes?: number }): Promise<PowerSessionStatus>
   simulateKeyPress(key: string): Promise<unknown>
   simulateKeyCombo(keys: string[]): Promise<unknown>
   simulateText(text: string): Promise<unknown>
@@ -372,6 +384,18 @@ export interface PluginAPI {
   install(pluginId: string, url: string): Promise<unknown>
   refresh(): Promise<unknown>
   toggle(pluginId: string): Promise<unknown>
+  /** 仅宿主：将插件设为下架状态，重复调用保持禁用。 */
+  revoke(pluginId: string, reason: string): Promise<unknown>
+  /** 仅宿主：查询指定安装任务的实际状态。 */
+  getInstallStatus(pluginId: string, operationId: string): Promise<{
+    status: 'running' | 'completed' | 'unknown'
+    pluginId: string
+    operationId: string
+    success?: boolean
+    error?: string
+    errorCode?: string
+    version?: string
+  }>
   close(pluginId: string, instanceId?: string): Promise<unknown>
   createShortcut(pluginId: string): Promise<unknown>
   refreshIcon(pluginId: string, iconUrl: string): Promise<unknown>

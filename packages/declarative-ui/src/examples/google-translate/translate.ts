@@ -267,7 +267,7 @@ export async function saveTranslateHistory(
   const current = await getTranslateHistory();
   const newItem: TranslateHistoryItem = {
     ...result,
-    id: `trans_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`
+    id: `trans_${Date.now()}_${(globalThis.crypto?.randomUUID?.()?.slice(0, 6) || "0001")}`
   };
 
   // 去重并限制最多保留 50 条

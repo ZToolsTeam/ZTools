@@ -6,6 +6,9 @@ import { fileURLToPath } from 'node:url'
 import { inspectMacApp, parseMacTestArguments } from './macos-preflight.mjs'
 import { verifyMacosUniversalBundle } from './verify-macos-universal.mjs'
 import { compareOsVersions } from './macos-minimum-os.mjs'
+import plist from 'plist'
+import { NETWORK_HELPER_BUNDLE, NETWORK_HELPER_EXECUTABLE, NETWORK_ENTITLEMENT, networkBundleId } from './macos-network-bundle.mjs'
+import { loadNetworkProfile, embedNetworkProfile, verifyNetworkEntitlements } from './macos-network-profile.mjs'
 
 const MAC_NATIVE_LOAD_PROOF_UNAVAILABLE = 'MAC_NATIVE_SAME_OBJECT_PROOF_UNAVAILABLE'
 
@@ -64,6 +67,7 @@ export function signMacosRelease(options, {
       const entitlement = JSON.parse(tool('/usr/bin/plutil', ['-convert', 'json', '-o', '-', target]))
       // A prototype must not weaken the approved native trust boundary.
       if (entitlement['com.apple.security.cs.disable-library-validation'] === true ||
+          Object.hasOwn(entitlement, NETWORK_ENTITLEMENT) ||
           entitlement['com.apple.security.get-task-allow'] === true ||
           entitlement['com.apple.security.app-sandbox'] === true ||
           entitlement['com.apple.security.cs.allow-jit'] !== true) throw new Error('ENTITLEMENTS_POLICY_REQUIRED')
@@ -77,14 +81,28 @@ export function signMacosRelease(options, {
       throw error
     }
     const units = macSigningOrder(appRoot, audit.machoFiles)
+    const networkBundle = path.join(appRoot, NETWORK_HELPER_BUNDLE)
+    const hasNetwork = audit.machoFiles.includes(NETWORK_HELPER_EXECUTABLE)
+    let networkProfile
+    if (hasNetwork && options['network-profile']) {
+      const bundleId = networkBundleId(options['bundle-id'])
+      const info = plist.parse(fsApi.readFileSync(path.join(networkBundle, 'Contents', 'Info.plist'), 'utf8'))
+      if (info.CFBundleIdentifier !== bundleId) throw new Error('NETWORK_PROFILE_APP_MISMATCH')
+      networkProfile = loadNetworkProfile({ profilePath: options['network-profile'], bundleId, identity: options.identity }, { fsApi, exec })
+    } else if (options['network-profile']) throw new Error('NETWORK_HELPER_MISSING')
     // Reserve a fresh external output root; never overwrite a previous release.
     fsApi.mkdirSync(path.dirname(options.output), { recursive: true })
     fsApi.mkdirSync(options.output)
+    const networkEntitlements = path.join(options.output, 'network-entitlements.plist')
+    if (networkProfile) embedNetworkProfile({ bundlePath: networkBundle, profile: networkProfile, entitlementsPath: networkEntitlements, fsApi })
     completedStages.push(stage)
     stage = 'nested-sign'
     for (const unit of units) {
       const argv = ['--force', '--options', 'runtime', '--timestamp', '--sign', options.identity]
-      if (unit.target.endsWith('.app')) argv.push('--entitlements', options['helper-entitlements'])
+      if (unit.target === networkBundle) {
+        if (networkProfile) argv.push('--entitlements', networkEntitlements)
+      }
+      else if (unit.target.endsWith('.app')) argv.push('--entitlements', options['helper-entitlements'])
       argv.push(unit.target)
       tool('/usr/bin/codesign', argv)
     }
@@ -95,6 +113,7 @@ export function signMacosRelease(options, {
     completedStages.push(stage)
     stage = 'signature-verify'
     tool('/usr/bin/codesign', ['--verify', '--deep', '--strict', appRoot])
+    if (networkProfile) verifyNetworkEntitlements(tool('/usr/bin/codesign', ['--display', '--entitlements', '-', '--xml', networkBundle]), networkProfile.entitlements)
     completedStages.push(stage)
     stage = 'submission-archive'
     const submission = path.join(options.output, 'notary-submission.zip')
@@ -126,7 +145,7 @@ export function signMacosRelease(options, {
     // Tool stderr/argv can contain identities, paths and credentials. Do not echo it.
     return {
       status: 'FAIL', phase: 2, stage, completedStages,
-      code: error?.code === MAC_NATIVE_LOAD_PROOF_UNAVAILABLE || error?.message === MAC_NATIVE_LOAD_PROOF_UNAVAILABLE
+      code: /^NETWORK_[A-Z_]+$/.test(error?.message ?? '') ? error.message : error?.code === MAC_NATIVE_LOAD_PROOF_UNAVAILABLE || error?.message === MAC_NATIVE_LOAD_PROOF_UNAVAILABLE
         ? MAC_NATIVE_LOAD_PROOF_UNAVAILABLE
         : 'SIGNING_STAGE_FAILED'
     }
@@ -135,13 +154,13 @@ export function signMacosRelease(options, {
 
 export function main(argv = process.argv.slice(2)) {
   if (argv.length === 1 && argv[0] === '--help') {
-    console.log('npm run sign:mac:prototype -- --app <absolute.app> --output <new absolute directory> --bundle-id <approved ID> --minimum-os <approved version> --expect-process-arch <x64|arm64> --identity <Developer ID Application: Name (TEAMID)> --keychain-profile <stored profile> --entitlements <approved absolute.plist> --helper-entitlements <approved absolute.plist>')
+    console.log('npm run sign:mac:prototype -- --app <absolute.app> --output <new absolute directory> --bundle-id <approved ID> --minimum-os <approved version> --expect-process-arch <x64|arm64> --identity <Developer ID Application: Name (TEAMID)> --keychain-profile <stored profile> --entitlements <approved absolute.plist> --helper-entitlements <approved absolute.plist> [--network-profile <网络辅助进程的 Developer ID 描述文件绝对路径>]')
     return 0
   }
   let options
   try {
     const { values } = parseArgs({ args: argv, options: Object.fromEntries(
-      ['app', 'output', 'bundle-id', 'minimum-os', 'expect-process-arch', 'identity', 'keychain-profile', 'entitlements', 'helper-entitlements'].map(k => [k, { type: 'string' }])) })
+      ['app', 'output', 'bundle-id', 'minimum-os', 'expect-process-arch', 'identity', 'keychain-profile', 'entitlements', 'helper-entitlements', 'network-profile'].map(k => [k, { type: 'string' }])) })
     parseMacTestArguments(['--app', values.app ?? '', '--output', values.output ?? '', '--bundle-id', values['bundle-id'] ?? '',
       '--minimum-os', values['minimum-os'] ?? '', '--expect-process-arch', values['expect-process-arch'] ?? ''])
     options = values

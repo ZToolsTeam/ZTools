@@ -3,6 +3,8 @@
   "ids": [
     "apple-shortcuts",
     "applications",
+    "batch-text-convert",
+    "chinese-number-converter",
     "clipboard-history",
     "currency-exchange",
     "dictionary",
@@ -12,6 +14,7 @@
     "google-translate",
     "homebrew",
     "navigation",
+    "notes",
     "obsidian",
     "organizations",
     "raycast-account",
@@ -23,11 +26,14 @@
     "script-commands",
     "system",
     "trial-nudges",
+    "unit-converter",
+    "uuid-generator",
     "web-searches",
     "window-management",
     "windows-run",
     "windows-shortcuts",
     "windows-taskbar",
-    "winget"
+    "winget",
+    "world-clock"
   ]
 }

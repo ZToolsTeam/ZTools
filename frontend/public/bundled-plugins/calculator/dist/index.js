@@ -60,7 +60,13 @@ export default function CalculatorCommand() {
     const [history, setHistory] = usePopoutValue("history", () => [], isHistory);
     // 历史以插件存储为准：带来的那份只用于首帧，读到存储后覆盖
     useEffect(() => {
-        void getCalculatorHistory().then(setHistory);
+        let active = true;
+        void getCalculatorHistory().then(items => { if (active)
+            setHistory(items); }).catch(error => {
+            if (active)
+                void showToast(Toast.Style.Failure, "读取计算历史失败，原数据保留", error instanceof Error ? error.message : String(error));
+        });
+        return () => { active = false; };
     }, []);
     const queryResult = useMemo(() => {
         return evaluateCalculatorQuery(searchText);
@@ -121,9 +127,9 @@ export default function CalculatorCommand() {
         });
         if (!confirmed)
             return;
-        await clearCalculatorHistory();
-        setHistory([]);
-        await showToast(Toast.Style.Success, "已清空所有历史计算记录");
+        if (await updateHistory(async () => { await clearCalculatorHistory(); return []; })) {
+            await showToast(Toast.Style.Success, "已清空所有历史计算记录");
+        }
     };
     const pinnedItems = history.filter(item => item.pinned);
     const recentItems = history.filter(item => !item.pinned);

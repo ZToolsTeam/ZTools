@@ -1,5 +1,6 @@
 import * as yauzl from 'yauzl'
 import { crc32 } from 'node:zlib'
+import { createHash } from 'node:crypto'
 import type { CallerIdentity } from '../../contracts/capabilities.js'
 import { errorCodes, ZToolsError } from '../../contracts/errors.js'
 import { grantId } from '../../contracts/path-reference.js'
@@ -48,65 +49,80 @@ export class ReferenceZipService {
     const controller = new AbortController(), combined = AbortSignal.any([signal, controller.signal])
     const active = () => { if (this.#stopped || combined.aborted) throw cancelled() }
     this.#pending.set(caller.webContentsId, controller)
-    let zip: yauzl.ZipFile | undefined
     try {
       const bytes = await this.grants.read(caller.webContentsId, id, '', limit, combined)
       active()
-      try {
-        zip = await yauzl.fromBufferPromise(bytes, { autoClose: false, decodeStrings: true, validateEntrySizes: true, strictFileNames: true })
-        active()
-        const archive = zip
-        // A closed in-memory reader may finish an already queued callback after cancellation.
-        archive.on('error', () => undefined)
-        const abort = () => archive.close()
-        combined.addEventListener('abort', abort, { once: true })
-        try {
-          const files: { name: string; size: number; compressedSize: number; isDirectory: boolean }[] = []
-          const contents: ZipContentEntry[] = []
-          const names = new Set<string>(); let expanded = 0, nameBytes = 0
-          for await (const entry of entries(archive, combined)) {
-            active()
-            const name = entry.fileName, segments = name.replace(/\/$/, '').split('/')
-            if (!name || name.includes('\\') || name.includes('\0') || /^[A-Za-z]:/.test(name) || segments.some(part => !part || part === '.' || part === '..') || names.has(name)) throw failed()
-            nameBytes += Buffer.byteLength(name, 'utf8'); expanded += entry.uncompressedSize
-            if (files.length >= 1024 || nameBytes > 512 * 1024 || entry.uncompressedSize > limit || expanded > 64 * 1024 * 1024) throw new ZToolsError(errorCodes.fileTooLarge, 'ZIP条目数量或展开大小超过上限')
-            names.add(name)
-            if (entry.isEncrypted() || !entry.canDecodeFileData() || ((entry.externalFileAttributes >>> 16) & 0xf000) === 0xa000) throw new ZToolsError(errorCodes.notSupported, 'ZIP加密、特殊条目或压缩算法尚不支持')
-            const directory = name.endsWith('/')
-            if (verify && !directory) {
-              const input = await archive.openReadStreamPromise(entry)
-              const cancelInput = () => input.destroy(cancelled())
-              combined.addEventListener('abort', cancelInput, { once: true })
-              const chunks: Buffer[] = []
-              let length = 0, crc = 0
-              try {
-                active()
-                for await (const chunk of input) {
-                  active(); const data = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)
-                  length += data.length
-                  if (length > entry.uncompressedSize || length > limit) throw failed()
-                  crc = crc32(data, crc); if (collect) chunks.push(data)
-                }
-                active()
-                if (length !== entry.uncompressedSize || crc !== entry.crc32) throw failed()
-                if (collect) contents.push({ name, isDirectory: false, data: Buffer.concat(chunks, length) })
-              } finally { combined.removeEventListener('abort', cancelInput); input.destroy() }
-            }
-            if (collect && directory) {
-              if (entry.uncompressedSize !== 0) throw failed()
-              contents.push({ name, isDirectory: true, data: Buffer.alloc(0) })
-            }
-            files.push({ name, size: entry.uncompressedSize, compressedSize: entry.compressedSize, isDirectory: directory })
-          }
-          active()
-          return collect ? { success: true as const, contents } : verify ? { success: true as const, valid: true } : { success: true as const, files }
-        } finally { combined.removeEventListener('abort', abort) }
-      } catch (error) {
-        active()
-        if (error instanceof ZToolsError && error.code !== errorCodes.fileError) throw error
-        if (verify && !collect) return { success: true as const, valid: false }
-        throw failed()
-      }
-    } finally { zip?.close(); this.#pending.delete(caller.webContentsId) }
+      return await decodeZipArchive(bytes, combined, verify, collect)
+    } finally { this.#pending.delete(caller.webContentsId) }
   }
+}
+
+async function decodeZipArchive(bytes: Buffer, signal: AbortSignal, verify: boolean, collect: boolean) {
+  const active = () => { if (signal.aborted) throw cancelled() }
+  active()
+  if (bytes.length > limit) throw new ZToolsError(errorCodes.fileTooLarge, 'ZIP 文件超过 16 MiB')
+  let zip: yauzl.ZipFile | undefined
+  try {
+    try {
+      zip = await yauzl.fromBufferPromise(bytes, { autoClose: false, decodeStrings: true, validateEntrySizes: true, strictFileNames: true })
+      active()
+      const archive = zip
+      // A closed in-memory reader may finish an already queued callback after cancellation.
+      archive.on('error', () => undefined)
+      const abort = () => archive.close()
+      signal.addEventListener('abort', abort, { once: true })
+      try {
+        const files: { name: string; size: number; compressedSize: number; isDirectory: boolean }[] = []
+        const contents: ZipContentEntry[] = []
+        const names = new Set<string>(); let expanded = 0, nameBytes = 0
+        for await (const entry of entries(archive, signal)) {
+          active()
+          const name = entry.fileName, segments = name.replace(/\/$/, '').split('/')
+          if (!name || name.includes('\\') || name.includes('\0') || /^[A-Za-z]:/.test(name) || segments.some(part => !part || part === '.' || part === '..') || names.has(name)) throw failed()
+          nameBytes += Buffer.byteLength(name, 'utf8'); expanded += entry.uncompressedSize
+          if (files.length >= 1024 || nameBytes > 512 * 1024 || entry.uncompressedSize > limit || expanded > 64 * 1024 * 1024) throw new ZToolsError(errorCodes.fileTooLarge, 'ZIP条目数量或展开大小超过上限')
+          names.add(name)
+          if (entry.isEncrypted() || !entry.canDecodeFileData() || ((entry.externalFileAttributes >>> 16) & 0xf000) === 0xa000) throw new ZToolsError(errorCodes.notSupported, 'ZIP加密、特殊条目或压缩算法尚不支持')
+          const directory = name.endsWith('/')
+          if (verify && !directory) {
+            const input = await archive.openReadStreamPromise(entry)
+            const cancelInput = () => input.destroy(cancelled())
+            signal.addEventListener('abort', cancelInput, { once: true })
+            const chunks: Buffer[] = []
+            let length = 0, crc = 0
+            try {
+              active()
+              for await (const chunk of input) {
+                active(); const data = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)
+                length += data.length
+                if (length > entry.uncompressedSize || length > limit) throw failed()
+                crc = crc32(data, crc); if (collect) chunks.push(data)
+              }
+              active()
+              if (length !== entry.uncompressedSize || crc !== entry.crc32) throw failed()
+              if (collect) contents.push({ name, isDirectory: false, data: Buffer.concat(chunks, length) })
+            } finally { signal.removeEventListener('abort', cancelInput); input.destroy() }
+          }
+          if (collect && directory) {
+            if (entry.uncompressedSize !== 0) throw failed()
+            contents.push({ name, isDirectory: true, data: Buffer.alloc(0) })
+          }
+          files.push({ name, size: entry.uncompressedSize, compressedSize: entry.compressedSize, isDirectory: directory })
+        }
+        active()
+        return collect ? { success: true as const, contents, sourceSize: bytes.length, digest: createHash('sha256').update(bytes).digest('hex') } : verify ? { success: true as const, valid: true } : { success: true as const, files }
+      } finally { signal.removeEventListener('abort', abort) }
+    } catch (error) {
+      active()
+      if (error instanceof ZToolsError && error.code !== errorCodes.fileError) throw error
+      if (verify && !collect) return { success: true as const, valid: false }
+      throw failed()
+    }
+  } finally { zip?.close() }
+}
+
+export async function readZipArchive(bytes: Buffer, signal: AbortSignal) {
+  const result = await decodeZipArchive(bytes, signal, true, true)
+  if (!result.contents || result.sourceSize === undefined || !result.digest) throw failed()
+  return { entries: result.contents, size: result.sourceSize, digest: result.digest }
 }

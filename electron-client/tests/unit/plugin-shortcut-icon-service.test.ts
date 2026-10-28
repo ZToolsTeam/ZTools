@@ -69,6 +69,92 @@ test('removes the plugin shortcut while refusing non-file replacements', async (
   assert.equal(await fs.access(shortcutPath).then(() => true, () => false), false)
 })
 
+test('卸载清理：非 Windows 不读清单，直接返回空操作（macOS 卸载不能被快捷方式挡住）', async () => {
+  let manifestReads = 0
+  const service = new PluginShortcutService(
+    {
+      withPluginDirectory: async () => {
+        manifestReads += 1
+        throw new Error('不应读取清单')
+      }
+    },
+    '/Users/test/Desktop',
+    '/Applications/ZTools.app',
+    () => true,
+    'darwin'
+  )
+
+  const cleanup = await service.planUninstallCleanup('plugin.test')
+  await cleanup()
+  assert.equal(manifestReads, 0)
+  await assert.rejects(service.remove('plugin.test'), { code: 'NOT_SUPPORTED' })
+})
+
+test('卸载清理：Windows 上清单读不到（损坏或内置插件）时返回空操作，不抛错', async (context) => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'ztools-plugin-shortcut-broken-'))
+  context.after(() => fs.rm(root, { recursive: true, force: true }))
+  const desktop = path.join(root, 'Desktop')
+  await fs.mkdir(desktop, { recursive: true })
+  const unrelated = path.join(desktop, 'Test Plugin.lnk')
+  await fs.writeFile(unrelated, 'shortcut')
+  const warnings: unknown[] = []
+  const warn = context.mock.method(console, 'warn', (...args: unknown[]) => { warnings.push(args) })
+  const service = new PluginShortcutService(
+    {
+      withPluginDirectory: async () => {
+        throw Object.assign(new Error('plugin.json 不是有效 JSON'), { code: 'PLUGIN_PACKAGE_INVALID' })
+      }
+    },
+    desktop,
+    'C:\\ZTools\\ZTools.exe',
+    () => true,
+    'win32'
+  )
+
+  const cleanup = await service.planUninstallCleanup('plugin.test')
+  await cleanup()
+  warn.mock.restore()
+  assert.equal(warnings.length, 1)
+  // 读不到清单就无从知道快捷方式名，不能误删桌面上的同名文件
+  assert.equal(await fs.access(unrelated).then(() => true, () => false), true)
+})
+
+test('卸载清理：卸载前记下快捷方式位置，执行时删除；不是普通文件时拒绝删除', async (context) => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'ztools-plugin-shortcut-plan-'))
+  context.after(() => fs.rm(root, { recursive: true, force: true }))
+  const desktop = path.join(root, 'Desktop')
+  const shortcutPath = path.join(desktop, 'Test Plugin.lnk')
+  await fs.mkdir(desktop, { recursive: true })
+  await fs.writeFile(shortcutPath, 'shortcut')
+  let pluginExists = true
+  const service = new PluginShortcutService(
+    {
+      withPluginDirectory: async (_pluginId, action) => {
+        if (!pluginExists) throw new Error('插件不存在')
+        return action(manifest(), root)
+      }
+    },
+    desktop,
+    'C:\\ZTools\\ZTools.exe',
+    () => true,
+    'win32'
+  )
+
+  const cleanup = await service.planUninstallCleanup('plugin.test')
+  // 模拟插件目录已被卸载：删除动作不再依赖清单
+  pluginExists = false
+  assert.equal(await fs.access(shortcutPath).then(() => true, () => false), true, '计划阶段不删除')
+  await cleanup()
+  assert.equal(await fs.access(shortcutPath).then(() => true, () => false), false)
+  // 快捷方式已不存在时再次执行不报错
+  await cleanup()
+
+  pluginExists = true
+  await fs.mkdir(shortcutPath)
+  const refuse = await service.planUninstallCleanup('plugin.test')
+  await assert.rejects(refuse(), { code: 'PERMISSION_DENIED' })
+})
+
 test('downloads supported icon formats into the plugin directory and records the URL', async (context) => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'ztools-plugin-icon-'))
   context.after(() => fs.rm(root, { recursive: true, force: true }))

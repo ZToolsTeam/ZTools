@@ -6,8 +6,11 @@ export function createTodo(title, priority = "medium") {
     if (!trimmed) {
         throw new Error("待办事项标题不能为空");
     }
+    if (typeof globalThis.crypto?.randomUUID !== 'function') {
+        throw new Error('无法生成唯一标识，请重启客户端后重试');
+    }
     return {
-        id: "todo_" + Date.now().toString(36) + "_" + Math.random().toString(36).slice(2, 9),
+        id: "todo_" + Date.now().toString(36) + "_" + globalThis.crypto.randomUUID(),
         title: trimmed,
         completed: false,
         priority,

@@ -4,13 +4,23 @@ import { fileURLToPath } from 'node:url'
 import { parseArgs } from 'node:util'
 import { inspectMacDeployment } from './macos-minimum-os.mjs'
 import { buildMacUniversalHelper } from './build-macos-universal-helper.mjs'
+import { buildDevelopmentHelper } from './build-macos-development-helper.mjs'
+
+const source = fileURLToPath(new URL('../native/ZToolsMacClipboard/main.mm', import.meta.url))
+const pasteSource = fileURLToPath(new URL('../native/ZToolsMacClipboard/paste_session.mm', import.meta.url))
 
 export function buildMacClipboard({ outputRoot, minimumOs, platform = process.platform,
   exec = execFileSync, inspectDeployment = inspectMacDeployment }) {
-  const source = fileURLToPath(new URL('../native/ZToolsMacClipboard/main.mm', import.meta.url))
-  return buildMacUniversalHelper({ name: 'ZToolsMacClipboard', sources: [source],
-    compilerArgs: ['-fobjc-arc', '-framework', 'AppKit', '-framework', 'Foundation', '-framework', 'CoreFoundation'],
+  return buildMacUniversalHelper({ name: 'ZToolsMacClipboard', sources: [source, pasteSource],
+    compilerArgs: ['-fobjc-arc', '-framework', 'AppKit', '-framework', 'Foundation', '-framework', 'CoreFoundation', '-framework', 'ApplicationServices', '-framework', 'Carbon'],
     outputRoot, minimumOs, platform, exec, inspectDeployment })
+}
+
+export function buildDevelopmentClipboard(root) {
+  const headers = ['paste_session.h', 'validation.hpp'].map(name =>
+    fileURLToPath(new URL(`../native/ZToolsMacClipboard/${name}`, import.meta.url)))
+  buildDevelopmentHelper({ root, directory: 'mac-clipboard-native', name: 'ZToolsMacClipboard',
+    sources: [source, pasteSource, ...headers, fileURLToPath(import.meta.url)], build: buildMacClipboard })
 }
 
 export function main(argv = process.argv.slice(2)) {

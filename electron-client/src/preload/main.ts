@@ -86,6 +86,7 @@ type PreloadMethod =
   | 'system_sleep'
   | 'system_hibernate'
   | 'system_prevent_sleep'
+  | 'system_power_session'
   | 'system_simulate_key_press'
   | 'system_simulate_key_combo'
   | 'system_simulate_text'
@@ -329,6 +330,32 @@ type PreloadMethod =
   | 'shortcuts_view'
   | 'navigation_search_menu_items'
   | 'navigation_click_menu_item'
+  | 'folder_sync'
+  | 'folder_sync_cancel'
+  | 'font_manager'
+  | 'font_manager_cancel'
+  | 'recent_projects'
+  | 'startup_manager'
+  | 'browser_bookmarks_scan'
+  | 'downloads_manager'
+  | 'keyboard_lock'
+  | 'docker_manager'
+  | 'environment_manager'
+  | 'file_unlock'
+  | 'hosts_manager'
+  | 'lan_network'
+  | 'network_speedtest'
+  | 'hotkey_probe'
+  | 'dns_benchmark'
+  | 'browser_bookmarks_cancel'
+  | 'media_metadata'
+  | 'media_metadata_cancel'
+  | 'office_document'
+  | 'markdown_document'
+  | 'monitor_control'
+  | 'ssh_proxy'
+  | 'tls_inspect'
+  | 'office_cancel'
   | 'audio_get_devices'
   | 'audio_set_default_device'
   | 'audio_set_volume'
@@ -629,6 +656,7 @@ const bridge = Object.freeze({
       system_sleep: (request: unknown) => invokeMethod('system_sleep', request),
       system_hibernate: (request: unknown) => invokeMethod('system_hibernate', request),
       system_prevent_sleep: (request: unknown) => invokeMethod('system_prevent_sleep', request),
+      system_power_session: (request: unknown) => invokeMethod('system_power_session', request),
       system_simulate_key_press: (request: unknown) => invokeMethod('system_simulate_key_press', request),
       system_simulate_key_combo: (request: unknown) => invokeMethod('system_simulate_key_combo', request),
       system_simulate_text: (request: unknown) => invokeMethod('system_simulate_text', request),
@@ -754,6 +782,32 @@ const bridge = Object.freeze({
       shortcuts_view: (request: unknown) => invokeMethod('shortcuts_view', request),
       navigation_search_menu_items: (request: unknown) => invokeMethod('navigation_search_menu_items', request),
       navigation_click_menu_item: (request: unknown) => invokeMethod('navigation_click_menu_item', request),
+      folder_sync: (request: unknown) => invokeMethod('folder_sync', request),
+      folder_sync_cancel: (request: unknown) => invokeMethod('folder_sync_cancel', request),
+      font_manager: (request: unknown) => invokeMethod('font_manager', request),
+      font_manager_cancel: (request: unknown) => invokeMethod('font_manager_cancel', request),
+      recent_projects: (request: unknown) => invokeMethod('recent_projects', request),
+      startup_manager: (request: unknown) => invokeMethod('startup_manager', request),
+      browser_bookmarks_scan: (request: unknown) => invokeMethod('browser_bookmarks_scan', request),
+      downloads_manager: (request: unknown) => invokeMethod('downloads_manager', request),
+      keyboard_lock: (request: unknown) => invokeMethod('keyboard_lock', request),
+      docker_manager: (request: unknown) => invokeMethod('docker_manager', request),
+      environment_manager: (request: unknown) => invokeMethod('environment_manager', request),
+      file_unlock: (request: unknown) => invokeMethod('file_unlock', request),
+      hosts_manager: (request: unknown) => invokeMethod('hosts_manager', request),
+      lan_network: (request: unknown) => invokeMethod('lan_network', request),
+      network_speedtest: (request: unknown) => invokeMethod('network_speedtest', request),
+      hotkey_probe: (request: unknown) => invokeMethod('hotkey_probe', request),
+      dns_benchmark: (request: unknown) => invokeMethod('dns_benchmark', request),
+      browser_bookmarks_cancel: (request: unknown) => invokeMethod('browser_bookmarks_cancel', request),
+      media_metadata: (request: unknown) => invokeMethod('media_metadata', request),
+      media_metadata_cancel: (request: unknown) => invokeMethod('media_metadata_cancel', request),
+      office_document: (request: unknown) => invokeMethod('office_document', request),
+      markdown_document: (request: unknown) => invokeMethod('markdown_document', request),
+      monitor_control: (request: unknown) => invokeMethod('monitor_control', request),
+      ssh_proxy: (request: unknown) => invokeMethod('ssh_proxy', request),
+      tls_inspect: (request: unknown) => invokeMethod('tls_inspect', request),
+      office_cancel: (request: unknown) => invokeMethod('office_cancel', request),
       audio_get_devices: (request: unknown) => invokeMethod('audio_get_devices', request),
       audio_set_default_device: (request: unknown) => invokeMethod('audio_set_default_device', request),
       audio_set_volume: (request: unknown) => invokeMethod('audio_set_volume', request),

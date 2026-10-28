@@ -101,6 +101,7 @@ int main(int argc, char**) {
           const auto handle = input.Uint(); input.End();
           if (objects.erase(handle) != 1) throw std::runtime_error("DENIED"); break;
         }
+        case 22:
         case 4: {
           const auto handle = input.Uint(), count = input.Uint();
           if (count > 64) throw std::runtime_error("DENIED");
@@ -108,7 +109,7 @@ int main(int argc, char**) {
           for (std::uint32_t i = 0; i < count; ++i) segments.push_back(input.String());
           input.End();
           const auto found = objects.find(handle); if (found == objects.end()) throw std::runtime_error("DENIED");
-          const auto entries = found->second.List(segments);
+          const auto entries = found->second.List(segments, {}, operation == 22);
           Put(result, static_cast<std::uint32_t>(entries.size()));
           for (const auto& entry : entries) {
             Put(result, static_cast<std::uint32_t>(entry.name.size())); result.insert(result.end(), entry.name.begin(), entry.name.end());
@@ -152,6 +153,16 @@ int main(int argc, char**) {
           Put(result, static_cast<std::uint32_t>(metadata.size)); Put(result, static_cast<std::uint32_t>(metadata.size >> 32));
           const auto modified = static_cast<std::uint64_t>(metadata.modified_ms);
           Put(result, static_cast<std::uint32_t>(modified)); Put(result, static_cast<std::uint32_t>(modified >> 32)); break;
+        }
+        case 23: {
+          const auto handle = input.Uint(); input.End();
+          const auto found = objects.find(handle); if (found == objects.end()) throw std::runtime_error("DENIED");
+          found->second.Trash(); result.push_back(1); break;
+        }
+        case 24: {
+          const auto handle = input.Uint(); const auto name = input.String(); input.End();
+          const auto found = objects.find(handle); if (found == objects.end()) throw std::runtime_error("DENIED");
+          found->second.Rename(name); objects.erase(found); result.push_back(1); break;
         }
         case 10: {
           const auto source = input.Uint(), destination = input.Uint(); const auto replace = input.Byte(); input.End();

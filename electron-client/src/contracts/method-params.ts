@@ -1,3 +1,24 @@
+import { validateRecentProjectsRequest } from './recent-projects.js'
+import { validateDownloadsManagerRequest } from './downloads-manager.js'
+import { validateStartupRequest } from './startup-manager.js'
+import { validateLanRequest } from './lan-network.js'
+import { validateSpeedtestRequest } from './network-speedtest.js'
+import { parseHotkeyProbeRequest } from './hotkey-probe.js'
+import { validateHostsRequest } from './hosts-manager.js'
+import { validateFolderSyncRequest } from './folder-sync.js'
+import { validateFontRequest } from './font-manager.js'
+import { validateBookmarkRequest } from './browser-bookmarks.js'
+import { validateKeyboardLockRequest } from './keyboard-lock.js'
+import { validateDockerRequest } from './docker-manager.js'
+import { validateEnvironmentRequest } from './environment-manager.js'
+import { validateFileUnlockRequest } from './file-unlock.js'
+import { validateDnsRequest } from './dns-benchmark.js'
+import { validateMediaMetadataParams } from './media-metadata.js'
+import { validateOfficeParams } from './office-document.js'
+import { validateMarkdownParams } from './markdown-document.js'
+import { validateMonitorRequest } from './monitor-control.js'
+import { validateSshProxyRequest } from './ssh-proxy.js'
+import { validateTlsInspectRequest } from './tls-inspect.js'
 import type { AllowedMethod } from './capabilities.js'
 import { errorCodes, ZToolsError } from './errors.js'
 import { isRuntimeCapabilityId } from './runtime-capability.js'
@@ -334,6 +355,8 @@ export interface ScreenCaptureParams {
 export interface ClipboardCopyTextParams {
   text?: string
   tempFile?: string
+  /** 不进入本客户端历史或订阅广播，30 秒后仍为本次内容时清除。 */
+  sensitive?: boolean
 }
 
 export interface ClipboardImageParams {
@@ -435,6 +458,10 @@ export interface PluginInstallParams extends PluginKeyParams {
   fileSize: number
   revoked?: boolean
   revoked_reason?: string
+}
+
+export interface PluginInstallStatusParams extends PluginKeyParams {
+  operationId: string
 }
 
 export interface UpdateCheckParams {
@@ -558,6 +585,12 @@ export interface SystemForceParams {
 
 export interface SystemPreventSleepParams {
   enable: boolean
+}
+
+export interface SystemPowerSessionParams {
+  action: 'status' | 'start' | 'stop' | 'toggle'
+  mode?: 'display' | 'system'
+  durationMinutes?: number
 }
 
 export interface RuntimeCapabilityQueryParams {
@@ -1238,7 +1271,8 @@ function validateScreenRect(value: unknown, key: string): void {
 export const MAX_CLIPBOARD_TEXT_BYTES = 8 * 1024 * 1024
 
 function validateClipboardText(params: Record<string, unknown>): void {
-  rejectUnknownKeys(params, ['text', 'tempFile'])
+  rejectUnknownKeys(params, ['text', 'tempFile', 'sensitive'])
+  if (params.sensitive !== undefined) requireBoolean(params, 'sensitive')
   const hasText = Object.hasOwn(params, 'text')
   const hasTempFile = Object.hasOwn(params, 'tempFile')
   if (hasText === hasTempFile) {
@@ -1684,6 +1718,11 @@ export function validateMethodParams(method: AllowedMethod, params: unknown): vo
         maxBytes: 1024 * 1024
       })
       return
+    case 'plugin_install_status':
+      rejectUnknownKeys(params, ['pluginId', 'operationId'])
+      requirePluginIdentifier(params, 'pluginId')
+      requireString(params, 'operationId', { min: 1, max: 128 })
+      return
     case 'plugin_install':
     case 'plugin_update': {
       rejectUnknownKeys(params, ['pluginId', 'url', 'version', 'checksum', 'fileSize'])
@@ -1856,6 +1895,13 @@ export function validateMethodParams(method: AllowedMethod, params: unknown): vo
     case 'system_prevent_sleep':
       rejectUnknownKeys(params, ['enable'])
       requireBoolean(params, 'enable')
+      return
+    case 'system_power_session':
+      rejectUnknownKeys(params, ['action', 'mode', 'durationMinutes'])
+      requireString(params, 'action', { min: 1, max: 16 })
+      if (!['status', 'start', 'stop', 'toggle'].includes(String(params.action))) throw new ZToolsError(errorCodes.invalidRequest, '防休眠操作无效')
+      if (params.mode !== undefined && params.mode !== 'display' && params.mode !== 'system') throw new ZToolsError(errorCodes.invalidRequest, '防休眠模式无效')
+      if (params.durationMinutes !== undefined) requireInteger(params, 'durationMinutes', { min: 0, max: 10080 })
       return
     case 'system_simulate_key_press':
       rejectUnknownKeys(params, ['key'])
@@ -2447,6 +2493,11 @@ export function validateMethodParams(method: AllowedMethod, params: unknown): vo
       requireString(params, 'id', { min: 1, max: 128 })
       return
     case 'focus_start':
+      rejectUnknownKeys(params, ['title', 'categoryId', 'durationMinutes', 'mode'])
+      if (params.title !== undefined) requireString(params, 'title', { min: 1, max: 300 })
+      if (params.categoryId !== undefined) requireString(params, 'categoryId', { min: 1, max: 128 })
+      if (params.durationMinutes !== undefined && (typeof params.durationMinutes !== 'number' || !Number.isFinite(params.durationMinutes) || params.durationMinutes < 1 || params.durationMinutes > 1440)) throw new ZToolsError(errorCodes.invalidRequest, 'durationMinutes 必须为 1～1440 分钟')
+      if (params.mode !== undefined && params.mode !== 'single' && params.mode !== 'pomodoro') throw new ZToolsError(errorCodes.invalidRequest, 'mode 无效')
       return
     case 'focus_toggle':
     case 'focus_pause':
@@ -2719,18 +2770,106 @@ export function validateMethodParams(method: AllowedMethod, params: unknown): vo
       rejectUnknownKeys(params, ['name'])
       requireString(params, 'name', { min: 1, max: 512 })
       return
+    case 'folder_sync':
+      validateFolderSyncRequest(params)
+      return
+    case 'folder_sync_cancel':
+      rejectUnknownKeys(params, ['operationId'])
+      requireString(params, 'operationId', { min: 1, max: 100 })
+      return
+    case 'recent_projects':
+      validateRecentProjectsRequest(params)
+      return
+    case 'startup_manager':
+      validateStartupRequest(params)
+      return
+    case 'browser_bookmarks_scan':
+    case 'browser_bookmarks_cancel':
+      validateBookmarkRequest(params)
+      return
+    case 'downloads_manager':
+      validateDownloadsManagerRequest(params)
+      return
+    case 'docker_manager':
+      validateDockerRequest(params)
+      return
+    case 'environment_manager':
+      validateEnvironmentRequest(params)
+      return
+    case 'network_speedtest':
+      validateSpeedtestRequest(params)
+      return
+    case 'lan_network':
+      validateLanRequest(params)
+      return
+    case 'hotkey_probe':
+      parseHotkeyProbeRequest(params)
+      return
+    case 'hosts_manager':
+      validateHostsRequest(params)
+      return
+    case 'file_unlock':
+      validateFileUnlockRequest(params)
+      return
+    case 'dns_benchmark':
+      validateDnsRequest(params)
+      return
+    case 'keyboard_lock':
+      validateKeyboardLockRequest(params)
+      return
+    case 'font_manager':
+      validateFontRequest(params)
+      return
+    case 'font_manager_cancel':
+      rejectUnknownKeys(params, ['operationId'])
+      requireString(params, 'operationId', { min: 1, max: 100 })
+      return
+    case 'media_metadata':
+      validateMediaMetadataParams(params)
+      return
+    case 'media_metadata_cancel':
+      rejectUnknownKeys(params, ['operationId'])
+      requireString(params, 'operationId', { min: 1, max: 100 })
+      return
+    case 'office_document':
+      validateOfficeParams(params)
+      return
+    case 'markdown_document':
+      validateMarkdownParams(params)
+      return
+    case 'monitor_control':
+      validateMonitorRequest(params)
+      return
+    case 'ssh_proxy':
+      validateSshProxyRequest(params)
+      return
+    case 'tls_inspect':
+      validateTlsInspectRequest(params)
+      return
+    case 'office_cancel':
+      rejectUnknownKeys(params, ['operationId'])
+      requireString(params, 'operationId', { min: 1, max: 100 })
+      return
     case 'audio_get_devices':
       rejectUnknownKeys(params, [])
       return
     case 'audio_set_default_device':
-      rejectUnknownKeys(params, ['id', 'name', 'idOrName', 'type'])
-      return
     case 'audio_set_volume':
-      rejectUnknownKeys(params, ['volume', 'type'])
+    case 'audio_toggle_mute': {
+      const allowed = method === 'audio_set_default_device' ? ['id', 'name', 'idOrName', 'type'] : method === 'audio_set_volume' ? ['id', 'volume', 'type'] : ['id', 'muted', 'type']
+      rejectUnknownKeys(params, allowed)
+      for (const key of ['id', 'name', 'idOrName']) {
+        if (params[key] !== undefined) {
+          const identity = requireString(params, key, { min: 1, max: 1024 })
+          if (identity.includes('\0')) throw new ZToolsError(errorCodes.invalidRequest, '音频设备标识无效')
+        }
+      }
+      if (params.type !== undefined && params.type !== 'input' && params.type !== 'output') throw new ZToolsError(errorCodes.invalidRequest, '音频方向无效')
+      if (method === 'audio_set_default_device' && params.id === undefined && params.name === undefined && params.idOrName === undefined) throw new ZToolsError(errorCodes.invalidRequest, '缺少音频设备标识')
+      if (method === 'audio_set_volume' && (typeof params.volume !== 'number' || !Number.isFinite(params.volume) || params.volume < 0 || params.volume > 100)) throw new ZToolsError(errorCodes.invalidRequest, '音量必须在 0 到 100 之间')
+      if (params.muted !== undefined) requireBoolean(params, 'muted')
       return
-    case 'audio_toggle_mute':
-      rejectUnknownKeys(params, ['muted'])
-      return
+    }
     case 'wifi_get_profiles':
       rejectUnknownKeys(params, ['interfaceName', 'forceRefresh'])
       return

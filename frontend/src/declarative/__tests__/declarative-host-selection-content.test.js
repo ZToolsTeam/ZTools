@@ -580,6 +580,33 @@ describe("Detail Markdown 渲染", () => {
 });
 
 describe("剪贴板写入失败如实提示，不能显示“已复制”", () => {
+  it.each(["CLIPBOARD_ERROR", "RESPONSE_TOO_LARGE", "CALLER_DESTROYED", "NOT_SUPPORTED", "PERMISSION_DENIED"])("自动粘贴被拒绝（%s）不臆测已经复制，也不执行成功回调", async (code) => {
+    const onPaste = vi.fn();
+    installTransport({ clipboard_hide_and_paste_text: () => ({ success: false, error: { code, message: "测试宿主拒绝粘贴" } }) });
+    const wrapper = mountView(() => List({}, [List.Item({
+      id: "paste", title: "待粘贴内容",
+      actions: ActionPanel({}, [Action.Paste({ title: "粘贴", content: "新的测试内容", onPaste })])
+    })]));
+    await flush();
+    press(searchInput(wrapper), "Enter");
+    await flush();
+    expect(wrapper.text()).toContain("粘贴失败");
+    expect(wrapper.text()).toContain("测试宿主拒绝粘贴");
+    expect(wrapper.text()).not.toContain("已复制");
+    expect(wrapper.text()).not.toContain("已粘贴到活动窗口");
+    expect(onPaste).not.toHaveBeenCalled();
+  });
+
+  it("发送粘贴请求的回执不能宣称目标应用已经收到", async () => {
+    installTransport({ clipboard_hide_and_paste_text: () => ({ success: true }) });
+    const wrapper = mountView(() => List({}, [List.Item({ id: "paste", title: "测试条目",
+      actions: ActionPanel({}, [Action.Paste({ title: "发送", content: "测试内容" })])
+    })]));
+    await flush(); press(searchInput(wrapper), "Enter"); await flush();
+    expect(wrapper.text()).toContain("已发送粘贴请求");
+    expect(wrapper.text()).not.toContain("已粘贴到活动窗口");
+  });
+
   function copyList(content, extra = {}) {
     return () =>
       List({}, [

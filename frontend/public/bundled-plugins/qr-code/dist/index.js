@@ -99,7 +99,7 @@ export function WifiQrForm({ onCreated }) {
         Form.Checkbox({ id: "hidden", label: "隐藏网络（不广播名称）", value: hidden, onChange: (v) => setHidden(v) })
     ]);
 }
-export default function QrCodeCommand() {
+export default function QrCodeCommand({ initialWifi = false } = {}) {
     const [searchText, setSearchText] = useState("");
     const [level, setLevel] = useState("M");
     const [history, setHistory] = useState([]);
@@ -156,7 +156,18 @@ export default function QrCodeCommand() {
         }
         setSearchText(text);
     };
-    const openWifiForm = () => push(() => WifiQrForm({ onCreated: (item) => run(() => saveQrItem(item), "已生成 Wi-Fi 二维码") }));
+    const openWifiForm = () => push(() => WifiQrForm({ onCreated: async (item) => {
+            const saved = await run(() => saveQrItem(item), "已生成 Wi-Fi 二维码");
+            if (saved) {
+                setSearchText(item.content);
+                setLevel(item.level);
+            }
+            return saved;
+        } }));
+    useEffect(() => {
+        if (initialWifi)
+            openWifiForm();
+    }, [initialWifi]);
     const clearAll = async () => {
         const ok = await confirmAlert({
             title: `清空 ${history.length} 条二维码历史？`,
@@ -246,3 +257,7 @@ export default function QrCodeCommand() {
         actions: ActionPanel({ title: "二维码" }, globalActions)
     }, sections);
 }
+export const commands = {
+    "qr-text": () => QrCodeCommand(),
+    "qr-wifi": () => QrCodeCommand({ initialWifi: true })
+};

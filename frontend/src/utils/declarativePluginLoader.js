@@ -450,6 +450,13 @@ export function transpileEsmToCjs(sourceCode) {
     (_, declType, varName) => `${declType} ${varName} = exports.${varName} =`
   )
 
+  // TypeScript 枚举先声明 export var，再由后续 IIFE 赋值，导出必须读取赋值后的变量。
+  code = code.replace(
+    /^[ \t]*export\s+(let|var)\s+([A-Za-z_$][\w$]*)[ \t]*;/gm,
+    (_, declType, varName) =>
+      `${declType} ${varName}; Object.defineProperty(exports, "${varName}", { enumerable: true, get: () => ${varName} });`
+  )
+
   // 12. export { a, b as c }
   code = code.replace(/^[ \t]*export\s*\{([^}]*)\}[ \t]*;?/gm, (_, namedBlock) => {
     const pairs = namedBlock
@@ -731,13 +738,13 @@ export async function loadInstalledDeclarativePlugin(pluginId, options = {}) {
     const camelCode = requestedFeatureCode.replace(/[-_]+([a-zA-Z0-9])/g, (_, ch) => ch.toUpperCase())
     const pascalCode = camelCode ? camelCode[0].toUpperCase() + camelCode.slice(1) : ''
     const candidates = [
+      entryExports.commands?.[requestedFeatureCode],
+      entryExports.features?.[requestedFeatureCode],
       entryExports[requestedFeatureCode],
       camelCode ? entryExports[camelCode] : null,
       pascalCode ? entryExports[pascalCode] : null,
       entryExports[`${camelCode}Command`],
-      pascalCode ? entryExports[`${pascalCode}Command`] : null,
-      entryExports.commands?.[requestedFeatureCode],
-      entryExports.features?.[requestedFeatureCode]
+      pascalCode ? entryExports[`${pascalCode}Command`] : null
     ]
     for (const candidate of candidates) {
       if (typeof candidate === 'function') {

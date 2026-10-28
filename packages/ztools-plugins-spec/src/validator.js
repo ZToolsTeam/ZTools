@@ -8,6 +8,23 @@ export const RESERVED_PLUGIN_IDS = new Set(
   JSON.parse(fs.readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'reserved-ids.json'), 'utf8')).ids
 )
 
+/** 官方插件名单（见 ../official-ids.json，维护者维护）：只有名单里的插件显示官方标记、可以用官方作者名 */
+export const OFFICIAL_PLUGIN_IDS = new Set(
+  JSON.parse(fs.readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'official-ids.json'), 'utf8')).ids
+)
+
+/**
+ * 作者名是否冒充官方：ZTools、ZTools Team、ZTools 官方、Official 一类（忽略大小写、空格、- 与 _）。
+ * 「ZTools Community」等不含官方字样的名称不算。
+ */
+export function isOfficialAuthorName(author) {
+  const raw = typeof author === 'string' ? author : author?.name
+  if (typeof raw !== 'string') return false
+  const key = raw.trim().toLowerCase().replace(/[\s_-]+/g, '')
+  if (!key) return false
+  return ['ztools', 'ztoolsteam', 'ztools团队'].includes(key) || key.includes('official') || key.includes('官方')
+}
+
 export const PERMISSIONS = [
   'network',
   'clipboard',
@@ -268,6 +285,10 @@ export function validatePluginManifest(manifest, options = {}) {
       }
     } else {
       errors.push('author 字段类型必须为字符串或对象')
+    }
+    // 官方名称只给官方名单里的插件用（已下架的历史条目不受影响），防止社区插件冒充官方
+    if (isOfficialAuthorName(manifest.author) && manifest.revoked !== true && !OFFICIAL_PLUGIN_IDS.has(manifest.id)) {
+      errors.push(`author 不能使用官方名称（"${typeof manifest.author === 'string' ? manifest.author : manifest.author?.name}"）：只有官方名单 official-ids.json 里的插件可以使用，请写你自己的名字或 GitHub 用户名`)
     }
   }
 

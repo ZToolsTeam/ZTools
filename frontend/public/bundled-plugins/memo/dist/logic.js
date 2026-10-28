@@ -5,8 +5,11 @@ export function createMemo(items, title, content, tag = '') {
     const cleanTitle = title.trim() || '无标题便签';
     const cleanContent = content.trim();
     const now = Date.now();
+    if (typeof globalThis.crypto?.randomUUID !== 'function') {
+        throw new Error('无法生成唯一标识，请重启客户端后重试');
+    }
     const newItem = {
-        id: `memo-${now}-${Math.floor(Math.random() * 1000)}`,
+        id: `memo-${now}-${globalThis.crypto.randomUUID()}`,
         title: cleanTitle,
         content: cleanContent,
         tag: tag.trim(),
@@ -159,23 +162,25 @@ export function isWritableMemoStore(raw) {
 export function applyMemoMutation(latest, mutation) {
     const base = latest ?? [];
     const matches = (entry, id) => !!entry && typeof entry === 'object' && entry.id === id;
+    if (mutation.type !== 'create') {
+        const found = base.filter(entry => matches(entry, mutation.expected.id));
+        const current = sanitizeStoredMemos(found)[0];
+        const fields = ['title', 'content', 'tag', 'createTime', 'updateTime'];
+        if (found.length !== 1 || !current || fields.some(field => current[field] !== mutation.expected[field])) {
+            throw new Error('这条便签已在其他窗口修改或删除，原数据保留。请重新打开便签后再操作。');
+        }
+    }
     switch (mutation.type) {
         case 'create':
+            if (base.some(entry => matches(entry, mutation.item.id)))
+                throw new Error('便签标识已存在，请重试');
             return [mutation.item, ...base];
-        case 'update': {
-            const now = Date.now();
-            let found = false;
-            const next = base.map((entry) => {
-                if (!matches(entry, mutation.id))
-                    return entry;
-                found = true;
-                return { ...entry, ...mutation.updates, updateTime: now };
-            });
-            // 正在编辑的便签已在其他窗口删除：保留用户刚输入的内容，不让它丢失
-            return found ? next : [{ ...mutation.fallback, ...mutation.updates, updateTime: now }, ...base];
-        }
+        case 'update':
+            return base.map(entry => matches(entry, mutation.expected.id)
+                ? { ...entry, ...mutation.updates, updateTime: Date.now() }
+                : entry);
         case 'delete':
-            return base.filter((entry) => !matches(entry, mutation.id));
+            return base.filter((entry) => !matches(entry, mutation.expected.id));
         default:
             return base;
     }

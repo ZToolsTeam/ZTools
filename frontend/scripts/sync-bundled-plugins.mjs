@@ -50,10 +50,11 @@ function officialPluginGroups() {
       continue
     }
     const author = String(typeof manifest.author === 'string' ? manifest.author : manifest.author?.name || '').trim().toLowerCase()
-    if (!manifest.id || !OFFICIAL_AUTHORS.has(author) || ids.includes(manifest.id)) continue
+    if (!manifest.id || ids.includes(manifest.id)) continue
+    // 草稿与已下架不论作者都隐藏：plugins 仓库里归为社区作者的插件同样由官方维护与下架
     if (manifest.draft === true || manifest.revoked === true) {
       draft.push(manifest.id)
-    } else {
+    } else if (OFFICIAL_AUTHORS.has(author)) {
       store.push(manifest.id)
       // 仅同步展示字段；安装版本、校验值、地址和发布状态仍以在线目录为准。
       storePlugins.push({

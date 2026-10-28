@@ -30,7 +30,7 @@
           class="flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-medium bg-[var(--rc-success-subtle)] text-[var(--rc-success)] border border-[var(--rc-border)]"
           title="当前处于独立常驻窗口模式，按 Esc 不会误关窗口"
         >
-          <i class="fa fa-window-restore text-[11px]"></i>
+          <CopyOutlined class="text-[11px]" />
           <span>独立窗口</span>
         </span>
 
@@ -74,7 +74,7 @@
             title="切换独立窗口始终置顶 (Always on Top)"
             @click="toggleAlwaysOnTop"
           >
-            <i class="fa fa-thumb-tack text-[11px]"></i>
+            <PushpinOutlined class="text-[11px]" />
             <span>{{ isAlwaysOnTop ? '已置顶' : '置顶' }}</span>
           </button>
 
@@ -119,7 +119,7 @@
         class="h-full flex flex-col items-center justify-center text-center p-8 bg-[var(--rc-surface)] rounded-2xl border border-[var(--rc-border)]"
       >
         <div class="w-14 h-14 rounded-2xl bg-[var(--rc-warning-subtle)] text-[var(--rc-warning)] border border-[var(--rc-border)] flex items-center justify-center text-2xl mb-4">
-          <i class="fa fa-exclamation-triangle"></i>
+          <WarningOutlined  />
         </div>
         <template v-if="hiddenPlugin">
           <h3 class="text-base font-semibold text-[var(--rc-text-primary)] mb-1">该插件暂未开放</h3>
@@ -151,6 +151,7 @@
 </template>
 
 <script setup>
+import { CopyOutlined, PushpinOutlined, WarningOutlined } from '@ant-design/icons-vue'
 import { computed, onMounted, onUnmounted, ref, shallowRef, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { getActivePinia } from 'pinia'

@@ -129,7 +129,7 @@ export const DEFAULT_SCRIPT_COMMANDS: readonly ScriptCommandMetadata[] = Object.
       "import socket",
       "print(socket.gethostbyname(socket.gethostname()))"
     ].join("\n"),
-    lastOutput: "LAN: 192.168.1.108 | WAN: 203.0.113.42"
+    lastOutput: ""
   }
 ]);
 

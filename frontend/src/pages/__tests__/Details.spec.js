@@ -3,6 +3,8 @@ import { mount, flushPromises } from '@vue/test-utils'
 import { createPinia, setActivePinia } from 'pinia'
 import { createRouter, createMemoryHistory } from 'vue-router'
 
+import { Modal } from 'ant-design-vue'
+
 import Details from '../Details.vue'
 import { usePluginsStore } from '@/stores/plugins'
 
@@ -291,7 +293,7 @@ describe('Details Page', () => {
   })
 
   it('开源版没有账号：安装不要求登录，直接安装', async () => {
-    pluginsStore.installPlugin = vi.fn().mockResolvedValue(undefined)
+    pluginsStore.installPlugin = vi.fn().mockResolvedValue({ success: true })
     wrapper = mount(Details, {
       global: {
         plugins: [router],
@@ -371,6 +373,82 @@ describe('Details Page', () => {
       'JSON 格式化|installed'
     )
     expect(apiMocks.getPluginDetails).not.toHaveBeenCalled()
+  })
+  it.each(['pending', 'busy'])('安装%s时不误报完成', async state => {
+    pluginsStore.installPlugin = vi.fn().mockResolvedValue({ success: false, [state]: true, message: '安装结果待确认' })
+    wrapper = mount(Details, { global: { plugins: [router], stubs: { PluginDetailHeader: true, PluginScreenshots: true, PluginDescription: true } } })
+    await flushPromises()
+    await wrapper.vm.downloadPlugin()
+    expect(toastSpies.toastSuccess).not.toHaveBeenCalledWith('插件安装完成')
+    expect(toastSpies.toastWarning).toHaveBeenCalledWith('安装结果待确认')
+  })
+
+  it('本窗口安装期间忽略页面旁路收到的旧任务通知', async () => {
+    wrapper = mount(Details, { global: { plugins: [router], stubs: { PluginDetailHeader: true, PluginScreenshots: true, PluginDescription: true } } })
+    await flushPromises()
+    pluginsStore.installingSet.add('plugin-1')
+    for (const success of [true, false]) {
+      await wrapper.vm.handleInstallComplete({ payload: { pluginId: 'plugin-1', operationId: 'old-operation', success, isUpdate: true, error: '旧任务失败' } })
+    }
+    expect(toastSpies.toastSuccess).not.toHaveBeenCalled()
+    expect(toastSpies.toastError).not.toHaveBeenCalled()
+    pluginsStore.installingSet.delete('plugin-1')
+    await wrapper.vm.handleInstallComplete({ payload: { pluginId: 'plugin-1', operationId: 'external-update', success: true, isUpdate: true } })
+    expect(toastSpies.toastSuccess).toHaveBeenCalled()
+  })
+
+  describe('卸载与桌面快捷方式入口', () => {
+    const headerStub = {
+      props: ['isInstalled', 'canUninstall', 'canCreateShortcut'],
+      emits: ['uninstall'],
+      template:
+        '<div data-test="entry-state" @click="$emit(\'uninstall\')">{{ isInstalled }}|{{ canUninstall }}|{{ canCreateShortcut }}</div>'
+    }
+
+    async function mountDetailsFor(pluginId, platform) {
+      globalThis.__ZTOOLS_PLATFORM_OVERRIDE__ = platform
+      apiMocks.getPluginDetails.mockResolvedValue({ pluginId, name: pluginId, version: '1.0.0', screenshots: [], changelogs: [] })
+      await router.push(`/details/${pluginId}`)
+      wrapper = mount(Details, {
+        global: {
+          plugins: [router],
+          stubs: { PluginDetailHeader: headerStub, PluginScreenshots: true, PluginDescription: true }
+        }
+      })
+      await flushPromises()
+      return wrapper.get('[data-test="entry-state"]')
+    }
+
+    afterEach(() => {
+      delete globalThis.__ZTOOLS_PLATFORM_OVERRIDE__
+    })
+
+    it('普通已安装插件：Windows 上可卸载、可生成快捷方式；macOS 上不给快捷方式入口', async () => {
+      expect((await mountDetailsFor('plugin-1', 'win32')).text()).toBe('true|true|true')
+      wrapper.unmount()
+      expect((await mountDetailsFor('plugin-1', 'darwin')).text()).toBe('true|true|false')
+    })
+
+    it('随客户端内置的插件：不能卸载、不能生成快捷方式；误触发卸载时不弹确认框也不调宿主', async () => {
+      const confirm = vi.spyOn(Modal, 'confirm')
+      const entry = await mountDetailsFor('calculator', 'win32')
+      expect(entry.text()).toBe('true|false|false')
+
+      await entry.trigger('click')
+      await flushPromises()
+      expect(confirm).not.toHaveBeenCalled()
+      expect(apiMocks.uninstallPluginNative).not.toHaveBeenCalled()
+      expect(toastSpies.toastError).toHaveBeenCalledWith('内置插件随客户端提供，不能卸载')
+      confirm.mockRestore()
+    })
+
+    it('插件市场分发的官方插件：以实际安装状态为准，装了就能卸载', async () => {
+      pluginsStore.installedSet = new Set()
+      expect((await mountDetailsFor('kill-process', 'win32')).text()).toBe('false|true|true')
+      wrapper.unmount()
+      pluginsStore.installedSet = new Set(['kill-process'])
+      expect((await mountDetailsFor('kill-process', 'win32')).text()).toBe('true|true|true')
+    })
   })
 })
 

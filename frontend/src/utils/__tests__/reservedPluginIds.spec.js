@@ -4,22 +4,26 @@ import path from 'node:path'
 import { OFFICIAL_PLUGINS_MAP, OFFICIAL_PLUGIN_ALIASES } from '../officialPlugins.js'
 import { isPluginVisible } from '../pluginVisibility.js'
 import { BUNDLED_PLUGIN_REPLACEMENTS } from '../bundledPlugins.js'
+import bundledConfig from '../../config/bundledPlugins.json'
 
 const RESERVED_FILE = path.resolve(__dirname, '../../../../packages/ztools-plugins-spec/reserved-ids.json')
+
+// 官方插件标了草稿或下架时对所有人隐藏，原因是还没做完或已下线，不属于内置功能占用
+const UNRELEASED = new Set((bundledConfig.unreleasedOfficialIds || []).map((s) => String(s).toLowerCase()))
 
 function hiddenBuiltinIds() {
   // 已合并进内置插件的旧 ID（如 notes → memo）对所有作者隐藏并重定向，同样要占住名额
   const ids = [
     ...new Set([...Object.keys(OFFICIAL_PLUGINS_MAP), ...Object.keys(OFFICIAL_PLUGIN_ALIASES), ...Object.keys(BUNDLED_PLUGIN_REPLACEMENTS)])
   ].map((s) => s.toLowerCase())
-  return ids.filter((id) => !isPluginVisible({ id, author: 'community-dev' }))
+  return ids.filter((id) => !UNRELEASED.has(id) && !isPluginVisible({ id, author: 'community-dev' }))
 }
 
 // 名单里可以多出已下线内置应用的 ID（如团队协同、极客账户演示）：继续保留名额防止社区插件抢注旧 ID，
 // 但客户端已不再注册这些应用，所以它们不隐藏
 function retiredReservedIds(recorded) {
   const hidden = new Set(hiddenBuiltinIds())
-  return recorded.filter((id) => !hidden.has(id))
+  return recorded.filter((id) => !hidden.has(id) && !UNRELEASED.has(id))
 }
 
 // 插件规范里的保留 ID 名单必须和客户端实际会隐藏的 ID 完全一致，否则社区插件会“通过校验却在客户端看不到”

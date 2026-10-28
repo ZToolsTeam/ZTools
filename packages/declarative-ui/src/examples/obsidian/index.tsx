@@ -1,3 +1,4 @@
+import { isRealElectronHost } from '../shared/native-ipc.js';
 import React from "../../index.js";
 import {
   List,
@@ -291,7 +292,7 @@ export function ObsidianQuickNoteForm({
  * Obsidian 知识库管理主命令 (现代纯正 TSX 模式)
  */
 export default function ObsidianCommand() {
-  const [notes, setNotes] = useState<ObsidianNote[]>(SAMPLE_OBSIDIAN_NOTES);
+  const [notes, setNotes] = useState<ObsidianNote[]>(isRealElectronHost() ? [] : SAMPLE_OBSIDIAN_NOTES);
   const [vaults, setVaults] = useState<ObsidianVaultInfo[]>(DEFAULT_VAULTS);
   const [selectedVault, setSelectedVault] = useState<string>("all");
   const [searchText, setSearchText] = useState<string>("");
