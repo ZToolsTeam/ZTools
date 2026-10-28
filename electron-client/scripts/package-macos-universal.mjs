@@ -174,7 +174,7 @@ export function createMacUniversalPackagerOptions({ sourceRoot, outputRoot, appB
       NSAppleEventsUsageDescription: 'ZTools 需要控制其他应用，用于切换窗口、粘贴内容和读取应用图标。',
       ...(minimumOs ? { LSMinimumSystemVersion: minimumOs } : {})
     },
-    asar: { unpackDir: '**/node_modules/exiftool-vendored.*' },
+    asar: { unpack: '**/{.**,**}/**/*.node', unpackDir: '**/node_modules/exiftool-vendored.*' },
     // 打包器会把包内 package.json 的 version 改成 appVersion（三段式 Info.plist 版本），
     // 丢掉第 4 位后 app.getVersion() 与签名预检都会对不上；打 asar 前改回四段式完整版本
     ...(appPackageVersion ? { beforeAsar: [restorePackagedAppVersion(appPackageVersion)] } : {}),

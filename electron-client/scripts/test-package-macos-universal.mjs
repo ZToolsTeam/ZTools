@@ -1,6 +1,7 @@
 import { NETWORK_HELPER_EXECUTABLE } from './macos-network-bundle.mjs'
 import assert from 'node:assert/strict'
-import { createPackage } from '@electron/asar'
+import { createPackage, createPackageWithOptions, statFile, uncache } from '@electron/asar'
+import { createWindowsPackagerOptions } from './windows-package-contract.mjs'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
@@ -227,7 +228,7 @@ test('configures the locked Universal target and skips a second lipo of classic-
     { CFBundleURLName: 'ZTools plugin open', CFBundleURLSchemes: ['ztools'] }
   ])
   assert.match(options.extendInfo.NSAppleEventsUsageDescription, /控制其他应用/)
-  assert.deepEqual(options.asar, { unpackDir: '**/node_modules/exiftool-vendored.*' })
+  assert.deepEqual(options.asar, { unpack: '**/{.**,**}/**/*.node', unpackDir: '**/node_modules/exiftool-vendored.*' })
   assert.equal(options.overwrite, false)
   assert.equal(options.prune, true)
   assert.equal(
@@ -250,6 +251,36 @@ test('configures the locked Universal target and skips a second lipo of classic-
   )
   assert.equal('osxSign' in options, false)
   assert.equal('osxNotarize' in options, false)
+})
+
+test('双端 ASAR 配置保留原生模块与 ExifTool 实体文件', async (t) => {
+  const temporaryRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'ztools-asar-native-'))
+  t.after(() => fs.rmSync(temporaryRoot, { recursive: true, force: true }))
+  const sourceRoot = path.join(temporaryRoot, 'source')
+  const nativeFile = 'node_modules/classic-level/prebuilds/darwin-x64+arm64/classic-level.node'
+  const exiftoolFile = 'node_modules/exiftool-vendored.pl/bin/exiftool'
+  for (const relative of [nativeFile, exiftoolFile, 'out/main/index.js']) {
+    const file = path.join(sourceRoot, relative)
+    fs.mkdirSync(path.dirname(file), { recursive: true })
+    fs.writeFileSync(file, `fixture: ${relative}`)
+  }
+  const configurations = [
+    createMacUniversalPackagerOptions({ sourceRoot, outputRoot: temporaryRoot,
+      appBundleId: 'org.example.ztools', shortVersion: '1.1.8', buildVersion: '1.1.8005' }),
+    createWindowsPackagerOptions({ clientRoot: sourceRoot, outputRoot: temporaryRoot })
+  ]
+  for (const options of configurations) {
+    const archive = path.join(temporaryRoot, `${options.platform}.asar`)
+    t.after(() => uncache(archive))
+    await createPackageWithOptions(sourceRoot, archive, options.asar)
+    for (const relative of [nativeFile, exiftoolFile]) {
+      assert.equal(statFile(archive, relative).unpacked, true, `${options.platform}: ${relative}`)
+      assert.deepEqual(fs.readFileSync(path.join(`${archive}.unpacked`, relative)),
+        fs.readFileSync(path.join(sourceRoot, relative)))
+    }
+    assert.notEqual(statFile(archive, 'out/main/index.js').unpacked, true)
+    assert.equal(fs.existsSync(path.join(`${archive}.unpacked`, 'out/main/index.js')), false)
+  }
 })
 
 test('rejects a pre-existing staging directory before building or invoking Packager', async () => {
