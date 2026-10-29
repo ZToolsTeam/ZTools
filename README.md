@@ -20,13 +20,13 @@ ZTools 把应用搜索、快捷启动和插件工具放进同一个桌面入口�
 <p align="center">
   <img src="assets/screenshots/01-dashboard-workspace.png" width="860" alt="ZTools 工作台主界面">
   <br>
-  <sub>工作台：分类管理已安装工具、插件市场与最近使用记录</sub>
+  <sub>工作台：已安装工具与热门推荐（macOS 官方版实拍）</sub>
 </p>
 
 <p align="center">
   <img src="assets/screenshots/02-geek-launcher-mode.png" width="680" alt="ZTools 悬浮搜索条">
   <br>
-  <sub>悬浮搜索条（Alt + Space）：用键盘检索并启动插件、命令与本地文件</sub>
+  <sub>悬浮搜索条：输入“计算”后的实际搜索结果（macOS 官方版实拍，⌥ Space 唤醒）</sub>
 </p>
 
 ## 下载与使用
