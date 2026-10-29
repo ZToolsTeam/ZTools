@@ -48,19 +48,44 @@ test('定时器独立于页面，真实时钟推进到期后自动释放断言',
   } finally { service.stop() }
 })
 
-test('不同插件与窗口互不停止，窗口销毁只清理自身资源，失效归属不能调用', () => {
+test('不同插件互不停止，窗口销毁只清理从该窗口开启的资源，失效归属不能调用', () => {
   const { service, active } = fixture()
   const ownerA: CallerIdentity = { type: 'main', webContentsId: 2, attributedPlugin: { pluginId: 'caffeine', sessionId: 'a', permissions: new Set(), source: 'installed' } }
   const ownerB: CallerIdentity = { ...ownerA, attributedPlugin: { ...ownerA.attributedPlugin!, pluginId: 'other' } }
   try {
-    for (const owner of [caller, ownerA, ownerB]) service.execute({ action: 'start' }, owner)
-    assert.equal(active.size, 3)
+    service.execute({ action: 'start' }, ownerA)
+    service.execute({ action: 'start' }, ownerB)
+    assert.equal(active.size, 2)
     service.execute({ action: 'stop' }, ownerB)
     assert.equal(service.execute({ action: 'status' }, ownerA).active, true)
     assert.throws(() => service.execute({ action: 'stop' }, { ...ownerA, stalePluginSession: true }))
-    service.releaseWindow(2)
+    service.releaseWindow(9)
     assert.equal(active.size, 1)
-    assert.equal(service.execute({ action: 'status' }, caller).active, true)
+    service.releaseWindow(2)
+    assert.equal(active.size, 0)
+  } finally { service.stop(); assert.equal(active.size, 0) }
+})
+
+test('同一插件在不同窗口共用一份防休眠：主窗口开启，悬浮条能看到并关闭；不会叠加第二个断言', () => {
+  const { service, active } = fixture()
+  const mainWindow: CallerIdentity = { type: 'main', webContentsId: 2, attributedPlugin: { pluginId: 'caffeine', sessionId: 'main', permissions: new Set(), source: 'installed' } }
+  const launcher: CallerIdentity = { type: 'main', webContentsId: 3, attributedPlugin: { pluginId: 'Caffeine', sessionId: 'launcher', permissions: new Set(), source: 'installed' } }
+  try {
+    service.execute({ action: 'start', durationMinutes: 0 }, mainWindow)
+    const seen = service.execute({ action: 'status' }, launcher)
+    assert.equal(seen.active, true)
+    service.execute({ action: 'start', durationMinutes: 15 }, launcher)
+    assert.equal(active.size, 1)
+    assert.equal(service.execute({ action: 'status' }, mainWindow).durationMinutes, 15)
+    service.execute({ action: 'stop' }, launcher)
+    assert.equal(active.size, 0)
+    assert.equal(service.execute({ action: 'status' }, mainWindow).active, false)
+    service.execute({ action: 'start' }, mainWindow)
+    service.releasePlugin('CAFFEINE')
+    assert.equal(active.size, 0)
+    const host: CallerIdentity = { type: 'main', webContentsId: 2 }
+    service.execute({ action: 'start' }, host)
+    assert.equal(service.execute({ action: 'status' }, { type: 'main', webContentsId: 3 }).active, false)
   } finally { service.stop(); assert.equal(active.size, 0) }
 })
 
@@ -90,7 +115,7 @@ test('原生启动或停止失败不伪报成功；一项释放失败不跳过�
     assert.throws(() => service.execute({ action: 'stop' }, caller))
     assert.equal(active.size, 1)
     assert.equal(service.execute({ action: 'status' }, caller).active, true)
-    service.execute({ action: 'start' }, { ...caller, webContentsId: 2 })
+    service.execute({ action: 'start' }, { ...caller, webContentsId: 2, pluginId: 'other-plugin' })
     service.stop()
     assert.deepEqual([...active.keys()], [1])
     faults.stop.clear()

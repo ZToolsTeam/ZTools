@@ -1,18 +1,14 @@
 <script setup>
 import { ref, computed, onMounted, onUnmounted } from 'vue'
-import {
-  ReloadOutlined,
-  CopyOutlined,
-  ScissorOutlined,
-  SnippetsOutlined,
-  ToolOutlined
-} from '@ant-design/icons-vue'
-import { openDevTools } from '@/utils/internalPlugins'
+import { ClipboardPasteIcon, CopyIcon, RotateCwIcon, ScissorsIcon, WrenchIcon } from '@lucide/vue'
+import { isHostDevBuild, toggleHostDevTools } from '@/utils/hostDevTools'
 
 const visible = ref(false)
 const x = ref(0)
 const y = ref(0)
 const selectedText = ref('')
+// 「开发者工具」只在开发版显示
+const showDevTools = ref(false)
 
 // 菜单项定义
 const menuItems = computed(() => {
@@ -23,13 +19,13 @@ const menuItems = computed(() => {
     items.push(
       {
         label: '复制',
-        icon: CopyOutlined,
+        icon: CopyIcon,
         action: 'copy',
         disabled: false
       },
       {
         label: '剪切',
-        icon: ScissorOutlined,
+        icon: ScissorsIcon,
         action: 'cut',
         disabled: false
       },
@@ -43,7 +39,7 @@ const menuItems = computed(() => {
   items.push(
     {
       label: '粘贴',
-      icon: SnippetsOutlined,
+      icon: ClipboardPasteIcon,
       action: 'paste',
       disabled: false
     },
@@ -52,17 +48,19 @@ const menuItems = computed(() => {
     },
     {
       label: '刷新页面',
-      icon: ReloadOutlined,
+      icon: RotateCwIcon,
       action: 'reload',
-      disabled: false
-    },
-    {
-      label: '开发者工具',
-      icon: ToolOutlined,
-      action: 'devtools',
       disabled: false
     }
   )
+  if (showDevTools.value) {
+    items.push({
+      label: '开发者工具',
+      icon: WrenchIcon,
+      action: 'devtools',
+      disabled: false
+    })
+  }
 
   return items
 })
@@ -128,7 +126,7 @@ const handleClick = async (action) => {
       window.location.reload()
       break
     case 'devtools':
-      await openDevTools()
+      await toggleHostDevTools()
       break
   }
 }
@@ -146,6 +144,7 @@ const handleContextMenu = (event) => {
 }
 
 onMounted(() => {
+  void isHostDevBuild().then((isDev) => { showDevTools.value = isDev })
   // 监听全局右键事件
   document.addEventListener('contextmenu', handleContextMenu)
   // 监听点击事件以关闭菜单

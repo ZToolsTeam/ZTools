@@ -454,7 +454,17 @@ test('录屏视频（Windows）：不再带 -t 60 截断；调用方窗口关闭
     assert.equal(watchers.length, 1); assert.equal(watchers[0]!.caller, caller)
     // 插件窗口关闭：没人会再调用停止，宿主发送 q 收尾并保存文件
     watchers[0]!.onClosed()
-    await new Promise((resolve) => setTimeout(resolve, 50))
+    // 等待真实异步文件发布完成；固定 50ms 在 Windows 并发测试时不足以完成写入与重命名。
+    const deadline = Date.now() + 5_000
+    while (Date.now() < deadline) {
+      try {
+        await fs.access(out)
+        break
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
+        await new Promise((resolve) => setTimeout(resolve, 10))
+      }
+    }
     assert.equal(spawned[0]!.stdin.received, 'q'); assert.equal(spawned[0]!.killed, false)
     assert.equal(await fs.readFile(out, 'utf8'), 'FULL_LENGTH')
     assert.equal(watchers[0]!.unwatched, true)

@@ -7,7 +7,7 @@ defineProps({
 </script>
 
 <template>
-  <div class="rc-setting-row flex items-center justify-between py-3.5 px-4 border-b border-[var(--rc-border)]/60 last:border-b-0 hover:bg-[var(--rc-surface-hover)]/40 transition-colors">
+  <div class="rc-setting-row flex items-center justify-between py-3.5 px-4 border-b border-[var(--rc-border-subtle)] last:border-b-0 hover:bg-[var(--rc-surface-hover)] transition-colors">
     <div class="flex items-center gap-3 min-w-0 pr-4">
       <div
         v-if="icon"

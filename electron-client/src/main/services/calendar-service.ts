@@ -143,8 +143,40 @@ function escapeLike(value: string): string {
   return value.replace(/[\\%_]/g, (ch) => `\\${ch}`)
 }
 
-function escapeIcsText(value: string): string {
-  return value.replace(/\\/g, '\\\\').replace(/;/g, '\\;').replace(/,/g, '\\,').replace(/\r?\n/g, '\\n')
+/** RFC 5545 3.3.11 TEXT 转义：反斜杠、分号、逗号加反斜杠；\r\n、\r、\n 统一转成字面量 \n */
+export function escapeIcsText(value: string): string {
+  return value.replace(/\\/g, '\\\\').replace(/;/g, '\\;').replace(/,/g, '\\,').replace(/\r\n|\r|\n/g, '\\n')
+}
+
+const ICS_MAX_LINE_OCTETS = 75
+
+/**
+ * RFC 5545 3.1 折行：每行（不含 CRLF）不超过 75 字节（UTF-8），超出部分以 CRLF + 一个空格续行；
+ * 续行的空格占 1 字节，所以续行内容最多 74 字节；按完整字符切分，不在多字节字符中间截断。
+ */
+export function foldIcsLine(line: string): string {
+  if (Buffer.byteLength(line, 'utf8') <= ICS_MAX_LINE_OCTETS) return line
+  const parts: string[] = []
+  let current = ''
+  let bytes = 0
+  for (const ch of line) {
+    const size = Buffer.byteLength(ch, 'utf8')
+    const limit = parts.length === 0 ? ICS_MAX_LINE_OCTETS : ICS_MAX_LINE_OCTETS - 1
+    if (bytes + size > limit) {
+      parts.push(current)
+      current = ''
+      bytes = 0
+    }
+    current += ch
+    bytes += size
+  }
+  parts.push(current)
+  return parts.join('\r\n ')
+}
+
+/** ICS 的 UTC 日期时间（YYYYMMDDTHHMMSSZ） */
+function formatIcsUtc(ms: number): string {
+  return new Date(ms).toISOString().replace(/[-:]/g, '').split('.')[0] + 'Z'
 }
 
 interface CalendarEventRow {
@@ -388,13 +420,16 @@ export class CalendarService {
    */
   public deleteEvent(id: string): boolean {
     const res = this.db.prepare('DELETE FROM calendar_events WHERE id = ?').run(id)
-    return res.changes > 0
+    if (Number(res.changes) === 0) {
+      throw new ZToolsError(errorCodes.invalidRequest, '日程不存在或已被删除，请刷新列表后重试')
+    }
+    return true
   }
 
   /**
-   * 导出为标准 ICS 文本
+   * 导出为符合 RFC 5545 的 ICS 文本：每个 VEVENT 带 DTSTAMP，文本属性已转义，超过 75 字节的行折行，行结束符 CRLF
    */
-  public exportToIcs(events?: CalendarEvent[]): string {
+  public exportToIcs(events?: CalendarEvent[], now = Date.now()): string {
     const list = events || this.listEvents({ limit: MAX_LIST_EVENTS_LIMIT })
     const lines = [
       'BEGIN:VCALENDAR',
@@ -403,24 +438,24 @@ export class CalendarService {
       'CALSCALE:GREGORIAN'
     ]
 
+    const dtStamp = formatIcsUtc(now)
     for (const evt of list) {
-      const dtStart = new Date(evt.startTime).toISOString().replace(/[-:]/g, '').split('.')[0] + 'Z'
-      const dtEnd = new Date(evt.endTime).toISOString().replace(/[-:]/g, '').split('.')[0] + 'Z'
-
       lines.push('BEGIN:VEVENT')
       lines.push(`UID:${evt.id}`)
-      lines.push(`SUMMARY:${evt.title}`)
-      if (evt.description) lines.push(`DESCRIPTION:${evt.description.replace(/\n/g, '\\n')}`)
-      if (evt.location) lines.push(`LOCATION:${evt.location}`)
+      lines.push(`DTSTAMP:${dtStamp}`)
+      lines.push(`SUMMARY:${escapeIcsText(evt.title)}`)
+      if (evt.description) lines.push(`DESCRIPTION:${escapeIcsText(evt.description)}`)
+      if (evt.location) lines.push(`LOCATION:${escapeIcsText(evt.location)}`)
       if (evt.conferenceUrl) lines.push(`URL:${evt.conferenceUrl}`)
       if (evt.calendarName) lines.push(`CATEGORIES:${escapeIcsText(evt.calendarName)}`)
-      lines.push(`DTSTART:${dtStart}`)
-      lines.push(`DTEND:${dtEnd}`)
+      lines.push(`DTSTART:${formatIcsUtc(evt.startTime)}`)
+      lines.push(`DTEND:${formatIcsUtc(evt.endTime)}`)
       lines.push('END:VEVENT')
     }
 
     lines.push('END:VCALENDAR')
-    return lines.join('\r\n')
+    // RFC 5545：每行（含最后一行）以 CRLF 结束
+    return lines.map(foldIcsLine).join('\r\n') + '\r\n'
   }
 
   private mapRowToEvent(r: CalendarEventRow): CalendarEvent {

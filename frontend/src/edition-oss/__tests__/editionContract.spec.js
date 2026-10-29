@@ -25,7 +25,9 @@ const EXPECTED_EXPORTS = {
   track: 'function',
   setTrackingWebVersion: 'function',
   onAppStart: 'function',
-  cloudSync: 'object'
+  cloudSync: 'object',
+  pluginLifecycle: 'object',
+  pluginRatings: 'object'
 }
 
 function typeOf(value) {
@@ -49,6 +51,19 @@ function assertContract(mod) {
   expect(typeof mod.cloudSync.enabled).toBe('boolean')
   for (const name of ['pullFavorites', 'pullHomeLayout', 'push']) {
     expect(typeof mod.cloudSync[name], `cloudSync.${name}`).toBe('function')
+  }
+  // 安装上报与评分：公共代码直接调用，两边都必须提供同样的方法
+  expect(typeof mod.pluginLifecycle.enabled).toBe('boolean')
+  for (const name of ['onInstalled', 'onUninstalled']) {
+    expect(typeof mod.pluginLifecycle[name], `pluginLifecycle.${name}`).toBe('function')
+  }
+  expect(typeof mod.pluginRatings.enabled).toBe('boolean')
+  expect(typeOf(mod.pluginRatings.summaries)).toBe('object')
+  for (const name of ['loadAll', 'load']) {
+    expect(typeof mod.pluginRatings[name], `pluginRatings.${name}`).toBe('function')
+  }
+  for (const name of ['cloudSync', 'pluginLifecycle', 'pluginRatings']) {
+    expect(Object.isFrozen(mod[name]), `${name} 只读`).toBe(true)
   }
   for (const tab of mod.pluginDetailTabs) {
     expect(typeof tab.key).toBe('string')
@@ -80,6 +95,35 @@ describe('@edition 接口契约', () => {
     expect(oss.onAppStart()).toBeUndefined()
     expect(oss.feedbackEntry.externalUrl).toBe('https://github.com/ZToolsTeam/ZTools/issues')
     expect(oss.useFeedbackIndicator().hasUnread.value).toBe(false)
+    expect(oss.pluginLifecycle.enabled).toBe(false)
+    expect(oss.pluginRatings.enabled).toBe(false)
+    expect(Object.keys(oss.pluginRatings.summaries)).toHaveLength(0)
+    expect(Object.isFrozen(oss.pluginRatings.summaries)).toBe(true)
+  })
+
+  it('[故障] 开源版的安装上报与评分不发任何请求、不读已安装列表、不碰 window.ztools', async () => {
+    const fetchSpy = vi.fn()
+    const originalFetch = globalThis.fetch
+    globalThis.fetch = fetchSpy
+    const isLoggedIn = vi.fn().mockResolvedValue(true)
+    window.ztools = { user: { isLoggedIn, getToken: vi.fn() } }
+    const getInstalledPluginIds = vi.fn().mockResolvedValue(['memo'])
+    try {
+      expect(oss.onAppStart({ getInstalledPluginIds })).toBeUndefined()
+      expect(oss.pluginLifecycle.onInstalled('memo')).toBeUndefined()
+      expect(oss.pluginLifecycle.onUninstalled('memo')).toBeUndefined()
+      expect(oss.pluginLifecycle.onInstalled(undefined)).toBeUndefined()
+      await expect(oss.pluginRatings.loadAll()).resolves.toBeUndefined()
+      await expect(oss.pluginRatings.load('memo')).resolves.toBeUndefined()
+      await new Promise((r) => setTimeout(r, 0))
+      expect(oss.pluginRatings.summaries.memo).toBeUndefined()
+      expect(getInstalledPluginIds).not.toHaveBeenCalled()
+      expect(isLoggedIn).not.toHaveBeenCalled()
+      expect(fetchSpy).not.toHaveBeenCalled()
+    } finally {
+      globalThis.fetch = originalFetch
+      delete window.ztools
+    }
   })
 
   it('[故障] 开源版的登录、统计与云同步钩子全部为空操作：不碰 window.ztools，不抛错', async () => {

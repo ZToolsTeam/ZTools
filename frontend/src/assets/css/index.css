@@ -9,6 +9,70 @@
 @tailwind components;
 @tailwind utilities;
 
+/*
+ * 界面图标统一规范（Lucide 线性图标，见 utils/appIcons.js）：
+ * 尺寸跟随字号（1em），线宽统一 1.75；实心变体只用于「已选中」状态。
+ * 放在 base 层，调用处的 w-* / h-* / text-* 工具类可以覆盖。
+ */
+@layer base {
+  .lucide,
+  .brand-logo {
+    display: inline-block;
+    width: 1em;
+    height: 1em;
+    flex-shrink: 0;
+    vertical-align: -0.125em;
+  }
+
+  .lucide {
+    stroke-width: 1.75;
+  }
+
+  .lucide.icon-filled {
+    fill: currentColor;
+  }
+
+  /* 输入框里的 Lucide 图标：清除按钮、前缀搜索图标 */
+  .input-clear-icon {
+    font-size: 14px;
+    color: var(--rc-text-faint);
+  }
+
+  .input-prefix-icon {
+    font-size: 14px;
+    margin-right: 2px;
+    color: var(--rc-text-muted);
+  }
+
+  .popconfirm-icon {
+    font-size: 14px;
+    margin-right: 6px;
+    color: var(--rc-warning);
+  }
+
+  /* 统一确认框（utils/confirmDialog.js）：外观与 RcDialog 一致 */
+  .rc-confirm-wrap .ant-modal-content {
+    border: 1px solid var(--rc-border);
+    border-radius: 18px !important;
+    background-color: var(--rc-surface) !important;
+    box-shadow: var(--rc-shadow-lg) !important;
+  }
+
+  .rc-confirm-wrap .rc-confirm-icon {
+    color: var(--rc-text-muted);
+  }
+
+  .rc-confirm-wrap .rc-confirm-icon.is-danger {
+    color: var(--rc-error);
+  }
+
+  /* antd 全局提示里的图标（useToast 传入）：antd 只给自带的 .anticon 留间距 */
+  .ant-message .toast-icon {
+    font-size: 16px;
+    margin-inline-end: 8px;
+  }
+}
+
 @layer utilities {
   .content-auto {
     content-visibility: auto;
@@ -70,9 +134,9 @@
 
   /* 工具卡片 - 符合设计规范 */
   .tool-card {
-    background-color: var(--color-surface);
+    background-color: var(--rc-surface);
     border-radius: var(--radius-xl);
-    border: 1px solid var(--color-border);
+    border: 1px solid var(--rc-border);
     padding: var(--spacing-md);
     cursor: pointer;
     transition: all var(--duration-standard) var(--easing-standard);
@@ -81,16 +145,16 @@
 
   .tool-card:hover {
     transform: translateY(-4px);
-    border-color: var(--color-primary);
+    border-color: var(--rc-accent);
     box-shadow: var(--shadow-lg);
   }
 
   /* 插件卡片 - 符合设计规范 */
   .plugin-card {
     min-width: 200px;
-    background-color: var(--color-surface);
+    background-color: var(--rc-surface);
     border-radius: var(--radius-xl);
-    border: 1px solid var(--color-border);
+    border: 1px solid var(--rc-border);
     padding: var(--spacing-md);
     cursor: pointer;
     transition: all var(--duration-standard) var(--easing-standard);
@@ -99,7 +163,7 @@
 
   .plugin-card:hover {
     transform: translateY(-4px);
-    border-color: var(--color-primary);
+    border-color: var(--rc-accent);
     box-shadow: var(--shadow-lg);
   }
 }
@@ -120,8 +184,8 @@ body {
   font-family: var(--font-family-base);
   font-size: var(--font-size-body-m);
   line-height: 1.6;
-  color: var(--color-text);
-  background: var(--color-background);
+  color: var(--rc-text-primary);
+  background: var(--rc-canvas);
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
   overflow: hidden;
@@ -138,13 +202,13 @@ body {
 
 /* 链接样式 */
 a {
-  color: var(--zt-primary);
+  color: var(--rc-accent);
   text-decoration: none;
   transition: color var(--zt-transition-fast);
 }
 
 a:hover {
-  color: var(--zt-primary-hover);
+  color: var(--rc-accent-hover);
 }
 
 /* 修复 Ant Design 按钮图标对齐 */
@@ -165,49 +229,73 @@ a:hover {
 /* Input 输入框 */
 .ant-input,
 .ant-input-affix-wrapper {
-  background-color: var(--zt-bg-elevated) !important;
-  border-color: var(--zt-border) !important;
-  color: var(--zt-text) !important;
+  background-color: var(--rc-surface) !important;
+  border-color: var(--rc-border) !important;
+  color: var(--rc-text-primary) !important;
 }
 
 .ant-input::placeholder,
 .ant-input-affix-wrapper input::placeholder {
-  color: var(--zt-text-secondary) !important;
+  color: var(--rc-text-secondary) !important;
   opacity: 0.6;
 }
 
 .ant-input:hover,
 .ant-input-affix-wrapper:hover {
-  border-color: var(--zt-primary) !important;
+  border-color: var(--rc-accent) !important;
 }
 
 .ant-input:focus,
 .ant-input-affix-wrapper-focused {
-  border-color: var(--zt-primary) !important;
+  border-color: var(--rc-accent) !important;
   box-shadow: 0 0 0 2px var(--zt-primary-bg) !important;
 }
 
 /* Input 前缀/后缀图标 */
 .ant-input-prefix,
 .ant-input-suffix {
-  color: var(--zt-text-secondary) !important;
+  color: var(--rc-text-secondary) !important;
 }
 
-/* Select 选择器 */
-.ant-select-selector {
-  background-color: var(--zt-bg-elevated) !important;
-  border-color: var(--zt-border) !important;
-  color: var(--zt-text) !important;
+/* 清除按钮与后缀（字数统计）垂直居中：Lucide 图标是行内 svg，按基线排会比旁边的文字高出一截 */
+.ant-input-suffix {
+  align-items: center;
 }
 
-.ant-select-arrow {
-  color: var(--zt-text-secondary) !important;
+.ant-input-clear-icon {
+  display: inline-flex;
+  align-items: center;
 }
+
+.ant-input-clear-icon > svg {
+  display: block;
+}
+
+/* Tooltip 悬停提示：紧凑、无箭头，深浅主题下都与页面反色，便于一眼看到 */
+.ant-tooltip {
+  --antd-arrow-background-color: var(--rc-text-primary);
+}
+
+.ant-tooltip .ant-tooltip-arrow {
+  display: none;
+}
+
+.ant-tooltip .ant-tooltip-inner {
+  min-height: 0;
+  padding: 5px 8px;
+  border-radius: 6px;
+  background: var(--rc-text-primary);
+  color: var(--rc-surface);
+  font-size: 12px;
+  line-height: 18px;
+  box-shadow: var(--rc-shadow-md);
+}
+
+/* Select 选择器：统一由 components/base/RcSelect.vue 定义外观 */
 
 /* Dropdown 下拉菜单 */
-.ant-dropdown,
-.ant-select-dropdown {
-  background-color: var(--zt-bg-elevated) !important;
+.ant-dropdown {
+  background-color: var(--rc-surface) !important;
   border: none !important;
   box-shadow: var(--shadow-lg, 0 8px 24px rgba(0, 0, 0, 0.08)) !important;
   border-radius: var(--radius-lg, 16px) !important;
@@ -221,58 +309,56 @@ a:hover {
   padding: 0 !important;
 }
 
-.ant-dropdown-menu-item,
-.ant-select-item {
-  color: var(--zt-text) !important;
+.ant-dropdown-menu-item {
+  color: var(--rc-text-primary) !important;
   border-radius: var(--radius-md, 12px) !important;
 }
 
-.ant-dropdown-menu-item:hover,
-.ant-select-item-option-active {
-  background-color: var(--zt-bg-hover) !important;
+.ant-dropdown-menu-item:hover {
+  background-color: var(--rc-surface-hover) !important;
 }
 
 /* Menu 菜单 */
 .ant-menu {
-  background-color: var(--zt-bg-elevated) !important;
-  color: var(--zt-text) !important;
+  background-color: var(--rc-surface) !important;
+  color: var(--rc-text-primary) !important;
 }
 
 .ant-menu-item {
-  color: var(--zt-text) !important;
+  color: var(--rc-text-primary) !important;
 }
 
 .ant-menu-item:hover {
-  background-color: var(--zt-bg-hover) !important;
+  background-color: var(--rc-surface-hover) !important;
 }
 
 /* Modal 模态框 */
 .ant-modal-content {
-  background-color: var(--zt-bg-elevated) !important;
-  color: var(--zt-text) !important;
+  background-color: var(--rc-surface) !important;
+  color: var(--rc-text-primary) !important;
 }
 
 .ant-modal-header {
-  background-color: var(--zt-bg-elevated) !important;
-  border-bottom-color: var(--zt-border) !important;
+  background-color: var(--rc-surface) !important;
+  border-bottom-color: var(--rc-border) !important;
 }
 
 .ant-modal-title {
-  color: var(--zt-text) !important;
+  color: var(--rc-text-primary) !important;
 }
 
 .ant-modal-close {
-  color: var(--zt-text-secondary) !important;
+  color: var(--rc-text-secondary) !important;
 }
 
 .ant-modal-close:hover {
-  color: var(--zt-text) !important;
-  background-color: var(--zt-bg-hover) !important;
+  color: var(--rc-text-primary) !important;
+  background-color: var(--rc-surface-hover) !important;
 }
 
 /* Divider 分隔线 */
 .ant-divider {
-  border-color: var(--zt-border) !important;
+  border-color: var(--rc-border) !important;
 }
 
 /* Image Preview 图片预览 - 确保预览图不占满整个窗口 */

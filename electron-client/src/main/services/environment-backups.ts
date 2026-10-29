@@ -8,11 +8,34 @@ import { environmentRevision, runEnvironmentCommand, type EnvironmentState } fro
 export interface EnvironmentBackup { version: 1; id: string; source: EnvironmentScope; createdAt: string; summary: string; before: EnvironmentState; after: EnvironmentState; checksum: string }
 const PRIVATE_PATHS_SCRIPT = String.raw`
 $ErrorActionPreference='Stop'
+$ProgressPreference='SilentlyContinue'
 [Console]::InputEncoding=New-Object System.Text.UTF8Encoding($false)
 [Console]::OutputEncoding=New-Object System.Text.UTF8Encoding($false)
 $request=[Console]::In.ReadToEnd() | ConvertFrom-Json
 $allowed=@([System.Security.Principal.WindowsIdentity]::GetCurrent().User.Value,'S-1-5-18','S-1-5-32-544')
+if($request.initialize) {
+  $directory=[string]$request.paths[0]
+  $security=New-Object System.Security.AccessControl.DirectorySecurity
+  $security.SetAccessRuleProtection($true,$false)
+  foreach($sid in $allowed) {
+    $rule=[System.Security.AccessControl.FileSystemAccessRule]::new([System.Security.Principal.SecurityIdentifier]::new($sid),'FullControl','ContainerInherit,ObjectInherit','None','Allow')
+    $security.AddAccessRule($rule)
+  }
+  if(-not [System.IO.Directory]::Exists($directory)) {
+    $security.SetOwner([System.Security.Principal.SecurityIdentifier]::new($allowed[0]))
+    [void][System.IO.Directory]::CreateDirectory($directory,$security)
+  } else {
+    $attributes=[System.IO.File]::GetAttributes($directory)
+    if(($attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0) { throw 'Backup directory cannot be a link' }
+    $owner=(Get-Acl -LiteralPath $directory).GetOwner([System.Security.Principal.SecurityIdentifier]).Value
+    # 只初始化当前用户的空目录；已有备份必须通过原有 ACL 校验，不替其背书。
+    if($owner -eq $allowed[0] -and [System.IO.Directory]::GetFileSystemEntries($directory).Length -eq 0) {
+      [System.IO.Directory]::SetAccessControl($directory,$security)
+    }
+  }
+}
 foreach($file in $request.paths) {
+  if(([System.IO.File]::GetAttributes($file) -band [System.IO.FileAttributes]::ReparsePoint) -ne 0) { throw 'Backup path cannot be a link' }
   $acl=Get-Acl -LiteralPath $file
   $descriptor=[System.Security.AccessControl.RawSecurityDescriptor]::new($acl.GetSecurityDescriptorSddlForm([System.Security.AccessControl.AccessControlSections]::All))
   if($null -eq $descriptor.DiscretionaryAcl -or $allowed -notcontains $acl.GetOwner([System.Security.Principal.SecurityIdentifier]).Value) { throw 'Backup owner or DACL is not private' }
@@ -22,10 +45,10 @@ foreach($file in $request.paths) {
 }
 [Console]::Out.Write('private')
 `
-async function assertPrivateWindowsPaths(paths: string[]) {
+async function assertPrivateWindowsPaths(paths: string[], initialize = false) {
   if (process.platform !== 'win32') return
   const executable = path.win32.join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe')
-  const result = await runEnvironmentCommand(executable, ['-NoProfile', '-NonInteractive', '-EncodedCommand', Buffer.from(PRIVATE_PATHS_SCRIPT, 'utf16le').toString('base64')], JSON.stringify({ paths }), AbortSignal.timeout(15000))
+  const result = await runEnvironmentCommand(executable, ['-NoProfile', '-NonInteractive', '-EncodedCommand', Buffer.from(PRIVATE_PATHS_SCRIPT, 'utf16le').toString('base64')], JSON.stringify({ paths, initialize }), AbortSignal.timeout(15000))
   if (result !== 'private') throw new Error('环境变量备份访问权限未确认')
 }
 function checksum(record: Omit<EnvironmentBackup, 'checksum'>) { return createHash('sha256').update(JSON.stringify(record)).digest('hex') }
@@ -35,7 +58,8 @@ function state(value: unknown): value is EnvironmentState {
 export class EnvironmentBackupStore {
   constructor(private readonly directory: string) {}
   async #ensure() {
-    await fs.mkdir(this.directory, { recursive: true, mode: 0o700 })
+    if (process.platform === 'win32') await assertPrivateWindowsPaths([this.directory], true)
+    else await fs.mkdir(this.directory, { recursive: true, mode: 0o700 })
     const stat = await fs.lstat(this.directory)
     if (!stat.isDirectory() || stat.isSymbolicLink() || (process.getuid && stat.uid !== process.getuid()) || (process.platform !== 'win32' && (stat.mode & 0o077))) throw new Error('环境变量备份目录权限不安全，未修改配置')
   }

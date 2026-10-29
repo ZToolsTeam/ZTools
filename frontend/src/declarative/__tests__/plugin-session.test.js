@@ -337,6 +337,37 @@ describe('会话 holder：引用计数、宽限期、在途调用、失败重试
     expect(openSessionsOf('racing')).toBe(0)
   })
 
+  it('插件目录短暂被独占（PLUGIN_BUSY）时稍等重试并拿到会话；一直忙或其他错误不重试太久', async () => {
+    let busy = 2
+    let attempts = 0
+    const busyError = () => Object.assign(new Error('插件正在执行其他操作'), { code: 'PLUGIN_BUSY' })
+    const call = async (method) => {
+      if (method !== 'declarative_session_open') return { data: {} }
+      attempts += 1
+      if (busy > 0) { busy -= 1; throw busyError() }
+      return { data: { token: TOKEN_A, sessionId: 's-busy' } }
+    }
+    const holder = createPluginSessionHolder('busy-probe', { call, graceMs: 0, busyRetryDelaysMs: [1, 1, 1] })
+    const release = await holder.acquire()
+    expect(holder.token).toBe(TOKEN_A)
+    expect(attempts).toBe(3)
+    release()
+
+    let always = 0
+    const alwaysBusy = createPluginSessionHolder('always-busy', { call: async () => { always += 1; throw busyError() }, graceMs: 0, busyRetryDelaysMs: [1, 1] })
+    const releaseBusy = await alwaysBusy.acquire()
+    expect(alwaysBusy.token).toBe(null)
+    expect(alwaysBusy.lastError?.code).toBe('PLUGIN_BUSY')
+    expect(always).toBe(3)
+    releaseBusy()
+
+    let other = 0
+    const notFound = createPluginSessionHolder('not-found', { call: async () => { other += 1; throw Object.assign(new Error('x'), { code: 'PLUGIN_NOT_FOUND' }) }, graceMs: 0, busyRetryDelaysMs: [1, 1] })
+    const releaseOther = await notFound.acquire()
+    expect(other).toBe(1)
+    releaseOther()
+  })
+
   it('作用域通道在会话打开中等待令牌，首个调用不丢归属；没有会话时不带令牌（与改动前一致）', async () => {
     host.state.openDelayMs = 20
     const holder = createPluginSessionHolder('probe')
@@ -392,6 +423,43 @@ describe('SecureStorage / terminateProcess：走插件专属通道', () => {
     const apis = createPluginHostApis({ pluginId, methods: bridge.transport.methods })
     return { holder, release, apis, local: createScopedLocalStorage(pluginId) }
   }
+
+  it('2FA 改为市场安装后沿用原 ID，能够读取既有加密账户与本地设置', async () => {
+    const previous = await setup('google-auth')
+    const accounts = [{ id: 'test-account', secret: 'JBSWY3DP', issuer: 'Test' }]
+    await previous.apis.SecureStorage.setItem('google-auth.accounts.v1', accounts)
+    await previous.local.setItem('display-preferences', { compact: true })
+    previous.release()
+
+    const fetched = []
+    vi.stubGlobal('fetch', async (url) => {
+      fetched.push(String(url))
+      const files = {
+        'ztools://plugins/google-auth/plugin.json': JSON.stringify({
+          id: 'google-auth', name: '2FA 验证码', entry: 'dist/index.js', permissions: ['crypto']
+        }),
+        'ztools://plugins/google-auth/dist/index.js': `
+          import { SecureStorage, LocalStorage } from '@ztools/declarative-ui';
+          export default async function ReadExistingData() {
+            return { accounts: await SecureStorage.getItem('google-auth.accounts.v1'), preferences: await LocalStorage.getItem('display-preferences') };
+          }
+        `
+      }
+      return { ok: Object.hasOwn(files, url), status: Object.hasOwn(files, url) ? 200 : 404, text: async () => files[url] || '' }
+    })
+    const loaded = await loadInstalledDeclarativePlugin('google-auth')
+    const release = await loaded.session.acquire()
+    try {
+      expect(await loaded.command()).toEqual({ accounts, preferences: { compact: true } })
+      expect(fetched).toEqual(['ztools://plugins/google-auth/plugin.json', 'ztools://plugins/google-auth/dist/index.js'])
+      const unrelated = await setup('another-plugin')
+      expect(await unrelated.apis.SecureStorage.getItem('google-auth.accounts.v1')).toBeUndefined()
+      unrelated.release()
+    } finally {
+      release()
+      vi.unstubAllGlobals()
+    }
+  })
 
   it('status 映射：可用 / 系统不可用 / 宿主过旧 / 未归属', async () => {
     const { apis, release } = await setup()

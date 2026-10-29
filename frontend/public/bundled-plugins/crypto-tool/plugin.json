@@ -1,8 +1,8 @@
 {
   "id": "crypto-tool",
   "name": "编码与加密",
-  "version": "1.1.2",
-  "description": "支持 Base64 / URL / Unicode / Hex 编码互转、MD5 / SHA 哈希计算、AES 加解密与 UUID 批量生成",
+  "version": "1.1.4",
+  "description": "支持 Base64 / URL / Unicode / Hex 编码互转、MD5 / SHA 哈希计算、AES 加解密、HMAC 计算与 UUID 批量生成",
   "author": "ZTools Team",
   "entry": "dist/index.js",
   "icon": "icon.svg",
@@ -70,7 +70,7 @@
     },
     {
       "code": "hash-digest",
-      "explain": "计算 MD5 / SHA256 哈希摘要",
+      "explain": "计算 MD5 / SHA-1 / SHA-256 / SHA-512 散列",
       "mode": "view",
       "cmds": [
         "md5",
@@ -91,8 +91,17 @@
         "aes",
         "aes加密",
         "aes解密",
-        "hmac",
         "加密解密"
+      ]
+    },
+    {
+      "code": "cipher-hmac",
+      "explain": "HMAC 计算（SHA-256 / SHA-512 / SHA-1 / MD5）",
+      "mode": "view",
+      "cmds": [
+        "hmac",
+        "hmac计算",
+        "hmac-sha256"
       ]
     },
     {

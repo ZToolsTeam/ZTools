@@ -159,7 +159,8 @@ test('真实写入子进程：授权中取消即退出，已进入事务则等�
       await fs.rm(ready, { force: true }); const controller = new AbortController()
       const operation = runDnsWriteCommand(helper, [], controller.signal)
       const expected = commit ? operation : assert.rejects(operation, /取消/)
-      for (let i = 0; i < 100; i++) { try { await fs.stat(ready); break } catch { await delay(5) } }
+      // 新建的可执行脚本首次启动会被 macOS 安全检查拖慢（实测约 0.8 秒），给足 5 秒等待子进程就绪
+      for (let i = 0; i < 1000; i++) { try { await fs.stat(ready); break } catch { await delay(5) } }
       await fs.stat(ready); const start = performance.now(); controller.abort()
       const result = await expected
       if (commit) { assert.match(String(result), /APPLIED/); assert.ok(performance.now() - start >= 200) }

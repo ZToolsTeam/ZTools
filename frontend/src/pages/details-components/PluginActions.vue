@@ -1,7 +1,9 @@
 <script setup>
-import { ArrowUpOutlined, DeleteOutlined, DownloadOutlined, EllipsisOutlined, ExportOutlined, LoadingOutlined, MessageOutlined, PlayCircleOutlined, ReloadOutlined, StarFilled, StarOutlined, StopOutlined } from '@ant-design/icons-vue'
-import BrandGlyph from '@/components/base/BrandGlyph.vue'
-defineProps({
+import { ArrowUpIcon, BanIcon, CirclePlayIcon, DownloadIcon, EllipsisIcon, ExternalLinkIcon, KeyboardIcon, MessageSquareIcon, RotateCwIcon, StarIcon, Trash2Icon } from '@lucide/vue'
+import { computed } from 'vue'
+import { SpinnerIcon, StarFilledIcon } from '@/utils/appIcons'
+import { RcButton, RcMenu } from '@/components/base'
+const props = defineProps({
   isInstalled: Boolean,
   // 内置插件随客户端提供，不能卸载
   canUninstall: {
@@ -46,7 +48,7 @@ defineProps({
   }
 })
 
-defineEmits([
+const emit = defineEmits([
   'open',
   'update',
   'uninstall',
@@ -56,143 +58,114 @@ defineEmits([
   'set-hotkey',
   'show-comments'
 ])
+
+// 「更多」菜单：快捷键（已绑定时右侧显示当前组合键）、桌面快捷方式（仅 Windows）、卸载（内置插件不能卸载）
+const moreItems = computed(() => {
+  const items = [{ key: 'hotkey', label: props.hotkeyText ? '修改快捷键' : '设置快捷键', icon: KeyboardIcon, hint: props.hotkeyText }]
+  if (props.canCreateShortcut) {
+    items.push({
+      key: 'shortcut',
+      label: props.creatingShortcut ? '正在生成…' : '生成桌面快捷方式',
+      icon: props.creatingShortcut ? SpinnerIcon : ExternalLinkIcon,
+      disabled: props.creatingShortcut
+    })
+  }
+  if (props.canUninstall) {
+    items.push({ type: 'separator' }, { key: 'uninstall', label: '卸载', icon: Trash2Icon, danger: true })
+  }
+  return items
+})
+
+// 安装 / 更新进行中的按钮文案：依赖库阶段显示第几个，下载阶段显示百分比
+const progressText = (verb) => {
+  if (props.downloadPhase === 'library') return `安装依赖库 (${props.libIndex}/${props.libTotal})… ${props.downloadProgress}%`
+  return props.downloadProgress > 0 ? `${verb}中 ${props.downloadProgress}%` : `${verb}中…`
+}
+
+const MORE_EVENTS = { hotkey: 'set-hotkey', shortcut: 'create-shortcut', uninstall: 'uninstall' }
+const onMoreSelect = (key) => {
+  if (MORE_EVENTS[key]) emit(MORE_EVENTS[key])
+}
 </script>
 
 <template>
   <div class="flex flex-wrap items-center justify-end gap-2">
-    <a-tooltip v-if="commentsCount !== null" title="查看留言" placement="top">
-      <a-button type="default" @click="$emit('show-comments')">
-        <MessageOutlined class="mr-1" />
-        <span>{{ commentsCount }}</span>
-      </a-button>
+    <!-- 有留言时给一个跳到留言 Tab 的轻量入口；没有留言时不占位（留言 Tab 上也有数量） -->
+    <a-tooltip v-if="commentsCount > 0" title="查看留言" placement="top">
+      <RcButton variant="ghost" size="md" class="comments-entry" :icon="MessageSquareIcon" @click="$emit('show-comments')">
+        {{ commentsCount }}
+      </RcButton>
     </a-tooltip>
 
     <!-- 下架状态强拦截：置灰禁用并展示下架原因 -->
     <a-tooltip v-if="isRevoked" :title="revokedReason || '该插件已被官方下架禁用'">
-      <a-button
-        type="default"
-        disabled
-        style="opacity: 0.6; color: var(--rc-error); border-color: var(--rc-error);"
-      >
-        <StopOutlined class="mr-2" /> 已下架
-      </a-button>
+      <RcButton variant="danger" size="md" :icon="BanIcon" disabled>已下架</RcButton>
     </a-tooltip>
 
     <!-- 正常已安装且无更新：打开 -->
-    <a-button
-      v-else-if="isInstalled && !hasUpdate"
-      type="primary"
-      @click="$emit('open')"
-    >
-      <PlayCircleOutlined class="mr-2" /> 打开
-    </a-button>
+    <RcButton v-else-if="isInstalled && !hasUpdate" variant="primary" size="md" :icon="CirclePlayIcon" @click="$emit('open')">
+      打开
+    </RcButton>
 
     <!-- 已安装且有更新：更新 -->
-    <a-button
+    <RcButton
       v-else-if="isInstalled && hasUpdate"
-      type="primary"
+      variant="primary"
+      size="md"
+      :icon="ArrowUpIcon"
       :loading="downloading"
       @click="$emit('update')"
     >
-      <ArrowUpOutlined v-if="!downloading" class="mr-2" />
-      {{
-        downloading
-          ? downloadPhase === 'library'
-            ? `安装依赖库 (${libIndex}/${libTotal})... ${downloadProgress}%`
-            : downloadProgress > 0
-              ? `更新中 ${downloadProgress}%`
-              : '更新中...'
-          : '更新'
-      }}
-    </a-button>
+      {{ downloading ? progressText('更新') : '更新' }}
+    </RcButton>
 
     <!-- 未安装且安装失败：展示重试及原因提示 -->
     <a-tooltip v-else-if="!isInstalled && installFailed && !downloading" :title="installError || '安装失败，点击重试'">
-      <a-button
-        type="primary"
-        danger
-        @click="$emit('download')"
-      >
-        <ReloadOutlined class="mr-2" /> 重试
-      </a-button>
+      <RcButton variant="danger" size="md" :icon="RotateCwIcon" @click="$emit('download')">重试</RcButton>
     </a-tooltip>
 
     <!-- 未安装：一键静默安装 -->
-    <a-button
+    <RcButton
       v-else-if="!isInstalled"
-      type="primary"
+      variant="primary"
+      size="md"
+      :icon="DownloadIcon"
       :loading="downloading"
       @click="$emit('download')"
     >
-      <DownloadOutlined v-if="!downloading" class="mr-2" />
-      {{
-        downloading
-          ? downloadPhase === 'library'
-            ? `安装依赖库 (${libIndex}/${libTotal})... ${downloadProgress}%`
-            : downloadProgress > 0
-              ? `安装中 ${downloadProgress}%`
-              : '安装中...'
-          : '安装'
-      }}
-    </a-button>
-    <a-button
-      type="default"
+      {{ downloading ? progressText('安装') : '安装' }}
+    </RcButton>
+
+    <RcButton
+      variant="secondary"
+      size="md"
+      class="icon-only"
       :class="{ 'is-favorite': isFavorite }"
+      :icon="isFavorite ? StarFilledIcon : StarIcon"
+      :title="isFavorite ? '取消收藏' : '收藏'"
+      :aria-label="isFavorite ? '取消收藏' : '收藏'"
+      :aria-pressed="isFavorite"
       @click="$emit('toggle-favorite')"
-    >
-      <component :is="isFavorite ? StarFilled : StarOutlined" aria-hidden="true" />
-    </a-button>
-    <a-dropdown v-if="isInstalled" :trigger="['click']" placement="bottomRight">
-      <a-button type="default" title="更多操作">
-        <EllipsisOutlined  />
-      </a-button>
-      <template #overlay>
-        <a-menu class="plugin-actions-menu min-w-[180px]">
-          <a-menu-item key="hotkey" @click="$emit('set-hotkey')">
-            <BrandGlyph kind="keyboard" :size="14" class="mr-2" />
-            <span>{{ hotkeyText ? `快捷键：${hotkeyText}` : '设置快捷键' }}</span>
-          </a-menu-item>
-          <a-menu-item
-            v-if="canCreateShortcut"
-            key="shortcut"
-            :disabled="creatingShortcut"
-            @click="$emit('create-shortcut')"
-          >
-            <component :is="creatingShortcut ? LoadingOutlined : ExportOutlined" class="mr-2" aria-hidden="true" />
-            <span>{{ creatingShortcut ? '正在生成...' : '生成桌面快捷方式' }}</span>
-          </a-menu-item>
-          <a-menu-divider v-if="canUninstall" />
-          <a-menu-item v-if="canUninstall" key="uninstall" @click="$emit('uninstall')">
-            <span class="text-[var(--rc-error)]">
-              <DeleteOutlined class="mr-2" />
-              卸载
-            </span>
-          </a-menu-item>
-        </a-menu>
-      </template>
-    </a-dropdown>
+    />
+    <RcMenu v-if="isInstalled" :items="moreItems" @select="onMoreSelect">
+      <RcButton variant="secondary" size="md" class="icon-only" :icon="EllipsisIcon" title="更多操作" aria-label="更多操作" />
+    </RcMenu>
   </div>
 </template>
 
 <style scoped>
 /* 已收藏：星标点亮为余烬橙，按钮本身保持中性 */
-.is-favorite :deep(.anticon) {
+.is-favorite :deep(.lucide) {
   color: var(--rc-accent);
 }
 
-:global(.plugin-actions-menu) {
-  border: 1px solid var(--color-border);
-  box-shadow: var(--rc-shadow-lg);
-  margin-top: 4px;
+.comments-entry {
+  color: var(--rc-text-muted);
 }
 
-:global(.plugin-actions-menu .ant-menu-item) {
-  margin-inline: 4px;
-  border-radius: 6px;
-}
-
-:global(.plugin-actions-menu .ant-menu-item-divider) {
-  margin: 4px 8px;
-  background-color: var(--color-border);
+/* 只有图标的按钮：正方形 */
+.icon-only {
+  width: 36px;
+  padding: 0;
 }
 </style>

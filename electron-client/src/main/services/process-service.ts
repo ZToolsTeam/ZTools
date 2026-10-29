@@ -45,6 +45,27 @@ export interface ProcessSummary {
   }
 }
 
+/**
+ * macOS 系统进程判定（只看可靠可测的信号，不看 uid）：
+ * - pid 1 是 launchd；kernel_task 的 pid 0 不会出现在 ps 列表里；
+ * - 可执行文件位于受 SIP 保护的系统目录 /System/、/usr/libexec/、/usr/sbin/、/sbin/，或 Apple 自带的 /Library/Apple/；
+ *   但 /System/Applications/（含 Utilities 等子目录）下是用户打开的自带应用（计算器、终端等），不算系统进程。
+ * 不按 uid 0 判断：Docker、杀毒、VPN 等第三方守护进程同样以 root 运行，按 uid 会把它们误标为系统进程；
+ * 路径读不到（ps 给的不是绝对路径）时返回 false，不猜测。规则与插件 process-monitor 的 isMacSystemPath 一致。
+ */
+export function isMacosSystemProcess(pid: number, executablePath: string): boolean {
+  if (pid === 1) return true
+  return /^\/(?:System|usr\/libexec|usr\/sbin|sbin|Library\/Apple)\//.test(executablePath) &&
+    !/^\/System\/(?:[^/]+\/)*Applications\//.test(executablePath)
+}
+
+/** 读取非负整数计数；缺失、非数字或负数返回 null（读不到就留空，不编造兜底值） */
+export function readOptionalCount(value: unknown): number | null {
+  if (value === null || value === undefined || value === '') return null
+  const parsed = Number(value)
+  return Number.isFinite(parsed) && parsed >= 0 ? Math.round(parsed) : null
+}
+
 export interface ProcessDiscoveryAdapter {
   list(signal: AbortSignal): Promise<ProcessSummary[]>
 }
@@ -565,8 +586,9 @@ export class ProcessService {
           privateBytes: null,
           threadCount: null,
           parentPid: p.parentPid ?? null,
-          isSystem: p.pid <= 4,
-          description: p.name,
+          isSystem: isMacosSystemProcess(p.pid, p.path),
+          // ps 读不到发布者与文件描述：留空，不用进程名冒充（界面按“未提供”显示）
+          description: '',
           companyName: ''
         }))
         this.#cachedMonitorSnapshot = { timestampMs: this.now(), processes: mapped }
@@ -659,8 +681,9 @@ export class ProcessService {
         const isSystem = pid <= 4 || sessionId === 0 || criticalSysNames.has(lowerName) || isSysPath
 
         const workingSetBytes = Math.max(0, Number(row?.workingSetBytes ?? 0))
-        const privateBytes = Math.max(0, Number(row?.privateBytes ?? 0)) || Math.round(workingSetBytes * 0.85)
-        const threadCount = Math.max(1, Number(row?.threadCount ?? 1))
+        // 读不到的计数保持 null，不用工作集估算私有内存、也不把线程数兜底成 1
+        const privateBytes = readOptionalCount(row?.privateBytes)
+        const threadCount = readOptionalCount(row?.threadCount)
         const handleCount = Math.max(0, Number(row?.handleCount ?? 0))
         const parentPid = Math.max(0, Number(row?.parentPid ?? 0))
 
@@ -676,8 +699,10 @@ export class ProcessService {
           parentPid,
           isSystem,
           description: exePath ? path.win32.basename(exePath) : name,
-          companyName: isSystem ? 'Microsoft Corporation' : '',
-          commandLine: String(row?.commandLine || exePath || name)
+          // 列表快照不读版本资源，发布者留空（详情接口按文件版本信息读取），不按是否系统进程猜成 Microsoft
+          companyName: '',
+          // 读不到命令行（权限不足或系统进程）就留空，不拿路径或进程名冒充
+          commandLine: typeof row?.commandLine === 'string' ? row.commandLine : ''
         })
       }
 
@@ -763,11 +788,13 @@ export class ProcessService {
               pid,
               name: String(cached?.name || `PID-${pid}`),
               path: String(cached?.path || ''),
-              commandLine: String(cached?.commandLine || cached?.path || ''),
-              companyName: String(cached?.companyName || ''),
-              fileDescription: String(cached?.description || ''),
+              // ps 只给可执行文件路径，拿不到真实命令行、产品名与文件描述：一律留空，
+              // 不用路径冒充命令行、不用进程名冒充产品名 / 文件描述（插件显示“未提供”）
+              commandLine: '',
+              companyName: '',
+              fileDescription: '',
               fileVersion: '',
-              productName: String(cached?.name || ''),
+              productName: '',
               signerName: '',
               startTime: '',
               handleCount: null,

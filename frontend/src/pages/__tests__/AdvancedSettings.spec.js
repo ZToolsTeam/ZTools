@@ -5,8 +5,16 @@ import { createPinia, setActivePinia } from 'pinia'
 const mocks = vi.hoisted(() => ({
   setWakePreference: vi.fn(),
   success: vi.fn(),
-  error: vi.fn()
+  error: vi.fn(),
+  getShowTrayIcon: vi.fn(),
+  setShowTrayIcon: vi.fn(),
+  isMac: false
 }))
+
+vi.mock('@/utils/platform', async (importOriginal) => {
+  const actual = await importOriginal()
+  return { ...actual, isMacOS: () => mocks.isMac }
+})
 
 vi.mock('vue-router', async (importOriginal) => ({
   ...(await importOriginal()),
@@ -24,6 +32,8 @@ vi.mock('@/api/apiserver', () => ({
   setHotkey: vi.fn().mockResolvedValue(true),
   getMinimizeToTray: vi.fn().mockResolvedValue(true),
   setMinimizeToTray: vi.fn().mockResolvedValue(true),
+  getShowTrayIcon: mocks.getShowTrayIcon,
+  setShowTrayIcon: mocks.setShowTrayIcon,
   getCloseConfirm: vi.fn().mockResolvedValue(true),
   setCloseConfirm: vi.fn().mockResolvedValue(true)
 }))
@@ -33,6 +43,7 @@ vi.mock('@/utils/windowMode', async (importOriginal) => {
 })
 
 import AdvancedSettings from '../AdvancedSettings.vue'
+import * as api from '@/api/apiserver'
 import { useThemeStore } from '@/stores/theme'
 
 function mountPage() {
@@ -58,14 +69,66 @@ function mountPage() {
 describe('AdvancedSettings 设置页（单栏分组版式）', () => {
   beforeEach(() => {
     setActivePinia(createPinia())
-    Object.values(mocks).forEach((m) => m.mockReset())
+    Object.values(mocks).forEach((m) => typeof m === 'function' && m.mockReset())
+    mocks.isMac = false
+    api.getHotkey.mockResolvedValue('Alt+Space')
+    api.setHotkey.mockClear()
+    api.getCloseConfirm.mockResolvedValue(true)
+    api.setCloseConfirm.mockResolvedValue(true)
+    api.getMinimizeToTray.mockResolvedValue(true)
+    api.setMinimizeToTray.mockResolvedValue(true)
+    mocks.getShowTrayIcon.mockResolvedValue(true)
+    mocks.setShowTrayIcon.mockResolvedValue(true)
   })
 
-  it('分组顺序为 外观 → 通用 → 快捷键 → 常用快捷键 → 开发者工具，且不再渲染装饰图标', async () => {
+  it('托盘图标开关：读取已保存的值，切换后写入；保存失败时开关回到原状态并提示', async () => {
+    mocks.getShowTrayIcon.mockResolvedValue(false)
+    const wrapper = mountPage()
+    await flushPromises()
+    const traySwitch = wrapper.findComponent('[data-testid="tray-icon-switch"]')
+    expect(traySwitch.exists()).toBe(true)
+    expect(traySwitch.attributes('checked')).toBe('false')
+
+    traySwitch.vm.$emit('update:checked', true)
+    traySwitch.vm.$emit('change', true)
+    await flushPromises()
+    expect(mocks.setShowTrayIcon).toHaveBeenCalledWith(true)
+    expect(mocks.success).toHaveBeenCalled()
+
+    mocks.setShowTrayIcon.mockResolvedValueOnce(false)
+    traySwitch.vm.$emit('update:checked', false)
+    traySwitch.vm.$emit('change', false)
+    await flushPromises()
+    expect(mocks.setShowTrayIcon).toHaveBeenLastCalledWith(false)
+    expect(mocks.error).toHaveBeenCalled()
+    expect(wrapper.find('[data-testid="tray-icon-switch"]').attributes('checked')).toBe('true')
+    wrapper.unmount()
+  })
+
+  it('[破坏性] 退出确认保存失败（setter 返回 false）时提示错误、不报成功，并按配置恢复开关', async () => {
+    const wrapper = mountPage()
+    await flushPromises()
+    const closeSwitch = wrapper.findAllComponents('a-switch-stub')
+      .find((sw) => sw.element.closest('.setting-item')?.textContent.includes('退出确认'))
+    expect(closeSwitch).toBeTruthy()
+    api.setCloseConfirm.mockResolvedValueOnce(false)
+    api.getCloseConfirm.mockClear()
+    mocks.success.mockClear()
+    closeSwitch.vm.$emit('update:checked', false)
+    closeSwitch.vm.$emit('change', false)
+    await flushPromises()
+    expect(mocks.error).toHaveBeenCalledWith('关闭窗口设置保存失败')
+    expect(mocks.success).not.toHaveBeenCalled()
+    expect(api.getCloseConfirm).toHaveBeenCalledTimes(1)
+    expect(closeSwitch.attributes('checked')).toBe('true')
+    wrapper.unmount()
+  })
+
+  it('分组顺序为 外观 → 通用 → 快捷键 → 常用快捷键，开发者工具卡片已删除，且不再渲染装饰图标', async () => {
     const wrapper = mountPage()
     await flushPromises()
     expect(wrapper.find('.page-title').text()).toBe('设置')
-    expect(wrapper.findAll('.card-title').map((t) => t.text())).toEqual(['外观', '通用', '快捷键', '常用快捷键', '开发者工具'])
+    expect(wrapper.findAll('.card-title').map((t) => t.text())).toEqual(['外观', '通用', '快捷键', '常用快捷键'])
     expect(wrapper.find('.setting-icon').exists()).toBe(false)
     expect(wrapper.find('.card-icon').exists()).toBe(false)
     wrapper.unmount()
@@ -126,7 +189,7 @@ describe('AdvancedSettings 设置页（单栏分组版式）', () => {
     await flushPromises()
     const rows = wrapper.findAll('.setting-item.compact')
     expect(rows.map((r) => r.find('.setting-label').text())).toEqual([
-      '聚焦搜索', '动作面板', '收起 / 展开侧栏', '切换到悬浮条', '打开设置', '返回主页'
+      '聚焦搜索', '动作面板', '切换到悬浮条', '打开设置', '返回主页'
     ])
     rows.forEach((row) => expect(row.findAll('kbd').length).toBeGreaterThan(0))
     wrapper.unmount()
@@ -149,7 +212,7 @@ describe('AdvancedSettings 设置页（单栏分组版式）', () => {
       const labels = (name) => wrapper.find(`[aria-label="${name}"]`).findAll('.seg-btn').map((b) => b.text())
       expect(labels('面板位置')).toEqual(['屏幕中心', '鼠标位置'])
       expect(labels('面板大小')).toEqual(['小400×300', '中400×600', '大800×600'])
-      expect(labels('默认选中 Tab')).toEqual(['历史', '固定', '本地', '系统工具', '全部'])
+      expect(labels('默认标签')).toEqual(['历史', '固定', '本地', '系统工具', '全部'])
       expect(wrapper.find('.sub-setting-info i').exists()).toBe(false)
 
       const cursor = wrapper.find('[aria-label="面板位置"]').findAll('.seg-btn')[1]
@@ -166,17 +229,72 @@ describe('AdvancedSettings 设置页（单栏分组版式）', () => {
       wrapper.unmount()
     })
 
+    it('全局唤醒已关闭（空串）时显示「点击设置」；改超级面板设置不会连带改写唤醒快捷键', async () => {
+      api.getHotkey.mockResolvedValue('')
+      const wrapper = mountPage()
+      await flushPromises()
+      expect(wrapper.find('.hotkey-item .no-hotkey').text()).toBe('点击设置')
+      await wrapper.find('[aria-label="面板大小"]').findAll('.seg-btn')[2].trigger('click')
+      await flushPromises()
+      expect(config.set).toHaveBeenCalledWith('super_panel', expect.objectContaining({ panelSize: 'large' }))
+      expect(api.setHotkey).not.toHaveBeenCalled()
+      wrapper.unmount()
+    })
+
+    it('[破坏性] 读取唤醒快捷键失败时提示错误，其余设置照常加载，且不会把唤醒快捷键当成已关闭', async () => {
+      const spy = vi.spyOn(console, 'error').mockImplementation(() => {})
+      api.getHotkey.mockRejectedValue(new Error('IPC 超时'))
+      const wrapper = mountPage()
+      await flushPromises()
+      expect(mocks.error).toHaveBeenCalledWith('读取全局唤醒快捷键失败')
+      expect(mocks.getShowTrayIcon).toHaveBeenCalled()
+      expect(wrapper.find('.hotkey-item .no-hotkey').exists()).toBe(false)
+      spy.mockRestore()
+      wrapper.unmount()
+    })
+
+    it('macOS 开发版禁用开机自启开关并说明原因，不读取也不写入；正式版照常读取', async () => {
+      mocks.isMac = true
+      window.ztools.sys = { isDev: vi.fn().mockResolvedValue(true) }
+      api.getAutostart.mockClear()
+      const dev = mountPage()
+      await flushPromises()
+      expect(dev.find('[data-testid="autostart-status"]').text()).toContain('开发版不支持开机启动')
+      expect(dev.findComponent('[data-testid="autostart-switch"]').attributes('disabled')).toBe('true')
+      expect(api.getAutostart).not.toHaveBeenCalled()
+      dev.unmount()
+
+      window.ztools.sys.isDev.mockResolvedValue(false)
+      const packaged = mountPage()
+      await flushPromises()
+      expect(api.getAutostart).toHaveBeenCalled()
+      expect(packaged.findComponent('[data-testid="autostart-switch"]').attributes('disabled')).toBe('false')
+      packaged.unmount()
+    })
+
+    it('鼠标热键只在 Windows 显示，macOS 没有原生实现时隐藏', async () => {
+      const win = mountPage()
+      await flushPromises()
+      expect(win.text()).toContain('鼠标热键')
+      win.unmount()
+      mocks.isMac = true
+      const mac = mountPage()
+      await flushPromises()
+      expect(mac.text()).not.toContain('鼠标热键')
+      mac.unmount()
+    })
+
     it('[破坏性] 写入超级面板配置失败时提示错误，不再误报「设置已保存」', async () => {
       const spy = vi.spyOn(console, 'error').mockImplementation(() => {})
       config.set.mockRejectedValue(new Error('磁盘只读'))
       const wrapper = mountPage()
       await flushPromises()
       mocks.success.mockClear()
-      await wrapper.find('[aria-label="默认选中 Tab"]').findAll('.seg-btn')[4].trigger('click')
+      await wrapper.find('[aria-label="默认标签"]').findAll('.seg-btn')[4].trigger('click')
       await flushPromises()
       expect(mocks.error).toHaveBeenCalledWith(expect.stringContaining('磁盘只读'))
       expect(mocks.success).not.toHaveBeenCalled()
-      expect(wrapper.find('[aria-label="默认选中 Tab"]').exists()).toBe(true)
+      expect(wrapper.find('[aria-label="默认标签"]').exists()).toBe(true)
       spy.mockRestore()
       wrapper.unmount()
     })

@@ -1,16 +1,16 @@
 /**
- * ZTools 统一命令检索与 Frecency 排序内核 (Command Search Composable)
+ * 悬浮条与工作台共用的命令检索内核
  *
- * 核心特性：
- * 1. 100% 本地无网络阻塞检索（本地插件 + 内置系统应用 + MFT/USN 硬件级文件秒搜）；
- * 2. 智能拼音全拼与首字母模糊匹配 (pinyinSearch)；
- * 3. Frecency 频度+时间衰减综合排序 (Frequency + Recency)；
- * 4. 连续快速输入高频防乱序机制 (Cancellation Token / RequestId 机制)。
+ * 1. 程序列表在窗口打开时取一次，与插件、子命令一起在本地当场匹配，按键后同一帧就有结果；
+ * 2. 普通文件走主进程检索，晚到的结果单独排在下面一段，不让已显示的结果跳位；
+ * 3. 排序：匹配档（见 pinyinSearch）→ 常用读音 → 名称命中 → 类型（程序 > 插件 > 子命令 > 系统指令）
+ *    → 使用频率 → 名称长短；输入同一个词时上次选中的那一项排第一；
+ * 4. 连续输入时按请求序号丢弃过期的文件结果。
  */
 
-import { ref, computed, getCurrentScope, onScopeDispose } from 'vue'
+import { ref, computed, watch, getCurrentScope, onScopeDispose } from 'vue'
 import { usePluginsStore } from '@/stores/plugins'
-import { matchItemWithQuery } from '@/utils/pinyinSearch'
+import { MATCH_TIERS, matchItemWithQuery, normalizeSearchQuery, splitHighlightParts } from '@/utils/pinyinSearch'
 import { openSettings } from '@/utils/internalPlugins'
 import { getOfficialPlugin } from '@/utils/officialPlugins'
 import { switchWindowMode, WINDOW_MODES } from '@/utils/windowMode'
@@ -18,6 +18,8 @@ import { switchWindowMode, WINDOW_MODES } from '@/utils/windowMode'
 import { evaluateCalculatorQuery, addCalculatorHistory } from '@/vendor/calculator-engine.js'
 
 const STORAGE_KEY_FRECENCY = 'ztools_command_frecency'
+const STORAGE_KEY_QUERY_CHOICES = 'ztools_command_query_choices'
+const MAX_QUERY_CHOICES = 300
 
 /**
  * 复制文本到系统剪贴板（兼容宿主 IPC 与浏览器 Clipboard API）
@@ -281,6 +283,69 @@ export function recordCommandUsage(itemKey) {
   saveFrecencyMap(map)
 }
 
+let frecencySnapshot = { raw: null, map: {} }
+
+/** 排序时读取的使用记录：内容没变就复用上次解析的结果（两个窗口共用同一份 localStorage） */
+function getFrecencySnapshot() {
+  let raw = null
+  try {
+    raw = typeof localStorage !== 'undefined' ? localStorage.getItem(STORAGE_KEY_FRECENCY) : null
+  } catch {
+    raw = null
+  }
+  if (raw !== frecencySnapshot.raw) frecencySnapshot = { raw, map: raw ? loadFrecencyMap() : {} }
+  return frecencySnapshot.map
+}
+
+let queryChoicesSnapshot = { raw: null, map: {} }
+
+function getQueryChoicesSnapshot() {
+  let raw = null
+  try {
+    raw = typeof localStorage !== 'undefined' ? localStorage.getItem(STORAGE_KEY_QUERY_CHOICES) : null
+  } catch {
+    raw = null
+  }
+  if (raw !== queryChoicesSnapshot.raw) queryChoicesSnapshot = { raw, map: raw ? loadQueryChoices() : {} }
+  return queryChoicesSnapshot.map
+}
+
+/**
+ * 读取「搜索词 → 上次选中项」记录
+ * @returns {Record<string, { key: string, at: number }>}
+ */
+export function loadQueryChoices() {
+  try {
+    const raw = typeof localStorage !== 'undefined' ? localStorage.getItem(STORAGE_KEY_QUERY_CHOICES) : null
+    const parsed = raw ? JSON.parse(raw) : null
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {}
+  } catch (err) {
+    console.warn('[useCommandSearch] 读取搜索选择记录失败:', err)
+    return {}
+  }
+}
+
+/**
+ * 记住这个搜索词最后选中的是哪一项，下次输入同一个词时它排第一；最多保留最近 300 个词
+ */
+export function recordQueryChoice(rawQuery, itemKey) {
+  const q = normalizeSearchQuery(rawQuery)
+  const key = String(itemKey || '')
+  if (!q || !key || key.startsWith('inline-calc:')) return
+  const choices = loadQueryChoices()
+  choices[q] = { key, at: Date.now() }
+  const entries = Object.entries(choices)
+  if (entries.length > MAX_QUERY_CHOICES) {
+    entries.sort((a, b) => (b[1]?.at || 0) - (a[1]?.at || 0))
+    for (const [staleQuery] of entries.slice(MAX_QUERY_CHOICES)) delete choices[staleQuery]
+  }
+  try {
+    if (typeof localStorage !== 'undefined') localStorage.setItem(STORAGE_KEY_QUERY_CHOICES, JSON.stringify(choices))
+  } catch (err) {
+    console.warn('[useCommandSearch] 保存搜索选择记录失败:', err)
+  }
+}
+
 /**
  * 判断插件条目是否为可原位渲染/执行的声明式插件
  */
@@ -335,101 +400,242 @@ export function normalizePluginFeatures(plugin) {
   return result
 }
 
+/** 同一档里的类型先后：程序 > 插件 > 插件子命令 > 系统指令 > 文件夹 > 文件 */
+function resultTypeRank(item) {
+  if (item?.isApplication) return 0
+  if (item?.type === 'plugin') return 1
+  if (item?.type === 'plugin-feature') return 2
+  if (item?.type === 'file') return item.isDir ? 4 : 5
+  return 3
+}
+
+/** 上次为同一个搜索词选中的结果排在所有匹配之前，只让位给用户设置的别名 */
+const LEARNED_TIER = MATCH_TIERS.EXACT + 0.5
+const FILE_SEARCH_DEBOUNCE_MS = 80
+const APPLICATION_REFRESH_INTERVAL_MS = 5000
+/** 主进程给结果路径的打开授权 30 分钟过期：窗口开着时每 10 分钟刷新一次程序列表（顺带续期），搜索时发现过旧也刷新 */
+const APPLICATION_GRANT_REFRESH_MS = 10 * 60 * 1000
+const APPLICATION_ICON_BATCH = 24
+const MAX_APPLICATION_ICON_CACHE = 512
+
+function compareRanked(a, b) {
+  return b.tier - a.tier ||
+    a.secondary - b.secondary ||
+    a.field - b.field ||
+    a.typeRank - b.typeRank ||
+    b.frecency - a.frecency ||
+    a.length - b.length ||
+    a.index - b.index
+}
+
+/** 文件段：同档时最近修改的、路径浅的在前 */
+function compareFiles(a, b) {
+  return b.tier - a.tier ||
+    a.secondary - b.secondary ||
+    a.typeRank - b.typeRank ||
+    b.frecency - a.frecency ||
+    b.mtime - a.mtime ||
+    a.depth - b.depth ||
+    a.index - b.index
+}
+
+function isFileRecord(f) {
+  return Boolean(f) && typeof f.path === 'string' && typeof f.name === 'string'
+}
+
+/** 主进程返回的文件记录转成列表条目；程序带上英文原名、文件带上去掉扩展名的名字，都参与匹配 */
+function toFileItem(f) {
+  const isApplication = f.kind === 'application'
+  const name = f.display_name || f.name
+  const rawStem = isApplication
+    ? String(f.name || '').replace(/\.(app|lnk)$/i, '')
+    : f.is_dir ? '' : String(f.name || '').replace(/\.[^.\s]{1,16}$/, '')
+  const parentPath = f.path.replace(/[\\/][^\\/]+$/, '')
+  return {
+    key: 'file:' + f.path,
+    type: 'file',
+    name,
+    title: name,
+    fileName: f.name,
+    path: f.path,
+    isDir: f.is_dir,
+    isApplication,
+    altNames: rawStem && rawStem !== name ? [rawStem] : [],
+    size: f.size,
+    mtime: f.mtime,
+    badge: isApplication ? '应用' : f.is_dir ? '文件夹' : '文件',
+    faIcon: isApplication ? 'fa-th-large' : resolveFileFaIcon(f.name, f.is_dir),
+    description: truncatePath(parentPath),
+    subtitle: truncatePath(parentPath),
+    actionLabel: '打开',
+    icon: ''
+  }
+}
+
+function sameText(a, b) {
+  return String(a || '').trim().toLowerCase() === String(b || '').trim().toLowerCase()
+}
+
+/** 已安装插件（过滤已下架或已禁用）、全部子命令与内置命令；只随插件列表变化重建 */
+function buildCommandCandidates(pluginsStore) {
+  const installed = []
+  const featureItems = []
+
+  for (const p of pluginsStore.installedPlugins || []) {
+    if (!p || typeof p !== 'object') continue
+    const key = String(p.pluginId || p.id || '').trim()
+    if (!key) continue
+    if (p.revoked === true || p.enabled === false || pluginsStore.isRevoked?.(key)) {
+      continue
+    }
+
+    const rawMode = String(p.mode || p.manifest?.mode || 'view').trim()
+    const mode = ['view', 'no-view'].includes(rawMode) ? rawMode : 'view'
+    const alias = String(p.alias || p.manifest?.alias || '').trim()
+    const features = normalizePluginFeatures(p)
+    const isDeclarative = isDeclarativePluginItem(p)
+    const pluginName = p.name || p.title || key
+
+    installed.push({
+      ...p,
+      key,
+      pluginId: key,
+      type: 'plugin',
+      mode,
+      alias,
+      features,
+      isDeclarative,
+      badge: p.badge || (mode === 'no-view' ? '极速动作' : '插件'),
+      faIcon: p.faIcon || resolveCommandFaIcon(p.name, p.category),
+      actionLabel: mode === 'no-view' ? '执行' : '启动'
+    })
+
+    features.forEach((feat, index) => {
+      // 与插件同名的默认子命令只保留插件这一条，避免结果里出现两条一样的名字
+      if (index === 0 && feat.mode === mode && sameText(feat.explain, pluginName)) return
+      featureItems.push({
+        key: `${key}:${feat.code}`,
+        type: 'plugin-feature',
+        pluginId: key,
+        pluginName,
+        featureCode: feat.code,
+        name: feat.explain,
+        title: feat.explain,
+        description: `${p.name || key}${feat.alias ? ` · 别名 ${feat.alias}` : ''}`,
+        subtitle: p.name || key,
+        alias: feat.alias,
+        mode: feat.mode,
+        shortcut: feat.shortcut,
+        cmds: feat.cmds,
+        icon: feat.icon || p.icon,
+        faIcon: p.faIcon || resolveCommandFaIcon(feat.explain, p.category),
+        badge: feat.mode === 'no-view' ? '极速动作' : (p.name || '子命令'),
+        actionLabel: feat.mode === 'no-view' ? '执行' : '打开',
+        isDeclarative
+      })
+    })
+  }
+
+  const installedKeys = new Set(installed.map((item) => item.key))
+  const remainingBuiltins = BUILTIN_COMMAND_ITEMS.filter((item) => !installedKeys.has(item.key))
+  return [...installed, ...featureItems, ...remainingBuiltins]
+}
+
 /**
  * 统一搜索内核 Composable
  * @param {object} [options]
- * @param {boolean} [options.enableFileSearch=true] 是否启用本地硬件级文件搜索
+ * @param {boolean} [options.enableFileSearch=true] 是否启用本地文件搜索
+ * @param {boolean} [options.enableApplications] 是否在本地匹配程序列表，默认与文件搜索一致
  * @param {number} [options.fileSearchLimit=12] 文件搜索候选条数上限
  */
 export function useCommandSearch(options = {}) {
   const enableFileSearch = options.enableFileSearch !== false
+  const enableApplications = options.enableApplications ?? enableFileSearch
   const fileSearchLimit = options.fileSearchLimit || 12
 
   const pluginsStore = usePluginsStore()
   const query = ref('')
   const fileResults = ref([])
+  const applicationResults = ref([])
+  // 主进程能按范围检索时程序在本地匹配；旧版主进程不认识范围，程序随文件结果一起返回
+  const applicationsAvailable = ref(false)
   const isSearching = ref(false)
   const fileSearchError = ref('')
   const fileSearchDegraded = ref(false)
   const applicationIcons = new Map()
+  const failedIconPaths = new Set()
 
   let searchRequestId = 0
   let fileSearchDebounceTimer = null
+  let applicationsRequest = null
+  let applicationsLoadedAt = 0
+  let disposed = false
 
-  /**
-   * 记录使用
-   */
-  function recordUsage(itemKey) {
-    recordCommandUsage(itemKey)
+  function launcherBridge() {
+    if (typeof window === 'undefined') return null
+    return typeof window.__ztoolsLauncher?.searchFiles === 'function' ? window.__ztoolsLauncher : null
   }
 
   /**
-   * 执行防乱序本地文件秒搜
+   * 记录使用：使用频率，以及「当前搜索词 → 选中项」
+   */
+  function recordUsage(itemKey) {
+    recordCommandUsage(itemKey)
+    recordQueryChoice(query.value, itemKey)
+  }
+
+  /** 读取程序列表（主进程有缓存，过期时先返回旧列表再后台刷新），窗口获得焦点时节流刷新 */
+  function refreshApplications({ force = false } = {}) {
+    if (!enableApplications || disposed) return Promise.resolve()
+    const bridge = launcherBridge()
+    if (!bridge) return Promise.resolve()
+    if (applicationsRequest) return applicationsRequest
+    if (!force && applicationsLoadedAt && Date.now() - applicationsLoadedAt < APPLICATION_REFRESH_INTERVAL_MS) {
+      return Promise.resolve()
+    }
+    applicationsRequest = (async () => {
+      try {
+        const res = await bridge.searchFiles('', fileSearchLimit, { scope: 'applications' })
+        if (disposed) return
+        if (res?.success === false) throw new Error(res.error?.message || '读取程序列表失败')
+        const data = res?.data ?? res
+        if (data?.scope !== 'applications' || !Array.isArray(data.files)) return
+        const previousIcons = new Map(applicationResults.value.map((item) => [item.path, item.icon]))
+        applicationResults.value = data.files
+          .filter((f) => isFileRecord(f) && f.kind === 'application')
+          .map((f) => Object.assign(toFileItem(f), { icon: previousIcons.get(f.path) || '' }))
+        applicationsAvailable.value = true
+        applicationsLoadedAt = Date.now()
+        failedIconPaths.clear()
+      } catch (err) {
+        console.warn('[useCommandSearch] 读取程序列表失败:', err)
+      } finally {
+        applicationsRequest = null
+      }
+    })()
+    return applicationsRequest
+  }
+
+  /**
+   * 执行防乱序本地文件检索；程序已在本地匹配时只请求文件
    */
   async function searchFilesLocally(text, currentReq) {
     const trimmed = text.trim()
-    if (!trimmed || !enableFileSearch) {
-      fileResults.value = []
-      return
-    }
-
     try {
-      let res = null
-      if (typeof window !== 'undefined') {
-        if (window.__ztoolsLauncher?.searchFiles) {
-          res = await window.__ztoolsLauncher.searchFiles(trimmed, fileSearchLimit)
-        } else if (window.ztools?.system?.searchFiles) {
-          res = await window.ztools.system.searchFiles(trimmed, fileSearchLimit)
-        } else if (window.ztools?.sys?.searchFiles) {
-          res = await window.ztools.sys.searchFiles(trimmed, fileSearchLimit)
-        }
-      }
+      const bridge = launcherBridge()
+      if (!bridge) throw new Error('当前客户端没有可用的文件搜索接口')
+      const res = applicationsAvailable.value
+        ? await bridge.searchFiles(trimmed, fileSearchLimit, { scope: 'files' })
+        : await bridge.searchFiles(trimmed, fileSearchLimit)
 
       // 防乱序检查：如果当前请求已过时，坚决丢弃结果
       if (currentReq !== searchRequestId) return
 
-      if (res === null) throw new Error('当前客户端没有可用的文件搜索接口')
       if (res?.success === false) throw new Error(res.error?.message || '本地文件搜索失败')
       const data = res?.data ?? res
       const rawFiles = Array.isArray(data?.files) ? data.files : []
       fileSearchDegraded.value = data?.degraded === true
-      fileResults.value = rawFiles
-        .filter(f => f && typeof f.path === 'string' && typeof f.name === 'string')
-        .map(f => {
-          const isApplication = f.kind === 'application'
-          const name = f.display_name || f.name
-          const rawStem = String(f.name || '').replace(/\.app$/i, '')
-          const extraKeywords = isApplication
-            ? [
-                rawStem,
-                ...String(f.acronym || '').split(/\s+/),
-                ...String(f.pinyin || '').split(/\s+/)
-              ].filter(Boolean)
-            : []
-          const parentPath = f.path.replace(/[\\/][^\\/]+$/, '')
-          return {
-            key: 'file:' + f.path,
-            type: 'file',
-            name,
-            title: name,
-            fileName: f.name,
-            path: f.path,
-            isDir: f.is_dir,
-            isApplication,
-            acronym: f.acronym || '',
-            pinyin: f.pinyin || '',
-            keywords: extraKeywords,
-            size: f.size,
-            mtime: f.mtime,
-            badge: isApplication ? '应用' : f.is_dir ? '文件夹' : '文件',
-            faIcon: isApplication ? 'fa-th-large' : resolveFileFaIcon(f.name, f.is_dir),
-            description: truncatePath(parentPath),
-            subtitle: truncatePath(parentPath),
-            actionLabel: '打开',
-            icon: ''
-          }
-        })
-      void loadApplicationIcons(fileResults.value, currentReq)
+      fileResults.value = rawFiles.filter(isFileRecord).map(toFileItem)
     } catch (err) {
       if (currentReq === searchRequestId) {
         fileResults.value = []
@@ -443,60 +649,74 @@ export function useCommandSearch(options = {}) {
     }
   }
 
-  async function loadApplicationIcons(items, requestId) {
+  async function loadApplicationIcons(items) {
     const api = typeof window !== 'undefined' ? window.ztools?.sys : null
     if (!api?.getFileIcon) return
-    await Promise.all(items.filter(item => item.isApplication).map(async item => {
+    const targets = items.filter((item) => item?.isApplication && !item.icon && !failedIconPaths.has(item.path))
+    await Promise.all(targets.map(async (item) => {
       try {
         let pending = applicationIcons.get(item.path)
         if (!pending) {
           pending = Promise.resolve(api.getFileIcon(item.path))
-          if (applicationIcons.size >= 64) applicationIcons.delete(applicationIcons.keys().next().value)
+          if (applicationIcons.size >= MAX_APPLICATION_ICON_CACHE) applicationIcons.delete(applicationIcons.keys().next().value)
           applicationIcons.set(item.path, pending)
         }
         const icon = await pending
-        if (requestId === searchRequestId && typeof icon === 'string' && icon.startsWith('data:image/')) {
+        if (disposed) return
+        if (typeof icon === 'string' && icon.startsWith('data:image/')) {
           item.icon = icon
+        } else {
+          failedIconPaths.add(item.path)
         }
       } catch (error) {
         applicationIcons.delete(item.path)
+        failedIconPaths.add(item.path)
         console.warn('[useCommandSearch] 应用图标读取失败:', error)
       }
     }))
   }
 
   /**
-   * 触发搜索更新
+   * 触发搜索更新：插件与程序随 query 同步重排，文件检索防抖后发出
    */
   function search(text) {
     query.value = typeof text === 'string' ? text : ''
     const requestId = ++searchRequestId
-    fileResults.value = []
     fileSearchError.value = ''
     fileSearchDegraded.value = false
 
     if (fileSearchDebounceTimer) {
       clearTimeout(fileSearchDebounceTimer)
+      fileSearchDebounceTimer = null
+    }
+    if (applicationsAvailable.value && Date.now() - applicationsLoadedAt > APPLICATION_GRANT_REFRESH_MS) {
+      void refreshApplications()
     }
 
-    if (!query.value.trim()) {
-      searchRequestId++
+    const trimmed = query.value.trim()
+    // 只输入一个英文字母或数字时文件检索最慢、结果几乎都是噪声，只出程序与插件
+    if (!trimmed || !enableFileSearch || /^[a-z0-9]$/i.test(trimmed)) {
       fileResults.value = []
       isSearching.value = false
       return
     }
 
-    if (enableFileSearch) {
-      isSearching.value = true
-      fileSearchDebounceTimer = setTimeout(() => {
-        searchFilesLocally(query.value, requestId)
-      }, 40)
-    }
+    // 新结果到达前保留上一轮里文件名仍包含搜索词的文件，避免列表一缩一涨
+    const lower = trimmed.toLowerCase()
+    fileResults.value = fileResults.value.filter((item) =>
+      String(item?.fileName || item?.name || '').toLowerCase().includes(lower)
+    )
+    isSearching.value = true
+    fileSearchDebounceTimer = setTimeout(() => {
+      fileSearchDebounceTimer = null
+      searchFilesLocally(query.value, requestId)
+    }, FILE_SEARCH_DEBOUNCE_MS)
   }
 
   function clearSearch() {
     searchRequestId++
     if (fileSearchDebounceTimer) clearTimeout(fileSearchDebounceTimer)
+    fileSearchDebounceTimer = null
     query.value = ''
     fileResults.value = []
     fileSearchError.value = ''
@@ -504,153 +724,126 @@ export function useCommandSearch(options = {}) {
     isSearching.value = false
   }
 
+  const onWindowFocus = () => {
+    void refreshApplications()
+  }
+  let grantRefreshTimer = null
   if (getCurrentScope()) {
+    if (typeof window !== 'undefined') window.addEventListener('focus', onWindowFocus)
+    if (enableApplications) {
+      grantRefreshTimer = setInterval(() => { void refreshApplications() }, APPLICATION_GRANT_REFRESH_MS)
+    }
     onScopeDispose(() => {
+      disposed = true
       searchRequestId++
       if (fileSearchDebounceTimer) clearTimeout(fileSearchDebounceTimer)
+      if (grantRefreshTimer) clearInterval(grantRefreshTimer)
+      if (typeof window !== 'undefined') window.removeEventListener('focus', onWindowFocus)
       applicationIcons.clear()
     })
   }
+  void refreshApplications({ force: true })
+
+  const commandCandidates = computed(() => buildCommandCandidates(pluginsStore))
 
   /**
-   * 本地插件、子命令 (features) 与内置命令的排序与匹配流
+   * 排序结果：上段是即时计算、插件、子命令、内置命令与程序的混排，下段是普通文件
    */
-  const matchedPlugins = computed(() => {
-    const frecencyMap = loadFrecencyMap()
+  const ranking = computed(() => {
+    const rawQuery = query.value
+    const q = normalizeSearchQuery(rawQuery)
+    const frecencyMap = getFrecencySnapshot()
     const now = Date.now()
-    const q = query.value.trim().toLowerCase()
+    const candidates = commandCandidates.value
+    const ranges = new Map()
 
-    // 1. 组装安装的插件及其 features 子命令（过滤已下架或已禁用插件）
-    const installed = []
-    const featureItems = []
-
-    for (const p of pluginsStore.installedPlugins || []) {
-      if (!p || typeof p !== 'object') continue
-      const key = String(p.pluginId || p.id || '').trim()
-      if (!key) continue
-      if (p.revoked === true || p.enabled === false || pluginsStore.isRevoked?.(key)) {
-        continue
-      }
-
-      const rawMode = String(p.mode || p.manifest?.mode || 'view').trim()
-      const mode = ['view', 'no-view'].includes(rawMode) ? rawMode : 'view'
-      const alias = String(p.alias || p.manifest?.alias || '').trim()
-      const features = normalizePluginFeatures(p)
-      const isDeclarative = isDeclarativePluginItem(p)
-
-      installed.push({
-        ...p,
-        key,
-        pluginId: key,
-        type: 'plugin',
-        mode,
-        alias,
-        features,
-        isDeclarative,
-        badge: p.badge || (mode === 'no-view' ? '极速动作' : '插件'),
-        faIcon: p.faIcon || resolveCommandFaIcon(p.name, p.category),
-        actionLabel: mode === 'no-view' ? '执行' : '启动'
-      })
-
-      for (const feat of features) {
-        const featKey = `${key}:${feat.code}`
-        // 空查询时仅展示曾经使用过的子命令以保持首屏清爽；有查询词时全量参与匹配
-        if (!q && !frecencyMap[featKey]) continue
-
-        featureItems.push({
-          key: featKey,
-          type: 'plugin-feature',
-          pluginId: key,
-          pluginName: p.name || p.title || key,
-          featureCode: feat.code,
-          name: feat.explain,
-          title: feat.explain,
-          description: `${p.name || key}${feat.alias ? ` · 别名 ${feat.alias}` : ''}`,
-          subtitle: p.name || key,
-          alias: feat.alias,
-          mode: feat.mode,
-          shortcut: feat.shortcut,
-          cmds: feat.cmds,
-          icon: feat.icon || p.icon,
-          faIcon: p.faIcon || resolveCommandFaIcon(feat.explain, p.category),
-          badge: feat.mode === 'no-view' ? '极速动作' : (p.name || '子命令'),
-          actionLabel: feat.mode === 'no-view' ? '执行' : '打开',
-          isDeclarative
-        })
-      }
-    }
-
-    // 2. 组装内置系统条目
-    const installedKeys = new Set(installed.map((item) => item.key))
-    const remainingBuiltins = BUILTIN_COMMAND_ITEMS.filter((item) => !installedKeys.has(item.key))
-    const allAvailable = [...installed, ...featureItems, ...remainingBuiltins]
-
-    // 3. 计算打分（匹配得分 + Frecency 额外权重）
-    const scored = []
-    for (const item of allAvailable) {
-      const { matched, score: matchScore } = matchItemWithQuery(item, q)
-      if (matched) {
-        const stats = frecencyMap[item.key]
-        const frecencyBonus = calculateFrecencyBonus(stats, now)
-        const totalScore = matchScore + frecencyBonus
-        scored.push({ item, totalScore })
-      }
-    }
-
-    scored.sort((a, b) => b.totalScore - a.totalScore)
-    const ranked = scored.map((s) => s.item)
-
-    // 4. Raycast rootSearch: 当输入命中有效算式/单位换算/汇率/日期/色值时，置顶展示临时结果卡片
-    const inlineItem = evaluateInlineCommandItem(query.value)
-    if (inlineItem) {
-      return [inlineItem, ...ranked]
-    }
-    return ranked
-  })
-
-  /**
-   * 最终呈现的组合列表：内联计算置顶，本地应用与插件命令按匹配度+Frecency 统一混排，普通文件在后
-   */
-  const filteredItems = computed(() => {
-    const q = query.value.trim().toLowerCase()
     if (!q) {
-      return matchedPlugins.value
-    }
-    const apps = fileResults.value.filter((item) => item && item.isApplication)
-    const regularFiles = fileResults.value.filter((item) => !item || !item.isApplication)
-    if (apps.length === 0) {
-      return [...matchedPlugins.value, ...regularFiles]
+      // 空查询：按使用频率排，子命令只展示用过的，保持首屏清爽
+      const commands = candidates
+        .filter((item) => item.type !== 'plugin-feature' || frecencyMap[item.key])
+        .map((item, index) => ({ item, frecency: calculateFrecencyBonus(frecencyMap[item.key], now), index }))
+        .sort((a, b) => b.frecency - a.frecency || a.index - b.index)
+        .map((entry) => entry.item)
+      return { commands, top: commands, files: [], ranges }
     }
 
-    const frecencyMap = loadFrecencyMap()
-    const now = Date.now()
-    const inlineItems = matchedPlugins.value.filter(
-      (item) => item.type === 'inline-calculator' || item.type === 'inline-color'
-    )
-    const commandItems = matchedPlugins.value.filter(
-      (item) => item.type !== 'inline-calculator' && item.type !== 'inline-color'
-    )
+    const learnedKey = getQueryChoicesSnapshot()[q]?.key || ''
+    const toEntry = (item, index, match) => {
+      if (match.range && item.key) ranges.set(item.key, match.range)
+      const learned = learnedKey !== '' && item.key === learnedKey && match.tier < MATCH_TIERS.ALIAS
+      return {
+        item,
+        tier: learned ? LEARNED_TIER : match.tier,
+        secondary: match.secondary ? 1 : 0,
+        field: match.field,
+        typeRank: resultTypeRank(item),
+        frecency: calculateFrecencyBonus(frecencyMap[item.key], now),
+        length: String(item.name || item.title || '').length,
+        index
+      }
+    }
 
-    const combined = [
-      ...commandItems.map((item) => {
-        const { score } = matchItemWithQuery(item, q)
-        return {
-          item,
-          totalScore: score + calculateFrecencyBonus(frecencyMap[item.key], now)
-        }
-      }),
-      ...apps.map((item) => {
-        const { score } = matchItemWithQuery(item, q)
-        return {
-          item,
-          totalScore: Math.max(320, score) + calculateFrecencyBonus(frecencyMap[item.key], now)
-        }
+    const entries = []
+    const localApps = applicationsAvailable.value
+      ? applicationResults.value
+      : fileResults.value.filter((item) => item?.isApplication)
+    ;[...candidates, ...localApps].forEach((item, index) => {
+      const match = matchItemWithQuery(item, q)
+      if (match.matched) entries.push(toEntry(item, index, match))
+    })
+    entries.sort(compareRanked)
+
+    const appPaths = new Set(localApps.map((item) => item.path))
+    const fileEntries = []
+    fileResults.value.forEach((item, index) => {
+      if (!item || appPaths.has(item.path)) return
+      // 主进程按文件名命中、前端规则没认出来的（如只命中扩展名）排在文件段最后，不丢弃
+      const match = matchItemWithQuery(item, q)
+      fileEntries.push({
+        ...toEntry(item, index, match.matched ? match : { tier: MATCH_TIERS.NONE, secondary: false, field: 3, range: null }),
+        mtime: Number(item.mtime) || 0,
+        depth: String(item.path).split(/[\\/]/).length
       })
-    ]
-    combined.sort((a, b) => b.totalScore - a.totalScore)
+    })
+    fileEntries.sort(compareFiles)
 
-    return [...inlineItems, ...combined.map((entry) => entry.item), ...regularFiles]
+    const ranked = entries.map((entry) => entry.item)
+    const commands = ranked.filter((item) => !item.isApplication)
+    // Raycast rootSearch: 当输入命中有效算式/单位换算/汇率/日期/色值时，置顶展示临时结果卡片
+    const inlineItem = evaluateInlineCommandItem(rawQuery)
+    return {
+      commands: inlineItem ? [inlineItem, ...commands] : commands,
+      top: inlineItem ? [inlineItem, ...ranked] : ranked,
+      files: fileEntries.map((entry) => entry.item),
+      ranges
+    }
   })
+
+  /** 即时计算 + 插件、子命令与内置命令（不含程序与文件） */
+  const matchedPlugins = computed(() => ranking.value.commands)
+
+  /**
+   * 最终呈现的组合列表：即时计算置顶，程序与插件命令按匹配档统一混排，普通文件在后
+   */
+  const filteredItems = computed(() => [...ranking.value.top, ...ranking.value.files])
+
+  /** 名称的高亮片段，命中区间在排序时已算好，渲染时不再重复匹配 */
+  function highlightParts(item) {
+    const text = String(item?.name || item?.title || '')
+    return splitHighlightParts(text, item?.key ? ranking.value.ranges.get(item.key) : null)
+  }
+
+  // 排在前面的程序按需取图标（主进程有缓存），取不到的本次不再重试
+  watch(
+    () => filteredItems.value
+      .slice(0, APPLICATION_ICON_BATCH)
+      .filter((item) => item?.isApplication && !item.icon && !failedIconPaths.has(item.path))
+      .map((item) => item.path)
+      .join('\n'),
+    (pending) => {
+      if (pending) void loadApplicationIcons(filteredItems.value.slice(0, APPLICATION_ICON_BATCH))
+    }
+  )
 
   return {
     query,
@@ -663,6 +856,8 @@ export function useCommandSearch(options = {}) {
     search,
     clearSearch,
     recordUsage,
+    highlightParts,
+    refreshApplications,
     builtinSystemItems: BUILTIN_COMMAND_ITEMS
   }
 }

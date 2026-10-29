@@ -14,7 +14,6 @@ export const ROUTES = {
   EVENTS: { name: 'events' },
   ADVANCED_SETTINGS: { name: 'advanced-settings' },
   ABOUT: { name: 'about' },
-  DEVTOOLS: { name: 'devtools' },
   DECLARATIVE: { name: 'declarative' },
   POPOUT: { name: 'popout' }
 }

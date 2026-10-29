@@ -85,7 +85,8 @@ describe('市场分类从 CDN、本地快照和内置清单到筛选与统计', 
     expect(names).not.toContain('效率工具')
     expect(names).not.toContain('设计工具')
     const bundled = getBundledPluginEntries()
-    expect(bundled.find(({ id }) => id === 'translator').category).toBe('办公效率')
+    // 内置插件清单里的旧分类名“效率工具”统一归入“办公效率”
+    expect(bundled.find(({ id }) => id === 'calculator').category).toBe('办公效率')
     for (const entry of bundled) {
       for (const name of entry.category.split(' / ')) expect(names, entry.id).toContain(name)
     }
@@ -111,7 +112,7 @@ describe('市场分类从 CDN、本地快照和内置清单到筛选与统计', 
       global: { stubs: { PluginActions: true, RcSquircle: true } }
     })
     try {
-      expect(wrapper.find('.plugin-tags .tag').text()).toBe('图像媒体 · 办公效率')
+      expect(wrapper.find('.plugin-meta .meta-category').text()).toBe('图像媒体 · 办公效率')
     } finally { wrapper.unmount() }
   })
 
@@ -140,12 +141,13 @@ describe('市场分类从 CDN、本地快照和内置清单到筛选与统计', 
     try {
       await flushPromises()
       expect(wrapper.findAll('article').map((item) => item.text())).toEqual(['离线 AI 插件', '离线未分类插件'])
-      const chips = wrapper.findAll('.market-chip')
+      const chips = wrapper.findAll('[aria-label="分类"] .seg-btn')
       expect(chips.map((chip) => chip.text())).toEqual(['全部', 'AI工具', '其他工具'])
       await chips.find((chip) => chip.text() === '其他工具').trigger('click')
       await flushPromises()
       expect(wrapper.findAll('article').map((item) => item.text())).toEqual(['离线未分类插件'])
-      expect(wrapper.text()).toContain('共 1 个')
+      // 来源切换上的「全部」数量按当前分类统计（真实目录，不打桩）
+      expect(wrapper.find('[aria-label="来源"] .seg-btn .seg-count').text()).toBe('1')
     } finally { wrapper.unmount() }
   })
 })

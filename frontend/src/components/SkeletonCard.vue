@@ -4,8 +4,8 @@
     style="
       border-radius: var(--radius-xl);
       padding: var(--spacing-md);
-      background-color: var(--color-surface);
-      border-color: var(--color-border);
+      background-color: var(--rc-surface);
+      border-color: var(--rc-border);
     "
   >
     <div class="flex items-center" style="gap: var(--spacing-md)">
@@ -14,7 +14,7 @@
         style="
           width: 48px;
           height: 48px;
-          background-color: var(--color-background-secondary);
+          background-color: var(--rc-canvas);
         "
       ></div>
       <div
@@ -25,14 +25,14 @@
           class="h-4 rounded"
           style="
             width: 50%;
-            background-color: var(--color-background-secondary);
+            background-color: var(--rc-canvas);
           "
         ></div>
         <div
           class="h-3 rounded"
           style="
             width: 33%;
-            background-color: var(--color-background-secondary);
+            background-color: var(--rc-canvas);
           "
         ></div>
       </div>

@@ -111,7 +111,6 @@ import {
   RecordCommand
 } from '@ztools/declarative-ui'
 import { isBundledPlugin, isStoreOfficialPlugin } from './bundledPlugins.js'
-import { COMMUNITY_EXTENSION_IDS } from './storeCatalogManager.js'
 
 /**
  * 官方标杆应用唯一标识清单
@@ -2047,8 +2046,8 @@ export function isOfficialPlugin(pluginId) {
   const { normalized, resolved } = resolveOfficialId(pluginId)
   // 与内置原版插件同 ID 的旧实现让位给原版
   if (isBundledPlugin(normalized) || isBundledPlugin(resolved)) return false
-  // 社区插件以插件市场安装的真实实现为准，同名旧实现不再算作官方插件
-  if (COMMUNITY_EXTENSION_IDS.has(normalized) || COMMUNITY_EXTENSION_IDS.has(resolved)) return false
+  // 官方市场插件按生成的名单识别；运行时入口仍由 getOfficialPlugin 排除同名旧实现
+  if (isStoreOfficialPlugin(normalized) || isStoreOfficialPlugin(resolved)) return true
   return Boolean(
     ownLookup(OFFICIAL_PLUGINS_MAP, resolved) ||
     ownLookup(OFFICIAL_PLUGINS_MAP, pluginId.trim())
@@ -2066,13 +2065,12 @@ export function getOfficialPlugin(pluginId) {
   // 内置插件与插件市场分发的官方插件都以 plugins 仓库的真实实现为准，不再返回同名的旧示例实现
   if (isBundledPlugin(normalized) || isBundledPlugin(resolved)) return undefined
   if (isStoreOfficialPlugin(normalized) || isStoreOfficialPlugin(resolved)) return undefined
-  if (COMMUNITY_EXTENSION_IDS.has(normalized) || COMMUNITY_EXTENSION_IDS.has(resolved)) return undefined
   return ownLookup(OFFICIAL_PLUGINS_MAP, resolved) || ownLookup(OFFICIAL_PLUGINS_MAP, pluginId.trim())
 }
 
 /**
  * 是否随客户端提供：内置插件，或由客户端自身实现的官方应用。这类插件没有安装目录，不能卸载、不能生成桌面快捷方式。
- * 插件市场分发的官方插件（storeOfficialIds）装在插件目录里，可以正常卸载，不算在内（isOfficialPlugin 会把它们也算进去）。
+ * 插件市场分发的官方插件（storeOfficialIds）装在插件目录里，可以正常卸载，不算客户端内置应用。
  * @param {string} pluginId
  * @returns {boolean}
  */
@@ -2085,8 +2083,8 @@ export function isClientProvidedPlugin(pluginId) {
  * @returns {Array<typeof OFFICIAL_PLUGINS_MAP[string]>}
  */
 export function getOfficialPluginsList() {
-  // 社区插件由插件市场分发，不能用同名的旧内置实现冒充“已安装”
-  return OFFICIAL_PLUGINS_LIST.filter((p) => !isBundledPlugin(p.pluginId) && !isStoreOfficialPlugin(p.pluginId) && !COMMUNITY_EXTENSION_IDS.has(p.pluginId))
+  // 市场插件安装后才显示，不能用同名的旧内置实现冒充“已安装”
+  return OFFICIAL_PLUGINS_LIST.filter((p) => !isBundledPlugin(p.pluginId) && !isStoreOfficialPlugin(p.pluginId))
 }
 
 

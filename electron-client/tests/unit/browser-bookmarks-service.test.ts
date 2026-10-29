@@ -9,11 +9,12 @@ import { execFileSync } from 'node:child_process'
 import { build as buildPlist } from 'plist'
 import { BrowserBookmarksService } from '../../src/main/services/browser-bookmarks-service.js'
 import { scanBrowserBookmarks, readBookmarkSource } from '../../src/main/services/bookmark-reader.js'
-import { discoverBookmarks, type BookmarkEnvironment } from '../../src/main/services/bookmark-discovery.js'
+import { discoverBookmarks, errorMessage, type BookmarkEnvironment } from '../../src/main/services/bookmark-discovery.js'
 import { parseBookmarkTree, type BookmarkSource } from '../../src/main/services/bookmark-parser.js'
 import { validateBookmarkRequest, validateBookmarkScan } from '../../src/contracts/browser-bookmarks.js'
 import { validateMethodParams } from '../../src/contracts/method-params.js'
 import { canCall } from '../../src/contracts/capabilities.js'
+import { toPublicError } from '../../src/contracts/errors.js'
 import type { CallerIdentity } from '../../src/contracts/capabilities.js'
 
 const caller: CallerIdentity = { type: 'plugin', webContentsId: 771, pluginId: 'browser-bookmarks' }
@@ -203,4 +204,25 @@ test('读取大量真实条目过程中取消，等待 worker 退出后可重新
     fs.writeFileSync(file, JSON.stringify(tree(1)))
     assert.equal((await service.scan({ operationId: 'after_running' }, caller, signal())).bookmarks.length, 1)
   } finally { clearTimeout(timer); await service.stop(); f.close() }
+})
+
+test('Safari 书签无权读取时提示完全磁盘访问，其他浏览器保持通用权限提示', () => {
+  const denied = Object.assign(new Error('operation not permitted'), { code: 'EPERM' })
+  assert.match(errorMessage(denied, 'safari'), /完全磁盘访问/)
+  assert.doesNotMatch(errorMessage(denied, 'chrome'), /完全磁盘访问/)
+  assert.match(errorMessage(denied), /文件访问权限/)
+  assert.equal(errorMessage(Object.assign(new Error('x'), { code: 'EBUSY' }), 'safari'), '浏览器正在使用书签，请稍后刷新')
+})
+
+test('一个来源都读不到时，插件收到真实原因（无权限），而不是“宿主内部错误”', { skip: process.platform === 'win32' || process.getuid?.() === 0 }, async () => {
+  const f = fixture(), service = new BrowserBookmarksService(f.env)
+  const file = put(chrome(f.env), JSON.stringify(tree(1)))
+  fs.chmodSync(file, 0o000)
+  try {
+    const error = await service.scan({ operationId: 'denied' }, caller, signal()).then(() => null, e => e)
+    assert.ok(error)
+    const exposed = toPublicError(error)
+    assert.notEqual(exposed.message, '宿主内部错误')
+    assert.match(exposed.message, /未能读取任何浏览器书签/)
+  } finally { fs.chmodSync(file, 0o600); await service.stop(); f.close() }
 })

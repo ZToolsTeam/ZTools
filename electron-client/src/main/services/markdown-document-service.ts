@@ -74,7 +74,7 @@ export class MarkdownDocumentService {
       const archive = await readZipArchive(bytes, activeSignal), summary = inspectOffice(archive.entries)
       if (summary.type !== 'docx') throw new Error('生成的文档格式校验失败')
       active()
-      const receipt = await this.files.writeFile({ path: p.outputPath!, content: bytes.toString('base64'), encoding: 'base64', overwrite: false }, caller, activeSignal)
+      const receipt = await this.files.writeFile({ path: p.outputPath!, content: bytes.toString('base64'), encoding: 'base64', overwrite: false }, caller, activeSignal, { replaceConfirmed: true })
       if (receipt.success !== true || receipt.size !== bytes.length) throw new ZToolsError(errorCodes.fileWriteOutcomeUnknown, '保存结果未确认，请检查新文件')
       return { success: true as const, status: 'committed' as const, size: bytes.length, name: path.basename(p.outputPath!), summary: rendered.summary }
     } catch (error) {

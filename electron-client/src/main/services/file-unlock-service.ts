@@ -16,7 +16,7 @@ interface Session {
 }
 const keyOf = (caller: CallerIdentity) => JSON.stringify([caller.webContentsId, caller.pluginId, caller.pluginInstanceId, caller.attributedPlugin?.sessionId])
 const message = (error: unknown) => error instanceof Error ? error.message : String(error)
-const notice = '仅显示当前权限可见的占用；文件夹不跟随符号链接或跨越嵌套挂载卷。未发现占用不等于磁盘可安全弹出，请用 Finder 弹出。'
+const notice = '仅显示当前权限可见的占用；文件夹不跟随符号链接或跨越嵌套挂载卷。未发现占用不等于磁盘可安全弹出，请在访达中弹出。'
 async function targetIdentity(file: string) {
   const stat = await fs.lstat(file)
   if (stat.isSymbolicLink() || (!stat.isFile() && !stat.isDirectory()) || (stat.isFile() && stat.nlink !== 1)) throw new Error('只能检测普通文件或文件夹，不能操作符号链接、硬链接或特殊文件')
@@ -96,7 +96,7 @@ export class FileUnlockService {
       const canonical = resolved.normalize('NFC').toLowerCase()
       if (within(canonical) || canonical.startsWith(normalized + '/')) return '客户端安装目录和数据目录不能在此改名或回收'
     }
-    if ((await fs.stat(path.dirname(file))).dev !== dev || /^\/Volumes\/[^/]+\/?$/i.test(file)) return '磁盘根目录不能改名或回收，请在 Finder 中弹出磁盘'
+    if ((await fs.stat(path.dirname(file))).dev !== dev || /^\/Volumes\/[^/]+\/?$/i.test(file)) return '磁盘根目录不能改名或回收，请在访达中弹出磁盘'
     return ''
   }
   async #assertTarget(session: Session, caller: CallerIdentity, access: 'read' | 'write', signal: AbortSignal) {

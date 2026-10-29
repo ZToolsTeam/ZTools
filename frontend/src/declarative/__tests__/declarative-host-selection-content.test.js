@@ -5,6 +5,7 @@
 import { mount } from "@vue/test-utils";
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { nextTick } from "vue";
+import { Select } from "ant-design-vue";
 import DeclarativeView from "../DeclarativeView.vue";
 import DetailRenderer from "../components/DetailRenderer.vue";
 import { renderMarkdown } from "../markdown.js";
@@ -314,7 +315,7 @@ describe("右栏子列表方向键选择滚动到可视区", () => {
 });
 
 describe("下拉框展开 Dropdown.Section", () => {
-  it("List.Dropdown 的分组选项全部显示为 optgroup，切换后 onChange 收到值", async () => {
+  it("List.Dropdown 的分组选项按分组交给统一下拉框，切换后 onChange 收到值", async () => {
     const values = [];
     const Cmd = () =>
       List(
@@ -335,15 +336,17 @@ describe("下拉框展开 Dropdown.Section", () => {
       );
     const wrapper = mountView(Cmd);
     await flush();
-    const select = wrapper.find("select").element;
-    expect(select.options.length).toBe(5);
-    expect([...select.querySelectorAll("optgroup")].map((g) => g.label)).toEqual(["类型筛选", "排序方式"]);
-    // 下拉选项是插件固定文案：仍去掉彩色 Emoji
-    expect(select.options[2].textContent.trim()).toBe("文档");
+    expect(wrapper.find("select").exists()).toBe(false);
+    const select = wrapper.findComponent(Select);
+    // 无标题的选项平铺，Section 变成 { label, options } 分组；下拉选项是插件固定文案：仍去掉彩色 Emoji
+    expect(select.props("options")).toEqual([
+      { label: "默认", value: "default" },
+      { label: "类型筛选", options: [{ label: "全部", value: "type:all" }, { label: "文档", value: "type:document" }] },
+      { label: "排序方式", options: [{ label: "按名称", value: "sort:name" }, { label: "按大小", value: "sort:size" }] }
+    ]);
     // 非受控下拉框不留空白：默认显示第一个选项
-    expect(select.value).toBe("default");
-    select.value = "sort:size";
-    select.dispatchEvent(new Event("change", { bubbles: true }));
+    expect(select.props("value")).toBe("default");
+    select.vm.$emit("update:value", "sort:size");
     await flush();
     expect(values).toEqual(["sort:size"]);
     // 推入下一层再返回，下拉框仍显示用户选的值，且不重复回调 onChange
@@ -351,8 +354,40 @@ describe("下拉框展开 Dropdown.Section", () => {
     await flush();
     press(document.activeElement || document.body, "Escape");
     await flush();
-    expect(wrapper.find("select").element.value).toBe("sort:size");
+    expect(wrapper.findComponent(Select).props("value")).toBe("sort:size");
     expect(values).toEqual(["sort:size"]);
+  });
+
+  it("焦点在下拉框上时，回车 / 上下键交给下拉框，不触发列表主动作；展开时 Esc 只收起下拉框", async () => {
+    const actions = [];
+    const Cmd = () =>
+      List(
+        {
+          searchBarAccessory: List.Dropdown({ onChange: () => {} }, [
+            List.Dropdown.Item({ title: "全部", value: "all" }),
+            List.Dropdown.Item({ title: "文档", value: "doc" })
+          ])
+        },
+        [List.Item({ id: "x", title: "x", actions: ActionPanel({}, [Action({ title: "打开", onAction: () => actions.push("open") })]) })]
+      );
+    const wrapper = mountView(Cmd);
+    await flush();
+    const selectRoot = wrapper.find(".ant-select").element;
+    const selectInput = selectRoot.querySelector("input");
+    press(selectInput, "Enter");
+    press(selectInput, "ArrowDown");
+    await flush();
+    expect(actions).toEqual([]);
+    // 展开状态：Esc 归下拉框，页面不返回、不触发任何动作
+    selectRoot.classList.add("ant-select-open");
+    const esc = press(selectInput, "Escape");
+    await flush();
+    expect(esc.defaultPrevented).toBe(false);
+    expect(wrapper.vm.getStack().length).toBe(1);
+    // 列表本身的回车仍正常触发主动作
+    press(searchInput(wrapper), "Enter");
+    await flush();
+    expect(actions).toEqual(["open"]);
   });
 
   it("Form.Dropdown.Section 的选项同样显示且可选", async () => {
@@ -369,13 +404,17 @@ describe("下拉框展开 Dropdown.Section", () => {
       ]);
     const wrapper = mountView(Cmd);
     await flush();
-    const select = wrapper.find("select#fmt").element;
-    expect(select.options.length).toBe(3);
-    expect(select.querySelector("optgroup").label).toBe("图片");
-    select.value = "jpg";
-    select.dispatchEvent(new Event("change", { bubbles: true }));
+    const select = wrapper.findComponent(Select);
+    expect(select.props("options")).toEqual([
+      { label: "图片", options: [{ label: "PNG", value: "png" }, { label: "JPG", value: "jpg" }] },
+      { label: "PDF", value: "pdf" }
+    ]);
+    // 没有默认值时显示第一个选项
+    expect(select.props("value")).toBe("png");
+    select.vm.$emit("update:value", "jpg");
     await flush();
     expect(values).toEqual(["jpg"]);
+    expect(wrapper.findComponent(Select).props("value")).toBe("jpg");
   });
 });
 
@@ -538,8 +577,9 @@ describe("Detail Markdown 渲染", () => {
     expect(p.innerHTML.split("<br>").length).toBe(3);
     expect(host.textContent).toContain("1.有序一");
     expect(host.textContent).toContain("2.有序二");
-    expect(host.textContent).toContain("☐未完成");
-    expect(host.textContent).toContain("☑已完成");
+    expect(host.textContent).toContain("未完成");
+    expect(host.textContent).not.toMatch(/[☐☑]/);
+    expect([...host.querySelectorAll("[data-task]")].map((e) => e.dataset.task)).toEqual(["todo", "done"]);
     expect([...host.querySelectorAll("em")].map((e) => e.textContent)).toEqual(["斜体", "也是斜体"]);
     expect(host.querySelector("del").textContent).toBe("删除");
     expect(host.querySelector("strong").textContent).toBe("加粗");
@@ -687,5 +727,37 @@ describe("剪贴板写入失败如实提示，不能显示“已复制”", () =
     await expect(Clipboard.copy("big")).rejects.toMatchObject({ code: "RESPONSE_TOO_LARGE" });
     await expect(Clipboard.clear()).resolves.toBeUndefined();
     expect(calls.map((c) => c[0])).toEqual(["clipboard_copy_text", "clipboard_clear"]);
+  });
+});
+
+describe("Action.ShowInFinder 按宿主结果提示", () => {
+  function finderList() {
+    return () => List({}, [List.Item({ id: "f", title: "文件", actions: ActionPanel({}, [Action.ShowInFinder({ title: "显示", path: "/tmp/a.txt" })]) })]);
+  }
+
+  it("宿主成功：macOS 提示“已在访达中显示”", async () => {
+    const calls = installTransport({ shell_show_item_in_folder: () => ({ success: true, data: { success: true } }) });
+    const wrapper = mountView(finderList());
+    await flush();
+    press(searchInput(wrapper), "Enter");
+    await flush(6);
+    expect(calls).toEqual([["shell_show_item_in_folder", { fullPath: "/tmp/a.txt" }]]);
+    expect(wrapper.text()).toContain("已在访达中显示");
+  });
+
+  it("宿主拒绝或没有该能力：提示失败，不报已显示", async () => {
+    installTransport({ shell_show_item_in_folder: () => ({ success: false, error: { code: "PERMISSION_DENIED", message: "路径未由当前窗口授权" } }) });
+    let wrapper = mountView(finderList());
+    await flush();
+    press(searchInput(wrapper), "Enter");
+    await flush(6);
+    expect(wrapper.text()).toContain("路径未由当前窗口授权");
+    expect(wrapper.text()).not.toContain("已在访达中显示");
+    installTransport({ clipboard_copy_text: () => ({ success: true }) });
+    wrapper = mountView(finderList());
+    await flush();
+    press(searchInput(wrapper), "Enter");
+    await flush(6);
+    expect(wrapper.text()).toContain("当前客户端不支持在文件管理器中定位");
   });
 });

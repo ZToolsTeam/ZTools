@@ -15,6 +15,7 @@ import {
   grantProcessPathsForCaller,
   grantResultsForCaller,
   grantSearchResultsForCaller,
+  grantVolumeRootsForCaller,
   resolveFileSearchTarget,
   searchFilesForCaller
 } from '../../src/main/ipc/router.js'
@@ -22,6 +23,7 @@ import {
   createBundledManifestReader,
   DeclarativePluginAttributionService
 } from '../../src/main/services/declarative-plugin-attribution-service.js'
+import { ClipboardHistoryService } from '../../src/main/services/clipboard-history-service.js'
 import { FileSearchService } from '../../src/main/services/file-search-service.js'
 import {
   defaultProtectedTrashRoots,
@@ -202,18 +204,67 @@ test('结果授权：精确命中只读、目录不递归、不能写入，别�
   }
 })
 
+test('程序列表与只搜文件：检索范围经参数校验原样交给检索服务，程序路径只读授权可打开，别的窗口与非法范围被拒绝', async () => {
+  const h = await createHarness()
+  try {
+    const appBundle = path.join(h.data, 'Apps', 'Alpha.app')
+    await fs.mkdir(appBundle, { recursive: true })
+    const shortcut = await touch(path.join(h.data, 'Apps', 'Beta.lnk'), 'shortcut')
+    const unlisted = await touch(path.join(h.data, 'Apps', 'Gamma.lnk'), 'shortcut')
+    const calls: Array<{ query: string; limit: number; options: unknown }> = []
+    const record = (file: string, isDir: boolean) => ({
+      kind: 'application' as const, display_name: path.basename(file).replace(/\.(app|lnk)$/, ''), name: path.basename(file),
+      path: file, is_dir: isDir, size: 0, mtime: 0, acronym: '', pinyin: ''
+    })
+    const sidecars = {
+      async searchFiles(query: string, limit: number, options: { scope?: string } = {}) {
+        calls.push({ query, limit, options })
+        const files = options.scope === 'applications' ? [record(appBundle, true), record(shortcut, false)] : []
+        return { files, count: files.length, total_matches: files.length, elapsed_us: 0, elapsed_ms: 0, total_indexed: files.length, ...(options.scope ? { scope: options.scope } : {}) }
+      }
+    }
+
+    const caller = h.admit(h.main, 'system_search_files', { query: '', limit: 20, scope: 'applications' })
+    const listed = await searchFilesForCaller({ query: '', limit: 20, scope: 'applications' }, caller, sidecars as never, h.files)
+    assert.equal(listed.scope, 'applications')
+    assert.deepEqual(calls[0], { query: '', limit: 20, options: { scope: 'applications' } })
+    await h.shell.openPath({ fullPath: appBundle }, caller)
+    await h.shell.openPath({ fullPath: shortcut }, caller)
+    assert.deepEqual(h.shellCalls.filter(call => call.method === 'openPath').map(call => call.value), [appBundle, shortcut])
+    // 只读授权：不能移入回收站；列表之外的快捷方式打不开；别的窗口拿不到
+    await assert.rejects(h.shell.trashItem({ fullPath: shortcut }, caller), denied)
+    await assert.rejects(h.shell.openPath({ fullPath: unlisted }, caller), denied)
+    const { caller: other } = h.window(2)
+    await assert.rejects(h.shell.openPath({ fullPath: appBundle }, other), denied)
+
+    // 不带范围时不传 scope（保持旧调用方行为），只搜文件时原样传递
+    await searchFilesForCaller({ query: 'alpha', limit: 12 }, caller, sidecars as never, h.files)
+    await searchFilesForCaller({ query: 'alpha', limit: 12, scope: 'files' }, caller, sidecars as never, h.files)
+    assert.deepEqual(calls.slice(1).map(call => call.options), [{}, { scope: 'files' }])
+
+    const invalid = codeOf(errorCodes.invalidRequest)
+    for (const scope of ['everything', '', 'APPLICATIONS', ['files'], 1, null]) {
+      assert.throws(() => h.admit(h.main, 'system_search_files', { query: '', scope }), invalid, JSON.stringify(scope))
+    }
+  } finally {
+    await h.dispose()
+  }
+})
+
 test('符号链接结果不登记：链接目标不会因此可读；真实文件本身被扫出时照常授权，回收站不跟随链接', async () => {
   const h = await createHarness()
   try {
     const outside = await touch(path.join(h.root, 'outside', 'secret.txt'), 'secret')
     const link = path.join(h.data, 'link.txt')
-    await fs.symlink(outside, link)
+    // Windows 普通用户可创建 junction；POSIX 继续验证文件符号链接。
+    await fs.symlink(process.platform === 'win32' ? path.dirname(outside) : outside, link, process.platform === 'win32' ? 'junction' : 'file')
+    assert.equal((await fs.lstat(link)).isSymbolicLink(), true)
     const token = await h.session('cleaner')
     const cleaner = h.admit(h.main, 'shell_trash_item', { fullPath: link }, token)
     assert.equal(cleaner.attributedPlugin?.pluginId, 'cleaner')
 
     for (const source of ['dir-scan', 'search', 'screenshot'] as const) {
-      assert.deepEqual(await h.files.grantResultPaths(cleaner, [{ path: link, isDir: false }], source), { granted: 0, skipped: 1 })
+      assert.deepEqual(await h.files.grantResultPaths(cleaner, [{ path: link, isDir: process.platform === 'win32' }], source), { granted: 0, skipped: 1 })
     }
     await assert.rejects(h.files.readFile({ path: link, encoding: 'utf8' }, cleaner), denied)
     await assert.rejects(h.files.readFile({ path: outside, encoding: 'utf8' }, cleaner), denied)
@@ -242,20 +293,21 @@ test('dir: 扫描经由目录里的符号链接（文件链接 / 目录链接）
     const secretChild = await touch(path.join(secretDir, 'notes.txt'), 'hidden')
     const scanRoot = path.join(h.data, 'linkdir')
     const plain = await touch(path.join(scanRoot, 'plain.txt'), 'plain')
-    await fs.symlink(secretFile, path.join(scanRoot, 'key-link'))
-    await fs.symlink(secretDir, path.join(scanRoot, 'dir-link'))
+    await fs.symlink(process.platform === 'win32' ? path.dirname(secretFile) : secretFile, path.join(scanRoot, 'key-link'), process.platform === 'win32' ? 'junction' : 'file')
+    await fs.symlink(secretDir, path.join(scanRoot, 'dir-link'), process.platform === 'win32' ? 'junction' : 'dir')
     const viaDirLink = path.join(scanRoot, 'dir-link', 'notes.txt')
     // 扫描根本身经由链接（类似 macOS 的 /tmp → /private/tmp）时，根之内的真实文件照常授权
     const rootLink = path.join(h.root, 'root-link')
-    await fs.symlink(scanRoot, rootLink)
+    await fs.symlink(scanRoot, rootLink, process.platform === 'win32' ? 'junction' : 'dir')
 
     for (const query of [`dir:${scanRoot}`, `dir:${rootLink}`]) {
       const token = await h.session('cleaner')
       const cleaner = h.admit(h.main, 'system_search_files', { query, limit: 200 }, token)
       const result = await searchFilesForCaller({ query, limit: 200 }, cleaner, sidecars, h.files)
-      // 扫描本身仍会列出链接与经由目录链接看到的文件（展示行为不变）
+      // 扫描跳过子项里的链接：既不列出链接本身，也不列出经由目录链接看到的文件
       const listed = result.files.map(file => file.path)
-      assert.ok(listed.some(item => item.endsWith('notes.txt')), `扫描结果应包含经由目录链接的文件: ${listed.join(',')}`)
+      assert.ok(listed.some(item => item.endsWith('plain.txt')), `扫描结果应包含普通文件: ${listed.join(',')}`)
+      assert.ok(!listed.some(item => item.endsWith('notes.txt') || item.endsWith('key-link') || item.endsWith('dir-link')), `扫描结果不应包含链接或经由链接的文件: ${listed.join(',')}`)
 
       assert.equal((await h.files.readFile({ path: query === `dir:${scanRoot}` ? plain : path.join(rootLink, 'plain.txt'), encoding: 'utf8' }, cleaner)).content, 'plain')
       for (const target of [secretFile, path.join(scanRoot, 'key-link'), secretDir, path.join(scanRoot, 'dir-link'), secretChild, viaDirLink]) {
@@ -533,17 +585,26 @@ test('dir: 扫描集成：真实目录扫描 → 文件可打开 / 定位 / 由�
     assert.deepEqual(await h.shell.trashItem({ fullPath: top }, cleaner), { success: true })
     assert.deepEqual(await h.shell.trashItem({ fullPath: top }, other), { success: true })
     // 文件变成符号链接后重新扫描：链接结果不登记，链接与其目标都不能回收
-    const outside = await touch(path.join(h.data, 'outside-scan.txt'))
+    const outside = await touch(path.join(h.root, 'outside-scan', 'secret.txt'))
     await fs.rm(top)
-    await fs.symlink(outside, top)
-    await searchFilesForCaller({ query: `dir:${scanRoot}` }, other, sidecars, h.files)
+    await fs.symlink(process.platform === 'win32' ? path.dirname(outside) : outside, top, process.platform === 'win32' ? 'junction' : 'file')
+    const relinked = await searchFilesForCaller({ query: `dir:${scanRoot}` }, other, sidecars, h.files)
+    // 扫描直接跳过链接，不列出也不计体积
+    assert.ok(!relinked.files.some(file => file.path === top))
     await assert.rejects(h.shell.trashItem({ fullPath: top }, other), denied)
     await assert.rejects(h.shell.trashItem({ fullPath: outside }, other), denied)
     await assert.rejects(h.files.readFile({ path: outside, encoding: 'utf8' }, other), denied)
     assert.deepEqual(trashCalls(h), [nested, top, top, top, top])
 
-    // 链接结果被跳过时记过一次 warn
-    assert.equal(warn.mock.callCount(), 1)
+    // 链接在扫描阶段就被跳过，授权阶段不再遇到链接结果，不产生 warn
+    assert.equal(warn.mock.callCount(), 0)
+    // 授权层的纵深防御仍在：即使有别的来源把链接路径交上来，也不登记
+    assert.deepEqual(
+      await h.files.grantResultPaths(other, [{ path: top, isDir: false }], 'dir-scan', { scanRoot }),
+      { granted: 0, skipped: 1 }
+    )
+    await assert.rejects(h.shell.trashItem({ fullPath: top }, other), denied)
+    const warnsBeforeRace = warn.mock.callCount()
     // 扫描与登记之间文件被删：跳过并只 warn 一次，其他结果照常授权
     const racing = await touch(path.join(h.data, 'race', 'vanish.txt'))
     const stays = await touch(path.join(h.data, 'race', 'stays.txt'))
@@ -556,7 +617,7 @@ test('dir: 扫描集成：真实目录扫描 → 文件可打开 / 定位 / 由�
     } as unknown as SidecarManager
     const raced = await searchFilesForCaller({ query: `dir:${path.dirname(racing)}` }, cleaner, deletingSidecar, h.files)
     assert.equal(raced.files.length, 2)
-    assert.equal(warn.mock.callCount(), 2)
+    assert.equal(warn.mock.callCount(), warnsBeforeRace + 1)
     assert.deepEqual(await h.shell.trashItem({ fullPath: stays }, cleaner), { success: true })
   } finally {
     await sidecars.stop()
@@ -646,6 +707,7 @@ test('system_list_common_folders：主进程计算各平台常用目录，存在
     const privateFile = await touch(path.join(home, 'Downloads', 'private.txt'))
     const registry = { onRemoved() { return () => {} } } as unknown as WindowRegistry
     const adapter = {
+      isDev: true,
       paths: {
         app: h.root, userData: h.protectedDir, home,
         desktop: path.join(home, 'Desktop'), downloads: path.join(home, 'Downloads'), documents: path.join(home, 'Documents'),
@@ -689,6 +751,142 @@ test('system_list_common_folders：主进程计算各平台常用目录，存在
     assert.equal(canCall('system_list_common_folders', h.mainCaller), true)
     assert.equal(canCall('system_list_common_folders', { type: 'plugin', webContentsId: 3, pluginId: 'quick-folders' }), true)
   } finally {
+    await h.dispose()
+  }
+})
+
+test('system_list_volumes：返回的卷根只读精确授权（可打开分区），卷内内容、回收站、别的窗口与别的插件都拿不到', async t => {
+  const h = await createHarness()
+  const warnings: unknown[][] = []
+  t.mock.method(console, 'warn', (...args: unknown[]) => { warnings.push(args) })
+  try {
+    // 用临时目录模拟挂载点（/Volumes/X、D:\），再加上本机真实的根卷（/ 或 C:\）
+    const mounted = path.join(h.data, 'Volumes', 'External')
+    const insideFile = await touch(path.join(mounted, 'big.iso'))
+    const insideDir = path.join(mounted, 'Movies')
+    await fs.mkdir(insideDir, { recursive: true })
+    const systemRoot = path.parse(h.root).root
+    const missing = path.join(h.data, 'Volumes', 'Ejected')
+    const token = await h.session('cleaner')
+    const cleaner = h.admit(h.main, 'system_list_volumes', {}, token)
+    assert.equal(cleaner.attributedPlugin?.pluginId, 'cleaner')
+
+    // 授权前：分区根目录与旧行为一致，直接拒绝
+    await assert.rejects(h.shell.openPath({ fullPath: mounted }, cleaner), denied)
+    await assert.rejects(h.shell.showItemInFolder({ fullPath: systemRoot }, cleaner), denied)
+
+    await grantVolumeRootsForCaller({
+      volumes: [
+        { path: mounted, label: 'External', fileSystem: 'APFS', totalBytes: 10, usedBytes: 5, availableBytes: 5, capacityGroup: 'disk9' },
+        { path: systemRoot, label: 'Root', fileSystem: 'APFS', totalBytes: 10, usedBytes: 5, availableBytes: 5, capacityGroup: 'disk1' },
+        // 枚举与授权之间卷被推出、相对路径、空路径、非字符串：跳过，不影响其它卷
+        { path: missing, label: 'Ejected', fileSystem: 'APFS', totalBytes: 10, usedBytes: 5, availableBytes: 5, capacityGroup: 'disk8' },
+        { path: 'relative/vol', label: 'x', fileSystem: '', totalBytes: 1, usedBytes: 0, availableBytes: 1, capacityGroup: 'x' },
+        { path: '', label: 'x', fileSystem: '', totalBytes: 1, usedBytes: 0, availableBytes: 1, capacityGroup: 'x' },
+        { path: 42 as unknown as string, label: 'x', fileSystem: '', totalBytes: 1, usedBytes: 0, availableBytes: 1, capacityGroup: 'x' }
+      ],
+      partial: false,
+      errors: []
+    }, cleaner, h.files)
+    assert.equal(warnings.length, 1, '有条目被跳过时只记一次 warn')
+
+    // 分区根目录可打开 / 定位（「在访达 / 资源管理器中打开此分区」）
+    assert.deepEqual(await h.shell.openPath({ fullPath: mounted }, cleaner), { success: true })
+    assert.deepEqual(await h.shell.showItemInFolder({ fullPath: mounted }, cleaner), { success: true })
+    assert.deepEqual(await h.shell.openPath({ fullPath: systemRoot }, cleaner), { success: true })
+    await assert.rejects(h.shell.openPath({ fullPath: missing }, cleaner), (error: unknown) => error instanceof ZToolsError)
+
+    // 不递归：卷内文件与子目录不因卷根授权变得可读
+    await assert.rejects(h.shell.openPath({ fullPath: insideFile }, cleaner), denied)
+    await assert.rejects(h.shell.openPath({ fullPath: insideDir }, cleaner), denied)
+    await assert.rejects(h.files.readFile({ path: insideFile, encoding: 'utf8' }, cleaner), denied)
+    // 只读：带 fs 权限也不能写入或回收分区根目录
+    await assert.rejects(h.shell.trashItem({ fullPath: mounted }, cleaner), denied)
+    await assert.rejects(h.files.writeFile({ path: path.join(mounted, 'new.txt'), content: 'x', encoding: 'utf8' }, cleaner), denied)
+    assert.deepEqual(trashCalls(h), [])
+
+    // 授权属于调用插件与调用窗口：同窗口别的插件、别的窗口都拿不到
+    const other = h.admit(h.main, 'shell_open_path', { fullPath: mounted }, await h.session('other-cleaner'))
+    await assert.rejects(h.shell.openPath({ fullPath: mounted }, other), denied)
+    const { caller: second } = h.window(2)
+    await assert.rejects(h.shell.openPath({ fullPath: mounted }, second), denied)
+
+    // 插件窗口身份不接收授权，也不抛错（列卷结果照常返回）；异常快照不抛错
+    const pluginWindow: CallerIdentity = { type: 'plugin', webContentsId: 3, pluginId: 'cleaner' }
+    await grantVolumeRootsForCaller({ volumes: [{ path: insideDir, label: '', fileSystem: '', totalBytes: 1, usedBytes: 0, availableBytes: 1, capacityGroup: '' }], partial: false, errors: [] }, pluginWindow, h.files)
+    await grantVolumeRootsForCaller({ volumes: undefined, partial: false, errors: [] } as never, cleaner, h.files)
+    await grantVolumeRootsForCaller(undefined as never, cleaner, h.files)
+    await assert.rejects(h.shell.openPath({ fullPath: insideDir }, cleaner), denied)
+
+    // 过期后失效（与其它结果授权一致）
+    h.clock.now += 31 * 60 * 1000
+    await assert.rejects(h.shell.openPath({ fullPath: mounted }, cleaner), denied)
+
+    // 契约：无参数、主窗口与插件窗口都可调用
+    validateMethodParams('system_list_volumes', {})
+    assert.equal(canCall('system_list_volumes', h.mainCaller), true)
+  } finally {
+    await h.dispose()
+  }
+})
+
+test('clipboard_history_query：系统采集的文件条目只读精确授权，可在访达中显示；手工记录、畸形数据、别的窗口与插件拿不到', async t => {
+  const h = await createHarness()
+  const history = new ClipboardHistoryService()
+  const warnings: unknown[][] = []
+  t.mock.method(console, 'warn', (...args: unknown[]) => { warnings.push(args) })
+  try {
+    const copied = await touch(path.join(h.data, 'Copied', '报告 1.txt'))
+    const copiedDir = path.join(h.data, 'Copied', '素材')
+    await fs.mkdir(copiedDir, { recursive: true })
+    const insideCopiedDir = await touch(path.join(copiedDir, 'inner.png'))
+    const manualTarget = await touch(path.join(h.data, 'Manual', 'secret.txt'))
+    const removed = path.join(h.data, 'Copied', 'gone.txt')
+    history.recordClipboardEntry({ type: 'files', files: [copied, copiedDir, removed] }, 10)
+    // 手工构造的 files 记录（非系统采集）与损坏的记录不授予任何路径
+    history.recordItem({ content: JSON.stringify([manualTarget]), format_type: 'files' }, 20)
+    history.recordItem({ content: '{not json', format_type: 'files' }, 30)
+    history.recordClipboardEntry({ type: 'text', text: manualTarget }, 40)
+    const token = await h.session('viewer')
+    const viewer = h.admit(h.main, 'clipboard_history_query', { limit: 100 }, token)
+
+    // 授权前：与修复前一致，定位文件被拒绝（「路径未由当前窗口授权」）
+    await assert.rejects(h.shell.showItemInFolder({ fullPath: copied }, viewer), denied)
+
+    // 与 IpcRouter 中 clipboard_history_query 相同的步骤：查询 → 取系统采集的文件路径 → 只读结果授权
+    const rows = history.queryItems({ limit: 100 })
+    const paths = history.systemCapturedFilePaths(rows)
+    assert.deepEqual(paths.sort(), [copied, copiedDir, removed].sort())
+    await grantResultsForCaller(h.files, viewer, paths.map(value => ({ path: value, isDir: true })), 'clipboard')
+    assert.equal(warnings.length, 1, '已删除的文件跳过，只记一次 warn')
+
+    assert.deepEqual(await h.shell.showItemInFolder({ fullPath: copied }, viewer), { success: true })
+    assert.deepEqual(await h.shell.showItemInFolder({ fullPath: copiedDir }, viewer), { success: true })
+    assert.deepEqual(h.shellCalls.map(call => call.method), ['showItemInFolder', 'openPath'])
+    // 精确路径、不递归、只读、不给回收站
+    await assert.rejects(h.shell.showItemInFolder({ fullPath: insideCopiedDir }, viewer), denied)
+    await assert.rejects(h.shell.showItemInFolder({ fullPath: manualTarget }, viewer), denied)
+    await assert.rejects(h.shell.showItemInFolder({ fullPath: removed }, viewer), denied)
+    await assert.rejects(h.shell.trashItem({ fullPath: copied }, viewer), denied)
+    await assert.rejects(h.files.writeFile({ path: copied, content: 'x', encoding: 'utf8' }, viewer), denied)
+
+    // 别的窗口、同窗口别的插件都拿不到
+    const { caller: second } = h.window(2)
+    await assert.rejects(h.shell.showItemInFolder({ fullPath: copied }, second), denied)
+    const other = h.admit(h.main, 'shell_show_item_in_folder', { fullPath: copied }, await h.session('cleaner'))
+    await assert.rejects(h.shell.showItemInFolder({ fullPath: copied }, other), denied)
+
+    // 异常输入：空列表、非 files 条目、畸形行不抛错也不授权
+    assert.deepEqual(history.systemCapturedFilePaths([]), [])
+    assert.deepEqual(history.systemCapturedFilePaths(rows.filter(row => row.format_type !== 'files')), [])
+    assert.deepEqual(history.systemCapturedFilePaths([{ id: 42 as unknown as string, format_type: 'files' }, null as never]), [])
+    // 插件窗口身份不接收授权也不抛错
+    const pluginWindow: CallerIdentity = { type: 'plugin', webContentsId: 3, pluginId: 'viewer' }
+    await grantResultsForCaller(h.files, pluginWindow, [{ path: manualTarget, isDir: true }], 'clipboard')
+    await assert.rejects(h.shell.showItemInFolder({ fullPath: manualTarget }, viewer), denied)
+    assert.equal(canCall('clipboard_history_query', h.mainCaller), true)
+  } finally {
+    history.close()
     await h.dispose()
   }
 })

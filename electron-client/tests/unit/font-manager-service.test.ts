@@ -1,10 +1,11 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import fs from 'node:fs/promises'
+import { existsSync } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { FontManagerService } from '../../src/main/services/font-manager-service.js'
-import { parseFontList, parseFontPreview, runFontProcess } from '../../src/main/services/font-provider.js'
+import { parseFontList, parseFontPreview, runFontProcess, SystemFontProvider } from '../../src/main/services/font-provider.js'
 import { validateFontRequest } from '../../src/contracts/font-manager.js'
 import type { CallerIdentity } from '../../src/contracts/capabilities.js'
 import type { FontProvider } from '../../src/main/services/font-provider.js'
@@ -57,4 +58,27 @@ test('子进程失败和损坏输出不返回成功；取消终止实际子进�
   const pending = runFontProcess(process.execPath, ['-e', 'setTimeout(()=>{},60000)'], request, abort.signal)
   setTimeout(() => abort.abort(), 80)
   await assert.rejects(pending); assert.ok(Date.now() - start < 3000)
+})
+test('预览缺字提示：coverageWarning 原样透传，超长或非字符串拒绝', () => {
+  const png = Buffer.alloc(33); Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]).copy(png); png.writeUInt32BE(1000, 16); png.writeUInt32BE(200, 20)
+  const base = { version: 1, success: true, id: font.id, png: png.toString('base64'), fallbacks: ['LastResort'], license: '', licenseUrl: '', copyright: '', manufacturer: '' }
+  assert.equal(parseFontPreview(base, font.id).coverageWarning, '')
+  assert.equal(parseFontPreview({ ...base, coverageWarning: '部分字符本机没有任何字体包含，显示为占位方框。' }, font.id).coverageWarning, '部分字符本机没有任何字体包含，显示为占位方框。')
+  assert.throws(() => parseFontPreview({ ...base, coverageWarning: 'x'.repeat(1025) }, font.id))
+  assert.throws(() => parseFontPreview({ ...base, coverageWarning: 1 }, font.id))
+})
+const visionHelper = path.resolve(__dirname, '../../../out/mac-vision-native/native/ZToolsMacVision')
+const visionSkip = process.platform !== 'darwin' ? '仅 macOS' : existsSync(visionHelper) ? false : 'ZToolsMacVision 未构建'
+test('真实 Mac 字体组件：苹方等 /System/ 下（含 AssetsV2、PrivateFrameworks）的字体标为系统字体；缺字时返回 coverageWarning', { skip: visionSkip }, async () => {
+  const provider = new SystemFontProvider(visionHelper, 'darwin')
+  const fonts = await provider.list(signal())
+  const pingfang = fonts.filter(item => item.id.startsWith('PingFang'))
+  assert.ok(pingfang.length > 0, '本机应有苹方字体')
+  assert.ok(pingfang.every(item => item.system), '苹方必须标为系统字体')
+  for (const item of fonts) assert.equal(item.system, item.filePath.startsWith('/System/'))
+  const missing = await provider.preview('Helvetica', 'Hello 中文 \u{10FFFD}', signal())
+  assert.ok(missing.fallbacks.includes('LastResort'))
+  assert.match(missing.coverageWarning ?? '', /占位方框/)
+  const complete = await provider.preview('Helvetica', 'Hello world', signal())
+  assert.equal(complete.coverageWarning, '')
 })

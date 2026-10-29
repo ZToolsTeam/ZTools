@@ -2,6 +2,7 @@ import { Worker } from 'node:worker_threads'
 import { pathToFileURL } from 'node:url'
 import { validateBookmarkRequest, validateBookmarkScan, type BookmarkScan } from '../../contracts/browser-bookmarks.js'
 import type { CallerIdentity } from '../../contracts/capabilities.js'
+import { errorCodes, ZToolsError } from '../../contracts/errors.js'
 import { bookmarkEnvironment, type BookmarkEnvironment } from './bookmark-discovery.js'
 
 function owner(caller: CallerIdentity) { return JSON.stringify([caller.webContentsId, caller.pluginId, caller.pluginInstanceId, caller.attributedPlugin?.sessionId]) }
@@ -16,7 +17,15 @@ export class BrowserBookmarksService {
     if (found) job!.abort()
     return { success: true, cancelRequested: found }
   }
+  /** 读取失败的原因（权限、超时、繁忙）要原样交给插件；普通 Error 经 IPC 会被统一成“宿主内部错误” */
   async scan(value: unknown, caller: CallerIdentity, signal: AbortSignal): Promise<BookmarkScan> {
+    try { return await this.#scan(value, caller, signal) }
+    catch (error) {
+      if (error instanceof ZToolsError) throw error
+      throw new ZToolsError(errorCodes.nativeHostError, (error instanceof Error ? error.message : String(error)).slice(0, 2000))
+    }
+  }
+  async #scan(value: unknown, caller: CallerIdentity, signal: AbortSignal): Promise<BookmarkScan> {
     validateBookmarkRequest(value); signal.throwIfAborted()
     const key = owner(caller)
     if (this.#stopped) throw new Error('书签读取服务已停止')

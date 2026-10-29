@@ -1,6 +1,7 @@
 <script setup>
+import { PinIcon } from '@lucide/vue'
 import { computed } from 'vue'
-import { RcSquircle } from '@/components/base'
+import { RcSquircle, RcTag } from '@/components/base'
 import ShortcutKeys from '@/components/base/ShortcutKeys.vue'
 import { usePluginIcon } from '@/composables/usePluginIcon'
 
@@ -23,12 +24,12 @@ const props = defineProps({
 
 const emit = defineEmits(['open', 'menu'])
 
-const { pluginIcon, pluginGlyph, displayIconUrl, iconFailed } = usePluginIcon(() => props.plugin)
+const { pluginGlyph, fallbackGlyph, displayIconUrl, iconFailed } = usePluginIcon(() => props.plugin)
 
 const status = computed(() => {
   if (props.revoked) return { text: props.revokedText || '已下架', tone: 'error' }
   if (props.hasUpdate) return { text: '可更新', tone: 'accent' }
-  if (!props.installed) return { text: '未安装', tone: 'muted' }
+  if (!props.installed) return { text: '未安装', tone: 'neutral' }
   return null
 })
 
@@ -56,20 +57,18 @@ const title = computed(() => {
   >
     <span class="tile-marker" aria-hidden="true"></span>
     <span v-if="pinned" class="tile-pin" title="已固定" aria-label="已固定">
-      <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-        <path d="M12 17v5M9 3h6l-1 6 3 3v2H7v-2l3-3z" />
-      </svg>
+      <PinIcon class="w-2.5 h-2.5" style="stroke-width: 2.5" aria-hidden="true" />
     </span>
     <RcSquircle
       :glyph="pluginGlyph"
+      :fallback-glyph="fallbackGlyph"
       :src="displayIconUrl && !iconFailed ? displayIconUrl : ''"
-      :icon="pluginIcon"
       :size="36"
     />
     <span class="tile-foot">
       <span class="tile-name">{{ plugin.name || plugin.pluginId }}</span>
-      <span v-if="status" class="tile-status" :class="`is-${status.tone}`">{{ status.text }}</span>
-      <span v-else-if="doubleTapLabel" class="tile-status is-muted">{{ doubleTapLabel }}</span>
+      <RcTag v-if="status" variant="text" :tone="status.tone" class="tile-status">{{ status.text }}</RcTag>
+      <RcTag v-else-if="doubleTapLabel" variant="text" class="tile-status">{{ doubleTapLabel }}</RcTag>
       <ShortcutKeys v-else-if="hotkey" class="tile-hotkey" :combo="hotkey" />
     </span>
   </button>
@@ -157,20 +156,7 @@ const title = computed(() => {
   flex-shrink: 0;
 }
 
-.tile-status {
-  flex-shrink: 0;
-  font-size: 11px;
-}
 
-.tile-status.is-error {
-  color: var(--rc-error);
-}
 
-.tile-status.is-accent {
-  color: var(--rc-accent-text);
-}
 
-.tile-status.is-muted {
-  color: var(--rc-text-faint);
-}
 </style>

@@ -58,8 +58,16 @@ export async function readStartupLoaded(domain: string, label: string, signal: A
   return { loaded: true, running: state === 'running', pid, loadedPath }
 }
 
+/** 空的 plist（<dict/>）launchd 不会加载，常见于软件用空文件屏蔽自己的更新代理；它不是启动项，也不是读取失败 */
+export class EmptyStartupPlistError extends Error {
+  constructor() { super('空的启动配置，launchd 不会加载') }
+}
+
+const warningText = (error: unknown, limit: number) => (error instanceof Error ? error.message : String(error)).slice(0, limit)
+
 export async function parseStartupPlist(bytes: Buffer, signal: AbortSignal, run: StartupCommand) {
   const value: unknown = JSON.parse(startupCommandOutput(await run(['-convert', 'json', '-o', '-', '--', '-'], signal, bytes)))
+  if (startupRecord(value) && Object.keys(value).length === 0) throw new EmptyStartupPlistError()
   if (!startupRecord(value) || typeof value.Label !== 'string' || !labelPattern.test(value.Label)) throw new Error('启动配置缺少有效 Label')
   if (value.Disabled !== undefined && typeof value.Disabled !== 'boolean') throw new Error('启动配置 Disabled 不是布尔值')
   const rawArgs = value.ProgramArguments ?? []
@@ -105,7 +113,7 @@ export class MacStartupReader {
     ]
     for (const domain of [`gui/${this.env.uid}`, 'system']) {
       try { domains.set(domain, parseStartupOverrides(startupCommandOutput(await this.run(['print-disabled', domain], signal)))) }
-      catch (error) { signal.throwIfAborted(); warnings.push(`${domain}：${String(error).slice(0, 700)}`) }
+      catch (error) { signal.throwIfAborted(); warnings.push(`${domain}：${warningText(error, 700)}`) }
     }
     if (!domains.size) throw new Error(`无法读取系统启动状态：${warnings.join('；')}`)
     for (const { directory, scope } of sources) {
@@ -118,7 +126,7 @@ export class MacStartupReader {
         readableDirectories++; candidates += names.length
       }
       catch (error) {
-        if ((error as NodeJS.ErrnoException).code !== 'ENOENT') warnings.push(`${directory}：读取失败 ${String(error).slice(0, 500)}`)
+        if ((error as NodeJS.ErrnoException).code !== 'ENOENT') warnings.push(`${directory}：读取失败 ${warningText(error, 500)}`)
         continue
       }
       if (names.length > 512) throw new Error('启动项超过单目录 512 项，请先在系统设置中检查')
@@ -128,7 +136,11 @@ export class MacStartupReader {
           totalBytes += snapshot.bytes.length
           snapshots.push(snapshot)
         }
-        catch (error) { signal.throwIfAborted(); warnings.push(`${name}：${String(error).slice(0, 700)}`) }
+        catch (error) {
+          signal.throwIfAborted()
+          if (error instanceof EmptyStartupPlistError) { candidates--; continue }
+          warnings.push(`${name}：${warningText(error, 700)}`)
+        }
         if (totalBytes > 16 * 1024 * 1024) throw new Error('启动配置合计超过 16 MiB，已停止扫描')
       }
     }

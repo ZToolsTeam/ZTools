@@ -7,7 +7,7 @@ import { createHash } from 'node:crypto'
 import type { PathAccessAdapter } from '../platform/path-access.js'
 import type { EnvironmentScope } from '../../contracts/environment-manager.js'
 import { environmentRecord, validEnvironmentValue } from '../../contracts/environment-manager.js'
-import { readEnvironmentProfile, replaceEnvironmentProfile } from './environment-profile.js'
+import { darwinPathProblem, readEnvironmentProfile, replaceEnvironmentProfile } from './environment-profile.js'
 import { WINDOWS_ENVIRONMENT_SCRIPT } from './windows-environment-script.js'
 import { preserveAndWriteEnvironment } from './environment-file-write.js'
 
@@ -39,8 +39,13 @@ export async function readEnvironmentFile(file: string): Promise<{ exists: boole
 }
 export function runEnvironmentCommand(file: string, args: string[], input: string | undefined, signal: AbortSignal, syntaxProbe = false): Promise<string> {
   signal.throwIfAborted()
+  const env: NodeJS.ProcessEnv = { ...process.env, LANG: 'C', LC_ALL: 'C' }
+  if (process.platform === 'win32' && path.basename(file).toLowerCase() === 'powershell.exe') {
+    // Windows PowerShell 不能继承启动宿主的 PowerShell 7 模块目录。
+    env.PSModulePath = path.join(path.dirname(file), 'Modules')
+  }
   return new Promise((resolve, reject) => {
-    const child = execFile(file, args, { encoding: 'utf8', timeout: 15000, killSignal: 'SIGKILL', maxBuffer: 2 * 1024 * 1024, windowsHide: true, env: { ...process.env, LANG: 'C', LC_ALL: 'C' } }, (error, stdout, stderr) => {
+    const child = execFile(file, args, { encoding: 'utf8', timeout: 15000, killSignal: 'SIGKILL', maxBuffer: 2 * 1024 * 1024, windowsHide: true, env }, (error, stdout, stderr) => {
       signal.removeEventListener('abort', cancel)
       if (signal.aborted) reject(new Error('环境变量操作已取消；写入结果请刷新确认'))
       else if (syntaxProbe && error && !error.killed && !error.signal && (error.code === 1 || error.code === 2) && !stdout.trim() && /(?:parse error near|syntax error near unexpected token).*then/.test(stderr)) resolve('')
@@ -117,6 +122,9 @@ export class SystemEnvironmentProvider implements EnvironmentProvider {
   }
   change(state: EnvironmentState, key: string, value: string | null): EnvironmentState {
     if (this.platform === 'darwin') {
+      // 只拦截本次写入的 PATH（设置与清理都经过这里）；恢复备份直接写回原文件，不受此限
+      const problem = key === 'PATH' && value !== null ? darwinPathProblem(value) : ''
+      if (problem) throw new Error(`${problem}，原配置未修改`)
       const entries = this.values(state)
       if (value === null) entries.delete(key); else entries.set(key, value)
       return { ...state, exists: true, raw: replaceEnvironmentProfile(state.raw, entries) }

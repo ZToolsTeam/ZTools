@@ -38,6 +38,22 @@ export interface ScreenshotSearchOptions {
 export interface ScreenshotsServiceOptions {
   searchDirectories?: readonly string[]
   maxScanLimit?: number
+  /** 移入废纸篓 / 回收站；默认用 Electron shell.trashItem（测试可注入） */
+  trashItem?: (filePath: string) => Promise<void>
+}
+
+/** 扫描时跳过的目录（无权限、不是文件夹等），message 为给用户看的中文原因 */
+export interface ScreenshotScanFailure {
+  readonly path: string
+  readonly code: string
+  readonly hostCode?: string
+  readonly message: string
+}
+
+/** screenshots_scan 的返回：screenshots 为截图列表；failedDirs 为跳过的目录及原因（全部成功时为空数组） */
+export interface ScreenshotScanReport {
+  readonly screenshots: readonly ScreenshotRecord[]
+  readonly failedDirs: readonly ScreenshotScanFailure[]
 }
 
 const IMAGE_EXTENSIONS = new Set(['.png', '.jpg', '.jpeg', '.bmp', '.webp', '.heic', '.tiff'])
@@ -78,13 +94,16 @@ export class ScreenshotsService {
   private customSearchDirs: string[] = []
   private readonly pinnedPaths = new Set<string>()
   private cache: ScreenshotRecord[] = []
+  private cacheFailures: ScreenshotScanFailure[] = []
   private lastScanTime = 0
+  private readonly trashItemImpl: ((filePath: string) => Promise<void>) | undefined
   private readonly cacheTtlMs = 5000 // 5秒轻量缓存
 
   constructor(options: ScreenshotsServiceOptions = {}) {
     if (options.searchDirectories) {
       this.customSearchDirs = [...options.searchDirectories]
     }
+    this.trashItemImpl = options.trashItem
   }
 
   /**
@@ -152,11 +171,22 @@ export class ScreenshotsService {
   public setSearchDirectories(dirs: readonly string[]): void {
     this.customSearchDirs = [...dirs]
     this.cache = []
+    this.cacheFailures = []
     this.lastScanTime = 0
   }
 
   /**
-   * 扫描目录获取所有截图文件
+   * 扫描并返回截图列表与跳过的目录（screenshots_scan 使用）。
+   * 某个目录不可读（如 macOS 未允许访问桌面）只跳过该目录并在 failedDirs 里说明原因；
+   * 所有目录都失败且一张截图也没找到时整体失败（错误信息逐个列出目录与原因）。
+   */
+  public scanScreenshotsReport(forceRefresh = false): ScreenshotScanReport {
+    const screenshots = this.scanScreenshots(forceRefresh)
+    return { screenshots, failedDirs: [...this.cacheFailures] }
+  }
+
+  /**
+   * 扫描目录获取所有截图文件；跳过的目录见 scanScreenshotsReport
    */
   public scanScreenshots(forceRefresh = false): readonly ScreenshotRecord[] {
     const now = Date.now()
@@ -174,6 +204,21 @@ export class ScreenshotsService {
 
     const records: ScreenshotRecord[] = []
     const seenPaths = new Set<string>()
+    const failures: ScreenshotScanFailure[] = []
+    const failedPaths = new Set<string>()
+    let readableDirs = 0
+    let unreadableDirs = 0
+    const recordFailure = (error: ZToolsError, target: string) => {
+      if (failedPaths.has(target)) return
+      failedPaths.add(target)
+      const hostCode = error.details?.hostCode
+      failures.push({
+        path: target,
+        code: error.code,
+        ...(typeof hostCode === 'string' ? { hostCode } : {}),
+        message: error.message
+      })
+    }
 
     const addFileRecord = (fullPath: string, filename: string) => {
       if (seenPaths.has(fullPath)) return
@@ -191,8 +236,10 @@ export class ScreenshotsService {
           pinned: this.pinnedPaths.has(fullPath)
         })
       } catch (error) {
-        // 扫描期间被移走的文件可以跳过；权限和磁盘错误不能冒充不存在。
-        if ((error as NodeJS.ErrnoException)?.code !== 'ENOENT') throw screenshotReadError(error, fullPath, '文件')
+        // 扫描期间被移走的文件可以跳过；其余读取失败记到所在目录的失败原因里，不能冒充不存在，也不拖垮其它目录。
+        if ((error as NodeJS.ErrnoException)?.code === 'ENOENT') return
+        const dir = path.dirname(fullPath)
+        recordFailure(screenshotReadError(error, dir, '目录'), dir)
       }
     }
 
@@ -200,6 +247,7 @@ export class ScreenshotsService {
       try {
         const isMacDesktop = !usingCustomDirs && macDesktopDir && path.resolve(dir) === macDesktopDir
         const entries = fs.readdirSync(dir, { withFileTypes: true })
+        readableDirs += 1
         for (const entry of entries) {
           if (entry.isFile()) {
             const ext = path.extname(entry.name).toLowerCase()
@@ -213,8 +261,11 @@ export class ScreenshotsService {
           }
         }
       } catch (error) {
-        // 尚未创建或已移除的可选目录不含截图；其余失败必须交给界面显示，保留上次缓存。
-        if ((error as NodeJS.ErrnoException)?.code !== 'ENOENT') throw screenshotReadError(error, dir, '目录')
+        // 尚未创建或已移除的可选目录不含截图；其余失败（无权限、不是文件夹等）跳过该目录并记下原因交给界面显示。
+        if ((error as NodeJS.ErrnoException)?.code !== 'ENOENT') {
+          unreadableDirs += 1
+          recordFailure(screenshotReadError(error, dir, '目录'), dir)
+        }
       }
     }
 
@@ -239,15 +290,24 @@ export class ScreenshotsService {
           }
         }
       } catch (error) {
-        // Spotlight 本身是可选来源，但已经找到的文件读取失败不能被当作索引不可用。
-        if (error instanceof ZToolsError) throw error
+        // Spotlight 本身是可选来源；已找到文件的读取失败在 addFileRecord 里记入 failedDirs
         console.warn('[ScreenshotsService] Spotlight 查询不可用:', error)
       }
+    }
+
+    // 没有一个目录能读、也没有找到任何截图：整体失败（保留上次缓存），错误信息逐个列出目录与原因
+    if (unreadableDirs > 0 && readableDirs === 0 && records.length === 0) {
+      const allDenied = failures.every((failure) => failure.code === errorCodes.permissionDenied)
+      throw new ZToolsError(
+        allDenied ? errorCodes.permissionDenied : errorCodes.fileError,
+        failures.length === 1 ? failures[0]!.message : `所有截图目录都无法读取：${failures.map((failure) => failure.message).join('；')}`
+      )
     }
 
     // 默认按修改时间降序排序
     records.sort((a, b) => b.modifiedAt - a.modifiedAt)
     this.cache = records
+    this.cacheFailures = failures
     this.lastScanTime = now
     return this.cache
   }
@@ -358,27 +418,34 @@ export class ScreenshotsService {
    */
   public async deleteScreenshot(filePath: string): Promise<boolean> {
     if (!filePath || !fs.existsSync(filePath)) {
-      throw new Error(`文件不存在: ${filePath}`)
+      throw new ZToolsError(errorCodes.fileError, `截图文件不存在：${filePath ? path.basename(filePath) : '（空路径）'}`, { path: filePath })
     }
+    const name = path.basename(filePath)
+    const trashName = process.platform === 'darwin' ? '废纸篓' : '回收站'
+    const trash = this.trashItemImpl
+      ?? (shell && typeof shell.trashItem === 'function' ? (target: string) => shell.trashItem(target) : undefined)
 
     try {
-      if (shell && typeof shell.trashItem === 'function') {
-        try {
-          await shell.trashItem(filePath)
-        } catch (err) {
-          console.warn('[ScreenshotsService] shell.trashItem failed:', err)
-          return false
-        }
+      if (trash) {
+        await trash(filePath)
       } else {
         await fs.promises.unlink(filePath)
       }
-
-      this.cache = this.cache.filter(item => item.path !== filePath)
-      this.pinnedPaths.delete(filePath)
-      return true
     } catch (err) {
-      throw new Error(`删除截图失败: ${err instanceof Error ? err.message : String(err)}`)
+      const hostCode = (err as NodeJS.ErrnoException)?.code
+      const denied = hostCode === 'EACCES' || hostCode === 'EPERM'
+      const detail = err instanceof Error && err.message ? err.message : String(err)
+      const reason = denied ? '没有访问权限' : hostCode === 'EBUSY' ? '文件正被其它程序占用' : detail
+      throw new ZToolsError(
+        denied ? errorCodes.permissionDenied : errorCodes.fileError,
+        trash ? `无法将截图“${name}”移到${trashName}：${reason}` : `无法删除截图“${name}”：${reason}`,
+        { path: filePath, ...(typeof hostCode === 'string' ? { hostCode } : {}) }
+      )
     }
+
+    this.cache = this.cache.filter(item => item.path !== filePath)
+    this.pinnedPaths.delete(filePath)
+    return true
   }
 
   /**

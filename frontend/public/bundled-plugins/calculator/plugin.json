@@ -1,7 +1,7 @@
 {
   "id": "calculator",
   "name": "计算器",
-  "version": "2.1.5",
+  "version": "2.1.6",
   "description": "输入算式即时计算，内置科学函数、单位换算、每日汇率、人民币大写金额转换与日期推算",
   "author": "ZTools Team",
   "entry": "dist/index.js",

@@ -64,6 +64,14 @@ export class StartupBackupStore {
     }
     return result.sort((a, b) => b.createdAt.localeCompare(a.createdAt))
   }
+  /** 删除一条恢复记录（只用于确认系统状态没有被改动时撤销本次备份）；文件不存在视为已删除 */
+  async discard(id: string): Promise<void> {
+    if (!validId(id)) throw new Error('启动项备份编号无效')
+    await this.#prepare()
+    await fs.unlink(path.join(this.directory, id + '.json')).catch((error: NodeJS.ErrnoException) => {
+      if (error.code !== 'ENOENT') throw error
+    })
+  }
   async save(snapshot: StartupSnapshot, enabled: boolean, kind: 'toggle' | 'remove' = 'toggle') {
     await this.#prepare()
     const { item } = snapshot

@@ -61,49 +61,4 @@ describe('useUIStore', () => {
     store.setFocusState('INVALID_STATE')
     expect(store.focusState).toBe('SEARCH')
   })
-
-  it('侧边栏折叠状态机流转、布尔转换与本地持久化正常', () => {
-    const store = useUIStore()
-    // 默认值：展开（false），兼顾小白用户首屏探索
-    expect(store.sidebarCollapsed).toBe(false)
-    expect(store.isSidebarCollapsed).toBe(false)
-
-    // 切换折叠
-    store.toggleSidebar()
-    expect(store.sidebarCollapsed).toBe(true)
-    expect(store.isSidebarCollapsed).toBe(true)
-    expect(localStorage.getItem('ztools_sidebar_collapsed')).toBe('true')
-
-    // 再次切换展开
-    store.toggleSidebar()
-    expect(store.sidebarCollapsed).toBe(false)
-    expect(store.isSidebarCollapsed).toBe(false)
-    expect(localStorage.getItem('ztools_sidebar_collapsed')).toBe('false')
-
-    // 显式赋值与布尔强制转换（异常边界）
-    store.setSidebarCollapsed(1)
-    expect(store.sidebarCollapsed).toBe(true)
-    store.setSidebarCollapsed(0)
-    expect(store.sidebarCollapsed).toBe(false)
-    store.setSidebarCollapsed('truthy-string')
-    expect(store.sidebarCollapsed).toBe(true)
-    store.setSidebarCollapsed(null)
-    expect(store.sidebarCollapsed).toBe(false)
-  })
-
-  it('localStorage 抛出异常时 setSidebarCollapsed 具备安全容错能力', () => {
-    const store = useUIStore()
-    const originalSetItem = localStorage.setItem
-    try {
-      localStorage.setItem = () => {
-        throw new Error('QuotaExceededError or SecurityError')
-      }
-      expect(() => {
-        store.setSidebarCollapsed(true)
-      }).not.toThrow()
-      expect(store.sidebarCollapsed).toBe(true)
-    } finally {
-      localStorage.setItem = originalSetItem
-    }
-  })
 })

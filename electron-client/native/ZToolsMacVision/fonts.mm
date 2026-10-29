@@ -37,7 +37,9 @@ static NSDictionary *FontList(NSArray *descriptors) {
       [items addObject:@{ @"id": identifier, @"family": CFBridgingRelease(CTFontCopyFamilyName(font)) ?: identifier,
         @"style": FontName(font, kCTFontSubFamilyNameKey), @"filePath": file,
         @"hasLicense": @(FontName(font, kCTFontLicenseNameKey).length > 0),
-        @"system": @([file hasPrefix:@"/System/Library/Fonts/"]) }];
+        // 系统自带字体不只在 /System/Library/Fonts/：苹方等按需下载的字体在 /System/Library/AssetsV2/，
+        // 另有一些在 PrivateFrameworks 下；/System/ 整卷只读（SSV），用户无法往里安装字体，按前缀判定可靠
+        @"system": @([file hasPrefix:@"/System/"]) }];
     }
     CFRelease(font);
     if (items.count > 10000) return FontFailure(@"TOO_MANY_FONTS");
@@ -82,10 +84,27 @@ static NSDictionary *FontPreview(CTFontRef font, NSString *text) {
   if (ok) { CGImageDestinationAddImage(destination, image, nullptr); ok = CGImageDestinationFinalize(destination); }
   if (destination) CFRelease(destination); if (image) CGImageRelease(image);
   if (!ok || !bytes.length || bytes.length > 2 * 1024 * 1024) return FontFailure(@"FONT_RENDER_FAILED");
-  return @{ @"version": @1, @"success": @YES, @"id": requested,
-    @"png": [bytes base64EncodedStringWithOptions:0], @"fallbacks": [[fallbacks allObjects] sortedArrayUsingSelector:@selector(compare:)],
+  NSArray *sortedFallbacks = [[fallbacks allObjects] sortedArrayUsingSelector:@selector(compare:)];
+  NSMutableDictionary *reply = [@{ @"version": @1, @"success": @YES, @"id": requested,
+    @"png": [bytes base64EncodedStringWithOptions:0], @"fallbacks": sortedFallbacks,
     @"license": FontName(font, kCTFontLicenseNameKey), @"licenseUrl": FontName(font, kCTFontLicenseURLNameKey),
-    @"copyright": FontName(font, kCTFontCopyrightNameKey), @"manufacturer": FontName(font, kCTFontManufacturerNameKey) };
+    @"copyright": FontName(font, kCTFontCopyrightNameKey), @"manufacturer": FontName(font, kCTFontManufacturerNameKey) } mutableCopy];
+  // 本机没有任何字体含某个字形时，CoreText 用 LastResort 画占位方框：它不是可用的回退字体，返回缺字提示。
+  // coverageWarning 会替代插件里的回退字体说明，所以把其余回退字体也写进去（最多列 8 个，宿主限制 1024 字符）
+  if ([fallbacks containsObject:@"LastResort"]) {
+    NSMutableArray *others = [NSMutableArray array];
+    for (NSString *name in sortedFallbacks) if (![name isEqual:@"LastResort"]) [others addObject:name];
+    NSString *warning = @"部分字符本机没有任何字体包含，显示为占位方框。";
+    if (others.count) {
+      NSArray *shown = [others subarrayWithRange:NSMakeRange(0, MIN((NSUInteger)8, others.count))];
+      NSString *names = [shown componentsJoinedByString:@"、"];
+      if (names.length > 600) names = [[names substringToIndex:600] stringByAppendingString:@"…"];
+      warning = [warning stringByAppendingFormat:@"其余字形使用系统回退字体：%@%@", names,
+        others.count > shown.count ? [NSString stringWithFormat:@" 等 %lu 个", (unsigned long)others.count] : @""];
+    }
+    reply[@"coverageWarning"] = warning;
+  }
+  return reply;
 }
 
 NSDictionary *DispatchFonts(NSDictionary *value) {

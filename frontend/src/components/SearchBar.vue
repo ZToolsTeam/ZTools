@@ -1,22 +1,22 @@
 <script setup>
+import { CircleXIcon, SearchIcon, XIcon } from '@lucide/vue'
 import { ref, watch, onMounted, onUnmounted, computed, nextTick } from 'vue'
 import ShortcutKeys from '@/components/base/ShortcutKeys.vue'
 import { useUIStore } from '@/stores/ui'
 import { usePluginsStore } from '@/stores/plugins'
 import { useCommandSearch } from '@/composables/useCommandSearch'
-import { getHighlightPartsWithPinyin } from '@/utils/pinyinSearch'
 import { useToast } from '@/composables/useToast'
 import { useKeymap, KEYMAP_SCOPES } from '@/utils/keymap'
 import { switchWindowMode, WINDOW_MODES } from '@/utils/windowMode'
-import { RcSquircle } from '@/components/base'
-import { resolveItemGlyph } from '@/utils/brandIcons'
+import { RcButton } from '@/components/base'
+import SearchResultRow from '@/components/SearchResultRow.vue'
 import { currentGlobalWakeHotkey } from '@/utils/globalWakeHotkey'
+import { executeDeclarativeNoViewCommand } from '@/utils/declarativePluginLoader'
 
 
 const props = defineProps({
   modelValue: String,
-  placeholder: String,
-  debounce: { type: Number, default: 300 }
+  placeholder: String
 })
 const emit = defineEmits(['update:modelValue', 'search'])
 
@@ -30,7 +30,6 @@ const isFocused = ref(false)
 const hintDismissed = ref(false)
 const isDropdownOpen = ref(false)
 const activeIndex = ref(0)
-let debounceTimer = null
 
 const {
   query: searchQuery,
@@ -38,28 +37,51 @@ const {
   filteredItems,
   search,
   clearSearch,
-  recordUsage
+  recordUsage,
+  highlightParts
 } = useCommandSearch({ enableFileSearch: true })
 
-// 候选命令列表（最多展示前 8 条，包含插件命令、本地应用与文件）
+// 候选命令列表：最多前 8 条（插件命令、本地应用与文件），最后一条固定是「在插件市场搜索」
 const candidateCommands = computed(() => {
   const source = filteredItems?.value ?? matchedPlugins?.value ?? []
-  return source.slice(0, 8)
+  const keyword = localValue.value.trim()
+  if (!keyword) return source.slice(0, 8)
+  return [
+    ...source.slice(0, 8),
+    {
+      key: 'market-search',
+      type: 'market-search',
+      name: `在插件市场搜索「${keyword}」`,
+      description: '查找可以安装的插件',
+      badge: '插件市场',
+      actionLabel: '搜索',
+      faIcon: 'fa-search',
+      omitFromFrecencyTracking: true
+    }
+  ]
 })
 
-// 防抖搜索与内核同步
+// 候选变少时（文件结果到达）选中项不能落到列表外
+watch(() => candidateCommands.value.length, (length) => {
+  if (activeIndex.value >= length) activeIndex.value = Math.max(0, length - 1)
+})
+
+// 键盘上下选择时把选中行滚进可见区域
+const rowElements = new Map()
+function registerRowEl(index, el) {
+  const node = el?.$el ?? el
+  if (node) rowElements.set(index, node)
+  else rowElements.delete(index)
+}
+watch(activeIndex, (index) => {
+  nextTick(() => rowElements.get(index)?.scrollIntoView?.({ block: 'nearest' }))
+})
+
+// 输入只更新下拉候选；跳到插件市场要按 Enter 或选「在插件市场搜索」（插件市场页里的实时筛选由 Header 负责）
 watch(localValue, (newVal) => {
   emit('update:modelValue', newVal)
   search(newVal)
   activeIndex.value = 0
-
-  if (debounceTimer) {
-    clearTimeout(debounceTimer)
-  }
-
-  debounceTimer = setTimeout(() => {
-    emit('search', newVal)
-  }, props.debounce)
 
   if (isFocused.value && newVal && newVal.trim()) {
     isDropdownOpen.value = true
@@ -77,9 +99,6 @@ watch(
 )
 
 const handleEnter = () => {
-  if (debounceTimer) {
-    clearTimeout(debounceTimer)
-  }
   isDropdownOpen.value = false
   emit('search', localValue.value)
 }
@@ -116,14 +135,13 @@ const focusInput = () => {
   uiStore.focusSearch()
 }
 
-function highlightParts(text) {
-  return getHighlightPartsWithPinyin(text, localValue.value)
-}
-
 async function executeCandidate(item) {
   if (!item) return
-  clearTimeout(debounceTimer)
-  debounceTimer = null
+  if (item.type === 'market-search') {
+    isDropdownOpen.value = false
+    emit('search', localValue.value)
+    return
+  }
   if (!item.omitFromFrecencyTracking) {
     recordUsage(item.key || item.pluginId)
   }
@@ -143,6 +161,11 @@ async function executeCandidate(item) {
       if (res !== true && res?.success !== true) {
         throw new Error(res?.error?.message || res?.error || '打开文件失败')
       }
+    } else if (item.mode === 'no-view' && item.pluginId) {
+      // 无界面命令直接执行并提示结果；打开页面视图只会得到一个空白的“未识别视图”页
+      await pluginsStore.markRecent?.(item.pluginId)
+      const res = await executeDeclarativeNoViewCommand(item.pluginId, { featureCode: item.featureCode || '', query: searchQuery.value })
+      toastSuccess?.(res?.message || `${item.name || item.title} 已执行`)
     } else if (item.pluginId) {
       const result = await pluginsStore.openPlugin(item.pluginId, { featureCode: item.featureCode })
       if (result?.cancelled) return
@@ -215,78 +238,33 @@ defineExpose({ focusInput })
       "
     >
       <template #prefix>
-        <svg
-          class="w-4 h-4 mr-1 text-[var(--rc-text-muted)]"
-          viewBox="0 0 24 24"
-          fill="none"
-          stroke="currentColor"
-          stroke-width="1.9"
-          stroke-linecap="round"
-          stroke-linejoin="round"
-        >
-          <circle cx="11" cy="11" r="7" />
-          <path d="m20 20-3.5-3.5" />
-        </svg>
+        <SearchIcon class="w-4 h-4 mr-1 text-[var(--rc-text-muted)]" aria-hidden="true" />
       </template>
       <template #suffix>
         <ShortcutKeys class="hidden sm:inline-flex" combo="Ctrl+F" />
       </template>
+      <template #clearIcon><CircleXIcon class="input-clear-icon" aria-hidden="true" /></template>
     </a-input>
 
-    <!-- 下拉命令面板 (Command Palette Dropdown) -->
+    <!-- 下拉命令面板：结果行与悬浮条相同（名称独占一行，路径或说明在第二行），比输入框更宽，长名称能看全 -->
     <transition name="dropdown-fade">
-      <div
-        v-if="isDropdownOpen && candidateCommands.length > 0"
-        class="absolute left-0 right-0 top-full mt-1.5 rounded-xl border shadow-2xl z-40 overflow-hidden select-none"
-        style="
-          background: var(--rc-surface);
-          border-color: var(--rc-border);
-          color: var(--rc-text-primary);
-          max-height: 320px;
-        "
-      >
-        <div class="px-3 py-1.5 text-[11px] font-semibold border-b flex items-center justify-between"
-             style="border-color: var(--rc-border); color: var(--rc-text-faint);">
+      <div v-if="isDropdownOpen && candidateCommands.length > 0" class="search-dropdown">
+        <div class="search-dropdown-head">
           <span>命令与快捷启动</span>
-          <span class="text-[10px]">↑↓ 选择 · ↵ 执行</span>
+          <span>↑↓ 选择 · ↵ 执行</span>
         </div>
 
-        <div class="overflow-y-auto p-1.5 space-y-1 custom-scrollbar" style="max-height: 260px;">
-          <div
+        <div class="search-dropdown-list custom-scrollbar">
+          <SearchResultRow
             v-for="(item, idx) in candidateCommands"
             :key="item.key || item.pluginId || idx"
-            class="flex items-center justify-between px-2.5 py-1.5 rounded-lg cursor-pointer transition-colors text-xs"
-            :class="{ 'is-active': activeIndex === idx }"
-            :style="activeIndex === idx ? 'background: var(--rc-surface-active); color: var(--rc-text-primary);' : 'color: var(--rc-text-muted);'"
+            :ref="el => registerRowEl(idx, el)"
+            :item="item"
+            :active="activeIndex === idx"
+            :parts="highlightParts(item)"
             @mousedown.prevent="executeCandidate(item)"
             @mouseenter="activeIndex = idx"
-          >
-            <div class="flex items-center gap-2.5 min-w-0 flex-1">
-              <span class="row-marker" aria-hidden="true"></span>
-              <RcSquircle
-                :glyph="resolveItemGlyph(item)"
-                :src="typeof item.icon === 'string' && /^(https?:|data:image\/|ztools:)/.test(item.icon) ? item.icon : ''"
-                :icon="item.faIcon || 'fa-cube'"
-                :size="24"
-              />
-              <div class="flex items-baseline gap-1.5 min-w-0">
-                <span class="font-medium text-[13px] truncate" style="color: var(--rc-text-primary)"><template v-for="(part, partIdx) in highlightParts(item.name || item.title)" :key="partIdx"><mark v-if="part.hit" class="p-0 bg-transparent text-[var(--rc-accent-text)] font-semibold">{{ part.text }}</mark><template v-else>{{ part.text }}</template></template></span>
-                <span v-if="item.description" class="text-[11px] truncate opacity-70 max-w-[280px]">
-                  {{ item.description }}
-                </span>
-              </div>
-            </div>
-
-            <div class="flex items-center gap-2 flex-shrink-0">
-              <span v-if="item.badge" class="px-1.5 py-0.5 rounded text-[10px] font-mono"
-                    style="background: var(--rc-surface-subtle); border: 1px solid var(--rc-border);">
-                {{ item.badge }}
-              </span>
-              <span v-if="activeIndex === idx" class="text-[11px]" style="color: var(--rc-text-secondary)">
-                {{ item.actionLabel || '启动' }} ↵
-              </span>
-            </div>
-          </div>
+          />
         </div>
       </div>
     </transition>
@@ -301,13 +279,11 @@ defineExpose({ focusInput })
           在任何地方按 <ShortcutKeys :combo="currentGlobalWakeHotkey" /> 也能直接搜索
         </span>
         <div class="flex items-center gap-1 flex-shrink-0">
-          <button type="button" class="search-hint-btn" @mousedown.prevent="tryGeekLauncher">
+          <RcButton variant="primary" size="xs" class="search-hint-btn" @mousedown.prevent="tryGeekLauncher">
             试一试
-          </button>
+          </RcButton>
           <button type="button" class="search-hint-close" title="关闭提示" aria-label="关闭提示" @mousedown.prevent="dismissHint">
-            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true">
-              <path d="M6 6l12 12M18 6 6 18" />
-            </svg>
+            <XIcon class="w-3 h-3" aria-hidden="true" />
           </button>
         </div>
       </div>
@@ -344,17 +320,41 @@ defineExpose({ focusInput })
   box-shadow: var(--rc-focus-ring) !important;
 }
 
-.row-marker {
-  width: 6px;
-  height: 6px;
-  border-radius: 1.7px;
-  flex-shrink: 0;
-  background: transparent;
+.search-dropdown {
+  position: absolute;
+  top: 100%;
+  left: 0;
+  z-index: 40;
+  /* 至少与输入框同宽，最多 600px；工作台最窄 900px 时右侧仍留出边距 */
+  width: max(100%, min(600px, calc(100vw - 300px)));
+  margin-top: 6px;
+  overflow: hidden;
+  user-select: none;
+  border: 1px solid var(--rc-border);
+  border-radius: var(--rc-radius-lg);
+  background: var(--rc-surface);
+  box-shadow: var(--rc-shadow-lg);
+  color: var(--rc-text-primary);
 }
 
-.is-active .row-marker {
-  background: var(--rc-accent);
-  box-shadow: var(--rc-marker-glow);
+.search-dropdown-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 7px 14px;
+  border-bottom: 1px solid var(--rc-border);
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--rc-text-faint);
+}
+
+.search-dropdown-list {
+  max-height: min(440px, 62vh);
+  overflow-y: auto;
+  padding: 6px 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
 }
 
 .search-hint {
@@ -370,22 +370,6 @@ defineExpose({ focusInput })
   box-shadow: var(--rc-shadow-md);
   font-size: 12px;
   color: var(--rc-text-secondary);
-}
-
-.search-hint-btn {
-  height: 24px;
-  padding: 0 10px;
-  border: none;
-  border-radius: 6px;
-  background: var(--rc-accent);
-  color: var(--rc-accent-contrast);
-  font-size: 12px;
-  font-weight: 500;
-  cursor: pointer;
-}
-
-.search-hint-btn:hover {
-  background: var(--rc-accent-hover);
 }
 
 .search-hint-close {

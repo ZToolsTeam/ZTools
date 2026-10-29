@@ -3,6 +3,7 @@
 
 import { isOfficialPlugin } from '@/utils/officialPlugins'
 import { normalizeCategoryNames } from '@/utils/pluginCategories'
+import { isMacOS } from '@/utils/platform'
 
 /**
  * Check if the native bridge is available
@@ -21,6 +22,9 @@ function hasNativeBridge() {
 }
 
 export const isNative = hasNativeBridge()
+
+/** 全局唤醒快捷键默认值：配置里没有这一项（从未设置过）时使用；存的是空串表示用户主动关闭 */
+export const DEFAULT_GLOBAL_WAKE_HOTKEY = 'Alt+Space'
 
 /**
  * Get a native module from window.ztools
@@ -206,11 +210,12 @@ const native = {
     }
   },
 
+  // sys.getAutostart / setAutostart 只在 Windows 实现；macOS 的登录项由主进程接在配置 system.autostart 上
   async getAutostart() {
     const isElectronHost = typeof window.ztools?.isElectron === 'function'
       ? window.ztools.isElectron()
       : Boolean(window.__ztoolsElectron)
-    if (isElectronHost) {
+    if (isElectronHost && !isMacOS()) {
       const sys = getNativeModule('sys')
       if (typeof sys.getAutostart === 'function') {
         const result = await withTimeout(sys.getAutostart())
@@ -226,6 +231,19 @@ const native = {
   },
 
   async setAutostart(enabled) {
+    if (isMacOS()) {
+      try {
+        const config = getNativeModule('config')
+        const saved = await withTimeout(config.set('system.autostart', String(!!enabled), true))
+        if (saved === false) return false
+        // 主进程写入后会回读系统登录项；这里再读一次，以系统实际状态为准
+        const raw = await withTimeout(config.get('system.autostart', 'false'))
+        return normalizeBoolean(raw) === !!enabled
+      } catch (err) {
+        console.warn('[native] macOS 登录项设置失败:', err)
+        return false
+      }
+    }
     try {
       const sys = window.ztools?.sys
       if (typeof sys?.setAutostart === 'function') {
@@ -240,13 +258,10 @@ const native = {
     }
   },
 
+  // 读取失败直接抛错：空串表示用户已关闭全局唤醒，不能把读取失败也当成关闭
   async getHotkey() {
-    try {
-      return (await getNativeModule('config').get('hotkey.global', '')) || ''
-    } catch (err) {
-      console.warn('[native] getHotkey 失败:', err)
-      return ''
-    }
+    const raw = await getNativeModule('config').get('hotkey.global', DEFAULT_GLOBAL_WAKE_HOTKEY)
+    return typeof raw === 'string' ? raw.trim() : ''
   },
   async setHotkey(val) {
     try {
@@ -279,6 +294,25 @@ const native = {
       return true
     } catch (err) {
       console.warn('[native] setMinimizeToTray 失败:', err)
+      return false
+    }
+  },
+  // 托盘图标（Windows 通知区域 / macOS 菜单栏）是否显示；只影响本机，不参与云同步
+  async getShowTrayIcon() {
+    try {
+      const raw = await getNativeModule('config').get('system.showTrayIcon', 'true')
+      return normalizeBoolean(raw)
+    } catch (err) {
+      console.warn('[native] getShowTrayIcon 失败:', err)
+      return true
+    }
+  },
+  async setShowTrayIcon(val) {
+    try {
+      await getNativeModule('config').set('system.showTrayIcon', String(!!val), false)
+      return true
+    } catch (err) {
+      console.warn('[native] setShowTrayIcon 失败:', err)
       return false
     }
   },
@@ -599,6 +633,8 @@ export const getHotkey = native.getHotkey
 export const setHotkey = native.setHotkey
 export const getMinimizeToTray = native.getMinimizeToTray
 export const setMinimizeToTray = native.setMinimizeToTray
+export const getShowTrayIcon = native.getShowTrayIcon
+export const setShowTrayIcon = native.setShowTrayIcon
 export const getCloseConfirm = native.getCloseConfirm
 export const setCloseConfirm = native.setCloseConfirm
 export const downloadAppUpdate = native.downloadAppUpdate

@@ -12,39 +12,20 @@
         WebkitAppRegion: 'drag'
       }"
     >
-      <div class="flex items-center gap-2.5 min-w-0" style="-webkit-app-region: no-drag">
-        <button
-          v-if="!effectiveIsPopout"
-          class="flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-medium text-[var(--rc-text-secondary)] hover:text-[var(--rc-text-primary)] hover:bg-[var(--rc-surface-hover)] transition-all border border-[var(--rc-border)] cursor-pointer"
-          title="返回我的插件 (Esc)"
-          @click="goBack"
-        >
-          <svg class="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
-            <polyline points="15 18 9 12 15 6" />
-          </svg>
-          <span>工作台</span>
-        </button>
-
-        <span
-          v-else
-          class="flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-medium bg-[var(--rc-success-subtle)] text-[var(--rc-success)] border border-[var(--rc-border)]"
-          title="当前处于独立常驻窗口模式，按 Esc 不会误关窗口"
-        >
-          <CopyOutlined class="text-[11px]" />
-          <span>独立窗口</span>
-        </span>
-
-        <span class="text-[var(--rc-text-faint)]">/</span>
-
-        <!-- 应用标题与语义图标 -->
+      <!--
+        面包屑：插件名 / 子页面标题。返回入口只在底栏（「返回工作台 Esc」/「返回 Esc」），这里不再重复；
+        独立窗口的 Esc 提示也只在底栏显示一处。
+      -->
+      <nav class="flex items-center gap-2 min-w-0" aria-label="当前位置" style="-webkit-app-region: no-drag">
         <div v-if="headerPluginMeta" class="flex items-center gap-2 min-w-0">
-          <RcSquircle :glyph="resolvePluginGlyph(headerPluginMeta.pluginId || headerPluginMeta.id || targetPluginId)" :icon="headerPluginMeta.faIcon || 'fa-cube'" :size="22" />
-          <span class="text-sm font-semibold text-[var(--rc-text-primary)] truncate">{{ headerPluginMeta.name }}</span>
-          <span class="px-1.5 py-0.5 rounded text-[10px] font-mono bg-[var(--rc-surface-hover)] text-[var(--rc-text-muted)] border border-[var(--rc-border)] flex-shrink-0">
-            {{ headerPluginMeta.isInstalledDeclarative ? 'V2 声明式扩展' : '官方标杆' }}
-          </span>
+          <RcSquircle :glyph="resolvePluginGlyph(headerPluginMeta.pluginId || headerPluginMeta.id || targetPluginId)" :fallback-glyph="resolveKeywordGlyph(headerPluginMeta.name || headerPluginMeta.title)" :size="22" />
+          <span class="text-sm font-semibold text-[var(--rc-text-primary)] truncate" :title="headerPluginMeta.featureExplain || headerPluginMeta.name">{{ headerPluginMeta.name }}</span>
         </div>
-      </div>
+        <template v-if="viewTitle">
+          <span class="text-[var(--rc-text-faint)] flex-shrink-0" aria-hidden="true">/</span>
+          <span class="text-sm text-[var(--rc-text-secondary)] truncate" data-decl-page-subtitle>{{ viewTitle }}</span>
+        </template>
+      </nav>
 
       <div class="flex items-center gap-2 flex-shrink-0" style="-webkit-app-region: no-drag">
         <!-- 主窗口模式：提供【独立窗口弹出】按钮 (携带当前搜索/筛选状态无缝接力) -->
@@ -55,11 +36,7 @@
           title="弹出为独立常驻窗口，自动携带当前搜索与选中状态 (Ctrl+Shift+O)"
           @click="handlePopout"
         >
-          <svg class="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-            <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6" />
-            <polyline points="15 3 21 3 21 9" />
-            <line x1="10" y1="14" x2="21" y2="3" />
-          </svg>
+          <ExternalLinkIcon class="w-3.5 h-3.5" aria-hidden="true" />
           <span>独立窗口</span>
         </button>
 
@@ -74,7 +51,7 @@
             title="切换独立窗口始终置顶 (Always on Top)"
             @click="toggleAlwaysOnTop"
           >
-            <PushpinOutlined class="text-[11px]" />
+            <PinIcon class="text-[11px]" />
             <span>{{ isAlwaysOnTop ? '已置顶' : '置顶' }}</span>
           </button>
 
@@ -102,7 +79,9 @@
           :isPopout="effectiveIsPopout"
           :initialSnapshot="initialSnapshot"
           :initialPopoutState="handoffSeed"
+          :hostTitleBar="true"
           @exit="handleExit"
+          @title-change="onViewTitleChange"
         />
       </template>
 
@@ -114,44 +93,33 @@
       />
 
       <!-- 异常状态处理 (Beyond Happy Path: 非法或不存在的插件ID) -->
-      <div
+      <DeclEmptyState
         v-else
-        class="h-full flex flex-col items-center justify-center text-center p-8 bg-[var(--rc-surface)] rounded-2xl border border-[var(--rc-border)]"
+        class="bg-[var(--rc-surface)] rounded-2xl border border-[var(--rc-border)]"
+        :title="errorTitle"
+        :description="errorDescription"
       >
-        <div class="w-14 h-14 rounded-2xl bg-[var(--rc-warning-subtle)] text-[var(--rc-warning)] border border-[var(--rc-border)] flex items-center justify-center text-2xl mb-4">
-          <WarningOutlined  />
-        </div>
-        <template v-if="hiddenPlugin">
-          <h3 class="text-base font-semibold text-[var(--rc-text-primary)] mb-1">该插件暂未开放</h3>
-          <p class="text-xs text-[var(--rc-text-muted)] max-w-md mb-5">这个插件还在完善中，完成真实功能验收后才会开放。</p>
+        <template #icon>
+          <TriangleAlertIcon class="w-5 h-5" aria-hidden="true" />
         </template>
-        <template v-else-if="unsupportedOfficial">
-          <h3 class="text-base font-semibold text-[var(--rc-text-primary)] mb-1">当前系统暂不可用</h3>
-          <p class="text-xs text-[var(--rc-text-muted)] max-w-md mb-5">{{ loadError }}</p>
+        <template v-if="loadError && !unsupportedOfficial && !hiddenPlugin" #description>
+          插件「<code class="font-mono text-[var(--rc-text-secondary)]">{{ targetPluginId || pluginId }}</code>」没有注册或加载失败。
+          <span class="block mt-2 font-mono text-[var(--rc-error)] break-all">{{ loadError }}</span>
         </template>
-        <h3 v-if="!unsupportedOfficial && !hiddenPlugin" class="text-base font-semibold text-[var(--rc-text-primary)] mb-1">未找到指定的声明式应用</h3>
-        <p v-if="!unsupportedOfficial && !hiddenPlugin" class="text-xs text-[var(--rc-text-muted)] max-w-md mb-3">
-          插件标识符 “<code class="text-[var(--rc-accent-text)] font-mono">{{ targetPluginId || pluginId }}</code>” 未在官方标杆应用注册表中注册，或者其组件未能成功加载。
-        </p>
-        <p
-          v-if="loadError && !unsupportedOfficial && !hiddenPlugin"
-          class="text-xs text-[var(--rc-error)] font-mono max-w-md mb-5 px-3 py-2 rounded-lg bg-[var(--rc-error-subtle)] border border-[var(--rc-error)]"
-        >
-          {{ loadError }}
-        </p>
         <button
-          class="declarative-error-back-btn px-4 py-2 rounded-xl text-xs font-medium bg-[var(--rc-accent)] hover:bg-[var(--rc-accent-hover)] text-[var(--rc-accent-contrast)] transition-all shadow-md cursor-pointer"
+          type="button"
+          class="declarative-error-back-btn h-8 px-3.5 rounded-[var(--rc-radius-md)] text-xs font-medium bg-[var(--rc-surface-hover)] hover:bg-[var(--rc-surface-active)] text-[var(--rc-text-primary)] border border-[var(--rc-border)] transition-colors cursor-pointer"
           @click="goBack"
         >
           返回我的插件列表
         </button>
-      </div>
+      </DeclEmptyState>
     </div>
   </div>
 </template>
 
 <script setup>
-import { CopyOutlined, PushpinOutlined, WarningOutlined } from '@ant-design/icons-vue'
+import { ExternalLinkIcon, PinIcon, TriangleAlertIcon } from '@lucide/vue'
 import { computed, onMounted, onUnmounted, ref, shallowRef, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { getActivePinia } from 'pinia'
@@ -162,8 +130,9 @@ import { isPluginSupportedOnCurrentPlatform, isMacOS, isWindows } from '@/utils/
 import { isModalOpen } from '@/utils/keymap'
 import { getCachedDeclarativePlugin, loadInstalledDeclarativePlugin } from '@/utils/declarativePluginLoader'
 import DeclarativeView from '@/declarative/DeclarativeView.vue'
+import DeclEmptyState from '@/declarative/components/DeclEmptyState.vue'
 import { RcSquircle } from '@/components/base'
-import { resolvePluginGlyph } from '@/utils/brandIcons'
+import { resolveKeywordGlyph, resolvePluginGlyph } from '@/utils/brandIcons'
 import { ROUTES, routeUtils } from '@/router/routes'
 const loadHostWinApi = () => import("@/api/apiserver")
 const nativeWin = {
@@ -284,6 +253,29 @@ const plugin = computed(() => {
 
 // 当前显示的已安装声明式插件持有会话归属（加密存储、结束进程等需要知道「是哪个插件」的能力依赖它）
 useDeclarativePluginSession(plugin)
+
+// 子页面标题（由声明式视图上报），显示在面包屑插件名之后；根页面为空
+const viewTitle = ref('')
+function onViewTitleChange(title) {
+  viewTitle.value = typeof title === 'string' ? title : ''
+}
+// 切换插件或功能时视图会重建，旧的子页面标题不能留在面包屑里
+watch([targetPluginId, targetFeatureCode], () => {
+  viewTitle.value = ''
+})
+
+// 异常状态文案：未开放 / 当前系统不可用 / 未找到或加载失败
+const errorTitle = computed(() => {
+  if (hiddenPlugin.value) return '该插件暂未开放'
+  if (unsupportedOfficial.value) return '当前系统暂不可用'
+  return '未找到指定的声明式应用'
+})
+
+const errorDescription = computed(() => {
+  if (hiddenPlugin.value) return '这个插件还在完善中，完成真实功能验收后才会开放。'
+  if (unsupportedOfficial.value) return loadError.value
+  return `插件「${targetPluginId.value || props.pluginId}」没有注册或加载失败。`
+})
 
 const headerPluginMeta = computed(() => {
   if (unsupportedOfficial.value || hiddenPlugin.value) return null

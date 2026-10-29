@@ -19,9 +19,10 @@ export function worldTime(date, zone) {
     const time = `${value("year")}-${value("month")}-${value("day")} ${value("hour")}:${value("minute")}:${value("second")}`;
     return { time, offsetMinutes: Math.round((Date.parse(time.replace(" ", "T") + "Z") - Math.floor(date.getTime() / 1000) * 1000) / 60000) };
 }
-export function zoneLabel(minutes) {
+/** ascii=true 时用普通减号：复制出去的文本要能被其它程序当作时区偏移解析，U+2212 减号不行 */
+export function zoneLabel(minutes, ascii = false) {
     const abs = Math.abs(minutes);
-    return `${minutes < 0 ? "−" : "+"}${String(Math.floor(abs / 60)).padStart(2, "0")}:${String(abs % 60).padStart(2, "0")}`;
+    return `${minutes < 0 ? (ascii ? "-" : "−") : "+"}${String(Math.floor(abs / 60)).padStart(2, "0")}:${String(abs % 60).padStart(2, "0")}`;
 }
 function availableZones() {
     const intl = Intl;
@@ -64,15 +65,17 @@ export default function WorldClockCommand() {
         Action({ title: "换算指定时间…", icon: Icon.Calendar, onAction: () => push(() => ReferenceTimeForm({ onSave: value => setFixed(value.getTime()) })) }),
         Action({ title: "恢复当前时间", icon: Icon.Repeat, onAction: () => { setFixed(null); setNow(Date.now()); } })
     ];
+    // 参考时区下拉只放常用城市（中文名）；其它 IANA 时区通过搜索找到后用“设为时差参考”选中，选中后也出现在下拉里
+    const referenceOptions = CITY_NAMES[reference] ? Object.keys(CITY_NAMES) : [...Object.keys(CITY_NAMES), reference];
     // 默认只显示常用城市，搜索时涵盖运行时支持的全部 IANA 时区。
     const filtered = (query.trim() ? zones : Object.keys(CITY_NAMES)).filter(zone => `${CITY_NAMES[zone] || ""} ${zone}`.toLowerCase().includes(query.trim().toLowerCase()));
     return List({ navigationTitle: "世界时钟", searchText: query, onSearchTextChange: setQuery, searchBarPlaceholder: "搜索城市或 IANA 时区，如 纽约、Europe/Paris", searchBarAccessory: List.Dropdown({ tooltip: "时差参考时区", value: reference, onChange: value => { if (zones.includes(value))
-                setReference(value); } }, zones.map(zone => List.Dropdown.Item({ value: zone, title: CITY_NAMES[zone] || zone }))), actions: ActionPanel({}, actions) }, [List.Section({ title: `${fixed === null ? "当前时间" : "指定时刻"} · 相对 ${CITY_NAMES[reference] || reference} 的时差` }, filtered.map(zone => {
+                setReference(value); } }, referenceOptions.map(zone => List.Dropdown.Item({ value: zone, title: CITY_NAMES[zone] || zone }))), actions: ActionPanel({}, actions) }, [List.Section({ title: `${fixed === null ? "当前时间" : "指定时刻"} · 相对 ${CITY_NAMES[reference] || reference} 的时差` }, filtered.map(zone => {
             const value = worldTime(date, zone);
             return List.Item({ id: zone, title: CITY_NAMES[zone] || zone, subtitle: `${value.time} · UTC${zoneLabel(value.offsetMinutes)}`, icon: Icon.Clock, accessories: [{ text: `时差 ${zoneLabel(value.offsetMinutes - baseline)}` }], actions: ActionPanel({}, [Action({ title: "复制当地时间", icon: Icon.CopyClipboard, onAction: async () => {
                             const current = worldTime(new Date(fixed ?? Date.now()), zone);
-                            await Clipboard.copy(`${current.time} UTC${zoneLabel(current.offsetMinutes)} (${zone})`);
+                            await Clipboard.copy(`${current.time} UTC${zoneLabel(current.offsetMinutes, true)} (${zone})`);
                             await showToast(Toast.Style.Success, "已复制当地时间");
-                        } }), ...actions]) });
+                        } }), ...(zone === reference ? [] : [Action({ title: "设为时差参考", icon: Icon.Pin, onAction: () => setReference(zone) })]), ...actions]) });
         }))]);
 }

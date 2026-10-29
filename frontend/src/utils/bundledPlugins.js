@@ -26,7 +26,7 @@ function normalizeId(value) {
 }
 
 /**
- * 与内置插件功能重复、已合并进去的旧插件 → 保留的内置插件。
+ * 功能已合并的旧插件 → 保留的插件（可能内置，也可能需要从市场安装）。
  * 旧快捷方式、历史记录、搜索结果打开旧插件时直接打开保留的那个，不再提示「暂未开放」。
  * （同 id 的重复插件，如 json-format、calculator，本来就只保留内置版本，不需要在这里登记）
  */
@@ -55,7 +55,7 @@ export const BUNDLED_REPLACEMENT_FEATURES = Object.freeze({
   'world-clock': 'tz-world'
 })
 
-/** 旧插件 id 解析到保留的内置插件 id；不在映射里时原样返回 */
+/** 旧插件 id 解析到保留的插件 id；不在映射里时原样返回 */
 export function resolveBundledReplacement(pluginId) {
   const raw = typeof pluginId === 'string' ? pluginId.trim() : ''
   const id = raw.toLowerCase()
@@ -162,6 +162,26 @@ export function getBundledPluginIconUrl(pluginId, iconRel = 'icon.svg') {
   return `${baseUrl()}${encodeURIComponent(id)}/${String(iconRel).replace(/^\/+/, '')}`
 }
 
+/** 内置插件截图：同步脚本只复制 plugin.json 声明过的 screenshots/ 下的 PNG，这里再按同一格式过滤一次 */
+const BUNDLED_SCREENSHOT_PATH = /^screenshots\/(?:[A-Za-z0-9_-]+\/)*[A-Za-z0-9_-]+(?:\.[A-Za-z0-9_-]+)*\.png$/
+
+/**
+ * 内置插件截图地址（指向随客户端分发的本地副本 bundled-plugins/<id>/screenshots/…）；没有截图时为空数组，不回退到网络
+ * @returns {Array<{ url: string, title: string, width?: number, height?: number }>}
+ */
+export function getBundledPluginScreenshots(p) {
+  const list = Array.isArray(p?.screenshots) ? p.screenshots : []
+  return list
+    .filter((shot) => shot && typeof shot.path === 'string' && BUNDLED_SCREENSHOT_PATH.test(shot.path))
+    .slice(0, 5)
+    .map((shot) => ({
+      url: getBundledPluginIconUrl(p.id, shot.path),
+      title: typeof shot.title === 'string' ? shot.title : '',
+      width: Number.isSafeInteger(shot.width) && shot.width > 0 ? shot.width : undefined,
+      height: Number.isSafeInteger(shot.height) && shot.height > 0 ? shot.height : undefined
+    }))
+}
+
 function toEntry(p) {
   const icon = getBundledPluginIconUrl(p.id, p.icon || 'icon.svg')
   return {
@@ -179,8 +199,11 @@ function toEntry(p) {
     features: Array.isArray(p.features) ? p.features : [],
     // 平台声明（plugin.json 的 targets），用于展示「跨平台 / 仅 Windows / 仅 macOS」并过滤当前系统不支持的插件
     targets: Array.isArray(p.targets) ? p.targets : [],
+    // 字节数，由同步脚本按随客户端分发的文件统计
+    size: Number(p.size) || 0,
     icon,
     logo: icon,
+    screenshots: getBundledPluginScreenshots(p),
     entry: 'dist/index.js',
     mode: 'view',
     isDeclarative: true,

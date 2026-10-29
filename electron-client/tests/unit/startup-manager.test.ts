@@ -137,6 +137,24 @@ macTest('真实文件扫描：覆盖优先、缺失程序、计划任务与错�
     assert.deepEqual(before, [startupHash(await fs.readFile(enabled)), startupHash(await fs.readFile(missing))])
   } finally { await f.close() }
 })
+macTest('空的 plist（<dict/>，常见于屏蔽更新代理）不算启动项也不算读取失败；警告不带 Error: 前缀', async () => {
+  const f = await fixture()
+  try {
+    await f.put('com.google.keystone.agent.plist', {})
+    await f.put('one.plist', { Label: 'cn.test.enabled', Program: '/bin/echo' })
+    await f.put('bad.plist', { Program: '/bin/echo' })
+    const { result } = await f.reader.scan(signal())
+    assert.equal(result.items.length, 1)
+    assert.deepEqual(result.warnings, ['bad.plist：启动配置缺少有效 Label'])
+    await assert.rejects(parseStartupPlist(Buffer.from(buildPlist({})), signal(), runStartupCommand), /空的启动配置/)
+    const onlyEmpty = await fixture()
+    try {
+      await onlyEmpty.put('com.google.keystone.xpcservice.plist', {})
+      const empty = await onlyEmpty.reader.scan(signal())
+      assert.equal(empty.result.items.length, 0); assert.deepEqual(empty.result.warnings, [])
+    } finally { await onlyEmpty.close() }
+  } finally { await f.close() }
+})
 macTest('缺系统权限不能显示为没有启动项；只有指定的未加载错误可视为未加载', async () => {
   const run: StartupCommand = async () => ({ code: 1, stdout: '', stderr: 'Operation not permitted' })
   await assert.rejects(new MacStartupReader(undefined, run).scan(signal()), /无法读取系统启动状态/)
@@ -248,6 +266,8 @@ macTest('备份期间配置变化和恢复前后续修改均阻断，不覆盖�
     const changing = new StartupTransactions(f.reader, new ChangingStore(f.store.directory), f.writer)
     await assert.rejects(changing.toggle(await f.snapshot(), false, signal()), /已变化/)
     assert.equal(f.state().writes, 0)
+    // 写入前核对失败，没有发出写入：本次恢复记录无效，已被删除
+    assert.equal((await f.store.list()).length, 0)
     const result = await f.transactions.toggle(await f.snapshot(), false, signal())
     const backup = await f.store.load(result.backupId)
     await fs.appendFile(f.file, '\n')
@@ -255,12 +275,59 @@ macTest('备份期间配置变化和恢复前后续修改均阻断，不覆盖�
     assert.equal(f.state().writes, 1)
   } finally { await f.close() }
 })
-macTest('命令返回 0 但系统状态不变时必须失败并保留恢复记录', async () => {
+macTest('命令返回 0 但系统状态不变时必须失败，且复查确认未修改后删除无效恢复记录', async () => {
   const f = await transactionalFixture()
   try {
     f.denyWrite()
-    await assert.rejects(f.transactions.toggle(await f.snapshot(), false, signal()), /修改未确认/)
-    assert.equal(f.state().disabled, false); assert.equal((await f.store.list()).length, 1)
+    await assert.rejects(f.transactions.toggle(await f.snapshot(), false, signal()), /自启状态未修改.*与请求不一致/)
+    assert.equal(f.state().disabled, false); assert.equal((await f.store.list()).length, 0)
+  } finally { await f.close() }
+})
+macTest('用户取消管理员授权（写入未执行）时删除恢复记录，并透出原错误', async () => {
+  const f = await transactionalFixture()
+  try {
+    const cancelled: StartupWriter = { async apply() { throw new Error('系统未确认修改：CANCELLED_OR_EXPIRED') } }
+    const transactions = new StartupTransactions(f.reader, f.store, cancelled)
+    await assert.rejects(transactions.toggle(await f.snapshot(), false, signal()), /自启状态未修改.*CANCELLED_OR_EXPIRED/)
+    assert.equal(f.state().writes, 0); assert.equal((await f.store.list()).length, 0)
+  } finally { await f.close() }
+})
+macTest('写入已改动系统状态后才报错时保留恢复记录', async () => {
+  const f = await transactionalFixture()
+  try {
+    const partial: StartupWriter = { async apply(input, abort) {
+      await f.writer.apply(input, abort)
+      throw new Error('系统写入结果无法验证')
+    } }
+    const transactions = new StartupTransactions(f.reader, f.store, partial)
+    await assert.rejects(transactions.toggle(await f.snapshot(), false, signal()), /恢复记录 .* 已保留.*无法验证/)
+    assert.equal(f.state().disabled, true); assert.equal((await f.store.list()).length, 1)
+  } finally { await f.close() }
+})
+macTest('写入失败后复查读不到系统状态时保留恢复记录，不当作未修改', async () => {
+  const f = await transactionalFixture()
+  try {
+    let failRecheck = false
+    const reader = new MacStartupReader(f.env, async (args, abort, input) => {
+      if (failRecheck && args[0] === 'print-disabled') throw new Error('launchctl 不可用')
+      return f.reader.run(args, abort, input)
+    })
+    const failing: StartupWriter = { async apply() { failRecheck = true; throw new Error('osascript 退出码 1') } }
+    const transactions = new StartupTransactions(reader, f.store, failing)
+    await assert.rejects(transactions.toggle((await reader.scan(signal())).snapshots[0]!, false, signal()), /已保留.*osascript/)
+    assert.equal((await f.store.list()).length, 1)
+  } finally { await f.close() }
+})
+macTest('未修改但删除恢复记录失败时报告删除失败，同时保留原错误', async () => {
+  const f = await transactionalFixture()
+  try {
+    class UndeletableStore extends StartupBackupStore {
+      override async discard(): Promise<void> { throw new Error('EPERM 删除被拒绝') }
+    }
+    const cancelled: StartupWriter = { async apply() { throw new Error('用户取消了授权') } }
+    const transactions = new StartupTransactions(f.reader, new UndeletableStore(f.store.directory), cancelled)
+    await assert.rejects(transactions.toggle(await f.snapshot(), false, signal()), /删除失败.*用户取消了授权/)
+    assert.equal((await f.store.list()).length, 1)
   } finally { await f.close() }
 })
 macTest('外部移除 override 即使有效状态相同也不能覆盖；临时记录不当作可恢复备份', async () => {

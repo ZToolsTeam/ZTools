@@ -30,11 +30,12 @@ describe('声明式插件命令选择', () => {
     expect((await loadCommand(source, 'unknown')).command()).toBe('default')
   })
 
-  it.each(['convert-color', 'contrast-check'])('内置取色器 %s 入口返回列表视图', async (featureCode) => {
+  // 对比度检测有自己的双色输入界面，不再与色值互转共用一个
+  it.each([['convert-color', '调色板与色彩转换'], ['contrast-check', '对比度检测']])('内置取色器 %s 入口返回各自的列表视图', async (featureCode, title) => {
     const plugin = await loadInstalledDeclarativePlugin('color-picker', {
       featureCode,
       readFile: (_id, relativePath) => fs.readFile(path.resolve('public/bundled-plugins/color-picker', relativePath), 'utf8')
     })
-    expect(plugin.command()).toMatchObject({ type: 'List', props: { navigationTitle: '调色板与色彩转换' } })
+    expect(plugin.command()).toMatchObject({ type: 'List', props: { navigationTitle: title } })
   })
 })

@@ -12,9 +12,18 @@ import { randomUUID } from 'node:crypto'
 import fs from 'node:fs'
 import path from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
+import { errorCodes, ZToolsError } from '../../contracts/errors.js'
 import type { HudService } from './hud-service.js'
 
 import { projectFocus, readFocusState, type FocusSessionState } from './focus-session.js'
+
+/**
+ * 专注服务的错误：用 ZToolsError 让中文原因原样返回给插件（普通 Error 经 IPC 只会显示「宿主内部错误」）；
+ * 错误码沿用此前普通 Error 对外的 INTERNAL_ERROR，不改变调用方看到的错误码。
+ */
+function focusError(message: string): ZToolsError {
+  return new ZToolsError(errorCodes.internalError, message)
+}
 export type { FocusSessionState, FocusSessionStatus, FocusSessionPresentation } from './focus-session.js'
 
 export interface FocusCategory {
@@ -64,6 +73,15 @@ const DEFAULT_CATEGORIES: FocusCategory[] = [
   { id: 'cat-learn', name: '技术研析', color: '#8B5CF6', icon: 'academic-cap', defaultDurationMinutes: 50, pinyin: 'jishuyanxi' }
 ]
 
+interface FocusCategoryRow {
+  id: string
+  name: string
+  color: string
+  icon: string
+  default_duration_minutes: number
+  pinyin: string
+}
+
 export class FocusService {
   private readonly db: DatabaseSync
   private readonly hudService: HudService | null | undefined
@@ -104,7 +122,7 @@ export class FocusService {
         if (this.currentSession.status === 'running') this.startTicker()
       }
     } catch (error) {
-      this.failure = new Error(`无法读取专注状态，已保留原数据：${String(error)}`)
+      this.failure = focusError(`无法读取专注状态，已保留原数据：${String(error)}`)
     }
   }
 
@@ -149,7 +167,7 @@ export class FocusService {
   }
 
   private assertAvailable(): void {
-    if (this.stopped) throw new Error('专注服务已停止')
+    if (this.stopped) throw focusError('专注服务已停止')
     if (this.failure) throw this.failure
   }
 
@@ -162,10 +180,10 @@ export class FocusService {
     this.notificationWarning = undefined
     try {
       void Promise.resolve(this.notify(title, message)).catch(error => {
-        this.notificationWarning = `系统通知失败：${String(error)}`
+        this.notificationWarning = `系统通知失败：${error instanceof Error ? error.message : String(error)}`
         console.warn(this.notificationWarning)
       })
-    } catch (error) { this.notificationWarning = `系统通知失败：${String(error)}` }
+    } catch (error) { this.notificationWarning = `系统通知失败：${error instanceof Error ? error.message : String(error)}` }
   }
 
   private save(state: FocusSessionState, anchor: number, history?: FocusHistoryRecord): void {
@@ -182,7 +200,7 @@ export class FocusService {
       this.db.exec('COMMIT')
     } catch (error) {
       try { this.db.exec('ROLLBACK') } catch (rollbackError) { console.error('专注状态回滚失败', rollbackError) }
-      throw new Error(`无法保存专注状态，原记录未被替换：${String(error)}`)
+      throw focusError(`无法保存专注状态，原记录未被替换：${String(error)}`)
     }
     this.currentSession = state
     this.lastTickTimestamp = anchor
@@ -193,19 +211,19 @@ export class FocusService {
   public startSession(input: StartFocusSessionInput = {}): FocusSessionState {
     this.assertAvailable()
     const existing = this.getCurrentSession()
-    if (existing?.status === 'running' || existing?.status === 'paused') throw new Error('A focus session is already running or paused，先继续或取消当前计时')
-    if (input.mode !== undefined && input.mode !== 'single' && input.mode !== 'pomodoro') throw new Error('专注模式无效')
-    if (input.title !== undefined && (typeof input.title !== 'string' || input.title.length > 300)) throw new Error('专注标题无效')
-    if (input.durationMinutes !== undefined && (!Number.isFinite(input.durationMinutes) || input.durationMinutes < 1 || input.durationMinutes > 1440)) throw new Error('专注时长必须为 1～1440 分钟')
+    if (existing?.status === 'running' || existing?.status === 'paused') throw focusError('已有进行中或暂停的计时，请先继续或取消当前计时')
+    if (input.mode !== undefined && input.mode !== 'single' && input.mode !== 'pomodoro') throw focusError('专注模式无效')
+    if (input.title !== undefined && (typeof input.title !== 'string' || input.title.length > 300)) throw focusError('专注标题无效')
+    if (input.durationMinutes !== undefined && (!Number.isFinite(input.durationMinutes) || input.durationMinutes < 1 || input.durationMinutes > 1440)) throw focusError('专注时长必须为 1～1440 分钟')
     const categories = this.listCategories()
     const target = (input.categoryId ? categories.find(c => c.id === input.categoryId) : categories[0])
-    if (!target) throw new Error('专注分类不存在')
+    if (!target) throw focusError('专注分类不存在')
     const mode = input.mode ?? 'single'
     const duration = mode === 'pomodoro' ? 25 : input.durationMinutes ?? target.defaultDurationMinutes
-    if (!Number.isFinite(duration) || duration < 1 || duration > 1440) throw new Error('专注时长必须为 1～1440 分钟，请检查分类默认时长')
+    if (!Number.isFinite(duration) || duration < 1 || duration > 1440) throw focusError('专注时长必须为 1～1440 分钟，请检查分类默认时长')
     const title = input.title?.trim() || `${target.name} 专注时钟`
-    if (typeof target.name !== 'string' || !target.name.trim() || target.name.length > 300) throw new Error('专注分类名称必须为 1～300 个字符')
-    if (title.length > 300) throw new Error('专注标题超过 300 个字符，请缩短分类名称或指定标题')
+    if (typeof target.name !== 'string' || !target.name.trim() || target.name.length > 300) throw focusError('专注分类名称必须为 1～300 个字符')
+    if (title.length > 300) throw focusError('专注标题超过 300 个字符，请缩短分类名称或指定标题')
     const totalDurationMs = Math.round(duration * 60_000), now = this.now()
     const count = this.db.prepare("SELECT count(*) AS count FROM focus_history WHERE mode = 'pomodoro'").get() as { count: number }
     this.save({ id: randomUUID(), title, categoryId: target.id,
@@ -225,7 +243,7 @@ export class FocusService {
 
   public pauseSession(): FocusSessionState {
     const current = this.getCurrentSession()
-    if (current?.status !== 'running') throw new Error('No active running focus session to pause')
+    if (current?.status !== 'running') throw focusError('当前没有进行中的计时，可能刚刚到期或在其他窗口操作过，请刷新')
     const now = this.now()
     this.save({ ...current, status: 'paused', pausedAt: now }, now)
     this.present(`专注已暂停：${current.title}`)
@@ -234,7 +252,7 @@ export class FocusService {
 
   public resumeSession(): FocusSessionState {
     const current = this.getCurrentSession()
-    if (current?.status !== 'paused') throw new Error('No paused focus session to resume')
+    if (current?.status !== 'paused') throw focusError('当前没有暂停的计时，可能在其他窗口操作过，请刷新')
     this.save({ ...current, status: 'running', pausedAt: null }, this.now())
     this.present(`专注已继续：${current.title}`)
     return this.getCurrentSession()!
@@ -242,7 +260,7 @@ export class FocusService {
 
   public completeSession(): FocusSessionState {
     const current = this.getCurrentSession()
-    if (!current || !['running', 'paused'].includes(current.status)) throw new Error('No active focus session to complete')
+    if (!current || !['running', 'paused'].includes(current.status)) throw focusError('当前没有可完成的计时，可能刚刚到期或在其他窗口操作过，请刷新')
     const now = this.now()
     const history = current.phase === 'focus' ? { id: current.id, title: current.title, categoryName: current.categoryName,
       durationMinutes: Math.max(1, Math.round(current.elapsedMs / 60_000)), completedAt: now } : undefined
@@ -253,7 +271,7 @@ export class FocusService {
 
   public cancelSession(): FocusSessionState {
     const current = this.getCurrentSession()
-    if (!current || !['running', 'paused'].includes(current.status)) throw new Error('No active focus session to cancel')
+    if (!current || !['running', 'paused'].includes(current.status)) throw focusError('当前没有可取消的计时，可能刚刚到期或在其他窗口操作过，请刷新')
     this.save({ ...current, status: 'cancelled' }, this.now())
     this.present('专注已取消')
     return this.getCurrentSession()!
@@ -295,7 +313,7 @@ export class FocusService {
    * M1.5-19.6: 分类管理与查询 (searchCategories, createCategory)
    */
   public listCategories(search?: string): FocusCategory[] {
-    const rows = this.db.prepare('SELECT id, name, color, icon, default_duration_minutes, pinyin FROM focus_categories').all() as any[]
+    const rows = this.db.prepare('SELECT id, name, color, icon, default_duration_minutes, pinyin FROM focus_categories').all() as unknown as FocusCategoryRow[]
     const list: FocusCategory[] = rows.map(r => ({
       id: r.id,
       name: r.name,
@@ -312,7 +330,7 @@ export class FocusService {
 
   public createCategory(input: { name: string; color?: string; icon?: string; defaultDurationMinutes?: number }): FocusCategory {
     const name = input.name?.trim()
-    if (!name) throw new Error('Category name cannot be empty')
+    if (!name) throw focusError('专注分类名称不能为空')
 
     const id = `cat-${randomUUID().slice(0, 8)}`
     const color = input.color || '#3B82F6'
@@ -376,7 +394,7 @@ export class FocusService {
           try { this.onTick?.(state) } catch (error) { console.warn('专注状态监听失败', error) }
         }
       } catch (error) {
-        this.failure = new Error(`专注计时未能保存，请排除存储问题后重启；原数据已保留：${String(error)}`)
+        this.failure = focusError(`专注计时未能保存，请排除存储问题后重启；原数据已保留：${String(error)}`)
         this.stopTicker()
         console.error(this.failure)
       }

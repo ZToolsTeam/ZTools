@@ -13,13 +13,38 @@ import { validateOfficeParams } from '../../src/contracts/office-document.js'
 import type { CallerIdentity } from '../../src/contracts/capabilities.js'
 const caller = { webContentsId: 701, pluginId: 'media-metadata' } as CallerIdentity
 const signal = () => new AbortController().signal
+test('真实 ExifTool 隔离无效 locale，读取中文路径且不修改宿主环境', async () => {
+  const names = ['LC_ALL', 'LC_CTYPE', 'LANG'] as const
+  const saved = names.map(name => process.env[name])
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'ztools-media-locale-'))
+  try {
+    for (const name of names) process.env[name] = 'ztools_invalid_locale'
+    const file = path.join(directory, '中文 照片 #&.jpg')
+    await fs.writeFile(file, Buffer.from(mediaFixtures.jpg, 'base64'))
+    const artist = '作者 #注释\\路径 "引号" $@'
+    await runExifTool(['-overwrite_original', '-Artist=' + artist, file], signal())
+    const tags = await readMediaTags(file, signal())
+    assert.equal(tagValue(tags, 'FileType'), 'JPEG')
+    assert.equal(tagValue(tags, 'Artist'), artist)
+    await assert.rejects(runExifTool([file + '\0'], signal()), /空字符/)
+    if (process.platform === 'win32') {
+      for (const invalid of ['-Artist=x\n-overwrite_original', '-Artist=x\r-ver', '#-ver', ' -ver', '']) {
+        await assert.rejects(runExifTool([invalid, file], signal()), /逐行参数格式/)
+      }
+    }
+    for (const name of names) assert.equal(process.env[name], 'ztools_invalid_locale')
+  } finally {
+    names.forEach((name, index) => { if (saved[index] === undefined) delete process.env[name]; else process.env[name] = saved[index] })
+    await fs.rm(directory, { recursive: true, force: true })
+  }
+})
 function fixture(ext: keyof typeof mediaFixtures = 'jpg') {
   let bytes: Buffer = Buffer.from(mediaFixtures[ext], 'base64')
   let writes = 0, output: Buffer | undefined, writeError = '', writeUnknown = false
   const input = path.resolve(os.tmpdir(), 'original.' + ext), outputPath = path.resolve(os.tmpdir(), '副本.' + ext)
   const service = new MediaMetadataService({
     readFile: async () => ({ success: true, content: bytes.toString('base64'), size: bytes.length }),
-    writeFile: async (p, _caller, aborted) => { aborted?.throwIfAborted(); assert.equal(p.overwrite, false); assert.notEqual(p.path, input); writes++; if (writeError) throw new Error(writeError); output = Buffer.from(p.content, 'base64'); return { success: true, size: writeUnknown ? 0 : output.length } }
+    writeFile: async (p, _caller, aborted, options) => { aborted?.throwIfAborted(); assert.equal(p.overwrite, false); assert.deepEqual(options, { replaceConfirmed: true, protectedPath: input }); assert.notEqual(p.path, input); writes++; if (writeError) throw new Error(writeError); output = Buffer.from(p.content, 'base64'); return { success: true, size: writeUnknown ? 0 : output.length } }
   })
   const inspect = () => service.execute({ action: 'inspect', operationId: 'inspect', path: input }, caller, signal())
   const clean = (mode: 'location' | 'metadata' = 'location', extra = {}, sig = signal()) => service.execute({ action: 'clean', operationId: 'clean', path: input, outputPath, digest: createHash('sha256').update(bytes).digest('hex'), mode, ...extra }, caller, sig)

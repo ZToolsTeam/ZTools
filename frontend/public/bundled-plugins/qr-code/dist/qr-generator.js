@@ -26,12 +26,28 @@ export function detectQrContentType(content) {
 /**
  * 生成 Wi-Fi 连接二维码内容（ZXing 约定格式），对 \ ; , : " 做转义
  */
+/** 只含可打印 ASCII（空格到 ~）：WPA / WEP 口令只允许这些字符 */
+function isPrintableAscii(text) {
+    for (let i = 0; i < text.length; i++) {
+        const code = text.charCodeAt(i);
+        if (code < 32 || code > 126)
+            return false;
+    }
+    return true;
+}
 export function buildWifiPayload(ssid, password, security, hidden = false) {
     const esc = (v) => v.replace(/([\\;,:"])/g, "\\$1");
     if (!ssid)
         throw new Error("Wi-Fi 名称不能为空");
     if (security !== "nopass" && !password)
         throw new Error("请填写 Wi-Fi 密码，或把加密方式选为「无密码」");
+    // 长度不合规的密码路由器本来就不接受，生成的二维码手机扫了也连不上，提前拦下
+    if (security === "WPA" && !((isPrintableAscii(password) && password.length >= 8 && password.length <= 63) || /^[0-9a-fA-F]{64}$/.test(password))) {
+        throw new Error("WPA 密码需要 8–63 个英文字母、数字或符号（或 64 位十六进制）");
+    }
+    if (security === "WEP" && !((isPrintableAscii(password) && (password.length === 5 || password.length === 13)) || /^(?:[0-9a-fA-F]{10}|[0-9a-fA-F]{26})$/.test(password))) {
+        throw new Error("WEP 密码需要 5 或 13 个字符（或 10 / 26 位十六进制）");
+    }
     return `WIFI:T:${security};S:${esc(ssid)};${security === "nopass" ? "" : `P:${esc(password)};`}${hidden ? "H:true;" : ""};`;
 }
 export function buildQrMatrix(text, level = "M") {

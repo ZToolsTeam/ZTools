@@ -243,7 +243,7 @@ describe('Details Page', () => {
     })
     await flushPromises()
 
-    expect(wrapper.findAll('.tab-btn').map((b) => b.text())).toEqual(['详情'])
+    expect(wrapper.findAll('[aria-label="插件信息"] .seg-btn').map((b) => b.text())).toEqual(['详情'])
     expect(wrapper.get('[data-test="comments-action"]').text()).toBe('none')
 
     // 头部误发「查看留言」或外部切换到不存在的 Tab：保持在详情，不报错
@@ -251,6 +251,71 @@ describe('Details Page', () => {
     wrapper.vm.handleTabChange('comments')
     await flushPromises()
     expect(wrapper.find('[data-test="description-panel"]').exists()).toBe(true)
+  })
+
+  it('开源版不显示评分：插件数据里的旧 rating 字段不用，头部收到的评分汇总为 null，也不请求评分接口', async () => {
+    const fetchSpy = vi.fn().mockRejectedValue(new Error('测试环境断网'))
+    vi.stubGlobal('fetch', fetchSpy)
+    apiMocks.getPluginDetails.mockResolvedValueOnce({
+      pluginId: 'plugin-1', name: 'Plugin 1', version: '1.0.0', rating: 4.9, screenshots: [], changelogs: []
+    })
+    try {
+      wrapper = mount(Details, {
+        global: {
+          plugins: [router],
+          stubs: { PluginActions: true, PluginScreenshots: true, PluginDescription: true, RcSquircle: true }
+        }
+      })
+      await flushPromises()
+      expect(wrapper.find('.plugin-name').text()).toBe('Plugin 1')
+      expect(wrapper.find('.meta-rating').exists()).toBe(false)
+      expect(wrapper.text()).not.toContain('4.9')
+      expect(wrapper.text()).not.toContain('评分')
+      expect(fetchSpy.mock.calls.some(([url]) => String(url).includes('rating'))).toBe(false)
+    } finally {
+      vi.unstubAllGlobals()
+    }
+  })
+
+  it('市场插件的截图来自目录条目，非 https 或只有相对路径的条目不显示', async () => {
+    const good = { url: 'https://cdn.ztools.cn/plugins-v2/official/plugin-1/screenshots/1.0.0/01-abcdef12.png', title: '主界面', width: 1280, height: 800 }
+    apiMocks.getPluginDetails.mockResolvedValueOnce({
+      pluginId: 'plugin-1', name: 'Plugin 1', version: '1.0.0', changelogs: [],
+      // 目录不可用时详情来自已安装插件的 plugin.json，screenshots 只有相对路径
+      screenshots: [good, { path: 'screenshots/02.png', title: '本地' }, { url: 'javascript:alert(1)' }]
+    })
+    wrapper = mount(Details, {
+      global: {
+        plugins: [router],
+        stubs: {
+          PluginDetailHeader: true,
+          PluginDescription: true,
+          PluginScreenshots: { props: ['screenshots'], template: '<div data-test="shots">{{ JSON.stringify(screenshots) }}</div>' }
+        }
+      }
+    })
+    await flushPromises()
+    expect(JSON.parse(wrapper.get('[data-test="shots"]').text())).toEqual([good])
+  })
+
+  it('内置插件的截图只用随客户端分发的本地副本，不请求插件目录', async () => {
+    await router.push('/details/memo')
+    wrapper = mount(Details, {
+      global: {
+        plugins: [router],
+        stubs: {
+          PluginDetailHeader: true,
+          PluginDescription: true,
+          PluginScreenshots: { props: ['screenshots'], template: '<div data-test="shots">{{ JSON.stringify(screenshots) }}</div>' }
+        }
+      }
+    })
+    await flushPromises()
+    expect(apiMocks.getPluginDetails).not.toHaveBeenCalled()
+    const shots = JSON.parse(wrapper.get('[data-test="shots"]').text())
+    // 目前内置插件都没有声明截图：不显示，也不回退到网络地址
+    expect(Array.isArray(shots)).toBe(true)
+    for (const item of shots) expect(item.url).toMatch(/bundled-plugins\/memo\/screenshots\//)
   })
 
   it('创建桌面快捷方式期间忽略重复请求', async () => {

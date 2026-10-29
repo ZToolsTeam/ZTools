@@ -1,15 +1,11 @@
 <script setup>
-import { StarFilled, StarOutlined } from '@ant-design/icons-vue'
+import { StarFilledIcon } from '@/utils/appIcons'
 import PluginActions from './PluginActions.vue'
 
 const props = defineProps({
   plugin: {
     type: Object,
     required: true
-  },
-  subtitle: {
-    type: String,
-    default: ''
   },
   isInstalled: Boolean,
   canUninstall: {
@@ -54,6 +50,11 @@ const props = defineProps({
   installError: {
     type: String,
     default: ''
+  },
+  // 评分汇总 { average: number|null, count }；为 null 时不显示评分（开源版没有评分）
+  ratingSummary: {
+    type: Object,
+    default: null
   }
 })
 
@@ -68,15 +69,51 @@ defineEmits([
   'show-comments'
 ])
 
-// 图标优先级：远程 icon URL > 本地 localIconPath > FA 图标（公共逻辑）
 import { usePluginIcon } from '@/composables/usePluginIcon'
-import { RcSquircle } from '@/components/base'
+import { PlatformLogos, RcSquircle, RcTag } from '@/components/base'
 import { computed } from 'vue'
-import { getPluginPlatformLabel } from '@/utils/platform'
 import { normalizeCategoryNames } from '@/utils/pluginCategories'
-const categoryLabel = computed(() => normalizeCategoryNames(props.plugin.category).join(' · '))
-const platformLabel = computed(() => getPluginPlatformLabel(props.plugin))
-const { pluginIcon, pluginGlyph, displayIconUrl, iconFailed } = usePluginIcon(() => props.plugin)
+import { formatBytes } from '@/utils/formatBytes'
+import { getPluginPlatforms } from '@/utils/platform'
+
+const { pluginGlyph, fallbackGlyph, displayIconUrl, iconFailed } = usePluginIcon(() => props.plugin)
+
+/**
+ * 名称下方一行元信息：开发者 · 版本 · 分类 · 大小 · 安装量 / 内置 · 评分，最后是支持的平台标志。
+ * 每项只在有真实数据时出现，不显示「未知」「N/A」这类占位，也不与其它位置重复。
+ */
+const metaItems = computed(() => {
+  const p = props.plugin || {}
+  const items = []
+  if (p.author) items.push({ key: 'author', text: p.author })
+  if (p.version) items.push({ key: 'version', text: `v${p.version}` })
+  const category = normalizeCategoryNames(p.category).join(' · ')
+  if (category) items.push({ key: 'category', text: category })
+  const size = formatBytes(p.size ?? p.fileSize ?? p.file_size)
+  if (size) items.push({ key: 'size', text: size, title: p.builtin ? '随客户端分发的文件大小' : '安装包大小' })
+  if (p.builtin || p.bundled) {
+    items.push({ key: 'builtin', text: '随客户端内置' })
+  } else {
+    const downloads = Number(p.downloads)
+    if (Number.isFinite(downloads) && downloads > 0) items.push({ key: 'downloads', text: `${downloads.toLocaleString('zh-CN')} 次安装` })
+  }
+  return items
+})
+
+const hasPlatforms = computed(() => (getPluginPlatforms(props.plugin) || []).length > 0)
+
+// 只展示真实评分汇总：人数足够时显示「4.6（23 人评分）」，人数不足（average 为 null）时如实说明；没有汇总时不显示
+const rating = computed(() => {
+  const summary = props.ratingSummary
+  if (!summary || typeof summary !== 'object') return null
+  const value = Number(summary.average)
+  const count = Math.max(0, Math.floor(Number(summary.count) || 0))
+  if (summary.average === null || summary.average === undefined || !Number.isFinite(value) || value <= 0 || value > 5) {
+    return { score: '', text: '评分人数不足', title: count > 0 ? `已有 ${count} 人评分，满 3 人后显示平均分` : '还没有人评分' }
+  }
+  const score = value.toFixed(1)
+  return { score, text: `${score}（${count} 人评分）`, title: `平均 ${score} / 5，${count} 人评分` }
+})
 </script>
 
 <template>
@@ -86,25 +123,32 @@ const { pluginIcon, pluginGlyph, displayIconUrl, iconFailed } = usePluginIcon(()
       <!-- 插件图标：官方插件用品牌线性图形，第三方插件用自带图标 -->
       <RcSquircle
         :glyph="pluginGlyph"
+        :fallback-glyph="fallbackGlyph"
         :src="displayIconUrl && !iconFailed ? displayIconUrl : ''"
-        :icon="pluginIcon"
         :size="64"
       />
 
       <!-- 插件信息 -->
       <div class="plugin-info">
-        <h1 class="plugin-name">{{ plugin.name }}</h1>
-        <p class="plugin-subtitle">{{ subtitle }}</p>
-
-        <!-- 标签 -->
-        <div class="plugin-tags">
-          <span v-if="categoryLabel" class="tag">{{ categoryLabel }}</span>
-          <span v-if="platformLabel" class="tag platform" :title="`支持平台：${platformLabel}`">{{ platformLabel }}</span>
-          <span v-if="plugin.revoked || isRevoked" class="tag revoked" :title="revokedReason || plugin.revoked_reason || '该插件已被官方下架禁用'" style="background: var(--rc-error-subtle); color: var(--rc-error); border: 1px solid transparent;">已下架</span>
-          <span v-if="isInstalled" class="tag installed">已安装</span>
-          <span v-if="hasUpdate" class="tag update">有更新</span>
-          <span v-else-if="updateInfo?.incompatible" class="tag incompat" :title="updateInfo.incompatReason">需升级</span>
+        <div class="title-row">
+          <h1 class="plugin-name">{{ plugin.name }}</h1>
+          <!-- 只放需要用户留意的状态；「已安装」由右侧「打开」按钮表达 -->
+          <RcTag
+            v-if="plugin.revoked || isRevoked"
+            tone="error"
+            class="status-tag"
+            :title="revokedReason || plugin.revoked_reason || '该插件已被官方下架禁用'"
+          >已下架</RcTag>
+          <RcTag v-if="hasUpdate" tone="accent" class="status-tag">有新版本</RcTag>
+          <RcTag v-else-if="updateInfo?.incompatible" tone="warning" class="status-tag" :title="updateInfo.incompatReason">需升级客户端</RcTag>
         </div>
+        <ul v-if="metaItems.length || rating || hasPlatforms" class="plugin-meta">
+          <li v-for="item in metaItems" :key="item.key" :class="`meta-${item.key}`" :title="item.title">{{ item.text }}</li>
+          <li v-if="rating" class="meta-rating" :title="rating.title">
+            <StarFilledIcon v-if="rating.score" class="meta-star" aria-hidden="true" />{{ rating.text }}
+          </li>
+          <li v-if="hasPlatforms" class="meta-platform"><PlatformLogos :plugin="plugin" /></li>
+        </ul>
       </div>
 
       <!-- 操作按钮 -->
@@ -137,168 +181,92 @@ const { pluginIcon, pluginGlyph, displayIconUrl, iconFailed } = usePluginIcon(()
       />
     </div>
 
-    <!-- 统计信息 -->
-    <div class="stats-grid">
-      <div class="stat-item">
-        <span class="stat-label">评分</span>
-        <span class="stat-value">
-          <span class="stars">
-            <component
-              v-for="i in 5"
-              :key="i"
-              :is="i <= Math.round(plugin.rating || 0) ? StarFilled : StarOutlined"
-              :class="{ 'is-empty': i > Math.round(plugin.rating || 0) }"
-              aria-hidden="true"
-            />
-          </span>
-          <span>{{ plugin.rating || 'N/A' }}</span>
-        </span>
-      </div>
-      <div class="stat-item">
-        <span class="stat-label">下载量</span>
-        <span class="stat-value">{{ plugin.downloads || 0 }}</span>
-      </div>
-      <div class="stat-item">
-        <span class="stat-label">开发者</span>
-        <span class="stat-value author">{{ plugin.author || '未知' }}</span>
-      </div>
-      <div class="stat-item">
-        <span class="stat-label">版本</span>
-        <span class="stat-value">v{{ plugin.version }}</span>
-      </div>
-      <div class="stat-item">
-        <span class="stat-label">大小</span>
-        <span class="stat-value">{{ plugin.size || '未知' }}</span>
-      </div>
-    </div>
   </div>
 </template>
 
 <style scoped>
 .detail-header {
-  background: var(--color-surface);
-  border: 1px solid var(--color-border);
+  background: var(--rc-surface);
+  border: 1px solid var(--rc-border);
   border-radius: 12px;
-  padding: 16px;
+  padding: 20px;
   margin-bottom: 12px;
 }
 
-/* 顶部信息区 */
 .header-top {
   display: flex;
-  align-items: flex-start;
+  align-items: center;
   gap: 16px;
-  margin-bottom: 12px;
 }
 
-/* 插件图标 */
 .plugin-info {
   flex: 1;
   min-width: 0;
 }
 
-.plugin-name {
-  font-size: 22px;
-  font-weight: 700;
-  color: var(--zt-text);
-  margin: 0 0 4px;
-  line-height: 1.3;
-}
-
-.plugin-subtitle {
-  font-size: 13px;
-  color: var(--zt-text-secondary);
-  margin: 0 0 12px;
-}
-
-.plugin-tags {
+.title-row {
   display: flex;
+  align-items: center;
   flex-wrap: wrap;
   gap: 8px;
+  margin-bottom: 6px;
 }
 
-.tag {
+.plugin-name {
+  margin: 0;
+  color: var(--rc-text-primary);
+  font-size: 20px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  line-height: 28px;
+}
+
+
+
+
+
+/* 元信息：一行，用间隔点分隔 */
+.plugin-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  color: var(--rc-text-muted);
+  font-size: 13px;
+  line-height: 20px;
+}
+
+.plugin-meta li {
   display: inline-flex;
   align-items: center;
-  padding: 4px 10px;
-  border-radius: 6px;
-  font-size: 12px;
-  font-weight: 500;
-  background: var(--color-gray-100);
-  color: var(--zt-text-secondary);
-}
-
-.tag.installed {
-  background: var(--rc-success-subtle);
-  color: var(--rc-success);
-}
-
-.tag.update {
-  background: var(--rc-warning-subtle);
-  color: var(--rc-warning);
-}
-
-.tag.incompat {
-  background: var(--rc-error-subtle);
-  color: var(--rc-error);
-  cursor: help;
-}
-
-/* 统计信息网格 */
-.stats-grid {
-  display: grid;
-  grid-template-columns: repeat(5, 1fr);
-  gap: 12px;
-}
-
-.stat-item {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-  padding: 12px 16px;
-  background: var(--color-gray-100);
-  border-radius: 10px;
-}
-
-.stat-label {
-  font-size: 12px;
-  color: var(--zt-text-secondary);
-}
-
-.stat-value {
-  font-size: 14px;
-  font-weight: 600;
-  color: var(--zt-text);
-  display: flex;
-  align-items: center;
-  gap: 4px;
-}
-
-.stat-value.author {
-  overflow: hidden;
-  text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.stars {
-  display: flex;
-  gap: 2px;
+.plugin-meta li + li::before {
+  content: '·';
+  margin: 0 8px;
+  color: var(--rc-text-faint);
 }
 
-.stars :deep(.anticon) {
-  font-size: 11px;
+.plugin-meta .meta-author {
+  color: var(--rc-text-secondary);
+}
+
+.plugin-meta .meta-version,
+.plugin-meta .meta-size {
+  font-variant-numeric: tabular-nums;
+}
+
+.meta-platform {
+  font-size: 13px;
+}
+
+.meta-star {
+  margin-right: 3px;
+  font-size: 12px;
   color: var(--rc-accent);
-}
-
-.stars :deep(.is-empty) {
-  color: var(--rc-border-highlight);
-}
-
-/* 响应式 */
-@media (max-width: 900px) {
-  .stats-grid {
-    grid-template-columns: repeat(3, 1fr);
-  }
 }
 
 @media (max-width: 600px) {
@@ -308,18 +276,9 @@ const { pluginIcon, pluginGlyph, displayIconUrl, iconFailed } = usePluginIcon(()
     text-align: center;
   }
 
-  .plugin-info {
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-  }
-
-  .plugin-tags {
+  .title-row,
+  .plugin-meta {
     justify-content: center;
-  }
-
-  .stats-grid {
-    grid-template-columns: repeat(2, 1fr);
   }
 }
 </style>

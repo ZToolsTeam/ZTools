@@ -1,5 +1,7 @@
 <script setup>
-import { WarningOutlined } from '@ant-design/icons-vue'
+import ShortcutKeys from '@/components/base/ShortcutKeys.vue'
+import { RcButton, RcDialog, RcTag } from '@/components/base'
+import { TriangleAlertIcon } from '@lucide/vue'
 /**
  * 快捷键冲突提醒弹窗
  * 支持两种冲突数据：
@@ -109,16 +111,14 @@ defineExpose({ show })
 </script>
 
 <template>
-  <a-modal
+  <RcDialog
     v-model:open="visible"
     :title="modalTitle"
-    :footer="null"
     :width="420"
-    centered
   >
     <div class="conflict-content">
       <div class="conflict-icon">
-        <WarningOutlined  />
+        <TriangleAlertIcon  />
       </div>
       <p class="conflict-desc">{{ descText }}</p>
 
@@ -127,18 +127,12 @@ defineExpose({ show })
         <div v-for="(item, index) in conflicts" :key="index" class="conflict-item plugin-conflict-item">
           <div class="plugin-conflict-row">
             <span class="plugin-name">{{ item.pluginName }}</span>
-            <span class="conflict-key">
-              <span
-                v-for="k in item.key.split('+')"
-                :key="k"
-                class="key-badge"
-              >{{ k }}</span>
-            </span>
+            <ShortcutKeys class="conflict-key" :combo="item.key" />
           </div>
           <div class="plugin-conflict-detail">
-            <span class="conflict-type-tag" :class="item.conflictType">
+            <RcTag :tone="item.conflictType === 'system_occupied' ? 'error' : 'warning'">
               {{ formatConflictType(item.conflictType) }}
-            </span>
+            </RcTag>
             <span class="conflict-with">与「{{ item.conflictWith }}」冲突</span>
           </div>
         </div>
@@ -148,23 +142,17 @@ defineExpose({ show })
       <div v-else class="conflict-list">
         <div v-for="(item, index) in conflicts" :key="index" class="conflict-item">
           <span class="conflict-type">{{ formatType(item.type) }}</span>
-          <span class="conflict-key">
-            <span
-              v-for="k in item.key.split('+')"
-              :key="k"
-              class="key-badge"
-            >{{ k }}</span>
-          </span>
+          <ShortcutKeys class="conflict-key" :combo="item.key" />
         </div>
       </div>
 
       <p class="conflict-tip">{{ tipText }}</p>
     </div>
     <div class="conflict-actions">
-      <a-button @click="close">关闭</a-button>
-      <a-button type="primary" @click="goSettings">去设置</a-button>
+      <RcButton variant="secondary" size="md" @click="close">关闭</RcButton>
+      <RcButton variant="primary" size="md" @click="goSettings">去设置</RcButton>
     </div>
-  </a-modal>
+  </RcDialog>
 </template>
 
 <style scoped>
@@ -179,7 +167,7 @@ defineExpose({ show })
 }
 .conflict-desc {
   font-size: 14px;
-  color: var(--zt-text);
+  color: var(--rc-text-primary);
   margin-bottom: 16px;
 }
 .conflict-list {
@@ -196,7 +184,7 @@ defineExpose({ show })
   justify-content: center;
   gap: 12px;
   padding: 8px 16px;
-  background: var(--color-background-secondary);
+  background: var(--rc-canvas);
   border-radius: 8px;
 }
 /* 插件冲突项：纵向布局 */
@@ -215,7 +203,7 @@ defineExpose({ show })
 .plugin-name {
   font-size: 13px;
   font-weight: 500;
-  color: var(--zt-text);
+  color: var(--rc-text-primary);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -226,44 +214,20 @@ defineExpose({ show })
   gap: 8px;
   font-size: 12px;
 }
-.conflict-type-tag {
-  padding: 1px 6px;
-  border-radius: 4px;
-  font-size: 11px;
-  font-weight: 500;
-}
-.conflict-type-tag.duplicate {
-  background: var(--rc-warning-subtle);
-  color: var(--rc-warning);
-}
-.conflict-type-tag.system_occupied {
-  background: var(--rc-error-subtle);
-  color: var(--rc-error);
-}
 .conflict-with {
-  color: var(--zt-text-secondary);
+  color: var(--rc-text-secondary);
 }
 .conflict-type {
   font-size: 13px;
-  color: var(--zt-text-secondary);
+  color: var(--rc-text-secondary);
 }
 .conflict-key {
   display: flex;
   gap: 4px;
 }
-.key-badge {
-  display: inline-block;
-  padding: 2px 8px;
-  background: var(--color-surface);
-  border: 1px solid var(--color-border);
-  border-radius: 4px;
-  font-size: 12px;
-  font-weight: 500;
-  color: var(--zt-text);
-}
 .conflict-tip {
   font-size: 12px;
-  color: var(--zt-text-secondary);
+  color: var(--rc-text-secondary);
   margin-bottom: 0;
 }
 .conflict-actions {

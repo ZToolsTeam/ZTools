@@ -355,7 +355,10 @@ describe("端到端移植应用集成渲染验证", () => {
     // 1. 验证底部黄金三键按钮栏渲染出主动作、次动作与动作面板 (3)，低频第3动作收纳于面板内
     expect(wrapper.text()).toContain("温和结束进程");
     expect(wrapper.text()).toContain("强制杀死进程 (-9)");
-    expect(wrapper.text()).toContain("动作面板 (3)");
+    // 面板按钮只计收起的动作（主 / 次动作已在底栏），危险的次动作不用强调色主按钮样式
+    expect(wrapper.text()).toContain("动作面板 (1)");
+    expect(wrapper.find("[data-decl-secondary]").classes()).toContain("is-destructive");
+    expect(wrapper.find("[data-decl-primary]").classes()).toContain("is-primary");
 
     // 2. 触发 Ctrl+Enter 执行次动作
     await wrapper.trigger("keydown", { key: "Enter", ctrlKey: true });

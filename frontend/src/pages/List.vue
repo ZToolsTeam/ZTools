@@ -1,10 +1,12 @@
 <script setup>
-import { GithubOutlined, RightOutlined, SearchOutlined } from '@ant-design/icons-vue'
+import { ChevronLeftIcon, ChevronRightIcon, ChevronsLeftIcon, ChevronsRightIcon, ArrowUpRightIcon, PlusIcon, SearchIcon } from '@lucide/vue'
+import { GithubLogo } from '@/utils/appIcons'
 import { ref, computed, onMounted, onBeforeUnmount, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 
 import PluginCard3D from '@/components/PluginCard3D.vue'
 import SkeletonCard from '@/components/SkeletonCard.vue'
+import { RcBannerLink, RcButton, RcEmpty, RcSegmented, RcSelect } from '@/components/base'
 
 import { useNavStore } from '@/stores/nav'
 import { usePluginsStore } from '@/stores/plugins'
@@ -16,7 +18,7 @@ import {
   isPluginVersionIncompatibleError,
   getPluginVersionIncompatibleMessage
 } from '@/api/apiserver'
-import { auth, onAuthRequired, track } from '@edition'
+import { auth, onAuthRequired, pluginRatings, track } from '@edition'
 import { useToast } from '@/composables/useToast'
 import { usePluginInstall } from '@/composables/usePluginInstall'
 import { useVersionCompat } from '@/composables/useVersionCompat'
@@ -90,6 +92,43 @@ const isCategoryOverview = computed(
   () => isAllCategory.value && searchKeyword.value === '' && selectedSourceType.value === 'all'
 )
 
+// 三个来源各自的插件数（按当前分类 / 搜索词 / 收藏统计），显示在来源切换上。
+// null：正在统计（占位，避免数字出现时把按钮挤开）；undefined：统计失败，不显示数字（不编造）
+const SOURCE_TYPES = ['all', 'official', 'community']
+const sourceCounts = ref({ all: null, official: null, community: null })
+let sourceCountsKey = ''
+let sourceCountsRequest = 0
+
+async function refreshSourceCounts({ requestCategory, requestKeyword, isFav }) {
+  const favIds = isFav ? Array.from(pluginsStore.favorites) : null
+  const key = `${requestCategory}|${requestKeyword}|${favIds ? favIds.join(',') : ''}`
+  // 只切换来源时数量不变，不重新统计，也不闪烁
+  if (key === sourceCountsKey) return
+  sourceCountsKey = key
+  const requestId = ++sourceCountsRequest
+  sourceCounts.value = { all: null, official: null, community: null }
+  if (favIds && favIds.length === 0) {
+    sourceCounts.value = { all: 0, official: 0, community: 0 }
+    return
+  }
+  const base = favIds ? { ids: favIds } : { category: requestCategory, keyword: requestKeyword }
+  let counts = null
+  try {
+    counts = await pluginsStore.countPluginsBySource(base)
+  } catch (error) {
+    console.warn('[List] 统计各来源插件数失败，来源切换上不显示数量:', error)
+  }
+  if (requestId !== sourceCountsRequest) return
+  // 统计失败时不记住这组条件，下次加载（如网络恢复后重试）重新统计
+  if (!counts) sourceCountsKey = ''
+  const next = {}
+  for (const type of SOURCE_TYPES) {
+    const total = Number(counts?.[type])
+    next[type] = Number.isFinite(total) && total >= 0 ? total : undefined
+  }
+  sourceCounts.value = next
+}
+
 const switchSourceType = async (type) => {
   page.value = 1
   await pluginsStore.setSourceFilter(type)
@@ -131,6 +170,21 @@ const getPluginId = (pluginOrId) => {
   return String(pluginOrId).trim()
 }
 
+// 插件卡片参数（分类预览与平铺列表共用）；评分汇总由版本提供，开源版没有评分，始终为 null
+const cardProps = (p) => {
+  const pid = getPluginId(p)
+  return {
+    plugin: p,
+    showFavorite: true,
+    isFavorite: pluginsStore.isFavorite(pid),
+    isInstalled: installedSet.value.has(pid),
+    downloading: downloadingSet.value.has(pid),
+    installFailed: installFailedSet.value.has(pid),
+    updateInfo: updateMap.value[pid],
+    ratingSummary: pluginRatings.enabled ? pluginRatings.summaries[pid] || null : null
+  }
+}
+
 const load = async () => {
   const requestId = ++loadRequestId
   const requestCategory = category.value || ''
@@ -143,6 +197,7 @@ const load = async () => {
   error.value = ''
   try {
     const isFav = requestCategory === 'favorites'
+    void refreshSourceCounts({ requestCategory: isFav ? '' : requestCategory, requestKeyword, isFav })
     const categoriesPromise = categoriesStore.fetchCategories()
 
     // 批量检查更新的公共函数（后台执行，不阻塞列表渲染）
@@ -183,7 +238,10 @@ const load = async () => {
     }
 
     if (requestIsCategoryOverview) {
-      const categories = await categoriesPromise
+      const [categories, catalogResult] = await Promise.all([
+        categoriesPromise,
+        pluginsStore.loadWithCache({ sourceType: 'all', page: 1, per_page: 1 })
+      ])
       if (requestId !== loadRequestId) return
 
       const groups = categories.map((item) => ({
@@ -235,7 +293,8 @@ const load = async () => {
 
       previewGroups.value = nextGroups
       items.value = []
-      total.value = nextGroups.reduce((sum, group) => sum + group.total, 0)
+      // 一个插件可以属于多个分类；总数取当前系统目录的去重结果，不累加分类或预览数量。
+      total.value = catalogResult.total
     } else if (isFav) {
       previewGroups.value = []
       // 收藏页：通过 IDs 批量获取，支持分页
@@ -531,6 +590,10 @@ onMounted(() => {
   // 埋点：市场页面访问
   track('market_view', '', { category: route.params.category || 'all' })
   load()
+  // 插件卡片上的评分：官方版一次拉全量汇总并缓存几分钟，不阻塞列表；开源版没有评分，为空操作
+  if (pluginRatings.enabled) {
+    Promise.resolve(pluginRatings.loadAll()).catch(() => {})
+  }
 
   // 订阅事件
   try {
@@ -564,7 +627,7 @@ onBeforeUnmount(() => {
       display: flex;
       flex-direction: column;
       gap: var(--spacing-sm);
-      color: var(--color-text);
+      color: var(--rc-text-primary);
     "
   >
     <!-- 页头：插件市场 / 当前分类 / 搜索词 -->
@@ -573,57 +636,40 @@ onBeforeUnmount(() => {
         <h1 class="market-title">{{ category || (searchKeyword ? `搜索「${searchKeyword}」` : '插件市场') }}</h1>
         <p class="market-subtitle">每个插件都经过官方审核，源码公开，免费安装。</p>
       </div>
-      <button type="button" class="market-submit" title="插件投稿即向开源插件大仓提交 PR，官方审核后上架" @click="openExtensionsRepo">
+      <!-- 页面主操作：淡强调色；右侧斜箭头提示会在浏览器打开 GitHub -->
+      <RcButton
+        variant="soft"
+        size="md"
+        :icon="PlusIcon"
+        class="market-submit"
+        title="插件投稿即向开源插件大仓提交 PR，官方审核后上架"
+        @click="openExtensionsRepo"
+      >
         提交插件
-      </button>
+        <ArrowUpRightIcon class="market-submit-external" aria-hidden="true" />
+      </RcButton>
     </header>
 
     <!-- 页面内筛选：分类（与侧栏同一导航）+ 来源 -->
     <div class="market-filters">
-      <div class="market-chips" role="group" aria-label="分类">
-        <button
-          v-for="c in visibleMarketCategories"
-          :key="c.name"
-          type="button"
-          class="market-chip"
-          :class="{ 'is-on': c.name === '全部' ? !category : category === c.name }"
-          :aria-pressed="c.name === '全部' ? !category : category === c.name"
-          @click="selectMarketCategory(c.name)"
-        >
-          <span class="market-chip-marker" aria-hidden="true"></span>{{ c.name }}
-        </button>
-      </div>
+      <RcSegmented
+        variant="chips"
+        aria-label="分类"
+        :model-value="category || '全部'"
+        :options="visibleMarketCategories.map((c) => ({ label: c.name, value: c.name }))"
+        @change="selectMarketCategory"
+      />
       <div class="market-filters-side">
-        <div class="market-seg" role="group" aria-label="来源">
-            <button
-              type="button"
-              class="market-seg-btn"
-              :class="{ 'is-on': selectedSourceType === 'all' }"
-              :aria-pressed="selectedSourceType === 'all'"
-              @click="switchSourceType('all')"
-            >
-              全部
-            </button>
-            <button
-              type="button"
-              class="market-seg-btn"
-              :class="{ 'is-on': selectedSourceType === 'official' }"
-              :aria-pressed="selectedSourceType === 'official'"
-              @click="switchSourceType('official')"
-            >
-              官方自营
-            </button>
-            <button
-              type="button"
-              class="market-seg-btn"
-              :class="{ 'is-on': selectedSourceType === 'community' }"
-              :aria-pressed="selectedSourceType === 'community'"
-              @click="switchSourceType('community')"
-            >
-              社区精选
-            </button>
-        </div>
-        <span class="market-total">共 {{ total }} 个</span>
+        <RcSegmented
+          aria-label="来源"
+          :model-value="selectedSourceType"
+          :options="[
+            { label: '全部', value: 'all', count: sourceCounts.all },
+            { label: '官方', value: 'official', count: sourceCounts.official },
+            { label: '社区', value: 'community', count: sourceCounts.community }
+          ]"
+          @change="switchSourceType"
+        />
       </div>
     </div>
     <!-- 加载骨架屏：等分类和插件列表都就绪后再渲染 -->
@@ -670,7 +716,7 @@ onBeforeUnmount(() => {
             @click="goCategory(group.name)"
           >
             <span>全部</span>
-            <RightOutlined class="text-[10px]" />
+            <ChevronRightIcon class="text-[10px]" />
           </button>
         </div>
         <!-- 该分类下的插件网格 -->
@@ -686,13 +732,7 @@ onBeforeUnmount(() => {
             :key="getPluginId(p)"
             class="transition-all rounded-xl"
             :class="{ 'is-list-card-focused': focusedCardIndex === previewFlatIndex(groupIndex, index) }"
-            :plugin="p"
-            :showFavorite="true"
-            :isFavorite="pluginsStore.isFavorite(getPluginId(p))"
-            :isInstalled="installedSet.has(getPluginId(p))"
-            :downloading="downloadingSet.has(getPluginId(p))"
-            :installFailed="installFailedSet.has(getPluginId(p))"
-            :updateInfo="updateMap[getPluginId(p)]"
+            v-bind="cardProps(p)"
             @toggle-favorite="toggleFavorite"
             @open="goDetails"
             @open-app="openApp"
@@ -703,51 +743,20 @@ onBeforeUnmount(() => {
       </div>
     </template>
 
-    <!-- 空状态提示：智能开发者转化引导 -->
-    <div
+    <!-- 空状态：搜索无结果时引导去写一个插件 -->
+    <RcEmpty
       v-else-if="categoriesReady && !loading && items.length === 0"
-      style="
-        display: flex;
-        flex-direction: column;
-        align-items: center;
-        justify-content: center;
-        padding: 50px 20px;
-        color: var(--color-text-secondary);
-      "
+      :icon="SearchIcon"
+      :title="route.query.q ? `没有找到与「${route.query.q}」相关的插件` : '暂无插件'"
+      :description="route.query.q ? '换个关键词试试；也可以自己写一个：基于声明式 UI，几分钟就能做出来，投稿后经官方审核发布。' : '稍后再来看看'"
     >
-      <SearchOutlined
-
-        style="font-size: 36px; opacity: 0.3; margin-bottom: 12px"
-       />
-      <p style="font-size: var(--font-size-body-l); font-weight: 500; margin: 0 0 4px">
-        {{ route.query.q ? `未找到与 "${route.query.q}" 相关的插件` : '暂无插件' }}
-      </p>
-      <p style="font-size: var(--font-size-body-s); opacity: 0.6; margin: 0 0 16px">
-        {{ route.query.q ? '试试其他关键词，或者亲手打造它：' : '稍后再来看看' }}
-      </p>
-
-      <!-- 杀手级开发者号召卡片 -->
-      <div
-        v-if="route.query.q"
-        class="flex flex-col items-center max-w-md p-4 rounded-xl border border-[var(--rc-border)] bg-[var(--rc-bg-secondary,rgba(255,255,255,0.03))] shadow-sm"
-      >
-        <div class="text-sm font-medium mb-1 text-[var(--rc-text-primary)]">
-          🚀 想要「{{ route.query.q }}」功能？
-        </div>
-        <div class="text-xs text-[var(--rc-text-muted)] mb-3 text-center leading-relaxed">
-          ZTools 全面拥抱开源生态！基于统一声明式 UI 标准，5 分钟为你需要的工具写一个插件，投稿即 PR，官方审核后全网一键分发。
-        </div>
+      <template v-if="route.query.q" #action>
         <div class="flex items-center gap-2">
-          <a-button type="primary" size="small" @click="openExtensionsRepo">
-            <template #icon><GithubOutlined class="mr-1" /></template>
-            访问 ZTools-extensions 大仓
-          </a-button>
-          <a-button size="small" @click="openDevGuide">
-            查看 5 分钟上手指南
-          </a-button>
+          <RcButton variant="secondary" size="sm" :icon="GithubLogo" @click="openExtensionsRepo">插件仓库</RcButton>
+          <RcButton variant="ghost" size="sm" @click="openDevGuide">开发入门指南</RcButton>
         </div>
-      </div>
-    </div>
+      </template>
+    </RcEmpty>
 
     <!-- 搜索结果 / 具体分类 / 收藏：平铺展示 -->
     <div
@@ -766,13 +775,7 @@ onBeforeUnmount(() => {
         @click="focusedCardIndex = index; uiStore.focusGrid()"
       >
         <PluginCard3D
-          :plugin="p"
-          :showFavorite="true"
-          :isFavorite="pluginsStore.isFavorite(getPluginId(p))"
-          :isInstalled="installedSet.has(getPluginId(p))"
-          :downloading="downloadingSet.has(getPluginId(p))"
-          :installFailed="installFailedSet.has(getPluginId(p))"
-          :updateInfo="updateMap[getPluginId(p)]"
+          v-bind="cardProps(p)"
           @toggle-favorite="toggleFavorite"
           @open="goDetails"
           @open-app="openApp"
@@ -783,7 +786,7 @@ onBeforeUnmount(() => {
     </div>
     <div
       v-if="error"
-      style="font-size: var(--font-size-body-s); color: var(--color-error)"
+      style="font-size: var(--font-size-body-s); color: var(--rc-error)"
     >
       {{ error }}
     </div>
@@ -800,18 +803,32 @@ onBeforeUnmount(() => {
         :page-size="pageSize"
         :page-size-options="PAGE_SIZE_OPTIONS"
         :total="total"
+        :select-component-class="RcSelect"
         @change="handlePaginationChange"
-      />
+      >
+        <!-- 上一页 / 下一页换成 Lucide 图标，其余页码沿用默认渲染 -->
+        <template #itemRender="{ type, originalElement }">
+          <button v-if="type === 'prev'" type="button" class="ant-pagination-item-link" aria-label="上一页"><ChevronLeftIcon aria-hidden="true" /></button>
+          <button v-else-if="type === 'next'" type="button" class="ant-pagination-item-link" aria-label="下一页"><ChevronRightIcon aria-hidden="true" /></button>
+          <a v-else-if="type === 'jump-prev' || type === 'jump-next'" class="ant-pagination-item-link" :aria-label="type === 'jump-prev' ? '向前 5 页' : '向后 5 页'">
+            <div class="ant-pagination-item-container">
+              <component :is="type === 'jump-prev' ? ChevronsLeftIcon : ChevronsRightIcon" class="ant-pagination-item-link-icon" aria-hidden="true" />
+              <span class="ant-pagination-item-ellipsis">•••</span>
+            </div>
+          </a>
+          <component :is="originalElement" v-else />
+        </template>
+      </a-pagination>
     </div>
 
     <!-- 底部：开源插件大仓直达 -->
-    <button type="button" class="market-repo-banner" @click="openExtensionsRepo">
-      <span class="market-repo-text">
-        <span class="market-repo-title">没找到想要的工具？</span>
-        <span class="market-repo-desc">插件源码全部开源，投稿即提交 PR，5 分钟就能写一个自己的插件</span>
-      </span>
-      <span class="market-repo-link">访问 ZTools-extensions →</span>
-    </button>
+    <RcBannerLink
+      class="market-repo-banner"
+      title="没找到想要的工具？"
+      description="插件源码全部开源，投稿即提交 PR，5 分钟就能写一个自己的插件"
+      link-text="访问插件仓库"
+      @click="openExtensionsRepo"
+    />
   </div>
 </template>
 
@@ -839,20 +856,13 @@ onBeforeUnmount(() => {
 }
 
 .market-submit {
-  height: 32px;
-  padding: 0 12px;
-  border-radius: var(--rc-radius-md);
-  border: 1px solid var(--rc-border-highlight);
-  background: var(--rc-surface);
-  color: var(--rc-text-primary);
-  font: inherit;
-  font-size: 13px;
-  cursor: pointer;
-  transition: background-color 0.15s ease;
+  flex-shrink: 0;
 }
 
-.market-submit:hover {
-  background: var(--rc-surface-hover);
+.market-submit-external {
+  margin-left: -2px;
+  font-size: 13px;
+  opacity: 0.7;
 }
 
 .market-filters {
@@ -865,50 +875,11 @@ onBeforeUnmount(() => {
   border-bottom: 1px solid var(--rc-border);
 }
 
-.market-chips {
-  display: flex;
-  gap: 2px;
-  flex-wrap: wrap;
-}
 
-.market-chip {
-  height: 32px;
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-  padding: 0 12px 0 8px;
-  border: none;
-  border-radius: var(--rc-radius-md);
-  background: transparent;
-  color: var(--rc-text-secondary);
-  font: inherit;
-  font-size: 13px;
-  cursor: pointer;
-  transition: background-color 0.15s ease, color 0.15s ease;
-}
 
-.market-chip:hover {
-  background: var(--rc-surface-hover);
-  color: var(--rc-text-primary);
-}
 
-.market-chip.is-on {
-  background: var(--rc-surface-active);
-  color: var(--rc-text-primary);
-  font-weight: 600;
-}
 
-.market-chip-marker {
-  width: 6px;
-  height: 6px;
-  border-radius: 1.7px;
-  background: transparent;
-}
 
-.market-chip.is-on .market-chip-marker {
-  background: var(--rc-accent);
-  box-shadow: var(--rc-marker-glow);
-}
 
 .market-filters-side {
   margin-left: auto;
@@ -917,84 +888,19 @@ onBeforeUnmount(() => {
   gap: 12px;
 }
 
-.market-seg {
-  display: flex;
-  padding: 2px;
-  border-radius: var(--rc-radius-md);
-  background: var(--rc-kbd-bg);
-}
 
-.market-seg-btn {
-  height: 24px;
-  padding: 0 10px;
-  border: none;
-  border-radius: 6px;
-  background: transparent;
-  color: var(--rc-text-muted);
-  font: inherit;
-  font-size: 12px;
-  cursor: pointer;
-}
 
-.market-seg-btn:hover {
-  color: var(--rc-text-primary);
-}
 
-.market-seg-btn.is-on {
-  background: var(--rc-surface);
-  color: var(--rc-text-primary);
-  box-shadow: var(--rc-shadow-sm);
-}
 
-.market-total {
-  font-size: 12px;
-  color: var(--rc-text-muted);
-  white-space: nowrap;
-}
+
+
+
+
+
+
 
 .market-repo-banner {
-  width: 100%;
   margin: 28px 0 12px;
-  display: flex;
-  align-items: center;
-  gap: 14px;
-  padding: 14px 18px;
-  border-radius: var(--rc-radius-lg);
-  border: 1px solid var(--rc-border-highlight);
-  background: var(--rc-surface);
-  font: inherit;
-  text-align: left;
-  cursor: pointer;
-  transition: border-color 0.15s ease;
-}
-
-.market-repo-banner:hover {
-  border-color: var(--rc-accent);
-}
-
-.market-repo-text {
-  flex: 1;
-  min-width: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-}
-
-.market-repo-title {
-  font-size: 13px;
-  font-weight: 500;
-  color: var(--rc-text-primary);
-}
-
-.market-repo-desc {
-  font-size: 12px;
-  color: var(--rc-text-muted);
-}
-
-.market-repo-link {
-  flex-shrink: 0;
-  font-size: 13px;
-  color: var(--rc-accent-text);
 }
 
 .is-list-card-focused {

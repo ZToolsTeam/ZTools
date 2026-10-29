@@ -5,9 +5,6 @@ import router, { preloadCoreRoutes } from './router'
 import App from './App.vue'
 import '@/assets/css/index.css'
 
-// FontAwesome
-import 'font-awesome/css/font-awesome.min.css'
-
 // Ant Design Vue
 import 'ant-design-vue/dist/reset.css'
 
@@ -20,7 +17,7 @@ import { useNavStore } from './stores/nav'
 // Toast 系统
 import { useToast } from '@/composables/useToast'
 import { syncGlobalWakeHotkey } from '@/utils/globalWakeHotkey'
-import { openSettings, openDevTools } from '@/utils/internalPlugins'
+import { openSettings } from '@/utils/internalPlugins'
 import { applyTranslationServiceConfig } from '@/config/translation'
 
 // 内置翻译命令的在线翻译服务地址（构建时注入；未配置时只用内置词典）
@@ -75,15 +72,6 @@ window.__navigateTo = async (path, options) => {
     return
   }
 
-  // 优先通过内置插件门面打开开发者工具
-  if (pageName === 'devtools') {
-    const res = await openDevTools({ ...options, router })
-    if (res?.fallback && res?.type === 'route') {
-      nav.setPage('devtools')
-    }
-    return
-  }
-
   if (pageName) nav.setPage(pageName)
   if (options?.openShortcutSettings) {
     window.__openShortcutSettings = true
@@ -111,7 +99,7 @@ const syncGlobalWakeHotkeyOnStartup = async () => {
 
   for (let i = 0; i < maxAttempts; i++) {
     try {
-      const result = await syncGlobalWakeHotkey({ useDefaultWhenEmpty: true })
+      const result = await syncGlobalWakeHotkey()
       if (result.success) {
         return
       }

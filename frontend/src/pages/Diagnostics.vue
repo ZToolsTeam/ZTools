@@ -1,7 +1,12 @@
 <script setup>
+import { ChevronDownIcon, ChevronUpIcon } from '@lucide/vue'
+import { confirmDialog } from '@/utils/confirmDialog'
+import { RcAlert, RcButton, RcCard, RcSegmented, RcSelect } from '@/components/base'
 import { ref, onMounted, onBeforeUnmount, nextTick, reactive, computed } from 'vue'
-import { message as antMessage, Modal } from 'ant-design-vue'
-import {
+import { message as antMessage } from 'ant-design-vue'
+import { useDiagnosticsApi } from '@/composables/useDiagnosticsApi'
+
+const {
   isNative,
   sys,
   fs,
@@ -20,14 +25,14 @@ import {
   getLocalPlugins,
   openPlugin,
   getDllPluginList,
-  callDllPlugin
-} from '@/api/native'
-import {
+  callDllPlugin,
+  installPluginNative,
+  uninstallPluginNative,
   getMarketPlugins,
   getPluginDetails,
-  getDownloadSign
-} from '@/api/apiserver'
-import { installPluginNative, uninstallPluginNative } from '@/api/native'
+  getDownloadSign,
+  readProtocolText
+} = useDiagnosticsApi()
 
 // ==========================================
 // 日志系统 (Logging System)
@@ -102,7 +107,10 @@ const detectDiagnosticRuntime = () => {
   try {
     const host = window.ztools
     if (typeof host?.isElectron === 'function' && host.isElectron()) return 'electron'
-  } catch {}
+  } catch (err) {
+    // 宿主探测失败时按未知运行时处理，但保留原因便于排查
+    console.warn('[Diagnostics] 读取宿主运行时失败:', err)
+  }
   return 'unknown'
 }
 
@@ -467,8 +475,7 @@ const batchTestList = [
     platforms: ['windows'],
     run: async () => {
       const url = `ztools://file/C:/Windows/System32/drivers/etc/hosts`
-      const response = await fetch(url)
-      const text = await response.text()
+      const text = await readProtocolText(url)
       return text ? `协议读取成功 (${text.length} bytes)` : '读取为空'
     }
   },
@@ -675,7 +682,7 @@ const getCpuMem = async () => {
 const powerAction = async (action) => {
   const dangerActions = ['hibernate', 'logout', 'restart', 'shutdown']
   if (dangerActions.includes(action)) {
-    Modal.confirm({
+    confirmDialog({
       title: '危险操作确认',
       content: `确定要执行 ${action} 吗？这可能导致数据丢失！`,
       okText: '确定',
@@ -748,7 +755,7 @@ const fsCheckExists = async () => {
 
 const fsDeleteFile = async () => {
   if (!canRunWindowsOnlyDiagnostic('文件删除')) return
-  Modal.confirm({
+  confirmDialog({
     title: '确认删除',
     content: `确定要删除文件 ${fsPath.value} 吗？`,
     onOk: async () => {
@@ -1110,7 +1117,7 @@ const testPrivileged = async (action) => {
         'Privileged Content ' + new Date().toISOString()
       )
     if (action === 'restartExplorer') {
-      Modal.confirm({
+      confirmDialog({
         title: '警告',
         content: '确定要重启资源管理器吗？这会导致任务栏闪烁。',
         onOk: async () => {
@@ -1217,13 +1224,28 @@ const getDllList = async () => {
 
 // 初始化
 const activeTab = ref('1')
+// 左侧诊断分类（值沿用原标签页的 key，测试按 key 切换）
+const tabOptions = [
+  { label: '系统基础', value: '1' },
+  { label: '电源管理', value: '2' },
+  { label: '文件系统', value: '3' },
+  { label: '数据库', value: '4' },
+  { label: '窗口控制', value: '5' },
+  { label: '剪贴板 / Shell', value: '6' },
+  { label: '事件 / 触发器', value: '7' },
+  { label: '高级功能', value: '8' }
+]
+const sysPathOptions = ['desktop', 'documents', 'downloads', 'temp', 'appData'].map((value) => ({
+  label: value,
+  value
+}))
 
 let globalHotkeyListener = null
 
 onMounted(() => {
   void loadDiagnosticHost()
   log('诊断中心已就绪。请选择左侧功能或运行一键体检。')
-  if (!isNative) log('警告：当前为非 Native 环境，API 均不可用', 'warn')
+  if (!isNative) log('警告：当前不在宿主环境中，API 均不可用', 'warn')
 
   // 监听全局热键触发事件
   const events = window.ztools?.events
@@ -1258,120 +1280,83 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <div
-    class="h-full flex flex-col bg-[var(--rc-kbd-bg)] dark:bg-[var(--rc-surface)] text-gray-800 dark:text-gray-200"
-  >
-    <!-- 顶部标题栏 -->
-    <div
-      class="px-6 py-4 bg-white dark:bg-[var(--rc-surface)] border-b dark:border-slate-700 flex justify-between items-center shrink-0"
-    >
-      <div class="flex items-center gap-3">
-        <h1 class="text-xl font-bold">ZTools API 诊断中心</h1>
-        <span
-          class="px-2 py-0.5 text-xs rounded-full"
-          :class="
-            isNative
-              ? 'bg-[var(--rc-success-subtle)] text-green-700'
-              : 'bg-gray-200 text-[var(--rc-text-secondary)]'
-          "
-        >
-          {{ isNative ? 'Native Mode' : 'Browser Mode' }}
-        </span>
+  <div class="diag-page">
+    <!-- 页面标题 -->
+    <header class="page-header diag-header">
+      <div>
+        <h1 class="page-title">API 诊断中心</h1>
+        <p class="page-subtitle">逐项调用宿主接口，或运行一键批量体检，结果写入右侧日志</p>
       </div>
-      <div class="text-sm text-[var(--rc-text-muted)]">v3.0 (Full API Coverage)</div>
-    </div>
+      <span class="diag-mode" :class="{ 'is-native': isNative }">
+        <span class="diag-mode-dot" aria-hidden="true"></span>
+        {{ isNative ? '宿主环境' : '浏览器环境' }}
+      </span>
+    </header>
 
     <!-- 主体内容区 (双栏布局) -->
-    <div class="flex-1 flex overflow-hidden">
-      <!-- 左侧：功能测试 Tabs (60%) -->
-      <div class="flex-1 flex flex-col min-w-0 border-r dark:border-slate-700">
-        <a-tabs
-          v-model:activeKey="activeTab"
-          class="h-full flex flex-col diag-tabs"
-          type="card"
-        >
-          <!-- Tab 1: 系统与基础 -->
-          <a-tab-pane key="1" tab="系统基础" class="p-4 overflow-y-auto h-full">
-            <div class="space-y-4">
-              <a-card title="系统信息 (sys)" size="small">
-                <div class="flex flex-wrap gap-2 mb-2">
-                  <a-button type="primary" @click="getSysInfo"
-                    >获取系统信息</a-button
-                  >
-                  <a-button @click="sendNotify">发送通知</a-button>
-                  <a-button @click="getCpuMem">CPU/内存</a-button>
-                </div>
-                <pre
-                  class="bg-[var(--rc-kbd-bg)] dark:bg-black p-2 rounded text-xs overflow-auto max-h-40"
-                  >{{ sysInfoResult }}</pre
-                >
-              </a-card>
+    <div class="diag-body">
+      <!-- 左侧：分类切换 + 功能测试 -->
+      <section class="diag-main">
+        <RcSegmented
+          v-model="activeTab"
+          :options="tabOptions"
+          aria-label="诊断分类"
+          class="diag-tabs"
+        />
 
-              <a-card title="系统路径 (sys.getPath)" size="small">
-                <div class="flex gap-2 items-center mb-2">
-                  <a-select v-model:value="sysPathType" class="w-32">
-                    <a-select-option value="desktop">desktop</a-select-option>
-                    <a-select-option value="documents"
-                      >documents</a-select-option
-                    >
-                    <a-select-option value="downloads"
-                      >downloads</a-select-option
-                    >
-                    <a-select-option value="temp">temp</a-select-option>
-                    <a-select-option value="appData">appData</a-select-option>
-                  </a-select>
-                  <a-button type="primary" @click="getSysPath"
-                    >获取路径</a-button
-                  >
-                </div>
-                <div
-                  class="text-xs bg-[var(--rc-kbd-bg)] dark:bg-black p-2 rounded break-all"
-                >
-                  {{ sysPathResult }}
-                </div>
-              </a-card>
-            </div>
-          </a-tab-pane>
+        <div class="diag-pane">
+          <!-- 分类 1: 系统与基础 -->
+          <div v-if="activeTab === '1'" class="diag-stack">
+            <RcCard title="系统信息 (sys)">
+              <div class="diag-actions">
+                <RcButton variant="primary" @click="getSysInfo">获取系统信息</RcButton>
+                <RcButton variant="secondary" @click="sendNotify">发送通知</RcButton>
+                <RcButton variant="secondary" @click="getCpuMem">CPU / 内存</RcButton>
+              </div>
+              <pre class="diag-output">{{ sysInfoResult }}</pre>
+            </RcCard>
 
-          <!-- Tab 2: 电源管理 -->
-          <a-tab-pane key="2" tab="电源管理" class="p-4 overflow-y-auto h-full">
-            <div class="space-y-4">
-              <a-alert
-                message="危险操作警告：部分操作会立即执行，请谨慎测试"
-                type="warning"
-                show-icon
-                class="mb-4"
-              />
+            <RcCard title="系统路径 (sys.getPath)">
+              <div class="diag-actions items-center">
+                <RcSelect
+                  v-model:value="sysPathType"
+                  :options="sysPathOptions"
+                  class="w-36"
+                />
+                <RcButton variant="primary" @click="getSysPath">获取路径</RcButton>
+              </div>
+              <div class="diag-output">{{ sysPathResult }}</div>
+            </RcCard>
+          </div>
 
-              <a-card title="安全操作" size="small">
-                <div class="flex gap-2">
-                  <a-button @click="powerAction('lock')">🔒 锁定屏幕</a-button>
-                  <a-button @click="powerAction('sleep')">💤 系统睡眠</a-button>
-                </div>
-              </a-card>
+          <!-- 分类 2: 电源管理 -->
+          <div v-else-if="activeTab === '2'" class="diag-stack">
+            <RcAlert
+              message="部分操作会立即执行，请谨慎测试"
+              type="warning"
+              show-icon
+            />
 
-              <a-card title="危险操作 (需确认)" size="small">
-                <div class="flex flex-wrap gap-2">
-                  <a-button danger @click="powerAction('hibernate')"
-                    >❄️ 休眠</a-button
-                  >
-                  <a-button danger @click="powerAction('logout')"
-                    >🚪 注销</a-button
-                  >
-                  <a-button danger @click="powerAction('restart')"
-                    >🔄 重启</a-button
-                  >
-                  <a-button danger @click="powerAction('shutdown')"
-                    >⏻ 关机</a-button
-                  >
-                </div>
-              </a-card>
-            </div>
-          </a-tab-pane>
+            <RcCard title="安全操作">
+              <div class="diag-actions mb-0">
+                <RcButton variant="secondary" @click="powerAction('lock')">锁定屏幕</RcButton>
+                <RcButton variant="secondary" @click="powerAction('sleep')">系统睡眠</RcButton>
+              </div>
+            </RcCard>
 
-          <!-- Tab 3: 文件系统 -->
-          <a-tab-pane key="3" tab="文件系统" class="p-4 overflow-y-auto h-full">
-            <a-alert
+            <RcCard title="危险操作（需确认）">
+              <div class="diag-actions mb-0">
+                <RcButton variant="danger" @click="powerAction('hibernate')">休眠</RcButton>
+                <RcButton variant="danger" @click="powerAction('logout')">注销</RcButton>
+                <RcButton variant="danger" @click="powerAction('restart')">重启</RcButton>
+                <RcButton variant="danger" @click="powerAction('shutdown')">关机</RcButton>
+              </div>
+            </RcCard>
+          </div>
+
+          <!-- 分类 3: 文件系统 -->
+          <div v-else-if="activeTab === '3'" class="diag-stack">
+            <RcAlert
               v-if="!isWindowsDiagnosticsAvailable"
               data-test="windows-filesystem-diagnostics-disabled"
               :message="windowsOnlyDiagnosticsMessage"
@@ -1381,559 +1366,618 @@ onBeforeUnmount(() => {
             <div
               v-else
               data-test="windows-filesystem-diagnostics"
-              class="space-y-4"
+              class="diag-stack"
             >
-              <a-card title="文件操作 (fs)" size="small">
-                <a-input
-                  v-model:value="fsPath"
-                  addon-before="Path"
-                  class="mb-2"
-                />
-                <div class="flex flex-wrap gap-2 mb-2">
-                  <a-button type="primary" @click="fsRead">读取</a-button>
-                  <a-button @click="fsCheckExists">检查存在</a-button>
-                  <a-button danger @click="fsDeleteFile">删除</a-button>
+              <RcCard title="文件操作 (fs)">
+                <a-input v-model:value="fsPath" addon-before="路径" class="mb-3" />
+                <div class="diag-actions">
+                  <RcButton variant="primary" @click="fsRead">读取</RcButton>
+                  <RcButton variant="secondary" @click="fsCheckExists">检查存在</RcButton>
+                  <RcButton variant="danger" @click="fsDeleteFile">删除</RcButton>
                 </div>
-                <div
-                  class="mt-2 p-2 bg-[var(--rc-kbd-bg)] dark:bg-black rounded text-xs break-all max-h-40 overflow-auto"
-                >
-                  {{ fsContent }}
-                </div>
-              </a-card>
+                <div class="diag-output">{{ fsContent }}</div>
+              </RcCard>
 
-              <a-card title="写入文件" size="small">
-                <a-textarea
-                  v-model:value="fsWriteContent"
-                  :rows="2"
-                  class="mb-2"
-                />
-                <a-button type="primary" @click="fsWrite"
-                  >写入到上方路径</a-button
-                >
-              </a-card>
+              <RcCard title="写入文件">
+                <a-textarea v-model:value="fsWriteContent" :rows="2" class="mb-3" />
+                <RcButton variant="primary" @click="fsWrite">写入到上方路径</RcButton>
+              </RcCard>
 
-              <a-card title="目录操作" size="small">
-                <div class="flex gap-2 mb-2">
-                  <a-button @click="fsListDir">列出当前目录</a-button>
-                  <a-button @click="fsMkDir">创建测试目录</a-button>
+              <RcCard title="目录操作">
+                <div class="diag-actions">
+                  <RcButton variant="secondary" @click="fsListDir">列出当前目录</RcButton>
+                  <RcButton variant="secondary" @click="fsMkDir">创建测试目录</RcButton>
                 </div>
-                <ul class="text-xs max-h-32 overflow-auto list-disc pl-4">
-                  <li v-for="(item, idx) in fsDirList" :key="idx">
-                    {{ item }}
-                  </li>
+                <ul class="diag-list max-h-32">
+                  <li v-for="(item, idx) in fsDirList" :key="idx">{{ item }}</li>
                 </ul>
-              </a-card>
+              </RcCard>
             </div>
-          </a-tab-pane>
+          </div>
 
-          <!-- Tab 4: 数据库 -->
-          <a-tab-pane key="4" tab="数据库" class="p-4 overflow-y-auto h-full">
-            <div class="space-y-4">
-              <a-card title="存储测试 (db)" size="small">
-                <div class="grid grid-cols-2 gap-2 mb-2">
-                  <a-input v-model:value="dbKey" addon-before="Key" />
-                  <a-input v-model:value="dbVal" addon-before="Val" />
+          <!-- 分类 4: 数据库 -->
+          <div v-else-if="activeTab === '4'" class="diag-stack">
+            <RcCard title="存储测试 (db)">
+              <div class="grid grid-cols-2 gap-2 mb-3">
+                <a-input v-model:value="dbKey" addon-before="键" />
+                <a-input v-model:value="dbVal" addon-before="值" />
+              </div>
+              <div class="diag-actions">
+                <RcButton variant="primary" @click="dbOps('set')">写入</RcButton>
+                <RcButton variant="secondary" @click="dbOps('get')">读取</RcButton>
+                <RcButton variant="secondary" @click="dbOps('delete')">删除</RcButton>
+                <RcButton variant="secondary" @click="dbOps('all')">全部文档</RcButton>
+                <RcButton variant="secondary" @click="dbOps('secure_set')">加密写入</RcButton>
+                <RcButton variant="secondary" @click="dbOps('secure_get')">加密读取</RcButton>
+              </div>
+              <pre class="diag-output">{{ dbResult }}</pre>
+            </RcCard>
+          </div>
+
+          <!-- 分类 5: 窗口控制 -->
+          <div v-else-if="activeTab === '5'" class="diag-stack">
+            <RcCard title="窗口操作 (win)">
+              <div class="diag-actions mb-4">
+                <RcButton variant="secondary" @click="winTest('min')">最小化</RcButton>
+                <RcButton variant="secondary" @click="winTest('max')">最大化</RcButton>
+                <RcButton variant="secondary" @click="winTest('restore')">还原</RcButton>
+                <RcButton variant="secondary" @click="winTest('top')">置顶</RcButton>
+                <RcButton variant="secondary" @click="winTest('untop')">取消置顶</RcButton>
+                <RcButton variant="secondary" @click="winTest('devtools')">开发者工具</RcButton>
+                <RcButton variant="secondary" @click="winTest('getBounds')">获取边界</RcButton>
+              </div>
+
+              <div class="grid grid-cols-3 gap-2 mb-3 items-center">
+                <a-input-number v-model:value="winWidth" addon-before="宽" class="w-full">
+                  <template #upIcon><ChevronUpIcon aria-hidden="true" /></template>
+                  <template #downIcon><ChevronDownIcon aria-hidden="true" /></template>
+                </a-input-number>
+                <a-input-number v-model:value="winHeight" addon-before="高" class="w-full">
+                  <template #upIcon><ChevronUpIcon aria-hidden="true" /></template>
+                  <template #downIcon><ChevronDownIcon aria-hidden="true" /></template>
+                </a-input-number>
+                <RcButton variant="primary" @click="winTest('setSize')">设置尺寸</RcButton>
+              </div>
+
+              <div class="flex gap-3 items-center">
+                <span class="diag-label">透明度</span>
+                <a-slider
+                  v-model:value="winOpacity"
+                  :min="0"
+                  :max="1"
+                  :step="0.1"
+                  class="flex-1"
+                />
+                <RcButton variant="secondary" size="xs" @click="winTest('setOpacity')">应用</RcButton>
+              </div>
+            </RcCard>
+
+            <RcCard title="对话框 (dialog)">
+              <div class="diag-actions mb-0">
+                <RcButton variant="secondary" @click="winOpenDialog('open')">打开文件</RcButton>
+                <RcButton variant="secondary" @click="winOpenDialog('openMulti')">多选文件</RcButton>
+                <RcButton variant="secondary" @click="winOpenDialog('save')">保存文件</RcButton>
+                <RcButton variant="secondary" @click="winOpenDialog('folder')">选择文件夹</RcButton>
+              </div>
+            </RcCard>
+          </div>
+
+          <!-- 分类 6: 剪贴板与 Shell -->
+          <div v-else-if="activeTab === '6'" class="diag-stack">
+            <RcCard title="剪贴板 (clipboard)">
+              <a-textarea
+                v-model:value="clipboardText"
+                :rows="2"
+                class="mb-3"
+                placeholder="要写入剪贴板的文本"
+              />
+              <div class="diag-actions mb-0">
+                <RcButton variant="primary" @click="clipboardOps('writeText')">写入文本</RcButton>
+                <RcButton variant="secondary" @click="clipboardOps('readText')">读取文本</RcButton>
+                <RcButton variant="secondary" @click="clipboardOps('readImage')">读取图片</RcButton>
+                <RcButton variant="secondary" @click="clipboardOps('readFiles')">读取文件</RcButton>
+                <RcButton variant="danger" @click="clipboardOps('clear')">清空</RcButton>
+              </div>
+            </RcCard>
+
+            <RcCard title="Shell 操作 (shell)">
+              <a-input v-model:value="externalUrl" addon-before="URL" class="mb-2" />
+              <RcButton variant="primary" class="mb-4" @click="shellOps('openExternal')">打开外部链接</RcButton>
+
+              <a-input v-model:value="shellCmd" addon-before="命令" class="mb-2" />
+              <div class="diag-actions mb-0">
+                <RcButton variant="secondary" @click="shellOps('exec')">执行命令</RcButton>
+                <RcButton variant="secondary" @click="shellOps('beep')">提示音</RcButton>
+              </div>
+            </RcCard>
+          </div>
+
+          <!-- 分类 7: 事件与触发器 -->
+          <div v-else-if="activeTab === '7'" class="diag-stack">
+            <RcCard title="事件系统 (events)">
+              <a-input v-model:value="eventName" addon-before="事件名" class="mb-2" />
+              <a-textarea
+                v-model:value="eventData"
+                :rows="2"
+                class="mb-3"
+                placeholder="事件数据 (JSON)"
+              />
+              <div class="diag-actions">
+                <RcButton variant="primary" @click="eventsOps('emit')">发送事件</RcButton>
+                <RcButton variant="secondary" @click="eventsOps('on')">开始监听</RcButton>
+                <RcButton variant="secondary" @click="eventsOps('off')">停止监听</RcButton>
+              </div>
+              <RcButton variant="secondary" @click="startFileDrop">启动文件拖放监听（10 秒）</RcButton>
+            </RcCard>
+
+            <RcCard title="触发器系统 (trigger)">
+              <a-input
+                v-model:value="hotkeyConfig"
+                addon-before="热键"
+                class="mb-3"
+                placeholder="例如: Ctrl+Alt+T"
+              />
+              <div class="diag-actions mb-0">
+                <RcButton variant="primary" @click="triggerOps('register')">注册热键</RcButton>
+                <RcButton variant="secondary" @click="triggerOps('list')">列出触发器</RcButton>
+                <RcButton variant="danger" @click="triggerOps('clear')">清空所有</RcButton>
+              </div>
+            </RcCard>
+          </div>
+
+          <!-- 分类 8: 高级功能 -->
+          <div v-else-if="activeTab === '8'" class="diag-stack">
+            <RcAlert
+              v-if="!isWindowsDiagnosticsAvailable"
+              data-test="windows-advanced-diagnostics-disabled"
+              :message="windowsOnlyDiagnosticsMessage"
+              type="warning"
+              show-icon
+            />
+            <div
+              v-if="isWindowsDiagnosticsAvailable"
+              data-test="windows-advanced-diagnostics"
+              class="diag-stack"
+            >
+              <RcCard title="协议读取 (ztools://)">
+                <a-input v-model:value="protoPath" addon-before="路径" class="mb-3" />
+                <div class="diag-actions mb-0">
+                  <RcButton variant="secondary" @click="testProtocol('url')">生成 URL</RcButton>
+                  <RcButton variant="secondary" @click="testProtocol('readText')">读取文本</RcButton>
+                  <RcButton variant="secondary" @click="testProtocol('readBlob')">读取 Blob</RcButton>
                 </div>
-                <div class="flex flex-wrap gap-2">
-                  <a-button type="primary" size="small" @click="dbOps('set')"
-                    >Put</a-button
-                  >
-                  <a-button type="primary" size="small" @click="dbOps('get')"
-                    >Get</a-button
-                  >
-                  <a-button size="small" @click="dbOps('delete')"
-                    >Delete</a-button
-                  >
-                  <a-button size="small" @click="dbOps('all')"
-                    >All Docs</a-button
-                  >
-                  <a-button size="small" @click="dbOps('secure_set')"
-                    >Secure Put</a-button
-                  >
-                  <a-button size="small" @click="dbOps('secure_get')"
-                    >Secure Get</a-button
-                  >
+              </RcCard>
+
+              <RcCard title="特权服务 (privileged)">
+                <RcAlert
+                  message="通过 ZToolsService（System 权限）执行"
+                  type="info"
+                  show-icon
+                  class="mb-3"
+                />
+                <div class="space-y-2">
+                  <a-input v-model:value="privRegPath" addon-before="注册表路径" />
+                  <div class="grid grid-cols-2 gap-2">
+                    <a-input v-model:value="privRegName" addon-before="名称" />
+                    <a-input v-model:value="privRegVal" addon-before="值" />
+                  </div>
+                  <div class="diag-actions">
+                    <RcButton variant="secondary" @click="testPrivileged('regWrite64')">写入 64 位</RcButton>
+                    <RcButton variant="secondary" @click="testPrivileged('regWrite32')">写入 32 位</RcButton>
+                    <RcButton variant="secondary" @click="testPrivileged('regDelete64')">删除 64 位</RcButton>
+                    <RcButton variant="secondary" @click="testPrivileged('regDelete32')">删除 32 位</RcButton>
+                  </div>
+                  <a-input v-model:value="privFileTarget" addon-before="文件" />
+                  <div class="diag-actions mb-0">
+                    <RcButton variant="primary" @click="testPrivileged('fileWrite')">提权写入</RcButton>
+                    <RcButton variant="danger" @click="testPrivileged('restartExplorer')">重启 Explorer</RcButton>
+                  </div>
                 </div>
-                <pre
-                  class="mt-2 bg-[var(--rc-kbd-bg)] dark:bg-black p-2 rounded text-xs max-h-40 overflow-auto"
-                  >{{ dbResult }}</pre
-                >
-              </a-card>
+              </RcCard>
             </div>
-          </a-tab-pane>
 
-          <!-- Tab 5: 窗口控制 -->
-          <a-tab-pane key="5" tab="窗口控制" class="p-4 overflow-y-auto h-full">
-            <div class="space-y-4">
-              <a-card title="窗口操作 (win)" size="small">
-                <div class="flex flex-wrap gap-2 mb-4">
-                  <a-button @click="winTest('min')">最小化</a-button>
-                  <a-button @click="winTest('max')">最大化</a-button>
-                  <a-button @click="winTest('restore')">还原</a-button>
-                  <a-button @click="winTest('top')">置顶</a-button>
-                  <a-button @click="winTest('untop')">取消置顶</a-button>
-                  <a-button @click="winTest('devtools')">DevTools</a-button>
-                  <a-button @click="winTest('getBounds')">获取边界</a-button>
-                </div>
-
-                <div class="grid grid-cols-3 gap-2 mb-2">
-                  <a-input-number
-                    v-model:value="winWidth"
-                    addon-before="宽"
-                    class="w-full"
-                  />
-                  <a-input-number
-                    v-model:value="winHeight"
-                    addon-before="高"
-                    class="w-full"
-                  />
-                  <a-button type="primary" @click="winTest('setSize')"
-                    >设置尺寸</a-button
-                  >
-                </div>
-
-                <div class="flex gap-2 items-center">
-                  <span class="text-xs">透明度:</span>
-                  <a-slider
-                    v-model:value="winOpacity"
-                    :min="0"
-                    :max="1"
-                    :step="0.1"
-                    class="flex-1"
-                  />
-                  <a-button size="small" @click="winTest('setOpacity')"
-                    >应用</a-button
-                  >
-                </div>
-              </a-card>
-
-              <a-card title="对话框 (Dialogs)" size="small">
-                <div class="flex flex-wrap gap-2">
-                  <a-button @click="winOpenDialog('open')"
-                    >📂 打开文件</a-button
-                  >
-                  <a-button @click="winOpenDialog('openMulti')"
-                    >📂 多选文件</a-button
-                  >
-                  <a-button @click="winOpenDialog('save')"
-                    >💾 保存文件</a-button
-                  >
-                  <a-button @click="winOpenDialog('folder')"
-                    >📁 选择文件夹</a-button
-                  >
-                </div>
-              </a-card>
-            </div>
-          </a-tab-pane>
-
-          <!-- Tab 6: 剪贴板与Shell -->
-          <a-tab-pane
-            key="6"
-            tab="剪贴板/Shell"
-            class="p-4 overflow-y-auto h-full"
-          >
-            <div class="space-y-4">
-              <a-card title="剪贴板 (clipboard)" size="small">
-                <a-textarea
-                  v-model:value="clipboardText"
-                  :rows="2"
-                  class="mb-2"
-                  placeholder="要写入剪贴板的文本"
-                />
-                <div class="flex flex-wrap gap-2">
-                  <a-button type="primary" @click="clipboardOps('writeText')"
-                    >写入文本</a-button
-                  >
-                  <a-button @click="clipboardOps('readText')"
-                    >读取文本</a-button
-                  >
-                  <a-button @click="clipboardOps('readImage')"
-                    >读取图片</a-button
-                  >
-                  <a-button @click="clipboardOps('readFiles')"
-                    >读取文件</a-button
-                  >
-                  <a-button danger @click="clipboardOps('clear')"
-                    >清空</a-button
-                  >
-                </div>
-              </a-card>
-
-              <a-card title="Shell 操作" size="small">
-                <a-input
-                  v-model:value="externalUrl"
-                  addon-before="URL"
-                  class="mb-2"
-                />
-                <a-button
-                  type="primary"
-                  @click="shellOps('openExternal')"
-                  class="mb-2"
-                  >打开外部链接</a-button
-                >
-
-                <a-input
-                  v-model:value="shellCmd"
-                  addon-before="命令"
-                  class="mb-2"
-                />
-                <div class="flex gap-2">
-                  <a-button @click="shellOps('exec')">执行命令</a-button>
-                  <a-button @click="shellOps('beep')">🔔 Beep</a-button>
-                </div>
-              </a-card>
-            </div>
-          </a-tab-pane>
-
-          <!-- Tab 7: 事件与触发器 -->
-          <a-tab-pane
-            key="7"
-            tab="事件/触发器"
-            class="p-4 overflow-y-auto h-full"
-          >
-            <div class="space-y-4">
-              <a-card title="事件系统 (events)" size="small">
-                <a-input
-                  v-model:value="eventName"
-                  addon-before="事件名"
-                  class="mb-2"
-                />
-                <a-textarea
-                  v-model:value="eventData"
-                  :rows="2"
-                  class="mb-2"
-                  placeholder="事件数据 (JSON)"
-                />
-                <div class="flex gap-2 mb-4">
-                  <a-button type="primary" @click="eventsOps('emit')"
-                    >发送事件</a-button
-                  >
-                  <a-button @click="eventsOps('on')">开始监听</a-button>
-                  <a-button @click="eventsOps('off')">停止监听</a-button>
-                </div>
-
-                <a-button @click="startFileDrop"
-                  >📁 启动文件拖放监听 (10秒)</a-button
-                >
-              </a-card>
-
-              <a-card title="触发器系统 (trigger)" size="small">
-                <a-input
-                  v-model:value="hotkeyConfig"
-                  addon-before="热键"
-                  class="mb-2"
-                  placeholder="例如: Ctrl+Alt+T"
-                />
-                <div class="flex gap-2">
-                  <a-button type="primary" @click="triggerOps('register')"
-                    >注册热键</a-button
-                  >
-                  <a-button @click="triggerOps('list')">列出触发器</a-button>
-                  <a-button danger @click="triggerOps('clear')"
-                    >清空所有</a-button
-                  >
-                </div>
-              </a-card>
-            </div>
-          </a-tab-pane>
-
-          <!-- Tab 8: 高级功能 -->
-          <a-tab-pane key="8" tab="高级功能" class="p-4 overflow-y-auto h-full">
-            <div class="space-y-4">
-              <a-alert
-                v-if="!isWindowsDiagnosticsAvailable"
-                data-test="windows-advanced-diagnostics-disabled"
-                :message="windowsOnlyDiagnosticsMessage"
+            <RcCard title="屏幕与模拟 (screen)">
+              <div class="diag-actions">
+                <RcButton variant="secondary" @click="screenOps('capture')">截图</RcButton>
+                <RcButton variant="secondary" @click="screenOps('displays')">显示器列表</RcButton>
+                <RcButton variant="secondary" @click="screenOps('cursor')">鼠标位置</RcButton>
+              </div>
+              <div v-if="isInputSimulationAvailable" class="flex gap-2 items-center">
+                <a-input v-model:value="simKey" class="w-20" placeholder="按键" />
+                <RcButton variant="secondary" @click="simulateKey">模拟按键</RcButton>
+              </div>
+              <RcAlert
+                v-else
+                data-test="input-simulation-disabled"
+                :message="inputSimulationUnavailableMessage"
                 type="warning"
                 show-icon
               />
-              <div
-                v-if="isWindowsDiagnosticsAvailable"
-                data-test="windows-advanced-diagnostics"
-                class="space-y-4"
-              >
-              <a-card title="协议读取 (ztools://)" size="small">
-                <a-input
-                  v-model:value="protoPath"
-                  addon-before="路径"
-                  class="mb-2"
-                />
-                <div class="flex gap-2">
-                  <a-button @click="testProtocol('url')">生成URL</a-button>
-                  <a-button @click="testProtocol('readText')"
-                    >读取文本</a-button
-                  >
-                  <a-button @click="testProtocol('readBlob')"
-                    >读取Blob</a-button
-                  >
-                </div>
-              </a-card>
+            </RcCard>
 
-              <a-card title="特权服务 (privileged)" size="small">
-                <a-alert
-                  message="通过 ZToolsService (System 权限) 执行"
-                  type="info"
-                  show-icon
-                  class="mb-2"
-                />
-                <div class="space-y-2">
-                  <a-input
-                    v-model:value="privRegPath"
-                    addon-before="注册表路径"
-                  />
-                  <div class="grid grid-cols-2 gap-2">
-                    <a-input v-model:value="privRegName" addon-before="Name" />
-                    <a-input v-model:value="privRegVal" addon-before="Val" />
-                  </div>
-                  <div class="flex flex-wrap gap-2">
-                    <a-button
-                      type="primary"
-                      size="small"
-                      @click="testPrivileged('regWrite64')"
-                      >写入64位</a-button
-                    >
-                    <a-button size="small" @click="testPrivileged('regWrite32')"
-                      >写入32位</a-button
-                    >
-                    <a-button
-                      size="small"
-                      @click="testPrivileged('regDelete64')"
-                      >删除64位</a-button
-                    >
-                    <a-button
-                      size="small"
-                      @click="testPrivileged('regDelete32')"
-                      >删除32位</a-button
-                    >
-                  </div>
-                  <a-input v-model:value="privFileTarget" addon-before="文件" />
-                  <div class="flex gap-2">
-                    <a-button
-                      type="primary"
-                      @click="testPrivileged('fileWrite')"
-                      >提权写入</a-button
-                    >
-                    <a-button danger @click="testPrivileged('restartExplorer')"
-                      >重启Explorer</a-button
-                    >
-                  </div>
-                </div>
-              </a-card>
+            <RcCard title="网络与进程 (network / process)">
+              <a-input v-model:value="httpUrl" addon-before="URL" class="mb-2" />
+              <RcButton variant="primary" class="mb-2" @click="sendHttp">发送 HTTP 请求</RcButton>
+              <div class="diag-output mb-3">{{ httpResult }}</div>
+
+              <RcButton variant="secondary" @click="getProcesses">获取进程列表</RcButton>
+              <ul class="diag-list max-h-24 mt-2">
+                <li v-for="(p, i) in procList" :key="i">{{ p.name || p }}</li>
+              </ul>
+            </RcCard>
+
+            <RcCard title="DLL 插件调用 (dllplugin)">
+              <div class="grid grid-cols-2 gap-2 mb-2">
+                <a-input v-model:value="dllPluginName" addon-before="插件名" />
+                <a-input v-model:value="dllFuncName" addon-before="函数名" />
               </div>
+              <a-textarea
+                v-model:value="dllParams"
+                :rows="2"
+                class="mb-3"
+                placeholder="参数 (JSON)"
+              />
+              <div class="diag-actions">
+                <RcButton variant="primary" @click="testDllPlugin">调用 DLL 函数</RcButton>
+                <RcButton variant="secondary" @click="getDllList">获取 DLL 列表</RcButton>
+              </div>
+              <pre class="diag-output">{{ dllResult }}</pre>
+            </RcCard>
+          </div>
+        </div>
+      </section>
 
-              <a-card title="屏幕与模拟" size="small">
-                <div class="flex flex-wrap gap-2 mb-2">
-                  <a-button @click="screenOps('capture')">📷 截图</a-button>
-                  <a-button @click="screenOps('displays')"
-                    >🖥️ 显示器列表</a-button
-                  >
-                  <a-button @click="screenOps('cursor')">🖱️ 鼠标位置</a-button>
-                </div>
-                <div v-if="isInputSimulationAvailable" class="flex gap-2 items-center">
-                  <a-input
-                    v-model:value="simKey"
-                    class="w-20"
-                    placeholder="按键"
-                  />
-                  <a-button @click="simulateKey">模拟按键</a-button>
-                </div>
-                <a-alert
-                  v-else
-                  data-test="input-simulation-disabled"
-                  :message="inputSimulationUnavailableMessage"
-                  type="warning"
-                  show-icon
-                />
-              </a-card>
-
-              <a-card title="网络与进程" size="small">
-                <a-input
-                  v-model:value="httpUrl"
-                  addon-before="URL"
-                  class="mb-2"
-                />
-                <a-button type="primary" @click="sendHttp" class="mb-2"
-                  >发送HTTP请求</a-button
-                >
-                <div class="text-xs bg-[var(--rc-kbd-bg)] dark:bg-black p-2 rounded mb-2">
-                  {{ httpResult }}
-                </div>
-
-                <a-button @click="getProcesses">获取进程列表</a-button>
-                <ul class="text-xs max-h-24 overflow-auto mt-2 list-disc pl-4">
-                  <li v-for="(p, i) in procList" :key="i">{{ p.name || p }}</li>
-                </ul>
-              </a-card>
-
-              <a-card title="DLL 插件调用" size="small">
-                <div class="grid grid-cols-2 gap-2 mb-2">
-                  <a-input
-                    v-model:value="dllPluginName"
-                    addon-before="插件名"
-                  />
-                  <a-input v-model:value="dllFuncName" addon-before="函数名" />
-                </div>
-                <a-textarea
-                  v-model:value="dllParams"
-                  :rows="2"
-                  class="mb-2"
-                  placeholder="参数 (JSON)"
-                />
-                <div class="flex gap-2">
-                  <a-button type="primary" @click="testDllPlugin"
-                    >调用DLL函数</a-button
-                  >
-                  <a-button @click="getDllList">获取DLL列表</a-button>
-                </div>
-                <pre
-                  class="mt-2 bg-[var(--rc-kbd-bg)] dark:bg-black p-2 rounded text-xs max-h-32 overflow-auto"
-                  >{{ dllResult }}</pre
-                >
-              </a-card>
-            </div>
-          </a-tab-pane>
-        </a-tabs>
-      </div>
-
-      <!-- 右侧：实时日志与诊断中心 (40%) -->
-      <div
-        class="w-[400px] flex flex-col bg-white dark:bg-[var(--rc-surface)] border-l dark:border-slate-700 shadow-xl z-10"
-      >
+      <!-- 右侧：一键体检与实时日志 -->
+      <aside class="diag-side">
         <!-- 一键体检面板 -->
-        <div
-          class="p-4 border-b dark:border-slate-700 bg-[var(--rc-accent-subtle)] dark:bg-[var(--rc-surface)]"
-        >
-          <h3 class="text-sm font-bold mb-3 text-blue-800 dark:text-blue-300">
-            自动化诊断中心
-          </h3>
-          <a-button
-            type="primary"
-            block
-            size="large"
+        <div class="diag-batch">
+          <h2 class="diag-section-title">批量体检</h2>
+          <RcButton
+            variant="primary"
+            size="md"
+            class="w-full mb-3"
             :loading="isTesting"
             @click="runBatchTest"
-            class="mb-3 font-semibold"
           >
             {{ isTesting ? '正在体检中...' : '开始一键批量体检' }}
-          </a-button>
+          </RcButton>
 
           <p
             v-if="batchPlatformStatus"
             data-test="batch-platform-status"
-            class="mb-2 text-xs text-[var(--rc-text-secondary)] dark:text-[var(--rc-text-muted)]"
+            class="diag-batch-status"
           >
             {{ batchPlatformStatus }}
           </p>
 
-          <div class="space-y-2">
-            <div class="flex justify-between text-xs text-[var(--rc-text-muted)]">
+          <div class="diag-batch-stats">
+            <div class="diag-stat-row">
               <span>进度</span>
-              <span
-                >{{ Math.round((passCount / totalCount) * 100) || 0 }}%</span
-              >
+              <span class="tabular-nums">{{ Math.round((passCount / totalCount) * 100) || 0 }}%</span>
             </div>
-            <a-progress
-              :percent="testProgress"
-              :show-info="false"
-              status="active"
-            />
-            <div class="flex justify-between text-xs mt-1">
-              <span data-test="batch-pass-count" class="text-[var(--rc-success)]"
-                >成功: {{ passCount }}</span
-              >
-              <span data-test="batch-fail-count" class="text-[var(--rc-error)]"
-                >失败: {{ failCount }}</span
-              >
+            <div
+              class="diag-progress"
+              role="progressbar"
+              :aria-valuenow="testProgress"
+              aria-valuemin="0"
+              aria-valuemax="100"
+            >
+              <div class="diag-progress-fill" :style="{ width: `${testProgress}%` }"></div>
             </div>
-            <div class="flex justify-between text-xs">
-              <span class="text-[var(--rc-text-muted)]">适用项: {{ totalCount }}</span>
-              <span data-test="batch-skip-count" class="text-[var(--rc-warning)]"
-                >已跳过: {{ skipCount }}</span
-              >
+            <div class="diag-stat-row">
+              <span data-test="batch-pass-count" class="is-success">成功: {{ passCount }}</span>
+              <span data-test="batch-fail-count" class="is-error">失败: {{ failCount }}</span>
+            </div>
+            <div class="diag-stat-row">
+              <span>适用项: {{ totalCount }}</span>
+              <span data-test="batch-skip-count" class="is-warn">已跳过: {{ skipCount }}</span>
             </div>
           </div>
         </div>
 
         <!-- 日志列表 -->
-        <div
-          class="flex items-center justify-between p-2 px-3 border-b dark:border-slate-700 bg-[var(--rc-kbd-bg)] dark:bg-[var(--rc-surface)]"
-        >
-          <span class="text-xs font-bold text-[var(--rc-text-muted)]">实时日志流</span>
-          <a-button type="text" size="small" @click="clearLog" class="text-xs"
-            >清空</a-button
-          >
+        <div class="diag-log-header">
+          <span class="diag-section-title mb-0">实时日志</span>
+          <RcButton variant="ghost" size="xs" @click="clearLog">清空</RcButton>
         </div>
 
-        <div
-          class="flex-1 overflow-y-auto p-2 font-mono text-xs space-y-1 log-container"
-          ref="logRef"
-        >
-          <div
-            v-if="logs.length === 0"
-            class="text-center text-[var(--rc-text-muted)] py-10 italic"
-          >
-            暂无日志...
-          </div>
+        <div ref="logRef" class="diag-log">
+          <div v-if="logs.length === 0" class="diag-log-empty">暂无日志</div>
           <div
             v-for="(l, i) in logs"
             :key="i"
-            class="p-1.5 rounded border-l-2 flex gap-2 items-start animate-fade-in"
-            :class="{
-              'border-blue-500 bg-[var(--rc-accent-subtle)] dark:bg-blue-900/20':
-                l.type === 'info',
-              'border-[var(--rc-border)] bg-[var(--rc-success-subtle)] dark:bg-green-900/20':
-                l.type === 'success',
-              'border-[var(--rc-error)] bg-[var(--rc-error-subtle)] dark:bg-red-900/20': l.type === 'error',
-              'border-[var(--rc-border)] bg-yellow-50 dark:bg-yellow-900/20':
-                l.type === 'warn'
-            }"
+            class="diag-log-line animate-fade-in"
+            :class="`is-${l.type}`"
           >
-            <span class="text-[var(--rc-text-muted)] shrink-0 select-none"
-              >[{{ l.time }}]</span
-            >
-            <div class="flex-1 break-all whitespace-pre-wrap">
-              {{ l.content }}
-            </div>
-            <span v-if="l.duration" class="text-[var(--rc-text-muted)] shrink-0">{{
-              l.duration
-            }}</span>
+            <span class="diag-log-dot" aria-hidden="true"></span>
+            <span class="diag-log-time">{{ l.time }}</span>
+            <div class="diag-log-content">{{ l.content }}</div>
+            <span v-if="l.duration" class="diag-log-time">{{ l.duration }}</span>
           </div>
         </div>
-      </div>
+      </aside>
     </div>
   </div>
 </template>
 
 <style scoped>
-/* Tabs 样式优化 */
-.diag-tabs :deep(.ant-tabs-nav) {
-  margin-bottom: 0;
-  padding: 0 8px;
-}
-.diag-tabs :deep(.ant-tabs-tab) {
-  padding: 8px 12px;
-  font-size: 13px;
-}
-.diag-tabs :deep(.ant-tabs-content) {
-  height: calc(100% - 46px);
-}
-.diag-tabs :deep(.ant-tabs-tabpane) {
+/* ---------- 页面骨架 ---------- */
+.diag-page {
   height: 100%;
+  display: flex;
+  flex-direction: column;
+  background: var(--rc-canvas);
+  color: var(--rc-text-primary);
 }
 
-/* 滚动条美化 */
-.log-container::-webkit-scrollbar {
+.diag-header {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 0;
+  padding: 22px 24px 16px;
+  flex-shrink: 0;
+}
+
+/* 运行环境标识：中性灰阶胶囊，宿主环境时圆点为成功色 */
+.diag-mode {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 24px;
+  padding: 0 10px;
+  border: 1px solid var(--rc-border);
+  border-radius: 999px;
+  background: var(--rc-surface);
+  color: var(--rc-text-secondary);
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.diag-mode-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--rc-text-faint);
+}
+
+.diag-mode.is-native .diag-mode-dot {
+  background: var(--rc-success);
+}
+
+.diag-body {
+  flex: 1;
+  display: flex;
+  min-height: 0;
+  border-top: 1px solid var(--rc-border);
+}
+
+/* ---------- 左侧功能区 ---------- */
+.diag-main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.diag-tabs {
+  padding: 12px 20px 0;
+  flex-shrink: 0;
+}
+
+.diag-pane {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 16px 24px 24px;
+}
+
+.diag-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.diag-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.diag-actions.mb-0 {
+  margin-bottom: 0;
+}
+
+.diag-label {
+  font-size: 12px;
+  color: var(--rc-text-secondary);
+}
+
+/* 结果区：浅底等宽字体，深色主题下同样是带边框的浅一级表面，不是纯黑条 */
+.diag-output {
+  margin: 0;
+  min-height: 32px;
+  max-height: 160px;
+  overflow: auto;
+  padding: 8px 10px;
+  border: 1px solid var(--rc-border);
+  border-radius: var(--rc-radius-md);
+  background: var(--rc-surface-subtle);
+  color: var(--rc-text-secondary);
+  font-family: var(--rc-font-mono);
+  font-size: 12px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+
+.diag-list {
+  margin: 0;
+  padding-left: 18px;
+  overflow: auto;
+  list-style: disc;
+  color: var(--rc-text-secondary);
+  font-family: var(--rc-font-mono);
+  font-size: 12px;
+}
+
+/* ---------- 右侧体检与日志 ---------- */
+.diag-side {
+  width: 400px;
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  border-left: 1px solid var(--rc-border);
+  background: var(--rc-surface);
+}
+
+.diag-batch {
+  padding: 16px;
+  border-bottom: 1px solid var(--rc-border);
+}
+
+.diag-section-title {
+  margin: 0 0 12px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--rc-text-primary);
+}
+
+.diag-batch-status {
+  margin: 0 0 8px;
+  font-size: 12px;
+  color: var(--rc-text-secondary);
+}
+
+.diag-batch-stats {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.diag-stat-row {
+  display: flex;
+  justify-content: space-between;
+  font-size: 12px;
+  color: var(--rc-text-muted);
+}
+
+.diag-stat-row .is-success {
+  color: var(--rc-success);
+}
+
+.diag-stat-row .is-error {
+  color: var(--rc-error);
+}
+
+.diag-stat-row .is-warn {
+  color: var(--rc-warning);
+}
+
+.diag-progress {
+  height: 6px;
+  border-radius: 999px;
+  background: var(--rc-surface-active);
+  overflow: hidden;
+}
+
+.diag-progress-fill {
+  height: 100%;
+  border-radius: inherit;
+  background: var(--rc-accent);
+  transition: width 0.2s ease;
+}
+
+.diag-log-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 12px 8px 16px;
+  border-bottom: 1px solid var(--rc-border);
+}
+
+.diag-log {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 8px;
+  background: var(--rc-surface-subtle);
+  font-family: var(--rc-font-mono);
+  font-size: 12px;
+}
+
+.diag-log-empty {
+  padding: 40px 0;
+  text-align: center;
+  color: var(--rc-text-muted);
+  font-family: inherit;
+}
+
+/* 日志行：中性底色，仅用小圆点区分级别 */
+.diag-log-line {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 4px 6px;
+  border-radius: 6px;
+  color: var(--rc-text-secondary);
+}
+
+.diag-log-line:hover {
+  background: var(--rc-surface-hover);
+}
+
+.diag-log-dot {
+  width: 6px;
+  height: 6px;
+  margin-top: 6px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  background: var(--rc-text-faint);
+}
+
+.diag-log-line.is-success .diag-log-dot {
+  background: var(--rc-success);
+}
+
+.diag-log-line.is-warn .diag-log-dot {
+  background: var(--rc-warning);
+}
+
+.diag-log-line.is-error .diag-log-dot {
+  background: var(--rc-error);
+}
+
+.diag-log-line.is-error .diag-log-content {
+  color: var(--rc-error);
+}
+
+.diag-log-time {
+  flex-shrink: 0;
+  color: var(--rc-text-faint);
+  user-select: none;
+  font-variant-numeric: tabular-nums;
+}
+
+.diag-log-content {
+  flex: 1;
+  min-width: 0;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+
+/* 滚动条 */
+.diag-log::-webkit-scrollbar {
   width: 6px;
 }
-.log-container::-webkit-scrollbar-thumb {
-  background-color: #cbd5e1;
+.diag-log::-webkit-scrollbar-thumb {
+  background-color: var(--rc-border-highlight);
   border-radius: 3px;
 }
-.log-container::-webkit-scrollbar-track {
+.diag-log::-webkit-scrollbar-track {
   background-color: transparent;
-}
-html.dark .log-container::-webkit-scrollbar-thumb {
-  background-color: #475569;
 }
 
 /* 简单的淡入动画 */

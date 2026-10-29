@@ -21,11 +21,10 @@ import { fetchVersions, checkCompat } from '@/composables/useVersionCompat'
 import { loadV2StaticCatalogList } from '@/api/pluginCatalog'
 import { formatLogArg } from '@/utils/logFormat'
 import { isPluginSupportedOnCurrentPlatform, getPluginPlatforms, getPluginPlatformLabel } from '@/utils/platform'
-import { cloudSync, track } from '@edition'
+import { cloudSync, pluginLifecycle, track } from '@edition'
 import {
   StoreCatalogManager,
-  isOfficialPluginItem,
-  normalizeCdnCatalogPayload
+  isOfficialPluginItem
 } from '@/utils/storeCatalogManager'
 import {
   clearDeclarativePluginCache,
@@ -34,6 +33,15 @@ import {
 import { getBundledPluginEntries, isBundledPlugin, resolveBundledReplacement, resolveBundledReplacementFeature } from '@/utils/bundledPlugins'
 import { isPluginVisible } from '@/utils/pluginVisibility'
 import { runPluginInstall } from '@/utils/pluginInstallOperation'
+
+/** 安装 / 卸载通知交给版本处理；版本钩子出错只记日志，不影响安装状态 */
+function notifyLifecycle(name, pluginId) {
+  try {
+    pluginLifecycle?.[name]?.(pluginId)
+  } catch (err) {
+    console.warn(`[plugins] pluginLifecycle.${name} 失败:`, err)
+  }
+}
 
 /**
  * 规范化插件 ID（业务标识符）
@@ -107,13 +115,14 @@ export const usePluginsStore = defineStore('plugins', {
     pageSize: 12,
     keyword: '',
     category: '',
-    sourceFilter: 'all', // 'all' | 'official' (官方自营) | 'community' (社区精选)
+    sourceFilter: 'all', // 'all' | 'official' (官方) | 'community' (社区)
     favorites: new Set(),
     recents: [],
     // 最近使用时间：{ [pluginId]: 毫秒时间戳 }，与 recents 一起只存本地
     recentUsedAt: {},
     installedSet: new Set(),
     installedPlugins: [], // 已安装插件的完整信息列表
+    installedListLoaded: false, // 最近一次是否从宿主成功读到本地已安装列表（失败时只有内置插件，不能当作完整列表）
     downloadingSet: new Set(), // 正在下载的插件ID
     installingSet: new Set(), // 正在安装的插件ID集合（并发防重互斥）
     installFailedSet: new Set(), // 安装失败的插件ID（用于显示"重试"）
@@ -200,17 +209,17 @@ export const usePluginsStore = defineStore('plugins', {
       return state.items.length > 0
     },
 
-    // 官方自营插件列表
+    // 官方插件列表
     officialPlugins: (state) => {
       return state.items.filter((item) => isOfficialPluginItem(item))
     },
 
-    // 社区精选插件列表
+    // 社区插件列表
     communityPlugins: (state) => {
       return state.items.filter((item) => !isOfficialPluginItem(item))
     },
 
-    // 检查指定插件是否为官方自营
+    // 检查指定插件是否为官方
     isOfficialItem: (state) => (pluginId) => {
       const pid = normalizePluginId(pluginId).toLowerCase()
       const found = state.items.find(
@@ -348,7 +357,7 @@ export const usePluginsStore = defineStore('plugins', {
             const list = await loadV2StaticCatalogList()
             this._applyRevocations(list)
             this._applyPlatformSupport(list)
-            return normalizeCdnCatalogPayload(list)
+            return list
           },
           getLocalSnapshot: async () => {
             if (window.ztools?.config) {
@@ -441,6 +450,20 @@ export const usePluginsStore = defineStore('plugins', {
       this._updateCategoryCounts(manager._catalog)
 
       return result
+    },
+
+    /**
+     * 当前分类 / 搜索词 / 指定 ID 范围内，「全部 / 官方 / 社区」各有多少插件。
+     * 在已缓存的目录上本地统计，不发请求；目录不可用时抛出，由调用方决定不显示数字。
+     * @param {{ category?: string, keyword?: string, ids?: string[] }} params
+     */
+    async countPluginsBySource(params = {}) {
+      const manager = this._getCatalogManager()
+      const types = ['all', 'official', 'community']
+      const results = await Promise.all(
+        types.map((sourceType) => manager.query({ ...params, sourceType, page: 1, pageSize: 1 }))
+      )
+      return Object.fromEntries(types.map((type, index) => [type, results[index].total]))
     },
 
     /** 按分类统计目录里的插件数（目录已按当前系统过滤，已下架的不计） */
@@ -791,6 +814,7 @@ export const usePluginsStore = defineStore('plugins', {
         }
 
         const localIds = (locals || []).map((p) => String(p.pluginId))
+        this.installedListLoaded = true
         const officialIds = officialList.map((p) => String(p.pluginId))
 
         // 合并：保留当前 installedSet 中已有、宿主尚未返回的 ID，以及所有官方内置标杆应用 ID
@@ -825,7 +849,7 @@ export const usePluginsStore = defineStore('plugins', {
               builtinMatch.official_badge ||
               builtinMatch.officialBadge ||
               builtinMatch.badge ||
-              '官方自营'
+              '官方'
             const mergedPlugin = {
               ...p,
               ...builtinMatch,
@@ -845,7 +869,7 @@ export const usePluginsStore = defineStore('plugins', {
             continue
           }
           if (isOff) {
-            const badge = p.official_badge || p.officialBadge || '官方自营'
+            const badge = p.official_badge || p.officialBadge || '官方'
             combined.push({
               ...p,
               is_official: true,
@@ -861,7 +885,7 @@ export const usePluginsStore = defineStore('plugins', {
           const key = String(official.pluginId || '').toLowerCase()
           if (!coveredOfficialKeys.has(key)) {
             coveredOfficialKeys.add(key)
-            const badge = official.official_badge || official.officialBadge || '官方自营'
+            const badge = official.official_badge || official.officialBadge || '官方'
             const localState = localBundledState.get(key)
             combined.push({
               ...official,
@@ -890,6 +914,7 @@ export const usePluginsStore = defineStore('plugins', {
         return combined
       } catch (err) {
         console.warn('[plugins] 获取本地插件失败，回退官方内置标杆插件列表:', err)
+        this.installedListLoaded = false
         const officialList = [...bundledEntries, ...getOfficialPluginsList()]
         const officialIds = officialList.map((p) => String(p.pluginId))
         this.installedSet = new Set(officialIds)
@@ -898,6 +923,28 @@ export const usePluginsStore = defineStore('plugins', {
           .map((plugin) => ({ ...plugin, builtin: true }))
         return officialList
       }
+    },
+
+    /**
+     * 当前已安装、且在插件目录里的插件 ID（含随客户端内置的插件），供版本同步安装记录用。
+     * 只返回插件目录里有的 ID：本地开发或自行导入的插件不外传。
+     * 本地已安装列表读取失败、或插件目录只有内置兜底数据时返回 null（列表不完整，不能用来覆盖服务端记录）。
+     * @returns {Promise<string[]|null>}
+     */
+    async getCatalogInstalledPluginIds() {
+      if (!this.installedListLoaded) await this.fetchInstalledPlugins()
+      if (!this.installedListLoaded) return null
+      const manager = this._getCatalogManager()
+      await manager.ensureCatalog()
+      // 插件目录只有随包内置的兜底数据时，市场插件都查不到，不能当作完整列表
+      if (!manager.lastSource || manager.lastSource === 'official_builtin') return null
+      const ids = []
+      for (const id of this.installedSet) {
+        const pid = normalizePluginId(id)
+        if (!pid) continue
+        if (isBundledPlugin(pid) || manager.getById(pid)) ids.push(pid)
+      }
+      return [...new Set(ids)]
     },
 
     acceptsInstallEvent(payload) {
@@ -921,6 +968,10 @@ export const usePluginsStore = defineStore('plugins', {
 
         if (payload.success) {
           clearDeclarativePluginCache(pluginId)
+          // 新装的插件告诉版本（官方版已登录时上报插件 ID；更新与重复通知不再上报；开源版为空操作，失败不影响安装结果）
+          if (!this.installedSet.has(pluginId) && !payload.isUpdate) {
+            notifyLifecycle('onInstalled', pluginId)
+          }
           // 安装成功：立即更新 installedSet
           const next = new Set(this.installedSet)
           next.add(pluginId)
@@ -981,6 +1032,10 @@ export const usePluginsStore = defineStore('plugins', {
           return
         }
         clearDeclarativePluginCache(payload.pluginId)
+        // 卸载事件与卸载调用可能各通知一次，只在第一次（插件还在已安装列表里）告诉版本
+        if (this.installedSet.has(String(payload.pluginId))) {
+          notifyLifecycle('onUninstalled', String(payload.pluginId))
+        }
         const next = new Set(this.installedSet)
         next.delete(String(payload.pluginId))
         this.installedSet = next

@@ -1,4 +1,11 @@
 <script setup>
+/**
+ * 分段切换，所有页面的标签切换都用它。两种版式：
+ * - chips（默认）：无外框的一排标签（主页已安装 / 收藏、插件市场分类与来源、反馈类型），选中项带余烬橙方块标记；
+ * - marker：带外框的分段按钮（设置页的选项），选中项带余烬橙方块标记。
+ * 选项可带 count（数量）、hint（补充说明）与 dot（标签右上角的提醒小圆点，如「有新回复」，dotLabel 给读屏用）。
+ * 选中项文字加粗时宽度会变，标签用隐藏的粗体副本预留宽度，切换时按钮尺寸始终不变。
+ */
 const props = defineProps({
   modelValue: { type: [String, Number, Boolean], required: true },
   options: {
@@ -6,9 +13,7 @@ const props = defineProps({
     required: true,
     // [ { label: '已安装', value: 'installed', count: 7, hint: '400×300' }, ... ]
   },
-  size: { type: String, default: 'sm' },
-  // pill：胶囊标签（主页）；marker：设置页分段按钮，选中项带余烬橙方块标记
-  variant: { type: String, default: 'pill' },
+  variant: { type: String, default: 'chips', validator: (v) => ['chips', 'marker'].includes(v) },
   ariaLabel: { type: String, default: '' }
 })
 
@@ -23,8 +28,8 @@ const selectOption = (opt) => {
 
 <template>
   <div
-    v-if="variant === 'marker'"
     class="seg-group"
+    :class="`is-${variant}`"
     role="radiogroup"
     :aria-label="ariaLabel || undefined"
   >
@@ -38,75 +43,34 @@ const selectOption = (opt) => {
       :aria-checked="modelValue === opt.value"
       @click="selectOption(opt)"
     >
-      <span class="seg-marker" aria-hidden="true"></span>{{ opt.label }}<span v-if="opt.hint" class="seg-hint">{{ opt.hint }}</span>
-    </button>
-  </div>
-  <div
-    v-else
-    class="rc-segmented-container inline-flex p-0.5 rounded-lg select-none"
-    style="background: var(--rc-surface-subtle); border: 1px solid var(--rc-border);"
-  >
-    <button
-      v-for="opt in options"
-      :key="String(opt.value)"
-      type="button"
-      class="rc-segmented-item flex items-center justify-center gap-1.5 px-3 py-1 text-xs font-medium rounded-md transition-all duration-150 cursor-pointer"
-      :class="[
-        modelValue === opt.value
-          ? 'rc-segmented-active text-[var(--rc-text-primary)] shadow-sm'
-          : 'text-[var(--rc-text-muted)] hover:text-[var(--rc-text-primary)]'
-      ]"
-      @click="selectOption(opt)"
-    >
-      <component :is="opt.icon" v-if="opt.icon" class="text-[11px]" aria-hidden="true" />
-      <span>{{ opt.label }}</span>
-      <span
-        v-if="opt.count !== undefined"
-        class="text-[10px] px-1 py-0.2 rounded-full opacity-70 font-mono"
-        :class="modelValue === opt.value ? 'bg-[var(--rc-kbd-bg)]' : 'bg-[var(--rc-surface-hover)]'"
-      >
-        {{ opt.count }}
-      </span>
+      <span class="seg-marker" aria-hidden="true"></span>
+      <span class="seg-label" :data-label="opt.label">{{ opt.label }}</span>
+      <span v-if="opt.dot" class="seg-dot" role="img" :aria-label="opt.dotLabel || '有新内容'"></span>
+      <!-- count 为 null 表示数量还在统计：先占住位置，数字出来时按钮不跳动 -->
+      <span v-if="opt.count === null" class="seg-count is-pending" aria-hidden="true"></span>
+      <span v-else-if="opt.count !== undefined" class="seg-count">{{ opt.count }}</span>
+      <span v-if="opt.hint" class="seg-hint">{{ opt.hint }}</span>
     </button>
   </div>
 </template>
 
 <style scoped>
-.rc-segmented-container {
-  background: var(--rc-kbd-bg);
-  border: 1px solid transparent;
-}
-
-.rc-segmented-active {
-  background: var(--rc-surface);
-  color: var(--rc-text-primary);
-  border: 1px solid var(--rc-border-highlight);
-}
-
-/* marker 变体 */
+/* ---------- 共用 ---------- */
 .seg-group {
   display: inline-flex;
   flex-wrap: wrap;
-  padding: 3px;
-  gap: 2px;
-  border-radius: 9px;
-  border: 1px solid var(--rc-border-highlight);
 }
 
 .seg-btn {
-  height: 28px;
-  display: flex;
+  display: inline-flex;
   align-items: center;
-  gap: 7px;
-  padding: 0 12px 0 9px;
-  border-radius: 6px;
   border: none;
   background: transparent;
   color: var(--rc-text-muted);
   font: inherit;
-  font-size: 13px;
   white-space: nowrap;
   cursor: pointer;
+  transition: background-color 0.15s ease, color 0.15s ease;
 }
 
 .seg-btn:hover {
@@ -114,7 +78,6 @@ const selectOption = (opt) => {
 }
 
 .seg-btn.active {
-  background: var(--rc-surface-active);
   color: var(--rc-text-primary);
   font-weight: 600;
 }
@@ -124,17 +87,53 @@ const selectOption = (opt) => {
   outline-offset: 1px;
 }
 
+/* 粗体占位：按粗体宽度撑开标签，选中加粗时不改变按钮宽度 */
+.seg-label {
+  display: inline-flex;
+  flex-direction: column;
+}
+
+.seg-label::after {
+  content: attr(data-label);
+  height: 0;
+  overflow: hidden;
+  visibility: hidden;
+  font-weight: 600;
+  user-select: none;
+  pointer-events: none;
+}
+
 .seg-marker {
   width: 6px;
   height: 6px;
   border-radius: 1.7px;
   flex-shrink: 0;
   background: transparent;
+  transition: background-color 0.15s ease, box-shadow 0.15s ease;
 }
 
 .seg-btn.active .seg-marker {
   background: var(--rc-accent);
-  box-shadow: 0 0 8px rgba(255, 107, 61, 0.55);
+  box-shadow: var(--rc-marker-glow);
+}
+
+/* 数量按 3 位数预留宽度、等宽数字：999 以内数字变化不会改变按钮宽度 */
+.seg-count {
+  box-sizing: border-box;
+  min-width: calc(3ch + 10px);
+  padding: 0 5px;
+  border-radius: var(--rc-radius-full);
+  background: var(--rc-surface-hover);
+  color: var(--rc-text-muted);
+  font-size: 11px;
+  font-weight: 500;
+  line-height: 16px;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+}
+
+.seg-count.is-pending {
+  visibility: hidden;
 }
 
 .seg-hint {
@@ -142,5 +141,62 @@ const selectOption = (opt) => {
   font-weight: 400;
   color: var(--rc-text-faint);
   font-variant-numeric: tabular-nums;
+}
+
+/* ---------- chips：无外框标签 ---------- */
+.is-chips {
+  gap: 2px;
+}
+
+.is-chips .seg-btn {
+  height: 32px;
+  gap: 8px;
+  padding: 0 12px 0 8px;
+  border-radius: var(--rc-radius-md);
+  color: var(--rc-text-secondary);
+  font-size: 13px;
+}
+
+.is-chips .seg-btn:hover {
+  background: var(--rc-surface-hover);
+}
+
+.is-chips .seg-btn.active {
+  background: var(--rc-surface-active);
+}
+
+/* ---------- marker：带外框分段 ---------- */
+.is-marker {
+  padding: 3px;
+  gap: 2px;
+  border-radius: 9px;
+  border: 1px solid var(--rc-border-highlight);
+}
+
+.is-marker .seg-btn {
+  height: 28px;
+  gap: 7px;
+  padding: 0 12px 0 9px;
+  border-radius: 6px;
+  font-size: 13px;
+}
+
+.is-marker .seg-btn.active {
+  background: var(--rc-surface-active);
+}
+
+/* 提醒小圆点：贴在标签右上角，不占宽度，出现 / 消失时按钮不跳动 */
+.seg-btn {
+  position: relative;
+}
+
+.seg-dot {
+  position: absolute;
+  top: 5px;
+  right: 4px;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--rc-error);
 }
 </style>

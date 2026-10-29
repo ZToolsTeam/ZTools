@@ -47,26 +47,18 @@ describe('Sidebar.vue 侧边栏高亮与导航测试', () => {
 
   let pluginsStore
 
-  const categoryNames = (wrapper) => wrapper.findAll('.sidebar-item').map((i) => i.text().trim())
+  const itemTexts = (wrapper) => wrapper.findAll('.sidebar-item').map((i) => i.text().trim())
 
-  it('当前系统上没有插件的分类不显示；统计结果出来前全部显示', async () => {
+  it('侧栏只保留主导航与系统入口，不再重复列出分类（分类只在插件市场页顶部切换）', () => {
     const wrapper = mount(Sidebar, { global: { plugins: [pinia] } })
-    expect(pluginsStore.refreshCategoryCounts).toHaveBeenCalled()
-    expect(categoryNames(wrapper)).toEqual(expect.arrayContaining(['系统工具', '办公效率']))
-
-    pluginsStore.categoryCounts = { 办公效率: 6 }
-    await wrapper.vm.$nextTick()
-    expect(categoryNames(wrapper)).toContain('办公效率')
-    expect(categoryNames(wrapper)).not.toContain('系统工具')
-  })
-
-  it('[边界] 正在查看的分类即使为空也保留，避免侧栏没有选中项', async () => {
-    mockRoute.name = 'list'
-    mockRoute.path = '/list/系统工具'
-    mockRoute.params = { category: '系统工具' }
-    pluginsStore.categoryCounts = { 办公效率: 6 }
-    const wrapper = mount(Sidebar, { global: { plugins: [pinia] } })
-    expect(categoryNames(wrapper)).toContain('系统工具')
+    const texts = itemTexts(wrapper)
+    expect(texts).not.toContain('系统工具')
+    expect(texts).not.toContain('办公效率')
+    expect(texts.some((t) => t.includes('重试分类'))).toBe(false)
+    expect(wrapper.text()).not.toContain('分类')
+    // 预取分类与目录已移到主布局，侧栏自己不再请求
+    expect(useCategoriesStore().fetchCategories).not.toHaveBeenCalled()
+    expect(pluginsStore.refreshCategoryCounts).not.toHaveBeenCalled()
   })
 
   it('初始状态下“主页”为激活高亮状态', () => {
@@ -141,27 +133,14 @@ describe('Sidebar.vue 侧边栏高亮与导航测试', () => {
     delete window.ztools
   })
 
-  it('选中分类时，页面级别高亮互斥失效，分类项处于 active', async () => {
-    const wrapper = mount(Sidebar, {
-      global: { plugins: [pinia] }
-    })
+  it('[边界] 在插件市场的任意分类下，侧栏都高亮「插件市场」，页面项互斥不高亮', async () => {
+    const wrapper = mount(Sidebar, { global: { plugins: [pinia] } })
     const nav = useNavStore()
-
+    nav.setCategory('系统工具')
+    await wrapper.vm.$nextTick()
     const items = wrapper.findAll('.sidebar-item')
-    const sysCat = items.find((i) => i.text().includes('系统工具'))
-    expect(sysCat).toBeDefined()
-
-    await sysCat.trigger('click')
-
-    expect(nav.isInCategoryMode).toBe(true)
-    expect(nav.currentCategory).toBe('系统工具')
-    expect(sysCat.classes()).toContain('active')
-
-    // 其他项均不处于 active
-    const myItem = items.find((i) => i.text().includes('主页'))
-    const settingsItem = items.find((i) => i.text().includes('设置'))
-    expect(myItem.classes()).not.toContain('active')
-    expect(settingsItem.classes()).not.toContain('active')
+    const active = items.filter((i) => i.classes().includes('active')).map((i) => i.text().trim())
+    expect(active).toEqual(['插件市场'])
   })
 
   it('外部路由切换同步到 nav 与高亮', async () => {
@@ -179,21 +158,12 @@ describe('Sidebar.vue 侧边栏高亮与导航测试', () => {
     expect(aboutItem.classes()).toContain('active')
   })
 
-  it('「插件市场」对应无分类的列表页，分类区不再重复列出「全部」', async () => {
-    const categoriesStore = useCategoriesStore()
-    categoriesStore.items = [{ name: '全部' }, { name: '系统工具' }]
+  it('点「插件市场」进入无分类的列表页并高亮', async () => {
     const wrapper = mount(Sidebar, { global: { plugins: [pinia] } })
-    const items = wrapper.findAll('.sidebar-item')
-    expect(items.filter((i) => i.text().trim() === '全部')).toHaveLength(0)
-
-    const market = items.find((i) => i.text().includes('插件市场'))
+    const market = wrapper.findAll('.sidebar-item').find((i) => i.text().includes('插件市场'))
     await market.trigger('click')
     expect(mockPush).toHaveBeenCalledWith({ ...ROUTES.LIST, params: { category: '' } })
     expect(market.classes()).toContain('active')
-
-    // 进入具体分类后「插件市场」不再高亮，二者互斥
-    await items.find((i) => i.text().includes('系统工具')).trigger('click')
-    expect(market.classes()).not.toContain('active')
   })
 
   it('「设置」项显示快捷键键帽', () => {

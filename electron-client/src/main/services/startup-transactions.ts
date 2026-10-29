@@ -23,15 +23,38 @@ export class StartupTransactions {
     const current = await this.#fresh(before, signal)
     if (current.item.enabled === enabled) throw new Error('启动状态未变化，请重新扫描')
     const backup = await this.backups.save(current, enabled)
-    // 备份可能耗时，命令发出前再次核对，避免覆盖期间其他软件的变更。
-    await this.#fresh(current, signal); signal.throwIfAborted()
+    let writeAttempted = false
     try {
+      // 备份可能耗时，命令发出前再次核对，避免覆盖期间其他软件的变更。
+      await this.#fresh(current, signal); signal.throwIfAborted()
+      writeAttempted = true
       await this.writer.apply(this.#write(backup, 'toggle'), signal)
       const overrides = parseStartupOverrides(startupCommandOutput(await this.reader.run(['print-disabled', current.item.domain], AbortSignal.timeout(5000))))
       if (overrides.get(current.item.label) !== !enabled) throw new Error('系统返回的自启状态与请求不一致')
       return { success: true as const, backupId: backup.id, enabled, message: '自启允许状态已更新；当前运行中的任务不受影响，下一次加载时生效' }
     } catch (error) {
-      throw new Error(`自启修改未确认，请重新扫描；恢复记录 ${backup.id} 已保留。${String(error).slice(0, 1000)}`)
+      const detail = String(error).slice(0, 1000)
+      // 写入命令没发出，或发出后（例如用户取消管理员授权）复查确认系统自启状态仍是原值：
+      // 本次没有改动任何东西，这条恢复记录无效，删除它；复查失败或状态已变化则保留记录供恢复。
+      const unchanged = !writeAttempted || await this.#overrideUnchanged(backup)
+      if (!unchanged) throw new Error(`自启修改未确认，请重新扫描；恢复记录 ${backup.id} 已保留。${detail}`)
+      try {
+        await this.backups.discard(backup.id)
+      } catch (discardError) {
+        console.warn(`[startup] 自启未修改，但删除无效恢复记录 ${backup.id} 失败:`, discardError)
+        throw new Error(`自启状态未修改；无效恢复记录 ${backup.id} 删除失败，可在恢复记录中忽略。${detail}`)
+      }
+      throw new Error(`自启状态未修改，请重新扫描后再试。${detail}`)
+    }
+  }
+  /** 复查系统自启覆盖值是否仍是备份时的原值；读取失败返回 false（无法确认就保留恢复记录） */
+  async #overrideUnchanged(backup: StartupBackup): Promise<boolean> {
+    try {
+      const overrides = parseStartupOverrides(startupCommandOutput(await this.reader.run(['print-disabled', backup.domain], AbortSignal.timeout(5000))))
+      return (overrides.get(backup.label) ?? null) === backup.originalOverride
+    } catch (error) {
+      console.warn(`[startup] 写入失败后复查自启状态失败，保留恢复记录 ${backup.id}:`, error)
+      return false
     }
   }
   async restore(backup: StartupBackup, signal: AbortSignal) {

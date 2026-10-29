@@ -435,7 +435,6 @@ export function canCall(method: AllowedMethod, caller: CallerIdentity): boolean 
  * 内置插件采用 "internal-" 命名空间前缀，并在系统内部登记受信任。
  */
 export const TRUSTED_INTERNAL_PLUGINS = [
-  'internal-developer',
   'internal-settings',
   'internal-super-panel',
   'internal-clipboard'

@@ -1,4 +1,5 @@
 import { Menu, Tray, type MenuItem, type MenuItemConstructorOptions } from 'electron'
+import { toElectronAccelerator } from '../platform/common/electron-global-shortcut.js'
 
 export const DEFAULT_TRAY_WAKE_ACCELERATOR = 'Alt+Space'
 const MAX_ACCELERATOR_LENGTH = 64
@@ -52,8 +53,9 @@ export function normalizeTrayAccelerator(
 ): string {
   if (typeof value !== 'string') return fallback
   const trimmed = value.trim()
+  // 空串表示用户已关闭全局唤醒，菜单项不显示快捷键，不能退回默认值
+  if (trimmed.length === 0) return ''
   if (
-    trimmed.length === 0 ||
     trimmed.length > MAX_ACCELERATOR_LENGTH ||
     /[\r\n\0\t]/.test(trimmed)
   ) {
@@ -96,7 +98,8 @@ export function buildTrayMenuTemplate(
     {
       id: 'open-launcher',
       label: '打开极客搜索',
-      accelerator: context.wakeAccelerator,
+      // 与全局快捷键注册同一套转换：设置里的 Ctrl 在 macOS 上实际是 ⌘，菜单按实际按键显示
+      ...(context.wakeAccelerator ? { accelerator: toElectronAccelerator(context.wakeAccelerator) } : {}),
       click: () => context.onOpenLauncher()
     },
     {

@@ -13,7 +13,7 @@ import { preserveAndWriteEnvironment } from '../../src/main/services/environment
 import { SystemEnvironmentProvider, runEnvironmentCommand } from '../../src/main/services/environment-provider.js'
 import { EnvironmentBackupStore } from '../../src/main/services/environment-backups.js'
 import { EnvironmentManagerService, inspectEnvironmentPath } from '../../src/main/services/environment-manager-service.js'
-import { ENV_BEGIN, ENV_END, readEnvironmentProfile, replaceEnvironmentProfile } from '../../src/main/services/environment-profile.js'
+import { darwinPathProblem, ENV_BEGIN, ENV_END, readEnvironmentProfile, replaceEnvironmentProfile } from '../../src/main/services/environment-profile.js'
 
 const caller: CallerIdentity = { type: 'plugin', webContentsId: 37, pluginId: 'env-manager', pluginInstanceId: 'environment-audit' }
 const signal = () => new AbortController().signal
@@ -74,16 +74,40 @@ test('真实 Mac 宿主读写、独立新 shell 验证、重建服务读取和�
   await f.apply({ kind: 'restore', source: 'user', backupId: changed.backupId })
   assert.equal(await fs.readFile(f.profile, 'utf8'), original)
 })
-test('PATH 清理只删除确认不存在目录，保留空项、相对路径、外部卷和既有顺序', { skip: !mac }, async t => {
-  const f = await fixture(t), absent = path.join(f.root, 'missing-dir'), literal = `/usr/bin:${absent}::relative:/Volumes/offline/bin:/bin`
+test('PATH 清理只删除确认不存在目录，保留空项、外部卷和既有顺序', { skip: !mac }, async t => {
+  const f = await fixture(t), absent = path.join(f.root, 'missing-dir'), literal = `/usr/bin:${absent}::/Volumes/offline/bin:/bin`
   await f.apply({ kind: 'set', source: 'user', key: 'PATH', value: literal })
   const plan = await f.prepare({ kind: 'clean', source: 'user' })
   assert.deepEqual(plan.removed, [absent])
   await f.call({ action: 'apply', planId: plan.planId })
-  assert.equal(f.provider.values(await f.provider.read('user', signal())).get('PATH'), '/usr/bin::relative:/Volumes/offline/bin:/bin')
+  assert.equal(f.provider.values(await f.provider.read('user', signal())).get('PATH'), '/usr/bin::/Volumes/offline/bin:/bin')
   assert.equal((await inspectEnvironmentPath('/Volumes/offline/bin', 'darwin')).status, 'unknown')
-  await f.apply({ kind: 'set', source: 'user', key: 'PATH', value: absent })
+  // 已有配置里只剩失效目录（外部写入）时，清理仍拒绝产生空 PATH
+  const raw = await fs.readFile(f.profile, 'utf8')
+  await fs.writeFile(f.profile, raw.replace(/^export PATH=.*$/m, `export PATH='${absent}'`))
   await assert.rejects(f.prepare({ kind: 'clean', source: 'user' }), /为空/)
+})
+test('macOS 拒绝会破坏终端的 PATH：$、反引号、~、相对目录、缺少 /usr/bin 或 /bin，原配置不变', { skip: !mac }, async t => {
+  const f = await fixture(t), before = await fs.readFile(f.profile, 'utf8')
+  const cases: Array<[string, RegExp]> = [
+    ['$PATH:/opt/bin', /不会展开/], ['/usr/bin:/bin:`id`', /反引号/], ['~/bin:/usr/bin:/bin', /~ 不会展开/],
+    ['relative:/usr/bin:/bin', /必须以 \/ 开头/], ['/opt/homebrew/bin:/bin', /\/usr\/bin 和 \/bin/], ['/usr/bin', /\/usr\/bin 和 \/bin/], ['', /\/usr\/bin 和 \/bin/]
+  ]
+  for (const [value, message] of cases) {
+    await assert.rejects(f.prepare({ kind: 'set', source: 'user', key: 'PATH', value }), message)
+    assert.equal(await fs.readFile(f.profile, 'utf8'), before)
+  }
+  // 其它变量可以含 $ 与 ~（按字面量保存），只有 PATH 受此限制；合法 PATH 允许空项
+  await f.apply({ kind: 'set', source: 'user', key: 'ZTOOLS_ENV_CASE', value: '~/$HOME' })
+  await f.apply({ kind: 'set', source: 'user', key: 'PATH', value: '/opt/homebrew/bin::/usr/bin:/bin' })
+})
+test('darwinPathProblem 与插件规则一致', () => {
+  assert.equal(darwinPathProblem('/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin'), '')
+  assert.equal(darwinPathProblem('/usr/bin::/bin'), '')
+  assert.match(darwinPathProblem('/usr/bin:/bin:$HOME/bin'), /不会展开/)
+  assert.match(darwinPathProblem('~/.cargo/bin:/usr/bin:/bin'), /~/)
+  assert.match(darwinPathProblem('./node_modules/.bin:/usr/bin:/bin'), /\//)
+  assert.match(darwinPathProblem('/usr/local/bin'), /\/usr\/bin/)
 })
 test('备份失败、损坏及外部编辑均停止写入，不覆盖原文件', { skip: !mac }, async t => {
   const f = await fixture(t), original = await fs.readFile(f.profile, 'utf8')

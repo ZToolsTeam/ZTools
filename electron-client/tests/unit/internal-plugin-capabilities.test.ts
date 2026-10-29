@@ -145,7 +145,7 @@ test('PRIVILEGED_METHODS covers critical system operations and excludes normal p
 
 test('canCall grants privileged methods to internal plugins while restricting normal plugins', () => {
   const internalSettings = makePluginCaller('internal-settings')
-  const internalDev = makePluginCaller('internal-developer')
+  const internalDev = makePluginCaller('internal-settings')
   const normalPlugin = makePluginCaller('third-party-tool')
   const mainCaller = makeMainCaller()
 
@@ -161,6 +161,12 @@ test('canCall grants privileged methods to internal plugins while restricting no
   assert.equal(canCall('plugin_refresh', internalDev), true)
   assert.equal(canCall('trigger_register', internalSettings), true)
   assert.equal(canCall('user_get_info', internalSettings), true)
+
+  // 调试控制台已删除，internal-developer 不再是受信任的内置插件，不能再拿到特权
+  const removedDeveloper = makePluginCaller('internal-developer')
+  assert.equal(isInternalPlugin('internal-developer'), false)
+  assert.equal(canCall('plugin_install', removedDeveloper), false)
+  assert.equal(canCall('config_set', removedDeveloper), false)
 
   // 普通第三方插件禁止调用限定 main 的管理类 API
   assert.equal(canCall('config_get', normalPlugin), false)
@@ -204,9 +210,9 @@ test('internal plugin can successfully authorize and invoke privileged methods',
   assert.doesNotThrow(() => authorizeIpcRequest(panelCaller, triggerReq, panelSender))
   assert.deepEqual(dispatchAuthorizedIpcRequest(panelCaller, triggerReq, panelSender), { success: true })
 
-  // 3. internal-developer 调用热重载、性能监控与调试工具
-  const devCaller = makePluginCaller('internal-developer')
-  const devSender = makeSender('ztools://plugins/internal-developer/index.html')
+  // 3. internal-settings 调用热重载、性能监控与调试工具
+  const devCaller = makePluginCaller('internal-settings')
+  const devSender = makeSender('ztools://plugins/internal-settings/index.html')
 
   const refreshReq = makeRequest('plugin_refresh')
   assert.doesNotThrow(() => authorizeIpcRequest(devCaller, refreshReq, devSender))
@@ -292,9 +298,9 @@ test('blocks spoofed pluginId parameter attack scenarios with PERMISSION_DENIED'
   assert.equal(spoofNormalRes.success, false)
   assert.equal(spoofNormalRes.error.code, 'PERMISSION_DENIED')
 
-  // 场景 2：普通插件试图在 trigger_register 中伪造 pluginId: 'internal-developer'
+  // 场景 2：普通插件试图在 trigger_register 中伪造 pluginId: 'internal-settings'
   const spoofPrivilegedReq = makeRequest('trigger_register', {
-    pluginId: 'internal-developer',
+    pluginId: 'internal-settings',
     id: 'spoof_id'
   })
   assert.throws(
@@ -342,9 +348,9 @@ test('blocks spoofed pluginId parameter attack scenarios with PERMISSION_DENIED'
   assert.equal(fakePrivilegedRes.success, false)
   assert.equal(fakePrivilegedRes.error.code, 'PERMISSION_DENIED')
 
-  // 场景 5：内置插件（如 internal-developer）管理其它插件时，允许携带目标 pluginId
-  const internalDevCaller = makePluginCaller('internal-developer')
-  const internalDevSender = makeSender('ztools://plugins/internal-developer/index.html')
+  // 场景 5：内置插件（如 internal-settings）管理其它插件时，允许携带目标 pluginId
+  const internalDevCaller = makePluginCaller('internal-settings')
+  const internalDevSender = makeSender('ztools://plugins/internal-settings/index.html')
   const devManageReq = makeRequest('plugin_toggle', { pluginId: 'any-target-plugin' })
   assert.doesNotThrow(() => authorizeIpcRequest(internalDevCaller, devManageReq, internalDevSender))
   assert.deepEqual(dispatchAuthorizedIpcRequest(internalDevCaller, devManageReq, internalDevSender), { success: true })

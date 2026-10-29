@@ -1,6 +1,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import net from 'node:net'
+import path from 'node:path'
 import dgram from 'node:dgram'
 import { once, getEventListeners } from 'node:events'
 import { setTimeout as delay } from 'node:timers/promises'
@@ -30,7 +31,7 @@ test('LAN 严格 IPC：参数注入、非法 IP/MAC、额外测试字段均在�
 })
 test('真实网卡掩码：/23 分段、/25、/31/32，边界地址不越界，不伪造 /24', () => {
   const entry = { address: iface.ip, netmask: '255.255.254.0', family: 'IPv4' as const, mac, internal: false, cidr: null }
-  const interfaces = listLanInterfaces({ en0: [entry], utun0: [entry], lo0: [{ ...entry, internal: true }] })
+  const interfaces = listLanInterfaces({ en0: [entry], utun0: [entry], lo0: [{ ...entry, internal: true }] }, 'darwin')
   assert.equal(interfaces.length, 1); assert.equal(interfaces[0]!.subnet, '192.0.2.0/23'); assert.equal(interfaces[0]!.broadcast, '192.0.3.255')
   const first = lanScanRange(interfaces[0]!, '192.0.2.44'), second = lanScanRange(interfaces[0]!, '192.0.3.44')
   assert.equal(first.hosts.length, 255); assert.ok(first.hosts.includes('192.0.2.255')); assert.ok(second.hosts.includes('192.0.3.0')); assert.equal(second.hosts.length, 255)
@@ -48,8 +49,8 @@ test('原生邻居回执拒绝脱敏、重复冲突、畸形地址与缺权限�
     [{ ip: '192.0.2.4', mac: 'ff:ff:ff:ff:ff:ff' }], [{ ip: '192.0.2.4', mac }, { ip: '192.0.2.4', mac: '02:11:22:33:44:56' }]]) assert.throws(() => parseLanNeighbors(encode(entries)))
   for (const value of ['{}', 'null', '[]', '{', '{"version":2,"success":true,"entries":[]}']) assert.throws(() => parseLanNeighbors(value))
   assert.throws(() => parseLanNeighbors('{"version":1,"success":false,"code":"TOPOLOGY_PERMISSION_REQUIRED"}'), /网络拓扑权限/)
-  assert.match(macNetworkHelperPath(true, '/example/ZTools.app/Contents/Resources'), /Contents\/Helpers\/ZToolsMacNetwork.app\/Contents\/MacOS\/ZToolsMacNetwork$/)
-  assert.match(macNetworkHelperPath(false, '/ignored'), /mac-network-native\/ZToolsMacNetwork.app/)
+  assert.equal(macNetworkHelperPath(true, '/example/ZTools.app/Contents/Resources'), path.join('/example/ZTools.app/Contents/Helpers/ZToolsMacNetwork.app/Contents/MacOS/ZToolsMacNetwork'))
+  assert.ok(macNetworkHelperPath(false, '/ignored').endsWith(path.join('mac-network-native', 'ZToolsMacNetwork.app', 'Contents', 'MacOS', 'ZToolsMacNetwork')))
 })
 test('真实 TCP 套接字：开放、拒绝、取消与重复探测均释放 abort 监听', async () => {
   const server = net.createServer(socket => socket.destroy()); server.listen(0, '127.0.0.1'); await once(server, 'listening')

@@ -99,11 +99,6 @@ const router = createRouter({
           component: () => import('../pages/About.vue')
         },
         {
-          path: 'devtools',
-          name: 'devtools',
-          component: () => import('../pages/DevTools.vue')
-        },
-        {
           path: 'declarative/:pluginId',
           name: 'declarative',
           component: DeclarativePage,

@@ -4,8 +4,7 @@ import {
   INTERNAL_PLUGIN_DEFINITIONS,
   isPluginApiAvailable,
   openInternalPlugin,
-  openSettings,
-  openDevTools
+  openSettings
 } from '../internalPlugins'
 
 describe('internalPlugins 门面', () => {
@@ -19,9 +18,9 @@ describe('internalPlugins 门面', () => {
 
   it('常量定义完备且不可变', () => {
     expect(INTERNAL_PLUGINS.SETTINGS).toBe('internal-settings')
-    expect(INTERNAL_PLUGINS.DEVELOPER).toBe('internal-developer')
+    // 调试控制台已删除，不再有 internal-developer 内置插件
+    expect(Object.keys(INTERNAL_PLUGINS)).toEqual(['SETTINGS'])
     expect(INTERNAL_PLUGIN_DEFINITIONS[INTERNAL_PLUGINS.SETTINGS].fallbackRoute.name).toBe('advanced-settings')
-    expect(INTERNAL_PLUGIN_DEFINITIONS[INTERNAL_PLUGINS.DEVELOPER].fallbackRoute.name).toBe('devtools')
   })
 
   it('isPluginApiAvailable 正确感知原生环境', () => {
@@ -88,16 +87,6 @@ describe('internalPlugins 门面', () => {
     )
   })
 
-  it('openDevTools 在降级环境下导航到 devtools 路由', async () => {
-    const mockRouter = { push: vi.fn().mockResolvedValue(true) }
-
-    const res = await openDevTools({ router: mockRouter })
-    expect(mockRouter.push).toHaveBeenCalledWith(
-      expect.objectContaining({ name: 'devtools' })
-    )
-    expect(res.success).toBe(true)
-    expect(res.fallback).toBe(true)
-  })
 
   it('无路由且无原生支持时给出友好提示', async () => {
     const mockToast = vi.fn()

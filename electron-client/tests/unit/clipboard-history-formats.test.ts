@@ -3,7 +3,7 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import test from 'node:test'
-import { ClipboardHistoryService } from '../../src/main/services/clipboard-history-service.js'
+import { ClipboardHistoryService, isNativeAbsoluteFilePath } from '../../src/main/services/clipboard-history-service.js'
 
 test('三种历史持久化后恢复原始内容，图片与文件不按文本截断', () => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'clipboard-formats-'))
@@ -75,4 +75,59 @@ test('图片列表只返回缩略图，按 ID 恢复才读原图，搜索短词�
     assert.deepEqual(service.getEntry(recorded.id), { type: 'image', image: rawImage })
     assert.deepEqual(service.queryItems({ search: 'QUJ' }), [])
   } finally { service.close() }
+})
+
+test('文件历史只认当前平台的本机绝对路径：其它系统的路径不记录、不恢复、不授权，形似路径的文本仍是文本', () => {
+  for (const [value, darwin, win32] of [
+    ['/Users/me/a.txt', true, false],
+    ['/Users/me/带\\反斜杠.txt', true, false],
+    ['C:\\Users\\qihong\\Downloads\\ZTools-WinLive\\a.txt', false, true],
+    ['c:/Users/a.txt', false, true],
+    ['\\\\server\\share\\a.txt', false, true],
+    ['//server/share/a.txt', true, true],
+    ['\\Users\\a.txt', false, false],
+    ['relative/a.txt', false, false],
+    ['C:relative.txt', false, false],
+    ['', false, false],
+    ['/tmp/a\0b', false, false],
+    [42, false, false]
+  ] as const) {
+    assert.equal(isNativeAbsoluteFilePath(value, 'darwin'), darwin, `darwin ${String(value)}`)
+    assert.equal(isNativeAbsoluteFilePath(value, 'win32'), win32, `win32 ${String(value)}`)
+  }
+
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'clipboard-foreign-'))
+  const dbPath = path.join(directory, 'history.sqlite')
+  const foreign = 'C:\\Users\\qihong\\Downloads\\ZTools-WinLive-20261029-001331\\ZTools-OCR-English.txt'
+  let service = new ClipboardHistoryService({ dbPath, platform: 'darwin' })
+  try {
+    // 混合：只保留本机路径
+    const mixed = service.recordClipboardEntry({ type: 'files', files: ['/Users/me/a.txt', foreign, '\\\\nas\\share\\b.txt'] })!
+    assert.deepEqual(service.getEntry(mixed.id), { type: 'files', files: ['/Users/me/a.txt'] })
+    assert.equal(mixed.text_preview, '/Users/me/a.txt')
+    // 全部是其它系统的路径：不记录
+    assert.equal(service.recordClipboardEntry({ type: 'files', files: [foreign] }), null)
+    assert.equal(service.queryItems({ format: 'files' }).length, 1)
+    // 系统剪贴板里复制的是 Windows 路径文本：仍按文本记录与恢复，不变成文件，也不授权任何路径
+    const text = service.recordClipboardEntry({ type: 'text', text: foreign })!
+    assert.equal(text.format_type, 'text')
+    assert.deepEqual(service.getEntry(text.id), { type: 'text', text: foreign })
+    assert.deepEqual(service.systemCapturedFilePaths([text]), [])
+    service.close()
+
+    // 同一个库在 Windows 上采集过的文件记录（例如数据目录被拷到 Mac）：Mac 上拒绝恢复、不授权
+    service = new ClipboardHistoryService({ dbPath, platform: 'win32' })
+    const fromWindows = service.recordClipboardEntry({ type: 'files', files: [foreign] })!
+    assert.deepEqual(service.getEntry(fromWindows.id), { type: 'files', files: [foreign] })
+    assert.deepEqual(service.systemCapturedFilePaths([fromWindows]), [foreign])
+    assert.equal(service.recordClipboardEntry({ type: 'files', files: ['/Users/me/a.txt', '\\Users\\x'] }), null)
+    service.close()
+    service = new ClipboardHistoryService({ dbPath, platform: 'darwin' })
+    assert.throws(() => service.getEntry(fromWindows.id), /不是本机的文件路径/)
+    assert.deepEqual(service.systemCapturedFilePaths([fromWindows, mixed]), ['/Users/me/a.txt'])
+    assert.deepEqual(service.getEntry(mixed.id), { type: 'files', files: ['/Users/me/a.txt'] })
+  } finally {
+    service.close()
+    fs.rmSync(directory, { recursive: true, force: true })
+  }
 })

@@ -438,6 +438,89 @@ test('exclusive writes keep existing outputs and publish only one concurrent win
   } finally { await dispose(context) }
 })
 
+test('另存为对话框确认替换：已有普通文件只允许单次原子替换，其他来源仍不覆盖', async (t) => {
+  const context = await createContext()
+  const exists = (error: unknown) => error instanceof ZToolsError && error.code === errorCodes.fileAlreadyExists
+  const write = (target: string, content: string, options?: { replaceConfirmed?: boolean; protectedPath?: string }) =>
+    context.service.writeFile({ path: target, encoding: 'utf8', content, overwrite: false }, mainCaller, undefined, options)
+  try {
+    // 1. 选择时已存在 → 对话框已确认替换 → 第一次替换成功，许可单次有效
+    const chosen = path.join(context.root, 'chosen.docx')
+    await fs.writeFile(chosen, 'old')
+    await context.service.grantSavePath(chosen, mainCaller)
+    await assert.rejects(write(chosen, 'no-option'), exists)
+    assert.equal(await fs.readFile(chosen, 'utf8'), 'old')
+    assert.deepEqual(await write(chosen, 'new', { replaceConfirmed: true }), { success: true, size: 3 })
+    assert.equal(await fs.readFile(chosen, 'utf8'), 'new')
+    await assert.rejects(write(chosen, 'again', { replaceConfirmed: true }), exists)
+    assert.equal(await fs.readFile(chosen, 'utf8'), 'new')
+    assert.equal((await fs.readdir(context.root)).some(name => name.endsWith('.tmp')), false)
+
+    // 2. 选择时不存在（对话框未询问替换），之后被别人创建 → 不覆盖
+    const fresh = path.join(context.root, 'fresh.docx')
+    await context.service.grantSavePath(fresh, mainCaller)
+    await fs.writeFile(fresh, 'someone else')
+    await assert.rejects(write(fresh, 'mine', { replaceConfirmed: true }), exists)
+    assert.equal(await fs.readFile(fresh, 'utf8'), 'someone else')
+
+    // 3. 目录递归授权不是对话框确认 → 不覆盖
+    const folder = path.join(context.root, 'folder')
+    await fs.mkdir(folder)
+    await context.service.grantFolder(folder, mainCaller)
+    const inFolder = path.join(folder, 'keep.txt')
+    await fs.writeFile(inFolder, 'keep')
+    await assert.rejects(write(inFolder, 'replace', { replaceConfirmed: true }), exists)
+    assert.equal(await fs.readFile(inFolder, 'utf8'), 'keep')
+
+    // 4. 选择后目标被换成目录 → 拒绝且目录保留
+    const swapped = path.join(context.root, 'swapped.docx')
+    await fs.writeFile(swapped, 'old')
+    await context.service.grantSavePath(swapped, mainCaller)
+    await fs.rm(swapped); await fs.mkdir(swapped)
+    await assert.rejects(write(swapped, 'new', { replaceConfirmed: true }), /不是普通文件/)
+    assert.equal((await fs.stat(swapped)).isDirectory(), true)
+
+    // 5. 写入失败时许可恢复，重试仍可替换
+    const retry = path.join(context.root, 'retry.docx')
+    await fs.writeFile(retry, 'old')
+    await context.service.grantSavePath(retry, mainCaller)
+    const rename = fs.rename
+    t.mock.method(fs, 'rename', async () => { throw Object.assign(new Error('disk full'), { code: 'ENOSPC' }) })
+    await assert.rejects(write(retry, 'new', { replaceConfirmed: true }))
+    t.mock.restoreAll()
+    assert.equal(fs.rename, rename)
+    assert.equal(await fs.readFile(retry, 'utf8'), 'old')
+    await write(retry, 'new', { replaceConfirmed: true })
+    assert.equal(await fs.readFile(retry, 'utf8'), 'new')
+
+    // 6. 别的窗口在对话框中的确认不能被借用
+    const other = path.join(context.root, 'other.docx')
+    await fs.writeFile(other, 'old')
+    await context.service.grantSavePath(other, pluginCaller)
+    await assert.rejects(write(other, 'main', { replaceConfirmed: true }),
+      (error) => error instanceof ZToolsError && error.code === errorCodes.permissionDenied)
+    assert.equal(await fs.readFile(other, 'utf8'), 'old')
+  } finally { t.mock.restoreAll(); await dispose(context) }
+})
+
+test('另存为确认替换不能借符号链接或别名替换受保护的原文件', { skip: process.platform === 'win32' }, async () => {
+  const context = await createContext()
+  try {
+    const source = path.join(context.root, 'source.docx')
+    const alias = path.join(context.root, 'alias.docx')
+    await fs.writeFile(source, 'original')
+    await fs.symlink(source, alias)
+    await context.service.grantOpenPath(source, mainCaller)
+    await context.service.grantSavePath(alias, mainCaller)
+    await assert.rejects(
+      context.service.writeFile({ path: alias, encoding: 'utf8', content: 'copy', overwrite: false }, mainCaller, undefined, { replaceConfirmed: true, protectedPath: source }),
+      (error) => error instanceof ZToolsError && error.code === errorCodes.invalidRequest && /原文件/.test(error.message)
+    )
+    assert.equal(await fs.readFile(source, 'utf8'), 'original')
+    assert.equal((await fs.lstat(alias)).isSymbolicLink(), true)
+  } finally { await dispose(context) }
+})
+
 test('closed owners cannot regain grants through an asynchronous grant request', async () => {
   const context = await createContext()
   try {

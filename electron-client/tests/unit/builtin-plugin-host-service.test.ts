@@ -1391,3 +1391,11 @@ test('[集成] MultiDownloadPlugin 的 file:// 源：带空格与中文的路径
     await fs.rm(tempDir, { recursive: true, force: true })
   }
 })
+
+
+test('AI 视频增强没有模型引擎时明确拒绝，不能用普通转码冒充', async () => {
+  const { handler, calls } = mediaHandlerWithoutFfmpeg();
+  const result = await handler.handleBatchMedia('AiVideoPlugin', 'enhanceVideo', { inputPath: 'input.avi', modelId: 'rife-v4-6' });
+  assert.deepEqual(result, { ok: false, success: false, processedCount: 0, errorCode: 'NOT_SUPPORTED', error: 'AI 视频补帧、超分和降噪引擎尚未接入，无法执行增强；普通转码不能代替 AI 处理' });
+  assert.deepEqual(calls, []);
+});

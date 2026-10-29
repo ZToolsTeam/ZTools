@@ -33,9 +33,10 @@ const themeConfig = computed(() => ({
     : antdTheme.defaultAlgorithm,
   token: {
     // 与 theme.css 的积木 Z × 余烬橙标记保持一致（Ant Design 需要具体色值，不能用 CSS 变量）
-    colorPrimary: '#ff6b3d',
+    // 主色取实心按钮填充色（theme.css --rc-accent-fill），配白字；与自绘按钮一致
+    colorPrimary: isDarkMode.value ? '#ec5a2d' : '#f0582a',
     colorLink: isDarkMode.value ? '#ff8a63' : '#c2410c',
-    colorTextLightSolid: '#1a0a04',
+    colorTextLightSolid: '#ffffff',
     borderRadius: 8,
     fontSize: 13,
     fontFamily:

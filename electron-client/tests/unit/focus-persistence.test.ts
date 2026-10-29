@@ -7,6 +7,7 @@ import { DatabaseSync } from 'node:sqlite'
 import { FocusService } from '../../src/main/services/focus-service.js'
 import { HudService } from '../../src/main/services/hud-service.js'
 import { validateMethodParams } from '../../src/contracts/method-params.js'
+import { toPublicError } from '../../src/contracts/errors.js'
 
 function fixture() {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'focus-persistent-')), dbPath = path.join(directory, 'focus.sqlite')
@@ -61,7 +62,7 @@ test('真实 SQLite 保持运行、精确暂停和继续状态；重启不重新
     let s = f.open(), first = s.startSession({ mode: 'pomodoro' })
     assert.equal(first.completedCycles, 0); f.add(1234)
     assert.equal(s.pauseSession().remainingMs, 1_500_000 - 1234)
-    assert.throws(() => s.startSession({ mode: 'pomodoro' }), /already running or paused/)
+    assert.throws(() => s.startSession({ mode: 'pomodoro' }), /已有进行中或暂停的计时/)
     s.stop(); f.add(40_000); s = f.open()
     assert.equal(s.getCurrentSession()?.status, 'paused'); assert.equal(s.getCurrentSession()?.remainingMs, 1_500_000 - 1234)
     s.resumeSession(); f.add(4321); s.stop(); f.add(5000); s = f.open()
@@ -123,5 +124,35 @@ test('IPC 与直接调用拒绝非法时长、类型和模式，不写入新状�
     }
     assert.throws(() => validateMethodParams('focus_start', { unknown: 1 })); assert.equal(s.getCurrentSession(), null)
     validateMethodParams('focus_start', { mode: 'pomodoro', title: '专注' })
+  } finally { f.close() }
+})
+
+test('专注服务的错误为中文且经 IPC 原样返回（错误码保持 INTERNAL_ERROR），插件旧的英文兜底规则不受影响', () => {
+  const f = fixture()
+  try {
+    const s = f.open()
+    const publicOf = (fn: () => unknown) => {
+      try { fn() } catch (error) { return toPublicError(error) }
+      assert.fail('应当抛出错误')
+    }
+    const cases: Array<[() => unknown, RegExp]> = [
+      [() => s.pauseSession(), /^当前没有进行中的计时/],
+      [() => s.resumeSession(), /^当前没有暂停的计时/],
+      [() => s.completeSession(), /^当前没有可完成的计时/],
+      [() => s.cancelSession(), /^当前没有可取消的计时/],
+      [() => s.createCategory({ name: '   ' }), /^专注分类名称不能为空$/],
+      [() => s.startSession({ mode: 'bad' as never }), /^专注模式无效$/]
+    ]
+    for (const [fn, pattern] of cases) {
+      const error = publicOf(fn)
+      assert.equal(error.code, 'INTERNAL_ERROR')
+      assert.match(error.message, pattern)
+      assert.equal(/[A-Za-z]{4,}/.test(error.message), false, `不应再有英文原因：${error.message}`)
+    }
+    s.startSession({ mode: 'pomodoro' })
+    const conflict = publicOf(() => s.startSession({ mode: 'pomodoro' }))
+    assert.deepEqual(conflict, { code: 'INTERNAL_ERROR', message: '已有进行中或暂停的计时，请先继续或取消当前计时' })
+    s.stop()
+    assert.deepEqual(publicOf(() => s.getCurrentSession()), { code: 'INTERNAL_ERROR', message: '专注服务已停止' })
   } finally { f.close() }
 })

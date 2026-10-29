@@ -4,7 +4,7 @@ import os from 'node:os'
 import path from 'node:path'
 import test from 'node:test'
 import { DatabaseSync } from 'node:sqlite'
-import { CalendarService, detectConference } from '../../src/main/services/calendar-service.js'
+import { CalendarService, detectConference, escapeIcsText, foldIcsLine } from '../../src/main/services/calendar-service.js'
 import { validateMethodParams } from '../../src/contracts/method-params.js'
 
 const HOUR = 3600 * 1000
@@ -77,17 +77,17 @@ test('[边界] listEvents 的 limit 被限制在 1000 以内，非法 limit 回�
 
 test('所属日历：新建时保存 calendarName，重新打开数据库仍是所选日历；未传时默认 Calendar', (t) => {
   const { dir, dbPath } = tempDb()
-  t.after(() => fs.rmSync(dir, { recursive: true, force: true }))
+  const services: CalendarService[] = []
+  t.after(() => { for (const service of services) service.stop(); fs.rmSync(dir, { recursive: true, force: true }) })
   const now = Date.now()
-  const first = new CalendarService({ dbPath })
+  const first = new CalendarService({ dbPath }); services.push(first)
   const eng = first.createEvent({ title: '架构评审', startTime: now, endTime: now + HOUR, calendarName: 'Engineering' })
   const plain = first.createEvent({ title: '无分组', startTime: now, endTime: now + HOUR })
   assert.equal(eng.calendarName, 'Engineering')
   assert.equal(plain.calendarName, 'Calendar')
   first.stop()
 
-  const reopened = new CalendarService({ dbPath })
-  t.after(() => reopened.stop())
+  const reopened = new CalendarService({ dbPath }); services.push(reopened)
   const byId = new Map(reopened.listEvents().map((e) => [e.id, e]))
   assert.equal(byId.get(eng.id)?.calendarName, 'Engineering')
   assert.equal(byId.get(plain.id)?.calendarName, 'Calendar')
@@ -233,4 +233,81 @@ test('[契约] calendar_* 方法参数校验：放行插件实际发送的字段
   validateMethodParams('calendar_create_event', { title: 't', startTime: '10:00', endTime: '11:00', calendarName: 'Work', attendees: [] })
   assert.throws(() => validateMethodParams('calendar_create_event', { title: 't', calendarName: 'x'.repeat(65) }))
   assert.throws(() => validateMethodParams('calendar_create_event', { title: 't', calendarName: 1 }))
+})
+
+/** 按 RFC 5545 把折行还原（CRLF 后跟一个空格表示续行） */
+function unfoldIcs(ics: string): string[] {
+  return ics.replace(/\r\n /g, '').split('\r\n')
+}
+
+test('ICS 符合 RFC 5545：DTSTAMP、文本转义、按 UTF-8 字节折行不切断多字节字符、CRLF 行结束', (t) => {
+  const service = new CalendarService()
+  t.after(() => service.stop())
+  const start = Date.UTC(2026, 9, 28, 1, 30, 0)
+  const stamp = Date.UTC(2026, 9, 27, 8, 0, 5)
+  const event = service.createEvent({
+    title: '周会; 讨论 a,b \\ c',
+    description: '第一行\r\n第二行\r第三行\n第四行',
+    location: '会议室 A, 3 楼; 东侧',
+    startTime: start,
+    endTime: start + HOUR
+  })
+  const longTitle = '长标题'.repeat(40)
+  const long = service.createEvent({ title: longTitle, startTime: start, endTime: start + HOUR })
+  const ics = service.exportToIcs(service.getEventsByIds([event.id, long.id]), stamp)
+
+  // 行结束符全部是 CRLF：没有孤立的 \n 或 \r，且以 CRLF 结尾
+  assert.equal(/\r(?!\n)|(?<!\r)\n/.test(ics), false)
+  assert.ok(ics.endsWith('END:VCALENDAR\r\n'))
+  // 物理行不超过 75 字节，续行以空格开头
+  const physical = ics.split('\r\n').slice(0, -1)
+  for (const line of physical) assert.ok(Buffer.byteLength(line, 'utf8') <= 75, `超长行: ${line}`)
+  assert.ok(physical.some((line) => line.startsWith(' ')), '长标题应被折行')
+  // 折行不切断多字节字符：每个物理行都是合法 UTF-8（往返编码不变、不含替换字符）
+  for (const line of physical) assert.equal(Buffer.from(line, 'utf8').toString('utf8'), line)
+  assert.equal(ics.includes('\ufffd'), false)
+
+  const lines = unfoldIcs(ics)
+  assert.equal(lines.filter((line) => line === 'DTSTAMP:20261027T080005Z').length, 2, '每个 VEVENT 都带 DTSTAMP')
+  assert.ok(lines.includes('SUMMARY:周会\\; 讨论 a\\,b \\\\ c'))
+  assert.ok(lines.includes('DESCRIPTION:第一行\\n第二行\\n第三行\\n第四行'))
+  assert.ok(lines.includes('LOCATION:会议室 A\\, 3 楼\\; 东侧'))
+  assert.ok(lines.includes(`SUMMARY:${longTitle}`), '还原折行后标题完整')
+  assert.ok(lines.includes('DTSTART:20261028T013000Z'))
+  assert.ok(lines.includes('DTEND:20261028T023000Z'))
+  // 空日历同样合规
+  assert.equal(service.exportToIcs([], stamp), 'BEGIN:VCALENDAR\r\nVERSION:2.0\r\nPRODID:-//ZTools//Calendar Service//CN\r\nCALSCALE:GREGORIAN\r\nEND:VCALENDAR\r\n')
+})
+
+test('ICS 折行与转义的边界：恰好 75 字节不折行，76 字节折行，4 字节字符不被拆开', () => {
+  const exact = 'S'.repeat(75)
+  assert.equal(foldIcsLine(exact), exact)
+  assert.equal(foldIcsLine('S'.repeat(76)), `${'S'.repeat(75)}\r\n S`)
+  // 73 个 ASCII + 一个 3 字节汉字 = 76 字节：汉字整体移到续行
+  assert.equal(foldIcsLine(`${'a'.repeat(73)}汉`), `${'a'.repeat(73)}\r\n 汉`)
+  const emoji = `X:${'\u{1F600}'.repeat(40)}`
+  const folded = foldIcsLine(emoji)
+  for (const part of folded.split('\r\n')) {
+    assert.ok(Buffer.byteLength(part, 'utf8') <= 75)
+    assert.equal(part.includes('\ufffd'), false)
+  }
+  assert.equal(folded.replace(/\r\n /g, ''), emoji)
+  assert.equal(foldIcsLine(''), '')
+  assert.equal(escapeIcsText('a\\b;c,d\r\ne\rf\ng'), 'a\\\\b\\;c\\,d\\ne\\nf\\ng')
+  assert.equal(escapeIcsText(''), '')
+})
+
+test('删除不存在的日程返回中文原因，已有日程删除成功且不能重复删除', (t) => {
+  const service = new CalendarService()
+  t.after(() => service.stop())
+  const now = Date.now()
+  const event = service.createEvent({ title: '待删除', startTime: now, endTime: now + HOUR })
+  assert.equal(service.deleteEvent(event.id), true)
+  for (const id of [event.id, 'missing', '']) {
+    assert.throws(() => service.deleteEvent(id), (error: { code?: string; message?: string }) => {
+      assert.equal(error.code, 'INVALID_REQUEST')
+      assert.match(error.message ?? '', /日程不存在或已被删除/)
+      return true
+    })
+  }
 })

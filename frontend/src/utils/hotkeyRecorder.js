@@ -266,3 +266,17 @@ export const parseSupportedHotkeyEvent = (event, options = {}) => {
     text: formatHotkeyForPlatform(hotkey, platform)
   }
 }
+
+/**
+ * 快捷键录入框里的一次按键：Esc 取消录入，单独按 ⌫ / Delete 清除已有快捷键，其余交给 parseSupportedHotkeyEvent。
+ * 返回 { action: 'cancel' | 'clear' | 'pending' | 'invalid' | 'valid', hotkey?, text, isKeys }
+ * isKeys 为 true 时 text 是已按下的组合键（界面用键帽显示），否则 text 是提示语（用文字显示）。
+ */
+export function interpretRecorderKeydown(event, options = {}) {
+  const bare = !event?.ctrlKey && !event?.metaKey && !event?.altKey && !event?.shiftKey
+  if (event?.key === 'Escape') return { action: 'cancel', text: '', isKeys: false }
+  if (bare && (event?.key === 'Backspace' || event?.key === 'Delete')) return { action: 'clear', text: '', isKeys: false }
+  const result = parseSupportedHotkeyEvent(event, options)
+  const isKeys = result.status === 'valid' || (result.status === 'pending' && String(result.text).endsWith('...'))
+  return { action: result.status, hotkey: result.hotkey, text: result.text, isKeys }
+}

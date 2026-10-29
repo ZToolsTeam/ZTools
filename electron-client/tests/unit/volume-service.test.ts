@@ -21,7 +21,7 @@ function macDeps(failing = ''): VolumeDependencies {
 }
 test('挂载卷：macOS过滤 /System/Volumes/* 与快照，保留真实用户卷且同容器共享组', async () => {
   const result = await listSystemVolumes('darwin', macDeps())
-  assert.deepEqual(result.volumes.map(v => v.path), ['/', '/Volumes/外置盘', '/Volumes/工作盘'])
+  assert.deepEqual(result.volumes.map(v => v.path).sort(), ['/', '/Volumes/外置盘', '/Volumes/工作盘'])
   assert.equal(result.partial, false)
   assert.equal(result.volumes.find(v => v.path === '/')?.capacityGroup, 'disk3')
   assert.equal(result.volumes.find(v => v.path === '/Volumes/工作盘')?.capacityGroup, 'disk3')

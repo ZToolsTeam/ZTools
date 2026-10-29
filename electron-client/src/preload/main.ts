@@ -841,8 +841,10 @@ contextBridge.exposeInMainWorld('__ztoolsLauncher', Object.freeze({
   expandToDashboard: (route?: string) => typeof route === 'string'
     ? ipcRenderer.invoke('ztools:launcher_call', 'expand_to_dashboard', { route })
     : ipcRenderer.invoke('ztools:launcher_call', 'expand_to_dashboard'),
-  searchFiles: async (query: string, limit = 20) => {
-    const res = await invoke('system_search_files', { query, limit }) as { success?: boolean; data?: unknown }
+  searchFiles: async (query: string, limit = 20, options?: { scope?: unknown }) => {
+    const scope = options?.scope
+    const params = typeof scope === 'string' ? { query, limit, scope } : { query, limit }
+    const res = await invoke('system_search_files', params) as { success?: boolean; data?: unknown }
     return res?.data ?? res
   },
   openPath: (targetPath: string) => invoke('shell_open_path', { fullPath: targetPath }),

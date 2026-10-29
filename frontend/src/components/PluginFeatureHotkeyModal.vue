@@ -1,6 +1,7 @@
 <script setup>
-import { CloseOutlined } from '@ant-design/icons-vue'
-import { computed, nextTick, ref } from 'vue'
+import HotkeyCaptureField from '@/components/HotkeyCaptureField.vue'
+import { RcDialog } from '@/components/base'
+import { computed, ref } from 'vue'
 import { message } from 'ant-design-vue'
 import { getHotkey, openPlugin as apiOpenPlugin } from '@/api/apiserver'
 import {
@@ -8,7 +9,7 @@ import {
   getHotkeyHostCapabilities,
   getHotkeyRuleDescription,
   getHotkeyWaitText,
-  parseSupportedHotkeyEvent,
+  interpretRecorderKeydown,
   resetHotkeyRecorderState
 } from '@/utils/hotkeyRecorder'
 import {
@@ -32,10 +33,9 @@ const supportsDoubleModifierHotkeys = ref(false)
 const loadingItemId = ref('')
 const recordingItemId = ref('')
 const recordingText = ref('')
+const recordingIsKeys = ref(false)
 const featureHotkeyMap = ref({})
 const screenshotSettings = ref(createDefaultScreenshotSettings())
-
-const inputRefs = {}
 
 function createDefaultScreenshotSettings() {
   return {
@@ -51,10 +51,6 @@ const getTriggerList = (result) => result?.data || result || []
 const configuredCount = computed(
   () => Object.keys(featureHotkeyMap.value).length
 )
-
-const setInputRef = (itemId, el) => {
-  inputRefs[itemId] = el
-}
 
 const getItemHotkey = (itemId) =>
   formatHotkeyForPlatform(
@@ -230,12 +226,6 @@ const handleCancel = () => {
   hide()
 }
 
-const focusInput = (itemId) => {
-  nextTick(() => {
-    inputRefs[itemId]?.focus()
-  })
-}
-
 const startRecording = async (item) => {
   if (loadingItemId.value) return
   if (item.pluginId === 'screenshot') {
@@ -243,13 +233,14 @@ const startRecording = async (item) => {
   }
   recordingItemId.value = item.id
   recordingText.value = ''
-  focusInput(item.id)
+  recordingIsKeys.value = false
 }
 
 const stopRecording = () => {
   resetHotkeyRecorderState()
   recordingItemId.value = ''
   recordingText.value = ''
+  recordingIsKeys.value = false
 }
 
 const getGlobalWakeHotkey = async () => {
@@ -437,40 +428,26 @@ const clearHotkey = async (item) => {
   }
 }
 
+/** 录入框里的按键：Esc 取消、⌫ 清除，组合键完整后注册 */
 const handleKeydown = async (item, event) => {
-  event.preventDefault()
-  event.stopPropagation()
-
   if (recordingItemId.value !== item.id) return
-
-  if (event.key === 'Escape') {
+  const result = interpretRecorderKeydown(event, {
+    platform: hotkeyPlatform.value,
+    allowDoubleTap: supportsDoubleModifierHotkeys.value
+  })
+  if (result.action === 'cancel') {
     stopRecording()
     return
   }
-
-  if (event.key === 'Backspace' || event.key === 'Delete') {
+  if (result.action === 'clear') {
     await clearHotkey(item)
     stopRecording()
     return
   }
-
-  const result = parseSupportedHotkeyEvent(event, {
-    platform: hotkeyPlatform.value,
-    allowDoubleTap: supportsDoubleModifierHotkeys.value
-  })
-  if (result.status === 'pending') {
-    recordingText.value = result.text
-    return
-  }
-
-  if (result.status === 'invalid') {
-    recordingText.value = result.text
-    return
-  }
-
-  const hotkeyStr = result.hotkey
   recordingText.value = result.text
-  await registerHotkey(item, hotkeyStr)
+  recordingIsKeys.value = result.isKeys
+  if (result.action !== 'valid') return
+  await registerHotkey(item, result.hotkey)
   stopRecording()
 }
 
@@ -478,12 +455,10 @@ defineExpose({ show, hide, configuredCount })
 </script>
 
 <template>
-  <a-modal
+  <RcDialog
     v-model:open="visible"
     title="功能快捷键管理"
-    :footer="null"
     :width="720"
-    centered
     @cancel="handleCancel"
   >
     <div class="feature-modal-tip">
@@ -521,55 +496,23 @@ defineExpose({ show, hide, configuredCount })
           <div class="feature-desc">{{ item.description }}</div>
         </div>
 
-        <div class="feature-actions">
-          <div
-            class="hotkey-recorder"
-            :class="{
-              recording: recordingItemId === item.id,
-              loading: loadingItemId === item.id
-            }"
-            @click="startRecording(item)"
-          >
-            <input
-              :ref="(el) => setInputRef(item.id, el)"
-              class="hotkey-hidden-input"
-              readonly
-              @keydown="handleKeydown(item, $event)"
-              @blur="recordingItemId === item.id ? stopRecording() : null"
-            />
-
-            <span v-if="recordingItemId === item.id" class="recording-text">
-              {{
-                loadingItemId === item.id
-                  ? '保存中...'
-                  : recordingText || getHotkeyWaitText(hotkeyPlatform, supportsDoubleModifierHotkeys)
-              }}
-            </span>
-            <div v-else-if="getItemHotkey(item.id)" class="hotkey-keys">
-              <span
-                v-for="key in getItemHotkey(item.id).split('+')"
-                :key="key"
-                class="key-badge"
-              >
-                {{ key }}
-              </span>
-            </div>
-            <span v-else class="no-hotkey">点击录入</span>
-          </div>
-
-          <button
-            v-if="getItemHotkey(item.id) && recordingItemId !== item.id"
-            type="button"
-            class="clear-btn"
-            title="清除快捷键"
-            @click.stop="clearHotkey(item)"
-          >
-            <CloseOutlined  />
-          </button>
-        </div>
+        <HotkeyCaptureField
+          class="feature-actions"
+          :hotkey="getItemHotkey(item.id)"
+          :recording="recordingItemId === item.id"
+          :loading="loadingItemId === item.id"
+          :recording-text="recordingText"
+          :recording-is-keys="recordingIsKeys"
+          :wait-text="getHotkeyWaitText(hotkeyPlatform, supportsDoubleModifierHotkeys)"
+          empty-text="点击录入"
+          @start="startRecording(item)"
+          @cancel="stopRecording"
+          @keydown="handleKeydown(item, $event)"
+          @clear="clearHotkey(item)"
+        />
       </div>
     </div>
-  </a-modal>
+  </RcDialog>
 </template>
 
 <style scoped>
@@ -669,97 +612,17 @@ defineExpose({ show, hide, configuredCount })
   cursor: pointer;
 }
 
-.feature-actions {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  flex-shrink: 0;
-}
 
-.hotkey-recorder {
-  min-width: 180px;
-  min-height: 38px;
-  padding: 0 10px;
-  border-radius: var(--rc-radius-lg, 10px);
-  border: 1.5px solid var(--rc-border);
-  background: var(--rc-surface);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  cursor: pointer;
-  transition: all 0.2s ease;
-  position: relative;
-}
 
-.hotkey-recorder:hover {
-  border-color: var(--rc-accent);
-}
 
-.hotkey-recorder.recording {
-  border-color: var(--rc-accent);
-  background: var(--rc-accent-subtle);
-}
 
-.hotkey-recorder.loading {
-  opacity: 0.6;
-  pointer-events: none;
-}
 
-.hotkey-hidden-input {
-  position: absolute;
-  inset: 0;
-  opacity: 0;
-  cursor: pointer;
-}
 
-.recording-text {
-  font-size: 12px;
-  font-weight: 500;
-  color: var(--rc-accent-text);
-}
 
-.hotkey-keys {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  flex-wrap: wrap;
-  justify-content: center;
-}
 
-.key-badge {
-  padding: 2px 6px;
-  border-radius: var(--rc-radius-sm, 4px);
-  font-size: 11px;
-  font-weight: 600;
-  font-family: var(--rc-font-mono, monospace);
-  background: var(--rc-kbd-bg);
-  color: var(--rc-kbd-text);
-  border: 1px solid var(--rc-kbd-border);
-}
 
-.no-hotkey {
-  font-size: 12px;
-  color: var(--rc-text-muted);
-}
 
-.clear-btn {
-  width: 28px;
-  height: 28px;
-  border-radius: var(--rc-radius-sm, 6px);
-  border: none;
-  background: transparent;
-  color: var(--rc-text-muted);
-  cursor: pointer;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  transition: all 0.15s ease;
-}
 
-.clear-btn:hover {
-  background: var(--rc-error-subtle);
-  color: var(--rc-error);
-}
 
 @media (max-width: 720px) {
   .feature-hotkey-item {

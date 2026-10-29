@@ -7,33 +7,17 @@ import BrandMark from './BrandMark.vue'
 import HeaderGeekModeTrigger from './HeaderGeekModeTrigger.vue'
 
 import { isNative, sys } from '@/api/apiserver'
-import { useUserStore, headerExtraComponents, feedbackEntry } from '@edition'
-import { useUIStore } from '@/stores/ui'
-import { useNavStore } from '@/stores/nav'
+import { useUserStore, headerExtraComponents } from '@edition'
 import { ROUTES, routeUtils } from '@/router/routes'
 
 const router = useRouter()
 const route = useRoute()
 const userStore = useUserStore()
-const uiStore = useUIStore()
-const nav = useNavStore()
-
-const isSidebarCollapsed = computed(() => uiStore.isSidebarCollapsed)
-const toggleSidebar = () => uiStore.toggleSidebar()
 
 const isMacPlatform = ref(
   typeof navigator !== 'undefined' &&
     (navigator.userAgent.includes('Mac') || navigator.platform?.includes('Mac'))
 )
-
-const currentCategoryTitle = computed(() => {
-  if (route.name === 'my') return '我的插件'
-  if (route.name === 'list') return nav.currentCategory || '全部插件'
-  if (feedbackEntry.routeName && route.name === feedbackEntry.routeName) return feedbackEntry.title
-  if (route.name === 'advanced-settings') return '偏好设置'
-  if (route.name === 'about') return '关于'
-  return ''
-})
 
 const keyword = ref('')
 const searchBarRef = ref(null)
@@ -59,11 +43,33 @@ const showDiagnostics = computed(() => {
 // 检查登录状态
 // const isCheckingAuth = computed(() => userStore.isCheckingAuth)
 
-// 搜索处理
+// 搜索处理：按 Enter 或选「在插件市场搜索」时跳到插件市场
 const onSearch = (q) => {
   keyword.value = q
   router.push(routeUtils.toListWithSearch(q))
 }
+
+// 已经在插件市场页时，输入即时筛选列表：防抖后替换地址里的搜索词，不新增历史记录
+const LIST_FILTER_DEBOUNCE_MS = 250
+let listFilterTimer = null
+const clearListFilterTimer = () => {
+  if (listFilterTimer) clearTimeout(listFilterTimer)
+  listFilterTimer = null
+}
+watch(keyword, () => {
+  clearListFilterTimer()
+  if (route.name !== ROUTES.LIST.name) return
+  listFilterTimer = setTimeout(() => {
+    listFilterTimer = null
+    const next = String(keyword.value || '').trim()
+    if (route.name !== ROUTES.LIST.name || next === String(route.query.q || '').trim()) return
+    const query = { ...route.query }
+    if (next) query.q = next
+    else delete query.q
+    router.replace({ name: ROUTES.LIST.name, params: route.params, query })
+      .catch((err) => console.warn('[Header] 更新插件市场搜索词失败:', err))
+  }, LIST_FILTER_DEBOUNCE_MS)
+})
 
 // 跳转到诊断页
 const goDiagnostics = () => {
@@ -130,6 +136,7 @@ watch(
 // 清理
 onUnmounted(() => {
   clearSearchFocusTimers()
+  clearListFilterTimer()
   delete window.__ztoolsFocusHomeSearch
   userStore.cleanupEventListeners()
 })
@@ -148,35 +155,13 @@ onUnmounted(() => {
     <div
       class="h-full w-full flex items-center justify-between"
       :style="{
-        // macOS：红绿灯 x=18、3×12px + 2×8px 间距，再留 16px 到侧栏按钮（与设计稿一致）
+        // macOS：红绿灯 x=18、3×12px + 2×8px 间距，再留 16px 到 Logo
         paddingLeft: isMacPlatform ? '86px' : '14px',
         paddingRight: isWindowsPlatform ? '142px' : '14px'
       }"
     >
-      <!-- Logo与侧栏折叠控制区域 -->
+      <!-- Logo 区域 -->
       <div class="flex items-center" style="gap: 10px; -webkit-app-region: no-drag">
-        <!-- 侧栏折叠/展开切换按钮 (macOS 风格) -->
-        <button
-          type="button"
-          class="sidebar-toggle-btn"
-          :class="{ 'is-active': !isSidebarCollapsed }"
-          :aria-label="isSidebarCollapsed ? '展开侧边栏' : '收起侧边栏'"
-          :aria-pressed="!isSidebarCollapsed"
-          :title="
-            isSidebarCollapsed
-              ? (isMacPlatform ? '展开侧边栏 (⌘B)' : '展开侧边栏 (Ctrl+B)')
-              : (isMacPlatform ? '收起侧边栏 (⌘B)' : '收起侧边栏 (Ctrl+B)')
-          "
-          @click="toggleSidebar"
-        >
-          <!-- 侧栏状态图标：展开时左栏填充，收起时只保留细线 -->
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-            <rect x="3" y="4.5" width="18" height="15" rx="3" />
-            <rect class="sidebar-pane" x="5.6" y="7.1" width="3.6" height="9.8" rx="1.1" stroke="none" />
-            <path d="M11.5 4.5v15" />
-          </svg>
-        </button>
-
         <!-- Logo -->
         <button
           @click="goHome"
@@ -191,17 +176,6 @@ onUnmounted(() => {
             ZTools
           </span>
         </button>
-
-        <!-- 当侧边栏收起时展示当前分类面包屑胶囊，给小白用户提供确定性指示与快速展开入口 -->
-        <div
-          v-if="isSidebarCollapsed && currentCategoryTitle"
-          class="category-breadcrumb-pill flex items-center gap-1.5 px-2 py-0.5 rounded-md text-xs font-medium cursor-pointer transition-colors"
-          @click="toggleSidebar"
-          title="点击展开侧边栏"
-        >
-          <span class="breadcrumb-marker"></span>
-          <span>{{ currentCategoryTitle }}</span>
-        </div>
 
         <!-- 调试信息 - 仅开发环境显示 -->
         <span
@@ -256,58 +230,4 @@ onUnmounted(() => {
   </header>
 </template>
 
-<style scoped>
-.sidebar-toggle-btn {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 28px;
-  height: 28px;
-  border-radius: var(--rc-radius-md, 8px);
-  color: var(--rc-text-muted);
-  background: transparent;
-  border: none;
-  cursor: pointer;
-  transition: background-color 0.15s ease, color 0.15s ease;
-}
-
-.sidebar-toggle-btn:hover {
-  background-color: var(--rc-surface-hover);
-  color: var(--rc-text-primary);
-}
-
-.sidebar-toggle-btn:focus-visible {
-  outline: none;
-  box-shadow: var(--rc-focus-ring);
-}
-
-.sidebar-toggle-btn .sidebar-pane {
-  fill: currentColor;
-  opacity: 0;
-  transition: opacity 0.15s ease;
-}
-
-/* 侧栏展开：左栏以淡色填充，表示「当前显示中」 */
-.sidebar-toggle-btn.is-active .sidebar-pane {
-  opacity: 0.35;
-}
-
-.category-breadcrumb-pill {
-  background-color: var(--rc-surface-subtle);
-  color: var(--rc-text-secondary);
-  border: 1px solid var(--rc-border-subtle);
-}
-
-.category-breadcrumb-pill:hover {
-  background-color: var(--rc-surface-hover);
-  color: var(--rc-text-primary);
-  border-color: var(--rc-border);
-}
-
-/* 修复 Ant Design Spin 内部元素的垂直对齐（深度选择器） */
-.header-spin :deep(.ant-spin-dot) {
-  vertical-align: middle;
-  display: inline-flex;
-  align-items: center;
-}
-</style>
+<style scoped></style>

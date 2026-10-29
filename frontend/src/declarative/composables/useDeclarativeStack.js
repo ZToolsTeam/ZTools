@@ -1,6 +1,7 @@
+import { confirmDialog } from "@/utils/confirmDialog";
 import { ref, computed, shallowRef, onUnmounted, toRaw, h } from "vue";
 import { setDeclarativeBridge, renderDeclarativeRoot, getComponentFactory } from "@ztools/declarative-ui";
-import { Modal } from "ant-design-vue";
+import { createScreenColorPicker } from "../screenColorPicker.js";
 import { getHostMethods } from "../hostMethods.js";
 
 
@@ -85,7 +86,7 @@ export function showInAppConfirm(options = {}) {
       settle(false);
     }
     try {
-      instance = Modal.confirm({
+      instance = confirmDialog({
         title,
         content: typeof options.message === "string" ? options.message : undefined,
         okText: buttonText(primary.title || "确定"),
@@ -115,6 +116,7 @@ export function showInAppConfirm(options = {}) {
  * @param {object|null} [options.handoffSeed] 独立窗口交接来的 usePopoutState 初值：只给第一次挂载的根页面用一次
  */
 export function useDeclarativeStack(initialRoot, options = {}) {
+  const screenColorPicker = createScreenColorPicker();
   const onOverlayClosed = typeof options?.onOverlayClosed === "function" ? options.onOverlayClosed : null;
   const captureViewState = typeof options?.captureViewState === "function" ? options.captureViewState : null;
   let pendingHandoffSeed =
@@ -189,6 +191,7 @@ export function useDeclarativeStack(initialRoot, options = {}) {
   }
 
   function clear() {
+    screenColorPicker.cancel();
     closeAllConfirms();
     while (stack.value.length > 0) {
       const item = stack.value.pop();
@@ -405,6 +408,7 @@ export function useDeclarativeStack(initialRoot, options = {}) {
       }
       throw Object.assign(new Error("当前宿主不支持自动粘贴"), { code: "NOT_SUPPORTED" });
     },
+    pickScreenColor: () => screenColorPicker.pick(),
     manageWindow: async (action) => {
       const methods = getElectronMethods();
       if (methods?.window_manage_action) {

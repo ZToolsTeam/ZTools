@@ -43,40 +43,20 @@ vi.mock('@/api/apiserver', () => ({
 
 vi.mock('ant-design-vue', () => ({
   message: { success: vi.fn(), error: vi.fn(), warning: vi.fn(), info: vi.fn() },
-  Modal: { confirm: vi.fn() }
+  Modal: { confirm: vi.fn() },
+  // RcSelect / RcAlert / RcDialog 的底层组件：本测试只关心批量诊断逻辑，渲染成空壳即可
+  Select: { name: 'ASelect', render: () => null },
+  Alert: { name: 'AAlert', render: () => null }
 }))
 
+// 页面仍直接使用的 antd 输入类组件渲染成空壳即可（按钮、卡片、分段切换走真实的 Rc 基础组件）；
+// a-alert / a-select 会匹配上面 mock 的 AAlert / ASelect，桩元素保留 data-test 属性供断言
 const antDesignStubs = Object.fromEntries(
-  [
-    'a-alert',
-    'a-card',
-    'a-input',
-    'a-input-number',
-    'a-progress',
-    'a-select',
-    'a-select-option',
-    'a-slider',
-    'a-tab-pane',
-    'a-tabs',
-    'a-textarea'
-  ].map((name) => [name, true])
+  ['a-alert', 'a-input', 'a-input-number', 'a-select', 'a-slider', 'a-textarea'].map((name) => [
+    name,
+    true
+  ])
 )
-antDesignStubs['a-tabs'] = {
-  props: ['activeKey'],
-  template: '<div><slot /></div>'
-}
-antDesignStubs['a-card'] = {
-  props: ['title'],
-  template: '<article><slot /></article>'
-}
-antDesignStubs['a-tab-pane'] = {
-  props: ['tab'],
-  template: '<section><slot /></section>'
-}
-antDesignStubs['a-button'] = {
-  emits: ['click'],
-  template: `<button @click="$emit('click')"><slot /></button>`
-}
 
 function createService(methods = {}) {
   return new Proxy(methods, {

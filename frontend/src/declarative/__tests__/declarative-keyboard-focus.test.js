@@ -197,6 +197,34 @@ describe("输入框原生编辑组合键与 macOS 修饰键", () => {
     expect(log).toEqual(["cmd+shift+z"]);
   });
 
+  it("输入框有内容时 ⌘⌫ 留给输入框删除文字，不触发删除动作；空输入框时照常触发", async () => {
+    const log = [];
+    const wrapper = mountView(() =>
+      List({}, [
+        List.Item({
+          id: "a",
+          title: "条目 A",
+          actions: ActionPanel({}, [
+            Action({ title: "主动作", onAction: () => log.push("primary") }),
+            Action({ title: "删除", shortcut: { modifiers: ["ctrl"], key: "backspace" }, onAction: () => log.push("delete") })
+          ])
+        })
+      ])
+    );
+    await flush();
+    const input = searchInput(wrapper);
+    input.focus();
+    input.value = "abc";
+    const typing = press(input, "Backspace", { metaKey: true });
+    await flush();
+    expect(log).toEqual([]);
+    expect(typing.defaultPrevented).toBe(false);
+    input.value = "";
+    press(input, "Backspace", { metaKey: true });
+    await flush();
+    expect(log).toEqual(["delete"]);
+  });
+
   it("macOS 上 ⌃C 不匹配声明为 cmd 的动作", async () => {
     const log = [];
     const wrapper = mountView(listWithShortcuts(log));
@@ -333,7 +361,7 @@ describe("动作面板关闭、推入新页面后焦点回到当前视图", () =
   });
 });
 
-describe("Form 视图：自动聚焦、内联按钮与 ⌘Enter 提交", () => {
+describe("Form 视图：自动聚焦、底栏主动作与 ⌘Enter 提交", () => {
   it("打开表单后首个文本框获得焦点，光标在预填内容末尾", async () => {
     const wrapper = mountView(() =>
       Form({ actions: ActionPanel({}, [Action.SubmitForm({ title: "保存", onSubmit: () => {} })]) }, [
@@ -360,7 +388,7 @@ describe("Form 视图：自动聚焦、内联按钮与 ⌘Enter 提交", () => {
     expect(wrapper.vm).toBeTruthy();
   });
 
-  it("普通 Action 作为表单主动作时，点内联主按钮执行 onAction（与键盘 Enter 一致）", async () => {
+  it("普通 Action 作为表单主动作时，点底栏主动作执行 onAction（与键盘 ⌘Enter 一致）；表单内不再重复渲染提交按钮", async () => {
     const log = [];
     const wrapper = mountView(() =>
       Form({ actions: ActionPanel({}, [Action({ title: "保存日程", onAction: () => log.push("save") })]) }, [
@@ -368,14 +396,19 @@ describe("Form 视图：自动聚焦、内联按钮与 ⌘Enter 提交", () => {
       ])
     );
     await flush();
-    const btn = wrapper.findAll("button").find((b) => b.text().includes("保存日程") && b.text().includes("✓"));
-    expect(btn).toBeDefined();
+    const matches = wrapper.findAll("button").filter((b) => b.text().includes("保存日程"));
+    // 同一动作只出现一次：底栏主动作；不再有带“(Enter)”或“✓”的表单内按钮，也没有“取消 / 返回”
+    expect(matches).toHaveLength(1);
+    expect(wrapper.text()).not.toContain("(Enter)");
+    expect(wrapper.text()).not.toContain("取消 / 返回");
+    const btn = matches[0];
+    expect(btn.attributes("title")).toContain("执行首要动作");
     await btn.trigger("click");
     await flush();
     expect(log).toEqual(["save"]);
   });
 
-  it("主动作抛错时点内联按钮给出失败提示，不静默", async () => {
+  it("主动作抛错时点底栏主动作给出失败提示，不静默", async () => {
     const wrapper = mountView(() =>
       Form({ actions: ActionPanel({}, [Action({ title: "复制 HMAC", onAction: () => { throw new Error("密钥为空"); } })]) }, [
         Form.TextField({ id: "k", title: "密钥" })
@@ -383,7 +416,8 @@ describe("Form 视图：自动聚焦、内联按钮与 ⌘Enter 提交", () => {
     );
     await flush();
     const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
-    const btn = wrapper.findAll("button").find((b) => b.text().includes("复制 HMAC") && b.text().includes("✓"));
+    const btn = wrapper.findAll("button").find((b) => b.text().includes("复制 HMAC"));
+    expect(btn).toBeDefined();
     await btn.trigger("click");
     await flush();
     expect(wrapper.text()).toContain("密钥为空");
@@ -446,7 +480,8 @@ describe("ActionPanel.Submenu", () => {
     await flush();
     const input = searchInput(wrapper);
     input.focus();
-    expect(wrapper.text()).toContain("动作面板 (4)");
+    // 主动作「复制结果」与次动作「复制公式」已在底栏露出，面板按钮只计收起的 2 个子菜单动作
+    expect(wrapper.text()).toContain("动作面板 (2)");
 
     press(input, "Enter", { metaKey: true });
     await flush();
@@ -492,7 +527,8 @@ describe("ActionPanel.Submenu", () => {
     );
     await flush();
     expect(wrapper.text()).toContain("唯一动作");
-    expect(wrapper.text()).toContain("动作面板 (1)");
+    // 唯一的动作已作为主动作显示在底栏，没有收起的动作时不显示动作面板按钮
+    expect(wrapper.find("[data-decl-action-panel]").exists()).toBe(false);
     expect(wrapper.text()).not.toContain("怪节点");
     press(searchInput(wrapper), "Enter");
     await flush();
@@ -612,5 +648,44 @@ describe("布局二：左栏导航与右栏明细的键盘切换", () => {
     await flush();
     expect(typed.defaultPrevented).toBe(false);
     expect(state.log.filter((l) => l.startsWith("check:")).length).toBe(1);
+  });
+});
+
+describe("列表状态栏按钮", () => {
+  it("按钮回调失败时如实提示，不静默；成功时不弹失败提示", async () => {
+    let fail = true;
+    const wrapper = mountView(() =>
+      List({ filterBar: { summaryText: "状态", actions: [{ id: "refresh", title: "重新扫描", onAction: async () => { if (fail) throw new Error("扫描被拒绝"); } }] } }, [
+        List.Item({ id: "a", title: "条目 A" })
+      ])
+    );
+    await flush();
+    const button = wrapper.findAll("button").find((item) => item.text().includes("重新扫描"));
+    expect(button).toBeTruthy();
+    await button.trigger("click");
+    await flush(6);
+    expect(wrapper.text()).toContain("操作失败");
+    expect(wrapper.text()).toContain("扫描被拒绝");
+  });
+});
+
+describe("⌘K 动作面板合并列表级动作", () => {
+  it("条目已有同名动作时，列表级同名动作不重复出现；不同名的仍在全局操作里", async () => {
+    const log = [];
+    const wrapper = mountView(() =>
+      List({ actions: ActionPanel({}, [
+        Action({ title: "新建便签", onAction: () => log.push("list-new") }),
+        Action({ title: "重新读取", onAction: () => log.push("list-reload") })
+      ]) }, [
+        List.Item({ id: "a", title: "条目 A", actions: ActionPanel({}, [
+          Action({ title: "打开", onAction: () => log.push("open") }),
+          Action({ title: "新建便签", onAction: () => log.push("item-new") })
+        ]) })
+      ])
+    );
+    await flush();
+    const titles = wrapper.vm.$.setupState.activeActions.map((act) => act.props.title);
+    expect(titles.filter((title) => title === "新建便签")).toHaveLength(1);
+    expect(titles).toContain("重新读取");
   });
 });

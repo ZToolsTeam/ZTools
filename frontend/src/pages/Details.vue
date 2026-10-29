@@ -1,8 +1,9 @@
 <script setup>
-import { ArrowLeftOutlined, ReloadOutlined, WarningOutlined } from '@ant-design/icons-vue'
+import { RcButton, RcSegmented } from '@/components/base'
+import { confirmDialog } from '@/utils/confirmDialog'
+import { ArrowLeftIcon, RotateCwIcon, TriangleAlertIcon } from '@lucide/vue'
 import { ref, watch, onMounted, onBeforeUnmount, computed, nextTick } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { Modal } from 'ant-design-vue'
 
 import PluginDetailHeader from './details-components/PluginDetailHeader.vue'
 import PluginScreenshots from './details-components/PluginScreenshots.vue'
@@ -28,10 +29,11 @@ import { useVersionCompat } from '@/composables/useVersionCompat'
 import { ROUTES, routeUtils } from '@/router/routes'
 import { getPluginFeatureHotkeyItemByTrigger } from '@/utils/pluginFeatureHotkeys'
 import { isPluginSupportedOnCurrentPlatform, isWindows } from '@/utils/platform'
-import { pluginDetailTabs, auth, onAuthRequired, track } from '@edition'
+import { pluginDetailTabs, pluginRatings, auth, onAuthRequired, track } from '@edition'
 import { getOfficialPlugin, isClientProvidedPlugin } from '@/utils/officialPlugins'
 import { getBundledPluginEntry, isBundledPlugin } from '@/utils/bundledPlugins'
 import { loadInstalledDeclarativePlugin } from '@/utils/declarativePluginLoader'
+import { normalizeCatalogScreenshots } from '@/utils/pluginScreenshots'
 
 const route = useRoute()
 const router = useRouter()
@@ -78,11 +80,6 @@ const libIndex = ref(0)           // 当前第几个依赖库
 const libTotal = ref(0)           // 依赖库总数
 // 当前插件绑定的快捷键文本
 const hotkeyText = ref('')
-const subtitle = computed(() => {
-  const p = plugin.value || {}
-  if (!p.version && !p.category && !p.size) return ''
-  return `v${p.version || ''} · ${p.category || ''} · ${p.size || '未知'}`
-})
 
 // 使用 Store 中的安装状态（随客户端提供的插件始终视为已安装，避免异步同步前按钮从“安装”跳变到“打开”；
 // 插件市场分发的官方插件以实际安装状态为准）
@@ -113,6 +110,7 @@ const tabNames = {
   ...Object.fromEntries(pluginDetailTabs.map((tab) => [tab.key, tab.label]))
 }
 const hasCommentsTab = pluginDetailTabs.some((tab) => tab.key === 'comments')
+// 标签切换统一用 RcSegmented；留言 Tab 带上留言数
 const activeTab = ref('detail')
 const tabContainerRef = ref(null)
 let loadRequestId = 0
@@ -125,8 +123,14 @@ const tabContext = computed(() => ({
   pluginId: pluginId.value,
   plugin: plugin.value,
   isInstalled: isInstalled.value,
+  isRevoked: isRevoked.value,
   activationToken: tabActivationToken.value
 }))
+
+// 评分汇总由版本提供（官方版：真实评分；开源版没有评分，始终为 null，头部不显示）
+const ratingSummary = computed(() =>
+  pluginRatings.enabled ? pluginRatings.summaries[pluginId.value] || null : null
+)
 
 const commentsCount = computed(() => {
   if (!hasCommentsTab) return null
@@ -144,6 +148,12 @@ const commentsCount = computed(() => {
     ? normalized
     : loadedCommentsCount.value
 })
+
+const tabOptions = computed(() => tabs.map((tab) => ({
+  label: tabNames[tab],
+  value: tab,
+  count: tab === 'comments' && commentsCount.value > 0 ? commentsCount.value : undefined
+})))
 
 function resetDetailsState() {
   plugin.value = {}
@@ -171,6 +181,11 @@ const load = async () => {
     return
   }
 
+  // 评分汇总后台加载，不阻塞详情显示（失败时由版本记日志，头部不显示评分）
+  if (pluginRatings.enabled) {
+    Promise.resolve(pluginRatings.load(pid)).catch(() => {})
+  }
+
   // 官方内置应用与随包内置插件（bundledPlugins）直接在首帧同步就绪，无需骨架屏闪烁或远程 API 请求
   const localBuiltin = getOfficialPlugin(pid) || getBundledPluginEntry(pid)
   if (localBuiltin) {
@@ -178,9 +193,8 @@ const load = async () => {
       ...localBuiltin,
       features: Array.isArray(localBuiltin.features) ? localBuiltin.features : [],
       comments: [],
-      screenshots: [],
-      rating: 5,
-      downloads: '内置'
+      // 内置插件的截图来自随客户端分发的本地副本，没有就不显示
+      screenshots: Array.isArray(localBuiltin.screenshots) ? localBuiltin.screenshots : []
     }
     isFavorite.value = pluginsStore.isFavorite(pid)
     loading.value = false
@@ -215,7 +229,8 @@ const load = async () => {
 
     // 1. 插件详情
     if (results[0].status === 'fulfilled') {
-      plugin.value = results[0].value
+      // 目录不可用时详情来自已安装插件的 plugin.json，其中的 screenshots 只有相对路径，这里只保留可展示的 https 地址
+      plugin.value = { ...results[0].value, screenshots: normalizeCatalogScreenshots(results[0].value?.screenshots) }
       if (!isPluginSupportedOnCurrentPlatform(plugin.value)) {
         error.value = '该插件不支持当前操作系统平台'
         loading.value = false
@@ -455,7 +470,7 @@ const downloadPlugin = () => installWithFeedback(pluginId.value, async () => {
 })
 
 const updatePlugin = async () => {
-  Modal.confirm({
+  confirmDialog({
     title: '确定要更新该插件吗？',
     content: '更新过程中可能会暂时中断服务。',
     okText: '更新',
@@ -492,7 +507,7 @@ const uninstall = async () => {
     toastError('内置插件随客户端提供，不能卸载')
     return
   }
-  Modal.confirm({
+  confirmDialog({
     title: '确定要卸载该插件吗？',
     content: '卸载后插件文件将被删除。',
     okText: '卸载',
@@ -652,7 +667,7 @@ onBeforeUnmount(() => {
     <!-- 返回按钮 -->
     <div class="back-nav">
       <button class="back-btn" @click="goBack">
-        <ArrowLeftOutlined  />
+        <ArrowLeftIcon  />
         <span>返回</span>
       </button>
     </div>
@@ -675,21 +690,17 @@ onBeforeUnmount(() => {
     <!-- 错误状态 -->
     <div v-else-if="error" class="error-container">
       <div class="error-icon">
-        <WarningOutlined  />
+        <TriangleAlertIcon  />
       </div>
       <h3 class="error-title">加载失败</h3>
       <p class="error-message">{{ error }}</p>
-      <button class="retry-btn" @click="load">
-        <ReloadOutlined  />
-        重试
-      </button>
+      <RcButton variant="primary" size="md" class="retry-btn" :icon="RotateCwIcon" @click="load">重试</RcButton>
     </div>
 
     <!-- 正常内容 -->
     <div v-else>
       <PluginDetailHeader
         :plugin="plugin"
-        :subtitle="subtitle"
         :isInstalled="isInstalled"
         :canUninstall="canUninstall"
         :canCreateShortcut="canCreateShortcut"
@@ -708,6 +719,7 @@ onBeforeUnmount(() => {
         :hotkeyText="hotkeyText"
         :creatingShortcut="creatingShortcut"
         :commentsCount="commentsCount"
+        :ratingSummary="ratingSummary"
         @open="open"
         @update="updatePlugin"
         @uninstall="uninstall"
@@ -723,15 +735,12 @@ onBeforeUnmount(() => {
       <!-- Tab分页 -->
       <div ref="tabContainerRef" class="tab-container">
         <div class="tab-header">
-          <button
-            v-for="tab in tabs"
-            :key="tab"
-            class="tab-btn"
-            :class="{ active: activeTab === tab }"
-            @click="handleTabChange(tab)"
-          >
-            <span>{{ tabNames[tab] }}</span>
-          </button>
+          <RcSegmented
+            aria-label="插件信息"
+            :model-value="activeTab"
+            :options="tabOptions"
+            @update:model-value="handleTabChange"
+          />
         </div>
 
         <div class="tab-content">
@@ -756,7 +765,7 @@ onBeforeUnmount(() => {
 
 <style scoped>
 .details-page {
-  color: var(--zt-text);
+  color: var(--rc-text-primary);
 }
 
 /* 返回导航 */
@@ -769,18 +778,18 @@ onBeforeUnmount(() => {
   align-items: center;
   gap: 6px;
   padding: 4px 12px;
-  background: var(--color-gray-100);
+  background: var(--rc-kbd-bg);
   border: none;
   border-radius: 6px;
   font-size: 12px;
-  color: var(--zt-text-secondary);
+  color: var(--rc-text-secondary);
   cursor: pointer;
   transition: all 0.2s ease;
 }
 
 .back-btn:hover {
-  background: var(--color-gray-200);
-  color: var(--zt-text);
+  background: var(--rc-surface-active);
+  color: var(--rc-text-primary);
 }
 
 /* 骨架屏 */
@@ -795,8 +804,8 @@ onBeforeUnmount(() => {
   align-items: flex-start;
   gap: 16px;
   padding: 16px;
-  background: var(--color-surface);
-  border: 1px solid var(--color-border);
+  background: var(--rc-surface);
+  border: 1px solid var(--rc-border);
   border-radius: 12px;
 }
 
@@ -873,8 +882,8 @@ onBeforeUnmount(() => {
   align-items: center;
   justify-content: center;
   padding: 32px 16px;
-  background: var(--color-surface);
-  border: 1px solid var(--color-border);
+  background: var(--rc-surface);
+  border: 1px solid var(--rc-border);
   border-radius: 16px;
   text-align: center;
 }
@@ -895,101 +904,38 @@ onBeforeUnmount(() => {
 .error-title {
   font-size: 18px;
   font-weight: 600;
-  color: var(--zt-text);
+  color: var(--rc-text-primary);
   margin: 0 0 8px;
 }
 
 .error-message {
   font-size: 14px;
-  color: var(--zt-text-secondary);
+  color: var(--rc-text-secondary);
   margin: 0 0 20px;
-}
-
-.retry-btn {
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-  height: 34px;
-  padding: 0 16px;
-  background: var(--rc-accent);
-  border: none;
-  border-radius: var(--rc-radius-md);
-  font-size: 13px;
-  font-weight: 500;
-  color: var(--rc-accent-contrast);
-  cursor: pointer;
-  transition: background-color 0.15s ease;
-}
-
-.retry-btn:hover {
-  background: var(--rc-accent-hover);
 }
 
 /* Tab 容器 */
 .tab-container {
-  background: var(--color-surface);
-  border: 1px solid var(--color-border);
-  border-radius: 16px;
+  background: var(--rc-surface);
+  border: 1px solid var(--rc-border);
+  border-radius: 12px;
   overflow: hidden;
 }
 
-/* 标签页：底部 2px 橙色指示条，选中态不做整块填充 */
 .tab-header {
-  display: flex;
-  gap: 4px;
-  padding: 0 12px;
-  border-bottom: 1px solid var(--rc-border);
-}
-
-.tab-btn {
-  position: relative;
-  height: 42px;
-  padding: 0 12px;
-  background: transparent;
-  border: none;
-  font-size: 13px;
-  font-weight: 500;
-  color: var(--rc-text-muted);
-  cursor: pointer;
-  transition: color 0.15s ease;
-}
-
-.tab-btn:hover {
-  color: var(--rc-text-primary);
-}
-
-.tab-btn.active {
-  color: var(--rc-text-primary);
-}
-
-.tab-btn.active::after {
-  content: '';
-  position: absolute;
-  left: 12px;
-  right: 12px;
-  bottom: -1px;
-  height: 2px;
-  border-radius: 2px;
-  background: var(--rc-accent);
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--rc-border-subtle);
+  overflow-x: auto;
 }
 
 .tab-content {
-  padding: 16px;
+  padding: 16px 20px 20px;
 }
 
 /* 响应式 */
 @media (max-width: 600px) {
   .skeleton-stats {
     grid-template-columns: repeat(2, 1fr);
-  }
-
-  .tab-header {
-    overflow-x: auto;
-    -webkit-overflow-scrolling: touch;
-  }
-
-  .tab-btn {
-    white-space: nowrap;
   }
 }
 </style>

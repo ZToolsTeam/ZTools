@@ -1,11 +1,13 @@
 <script setup>
-import { AppstoreAddOutlined, CloseOutlined, DesktopOutlined } from '@ant-design/icons-vue'
+import HotkeyCaptureField from '@/components/HotkeyCaptureField.vue'
+import { RcDialog } from '@/components/base'
+import { CircleXIcon, MonitorIcon, SearchIcon, SquarePlusIcon } from '@lucide/vue'
 /**
  * 启动快捷键管理弹窗
  * 展示所有已安装插件和已加入面板的本地软件，支持设置/修改/清除全局快捷键
  * 通过 IPC trigger 系列接口与原生宿主端交互
  */
-import { ref, computed, nextTick, onBeforeUnmount } from 'vue'
+import { ref, computed, onBeforeUnmount } from 'vue'
 import { usePluginsStore } from '@/stores/plugins'
 import { storeToRefs } from 'pinia'
 import { message } from 'ant-design-vue'
@@ -20,7 +22,7 @@ import {
   getHotkeyHostCapabilities,
   getHotkeyRuleDescription,
   getHotkeyWaitText,
-  parseSupportedHotkeyEvent,
+  interpretRecorderKeydown,
   resetHotkeyRecorderState
 } from '@/utils/hotkeyRecorder'
 
@@ -38,6 +40,7 @@ const localApps = ref([])
 const recordingPluginId = ref(null)
 // 录入中显示的临时按键文本
 const recordingText = ref('')
+const recordingIsKeys = ref(false)
 // 操作加载状态
 const loadingPluginId = ref(null)
 
@@ -97,7 +100,6 @@ const getPluginIcon = (target) => {
 }
 
 const getTargetTypeName = target => target.kind === 'localApp' ? '本地软件' : '插件'
-const getHotkeyInputId = targetId => `hotkey-hidden-input-${encodeURIComponent(targetId)}`
 
 // ========== 弹窗生命周期 ==========
 
@@ -161,20 +163,12 @@ async function loadLocalApps() {
 
 // ========== 快捷键录入 ==========
 
-/** 开始录入快捷键 */
+/** 开始录入快捷键（录入框组件负责聚焦） */
 const startRecording = (targetId) => {
   resetHotkeyRecorderState()
-  // 如果有其他插件正在录入，先取消
-  if (recordingPluginId.value && recordingPluginId.value !== targetId) {
-    cancelRecording()
-  }
   recordingPluginId.value = String(targetId)
   recordingText.value = ''
-  // 等待 DOM 更新后聚焦隐藏输入框
-  nextTick(() => {
-    const input = document.getElementById(getHotkeyInputId(String(targetId)))
-    input?.focus()
-  })
+  recordingIsKeys.value = false
 }
 
 /** 取消录入 */
@@ -182,40 +176,29 @@ const cancelRecording = () => {
   resetHotkeyRecorderState()
   recordingPluginId.value = null
   recordingText.value = ''
+  recordingIsKeys.value = false
 }
 
-/** 处理键盘按下事件 */
+/** 录入框里的按键：Esc 取消、⌫ 清除，组合键完整后做冲突检测并保存 */
 const handleKeydown = async (event, target) => {
-  event.preventDefault()
-  event.stopPropagation()
-
   if (!recordingPluginId.value || recordingPluginId.value !== target.id) return
-
-  // Escape 取消录入
-  if (event.key === 'Escape') {
-    cancelRecording()
-    return
-  }
-
-  const result = parseSupportedHotkeyEvent(event, {
+  const result = interpretRecorderKeydown(event, {
     platform: hotkeyPlatform.value,
     allowDoubleTap: supportsDoubleModifierHotkeys.value
   })
-  if (result.status === 'pending') {
-    recordingText.value = result.text
+  if (result.action === 'cancel') {
+    cancelRecording()
     return
   }
-
-  if (result.status === 'invalid') {
-    recordingText.value = result.text
+  if (result.action === 'clear') {
+    cancelRecording()
+    if (getPluginHotkey(target.id)) await clearHotkey(target.id)
     return
   }
-
-  const hotkeyStr = result.hotkey
   recordingText.value = result.text
-
-  // 录入完成，进行冲突检测并保存
-  await handleHotkeyRecorded(target, hotkeyStr)
+  recordingIsKeys.value = result.isKeys
+  if (result.action !== 'valid') return
+  await handleHotkeyRecorded(target, result.hotkey)
 }
 
 async function hasSameTargetHotkeyConflict(target, hotkeyStr) {
@@ -469,21 +452,22 @@ defineExpose({ show, hide, updateMap, configuredCount })
 </script>
 
 <template>
-  <a-modal
+  <RcDialog
     v-model:open="visible"
     title="启动快捷键管理"
-    :footer="null"
     :width="560"
-    centered
     @cancel="handleCancel"
   >
     <!-- 搜索框 -->
-    <a-input-search
+    <a-input
       v-model:value="searchText"
       placeholder="搜索插件或本地软件..."
       allow-clear
       class="mb-3"
-    />
+    >
+      <template #prefix><SearchIcon class="input-prefix-icon" aria-hidden="true" /></template>
+      <template #clearIcon><CircleXIcon class="input-clear-icon" aria-hidden="true" /></template>
+    </a-input>
 
     <div class="hotkey-rule-tip">
       {{ getHotkeyRuleDescription(hotkeyPlatform, supportsDoubleModifierHotkeys) }}
@@ -510,7 +494,7 @@ defineExpose({ show, hide, updateMap, configuredCount })
             :alt="target.name"
           />
           <div v-else class="plugin-icon-placeholder">
-            <component :is="target.kind === 'localApp' ? DesktopOutlined : AppstoreAddOutlined" aria-hidden="true" />
+            <component :is="target.kind === 'localApp' ? MonitorIcon : SquarePlusIcon" aria-hidden="true" />
           </div>
         </div>
 
@@ -521,63 +505,23 @@ defineExpose({ show, hide, updateMap, configuredCount })
         </div>
 
         <!-- 快捷键区域 -->
-        <div class="hotkey-area">
-          <!-- 录入模式 -->
-          <div
-            v-if="recordingPluginId === target.id"
-            class="hotkey-recorder recording"
-            @click.stop
-          >
-            <input
-              :id="getHotkeyInputId(target.id)"
-              class="hotkey-hidden-input"
-              readonly
-              @keydown="handleKeydown($event, target)"
-              @blur="cancelRecording"
-            />
-            <span v-if="recordingText" class="recording-keys">
-              <span
-                v-for="k in recordingText.replace('...', '').split('+')"
-                :key="k"
-                class="key-badge"
-              >{{ k || '...' }}</span>
-            </span>
-            <span v-else class="recording-text">
-              <span class="recording-dot" aria-hidden="true"></span>
-              {{ getHotkeyWaitText(hotkeyPlatform, supportsDoubleModifierHotkeys) }}
-            </span>
-          </div>
-
-          <!-- 显示模式 -->
-          <div
-            v-else
-            class="hotkey-recorder"
-            :class="{ loading: loadingPluginId === target.id, disabled: target.invalid }"
-            @click="!target.invalid && startRecording(target.id)"
-          >
-            <div v-if="getPluginHotkey(target.id)" class="hotkey-keys">
-              <span
-                v-for="k in getPluginHotkey(target.id).split('+')"
-                :key="k"
-                class="key-badge"
-              >{{ k }}</span>
-            </div>
-            <span v-else class="no-hotkey">未设置</span>
-          </div>
-
-          <!-- 清除按钮 -->
-          <button
-            v-if="getPluginHotkey(target.id) && recordingPluginId !== target.id"
-            class="clear-btn"
-            title="清除快捷键"
-            @click.stop="clearHotkey(target.id)"
-          >
-            <CloseOutlined  />
-          </button>
-        </div>
+        <HotkeyCaptureField
+          :hotkey="getPluginHotkey(target.id)"
+          :recording="recordingPluginId === target.id"
+          :loading="loadingPluginId === target.id"
+          :disabled="target.invalid"
+          :recording-text="recordingText"
+          :recording-is-keys="recordingIsKeys"
+          :wait-text="getHotkeyWaitText(hotkeyPlatform, supportsDoubleModifierHotkeys)"
+          empty-text="未设置"
+          @start="startRecording(target.id)"
+          @cancel="cancelRecording"
+          @keydown="handleKeydown($event, target)"
+          @clear="clearHotkey(target.id)"
+        />
       </div>
     </div>
-  </a-modal>
+  </RcDialog>
 </template>
 
 <style scoped>
@@ -658,68 +602,14 @@ defineExpose({ show, hide, updateMap, configuredCount })
   font-weight: 400;
 }
 
-.hotkey-area {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  flex-shrink: 0;
-}
 
-.hotkey-recorder {
-  min-width: 120px;
-  height: 32px;
-  padding: 0 10px;
-  border-radius: var(--rc-radius-md, 8px);
-  border: 1.5px solid var(--rc-border);
-  background: var(--rc-surface);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  cursor: pointer;
-  transition: all 0.2s ease;
-  position: relative;
-}
 
-.hotkey-recorder:hover {
-  border-color: var(--rc-accent);
-}
 
-.hotkey-recorder.recording {
-  border-color: var(--rc-accent);
-  background: var(--rc-accent-subtle);
-}
 
-.hotkey-recorder.loading {
-  opacity: 0.6;
-  pointer-events: none;
-}
 
-.hotkey-recorder.disabled {
-  cursor: not-allowed;
-  opacity: 0.65;
-}
 
-.hotkey-hidden-input {
-  position: absolute;
-  inset: 0;
-  opacity: 0;
-  cursor: pointer;
-}
 
-.recording-text {
-  font-size: 12px;
-  font-weight: 500;
-  color: var(--rc-accent-text);
-  display: flex;
-  align-items: center;
-  gap: 6px;
-}
 
-.recording-keys .key-badge:first-child:last-child {
-  color: var(--rc-error);
-  border-color: var(--rc-error);
-  background: var(--rc-error-subtle);
-}
 
 .hotkey-rule-tip {
   margin: -4px 0 12px;
@@ -732,64 +622,11 @@ defineExpose({ show, hide, updateMap, configuredCount })
   line-height: 1.6;
 }
 
-.recording-keys {
-  display: flex;
-  align-items: center;
-  gap: 3px;
-}
 
-.recording-dot {
-  display: inline-block;
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  background: currentColor;
-  animation: pulse 1s infinite;
-}
 
-@keyframes pulse {
-  0%, 100% { opacity: 1; }
-  50% { opacity: 0.3; }
-}
 
-.hotkey-keys {
-  display: flex;
-  align-items: center;
-  gap: 3px;
-}
 
-.key-badge {
-  padding: 2px 6px;
-  border-radius: var(--rc-radius-sm, 4px);
-  font-size: 11px;
-  font-weight: 600;
-  font-family: var(--rc-font-mono, monospace);
-  background: var(--rc-kbd-bg);
-  color: var(--rc-kbd-text);
-  border: 1px solid var(--rc-kbd-border);
-}
 
-.no-hotkey {
-  font-size: 12px;
-  color: var(--rc-text-muted);
-}
 
-.clear-btn {
-  width: 28px;
-  height: 28px;
-  border-radius: var(--rc-radius-sm, 6px);
-  border: none;
-  background: transparent;
-  color: var(--rc-text-muted);
-  cursor: pointer;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  transition: all 0.15s ease;
-}
 
-.clear-btn:hover {
-  background: var(--rc-error-subtle);
-  color: var(--rc-error);
-}
 </style>

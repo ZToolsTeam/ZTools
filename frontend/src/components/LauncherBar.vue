@@ -27,10 +27,9 @@
           <template v-else>
             <p class="launcher-empty-title">无法打开该扩展</p>
             <p class="launcher-empty-desc">{{ declarativeLoadError }}</p>
-            <button type="button" class="launcher-primary-btn" @click="exitDeclarative">
+            <RcButton variant="primary" size="sm" class="launcher-primary-btn" kbd="Escape" @click="exitDeclarative">
               返回搜索
-              <ShortcutKeys combo="Escape" tone="onAccent" />
-            </button>
+            </RcButton>
           </template>
         </div>
       </template>
@@ -58,9 +57,7 @@
             aria-label="清空"
             @click="clearQuery"
           >
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true">
-              <path d="M6 6l12 12M18 6 6 18" />
-            </svg>
+            <XIcon class="w-3.5 h-3.5" aria-hidden="true" />
           </button>
           <button
             type="button"
@@ -80,40 +77,17 @@
           class="launcher-list custom-scrollbar"
           tabindex="-1"
         >
-          <template v-if="filteredItems.length > 0">
-            <div
-              v-for="(item, index) in filteredItems"
+          <template v-if="visibleItems.length > 0">
+            <SearchResultRow
+              v-for="(item, index) in visibleItems"
               :key="item.key || item.pluginId || index"
               :ref="el => registerItemEl(index, el)"
-              class="launcher-row"
-              :class="{ 'is-active': activeIndex === index }"
+              :item="item"
+              :active="activeIndex === index"
+              :parts="highlightParts(item)"
               @mouseenter="activeIndex = index"
               @click="executeItem(item)"
-            >
-              <span class="launcher-marker" aria-hidden="true"></span>
-              <img
-                v-if="item.isApplication && isImageIcon(item.icon)"
-                :src="item.icon"
-                class="launcher-app-icon"
-                alt=""
-                @error="item.icon = ''"
-              />
-              <RcSquircle
-                v-else
-                :glyph="resolveItemGlyph(item)"
-                :src="isImageIcon(item.icon) ? item.icon : ''"
-                :icon="item.faIcon || 'fa-cube'"
-                :size="28"
-              />
-              <div class="launcher-row-text">
-                <!-- 片段写在同一行，避免模板换行产生多余空格 -->
-                <span class="launcher-row-title" :title="item.name || item.title"><template v-for="(part, partIndex) in highlightParts(item.name || item.title)" :key="partIndex"><mark v-if="part.hit">{{ part.text }}</mark><template v-else>{{ part.text }}</template></template></span>
-                <span v-if="item.description || item.subtitle" class="launcher-row-desc" :title="item.path || item.description || item.subtitle">
-                  {{ item.description || item.subtitle }}
-                </span>
-              </div>
-              <span v-if="item.badge" class="launcher-row-tag">{{ item.badge }}</span>
-            </div>
+            />
           </template>
 
           <div v-else class="launcher-empty" role="status">
@@ -123,10 +97,9 @@
             <p v-if="!isSearching && !fileSearchError" class="launcher-empty-desc">
               {{ fileSearchDegraded ? '系统索引暂不可用，当前结果可能不完整' : '试试文件名、应用名或扩展名；也可以到插件市场查找工具' }}
             </p>
-            <button v-if="!isSearching && !fileSearchError" type="button" class="launcher-primary-btn" @click="searchInMarket">
+            <RcButton v-if="!isSearching && !fileSearchError" variant="primary" size="sm" class="launcher-primary-btn" kbd="Enter" @click="searchInMarket">
               在插件市场搜索
-              <ShortcutKeys combo="Enter" tone="onAccent" />
-            </button>
+            </RcButton>
           </div>
         </div>
 
@@ -162,6 +135,7 @@
 </template>
 
 <script setup>
+import { XIcon } from '@lucide/vue'
 import { ref, computed, onMounted, onBeforeUnmount, nextTick, watch } from 'vue'
 import ShortcutKeys from '@/components/base/ShortcutKeys.vue'
 import { useRouter } from 'vue-router'
@@ -182,30 +156,20 @@ import {
   normalizePluginFeatures,
   copyInlineAnswerToClipboard
 } from '@/composables/useCommandSearch'
-import { getHighlightPartsWithPinyin } from '@/utils/pinyinSearch'
 import { useKeymap, KEYMAP_SCOPES, dispatchKeyEvent } from '@/utils/keymap'
 import ActionPanelModal from '@/declarative/components/ActionPanelModal.vue'
 import DeclarativeView from '@/declarative/DeclarativeView.vue'
 import { requestPopoutWindow } from '@/declarative/popoutHandoff'
 import BrandMark from '@/components/BrandMark.vue'
-import { RcSquircle } from '@/components/base'
+import { RcButton } from '@/components/base'
+import SearchResultRow from '@/components/SearchResultRow.vue'
 import { shortcutLabel, isMacOS, isPluginSupportedOnCurrentPlatform } from '@/utils/platform'
-import { resolveItemGlyph } from '@/utils/brandIcons'
 import { win as nativeWin } from '@/api/apiserver'
 
 const router = useRouter()
 const pluginsStore = usePluginsStore()
 // 悬停提示是纯文本，按平台格式化（键帽展示统一走 ShortcutKeys）
 const workbenchHint = shortcutLabel('Ctrl+M')
-
-function isImageIcon(icon) {
-  return typeof icon === 'string' && /^(https?:|data:image\/|ztools:)/.test(icon)
-}
-
-/** 把标题中与查询（支持字面、中文全拼、首字母与多音字命中）匹配的片段拆出来高亮 */
-function highlightParts(text) {
-  return getHighlightPartsWithPinyin(text, query.value)
-}
 
 const inputRef = ref(null)
 const listContainerRef = ref(null)
@@ -233,11 +197,17 @@ const {
   fileSearchDegraded,
   search,
   clearSearch,
-  recordUsage
+  recordUsage,
+  highlightParts
 } = useCommandSearch({ enableFileSearch: true })
 
+// 结果再多也只渲染前 50 条：键盘上下选择、Enter 与动作面板都只在这 50 条里进行
+const MAX_VISIBLE_ITEMS = 50
+const visibleItems = computed(() => filteredItems.value.slice(0, MAX_VISIBLE_ITEMS))
+
 function registerItemEl(index, el) {
-  if (el) itemElements.set(index, el)
+  const node = el?.$el ?? el
+  if (node) itemElements.set(index, node)
   else itemElements.delete(index)
 }
 
@@ -281,7 +251,7 @@ const runLauncherAction = (action) => {
 }
 
 const activeItemActions = computed(() => {
-  const item = filteredItems.value[activeIndex.value]
+  const item = visibleItems.value[activeIndex.value]
   if (!item) return []
 
   if (item.type === 'inline-calculator' || item.type === 'inline-color') {
@@ -525,6 +495,11 @@ watch(query, (newVal) => {
   search(newVal)
 })
 
+// 输入没变时列表也会变短（文件结果到达替换掉保留的旧结果）：选中项不能落到列表外
+watch(() => visibleItems.value.length, (length) => {
+  if (activeIndex.value >= length) activeIndex.value = Math.max(0, length - 1)
+})
+
 function clearQuery() {
   clearSearch()
   activeIndex.value = 0
@@ -544,8 +519,8 @@ function exitDeclarative() {
 useKeymap(KEYMAP_SCOPES.PAGE, {
   'ArrowDown': () => {
     if (activeDeclarativePlugin.value || loadingDeclarative.value || declarativeLoadError.value) return false
-    if (filteredItems.value.length > 0) {
-      activeIndex.value = (activeIndex.value + 1) % filteredItems.value.length
+    if (visibleItems.value.length > 0) {
+      activeIndex.value = (activeIndex.value + 1) % visibleItems.value.length
       scrollToActiveItem()
       return true
     }
@@ -553,8 +528,8 @@ useKeymap(KEYMAP_SCOPES.PAGE, {
   },
   'ArrowUp': () => {
     if (activeDeclarativePlugin.value || loadingDeclarative.value || declarativeLoadError.value) return false
-    if (filteredItems.value.length > 0) {
-      activeIndex.value = (activeIndex.value - 1 + filteredItems.value.length) % filteredItems.value.length
+    if (visibleItems.value.length > 0) {
+      activeIndex.value = (activeIndex.value - 1 + visibleItems.value.length) % visibleItems.value.length
       scrollToActiveItem()
       return true
     }
@@ -562,8 +537,8 @@ useKeymap(KEYMAP_SCOPES.PAGE, {
   },
   'Enter': () => {
     if (activeDeclarativePlugin.value || loadingDeclarative.value || declarativeLoadError.value) return false
-    if (filteredItems.value.length > 0) {
-      executeItem(filteredItems.value[activeIndex.value])
+    if (visibleItems.value.length > 0) {
+      executeItem(visibleItems.value[activeIndex.value])
       return true
     } else if (query.value.trim() && !isSearching.value && !fileSearchError.value) {
       searchInMarket()
@@ -573,7 +548,7 @@ useKeymap(KEYMAP_SCOPES.PAGE, {
   },
   'Ctrl+Enter': () => {
     if (activeDeclarativePlugin.value || loadingDeclarative.value || declarativeLoadError.value) return false
-    const cur = filteredItems.value[activeIndex.value]
+    const cur = visibleItems.value[activeIndex.value]
     if (cur && cur.type === 'file') {
       showInFolder(cur.path)
       return true
@@ -601,7 +576,7 @@ useKeymap(KEYMAP_SCOPES.PAGE, {
       )
       return true
     }
-    const cur = filteredItems.value[activeIndex.value]
+    const cur = visibleItems.value[activeIndex.value]
     if (cur && cur.pluginId && isDeclarativeTarget(cur.pluginId, cur) && cur.mode !== 'no-view') {
       popoutDeclarativePlugin(cur.pluginId, cur.featureCode || '')
       return true
@@ -1054,86 +1029,6 @@ watch(
   background-clip: padding-box;
 }
 
-.launcher-row {
-  height: 46px;
-  flex-shrink: 0;
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  padding: 0 14px 0 8px;
-  border-radius: 10px;
-  cursor: pointer;
-}
-
-.launcher-row.is-active {
-  background: var(--rc-surface-active);
-}
-
-.launcher-marker {
-  width: 6px;
-  height: 6px;
-  border-radius: 1.7px;
-  flex-shrink: 0;
-  background: transparent;
-}
-
-.launcher-row.is-active .launcher-marker {
-  background: var(--rc-accent);
-  box-shadow: var(--rc-marker-glow);
-}
-
-.launcher-app-icon {
-  width: 28px;
-  height: 28px;
-  flex-shrink: 0;
-  object-fit: contain;
-}
-
-.launcher-row-text {
-  flex: 1;
-  min-width: 0;
-  display: flex;
-  flex-direction: column;
-  justify-content: center;
-  gap: 2px;
-}
-
-.launcher-row-title {
-  max-width: 100%;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  line-height: 18px;
-  font-size: 14px;
-  font-weight: 500;
-  color: var(--rc-text-primary);
-  white-space: nowrap;
-}
-
-.launcher-row-title mark {
-  padding: 0;
-  background: transparent;
-  color: var(--rc-accent-text);
-}
-
-.launcher-row-desc {
-  max-width: 100%;
-  line-height: 15px;
-  font-size: 11px;
-  color: var(--rc-text-muted);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.launcher-row-tag {
-  flex-shrink: 0;
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  font-size: 12px;
-  color: var(--rc-text-faint);
-}
-
 .launcher-empty {
   display: flex;
   flex-direction: column;
@@ -1153,26 +1048,6 @@ watch(
   margin: 4px 0 14px;
   font-size: 12px;
   color: var(--rc-text-muted);
-}
-
-.launcher-primary-btn {
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-  height: 30px;
-  padding: 0 6px 0 12px;
-  border: none;
-  border-radius: 8px;
-  background: var(--rc-accent);
-  color: var(--rc-accent-contrast);
-  font: inherit;
-  font-size: 12px;
-  font-weight: 500;
-  cursor: pointer;
-}
-
-.launcher-primary-btn:hover {
-  background: var(--rc-accent-hover);
 }
 
 .launcher-foot {

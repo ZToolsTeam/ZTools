@@ -85,7 +85,7 @@ const PLATFORM_ORDER = ['windows', 'macos']
 
 /**
  * 插件声明支持的平台（'windows' / 'macos' 的子集）。
- * 以 plugin.json 的 targets 为准（只看 electron 运行时目标，与主进程安装校验一致），兼容旧的 platforms 字符串数组。
+ * 以 plugin.json 的 targets 为准（只看 electron 运行时目标，与主进程安装校验一致）；仅在没有 targets 字段时兼容旧的 platforms 字符串数组。
  * 未声明时返回 null；声明了但没有可用的 electron 目标时返回 []。
  * @param {object} plugin
  * @returns {string[] | null}
@@ -94,15 +94,15 @@ export function getPluginPlatforms(plugin) {
   if (!plugin || typeof plugin !== 'object') return null
   const found = new Set()
   let declared = false
-  if (Array.isArray(plugin.targets) && plugin.targets.length > 0) {
+  if (Object.hasOwn(plugin, 'targets')) {
     declared = true
+    if (!Array.isArray(plugin.targets)) return []
     for (const target of plugin.targets) {
       if (!target || typeof target !== 'object' || target.runtime !== 'electron') continue
       const platform = PLATFORM_ALIASES[String(target.platform || '').trim().toLowerCase()]
       if (platform) found.add(platform)
     }
-  }
-  if (Array.isArray(plugin.platforms) && plugin.platforms.length > 0) {
+  } else if (Array.isArray(plugin.platforms) && plugin.platforms.length > 0) {
     declared = true
     for (const item of plugin.platforms) {
       const platform = PLATFORM_ALIASES[String(item || '').trim().toLowerCase()]

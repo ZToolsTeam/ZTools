@@ -1,5 +1,7 @@
 import { getStoreOfficialPluginMeta } from './bundledPlugins'
 import { getPluginCategories, normalizeCategoryNames } from './pluginCategories'
+import { compareMatches, matchItemWithQuery } from './pinyinSearch'
+import { normalizeCatalogScreenshots } from './pluginScreenshots'
 /**
  * storeCatalogManager.js
  * ZTools 对齐 Raycast 标杆体系的 Local-First 扩展商店数据管理器
@@ -45,106 +47,7 @@ const OFFICIAL_AUTHORS = new Set([
 ])
 
 /**
- * ZTools-extensions 开源社区生态插件集合（26 款跨平台开源扩展）
- * 当静态 CDN 索引 (plugins-v2/plugins.json) 批量构建产物的默认作者为 ZTools Team 时，
- * 将这些开源社区扩展归类到「社区精选 (community)」，确保开源版与官方版客户端的「社区精选」Tab 均可正常浏览与安装。
- */
-export const COMMUNITY_EXTENSION_IDS = new Set([
-  'audio-device',
-  'batch-text-convert',
-  'browser-bookmarks',
-  'browser-history',
-  'caffeine',
-  'calendar',
-  'chinese-number-converter',
-  'chmod-cidr-calc',
-  'clean-keyboard',
-  'curl-http',
-  'dns-benchmark',
-  'docker-manager',
-  'env-manager',
-  'everything-file-search',
-  'file-inspector',
-  'file-unlock',
-  'folder-sync',
-  'font-manager',
-  'git-helper',
-  'hosts-switcher',
-  'hotkey-radar',
-  'id-watermark',
-  'image-editor',
-  'image-tool',
-  'jwt-url-codec',
-  'lan-scanner',
-  'linux-http-dict',
-  'md-to-office',
-  'media-metadata',
-  'mock-data',
-  'monitor-control',
-  'office-slim',
-  'password-vault',
-  'paste-stack',
-  'pomodoro-focus',
-  'port-manager',
-  'quick-folders',
-  'quicklinks',
-  'regex-cron',
-  'shutdown-timer',
-  'snippets',
-  'speedtest',
-  'sql-helper',
-  'ssh-proxy-helper',
-  'ssl-domain-check',
-  'startup-manager',
-  'super-markdown',
-  'svg-icon-studio',
-  'table-converter',
-  'text-formatter',
-  'unit-converter',
-  'uuid-generator',
-  'vscode-projects',
-  'wifi-password-reveal',
-  'world-clock'
-])
-
-/**
- * 规范化静态 CDN 插件目录载荷，将 ZTools-extensions 开源社区扩展标记为 community 来源
- * @param {any} payload
- * @returns {any}
- */
-export function normalizeCdnCatalogPayload(payload) {
-  if (!payload || typeof payload !== 'object') return payload
-  const mapItem = (item) => {
-    if (!item || typeof item !== 'object') return item
-    const pid = normalizePluginId(item.pluginId || item.id).toLowerCase()
-    if (!pid || !COMMUNITY_EXTENSION_IDS.has(pid)) return item
-    const rawAuthor = String(item.author || '').trim()
-    const isDefaultOfficialAuthor = !rawAuthor || isOfficialAuthor(rawAuthor)
-    return {
-      ...item,
-      author: isDefaultOfficialAuthor ? 'ZTools Community' : rawAuthor,
-      is_official: false,
-      isOfficial: false,
-      official_badge: null,
-      officialBadge: null,
-      source_type: 'community',
-      sourceType: 'community'
-    }
-  }
-  if (Array.isArray(payload)) {
-    return payload.map(mapItem)
-  }
-  if (Array.isArray(payload.plugins)) {
-    return { ...payload, plugins: payload.plugins.map(mapItem) }
-  }
-  if (Array.isArray(payload.list)) {
-    return { ...payload, list: payload.list.map(mapItem) }
-  }
-  return payload
-}
-
-/**
- * 判断作者名称是否属于官方自营团队
+ * 判断作者名称是否属于官方团队
  * @param {string} [author]
  * @returns {boolean}
  */
@@ -156,7 +59,7 @@ export function isOfficialAuthor(author) {
 }
 
 /**
- * 统一判定插件条目是否为官方自营
+ * 统一判定插件条目是否为官方
  * 修复 `item.is_official ?? ...` 在后端返回默认布尔值 `false` 时直接短路、
  * 从而忽略 builtinMatch 与官方作者（如 'ZTools Team'）的缺陷
  * @param {object} item
@@ -173,13 +76,7 @@ export function isOfficialPluginItem(item, builtinMatch = null) {
   ) {
     return true
   }
-  if (
-    (item.source_type === 'community' || item.sourceType === 'community') &&
-    item.is_official !== true &&
-    item.isOfficial !== true
-  ) {
-    return false
-  }
+  if (isCommunityPluginItem(item)) return false
   if (item.is_official === true || item.isOfficial === true) return true
   if (item.source_type === 'official' || item.sourceType === 'official') return true
   if (isOfficialAuthor(item.author) || isOfficialAuthor(builtinMatch?.author)) {
@@ -189,31 +86,41 @@ export function isOfficialPluginItem(item, builtinMatch = null) {
 }
 
 /**
- * 简易拼音/模糊匹配评分器
+ * 目录里明确署名为社区插件（source_type 为 community 且没有标官方）。
+ * 界面上的官方标记以目录署名为准：这类插件即使在内部官方名单里也不显示为官方。
+ * @param {object} item
+ * @returns {boolean}
+ */
+export function isCommunityPluginItem(item) {
+  if (!item || typeof item !== 'object') return false
+  return (
+    (item.source_type === 'community' || item.sourceType === 'community') &&
+    item.is_official !== true &&
+    item.isOfficial !== true
+  )
+}
+
+/**
+ * 插件市场搜索与悬浮条共用同一套匹配规则（名称、拼音、首字母、触发词、标识、描述与作者）
+ * @param {object} plugin - 插件对象
+ * @param {string} keyword - 搜索关键词
+ * @returns {object} 匹配结果（见 matchItemWithQuery）；keyword 为空时视为命中
+ */
+function matchCatalogPlugin(plugin, keyword) {
+  const keywords = Array.isArray(plugin?.keywords)
+    ? plugin.keywords
+    : typeof plugin?.keywords === 'string' ? plugin.keywords.split(/[\s,，]+/) : []
+  return matchItemWithQuery({ ...plugin, keyword: undefined, keywords }, keyword)
+}
+
+/**
  * @param {object} plugin - 插件对象
  * @param {string} keyword - 搜索关键词
  * @returns {boolean} 是否命中
  */
 export function matchPlugin(plugin, keyword) {
-  if (!keyword) return true
-  const kw = keyword.trim().toLowerCase()
-  if (!kw) return true
-
-  const id = String(plugin.pluginId || plugin.id || '').toLowerCase()
-  const name = String(plugin.name || '').toLowerCase()
-  const title = String(plugin.title || '').toLowerCase()
-  const desc = String(plugin.description || '').toLowerCase()
-  const author = String(plugin.author || '').toLowerCase()
-  const kwList = Array.isArray(plugin.keywords) ? plugin.keywords.join(' ').toLowerCase() : String(plugin.keywords || '').toLowerCase()
-
-  return (
-    id.includes(kw) ||
-    name.includes(kw) ||
-    title.includes(kw) ||
-    desc.includes(kw) ||
-    author.includes(kw) ||
-    kwList.includes(kw)
-  )
+  if (!keyword || !String(keyword).trim()) return true
+  return matchCatalogPlugin(plugin, keyword).matched
 }
 
 export class StoreCatalogManager {
@@ -242,6 +149,7 @@ export class StoreCatalogManager {
 
     this._catalog = [] // 内存中全量有效插件条目
     this._lastSyncTime = 0
+    this.lastSource = '' // 最近一次目录数据的来源，见 _doSync
     this._revokedMap = {} // { [pluginId]: { revoked: true, reason: string } }
     this._inFlightPromise = null
   }
@@ -366,7 +274,7 @@ export class StoreCatalogManager {
       }
     }
 
-    // 5. 规范化并解析官方自营金标插件
+    // 5. 规范化并解析官方金标插件
     const officialList = this.getOfficialList() || []
     const officialMap = new Map()
     for (const off of officialList) {
@@ -394,7 +302,7 @@ export class StoreCatalogManager {
         item.officialBadge ||
         builtinMatch?.official_badge ||
         builtinMatch?.officialBadge ||
-        (isOfficial ? '官方自营' : null)
+        (isOfficial ? '官方' : null)
       const homepageUrl =
         item.homepage_url ||
         item.homepageUrl ||
@@ -420,7 +328,6 @@ export class StoreCatalogManager {
         category: getPluginCategories(storeMeta?.category || item.category),
         isBuiltin: Boolean(item.isBuiltin || builtinMatch?.isBuiltin),
         downloads: Number(item.downloads || item.downloadsCount || 0),
-        rating: Number(item.rating || 5.0),
         is_official: isOfficial,
         isOfficial: isOfficial,
         official_badge: officialBadge,
@@ -428,7 +335,9 @@ export class StoreCatalogManager {
         source_type: sourceType,
         sourceType: sourceType,
         homepage_url: homepageUrl,
-        homepageUrl: homepageUrl
+        homepageUrl: homepageUrl,
+        // 截图只接受 https 地址（发布脚本写入的 CDN 地址），其它协议与格式不对的条目丢弃
+        screenshots: normalizeCatalogScreenshots(item.screenshots)
       }
 
       // 与内置插件同 ID 时，实际打开的是内置插件（openPlugin 优先走内置）。
@@ -449,6 +358,8 @@ export class StoreCatalogManager {
           normalizedItem.icon = builtinMatch.icon
           normalizedItem.logo = builtinMatch.logo || builtinMatch.icon
         }
+        // 内置插件的截图随客户端分发，只用本地副本；没有就不显示，不用目录里的网络地址
+        normalizedItem.screenshots = Array.isArray(builtinMatch.screenshots) ? builtinMatch.screenshots : []
         for (const key of ['downloadUrl', 'download_url', 'sha256', 'size', 'minAppVersion', 'min_app_version']) {
           delete normalizedItem[key]
         }
@@ -467,7 +378,7 @@ export class StoreCatalogManager {
       }
     }
 
-    // 补充未在列表中出现的内置官方标杆应用（自动赋予官方自营金标与官方技术支持属性）
+    // 补充未在列表中出现的内置官方标杆应用（自动赋予官方金标与官方技术支持属性）
     for (const official of officialList) {
       const pid = normalizePluginId(official.pluginId || official.id)
       if (pid && !seenIds.has(pid.toLowerCase())) {
@@ -480,8 +391,8 @@ export class StoreCatalogManager {
             pluginId: pid,
             is_official: true,
             isOfficial: true,
-            official_badge: official.official_badge || official.officialBadge || '官方自营',
-            officialBadge: official.official_badge || official.officialBadge || '官方自营',
+            official_badge: official.official_badge || official.officialBadge || '官方',
+            officialBadge: official.official_badge || official.officialBadge || '官方',
             source_type: 'official',
             sourceType: 'official',
             homepage_url: official.homepage_url || official.homepageUrl || official.homepage || '',
@@ -495,6 +406,8 @@ export class StoreCatalogManager {
     this._catalog = mergedList
     this._revokedMap = newRevokedMap
     this._lastSyncTime = Date.now()
+    // 最近一次目录数据的来源（remote / local_snapshot / decentralized_static / official_builtin），内存缓存命中时沿用
+    this.lastSource = source
 
     // 若本次成功从远程拉取，异步持久化到本地存储
     if (source === 'remote' && mergedList.length > 0) {
@@ -515,10 +428,10 @@ export class StoreCatalogManager {
    * 极速本地查询（SLA < 10ms）
    * @param {object} params
    * @param {string} [params.category]
-   * @param {string} [params.sourceType] - 'all' | 'official' (官方自营) | 'community' (社区精选)
+   * @param {string} [params.sourceType] - 'all' | 'official' (官方) | 'community' (社区)
    * @param {string} [params.keyword]
    * @param {string|string[]} [params.ids]
-   * @param {'downloads'|'created_at'|'rating'|'name'} [params.sort='downloads']
+   * @param {'downloads'|'created_at'|'name'} [params.sort='downloads']
    * @param {'asc'|'desc'} [params.direction='desc']
    * @param {number} [params.page=1]
    * @param {number} [params.pageSize=20]
@@ -536,7 +449,7 @@ export class StoreCatalogManager {
     const rawPageSize = Number(params.pageSize || params.per_page)
     const pageSize = Number.isFinite(rawPageSize) && rawPageSize > 0 ? Math.floor(rawPageSize) : 20
 
-    // 分类筛选适配：all、official（官方自营）、community（社区精选）
+    // 分类筛选适配：all、official（官方）、community（社区）
     const rawFilter = String(
       params.sourceType || params.filterType || params.sourceFilter || params.filter || ''
     ).trim().toLowerCase()
@@ -552,7 +465,8 @@ export class StoreCatalogManager {
       targetIds = new Set(arr.map((id) => normalizePluginId(id).toLowerCase()).filter(Boolean))
     }
 
-    // 1. 本地极速过滤
+    // 1. 本地极速过滤（有搜索词时顺带记下每个插件的匹配档，排序先看匹配程度）
+    const relevance = keyword ? new Map() : null
     let filtered = catalog.filter((item) => {
       // ID 限制（如收藏夹/指定插件批量查询）
       if (targetIds && !targetIds.has(String(item.pluginId).toLowerCase())) {
@@ -580,19 +494,25 @@ export class StoreCatalogManager {
       }
 
       // 关键词搜索
-      if (keyword && !matchPlugin(item, keyword)) {
-        return false
+      if (relevance) {
+        const match = matchCatalogPlugin(item, keyword)
+        if (!match.matched) return false
+        relevance.set(item, match)
       }
 
       return true
     })
 
-    // 2. 本地排序：官方自营插件置顶
+    // 2. 本地排序：有搜索词时匹配程度高的在前；同档官方插件置顶，再按排序字段
     filtered.sort((a, b) => {
+      if (relevance) {
+        const byRelevance = compareMatches(relevance.get(a), relevance.get(b))
+        if (byRelevance !== 0) return byRelevance
+      }
       const aOfficial = isOfficialPluginItem(a) ? 1 : 0
       const bOfficial = isOfficialPluginItem(b) ? 1 : 0
       if (aOfficial !== bOfficial) {
-        return bOfficial - aOfficial // 官方自营置顶
+        return bOfficial - aOfficial // 官方置顶
       }
 
       let valA = a[sortField]

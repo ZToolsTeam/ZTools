@@ -10,7 +10,9 @@
  * 3. 校验合规的插件打包为 {plugin-id}-{version}.zip；
  * 4. 计算并记录每个发布包的 SHA-256 校验和与文件大小；
  * 5. 自动生成包含全量插件元数据的静态全网索引 plugins.json（经阿里云 CDN 分发给客户端）；
- * 6. 支持模块化导出与独立 CLI 执行。
+ * 6. 支持模块化导出与独立 CLI 执行；
+ * 7. plugin.json 声明的截图（screenshots/ 下的 PNG）不进安装包，复制到 <作者>/<id>/screenshots/<版本>/ 随发布上传，
+ *    插件目录条目写入 screenshots: [{ url, title, width, height }]。
  */
 
 import fs from 'node:fs'
@@ -19,7 +21,7 @@ import crypto from 'node:crypto'
 import zlib from 'node:zlib'
 import { fileURLToPath } from 'node:url'
 import { scanPluginSecurity } from './scan-plugin-security.mjs'
-import { getManifestPlatforms, validateStoreCatalog, OFFICIAL_PLUGIN_IDS } from '../packages/ztools-plugins-spec/src/validator.js'
+import { getManifestPlatforms, validateStoreCatalog, OFFICIAL_PLUGIN_IDS, inspectScreenshotFile, SCREENSHOT_PATH_REGEX, SCREENSHOT_LIMITS } from '../packages/ztools-plugins-spec/src/validator.js'
 import { resolvePluginMinAppVersion } from '../packages/ztools-plugins-spec/src/host-requirements.js'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
@@ -128,6 +130,53 @@ export function createZipArchiveFromDirectory(sourceDir, filterFn = null) {
   endRecord.writeUInt16LE(0, 20) // comment length
 
   return Buffer.concat([...localHeaders, ...centralHeaders, endRecord])
+}
+
+/**
+ * 读取 plugin.json 声明的截图并逐张复核（与清单校验同一套规则：screenshots/ 下的 PNG、≤ 1 MB、尺寸范围）。
+ * 跳过扫描（--skip-scan）时也要复核：目录里的截图地址会直接展示在客户端与官网。
+ * @returns {{ errors: string[], items: Array<{ index: number, path: string, title: string, width: number, height: number, data: Buffer, hash: string }> }}
+ */
+export function collectPluginScreenshots(pluginDir, manifest) {
+  const list = manifest?.screenshots
+  if (list === undefined) return { errors: [], items: [] }
+  if (!Array.isArray(list)) return { errors: ['screenshots 必须为数组'], items: [] }
+  if (list.length > SCREENSHOT_LIMITS.maxCount) return { errors: [`screenshots 最多 ${SCREENSHOT_LIMITS.maxCount} 张`], items: [] }
+  const errors = []
+  const items = []
+  const seen = new Set()
+  for (const [index, shot] of list.entries()) {
+    const rel = shot?.path
+    if (typeof rel !== 'string' || !SCREENSHOT_PATH_REGEX.test(rel) || seen.has(rel)) {
+      errors.push(`screenshots[${index}].path 不合法或重复: ${JSON.stringify(rel)}`)
+      continue
+    }
+    seen.add(rel)
+    const info = inspectScreenshotFile(pluginDir, rel)
+    if (!info.ok) {
+      errors.push(info.error)
+      continue
+    }
+    const data = fs.readFileSync(path.join(pluginDir, rel))
+    items.push({
+      index,
+      path: rel,
+      title: typeof shot.title === 'string' ? shot.title.trim() : '',
+      width: info.width,
+      height: info.height,
+      data,
+      hash: crypto.createHash('sha256').update(data).digest('hex')
+    })
+  }
+  return { errors, items }
+}
+
+/**
+ * 截图在 CDN 上的相对路径（相对插件目录 <作者>/<id>/）：screenshots/<版本>/<序号>-<内容哈希前 8 位>.png。
+ * 带版本号与内容哈希，与安装包一样长期强缓存；同一版本里换了图也会得到新地址，不会被旧缓存挡住。
+ */
+export function screenshotCdnName(version, index, hash) {
+  return `screenshots/${version}/${String(index + 1).padStart(2, '0')}-${hash.slice(0, 8)}.png`
 }
 
 /**
@@ -323,6 +372,18 @@ export async function buildPluginsRelease(options = {}) {
       }
     }
 
+    // 截图在打包前复核（跳过扫描时同样复核），不合格的插件不产出任何文件
+    const shotResult = collectPluginScreenshots(dir, manifest)
+    if (shotResult.errors.length > 0) {
+      console.error(`❌ [${pluginId}] 截图不符合要求，拒绝发布:`)
+      for (const e of shotResult.errors) console.error(`   - ${e}`)
+      rejectedCount++
+      if (failFast) {
+        throw new Error(`插件 ${pluginId} 截图校验失败，构建中止！`)
+      }
+      continue
+    }
+
     // 2. 打包为 ZIP 文件
     const zipFileName = `${pluginId}-${version}.zip`
     const pluginOutputDir = path.join(outputDir, authorSlug, pluginId)
@@ -353,6 +414,16 @@ export async function buildPluginsRelease(options = {}) {
       fs.copyFileSync(path.join(dir, manifest.icon), iconTargetPath)
       iconUrl = `${cdnBaseUrl}/${relPrefix}/${iconTargetName}`
     }
+
+    // 5. 截图随版本上传到 CDN（不进安装包），目录里只写地址、说明与尺寸
+    const screenshots = shotResult.items.map((shot) => {
+      const cdnName = screenshotCdnName(version, shot.index, shot.hash)
+      const target = path.join(pluginOutputDir, ...cdnName.split('/'))
+      fs.mkdirSync(path.dirname(target), { recursive: true })
+      fs.writeFileSync(target, shot.data)
+      return { url: `${cdnBaseUrl}/${relPrefix}/${cdnName}`, title: shot.title, width: shot.width, height: shot.height }
+    })
+    if (screenshots.length) console.log(`🖼  已附带 ${screenshots.length} 张截图`)
 
     const twoManReviewStatus = (scanResult && scanResult.requiresTwoManReview)
       ? { required: true, reasons: scanResult.twoManReviewReasons, status: 'pending' }
@@ -392,6 +463,7 @@ export async function buildPluginsRelease(options = {}) {
       official_badge: isOfficial ? '官方自营' : '',
       window: manifest.window,
       features: manifest.features || [],
+      ...(screenshots.length ? { screenshots } : {}),
       downloadUrl,
       sha256,
       checksum: sha256,

@@ -74,11 +74,11 @@ test('SQLite 拒绝生成列、VIEW、巨型值和重复历史 key；错误后�
 })
 test('真实 XML：实体解码、两种目录变量、真实时间；非法实体与坏 URI 明确报错', () => {
   const xml = '<application><component name="RecentProjectsManager"><option name="additionalInfo"><map><entry key="$USER_HOME$/A &amp; B"><value><RecentProjectMetaInfo><option name="activationTimestamp" value="1700000000000"/></RecentProjectMetaInfo></value></entry></map></option><option name="lastOpenedProject" value="$APPLICATION_CONFIG_DIR$/scratch"/></component></application>'
-  const rows = parseJetBrainsHistory(xml, '/tmp/home$&', '/tmp/config')
+  const rows = parseJetBrainsHistory(xml, '/tmp/home$&', '/tmp/config', path.posix)
   assert.equal(rows[0]!.path, '/tmp/home$&/A & B'); assert.equal(rows[0]!.timestamp, 1700000000000); assert.equal(rows[1]!.path, '/tmp/config/scratch'); assert.equal(rows[1]!.timestamp, null)
   assert.throws(() => parseJetBrainsHistory('<!DOCTYPE x []>' + xml, '/tmp'), /声明/)
-  assert.throws(() => parseVscHistory('{"entries":[{"folderUri":"file:///a%00b"}]}', '/tmp'), /路径/)
-  const paths = parseVscHistory('{"entries":[{"folderUri":"file:///tmp/A"},{"folderUri":"file:///tmp/a"}]}', '/tmp').projects
+  assert.throws(() => parseVscHistory('{"entries":[{"folderUri":"file:///a%00b"}]}', '/tmp', path.posix), /路径/)
+  const paths = parseVscHistory('{"entries":[{"folderUri":"file:///tmp/A"},{"folderUri":"file:///tmp/a"}]}', '/tmp', path.posix).projects
   assert.equal(paths.length, 2); assert.notEqual(paths[0]!.path, paths[1]!.path)
 })
 test('Git worktree 与异常文件：工作树 HEAD 正确，FIFO 不阻塞读取', () => {
@@ -119,7 +119,10 @@ test('启动时再次检查路径；已移除项目不会进入系统打开命�
   const f = fixture()
   try {
     const p = scanRecentProjects(f.env).projects[0]!
-    fs.rmdirSync(f.project); await assert.rejects(launchRecentProject(p, 'open', signal()), /ENOENT/)
+    // 路径已删除：给出中文原因，不透出 Node 原始错误文本
+    fs.rmdirSync(f.project); await assert.rejects(launchRecentProject(p, 'open', signal()), (e: Error) => /^项目路径不存在/.test(e.message) && !/ENOENT|no such file/.test(e.message))
+    // 项目文件夹被替换成同名普通文件：类型已改变
+    fs.writeFileSync(f.project, 'x'); await assert.rejects(launchRecentProject(p, 'terminal', signal()), /类型已改变/)
   } finally { f.close() }
 })
 test('辅助进程真实取消、超时和输出溢出都等待退出；路径参数不经过 shell 展开', async () => {

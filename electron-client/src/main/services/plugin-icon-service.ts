@@ -6,6 +6,8 @@ import type { PluginDirectoryProvider } from './plugin-install-service.js'
 import type { PluginStateProvider } from './plugin-state-service.js'
 
 const MAX_ICON_BYTES = 4 * 1024 * 1024
+// 低于渲染层 IPC 默认的 10 秒超时，失败能如实回到调用方
+const ICON_DOWNLOAD_TIMEOUT_MS = 8_000
 
 function validateIconUrl(source: string): URL {
   let url: URL
@@ -38,20 +40,26 @@ export class PluginIconService {
 
   async refresh(pluginId: string, iconUrl: string): Promise<{ success: true; pluginId: string; status: 'refreshing' }> {
     const url = validateIconUrl(iconUrl)
+    // 先在插件目录锁之外下载：独占锁期间插件无法打开会话，不能让网络耗时（或断网挂起）占住它
+    let response: Response
+    try {
+      response = await this.fetchImpl(url, { signal: AbortSignal.timeout(ICON_DOWNLOAD_TIMEOUT_MS) })
+    } catch {
+      throw new ZToolsError(errorCodes.networkError, '下载插件图标失败')
+    }
+    if (!response.ok) throw new ZToolsError(errorCodes.networkError, '下载插件图标失败')
+    const contentType = response.headers.get('content-type') ?? ''
+    const suffix = iconSuffix(contentType)
+    let bytes: Buffer
+    try {
+      bytes = Buffer.from(await response.arrayBuffer())
+    } catch {
+      throw new ZToolsError(errorCodes.networkError, '下载插件图标失败')
+    }
+    if (bytes.length === 0 || bytes.length > MAX_ICON_BYTES) {
+      throw new ZToolsError(errorCodes.fileTooLarge, '插件图标超过大小限制')
+    }
     return this.manifests.withPluginDirectory(pluginId, async (manifest, pluginRoot) => {
-      let response: Response
-      try {
-        response = await this.fetchImpl(url)
-      } catch {
-        throw new ZToolsError(errorCodes.networkError, '下载插件图标失败')
-      }
-      if (!response.ok) throw new ZToolsError(errorCodes.networkError, '下载插件图标失败')
-      const contentType = response.headers.get('content-type') ?? ''
-      const suffix = iconSuffix(contentType)
-      const bytes = Buffer.from(await response.arrayBuffer())
-      if (bytes.length === 0 || bytes.length > MAX_ICON_BYTES) {
-        throw new ZToolsError(errorCodes.fileTooLarge, '插件图标超过大小限制')
-      }
       const target = path.join(pluginRoot, `icon${suffix}`)
       const temporary = path.join(pluginRoot, `.icon-${randomUUID()}.tmp`)
       try {

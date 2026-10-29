@@ -107,6 +107,16 @@ export function isModalOpen() {
   return false
 }
 
+const SELECT_OPEN_KEYS = new Set(['Enter', 'ArrowUp', 'ArrowDown', ' '])
+
+/** 按键是否应交给下拉选择框（antd Select，RcSelect 的底层）处理 */
+export function isSelectKey(event) {
+  const select = event?.target?.closest?.('.ant-select')
+  if (!select) return false
+  if (select.classList.contains('ant-select-open')) return true
+  return SELECT_OPEN_KEYS.has(event.key)
+}
+
 // 同一个按键事件只分发一次：窗口捕获阶段的监听与声明式根节点的 @keydown 可能先后收到同一事件
 const dispatchedEvents = new WeakSet()
 
@@ -120,6 +130,8 @@ export function dispatchKeyEvent(event) {
   }
   // 有对话框打开时按键归对话框（Esc 关对话框、回车点按钮），页面快捷键一律不响应
   if (isModalOpen()) return false
+  // 焦点在下拉选择框上：展开时按键全部归选择框；收起时回车 / 上下键 / 空格用来展开它，Esc 仍交给页面（返回）
+  if (isSelectKey(event)) return false
 
   const combo = normalizeEventKeyCombo(event)
   const inInput = isInputElement(event.target)

@@ -1,5 +1,5 @@
 import { List, Form, ActionPanel, Action, Icon, Clipboard, showToast, Toast, useState, useMemo, useNavigation } from '@ztools/declarative-ui';
-import { diffText, formatHunk, formatUnifiedDiff, describeHunk, fencedDiffMarkdown, splitLines, MAX_DIFF_LINES } from './logic.js';
+import { diffText, formatHunk, formatUnifiedDiff, describeHunk, hunkPreviewMarkdown, splitLines, MAX_DIFF_LINES } from './logic.js';
 import { pickTextFile } from './host.js';
 import { usePopoutValue } from './popout-state.js';
 export * from './logic.js';
@@ -15,6 +15,16 @@ const isFlag = (v) => typeof v === 'boolean';
 /**
  * 编辑左右两段文本的表单
  */
+/** 动作面板快捷键文案：macOS 写 ⌘K，Windows 写 Ctrl+K */
+export function actionPanelKey() {
+    try {
+        const nav = globalThis.navigator;
+        return /Mac/i.test(nav?.platform || nav?.userAgent || '') ? '⌘K' : 'Ctrl+K';
+    }
+    catch {
+        return 'Ctrl+K';
+    }
+}
 export function EditTextsForm({ left, right, onSave }) {
     const { pop } = useNavigation();
     const [a, setA] = useState(left.text);
@@ -60,7 +70,14 @@ export function FileCompareCommand() {
     }, [ready, left.text, right.text, left.name, right.name, ignoreWhitespace]);
     const openEditor = () => push(() => EditTextsForm({ left, right, onSave: (l, r) => { setLeft(l); setRight(r); } }));
     const pasteInto = async (side) => {
-        const text = await Clipboard.readText();
+        let text;
+        try {
+            text = await Clipboard.readText();
+        }
+        catch (err) {
+            await showToast(Toast.Style.Failure, '读取剪贴板失败', err instanceof Error ? err.message : String(err));
+            return;
+        }
         if (!text) {
             await showToast(Toast.Style.Failure, '剪贴板里没有文字');
             return;
@@ -89,8 +106,19 @@ export function FileCompareCommand() {
         Action({ title: ignoreWhitespace ? '恢复比较空白字符' : '忽略空白差异', icon: Icon.Text, onAction: () => setIgnoreWhitespace(!ignoreWhitespace) }),
         Action({ title: '清空', icon: Icon.Trash, onAction: () => { setLeft(emptySide('左侧')); setRight(emptySide('右侧')); } })
     ];
+    /** 复制失败如实提示，不在失败后显示「已复制」 */
+    const copyText = async (text, success) => {
+        try {
+            await Clipboard.copy(text);
+        }
+        catch (err) {
+            await showToast(Toast.Style.Failure, '复制失败', err instanceof Error ? err.message : String(err));
+            return;
+        }
+        await showToast(Toast.Style.Success, success);
+    };
     const reportActions = report
-        ? [Action({ title: '复制差异报告', icon: Icon.CopyClipboard, onAction: async () => { await Clipboard.copy(report); await showToast(Toast.Style.Success, '已复制差异报告（unified diff）'); } })]
+        ? [Action({ title: '复制差异报告', icon: Icon.CopyClipboard, onAction: () => copyText(report, '已复制差异报告（unified diff）') })]
         : [];
     let sections;
     if (hasLeft !== hasRight) {
@@ -136,10 +164,10 @@ export function FileCompareCommand() {
             List.Section({ title: `${left.name} ↔ ${right.name}` }, [
                 List.Item({
                     id: 'identical',
-                    title: ignoreWhitespace ? '两段文本相同（已忽略空白差异）' : '两段文本完全相同',
+                    title: ignoreWhitespace ? '两段文本相同（已忽略空白差异）' : left.text === right.text ? '两段文本完全相同' : '逐行内容相同（换行符或末尾换行不同）',
                     subtitle: `共 ${result.leftLines} 行`,
                     icon: Icon.Checkmark,
-                    detail: List.Item.Detail({ markdown: '两侧内容一致，没有差异。' }),
+                    detail: List.Item.Detail({ markdown: ignoreWhitespace || left.text === right.text ? '两侧内容一致，没有差异。' : '每一行的内容都相同，只有换行符（Windows CRLF 与 LF）或文件末尾是否有空行不同；逐行对比不把它们算作差异。' }),
                     actions: ActionPanel({ title: '操作' }, sourceActions)
                 })
             ])
@@ -152,10 +180,10 @@ export function FileCompareCommand() {
                 title: `第 ${Math.max(h.rightStart, 1)} 行附近`,
                 subtitle: describeHunk(h),
                 icon: Icon.Document,
-                detail: List.Item.Detail({ markdown: fencedDiffMarkdown(formatHunk(h)) }),
+                detail: List.Item.Detail({ markdown: hunkPreviewMarkdown(h) }),
                 actions: ActionPanel({ title: '差异' }, [
                     ...reportActions,
-                    Action({ title: '复制这一处差异', icon: Icon.CopyClipboard, onAction: async () => { await Clipboard.copy(formatHunk(h)); await showToast(Toast.Style.Success, '已复制'); } }),
+                    Action({ title: '复制这一处差异', icon: Icon.CopyClipboard, onAction: () => copyText(formatHunk(h), '已复制这一处差异') }),
                     ...sourceActions
                 ])
             })))
@@ -167,7 +195,7 @@ export function FileCompareCommand() {
     return List({
         navigationTitle: '文本对比',
         isShowingDetail: Boolean(result && result.hunks.length > 0) || Boolean(result?.identical),
-        searchBarPlaceholder: '按回车编辑文本，Ctrl+K 查看更多操作',
+        searchBarPlaceholder: result && result.hunks.length > 0 ? `按回车复制差异报告，${actionPanelKey()} 查看更多操作` : `按回车开始，${actionPanelKey()} 查看更多操作`,
         actions: ActionPanel({ title: '全局操作' }, [...reportActions, ...sourceActions])
     }, sections);
 }

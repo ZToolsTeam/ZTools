@@ -20,14 +20,13 @@ describe('isPluginSupportedOnCurrentPlatform', () => {
     vi.restoreAllMocks()
   })
 
-  it('macOS 上隐藏实现完全依赖 Windows 的官方插件，而升级为声明式 2.0 的 35 款自营插件双端均可用', () => {
+  it('macOS 上隐藏 Windows 专用插件，并保留已声明双端的内置插件', () => {
     asPlatform('mac')
     for (const id of ['windows-run', 'windows-shortcuts', 'winget']) {
       expect(isPluginSupportedOnCurrentPlatform(id), id).toBe(false)
       expect(isPluginSupportedOnCurrentPlatform({ pluginId: id }), id).toBe(false)
     }
-    // 跨平台与声明式 2.0 升级后的自营插件在 macOS 与 Windows 均可用
-    for (const id of ['json-format', 'system', 'cleaner', 'boost', 'batch-video', 'disk-analyzer', 'kill-process']) {
+    for (const id of ['json-format', 'disk-analyzer', 'hardware-info', 'clipboard-manager']) {
       expect(isPluginSupportedOnCurrentPlatform({ pluginId: id }), id).toBe(true)
     }
   })
@@ -55,7 +54,7 @@ describe('isPluginSupportedOnCurrentPlatform', () => {
     expect(isPluginSupportedOnCurrentPlatform({ pluginId: 'trial-nudges', platforms: ['darwin', 'win32'] })).toBe(false)
   })
 
-  it('Mac 上实际可见的内置插件包含已打通宿主的跨平台核心插件；Windows 多出依赖 Windows 组件的插件', () => {
+  it('官方入口的平台过滤保留通用命令，并区分系统专属入口', () => {
     asPlatform('mac')
     const mac = OFFICIAL_PLUGINS_LIST.filter(isPluginSupportedOnCurrentPlatform).map((p) => p.pluginId).sort()
     expect(mac).toEqual(
@@ -81,7 +80,9 @@ describe('isPluginSupportedOnCurrentPlatform', () => {
     vi.restoreAllMocks()
     asPlatform('win')
     const win = OFFICIAL_PLUGINS_LIST.filter(isPluginSupportedOnCurrentPlatform).map((p) => p.pluginId)
-    expect(win.length).toBeGreaterThan(mac.length)
+    for (const id of WINDOWS_EXCLUSIVE_PLUGIN_IDS) expect(win).toContain(id)
+    expect(mac).toContain('homebrew')
+    expect(win).not.toContain('homebrew')
     expect(win).toEqual(expect.arrayContaining(['clipboard-history', 'system', 'winget', 'cleaner', 'pdf']))
     for (const id of UNAVAILABLE_PLUGIN_IDS) expect(win).not.toContain(id)
   })
@@ -208,6 +209,34 @@ describe('插件平台声明（plugin.json 的 targets）', () => {
     expect(isPluginSupportedOnCurrentPlatform(both)).toBe(true)
     expect(isPluginSupportedOnCurrentPlatform(winOnly)).toBe(true)
     expect(isPluginSupportedOnCurrentPlatform(macOnly)).toBe(false)
+  })
+
+  it('新版 targets 覆盖旧 platforms，旧数据不能把单端插件显示成跨平台', () => {
+    const conflictingWin = { ...winOnly, platforms: ['win32', 'darwin'] }
+    const conflictingMac = { ...macOnly, platforms: ['win32', 'darwin'] }
+    expect(getPluginPlatforms(conflictingWin)).toEqual(['windows'])
+    expect(getPluginPlatformLabel(conflictingWin)).toBe('仅 Windows')
+    expect(getPluginPlatformLabel(conflictingMac)).toBe('仅 macOS')
+    asPlatform('mac')
+    expect(isPluginSupportedOnCurrentPlatform(conflictingWin)).toBe(false)
+    expect(isPluginSupportedOnCurrentPlatform(conflictingMac)).toBe(true)
+    vi.restoreAllMocks()
+    asPlatform('win')
+    expect(isPluginSupportedOnCurrentPlatform(conflictingWin)).toBe(true)
+    expect(isPluginSupportedOnCurrentPlatform(conflictingMac)).toBe(false)
+  })
+
+  it('[破坏性] targets 为空或损坏时不能回退到旧平台声明或内置清单', () => {
+    for (const os of ['mac', 'win']) {
+      vi.restoreAllMocks()
+      asPlatform(os)
+      for (const targets of [[], null, undefined, 'windows', {}, [target('windows', 'legacy-delphi')]]) {
+        const plugin = { pluginId: 'calculator', targets, platforms: ['windows', 'macos'] }
+        expect(getPluginPlatforms(plugin)).toEqual([])
+        expect(getPluginPlatformLabel(plugin)).toBe('')
+        expect(isPluginSupportedOnCurrentPlatform(plugin)).toBe(false)
+      }
+    }
   })
 
   it('[破坏性] 只有旧版 Delphi 目标、平台名无效或条目损坏时，两端都视为不支持，不会因此报错', () => {

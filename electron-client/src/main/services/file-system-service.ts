@@ -48,8 +48,10 @@ export type ResultGrantSource =
   | 'process'
   | 'screenshot'
   | 'common-folder'
+  | 'volume'
   | 'system-path'
   | 'handoff'
+  | 'clipboard'
 
 export interface ResultGrantEntry {
   path: string
@@ -82,7 +84,7 @@ const LINK_CHECKED_SOURCES: ReadonlySet<ResultGrantSource> = new Set(['search', 
 
 /** 结果授权表的键：规范化后的真实路径；Windows（NTFS 默认不区分大小写）转小写，其余平台保持原样，查不中按未授权处理 */
 export function resultGrantKey(canonicalPath: string, platform: NodeJS.Platform = process.platform): string {
-  const normalized = normalizeForCompare(canonicalPath)
+  const normalized = normalizeForCompare(canonicalPath, platform === 'win32' ? path.win32 : path.posix)
   return platform === 'win32' ? normalized.toLowerCase() : normalized
 }
 
@@ -177,6 +179,16 @@ interface PathGrant {
   read: boolean
   write: boolean
   expiresAt: number
+  /** 仅另存为对话框签发：选择时目标已是普通文件，即用户已在系统对话框确认替换；单次有效，不随授权转交。 */
+  replaceConfirmed?: boolean
+}
+
+/** 宿主内部服务写入选项，不经 IPC 暴露。 */
+export interface ConfirmedReplaceOptions {
+  /** overwrite 为 false 时，仍允许替换用户在另存为对话框中确认过的已有文件（单次）。 */
+  replaceConfirmed?: boolean
+  /** 不得被替换的原文件（按设备号与 inode 判断，覆盖符号链接、大小写与硬链接别名）。 */
+  protectedPath?: string
 }
 
 export function fileFailure(error: unknown): ZToolsError {
@@ -199,9 +211,9 @@ function errorCode(error: unknown): string | undefined {
 
 type CaseSensitivity = 'sensitive' | 'insensitive' | 'unknown'
 
-function normalizeForCompare(value: string): string {
-  const normalized = path.normalize(value)
-  return normalized === path.parse(normalized).root ? normalized : normalized.replace(/[\\/]+$/, '')
+function normalizeForCompare(value: string, pathApi: path.PlatformPath = path): string {
+  const normalized = pathApi.normalize(value)
+  return normalized === pathApi.parse(normalized).root ? normalized : normalized.replace(/[\\/]+$/, '')
 }
 
 function toggleAsciiCase(value: string): string | undefined {
@@ -384,6 +396,16 @@ function rawFileUrlPath(value: string): string | undefined {
     return decoded || undefined
   } catch {
     return undefined
+  }
+}
+
+/** 读取路径状态；不存在时返回 null（“不存在”是正常结果），其他错误照常抛出 */
+async function statIfPresent(target: string): Promise<import('node:fs').Stats | null> {
+  try {
+    return await fs.stat(target)
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null
+    throw fileFailure(error)
   }
 }
 
@@ -677,7 +699,17 @@ export class FileSystemService {
 
   async grantSavePath(value: string, caller: CallerIdentity): Promise<string> {
     const target = await this.#canonical(value, true)
+    // 系统另存为对话框选中已有文件时会先请用户确认替换；只在此时记录一次替换许可
+    const existing = await fs.lstat(target).catch((error: unknown) => {
+      if (errorCode(error) === 'ENOENT') return undefined
+      throw fileFailure(error)
+    })
     await this.#grant(caller, target, false, false, true)
+    const now = this.now()
+    for (const grant of this.#grants.get(caller.webContentsId) ?? []) {
+      if (grant.expiresAt <= now || grant.recursive || grant.read || !grant.write) continue
+      if (await samePathOnVolume(grant.path, target)) grant.replaceConfirmed = existing?.isFile() === true
+    }
     return this.#issueFileCapability(target, caller, false)
   }
 
@@ -717,7 +749,12 @@ export class FileSystemService {
     }
   }
 
-  async writeFile(params: FileWriteParams, caller: CallerIdentity, signal?: AbortSignal): Promise<{ success: true; size: number }> {
+  async writeFile(
+    params: FileWriteParams,
+    caller: CallerIdentity,
+    signal?: AbortSignal,
+    options?: ConfirmedReplaceOptions
+  ): Promise<{ success: true; size: number }> {
     try {
       const data = params.encoding === 'base64'
         ? Buffer.from(params.content, 'base64')
@@ -726,11 +763,55 @@ export class FileSystemService {
         throw new ZToolsError(errorCodes.fileTooLarge, '文件超过 16 MiB IPC 上限')
       }
       const target = await this.resolveAuthorizedPath(params.path, caller, 'write', true)
-      await this.#writeData(target, data, params.overwrite !== false, () => { signal?.throwIfAborted(); this.#assertCallerAvailable(caller) })
+      let overwrite = params.overwrite !== false
+      let confirmed: PathGrant | undefined
+      if (!overwrite && options?.replaceConfirmed === true) {
+        confirmed = await this.#confirmedReplaceGrant(target, caller)
+        if (confirmed && await this.#replaceableTarget(target, caller, options.protectedPath, signal)) {
+          // 先消费许可再写入，避免并发写入重复使用同一次确认；失败时恢复
+          confirmed.replaceConfirmed = false
+          overwrite = true
+        } else {
+          confirmed = undefined
+        }
+      }
+      try {
+        await this.#writeData(target, data, overwrite, () => { signal?.throwIfAborted(); this.#assertCallerAvailable(caller) })
+      } catch (error) {
+        if (confirmed) confirmed.replaceConfirmed = true
+        throw error
+      }
       return { success: true, size: data.byteLength }
     } catch (error) {
       throw fileFailure(error)
     }
+  }
+
+  async #confirmedReplaceGrant(target: string, caller: CallerIdentity): Promise<PathGrant | undefined> {
+    const now = this.now()
+    for (const grant of this.#grants.get(caller.webContentsId) ?? []) {
+      if (grant.expiresAt <= now || grant.replaceConfirmed !== true || grant.recursive || grant.read || !grant.write) continue
+      if (await samePathOnVolume(grant.path, target)) return grant
+    }
+    return undefined
+  }
+
+  /** 目标不存在时返回 false（按独占创建写入）；目标存在但不是普通文件或就是受保护原文件时拒绝。 */
+  async #replaceableTarget(target: string, caller: CallerIdentity, protectedPath: string | undefined, signal?: AbortSignal): Promise<boolean> {
+    const existing = await fs.lstat(target).catch((error: unknown) => {
+      if (errorCode(error) === 'ENOENT') return undefined
+      throw error
+    })
+    signal?.throwIfAborted()
+    if (!existing) return false
+    if (!existing.isFile()) throw new ZToolsError(errorCodes.fileError, '目标已不是普通文件，未替换')
+    if (protectedPath !== undefined) {
+      const source = await fs.stat(await this.resolveAuthorizedPath(protectedPath, caller, 'read', false))
+      if (source.dev === existing.dev && source.ino === existing.ino) {
+        throw new ZToolsError(errorCodes.invalidRequest, '不能用新副本替换原文件，请另存为其他文件名')
+      }
+    }
+    return true
   }
 
   async readCache(params: FileCacheParams, caller: CallerIdentity): Promise<{ success: true; content: string; size: number }> {
@@ -868,12 +949,8 @@ export class FileSystemService {
 
   async fileExists(params: FilePathParams, caller: CallerIdentity): Promise<{ success: true; exists: boolean }> {
     const target = await this.resolveAuthorizedPath(params.path, caller, 'read', true)
-    try {
-      return { success: true, exists: (await fs.stat(target)).isFile() }
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return { success: true, exists: false }
-      throw fileFailure(error)
-    }
+    const stats = await statIfPresent(target)
+    return { success: true, exists: stats?.isFile() === true }
   }
 
   async getFileSize(params: FilePathParams, caller: CallerIdentity): Promise<{ success: true; size: number }> {
@@ -908,12 +985,8 @@ export class FileSystemService {
 
   async directoryExists(params: FilePathParams, caller: CallerIdentity): Promise<{ success: true; exists: boolean }> {
     const target = await this.resolveAuthorizedPath(params.path, caller, 'read', true)
-    try {
-      return { success: true, exists: (await fs.stat(target)).isDirectory() }
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return { success: true, exists: false }
-      throw fileFailure(error)
-    }
+    const stats = await statIfPresent(target)
+    return { success: true, exists: stats?.isDirectory() === true }
   }
 
   async getDirectoryContents(params: FilePathParams, caller: CallerIdentity): Promise<{ success: true; files: FileInfo[]; writeAuthorized: boolean }> {

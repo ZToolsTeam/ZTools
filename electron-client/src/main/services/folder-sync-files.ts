@@ -82,9 +82,9 @@ export function buildSyncDiffs(source: SyncTree, target: SyncTree, mode: SyncMod
       if (Math.abs(src.modified - dst.modified) <= 2000) { direction = 'conflict'; diffType = 'conflict' }
       else if (dst.modified > src.modified) direction = 'dst-to-src'
     }
-    const badge = direction === 'delete-dst' ? '移入回收站' : direction === 'conflict' ? '需手动处理' : direction === 'dst-to-src' ? '目标 → 源' : '源 → 目标'
+    const badge = direction === 'delete-dst' ? '移入废纸篓' : direction === 'conflict' ? '需手动处理' : direction === 'dst-to-src' ? '目标 → 源' : '源 → 目标'
     result.push({ relPath: name, direction, diffType, actionBadge: badge,
-      reasonText: direction === 'conflict' ? '内容不同但修改时间接近；不会自动选择覆盖方向' : direction === 'delete-dst' ? '源端没有此文件；先备份，再移入系统回收站' : src && dst ? '内容不同；覆盖前保留并校验原文件备份' : '新增文件；不会覆盖执行期间出现的同名文件',
+      reasonText: direction === 'conflict' ? '内容不同但修改时间接近；不会自动选择覆盖方向' : direction === 'delete-dst' ? '源端没有此文件；先备份，再移入废纸篓' : src && dst ? '内容不同；覆盖前保留并校验原文件备份' : '新增文件；不会覆盖执行期间出现的同名文件',
       sizeBytes: (direction === 'dst-to-src' || !src ? dst : src)!.size,
       sourceFullPath: src ? path.join(roots[0].path, name) : '', targetFullPath: dst ? path.join(roots[1].path, name) : '' })
   }

@@ -20,7 +20,8 @@ vi.mock('@/composables/useCommandSearch', async importOriginal => ({
     filteredItems: computed(() => items.value),
     search: vi.fn(),
     clearSearch: () => { searchQuery.value = '' },
-    recordUsage: vi.fn()
+    recordUsage: vi.fn(),
+    highlightParts: item => [{ text: item?.name || item?.title || '', hit: false }]
   })
 }))
 const openPlugin = vi.fn().mockResolvedValue({ success: true })
@@ -184,6 +185,24 @@ describe('LauncherBar 文件搜索结果执行', () => {
     delete window.__ztoolsLauncher
     vi.restoreAllMocks()
     document.body.innerHTML = ''
+  })
+
+  it('文件结果到达让列表变短时，键盘选中项收回到列表内，Enter 仍打开一项', async () => {
+    const openPath = vi.fn().mockResolvedValue({ success: true })
+    window.__ztoolsLauncher = { openPath, hide: vi.fn().mockResolvedValue() }
+    items.value = ['a', 'b', 'c'].map(name => ({ key: `file:${name}`, type: 'file', name: `${name}.txt`, path: `/search/${name}.txt` }))
+    const { wrapper } = await mountLauncher()
+    const input = wrapper.find('#launcherQuery')
+    await input.trigger('keydown', { key: 'ArrowDown' })
+    await input.trigger('keydown', { key: 'ArrowDown' })
+    expect(wrapper.findAll('.launcher-row')[2].classes()).toContain('is-active')
+    items.value = [{ key: 'file:new', type: 'file', name: 'new.txt', path: '/search/new.txt' }]
+    await flushPromises()
+    expect(wrapper.find('.launcher-row').classes()).toContain('is-active')
+    await input.trigger('keydown', { key: 'Enter' })
+    await flushPromises()
+    expect(openPath).toHaveBeenCalledWith('/search/new.txt')
+    wrapper.unmount()
   })
 
   it('等待打开成功才隐藏，并阻止重复点击', async () => {

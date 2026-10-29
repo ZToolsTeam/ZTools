@@ -26,7 +26,7 @@ export interface FileSearchServiceOptions {
 
 /**
  * 文件秒搜服务 (File Search Service)
- * 深度联动预编译 Rust 侧车 ztools-indexer.exe 与 macOS Spotlight (mdfind)，支持全盘文件毫秒检索、打开、定位、Quick Look 与 SHA-256 哈希计算
+ * Windows 联动 C++ 辅助进程 ztools-indexer.exe，macOS 使用 Spotlight (mdfind)，支持全盘文件毫秒检索、打开、定位、Quick Look 与 SHA-256 哈希计算
  */
 export class FileSearchService {
   constructor(private readonly options: FileSearchServiceOptions) {}

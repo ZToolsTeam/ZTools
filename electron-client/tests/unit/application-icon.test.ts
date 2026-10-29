@@ -5,7 +5,9 @@ import type { NativeImage } from 'electron'
 import {
   developmentIconFile,
   loadApplicationIcon,
-  resolveApplicationIconCandidates
+  loadTrayIcon,
+  resolveApplicationIconCandidates,
+  resolveTrayIconCandidates
 } from '../../src/main/windows/application-icon.js'
 
 function mockImage(empty: boolean, tag = 'icon'): NativeImage {
@@ -125,4 +127,69 @@ test('loadApplicationIcon throws explicit error when all icon sources are empty 
     }),
     /无法加载 ZTools 应用图标/
   )
+})
+
+function mockTemplateImage(empty: boolean, tag: string): NativeImage & { templateFlags: boolean[] } {
+  const templateFlags: boolean[] = []
+  return {
+    isEmpty: () => empty,
+    setTemplateImage: (flag: boolean) => { templateFlags.push(flag) },
+    templateFlags,
+    tag
+  } as unknown as NativeImage & { templateFlags: boolean[] }
+}
+
+test('resolveTrayIconCandidates: macOS 用 out/assets/tray 下的模板图，Windows 用多尺寸 ICO，源码目录作开发兜底', () => {
+  assert.deepEqual(resolveTrayIconCandidates({ platform: 'darwin', appPath: '/app' }), [
+    path.join('/app', 'out', 'assets', 'tray', 'trayTemplate.png'),
+    path.join('/app', 'resources', 'app', 'tray', 'trayTemplate.png')
+  ])
+  assert.deepEqual(resolveTrayIconCandidates({ platform: 'win32', appPath: 'C:/app' }), [
+    path.join('C:/app', 'out', 'assets', 'tray', 'tray.ico'),
+    path.join('C:/app', 'resources', 'app', 'LOGO.ico')
+  ])
+})
+
+test('loadTrayIcon: macOS 取到模板图后标记为模板，菜单栏按深浅色自动着色', () => {
+  const template = mockTemplateImage(false, 'tray-template')
+  const icon = loadTrayIcon(mockImage(false, 'app'), {
+    platform: 'darwin',
+    getAppPath: () => '/app',
+    createFromPath: () => template
+  })
+  assert.equal(icon, template)
+  assert.deepEqual(template.templateFlags, [true])
+})
+
+test('loadTrayIcon: Windows 打包产物缺失时退回源码目录的 LOGO.ico，且不设置模板标记', () => {
+  const requested: string[] = []
+  const ico = mockTemplateImage(false, 'ico')
+  const icon = loadTrayIcon(mockImage(false, 'app'), {
+    platform: 'win32',
+    getAppPath: () => 'C:/app',
+    createFromPath: (target) => {
+      requested.push(target)
+      if (target.endsWith('tray.ico')) throw new Error('ENOENT')
+      return ico
+    }
+  })
+  assert.equal(icon, ico)
+  assert.equal(requested.length, 2)
+  assert.deepEqual(ico.templateFlags, [])
+})
+
+test('loadTrayIcon: 专用图标全部为空或读取失败时返回应用图标，托盘仍能显示', () => {
+  const fallback = mockImage(false, 'app')
+  let calls = 0
+  const icon = loadTrayIcon(fallback, {
+    platform: 'darwin',
+    getAppPath: () => '/app',
+    createFromPath: () => {
+      calls += 1
+      if (calls === 1) return mockImage(true, 'empty')
+      throw new Error('broken png')
+    }
+  })
+  assert.equal(icon, fallback)
+  assert.equal(calls, 2)
 })

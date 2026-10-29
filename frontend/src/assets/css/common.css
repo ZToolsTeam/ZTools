@@ -71,19 +71,19 @@
   --zt-scrollbar-track: transparent;
 
   /* ===== 兼容 plugin 变量名（供共用组件使用）===== */
-  --plugin-bg: var(--zt-bg);
-  --plugin-panel-bg: var(--zt-bg-elevated);
-  --plugin-text: var(--zt-text);
-  --plugin-text-secondary: var(--zt-text-secondary);
-  --plugin-text-disabled: var(--zt-text-disabled);
-  --plugin-primary: var(--zt-primary);
-  --plugin-primary-hover: var(--zt-primary-hover);
+  --plugin-bg: var(--rc-canvas);
+  --plugin-panel-bg: var(--rc-surface);
+  --plugin-text: var(--rc-text-primary);
+  --plugin-text-secondary: var(--rc-text-secondary);
+  --plugin-text-disabled: var(--rc-text-muted);
+  --plugin-primary: var(--rc-accent);
+  --plugin-primary-hover: var(--rc-accent-hover);
   --plugin-primary-active: var(--zt-primary-active);
   --plugin-success: var(--zt-success);
   --plugin-warning: var(--zt-warning);
   --plugin-error: var(--zt-error);
   --plugin-info: var(--zt-info);
-  --plugin-border: var(--zt-border);
+  --plugin-border: var(--rc-border);
   --plugin-border-strong: var(--zt-border-strong);
   --plugin-shadow: var(--zt-shadow);
   --plugin-shadow-strong: var(--zt-shadow-strong);
@@ -180,15 +180,15 @@
 
 /* 面板/卡片 */
 .zt-panel {
-  background-color: var(--zt-bg-elevated);
+  background-color: var(--rc-surface);
   border-radius: var(--zt-radius);
-  border: 1px solid var(--zt-border);
+  border: 1px solid var(--rc-border);
   box-shadow: var(--zt-shadow);
   transition: all var(--zt-transition);
 }
 
 .zt-panel-hover:hover {
-  border-color: var(--zt-primary);
+  border-color: var(--rc-accent);
   box-shadow: var(--zt-shadow-strong);
   transform: translateY(-2px);
 }
@@ -204,7 +204,7 @@
   font-size: 12px;
   line-height: 20px;
   border-radius: 10px;
-  background-color: var(--zt-primary);
+  background-color: var(--rc-accent);
   color: var(--rc-accent-contrast);
   font-weight: 500;
 }
@@ -226,7 +226,7 @@
 .zt-divider {
   height: 1px;
   margin: var(--zt-spacing) 0;
-  background-color: var(--zt-border);
+  background-color: var(--rc-border);
   border: none;
 }
 
@@ -259,7 +259,7 @@
   width: 20px;
   height: 20px;
   margin: -10px 0 0 -10px;
-  border: 2px solid var(--zt-primary);
+  border: 2px solid var(--rc-accent);
   border-radius: 50%;
   border-top-color: transparent;
   animation: zt-spin 0.8s linear infinite;

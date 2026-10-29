@@ -1,7 +1,7 @@
 {
   "id": "timestamp",
   "name": "时间戳转换",
-  "version": "1.1.3",
+  "version": "1.1.4",
   "description": "秒与毫秒时间戳、日期格式实时互转，支持全球城市世界时钟与多时区时差换算",
   "author": "ZTools Team",
   "entry": "dist/index.js",

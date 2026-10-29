@@ -38,7 +38,9 @@ export async function findDockerExecutable(env = process.env, platform = process
   const name = platform === 'win32' ? 'docker.exe' : 'docker'
   const directories = (env.PATH || '').split(path.delimiter).filter(p => p && path.isAbsolute(p))
   const candidates = [...directories.map(p => path.join(p, name)), path.join(home, '.docker', 'bin', name)]
-  if (platform === 'darwin') candidates.push('/Applications/Docker.app/Contents/Resources/bin/docker', '/Applications/OrbStack.app/Contents/MacOS/xbin/docker', '/opt/homebrew/bin/docker', '/usr/local/bin/docker')
+  // OrbStack 的 CLI 默认装在 ~/.orbstack/bin，Rancher Desktop 装在 ~/.rd/bin；从 Finder / 程序坞启动时 PATH 不含这些目录。
+  // 候选路径一律经 X_OK + stat().isFile() 校验，只接受（链接最终指向的）普通可执行文件
+  if (platform === 'darwin') candidates.push(path.join(home, '.orbstack', 'bin', name), path.join(home, '.rd', 'bin', name), '/Applications/Docker.app/Contents/Resources/bin/docker', '/Applications/OrbStack.app/Contents/MacOS/xbin/docker', '/opt/homebrew/bin/docker', '/usr/local/bin/docker')
   if (platform === 'win32' && env.ProgramFiles) candidates.push(path.join(env.ProgramFiles, 'Docker', 'Docker', 'resources', 'bin', name))
   for (const file of new Set(candidates)) {
     try { await fs.access(file, constants.X_OK); if ((await fs.stat(file)).isFile()) return file }

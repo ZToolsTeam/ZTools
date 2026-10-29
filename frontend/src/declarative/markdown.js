@@ -5,29 +5,32 @@
  * 属性值再转义引号。插件与用户的原文一律原样显示（不删 Emoji、不改空白），代码块内容不做任何处理。
  *
  * 支持：围栏代码块（``` 或 ~~~，长度 ≥ 3，结束围栏同字符且不短于开头）、GFM 表格、# 标题、
- * 无序 / 有序 / 任务列表、> 引用、分割线、段落内单换行、行内代码、图片、链接、加粗、斜体、删除线。
+ * 无序 / 有序 / 任务列表、> 引用（含 GFM 提示块 > [!NOTE] / [!TIP] / [!IMPORTANT] / [!WARNING] / [!CAUTION]）、分割线、段落内单换行、行内代码、图片、链接、加粗、斜体、删除线。
  */
 
+// 块级元素的上下间距统一由 declarative-fluent.css 的 .declarative-markdown 规则控制（标题上大下小），这里只写外观
 const CLS = {
-  pre: "my-2 bg-[var(--rc-surface-subtle)] border border-[var(--rc-border)] rounded-xl p-3.5 font-mono text-xs overflow-x-auto text-[var(--rc-text-primary)] leading-relaxed whitespace-pre",
+  pre: "bg-[var(--rc-surface-subtle)] border border-[var(--rc-border)] rounded-lg p-3 font-mono text-xs overflow-x-auto text-[var(--rc-text-primary)] leading-relaxed whitespace-pre-wrap break-words",
   inlineCode: "bg-[var(--rc-surface-active)] px-1.5 py-0.5 rounded text-[var(--rc-text-secondary)] border border-[var(--rc-border)] text-xs font-mono",
-  h1: "text-xl font-bold text-[var(--rc-text-primary)] mb-3",
-  h2: "text-lg font-bold text-[var(--rc-text-primary)] mt-5 mb-2.5 border-b border-[var(--rc-border)] pb-1.5",
-  h3: "text-base font-semibold text-[var(--rc-text-primary)] mt-4 mb-2",
-  hr: "my-3 border-t border-[var(--rc-border)]",
-  quote: "my-2 pl-3 border-l-2 border-[var(--rc-border-highlight)] text-[var(--rc-text-secondary)] italic",
-  p: "my-0 break-words",
-  list: "my-1 space-y-1",
+  h1: "text-lg font-semibold text-[var(--rc-text-primary)]",
+  h2: "text-base font-semibold text-[var(--rc-text-primary)] border-b border-[var(--rc-border)] pb-1.5",
+  h3: "text-sm font-semibold text-[var(--rc-text-primary)]",
+  hr: "border-t border-[var(--rc-border)]",
+  quote: "pl-3 border-l-2 border-[var(--rc-border-highlight)] text-[var(--rc-text-secondary)] italic",
+  alert: "pl-3 border-l-2 border-[var(--rc-border-highlight)] text-[var(--rc-text-secondary)]",
+  alertTitle: "font-semibold text-[var(--rc-text-primary)] not-italic",
+  p: "break-words",
+  list: "space-y-1",
   li: "flex items-start gap-2",
   bullet: "text-[var(--rc-text-muted)] select-none flex-shrink-0",
-  tableWrap: "my-2 overflow-x-auto",
+  tableWrap: "overflow-x-auto",
   table: "w-full border-collapse text-xs",
   th: "border border-[var(--rc-border)] bg-[var(--rc-surface-hover)] px-2.5 py-1.5 font-semibold text-[var(--rc-text-primary)]",
   td: "border border-[var(--rc-border)] px-2.5 py-1.5 text-[var(--rc-text-secondary)] align-top",
   strong: "font-semibold text-[var(--rc-text-primary)]",
   link: "text-[var(--rc-text-primary)] underline underline-offset-2",
-  imgWrap: "my-4 flex items-center justify-center p-4 bg-[var(--rc-surface-hover)] rounded-2xl border border-[var(--rc-border)]",
-  img: "max-h-72 object-contain rounded-lg shadow-lg"
+  imgWrap: "my-2 flex items-center justify-center p-4 bg-[var(--rc-surface-hover)] rounded-xl border border-[var(--rc-border)]",
+  img: "max-h-72 object-contain rounded-lg"
 };
 
 function escapeHtml(text) {
@@ -83,6 +86,8 @@ const HR = /^ {0,3}([-*_])(?:\s*\1){2,}\s*$/;
 const QUOTE = /^ {0,3}>\s?(.*)$/;
 const BULLET = /^(\s*)[-*+]\s+(.*)$/;
 const ORDERED = /^(\s*)(\d{1,9})[.)]\s+(.*)$/;
+const ALERT = /^\s*\[!(NOTE|TIP|IMPORTANT|WARNING|CAUTION)\]\s*(.*)$/i;
+const ALERT_TITLES = { NOTE: "注意", TIP: "提示", IMPORTANT: "重要", WARNING: "警告", CAUTION: "小心" };
 const TABLE_SEP = /^\s*\|?\s*:?-+:?\s*(\|\s*:?-+:?\s*)*\|?\s*$/;
 
 function splitRow(line) {
@@ -139,7 +144,9 @@ function renderListItem(content, ordered, number) {
   const task = /^\[( |x|X)\]\s+(.*)$/.exec(content);
   if (task && !ordered) {
     const done = task[1] !== " ";
-    return `<div class="${CLS.li}"><span class="${CLS.bullet}">${done ? "☑" : "☐"}</span><span class="${done ? "line-through opacity-70" : ""}">${renderInline(task[2])}</span></div>`;
+    // 任务框用带边框的方块表示，不用 ☑ / ☐ 字符（会被当成彩色符号渲染）
+    const box = `<span class="inline-block w-3 h-3 mt-1 rounded-sm border border-[var(--rc-text-muted)]${done ? " bg-[var(--rc-text-muted)]" : ""}" data-task="${done ? "done" : "todo"}" aria-label="${done ? "已完成" : "未完成"}"></span>`;
+    return `<div class="${CLS.li}"><span class="${CLS.bullet}">${box}</span><span class="${done ? "line-through opacity-70" : ""}">${renderInline(task[2])}</span></div>`;
   }
   const marker = ordered ? `${number}.` : "•";
   return `<div class="${CLS.li}"><span class="${CLS.bullet}">${marker}</span><span>${renderInline(content)}</span></div>`;
@@ -153,7 +160,7 @@ function renderListItem(content, ordered, number) {
 export function renderMarkdown(markdown) {
   if (markdown === undefined || markdown === null || markdown === "") return "";
   // 占位符使用 \u0000，原文里的 \u0000 先替换掉
-  const lines = String(markdown).replace(/\u0000/g, "�").replace(/\r\n?/g, "\n").split("\n");
+  const lines = String(markdown).replace(/\u0000/g, "\uFFFD").replace(/\r\n?/g, "\n").split("\n");
   const blocks = [];
   let paragraph = [];
 
@@ -215,12 +222,22 @@ export function renderMarkdown(markdown) {
 
     if (QUOTE.test(line)) {
       flushParagraph();
-      const quoted = [];
+      const raw = [];
       while (i < lines.length && QUOTE.test(lines[i])) {
-        quoted.push(renderInline(QUOTE.exec(lines[i])[1]));
+        raw.push(QUOTE.exec(lines[i])[1]);
         i++;
       }
-      blocks.push(`<blockquote class="${CLS.quote}">${quoted.join("<br>")}</blockquote>`);
+      // GFM 提示块：首行是 [!TIP] 等标记时去掉标记，换成固定的中文小标题（标题是常量，不含插件原文）
+      const alert = ALERT.exec(raw[0]);
+      const title = alert ? ALERT_TITLES[alert[1].toUpperCase()] : "";
+      if (alert) {
+        raw[0] = alert[2];
+        if (raw[0].trim() === "") raw.shift();
+      }
+      const quoted = raw.map(renderInline);
+      const head = title ? `<strong class="${CLS.alertTitle}">${title}</strong>` : "";
+      const sep = head && quoted.length > 0 ? "<br>" : "";
+      blocks.push(`<blockquote class="${title ? CLS.alert : CLS.quote}">${head}${sep}${quoted.join("<br>")}</blockquote>`);
       continue;
     }
 

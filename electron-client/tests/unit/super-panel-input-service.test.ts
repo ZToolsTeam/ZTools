@@ -283,7 +283,7 @@ function keyboardRecorder() {
 }
 
 test('[迁移] 旧默认 Alt+Space 且全局唤醒也是 Alt+Space（未设置时按默认）时，超级面板改为 Alt+Shift+Space 并写回', async () => {
-  for (const wake of [undefined, '', 'Alt+Space', 'option + space']) {
+  for (const wake of [undefined, 'Alt+Space', 'option + space']) {
     const store: Record<string, unknown> = { super_panel: legacyPanel(), ...(wake === undefined ? {} : { wake }) }
     const { config, writes } = migrationConfig(store)
     const rec = keyboardRecorder()
@@ -304,15 +304,17 @@ test('[迁移] 旧默认 Alt+Space 且全局唤醒也是 Alt+Space（未设置�
   }
 })
 
-test('[迁移] 用户已把全局唤醒改成别的键时，保留超级面板的 Alt+Space 不动', async () => {
-  const store: Record<string, unknown> = { super_panel: legacyPanel(), wake: 'Ctrl+Shift+Z' }
-  const { config, writes } = migrationConfig(store)
-  const rec = keyboardRecorder()
-  const service = new SuperPanelInputService({ config, triggers: rec.triggers, nativeInput: null, toggle: () => undefined })
-  await service.ready
-  assert.deepEqual(rec.calls, [{ enabled: true, accelerator: 'Alt+Space' }])
-  assert.equal(writes.length, 0)
-  await service.stop()
+test('[迁移] 用户已把全局唤醒改成别的键或已关闭（空串）时，保留超级面板的 Alt+Space 不动', async () => {
+  for (const wake of ['Ctrl+Shift+Z', '', '   ']) {
+    const store: Record<string, unknown> = { super_panel: legacyPanel(), wake }
+    const { config, writes } = migrationConfig(store)
+    const rec = keyboardRecorder()
+    const service = new SuperPanelInputService({ config, triggers: rec.triggers, nativeInput: null, toggle: () => undefined })
+    await service.ready
+    assert.deepEqual(rec.calls, [{ enabled: true, accelerator: 'Alt+Space' }], JSON.stringify(wake))
+    assert.equal(writes.length, 0)
+    await service.stop()
+  }
 })
 
 test('[故障注入] 写回配置失败时本次仍使用新键；读不到全局唤醒设置时不做迁移', async () => {

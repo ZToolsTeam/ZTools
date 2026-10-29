@@ -67,11 +67,7 @@ describe('useCommandSearch 统一搜索内核与 Frecency 排序测试套件', (
       return Promise.resolve({ files: [] })
     })
 
-    window.ztools = {
-      system: {
-        searchFiles: mockSearchFiles
-      }
-    }
+    window.__ztoolsLauncher = { searchFiles: mockSearchFiles }
 
     const { query, fileResults, search } = useCommandSearch({ enableFileSearch: true })
 
@@ -81,7 +77,7 @@ describe('useCommandSearch 统一搜索内核与 Frecency 排序测试套件', (
     search('second')
 
     // 此时即使第一次搜索耗时很长并之后才返回
-    await new Promise((r) => setTimeout(r, 60)) // 等待 debounce
+    await new Promise((r) => setTimeout(r, 120)) // 等待 debounce（80ms）
     if (resolveSecond) resolveSecond()
     if (resolveFirst) resolveFirst()
 
@@ -90,6 +86,7 @@ describe('useCommandSearch 统一搜索内核与 Frecency 排序测试套件', (
     // 结果必须是第二次的，绝不被第一次乱序覆盖
     expect(fileResults.value.some((f) => f.name === 'second.txt')).toBe(true)
     expect(fileResults.value.some((f) => f.name === 'first.txt')).toBe(false)
+    delete window.__ztoolsLauncher
   })
 
   it('4. [图标语义映射与 Beyond Happy Path] 容错与默认回退', () => {
@@ -240,29 +237,29 @@ describe('useCommandSearch 统一搜索内核与 Frecency 排序测试套件', (
     search('')
     expect(filteredItems.value.some((i) => i.type === 'plugin-feature')).toBe(false)
 
-    // 2. 搜索「webp转jpg」命中 batch-image 的 preset-to-jpg 子命令
-    search('webp转jpg')
-    expect(filteredItems.value.some((i) => i.key === 'batch-image:preset-to-jpg')).toBe(true)
+    // 2. 搜索「单位换算」命中 calculator 的 calc-unit 子命令（原独立的单位换算插件已合并进来）
+    search('单位换算')
+    expect(filteredItems.value.some((i) => i.key === 'calculator:calc-unit')).toBe(true)
 
-    // 3. 搜索「扫描件转灰度」命中 batch-image 的 preset-doc-bw 子命令
-    search('扫描件转灰度')
-    expect(filteredItems.value.some((i) => i.key === 'batch-image:preset-doc-bw')).toBe(true)
+    // 3. 搜索「人民币大写」命中 calculator 的 calc-rmb 子命令
+    search('人民币大写')
+    expect(filteredItems.value.some((i) => i.key === 'calculator:calc-rmb')).toBe(true)
 
-    // 4. 搜索原独立插件「词典 / 查词」命中 translator 的 translate-dict 子命令
-    search('词典')
-    expect(filteredItems.value.some((i) => i.key === 'translator:translate-dict')).toBe(true)
+    // 4. 搜索原独立插件「世界时钟」命中 timestamp 的 tz-world 子命令
+    search('世界时钟')
+    expect(filteredItems.value.some((i) => i.key === 'timestamp:tz-world')).toBe(true)
 
-    // 5. 搜索「变量命名」命中 translator 的 translate-naming 子命令
-    search('变量命名')
-    expect(filteredItems.value.some((i) => i.key === 'translator:translate-naming')).toBe(true)
+    // 5. 搜索「对比度」命中 color-picker 的 contrast-check 子命令
+    search('对比度')
+    expect(filteredItems.value.some((i) => i.key === 'color-picker:contrast-check')).toBe(true)
 
     // 6. 搜索原独立插件「base64解码」命中 crypto-tool 的 codec-base64 子命令
     search('base64解码')
     expect(filteredItems.value.some((i) => i.key === 'crypto-tool:codec-base64')).toBe(true)
 
-    // 7. 搜索「高铁票」命中 invoice-assistant 的 invoice-travel 子命令
-    search('高铁票')
-    expect(filteredItems.value.some((i) => i.key === 'invoice-assistant:invoice-travel')).toBe(true)
+    // 7. 搜索「json转ts」命中 json-format 的 json-codegen 子命令
+    search('json转ts')
+    expect(filteredItems.value.some((i) => i.key === 'json-format:json-codegen')).toBe(true)
 
     // 8. 搜索原独立插件「大写金额」与「世界时钟」命中合并后的 calculator 与 timestamp 子命令
     search('大写金额')

@@ -64,33 +64,88 @@ test('真实目录无权限时报告拒绝访问，恢复权限后可以重新�
   assert.equal(fs.readFileSync(file, 'utf8'), 'image Screenshot retained.png')
 })
 
-test('部分目录读取失败不返回残缺成功结果，失败不覆盖上次缓存且恢复后可重试', (t) => {
+test('部分目录读取失败只跳过该目录：返回其余目录的截图并在 failedDirs 中说明原因，恢复后重扫完整', (t) => {
   const { root, shots, outside } = fixtureDir(t)
   const first = writeShot(shots, 'Screenshot first.png', '2026-10-20T10:00:00Z')
   const second = writeShot(outside, 'Screenshot second.png', '2026-10-21T10:00:00Z')
   const service = new ScreenshotsService({ searchDirectories: [shots, outside] })
-  const previous = service.scanScreenshots(true)
-  assert.equal(previous.length, 2)
+  const previous = service.scanScreenshotsReport(true)
+  assert.equal(previous.screenshots.length, 2)
+  assert.deepEqual(previous.failedDirs, [])
   const retainedDirectory = path.join(root, 'retained-directory')
   fs.renameSync(outside, retainedDirectory)
   fs.writeFileSync(outside, '临时替代目录')
-  assert.throws(() => service.scanScreenshots(true), hasCode('FILE_ERROR'))
-  assert.strictEqual(service.scanScreenshots(), previous, '失败不能把已有缓存替换为半份结果')
+  const partial = service.scanScreenshotsReport(true)
+  assert.deepEqual(partial.screenshots.map((r) => r.path), [first])
+  assert.equal(partial.failedDirs.length, 1)
+  assert.equal(partial.failedDirs[0]!.path, outside)
+  assert.equal(partial.failedDirs[0]!.code, 'FILE_ERROR')
+  assert.equal(partial.failedDirs[0]!.hostCode, 'ENOTDIR')
+  assert.match(partial.failedDirs[0]!.message, /Private.*路径不是文件夹/)
+  // 缓存期内读取同样带回失败目录（不会因命中缓存把原因丢掉）
+  assert.deepEqual(service.scanScreenshotsReport().failedDirs, partial.failedDirs)
+  // 返回值可 JSON 序列化（经 IPC 传给插件），插件按 data.screenshots 取列表
+  const roundTrip = JSON.parse(JSON.stringify(partial)) as { screenshots: unknown[]; failedDirs: unknown[] }
+  assert.equal(Array.isArray(roundTrip.screenshots) && roundTrip.screenshots.length, 1)
   fs.unlinkSync(outside)
   fs.renameSync(retainedDirectory, outside)
-  assert.deepEqual(service.scanScreenshots(true).map((r) => r.path).sort(), [first, second].sort())
+  const recovered = service.scanScreenshotsReport(true)
+  assert.deepEqual(recovered.screenshots.map((r) => r.path).sort(), [first, second].sort())
+  assert.deepEqual(recovered.failedDirs, [])
 })
 
-test('截图文件读取错误不能被目录或 Spotlight 的异常处理吞掉', (t) => {
+test('macOS 拒绝访问桌面（EPERM）：跳过桌面继续扫描其它目录；全部目录都失败才整体失败且不覆盖上次缓存', (t) => {
+  const { root, shots } = fixtureDir(t)
+  const desktop = path.join(root, 'Desktop')
+  fs.mkdirSync(desktop)
+  writeShot(desktop, 'Screenshot desktop.png', '2026-10-19T10:00:00Z')
+  const kept = writeShot(shots, 'Screenshot kept.png', '2026-10-20T10:00:00Z')
+  const deniedDirs = new Set([desktop])
+  const originalReaddir = fs.readdirSync
+  t.mock.method(fs, 'readdirSync', ((...args: Parameters<typeof fs.readdirSync>) => {
+    if (deniedDirs.has(String(args[0]))) throw Object.assign(new Error('operation not permitted'), { code: 'EPERM' })
+    return originalReaddir(...args)
+  }) as typeof fs.readdirSync)
+
+  const service = new ScreenshotsService({ searchDirectories: [desktop, shots] })
+  const report = service.scanScreenshotsReport(true)
+  assert.deepEqual(report.screenshots.map((r) => r.path), [kept])
+  assert.deepEqual(report.failedDirs, [{
+    path: desktop, code: 'PERMISSION_DENIED', hostCode: 'EPERM', message: '无法读取截图目录“Desktop”：没有访问权限'
+  }])
+
+  // 全部目录都被拒绝：整体失败，错误信息逐个列出目录与原因，上次缓存保留
+  const previous = service.scanScreenshots()
+  deniedDirs.add(shots)
+  assert.throws(() => service.scanScreenshots(true), (error: { code?: string; message?: string }) => {
+    assert.equal(error.code, 'PERMISSION_DENIED')
+    assert.match(error.message ?? '', /所有截图目录都无法读取：.*Desktop.*没有访问权限；.*Screenshots.*没有访问权限/)
+    return true
+  })
+  assert.strictEqual(service.scanScreenshots(), previous, '整体失败不能覆盖已有缓存')
+  assert.deepEqual(service.scanScreenshotsReport().failedDirs.map((f) => f.path), [desktop], '失败目录也沿用上次结果')
+  // 只有一个目录且被拒绝：沿用原来的单目录错误文案
+  const single = new ScreenshotsService({ searchDirectories: [desktop] })
+  assert.throws(() => single.scanScreenshots(true), (error: { code?: string; message?: string }) => {
+    assert.equal(error.code, 'PERMISSION_DENIED')
+    assert.equal(error.message, '无法读取截图目录“Desktop”：没有访问权限')
+    return true
+  })
+})
+
+test('截图文件读取错误不能被目录或 Spotlight 的异常处理吞掉：记入所在目录的 failedDirs', (t) => {
   const { shots } = fixtureDir(t)
   const file = writeShot(shots, 'Screenshot unreadable.png', '2026-10-20T10:00:00Z')
+  const readable = writeShot(shots, 'Screenshot readable.png', '2026-10-21T10:00:00Z')
   const originalStat = fs.statSync
   t.mock.method(fs, 'statSync', ((...args: Parameters<typeof fs.statSync>) => {
     if (args[0] === file) throw Object.assign(new Error('test read denied'), { code: 'EACCES' })
     return originalStat(...args)
   }) as typeof fs.statSync)
   const service = new ScreenshotsService({ searchDirectories: [shots] })
-  assert.throws(() => service.scanScreenshots(true), hasCode('PERMISSION_DENIED'))
+  const report = service.scanScreenshotsReport(true)
+  assert.deepEqual(report.screenshots.map((r) => r.path), [readable])
+  assert.deepEqual(report.failedDirs.map((f) => [f.path, f.code, f.hostCode]), [[shots, 'PERMISSION_DENIED', 'EACCES']])
   if (process.platform === 'darwin') {
     const indexed = new ScreenshotsService()
     t.mock.method(indexed, 'getDefaultLocations', () => [])
@@ -98,7 +153,9 @@ test('截图文件读取错误不能被目录或 Spotlight 的异常处理吞掉
       assert.equal(command, '/usr/bin/mdfind')
       return file + '\n'
     }) as typeof childProcess.execFileSync)
-    assert.throws(() => indexed.scanScreenshots(true), hasCode('PERMISSION_DENIED'))
+    const indexedReport = indexed.scanScreenshotsReport(true)
+    assert.deepEqual(indexedReport.screenshots, [])
+    assert.deepEqual(indexedReport.failedDirs.map((f) => [f.path, f.code]), [[shots, 'PERMISSION_DENIED']])
   }
 })
 
@@ -129,6 +186,11 @@ test('置顶与删除只命中一张截图', async (t) => {
 
   const victim = await service.resolveScannedScreenshot(files[2])
   assert.equal(await service.deleteScreenshot(victim.path), true)
+  await assert.rejects(service.deleteScreenshot(victim.path), (error: { code?: string; message?: string }) => {
+    assert.equal(error.code, 'FILE_ERROR')
+    assert.match(error.message ?? '', /截图文件不存在：Screenshot 3\.png/)
+    return true
+  })
   const remaining = service.scanScreenshots(true).map((r) => r.path).sort()
   assert.deepEqual(remaining, [files[0], files[1], files[3]].sort())
 })
@@ -139,7 +201,9 @@ test('[安全] 只能操作宿主扫描到的截图：任意文件、../ 穿越�
   const secret = path.join(outside, 'family.png')
   fs.writeFileSync(secret, 'private photo')
   const link = path.join(shots, 'Screenshot link.png')
-  fs.symlinkSync(secret, link)
+  // Windows 普通权限使用真实目录重解析点，仍验证扫描不跟随链接泄露外部照片。
+  fs.symlinkSync(process.platform === 'win32' ? outside : secret, link, process.platform === 'win32' ? 'junction' : 'file')
+  assert.equal(fs.lstatSync(link).isSymbolicLink(), true)
   const service = new ScreenshotsService({ searchDirectories: [shots] })
   assert.deepEqual(service.scanScreenshots(true).map((r) => r.path), [shot])
 
@@ -216,4 +280,32 @@ test('[契约] screenshots_delete / toggle_pin 参数校验', () => {
   assert.throws(() => validateMethodParams('screenshots_delete', { filePath: '/a\0b' }))
   assert.throws(() => validateMethodParams('screenshots_toggle_pin', { filePath: 1 }))
   assert.throws(() => validateMethodParams('screenshots_toggle_pin', { filePath: '/a', extra: true }))
+})
+
+test('删除截图失败时带上中文原因（权限、占用、其它错误），失败不从列表移除', async (t) => {
+  const { shots } = fixtureDir(t)
+  const file = writeShot(shots, 'Screenshot busy.png', '2026-10-20T10:00:00Z')
+  const trashName = process.platform === 'darwin' ? '废纸篓' : '回收站'
+  const failures: Array<[unknown, string, RegExp]> = [
+    [Object.assign(new Error('denied'), { code: 'EPERM' }), 'PERMISSION_DENIED', new RegExp(`无法将截图“Screenshot busy\\.png”移到${trashName}：没有访问权限`)],
+    [Object.assign(new Error('busy'), { code: 'EBUSY' }), 'FILE_ERROR', /文件正被其它程序占用/],
+    [new Error('Failed to move item to trash'), 'FILE_ERROR', /移到.*：Failed to move item to trash/]
+  ]
+  for (const [failure, code, pattern] of failures) {
+    const service = new ScreenshotsService({ searchDirectories: [shots], trashItem: async () => { throw failure } })
+    service.scanScreenshots(true)
+    await assert.rejects(service.deleteScreenshot(file), (error: { code?: string; message?: string }) => {
+      assert.equal(error.code, code)
+      assert.match(error.message ?? '', pattern)
+      return true
+    })
+    assert.deepEqual(service.scanScreenshots().map((r) => r.path), [file], '删除失败不能从缓存里移除')
+    assert.equal(fs.existsSync(file), true)
+  }
+  const trashed: string[] = []
+  const service = new ScreenshotsService({ searchDirectories: [shots], trashItem: async (target) => { trashed.push(target); fs.unlinkSync(target) } })
+  service.scanScreenshots(true)
+  assert.equal(await service.deleteScreenshot(file), true)
+  assert.deepEqual(trashed, [file])
+  assert.deepEqual(service.scanScreenshots(), [])
 })

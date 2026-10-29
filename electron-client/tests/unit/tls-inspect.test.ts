@@ -1,6 +1,7 @@
 import test, { before, after, type TestContext } from 'node:test'
 import assert from 'node:assert/strict'
 import fs from 'node:fs/promises'
+import { existsSync } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import tls from 'node:tls'
@@ -12,6 +13,18 @@ import { validateTlsInspectRequest, type TlsInspection } from '../../src/contrac
 import { validateMethodParams } from '../../src/contracts/method-params.js'
 import { canCall, type CallerIdentity } from '../../src/contracts/capabilities.js'
 
+function opensslExecutable(): string {
+  if (process.platform !== 'win32') return 'openssl'
+  // Git for Windows 自带 OpenSSL，但默认只将 cmd 目录加入 PATH。
+  const gitPaths = execFileSync('where.exe', ['git.exe'], { encoding: 'utf8', windowsHide: true }).trim().split(/\r?\n/)
+  for (const git of gitPaths) {
+    for (const root of [path.dirname(git), path.dirname(path.dirname(git)), path.dirname(path.dirname(path.dirname(git)))]) {
+      const file = path.join(root, 'usr', 'bin', 'openssl.exe')
+      if (existsSync(file)) return file
+    }
+  }
+  throw new Error('TLS 集成测试需要 Git for Windows 附带的 OpenSSL')
+}
 let directory: string, key: Buffer, cert: Buffer
 const caller: CallerIdentity = { type: 'plugin', webContentsId: 701, pluginId: 'ssl-domain-check', pluginInstanceId: 'tls-test' }
 const signal = () => new AbortController().signal
@@ -19,7 +32,7 @@ const request = (port: number, domain = 'fixture.example') => ({ action: 'inspec
 before(async () => {
   directory = await fs.mkdtemp(path.join(os.tmpdir(), 'ztools-tls-test-'))
   await fs.writeFile(path.join(directory, 'cert.cnf'), '[req]\ndistinguished_name=dn\nx509_extensions=ext\nprompt=no\n[dn]\nCN=fixture.example\n[ext]\nsubjectAltName=DNS:fixture.example\nbasicConstraints=critical,CA:TRUE\nkeyUsage=digitalSignature,keyEncipherment,keyCertSign\n')
-  execFileSync('openssl', ['req', '-x509', '-newkey', 'rsa:2048', '-nodes', '-days', '2', '-config', path.join(directory, 'cert.cnf'), '-keyout', path.join(directory, 'key.pem'), '-out', path.join(directory, 'cert.pem')], { stdio: 'ignore', timeout: 15000 })
+  execFileSync(opensslExecutable(), ['req', '-x509', '-newkey', 'rsa:2048', '-nodes', '-days', '2', '-config', path.join(directory, 'cert.cnf'), '-keyout', path.join(directory, 'key.pem'), '-out', path.join(directory, 'cert.pem')], { stdio: 'ignore', timeout: 15000 })
   await fs.chmod(path.join(directory, 'key.pem'), 0o600)
   key = await fs.readFile(path.join(directory, 'key.pem')); cert = await fs.readFile(path.join(directory, 'cert.pem'))
 })

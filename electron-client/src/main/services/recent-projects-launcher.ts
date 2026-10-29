@@ -92,6 +92,32 @@ export async function findWindowsEditor(editor: ProjectEditor, deps: WindowsLaun
   throw new Error(`未找到 ${app.dirs[0]} 的安装位置，请确认已安装对应编辑器`)
 }
 
+type ProjectStat = { isFile(): boolean; isDirectory(): boolean }
+/** 把 fs.stat 的系统错误转换成给用户看的中文原因；原始错误放在 cause 里，不直接透给插件 */
+export function describeProjectPathError(error: unknown): string {
+  const code = (error as NodeJS.ErrnoException | undefined)?.code
+  switch (code) {
+    case 'ENOENT': return '项目路径不存在，可能已被移动、重命名或删除，请重新扫描'
+    case 'ENOTDIR': return '项目路径的上级不是文件夹，项目可能已被移动，请重新扫描'
+    case 'EACCES':
+    case 'EPERM': return '没有权限访问项目路径，请检查文件夹权限（macOS 需在“系统设置 > 隐私与安全性”中允许访问该位置）'
+    case 'ELOOP': return '项目路径包含循环的符号链接，无法打开'
+    case 'ENAMETOOLONG': return '项目路径过长，无法打开'
+    case 'EIO':
+    case 'ETIMEDOUT':
+    case 'EHOSTDOWN':
+    case 'ENXIO': return '项目所在磁盘或网络位置无法读取，请确认已连接后重试'
+    default: return `无法读取项目路径${code ? `（${code}）` : ''}，请重新扫描`
+  }
+}
+/** 读取项目路径并确认类型与记录一致；失败时给出中文原因 */
+async function checkProjectPath(project: RecentProject, stat: (file: string) => Promise<ProjectStat>): Promise<void> {
+  let info: ProjectStat
+  try { info = await stat(project.path) } catch (error) { throw new Error(describeProjectPathError(error), { cause: error }) }
+  if (project.kind === 'folder' && !info.isDirectory()) throw new Error('项目路径类型已改变：记录的是文件夹，现在不是文件夹，请重新扫描')
+  if (project.kind !== 'folder' && !info.isFile()) throw new Error('项目路径类型已改变：记录的是工作区文件，现在不是普通文件，请重新扫描')
+}
+
 /** 直接启动可执行文件并等待其启动成功或失败；参数原样传递，路径里的空格与 & 等字符不会被当成命令 */
 function spawnDetached(start: typeof spawn, file: string, args: string[], cwd?: string, verbatim = false): Promise<void> {
   return new Promise((resolve, reject) => {
@@ -105,8 +131,7 @@ function spawnDetached(start: typeof spawn, file: string, args: string[], cwd?: 
 
 export async function launchWindowsProject(project: RecentProject, action: 'open' | 'terminal', signal: AbortSignal, deps: WindowsLaunchDeps = windowsDeps) {
   signal.throwIfAborted()
-  const stat = await deps.stat(project.path)
-  if (project.kind === 'folder' ? !stat.isDirectory() : !stat.isFile()) throw new Error('项目路径类型已改变，请重新扫描')
+  await checkProjectPath(project, deps.stat)
   if (action === 'terminal') {
     const directory = project.kind === 'folder' ? project.path : path.win32.dirname(project.path)
     // ComSpec 缺失时用系统目录下的 cmd.exe 绝对路径，不按 PATH / 当前目录查找裸文件名
@@ -128,8 +153,7 @@ export async function launchWindowsProject(project: RecentProject, action: 'open
 export async function launchRecentProject(project: RecentProject, action: 'open' | 'terminal', signal: AbortSignal) {
   if (process.platform === 'win32') return launchWindowsProject(project, action, signal)
   signal.throwIfAborted()
-  const stat = await fs.stat(project.path)
-  if (project.kind === 'folder' ? !stat.isDirectory() : !stat.isFile()) throw new Error('项目路径类型已改变，请重新扫描')
+  await checkProjectPath(project, file => fs.stat(file))
   if (action === 'terminal') {
     const directory = project.kind === 'folder' ? project.path : path.dirname(project.path)
     await runProjectCommand('/usr/bin/open', ['-a', '/System/Applications/Utilities/Terminal.app', directory], signal, 8000)
@@ -137,7 +161,10 @@ export async function launchRecentProject(project: RecentProject, action: 'open'
     const editor = await findEditor(project.editor, signal)
     if (editor.cli) {
       const cli = path.join(editor.path, 'Contents', 'Resources', 'app', 'out', 'cli.js')
-      if (!(await fs.stat(cli)).isFile()) throw new Error('编辑器命令行入口不是普通文件')
+      const cliStat = await fs.stat(cli).catch((error: unknown) => {
+        throw new Error(`编辑器命令行入口不可用（${(error as NodeJS.ErrnoException).code === 'ENOENT' ? '文件不存在，请重新安装编辑器' : describeProjectPathError(error)}）`, { cause: error })
+      })
+      if (!cliStat.isFile()) throw new Error('编辑器命令行入口不是普通文件')
       const executable = path.join(editor.path, 'Contents', 'MacOS', editor.executable)
       const env = { ...process.env, ELECTRON_RUN_AS_NODE: '1' }
       for (const key of ['VSCODE_IPC_HOOK_CLI', 'NODE_OPTIONS', 'NODE_REPL_EXTERNAL_MODULE']) delete (env as NodeJS.ProcessEnv)[key]

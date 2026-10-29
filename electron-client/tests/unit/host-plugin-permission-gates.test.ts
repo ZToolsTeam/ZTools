@@ -30,6 +30,15 @@ test('dllplugin_call 兜底：插件只能调用自己对应的处理器，别�
   assert.equal(isBuiltinPluginFallbackAllowed(pluginWindow('system-tools'), 'SystemActionsPlugin', normalizePluginName), true)
 })
 
+test('SQLite 查看器仅允许自身会话，失效会话与其他插件不能借同名公共 DLL 越权', () => {
+  for (const caller of [declarative('sqlite-plugin'), pluginWindow('sqlite-plugin')]) {
+    assert.equal(isBuiltinPluginFallbackAllowed(caller, 'SqlitePlugin', normalizePluginName), true)
+  }
+  for (const caller of [declarative('caffeine'), pluginWindow('community-tool'), { type: 'main' as const, webContentsId: 1, stalePluginSession: true as const }]) {
+    assert.equal(isBuiltinPluginFallbackAllowed(caller, 'SqlitePlugin', normalizePluginName), false)
+  }
+})
+
 test('[越权] dllplugin_call 兜底：跨插件调用、未登记插件、失效会话与未归属插件窗口一律拒绝', () => {
   // 防休眠插件不能借兜底粉碎文件、改 hosts 或解锁结束进程
   for (const target of ['ShredderPlugin', 'HostsSwitcherPlugin', 'FileUnlockPlugin']) {
@@ -71,6 +80,10 @@ test('需要归属的系统能力在路由入口检查插件清单权限', () =>
     hosts_manager: ['system', 'fs'],
     docker_manager: ['shell'],
     wifi_get_password: ['system'],
+    wifi_get_profiles: ['system'],
+    audio_set_default_device: ['audio'],
+    audio_set_volume: ['audio'],
+    audio_toggle_mute: ['audio'],
     dns_benchmark: ['network', 'system'],
     keyboard_lock: ['system'],
     hotkey_probe: ['system'],

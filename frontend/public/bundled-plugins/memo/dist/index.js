@@ -1,5 +1,5 @@
 import { List, Form, ActionPanel, Action, Icon, Clipboard, useState, useEffect, useRef, useNavigation, showToast, Toast, LocalStorage, confirmAlert } from '@ztools/declarative-ui';
-import { createMemo, applyMemoMutation, isWritableMemoStore, filterMemos, sanitizeStoredMemos, readLegacyMemos, readLegacyNotes, MEMOS_STORAGE_KEY } from './logic.js';
+import { createMemo, applyMemoMutation, isWritableMemoStore, filterMemos, sanitizeStoredMemos, readLegacyMemos, readLegacyNotes, formatListDate, MEMOS_STORAGE_KEY } from './logic.js';
 const CORRUPT_MESSAGE = '存储的便签数据已损坏，为避免覆盖原数据已停止保存';
 function requireAtomicStorage() {
     if (typeof LocalStorage.updateItem !== 'function' || typeof LocalStorage.compareAndSet !== 'function') {
@@ -9,9 +9,9 @@ function requireAtomicStorage() {
 /**
  * 新建 / 编辑便签表单
  */
-export function MemoForm({ memo, onSave }) {
+export function MemoForm({ memo, initialTitle = '', onSave }) {
     const { pop } = useNavigation();
-    const [title, setTitle] = useState(memo?.title ?? '');
+    const [title, setTitle] = useState(memo?.title ?? initialTitle);
     const [content, setContent] = useState(memo?.content ?? '');
     const [tag, setTag] = useState(memo?.tag ?? '');
     const [error, setError] = useState(undefined);
@@ -186,8 +186,8 @@ export default function MemoCommand() {
                             id: 'load-error',
                             title: '读取便签失败，原数据未改动',
                             subtitle: `${loadError.message}；按回车重试`,
-                            icon: Icon.ExclamationMark,
-                            actions: errorActions
+                            icon: Icon.ExclamationMark
+                            // 不传 actions：客户端回退到 List 级动作，避免同名动作在动作面板里出现两次
                         })
                     ]
                 })
@@ -195,7 +195,7 @@ export default function MemoCommand() {
         });
     }
     const openCreate = (initialTitle = '') => push(() => MemoForm({
-        memo: initialTitle ? { title: initialTitle, content: '', tag: '' } : undefined,
+        initialTitle,
         onSave: async (title, content, tag) => {
             const ok = await commit({ type: 'create', item: createMemo([], title, content, tag)[0] });
             if (ok)
@@ -228,6 +228,19 @@ export default function MemoCommand() {
         if (await commit({ type: 'delete', expected: memo }))
             await showToast(Toast.Style.Success, '已删除便签');
     };
+    // 复制失败（内容为空、剪贴板被占用）如实提示，不显示「已复制」
+    const copyText = async (text, emptyMessage, successTitle) => {
+        try {
+            if (!text)
+                throw new Error(emptyMessage);
+            await Clipboard.copy(text);
+        }
+        catch (err) {
+            await showToast(Toast.Style.Failure, '复制失败', err instanceof Error ? err.message : String(err));
+            return;
+        }
+        await showToast(Toast.Style.Success, successTitle);
+    };
     const filtered = filterMemos(memos, searchText);
     const query = searchText.trim();
     const globalActions = ActionPanel({ title: '便签' }, [
@@ -239,13 +252,13 @@ export default function MemoCommand() {
             title: item.title,
             subtitle: item.tag || undefined,
             icon: Icon.Document,
-            accessories: [{ text: new Date(item.updateTime).toLocaleDateString([], { month: '2-digit', day: '2-digit' }) }],
+            accessories: item.updateTime > 0 ? [{ text: formatListDate(item.updateTime) }] : [],
             detail: List.Item.Detail({ markdown: item.content || '*（无正文）*' }),
             actions: ActionPanel({ title: item.title }, [
-                Action({ title: '复制正文', icon: Icon.Clipboard, onAction: async () => { await Clipboard.copy(item.content); await showToast(Toast.Style.Success, '已复制正文'); } }),
+                Action({ title: '复制正文', icon: Icon.Clipboard, onAction: () => copyText(item.content, '这条便签没有正文', '已复制正文') }),
                 Action({ title: '编辑便签', icon: Icon.Pencil, onAction: () => openEdit(item) }),
-                Action({ title: '新建便签', icon: Icon.Plus, onAction: () => openCreate() }),
-                Action({ title: '复制标题', icon: Icon.Clipboard, onAction: async () => { await Clipboard.copy(item.title); await showToast(Toast.Style.Success, '已复制标题'); } }),
+                // 「新建便签」只放在 List 级：客户端会以「全局操作」附在每条便签的动作后面，这里不再重复
+                Action({ title: '复制标题', icon: Icon.Clipboard, onAction: () => copyText(item.title, '这条便签没有标题', '已复制标题') }),
                 Action({ title: '删除便签', icon: Icon.Trash, onAction: () => remove(item) })
             ])
         }))
@@ -255,8 +268,8 @@ export default function MemoCommand() {
                 title: loading ? '正在读取便签…' : query ? `新建便签「${query}」` : '还没有便签',
                 subtitle: query ? '按回车用这段文字作为标题新建' : '按回车新建第一条便签',
                 icon: Icon.Plus,
-                detail: List.Item.Detail({ markdown: '' }),
-                actions: globalActions
+                detail: List.Item.Detail({ markdown: '' })
+                // 不传 actions：客户端回退到 List 级动作，避免同名动作在动作面板里出现两次
             })
         ];
     return List({

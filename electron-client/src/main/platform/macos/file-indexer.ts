@@ -4,6 +4,7 @@ import os from 'node:os'
 import path from 'node:path'
 import type { FileRecord, SearchFilesResult, SubdirStatRecord } from '../../services/sidecar-manager.js'
 
+import { createApplicationListCache } from '../common/application-list-cache.js'
 import { batchMacosApplicationNames, collectSpotlightPaths, macosApplicationName } from './spotlight-search.js'
 
 /** dir: 扫描根目录的展开规则（~ 开头按用户主目录）；路由登记结果授权时用同一规则得到扫描根 */
@@ -102,8 +103,7 @@ export function computePinyinMeta(rawName: string): { acronym: string; pinyin: s
 }
 
 const statRecordCache = new Map<string, { expires: number; record: FileRecord }>()
-let macosAppCache: { expires: number; apps: FileRecord[] } | null = null
-let macosAppCachePending: Promise<FileRecord[]> | null = null
+const MACOS_APPLICATION_CACHE_TTL_MS = 5 * 60_000
 
 async function getStatFileRecordCached(fullPath: string, name?: string): Promise<FileRecord> {
   const now = Date.now()
@@ -120,34 +120,62 @@ async function getStatFileRecordCached(fullPath: string, name?: string): Promise
   return record
 }
 
-async function buildMacosApplicationsCache(): Promise<FileRecord[]> {
-  const appDirs = [
+/** 用户安装程序的目录：其中不是 .app 的文件夹再看一层（如 /Applications/Adobe Photoshop 2024/Adobe Photoshop 2024.app） */
+function macosUserApplicationDirs(): string[] {
+  return ['/Applications', path.join(os.homedir(), 'Applications')]
+}
+
+export function macosApplicationDirs(): Array<{ dir: string; nested: boolean }> {
+  const nested = new Set(macosUserApplicationDirs())
+  return [
     '/Applications',
     '/Applications/Utilities',
     '/System/Applications',
     '/System/Applications/Utilities',
     '/System/Cryptexes/App/System/Applications',
     path.join(os.homedir(), 'Applications')
-  ]
+  ].map(dir => ({ dir, nested: nested.has(dir) }))
+}
+
+async function readDirents(dir: string): Promise<fs.Dirent[]> {
+  try {
+    return await fs.promises.readdir(dir, { withFileTypes: true })
+  } catch {
+    return []
+  }
+}
+
+export async function buildMacosApplicationsCache(
+  appDirs: ReadonlyArray<{ dir: string; nested: boolean }> = macosApplicationDirs()
+): Promise<FileRecord[]> {
   const apps: FileRecord[] = []
   const seen = new Set<string>()
-  for (const dir of appDirs) {
-    let entries: fs.Dirent[] = []
+  const addBundle = async (dir: string, name: string): Promise<void> => {
+    const fullPath = path.join(dir, name)
+    if (seen.has(fullPath)) return
+    seen.add(fullPath)
     try {
-      entries = await fs.promises.readdir(dir, { withFileTypes: true })
+      // /Applications/Safari.app 这类链接与真实位置是同一个程序：按真实路径去重，保留先找到的路径
+      const realPath = await fs.promises.realpath(fullPath)
+      if (realPath !== fullPath) {
+        if (seen.has(realPath)) return
+        seen.add(realPath)
+      }
+      const rec = await getStatFileRecordCached(fullPath, name)
+      if (rec.kind === 'application') apps.push({ ...rec })
     } catch {
-      continue
+      // ignore inaccessible app
     }
-    for (const ent of entries) {
-      if (!ent.name.toLowerCase().endsWith('.app')) continue
-      const fullPath = path.join(dir, ent.name)
-      if (seen.has(fullPath)) continue
-      seen.add(fullPath)
-      try {
-        const rec = await getStatFileRecordCached(fullPath, ent.name)
-        apps.push({ ...rec })
-      } catch {
-        // ignore inaccessible app
+  }
+  for (const { dir, nested } of appDirs) {
+    for (const ent of await readDirents(dir)) {
+      if (ent.name.toLowerCase().endsWith('.app')) {
+        await addBundle(dir, ent.name)
+      } else if (nested && ent.isDirectory() && !ent.name.startsWith('.') && ent.name !== 'Utilities') {
+        const subdir = path.join(dir, ent.name)
+        for (const child of await readDirents(subdir)) {
+          if (child.name.toLowerCase().endsWith('.app')) await addBundle(subdir, child.name)
+        }
       }
     }
   }
@@ -165,22 +193,39 @@ async function buildMacosApplicationsCache(): Promise<FileRecord[]> {
     app.pinyin = [...pinyins].join(' ')
   }
 
-  macosAppCache = { expires: Date.now() + 60_000, apps }
   return apps
 }
 
+// 过期后先返回旧列表再后台重扫；/Applications 有程序装入或删除时提前重扫
+const macosApplications = createApplicationListCache({
+  build: () => buildMacosApplicationsCache(),
+  ttlMs: MACOS_APPLICATION_CACHE_TTL_MS,
+  watchDirs: macosUserApplicationDirs
+})
+
 export async function getCachedMacosApplications(): Promise<FileRecord[]> {
   if (process.platform !== 'darwin') return []
-  const now = Date.now()
-  if (macosAppCache && macosAppCache.expires > now) {
-    return macosAppCache.apps
+  return macosApplications.get()
+}
+
+/** 全部可启动的程序（悬浮条与工作台搜索框在本地匹配用），不触发 Spotlight */
+export async function listMacosApplications(): Promise<SearchFilesResult> {
+  const t0 = performance.now()
+  const files = (await getCachedMacosApplications()).map(app => ({ ...app }))
+  const elapsedMs = performance.now() - t0
+  return {
+    query: '',
+    limit: files.length,
+    files,
+    count: files.length,
+    total_matches: files.length,
+    total_bytes: 0,
+    elapsed_us: Math.round(elapsedMs * 1000),
+    elapsed_ms: elapsedMs,
+    total_indexed: files.length,
+    source: 'macos-applications',
+    scope: 'applications'
   }
-  if (!macosAppCachePending) {
-    macosAppCachePending = buildMacosApplicationsCache().finally(() => {
-      macosAppCachePending = null
-    })
-  }
-  return macosAppCachePending
 }
 
 /** 后台预热 macOS 应用列表与本地化名称缓存，让首次打开悬浮条搜索即达亚毫秒级命中 */
@@ -300,15 +345,30 @@ export async function scanLocalRecentFiles(
   }
 }
 
+export interface MacosSearchOptions {
+  /** 界面已在本地匹配程序列表：不再合并程序，也不为常规程序目录里的 .app 解析名称 */
+  excludeApplications?: boolean
+}
+
+/**
+ * 悬浮条与工作台搜索框的只搜文件检索：新的一次开始后，旧的一次跳过剩下的读取与名称解析，带着已有结果返回。
+ * 只在这条路径上计数，插件与文件秒搜的检索不受影响。
+ */
+let macosSearchGeneration = 0
+
 /**
  * macOS Spotlight (/usr/bin/mdfind) 极速文件检索 + 主目录浅层回退扫描
  */
 export async function searchFilesOnMacos(
   rawQuery: string,
   limit = 50,
-  fallbackFiles: readonly FileRecord[] = []
+  fallbackFiles: readonly FileRecord[] = [],
+  options: MacosSearchOptions = {}
 ): Promise<SearchFilesResult> {
   const t0 = performance.now()
+  const cancellable = options.excludeApplications === true
+  const generation = cancellable ? ++macosSearchGeneration : macosSearchGeneration
+  const superseded = () => cancellable && generation !== macosSearchGeneration
   const cleanQuery = String(rawQuery || '').trim()
   const safeLimit = Math.max(1, Math.min(500, Number(limit) || 50))
 
@@ -365,25 +425,30 @@ export async function searchFilesOnMacos(
 
   let degraded = process.platform !== 'darwin'
   let source = 'macos-fs'
+  let partial = false
+  const cachedApps = process.platform === 'darwin' ? await getCachedMacosApplications() : []
+  const knownAppPaths = new Set(options.excludeApplications ? cachedApps.map(app => app.path) : [])
   if (process.platform === 'darwin' && resultsMap.size < safeLimit) {
-    const cachedApps = await getCachedMacosApplications()
-    for (const appItem of cachedApps) {
-      if (
-        appItem.name.toLowerCase().includes(qLower) ||
-        (appItem.display_name || '').toLowerCase().includes(qLower) ||
-        appItem.acronym.toLowerCase().includes(qLower) ||
-        appItem.pinyin.toLowerCase().includes(qLower)
-      ) {
-        resultsMap.set(appItem.path, appItem)
+    if (!options.excludeApplications) {
+      for (const appItem of cachedApps) {
+        if (
+          appItem.name.toLowerCase().includes(qLower) ||
+          (appItem.display_name || '').toLowerCase().includes(qLower) ||
+          appItem.acronym.toLowerCase().includes(qLower) ||
+          appItem.pinyin.toLowerCase().includes(qLower)
+        ) {
+          resultsMap.set(appItem.path, appItem)
+        }
       }
     }
     const spotlight = await collectSpotlightPaths(cleanQuery, Math.max(safeLimit, Math.min(128, safeLimit * 4)))
     degraded = spotlight.degraded
     if (spotlight.paths.length > 0) source = 'macos-spotlight'
+    partial = superseded()
     // Small batches bound filesystem and metadata subprocess concurrency.
-    for (let offset = 0; offset < spotlight.paths.length; offset += 32) {
+    for (let offset = 0; offset < spotlight.paths.length && !partial; offset += 32) {
       await Promise.all(spotlight.paths.slice(offset, offset + 32).map(async candidatePath => {
-        if (resultsMap.has(candidatePath)) return
+        if (resultsMap.has(candidatePath) || knownAppPaths.has(candidatePath)) return
         try {
           resultsMap.set(candidatePath, await getStatFileRecordCached(candidatePath))
 
@@ -396,18 +461,22 @@ export async function searchFilesOnMacos(
         }
       }))
     }
+    partial ||= superseded()
     // Preserve partial Spotlight results and fill gaps from accessible local folders.
-    if (resultsMap.size < safeLimit) {
+    if (resultsMap.size < safeLimit && !partial) {
       const local = await scanLocalRecentFiles(cleanQuery, safeLimit)
       for (const file of local.files) {
-        if (!resultsMap.has(file.path)) resultsMap.set(file.path, file)
+        if (!resultsMap.has(file.path) && !knownAppPaths.has(file.path)) resultsMap.set(file.path, file)
       }
     }
   }
 
   // Include applications found by the local fallback; resolve at most one page concurrently.
-  const applications = [...resultsMap.values()].filter(file => file.kind === 'application').slice(0, 12)
-  await Promise.all(applications.map(async file => { file.display_name = await macosApplicationName(file.path) }))
+  partial ||= superseded()
+  if (!partial) {
+    const applications = [...resultsMap.values()].filter(file => file.kind === 'application').slice(0, 12)
+    await Promise.all(applications.map(async file => { file.display_name = await macosApplicationName(file.path) }))
+  }
   const files = rankSearchFiles([...resultsMap.values()], cleanQuery).slice(0, safeLimit)
   const totalBytes = files.reduce((acc, f) => acc + (f.size || 0), 0)
   const elapsedMs = performance.now() - t0
@@ -423,11 +492,16 @@ export async function searchFilesOnMacos(
     elapsed_ms: elapsedMs,
     total_indexed: Math.max(fallbackFiles.length, files.length),
     degraded,
-    source
+    source,
+    ...(partial ? { partial: true } : {}),
+    ...(options.excludeApplications ? { scope: 'files' as const } : {})
   }
 }
 
-/** Exact localized names precede prefix and substring matches. */
+/**
+ * Exact localized names precede prefix and substring matches; same score keeps the most recently
+ * modified and least nested files first.
+ */
 export function rankSearchFiles(files: readonly FileRecord[], query: string): FileRecord[] {
   const normalized = query.trim().toLocaleLowerCase()
   const score = (file: FileRecord): number => {
@@ -443,7 +517,10 @@ export function rankSearchFiles(files: readonly FileRecord[], query: string): Fi
     if (acronyms.some(a => a.includes(normalized)) || pinyins.some(p => p.includes(normalized))) return 0.5 + appBonus
     return 0
   }
+  const depth = (file: FileRecord): number => file.path.split(/[\\/]/).length
   return [...files].sort((a, b) => score(b) - score(a) ||
+    (b.mtime || 0) - (a.mtime || 0) ||
+    depth(a) - depth(b) ||
     (a.display_name ?? a.name).localeCompare(b.display_name ?? b.name))
 }
 
@@ -620,6 +697,7 @@ export async function scanDirectoryForSearch(
   /** 未遍历完的一级子目录名；'' 表示根目录自身的条目都没读完 */
   const incompleteTop = new Set<string>()
 
+  // 只有扫描根本身可以是链接（如 macOS 的 /tmp → /private/tmp），按真实路径去重；子项里的链接在下面直接跳过
   const queue: Array<{ dirPath: string; topSubdir: string; isSymlink?: boolean }> = [
     { dirPath: resolvedRoot, topSubdir: '', isSymlink: true }
   ]
@@ -663,18 +741,19 @@ export async function scanDirectoryForSearch(
       const fullPath = path.join(current.dirPath, ent.name)
       const topSub = current.topSubdir || ent.name
 
-      const isSym = ent.isSymbolicLink()
-      let isDir = ent.isDirectory()
-      let isFile = ent.isFile()
-      let statObj: fs.Stats | null = null
-
+      // 符号链接（含 Windows 目录联接）一律跳过：不计体积、不递归、不列入结果。
+      // 链接本身几乎不占空间，跟随它会把目标重复计数（如 Homebrew 缓存根目录的「名称--版本」链接指向 downloads/ 里的同一文件），
+      // 也会跳出扫描根；而且结果授权会拒绝链接路径，列出来插件也打不开、删不掉。用 lstat 兜底 Dirent 类型未知的文件系统。
+      if (ent.isSymbolicLink()) continue
+      let statObj: fs.Stats
       try {
-        statObj = await fs.promises.stat(fullPath)
-        isDir = statObj.isDirectory()
-        isFile = statObj.isFile()
+        statObj = await fs.promises.lstat(fullPath)
       } catch {
         continue
       }
+      if (statObj.isSymbolicLink()) continue
+      const isDir = statObj.isDirectory()
+      const isFile = statObj.isFile()
 
       if (isDir) {
         const lowerName = ent.name.toLowerCase()
@@ -701,7 +780,7 @@ export async function scanDirectoryForSearch(
             topFiles: []
           })
         }
-        queue.push({ dirPath: fullPath, topSubdir: topSub, isSymlink: isSym })
+        queue.push({ dirPath: fullPath, topSubdir: topSub })
       } else if (isFile && statObj) {
         const sz = Number(statObj.size || 0)
         const mtimeMs = Math.round(Number(statObj.mtimeMs || Date.now()))

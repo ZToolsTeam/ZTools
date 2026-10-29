@@ -9,7 +9,8 @@ let scope
 let searchFiles
 let getFileIcon
 const create = () => scope.run(() => useCommandSearch())
-const flush = () => vi.advanceTimersByTimeAsync(45)
+// 文件检索防抖 80ms
+const flush = () => vi.advanceTimersByTimeAsync(100)
 
 beforeEach(() => {
   setActivePinia(createPinia())

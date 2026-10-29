@@ -120,30 +120,7 @@
 
 /* ===== 4. 键帽与通用操作按钮 ===== */
 /* 与全站 .rc-kbd 键帽保持一致 */
-.key-badge {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  box-sizing: border-box;
-  height: 20px;
-  min-width: 20px;
-  padding: 0 5px 1px;
-  border-radius: 5px;
-  font-family: var(--rc-font-sans);
-  font-size: 11px;
-  font-weight: 500;
-  line-height: 1;
-  background: var(--rc-kbd-bg);
-  color: var(--rc-kbd-text);
-  border: 1px solid var(--rc-kbd-border);
-  box-shadow: inset 0 -1px 0 var(--rc-kbd-border);
-}
 
-.key-badge.small {
-  height: 18px;
-  min-width: 18px;
-  font-size: 10.5px;
-}
 
 .no-hotkey {
   font-size: 12px;
@@ -192,4 +169,21 @@
 .conflict-warning i {
   color: var(--rc-warning);
   font-size: 13px;
+}
+
+/* 设置说明里的错误与行内操作（如「重试」） */
+.setting-desc.is-error {
+  color: var(--rc-error);
+}
+
+.setting-inline-link {
+  margin-left: 6px;
+  padding: 0;
+  border: none;
+  background: none;
+  color: var(--rc-accent-text);
+  font: inherit;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  cursor: pointer;
 }

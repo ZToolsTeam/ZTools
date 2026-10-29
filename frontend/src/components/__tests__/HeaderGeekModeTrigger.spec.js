@@ -20,7 +20,7 @@ describe('HeaderGeekModeTrigger 交互与全异常覆盖测试套件', () => {
     vi.useRealTimers()
   })
 
-  it('1. [集成链路] 鼠标悬停 150ms 成功展现引导浮层，点击立即试用触发极客模式切换', async () => {
+  it('1. [集成链路] 鼠标悬停 150ms 成功展现引导浮层，点击切到悬浮条触发极客模式切换', async () => {
     const switchSpy = vi.spyOn(windowMode, 'switchWindowMode').mockImplementation(() => {})
 
     const wrapper = mount(HeaderGeekModeTrigger)
@@ -41,11 +41,11 @@ describe('HeaderGeekModeTrigger 交互与全异常覆盖测试套件', () => {
     await wrapper.vm.$nextTick()
     expect(wrapper.find('.guide-card').exists()).toBe(true)
 
-    // 验证包含立即试用按钮
-    const tryBtn = wrapper.findAll('button').find(b => b.text().includes('立即试用'))
+    // 验证包含切到悬浮条按钮
+    const tryBtn = wrapper.findAll('button').find(b => b.text().includes('切到悬浮条'))
     expect(tryBtn).toBeDefined()
 
-    // 点击立即试用
+    // 点击切到悬浮条
     await tryBtn.trigger('click')
 
     // 验证关闭浮层并调用 switchWindowMode(WINDOW_MODES.LAUNCHER)
@@ -138,22 +138,28 @@ describe('HeaderGeekModeTrigger 交互与全异常覆盖测试套件', () => {
     const wrapper = mount(HeaderGeekModeTrigger)
     await vi.waitFor(() => expect(currentGlobalWakeHotkey.value).toBe('Ctrl+Shift+Z'))
     await wrapper.vm.$nextTick()
-    const keys = wrapper.findAllComponents(ShortcutKeys).map((c) => c.props('combo'))
-    expect(keys).toContain('Ctrl+Shift+Z')
-    expect(keys).not.toContain('Alt+Space')
+    // 按钮上显示的是「切到悬浮条」本身的快捷键，不是全局唤醒键
+    expect(wrapper.find('.launcher-trigger').findAllComponents(ShortcutKeys).map((c) => c.props('combo'))).toEqual(['Ctrl+M'])
+    // 全局唤醒键在悬停说明里，用用户实际设置的值
+    await wrapper.trigger('mouseenter')
+    vi.advanceTimersByTime(150)
+    await wrapper.vm.$nextTick()
+    const guideKeys = wrapper.find('.guide-card').findAllComponents(ShortcutKeys).map((c) => c.props('combo'))
+    expect(guideKeys).toContain('Ctrl+Shift+Z')
+    expect(guideKeys).not.toContain('Alt+Space')
     wrapper.unmount()
   })
 
-  it('全局唤醒关闭时不显示快捷键，引导文案提示去设置里开启', async () => {
+  it('全局唤醒关闭时按钮仍只显示切换快捷键，引导文案提示去设置里开启', async () => {
     const wrapper = mount(HeaderGeekModeTrigger)
     await vi.waitFor(() => expect(apiMock.getHotkey).toHaveBeenCalled())
     currentGlobalWakeHotkey.value = ''
     await wrapper.vm.$nextTick()
-    expect(wrapper.find('.launcher-trigger').findAllComponents(ShortcutKeys)).toHaveLength(0)
+    expect(wrapper.find('.launcher-trigger').findAllComponents(ShortcutKeys).map((c) => c.props('combo'))).toEqual(['Ctrl+M'])
     await wrapper.trigger('mouseenter')
     vi.advanceTimersByTime(150)
     await wrapper.vm.$nextTick()
-    expect(wrapper.find('.guide-card').text()).toContain('全局唤醒快捷键已关闭')
+    expect(wrapper.find('.guide-card').text()).toContain('未开启，可在设置中开启')
     wrapper.unmount()
     currentGlobalWakeHotkey.value = 'Alt+Space'
   })

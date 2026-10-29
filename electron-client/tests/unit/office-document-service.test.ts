@@ -30,8 +30,8 @@ function fixture(type: 'docx' | 'xlsx' | 'pptx' = 'docx', deflated = false) {
   let bytes = buildZipFixture(entries(type), false, deflated), written: Buffer | undefined, writes = 0, failWrite = false
   const service = new OfficeDocumentService({
     readFile: async () => ({ success: true, content: bytes.toString('base64'), size: bytes.length }),
-    writeFile: async params => {
-      assert.equal(params.overwrite, false); writes++
+    writeFile: async (params, _caller, _signal, options) => {
+      assert.equal(params.overwrite, false); assert.deepEqual(options, { replaceConfirmed: true, protectedPath: input }); writes++
       if (failWrite) throw new Error('目标文件已存在')
       written = Buffer.from(params.content, 'base64'); return { success: true, size: written.length }
     }

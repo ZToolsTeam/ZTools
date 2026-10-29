@@ -4,7 +4,7 @@
       "id": "json-format",
       "name": "JSON 格式化",
       "description": "JSON 语法校验、高亮美化与压缩转义，支持一键生成 TypeScript / Go / Rust 数据结构定义",
-      "version": "2.1.3",
+      "version": "2.1.5",
       "author": "ZTools Team",
       "icon": "icon.svg",
       "category": [
@@ -58,6 +58,7 @@
           "arch": "any"
         }
       ],
+      "size": 55174,
       "files": [
         "plugin.json",
         "icon.svg",
@@ -70,7 +71,7 @@
       "id": "timestamp",
       "name": "时间戳转换",
       "description": "秒与毫秒时间戳、日期格式实时互转，支持全球城市世界时钟与多时区时差换算",
-      "version": "1.1.3",
+      "version": "1.1.4",
       "author": "ZTools Team",
       "icon": "icon.svg",
       "category": [
@@ -125,6 +126,7 @@
           "arch": "any"
         }
       ],
+      "size": 24212,
       "files": [
         "plugin.json",
         "icon.svg",
@@ -137,7 +139,7 @@
       "id": "calculator",
       "name": "计算器",
       "description": "输入算式即时计算，内置科学函数、单位换算、每日汇率、人民币大写金额转换与日期推算",
-      "version": "2.1.5",
+      "version": "2.1.6",
       "author": "ZTools Team",
       "icon": "icon.svg",
       "category": [
@@ -203,6 +205,7 @@
           "arch": "any"
         }
       ],
+      "size": 72891,
       "files": [
         "plugin.json",
         "icon.svg",
@@ -218,7 +221,7 @@
       "id": "qr-code",
       "name": "二维码生成",
       "description": "输入网址或文本实时生成高清二维码，支持生成 Wi-Fi 连网二维码、复制图片与导出 PNG",
-      "version": "2.1.6",
+      "version": "2.1.7",
       "author": "ZTools Team",
       "icon": "icon.svg",
       "category": [
@@ -268,6 +271,7 @@
           "arch": "any"
         }
       ],
+      "size": 40363,
       "files": [
         "plugin.json",
         "icon.svg",
@@ -278,52 +282,10 @@
       ]
     },
     {
-      "id": "base64image",
-      "name": "图片 Base64",
-      "description": "图片文件或截图与 Base64 编码双向互转，支持一键复制 Data URL 或还原预览图片",
-      "version": "1.0.4",
-      "author": "ZTools Team",
-      "icon": "icon.svg",
-      "category": [
-        "开发工具"
-      ],
-      "keywords": [
-        "base64",
-        "图片",
-        "image",
-        "datauri",
-        "编码",
-        "解码"
-      ],
-      "alias": "",
-      "features": [],
-      "targets": [
-        {
-          "id": "windows-electron-any",
-          "platform": "windows",
-          "runtime": "electron",
-          "arch": "any"
-        },
-        {
-          "id": "macos-electron-any",
-          "platform": "macos",
-          "runtime": "electron",
-          "arch": "any"
-        }
-      ],
-      "files": [
-        "plugin.json",
-        "icon.svg",
-        "dist/host.js",
-        "dist/index.js",
-        "dist/logic.js"
-      ]
-    },
-    {
       "id": "file-compare",
       "name": "文本对比",
       "description": "逐行对比两段文本、代码或配置文件，逐处列出增删的行，支持忽略空白与复制 unified diff 差异报告",
-      "version": "2.0.5",
+      "version": "2.0.8",
       "author": "ZTools Team",
       "icon": "icon.svg",
       "category": [
@@ -352,6 +314,7 @@
           "arch": "any"
         }
       ],
+      "size": 31595,
       "files": [
         "plugin.json",
         "icon.svg",
@@ -364,8 +327,8 @@
     {
       "id": "crypto-tool",
       "name": "编码与加密",
-      "description": "支持 Base64 / URL / Unicode / Hex 编码互转、MD5 / SHA 哈希计算、AES 加解密与 UUID 批量生成",
-      "version": "1.1.2",
+      "description": "支持 Base64 / URL / Unicode / Hex 编码互转、MD5 / SHA 哈希计算、AES 加解密、HMAC 计算与 UUID 批量生成",
+      "version": "1.1.4",
       "author": "ZTools Team",
       "icon": "icon.svg",
       "category": [
@@ -416,7 +379,7 @@
         },
         {
           "code": "hash-digest",
-          "explain": "计算 MD5 / SHA256 哈希摘要",
+          "explain": "计算 MD5 / SHA-1 / SHA-256 / SHA-512 散列",
           "mode": "view",
           "cmds": [
             "md5",
@@ -437,8 +400,17 @@
             "aes",
             "aes加密",
             "aes解密",
-            "hmac",
             "加密解密"
+          ]
+        },
+        {
+          "code": "cipher-hmac",
+          "explain": "HMAC 计算（SHA-256 / SHA-512 / SHA-1 / MD5）",
+          "mode": "view",
+          "cmds": [
+            "hmac",
+            "hmac计算",
+            "hmac-sha256"
           ]
         },
         {
@@ -484,6 +456,7 @@
           "arch": "any"
         }
       ],
+      "size": 46505,
       "files": [
         "plugin.json",
         "icon.svg",
@@ -496,53 +469,10 @@
       ]
     },
     {
-      "id": "google-auth",
-      "name": "2FA 验证码",
-      "description": "桌面端两步验证动态口令（TOTP）管理工具，支持秒级复制 6 位验证码，密钥加密保存在本机",
-      "version": "1.0.6",
-      "author": "ZTools Team",
-      "icon": "icon.svg",
-      "category": [
-        "效率工具"
-      ],
-      "keywords": [
-        "2fa",
-        "totp",
-        "otp",
-        "验证码",
-        "动态口令",
-        "authenticator"
-      ],
-      "alias": "",
-      "features": [],
-      "targets": [
-        {
-          "id": "windows-electron-any",
-          "platform": "windows",
-          "runtime": "electron",
-          "arch": "any"
-        },
-        {
-          "id": "macos-electron-any",
-          "platform": "macos",
-          "runtime": "electron",
-          "arch": "any"
-        }
-      ],
-      "files": [
-        "plugin.json",
-        "icon.svg",
-        "dist/hash.js",
-        "dist/host-compat.js",
-        "dist/index.js",
-        "dist/logic.js"
-      ]
-    },
-    {
       "id": "color-picker",
       "name": "取色与配色",
       "description": "支持 HEX / RGB / HSL / CMYK 色值实时互转、WCAG 无障碍对比度检测与常用色板收藏",
-      "version": "2.1.5",
+      "version": "2.1.6",
       "author": "ZTools Team",
       "icon": "icon.svg",
       "category": [
@@ -574,7 +504,7 @@
         },
         {
           "code": "contrast-check",
-          "explain": "WCAG 无障碍颜色对比度检测",
+          "explain": "前景色与背景色的 WCAG 无障碍对比度检测",
           "mode": "view",
           "cmds": [
             "对比度",
@@ -598,6 +528,7 @@
           "arch": "any"
         }
       ],
+      "size": 38769,
       "files": [
         "plugin.json",
         "icon.svg",
@@ -609,7 +540,7 @@
       "id": "memo",
       "name": "便签",
       "description": "轻量随手记便签，正文支持 Markdown，可加标签，按标题、正文或标签搜索",
-      "version": "1.0.6",
+      "version": "1.0.7",
       "author": "ZTools Team",
       "icon": "icon.svg",
       "category": [
@@ -638,6 +569,7 @@
           "arch": "any"
         }
       ],
+      "size": 22968,
       "files": [
         "plugin.json",
         "icon.svg",
@@ -649,7 +581,7 @@
       "id": "todo",
       "name": "待办清单",
       "description": "极简任务待办清单，回车快速添加任务，支持高优标记与完成状态筛选",
-      "version": "1.0.5",
+      "version": "1.0.6",
       "author": "ZTools Team",
       "icon": "icon.svg",
       "category": [
@@ -677,394 +609,13 @@
           "arch": "any"
         }
       ],
+      "size": 24410,
       "files": [
         "plugin.json",
         "icon.svg",
         "dist/host-compat.js",
         "dist/index.js",
         "dist/logic.js"
-      ]
-    },
-    {
-      "id": "batch-image",
-      "name": "图片压缩",
-      "description": "批量压缩与转换 PNG/JPG/WebP/BMP 图片：三档画质重新编码、限制最长边、转 JPG/PNG、扫描件转灰度，报销附件场景会标出仍超过 300KB 的图片；结果另存为原图同目录的 *_opt 文件，不覆盖原图",
-      "version": "1.1.4",
-      "author": "ZTools Team",
-      "icon": "icon.svg",
-      "category": [
-        "图像媒体",
-        "办公效率"
-      ],
-      "keywords": [
-        "image",
-        "compress",
-        "png",
-        "jpg",
-        "webp",
-        "图片压缩",
-        "格式转换",
-        "图片转jpg",
-        "图片缩放"
-      ],
-      "alias": "img",
-      "features": [
-        {
-          "code": "preset-lossless",
-          "explain": "图片批量压缩",
-          "mode": "view",
-          "cmds": [
-            "图片压缩",
-            "压缩图片",
-            "图片瘦身"
-          ]
-        },
-        {
-          "code": "preset-gov-limit",
-          "explain": "报销/政务附件压缩（标出超过 300KB 的图片）",
-          "mode": "view",
-          "cmds": [
-            "证件照压缩",
-            "300kb",
-            "政务上传",
-            "报销附图"
-          ]
-        },
-        {
-          "code": "preset-to-jpg",
-          "explain": "PNG/WebP/BMP 批量转 JPG",
-          "mode": "view",
-          "cmds": [
-            "图片格式转换",
-            "webp转jpg",
-            "png转jpg",
-            "转jpg"
-          ]
-        },
-        {
-          "code": "preset-doc-bw",
-          "explain": "扫描件转灰度",
-          "mode": "view",
-          "cmds": [
-            "扫描件转灰度",
-            "图片转灰度",
-            "黑白扫描件"
-          ]
-        }
-      ],
-      "targets": [
-        {
-          "id": "windows-electron-any",
-          "platform": "windows",
-          "runtime": "electron",
-          "arch": "any"
-        }
-      ],
-      "files": [
-        "plugin.json",
-        "icon.svg",
-        "dist/hash.js",
-        "dist/index.js",
-        "dist/logic.js",
-        "dist/native-ipc.js"
-      ]
-    },
-    {
-      "id": "archive-manager",
-      "name": "解压与压缩",
-      "description": "不解压就能查看本机 ZIP 压缩包里的文件，可整包解压或只提取勾选的文件；只支持 ZIP，不提供压缩打包",
-      "version": "1.1.4",
-      "author": "ZTools Team",
-      "icon": "icon.svg",
-      "category": [
-        "文件管理",
-        "办公效率"
-      ],
-      "keywords": [
-        "zip",
-        "archive",
-        "unzip",
-        "extract",
-        "解压",
-        "压缩包",
-        "查看压缩包"
-      ],
-      "alias": "zip",
-      "features": [
-        {
-          "code": "archive-inspect",
-          "explain": "查看 ZIP 压缩包内容并解压或提取",
-          "mode": "view",
-          "cmds": [
-            "解压",
-            "压缩包",
-            "查看压缩包",
-            "zip",
-            "校验压缩包"
-          ]
-        },
-        {
-          "code": "archive-docs",
-          "explain": "提取压缩包内办公文档",
-          "mode": "view",
-          "cmds": [
-            "提取文档",
-            "压缩包文档"
-          ]
-        }
-      ],
-      "targets": [
-        {
-          "id": "windows-electron-any",
-          "platform": "windows",
-          "runtime": "electron",
-          "arch": "any"
-        }
-      ],
-      "files": [
-        "plugin.json",
-        "icon.svg",
-        "dist/hash.js",
-        "dist/index.js",
-        "dist/logic.js",
-        "dist/native-ipc.js"
-      ]
-    },
-    {
-      "id": "invoice-assistant",
-      "name": "发票助手",
-      "description": "扫描下载、桌面、文档目录中的 PDF/XML 电子发票，识别发票号码、开票日期、销售方、购买方与金额（识别不到的字段需手动补全后才能导出），支持发票号查重、个人抬头提示、按模板复制规范命名的发票副本、导出报销明细 CSV 与复制表格文本",
-      "version": "1.1.4",
-      "author": "ZTools Team",
-      "icon": "icon.svg",
-      "category": [
-        "办公效率",
-        "文档处理"
-      ],
-      "keywords": [
-        "invoice",
-        "fapiao",
-        "reimbursement",
-        "pdf",
-        "csv",
-        "excel",
-        "发票",
-        "报销",
-        "电子发票",
-        "数电票"
-      ],
-      "alias": "fp",
-      "features": [
-        {
-          "code": "invoice-reimburse",
-          "explain": "电子发票汇总与导出报销明细",
-          "mode": "view",
-          "cmds": [
-            "发票报销",
-            "报销台账",
-            "发票汇总",
-            "导出报销单",
-            "数电票",
-            "电子发票"
-          ]
-        },
-        {
-          "code": "invoice-rename",
-          "explain": "按模板复制规范命名的电子发票副本",
-          "mode": "view",
-          "cmds": [
-            "发票重命名",
-            "发票改名",
-            "归档重命名"
-          ]
-        },
-        {
-          "code": "invoice-travel",
-          "explain": "差旅交通与住宿发票筛选",
-          "mode": "view",
-          "cmds": [
-            "差旅发票",
-            "打车票",
-            "高铁票",
-            "交通发票",
-            "酒店发票"
-          ]
-        }
-      ],
-      "targets": [
-        {
-          "id": "windows-electron-any",
-          "platform": "windows",
-          "runtime": "electron",
-          "arch": "any"
-        }
-      ],
-      "files": [
-        "plugin.json",
-        "icon.svg",
-        "dist/hash.js",
-        "dist/index.js",
-        "dist/logic.js",
-        "dist/native-ipc.js"
-      ]
-    },
-    {
-      "id": "translator",
-      "name": "划词翻译",
-      "description": "中英互译常用词与办公短语（只查客户端内置的离线词库，收录有限），并把英文转成 camelCase / snake_case 变量名",
-      "version": "2.0.2",
-      "author": "ZTools Team",
-      "icon": "icon.svg",
-      "category": [
-        "办公效率",
-        "文本工具"
-      ],
-      "keywords": [
-        "translate",
-        "translator",
-        "dictionary",
-        "english",
-        "chinese",
-        "翻译",
-        "划词翻译",
-        "词典",
-        "中英互译",
-        "变量命名"
-      ],
-      "alias": "tr",
-      "features": [
-        {
-          "code": "translate-standard",
-          "explain": "中英互译（客户端离线词库，收录有限）",
-          "mode": "view",
-          "cmds": [
-            "翻译",
-            "划词翻译",
-            "中英互译",
-            "英文翻译",
-            "translate"
-          ]
-        },
-        {
-          "code": "translate-dict",
-          "explain": "查中英常用词的译文（客户端离线词库，收录有限）",
-          "mode": "view",
-          "cmds": [
-            "词典",
-            "查词",
-            "单词",
-            "dictionary"
-          ]
-        },
-        {
-          "code": "translate-naming",
-          "explain": "中文翻译成英文变量名（camelCase / snake_case）",
-          "mode": "view",
-          "cmds": [
-            "变量命名",
-            "代码命名",
-            "驼峰命名",
-            "camelcase"
-          ]
-        }
-      ],
-      "targets": [
-        {
-          "id": "windows-electron-any",
-          "platform": "windows",
-          "runtime": "electron",
-          "arch": "any"
-        }
-      ],
-      "files": [
-        "plugin.json",
-        "icon.svg",
-        "dist/hash.js",
-        "dist/index.js",
-        "dist/logic.js",
-        "dist/native-ipc.js"
-      ]
-    },
-    {
-      "id": "downloads-manager",
-      "name": "下载管理",
-      "description": "聚合已识别的系统下载、网盘与接收目录，支持自定义目录、筛选、打开和安全回收；扫描不完整时明确提示",
-      "version": "2.1.5",
-      "author": "ZTools Team",
-      "icon": "icon.svg",
-      "category": [
-        "效率工具",
-        "系统工具"
-      ],
-      "keywords": [],
-      "alias": "",
-      "features": [
-        {
-          "code": "downloads-all",
-          "explain": "浏览和筛选已识别下载目录与自定义目录中的文件",
-          "cmds": [
-            "下载",
-            "下载管理",
-            "downloads",
-            "dl",
-            "最近下载",
-            "接收文件"
-          ]
-        },
-        {
-          "code": "downloads-netdisk",
-          "explain": "筛选已识别的网盘和下载器目录中的文件",
-          "cmds": [
-            "网盘下载",
-            "百度网盘",
-            "夸克下载",
-            "迅雷下载",
-            "netdisk"
-          ]
-        },
-        {
-          "code": "downloads-im",
-          "explain": "筛选已识别的办公软件接收目录中的文件，未识别目录可自行添加",
-          "cmds": [
-            "微信文件",
-            "微信接收",
-            "QQ文件",
-            "飞书文件",
-            "钉钉文件"
-          ]
-        },
-        {
-          "code": "downloads-clean-installers",
-          "explain": "筛选当前列出的安装包，经确认后将未保护项移入回收站",
-          "cmds": [
-            "清理安装包",
-            "删除安装包",
-            "installers"
-          ]
-        }
-      ],
-      "targets": [
-        {
-          "id": "windows-electron-any",
-          "platform": "windows",
-          "runtime": "electron",
-          "arch": "any"
-        },
-        {
-          "id": "macos-electron-any",
-          "platform": "macos",
-          "runtime": "electron",
-          "arch": "any"
-        }
-      ],
-      "files": [
-        "plugin.json",
-        "icon.svg",
-        "dist/downloads-preferences.js",
-        "dist/downloads-service.js",
-        "dist/index.js",
-        "dist/native-ipc.js",
-        "dist/types.js"
       ]
     }
   ]

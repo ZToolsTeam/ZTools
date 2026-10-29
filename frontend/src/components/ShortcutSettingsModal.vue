@@ -1,5 +1,6 @@
 <script setup>
-import { PlusOutlined } from '@ant-design/icons-vue'
+import { RcButton, RcDialog, RcSelect } from '@/components/base'
+import { PlusIcon, TriangleAlertIcon } from '@lucide/vue'
 /**
  * 快捷方式设置弹窗
  * 管理超级面板快捷方式前缀与插件的映射关系
@@ -199,12 +200,10 @@ defineExpose({ open: () => emit('update:open', true) })
 </script>
 
 <template>
-  <a-modal
+  <RcDialog
     :open="open"
     title="快捷方式设置"
-    :footer="null"
     :width="520"
-    centered
     @cancel="handleClose"
   >
     <div class="shortcut-content">
@@ -220,9 +219,10 @@ defineExpose({ open: () => emit('update:open', true) })
           <span class="shortcut-arrow">→</span>
           <span class="shortcut-plugin">{{ getPluginName(item.pluginId) }}</span>
           <div class="shortcut-actions">
-            <a-button size="small" type="link" @click="startEdit(index)">编辑</a-button>
+            <RcButton variant="ghost" size="sm" @click="startEdit(index)">编辑</RcButton>
             <a-popconfirm title="确定删除？" @confirm="removeShortcut(index)">
-              <a-button size="small" type="link" danger>删除</a-button>
+              <template #icon><TriangleAlertIcon class="popconfirm-icon" aria-hidden="true" /></template>
+              <RcButton variant="danger" size="sm">删除</RcButton>
             </a-popconfirm>
           </div>
         </template>
@@ -236,7 +236,7 @@ defineExpose({ open: () => emit('update:open', true) })
               style="width: 120px"
               addon-before="/"
             />
-            <a-select
+            <RcSelect
               v-model:value="editForm.pluginId"
               placeholder="选择插件"
               size="small"
@@ -245,8 +245,8 @@ defineExpose({ open: () => emit('update:open', true) })
               :filter-option="(input, option) => option.label.toLowerCase().includes(input.toLowerCase())"
               :options="pluginOptions"
             />
-            <a-button size="small" type="primary" @click="confirmEdit">确定</a-button>
-            <a-button size="small" @click="cancelEdit">取消</a-button>
+            <RcButton variant="primary" size="sm" @click="confirmEdit">确定</RcButton>
+            <RcButton variant="secondary" size="sm" @click="cancelEdit">取消</RcButton>
           </div>
           <div v-if="editError" class="error-tip">{{ editError }}</div>
         </template>
@@ -262,7 +262,7 @@ defineExpose({ open: () => emit('update:open', true) })
             style="width: 120px"
             addon-before="/"
           />
-          <a-select
+          <RcSelect
             v-model:value="addForm.pluginId"
             placeholder="选择插件"
             size="small"
@@ -271,20 +271,20 @@ defineExpose({ open: () => emit('update:open', true) })
             :filter-option="(input, option) => option.label.toLowerCase().includes(input.toLowerCase())"
             :options="pluginOptions"
           />
-          <a-button size="small" type="primary" @click="confirmAdd">确定</a-button>
-          <a-button size="small" @click="cancelAdd">取消</a-button>
+          <RcButton variant="primary" size="sm" @click="confirmAdd">确定</RcButton>
+          <RcButton variant="secondary" size="sm" @click="cancelAdd">取消</RcButton>
         </div>
         <div v-if="addError" class="error-tip">{{ addError }}</div>
       </div>
 
       <!-- 新增按钮 -->
       <div class="add-btn-row">
-        <a-button type="dashed" block @click="startAdd" :disabled="adding">
-          <PlusOutlined  style="margin-right: 6px" />新增快捷方式
-        </a-button>
+        <RcButton variant="secondary" size="md" class="w-full" @click="startAdd" :disabled="adding">
+          <PlusIcon  style="margin-right: 6px" />新增快捷方式
+        </RcButton>
       </div>
     </div>
-  </a-modal>
+  </RcDialog>
 </template>
 
 <style scoped>

@@ -131,6 +131,26 @@ test('请求并发拒绝，窗口关闭或服务停止取消真实进程并释�
   service.closeOwner(caller.webContentsId); await rejection; await service.stop()
   await assert.rejects(service.handle({ action: 'list' }, caller, signal()), /已停止/)
 })
+test('macOS 命令发现补充 OrbStack (~/.orbstack/bin) 与 Rancher Desktop (~/.rd/bin)，只接受普通可执行文件', { skip: process.platform === 'win32' ? '依赖 POSIX 可执行权限' : false }, async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), 'docker-home-'))
+  try {
+    const orb = path.join(home, '.orbstack', 'bin', 'docker'), rd = path.join(home, '.rd', 'bin', 'docker')
+    await fs.mkdir(path.dirname(orb), { recursive: true }); await fs.mkdir(path.dirname(rd), { recursive: true })
+    // 不可执行的普通文件与名为 docker 的目录都不能被选中
+    await fs.writeFile(orb, 'fixture'); await fs.chmod(orb, 0o600)
+    await fs.mkdir(rd)
+    const fallback = await findDockerExecutable({ PATH: '' }, 'darwin', home).catch((error: Error) => error)
+    if (typeof fallback === 'string') { assert.notEqual(fallback, orb); assert.notEqual(fallback, rd) }
+    else assert.match(fallback.message, /未找到 Docker 命令行/)
+    await fs.rmdir(rd); await fs.writeFile(rd, 'fixture'); await fs.chmod(rd, 0o700)
+    assert.equal(await findDockerExecutable({ PATH: '' }, 'darwin', home), rd)
+    await fs.chmod(orb, 0o700)
+    assert.equal(await findDockerExecutable({ PATH: '' }, 'darwin', home), orb)
+    // 非 macOS 平台不查找这两个目录
+    const linux = await findDockerExecutable({ PATH: '' }, 'linux', home).catch((error: Error) => error)
+    assert.ok(linux instanceof Error || (linux !== orb && linux !== rd))
+  } finally { await fs.rm(home, { recursive: true, force: true }) }
+})
 test('命令发现仅选择存在的可执行文件，不接受 PATH 中的相对目录', async () => {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'docker-locate-'))
   try {

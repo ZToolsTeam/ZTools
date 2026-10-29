@@ -1,7 +1,8 @@
 import { ref } from 'vue'
 import { getHotkey } from '@/api/apiserver'
+import { DEFAULT_GLOBAL_WAKE_HOTKEY } from '@/api/native'
 
-export const DEFAULT_GLOBAL_WAKE_HOTKEY = 'Alt+Space'
+export { DEFAULT_GLOBAL_WAKE_HOTKEY }
 
 /**
  * 当前生效的全局唤醒快捷键，供界面提示使用（空字符串表示用户已关闭全局唤醒）。
@@ -9,10 +10,10 @@ export const DEFAULT_GLOBAL_WAKE_HOTKEY = 'Alt+Space'
  */
 export const currentGlobalWakeHotkey = ref(DEFAULT_GLOBAL_WAKE_HOTKEY)
 
-/** 从配置读取当前唤醒快捷键；未设置时与启动注册逻辑一致，按默认值显示 */
+/** 从配置读取当前唤醒快捷键；未设置时 getHotkey 已返回默认值，空串表示用户已关闭 */
 export async function refreshCurrentGlobalWakeHotkey() {
   try {
-    currentGlobalWakeHotkey.value = normalizeHotkey(await getHotkey()) || DEFAULT_GLOBAL_WAKE_HOTKEY
+    currentGlobalWakeHotkey.value = normalizeHotkey(await getHotkey())
   } catch (err) {
     console.warn('[globalWakeHotkey] 读取当前唤醒快捷键失败:', err)
   }
@@ -136,20 +137,11 @@ function failureResult(reason, hotkey, message = '', rollbackFailed = false) {
   }
 }
 
-export async function syncGlobalWakeHotkey({
-  hotkey,
-  useDefaultWhenEmpty = false
-} = {}) {
-  const hasExplicitHotkey = typeof hotkey === 'string'
-  let targetHotkey = normalizeHotkey(hotkey)
-
-  if (!hasExplicitHotkey) {
-    targetHotkey = normalizeHotkey(await getHotkey())
-  }
-
-  if (!targetHotkey && useDefaultWhenEmpty) {
-    targetHotkey = DEFAULT_GLOBAL_WAKE_HOTKEY
-  }
+export async function syncGlobalWakeHotkey({ hotkey } = {}) {
+  // 不传 hotkey 时按配置同步：未设置得到默认值，用户关闭得到空串（注销），读取失败抛错且不改动现有注册
+  const targetHotkey = typeof hotkey === 'string'
+    ? normalizeHotkey(hotkey)
+    : normalizeHotkey(await getHotkey())
 
   const triggerApi = window.ztools?.trigger
   if (

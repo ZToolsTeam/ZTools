@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 18 18">
+  <!-- macOS 菜单栏模板图源文件：积木 Z 四块（方块 5、间距 1.25、圆角 1.3），纯黑 + 透明，系统按菜单栏深浅自动着色。
+       导出为 ../tray/trayTemplate.png（18px）、@2x（36px）、@3x（54px） -->
+  <g fill="#000">
+    <rect x="0.25" y="3.375" width="5" height="5" rx="1.3"/>
+    <rect x="6.5" y="3.375" width="5" height="5" rx="1.3"/>
+    <rect x="6.5" y="9.625" width="5" height="5" rx="1.3"/>
+    <rect x="12.75" y="9.625" width="5" height="5" rx="1.3"/>
+  </g>
+</svg>

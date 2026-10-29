@@ -24,14 +24,22 @@ export function exifToolCommand(platform = process.platform): { file: string; pr
 
 export async function runExifTool(args: string[], signal: AbortSignal): Promise<string> {
   signal.throwIfAborted()
-  const command = exifToolCommand(), env = { ...process.env }
+  if (args.some(arg => arg.includes('\0'))) throw new Error('媒体处理参数含空字符')
+  const useArgumentStream = process.platform === 'win32'
+  if (useArgumentStream && args.some(arg => !arg || /^[#\s]|[\r\n]/.test(arg))) throw new Error('媒体处理参数不符合逐行参数格式')
+  // ExifTool 的 JSON 不依赖系统语言；固定为所有平台支持的 C locale，避免 Perl 继承无效 locale 后报错。
+  const command = exifToolCommand(), env: NodeJS.ProcessEnv = { ...process.env, LC_ALL: 'C', LC_CTYPE: 'C', LANG: 'C' }
   for (const key of Object.keys(env)) if (/^(?:PERL|EXIFTOOL)/i.test(key)) delete env[key]
+  // Windows 启动器的命令行会经系统代码页转换；使用官方 UTF-8 参数流，换行等结构字符已在启动前拒绝。
+  const parameters = useArgumentStream ? ['-@', '-'] : args
   return new Promise((resolve, reject) => {
     let output = '', failure: unknown
     // 回调可能在 abort 后早于 close；等进程真正退出后才允许调用方清理临时目录。
-    const child = execFile(command.file, [...command.prefix, '-config', '', ...args], {
+    const child = execFile(command.file, [...command.prefix, '-config', '', '-charset', 'filename=UTF8', ...parameters], {
       shell: false, windowsHide: true, timeout: 30000, killSignal: 'SIGKILL', maxBuffer: 4 * 1024 * 1024, env, signal
-    }, (error, stdout, stderr) => { output = stdout; failure = error || (stderr.trim() ? new Error(stderr.trim()) : undefined) })
+    }, (error, stdout, stderr) => { output = stdout; failure ??= error || (stderr.trim() ? new Error(stderr.trim()) : undefined) })
+    child.stdin?.on('error', error => { failure ??= error })
+    child.stdin?.end(useArgumentStream ? args.join('\n') + '\n' : undefined, 'utf8')
     child.once('close', () => {
       if (signal.aborted) reject(signal.reason ?? new Error('媒体处理已取消'))
       else if (failure) reject(failure)

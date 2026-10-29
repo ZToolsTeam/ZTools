@@ -1,7 +1,7 @@
 {
   "id": "todo",
   "name": "待办清单",
-  "version": "1.0.5",
+  "version": "1.0.6",
   "description": "极简任务待办清单，回车快速添加任务，支持高优标记与完成状态筛选",
   "author": "ZTools Team",
   "entry": "dist/index.js",

@@ -73,7 +73,7 @@ export function scanBrowserBookmarks(env: BookmarkEnvironment): BookmarkScan {
       const items = readBookmarkSource(source), bytes = Buffer.byteLength(JSON.stringify(items))
       if (result.bookmarks.length + items.length > 20000 || size + bytes > 7 * 1024 * 1024) throw new Error('总结果超过 20000 条或 7 MiB，本配置未载入')
       result.bookmarks.push(...items); size += bytes; result.sourcesRead++
-    } catch (error) { warnings.push(`${source.browserLabel} / ${source.profile}：${errorMessage(error)}`) }
+    } catch (error) { warnings.push(`${source.browserLabel} / ${source.profile}：${errorMessage(error, source.browser)}`) }
   }
   return validateBookmarkScan(result)
 }

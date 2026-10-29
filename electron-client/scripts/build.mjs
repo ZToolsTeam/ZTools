@@ -98,6 +98,15 @@ fs.rmSync(rendererOutput, { recursive: true, force: true })
 fs.cpSync(frontendDist, rendererOutput, { recursive: true, force: true })
 console.log(`Frontend 生产产物已复制到 ${rendererOutput}`)
 
+// 托盘图标：macOS 菜单栏模板图 + Windows 多尺寸 ICO，放进 out/assets 随安装包分发（resources/ 不进安装包）
+const trayOutput = path.join(root, 'out', 'assets', 'tray')
+fs.rmSync(trayOutput, { recursive: true, force: true })
+fs.mkdirSync(trayOutput, { recursive: true })
+for (const file of fs.readdirSync(path.join(root, 'resources', 'app', 'tray'))) {
+  fs.copyFileSync(path.join(root, 'resources', 'app', 'tray', file), path.join(trayOutput, file))
+}
+fs.copyFileSync(path.join(root, 'resources', 'app', 'LOGO.ico'), path.join(trayOutput, 'tray.ico'))
+
 // 写入构建期运行配置。开源版不使用其中的后台地址（不连接任何后台）；
 // 其他版本实现（见 src/main/edition.ts）在空地址时同样按单机离线运行
 fs.writeFileSync(

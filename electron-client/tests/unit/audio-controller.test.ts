@@ -38,7 +38,7 @@ test('真实控制器链路：列表和操作保留设备身份，响应读回�
   assert.deepEqual(await controller.list(), [device])
   assert.equal((await controller.change({ version: 1, operation: 'volume', type: 'output', id: device.id, volume: 25 })).volume, 25)
   assert.equal(requests[1]?.operation, 'volume')
-  assert.equal(macAudioHelperPath(true, '/App/Contents/Resources'), '/App/Contents/Resources/native/ZToolsMacAudio')
+  assert.equal(macAudioHelperPath(true, '/App/Contents/Resources'), path.join('/App/Contents/Resources', 'native', 'ZToolsMacAudio'))
 })
 
 test('设备不支持控制时明确失败，不回显未知原生错误', async () => {
@@ -87,7 +87,11 @@ test('并发修改不会交错，失败后可重试', async () => {
 test('组件缺失、平台不支持、符号链接与运行器失败均明确拒绝', async () => {
   await assert.rejects(new MacAudioController(path.join(directory, 'missing'), 'darwin').list(), /未构建/)
   await assert.rejects(new MacAudioController(helper, 'win32').list(), /尚未接入/)
-  const link = path.join(directory, 'link'); fs.symlinkSync(helper, link)
+  // 相对路径不在构造时抛错（不能拖垮 SystemService），调用时如实报告
+  const relative = new MacAudioController('native/ZToolsMacAudio', 'darwin')
+  await assert.rejects(relative.list(), /路径无效/)
+  const link = path.join(directory, 'link'); fs.symlinkSync(process.platform === 'win32' ? directory : helper, link, process.platform === 'win32' ? 'junction' : 'file')
+  assert.equal(fs.lstatSync(link).isSymbolicLink(), true)
   await assert.rejects(new MacAudioController(link, 'darwin').list(), /无效/)
   await assert.rejects(new MacAudioController(helper, 'darwin', async () => { throw new Error('timeout') }).list(), /timeout/)
 })

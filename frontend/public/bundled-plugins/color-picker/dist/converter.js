@@ -234,7 +234,7 @@ export function calculateContrast(rgb1, rgb2) {
     const darker = Math.min(l1, l2);
     return Number(((lighter + 0.05) / (darker + 0.05)).toFixed(2));
 }
-function evaluateRating(ratio) {
+export function evaluateRating(ratio) {
     if (ratio >= 7.0)
         return "AAA";
     if (ratio >= 4.5)
@@ -546,3 +546,39 @@ export async function removeFromPalette(id) {
     return changePalette(current => current.filter(c => c.id !== id));
 }
 export const convertColor = parseColor;
+/**
+ * 把「前景色 背景色」拆成两段颜色写法。
+ * 括号内的空格与逗号不拆（rgb(10, 132, 255)），括号外的空白、逗号、斜杠、竖线以及 on / vs / 和 / 与 / 对 都视为分隔。
+ */
+export function splitColorInputs(input) {
+    const parts = [];
+    let depth = 0;
+    let current = "";
+    for (const ch of String(input || "")) {
+        if (ch === "(")
+            depth += 1;
+        if (ch === ")")
+            depth = Math.max(0, depth - 1);
+        if (depth === 0 && /[\s,，/|;；]/.test(ch)) {
+            if (current)
+                parts.push(current);
+            current = "";
+            continue;
+        }
+        current += ch;
+    }
+    if (current)
+        parts.push(current);
+    return parts.filter((part) => !/^(on|vs|和|与|对)$/i.test(part));
+}
+/** 对比度预览图：背景色上用前景色写一行正文与一行大字（均按不透明颜色绘制） */
+export function generateContrastPreviewSvg(foregroundHex, backgroundHex, width = 360, height = 120) {
+    const fg = normalizeHex(foregroundHex).slice(0, 7);
+    const bg = normalizeHex(backgroundHex).slice(0, 7);
+    const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}">
+    <rect width="${width}" height="${height}" rx="12" fill="${bg}" stroke="#888888" stroke-opacity="0.35"/>
+    <text x="20" y="50" fill="${fg}" font-size="28" font-weight="bold" font-family="sans-serif">大字 Aa 24px</text>
+    <text x="20" y="88" fill="${fg}" font-size="15" font-family="sans-serif">正文示例 The quick brown fox 0123</text>
+  </svg>`;
+    return `data:image/svg+xml;utf8,${encodeURIComponent(svg).replace(/\(/g, "%28").replace(/\)/g, "%29")}`;
+}

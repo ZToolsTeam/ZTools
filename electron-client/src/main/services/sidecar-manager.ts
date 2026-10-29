@@ -3,11 +3,14 @@ import readline from 'node:readline'
 import path from 'node:path'
 import fs from 'node:fs'
 import crypto from 'node:crypto'
+import type { SystemSearchFilesScope } from '../../contracts/method-params.js'
 import {
+  listMacosApplications,
   scanDirectoryForSearch,
   scanLocalRecentFiles,
   searchFilesOnMacos
 } from '../platform/macos/file-indexer.js'
+import { getCachedStartMenuApplications } from '../platform/windows/start-menu-apps.js'
 import {
   pasteToActiveWindowOnMac,
   setFrontmostWindowBounds,
@@ -47,6 +50,38 @@ export interface ActiveWindowInfo {
 export interface SelectedTextInfo {
   text: string
   source: string
+}
+
+/**
+ * Windows 索引侧车返回的修改时间是 FILETIME（1601 年起的 100 纳秒数），换成毫秒时间戳；
+ * 已经是毫秒（如 macOS / 本地扫描）的原样返回
+ */
+export function indexerMtimeToMs(value: unknown): number {
+  const raw = Number(value)
+  if (!Number.isFinite(raw) || raw <= 0) return 0
+  if (raw < 1e15) return Math.round(raw)
+  return Math.max(0, Math.round(raw / 10_000 - 11_644_473_600_000))
+}
+
+/** 全部可启动的程序：macOS 程序目录里的 .app，Windows 开始菜单里的快捷方式 */
+async function listLaunchableApplications(): Promise<SearchFilesResult> {
+  if (process.platform === 'darwin') return await listMacosApplications()
+  const t0 = performance.now()
+  const files = process.platform === 'win32' ? (await getCachedStartMenuApplications()).map(app => ({ ...app })) : []
+  const elapsedMs = performance.now() - t0
+  return {
+    query: '',
+    limit: files.length,
+    files,
+    count: files.length,
+    total_matches: files.length,
+    total_bytes: 0,
+    elapsed_us: Math.round(elapsedMs * 1000),
+    elapsed_ms: elapsedMs,
+    total_indexed: files.length,
+    source: process.platform === 'win32' ? 'windows-start-menu' : 'none',
+    scope: 'applications'
+  }
 }
 
 export interface BrowserUrlInfo {
@@ -98,6 +133,8 @@ export interface SearchFilesResult {
   truncated?: boolean | undefined
   /** dir: 扫描体积是近似值（截断后部分子目录体积未能完整统计） */
   approximate?: boolean | undefined
+  /** 按范围检索时回显实际使用的范围；旧版主进程不返回，界面据此判断能否在本地匹配程序 */
+  scope?: SystemSearchFilesScope | undefined
   visited_entries?: number | undefined
   max_entries?: number | undefined
 }
@@ -796,9 +833,17 @@ export class SidecarManager {
     this.fallbackFiles.push(file)
   }
 
-  public async searchFiles(query: string, limit = 50): Promise<SearchFilesResult> {
+  public async searchFiles(
+    query: string,
+    limit = 50,
+    options: { scope?: SystemSearchFilesScope } = {}
+  ): Promise<SearchFilesResult> {
     const trimmed = String(query || '').trim()
     const safeLimit = Math.max(1, Math.min(500, Number(limit) || 50))
+    const scope = options.scope ?? 'all'
+    if (scope === 'applications') {
+      return await listLaunchableApplications()
+    }
     if (trimmed.toLowerCase().startsWith('dir:')) {
       const targetDir = trimmed.slice(4).trim()
       if (targetDir) {
@@ -843,7 +888,9 @@ export class SidecarManager {
 
     // 2. macOS 优先走原生应用缓存（含 InfoPlist.strings / mdls 本地化中文名称与双语拼音）+ 本地目录 / Spotlight 检索
     if (process.platform === 'darwin') {
-      return await searchFilesOnMacos(trimmed, safeLimit, this.fallbackFiles)
+      return await searchFilesOnMacos(trimmed, safeLimit, this.fallbackFiles, {
+        excludeApplications: scope === 'files'
+      })
     }
 
     // 3. 若 Windows Indexer 侧车运行中且有非空关键词，优先调用硬件级索引
@@ -854,7 +901,11 @@ export class SidecarManager {
           limit: safeLimit
         })
         if (rpcRes && Array.isArray(rpcRes.files) && (rpcRes.files.length > 0 || (rpcRes.total_indexed ?? 0) > 0)) {
-          return rpcRes
+          return {
+            ...rpcRes,
+            files: rpcRes.files.map(file => ({ ...file, mtime: indexerMtimeToMs(file.mtime) })),
+            ...(scope === 'files' ? { scope } : {})
+          }
         }
       } catch (err) {
         console.warn('[SidecarManager] searchFiles RPC failed, falling back:', err)
@@ -878,7 +929,8 @@ export class SidecarManager {
       elapsed_ms: elapsedMs,
       total_indexed: local.files.length,
       degraded: this.indexerProcess.state !== 'running',
-      source: 'local-fs'
+      source: 'local-fs',
+      ...(scope === 'files' ? { scope } : {})
     }
   }
 

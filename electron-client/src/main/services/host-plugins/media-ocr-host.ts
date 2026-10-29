@@ -1042,6 +1042,11 @@ export class MediaOcrHostPluginHandler {
       return { ok: true, success: true, items }
     }
 
+    // 普通转码不能冒充 AI 模型推理；探测仍可用，处理必须等真实引擎接入。
+    if (pluginName === 'AiVideoPlugin') {
+      return { ok: false, success: false, processedCount: 0, errorCode: 'NOT_SUPPORTED', error: 'AI 视频补帧、超分和降噪引擎尚未接入，无法执行增强；普通转码不能代替 AI 处理' }
+    }
+
     if (rawFiles.length > 0) {
       const fallbackExt = pluginName === 'BatchAudioPlugin' ? 'mp3' : 'mp4'
       const rawFmt =

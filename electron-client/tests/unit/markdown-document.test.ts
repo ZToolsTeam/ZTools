@@ -96,6 +96,11 @@ test('真实文件授权→读取→转换→另存：无授权拒绝、原文�
     const bytes = await fs.readFile(output); assert.ok((await xmlParts(bytes)).has('word/document.xml')); assert.equal(await fs.readFile(input, 'utf8'), source)
     await assert.rejects(service.execute({ ...request('export'), markdown: '试图覆盖', outputPath: output }, caller, signal()))
     assert.deepEqual(await fs.readFile(output), bytes)
+    // 再次在另存为对话框中选择这个已存在的文件（系统已请用户确认替换）→ 允许替换一次
+    await files.grantSavePath(output, caller)
+    const replaced = await service.execute({ ...request('export'), markdown: '# 新内容', outputPath: output }, caller, signal()); assert.ok('status' in replaced && replaced.status === 'committed')
+    assert.notDeepEqual(await fs.readFile(output), bytes); assert.match((await xmlParts(await fs.readFile(output))).get('word/document.xml')!, /新内容/)
+    await assert.rejects(service.execute({ ...request('export'), outputPath: output }, caller, signal()), /已存在/)
     await fs.writeFile(input, Buffer.from([0xff, 0xfe, 0x00])); await assert.rejects(service.execute({ action: 'read', path: input, operationId: 'bad' }, caller, signal()))
     await fs.writeFile(input, 'a'.repeat(256 * 1024 + 1)); await assert.rejects(service.execute({ action: 'read', path: input, operationId: 'large' }, caller, signal()), /256 KiB/)
   } finally { await service.stop(); await files.stop(); await fs.rm(root, { recursive: true, force: true }) }

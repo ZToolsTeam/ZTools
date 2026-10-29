@@ -7,6 +7,7 @@ import { callHostMethod, getHostMethods } from '@/declarative/hostMethods'
 import {
   BUNDLED_PLUGIN_IDS,
   isBundledPlugin,
+  isStoreOfficialPlugin,
   readBundledPluginFile,
   getBundledPluginEntries,
   resolveBundledReplacement,
@@ -14,7 +15,7 @@ import {
   BUNDLED_PLUGIN_REPLACEMENTS
 } from '@/utils/bundledPlugins'
 import { isPluginVisible } from '@/utils/pluginVisibility'
-import { getOfficialPlugin, getOfficialPluginsList } from '@/utils/officialPlugins'
+import { getOfficialPlugin, getOfficialPluginsList, isClientProvidedPlugin } from '@/utils/officialPlugins'
 import { resolvePluginGlyph, isGlyph } from '@/utils/brandIcons'
 import { loadInstalledDeclarativePlugin } from '@/utils/declarativePluginLoader'
 import bundledConfig from '@/config/bundledPlugins.generated.js'
@@ -181,6 +182,24 @@ describe('宿主 IPC 调用 hostMethods', () => {
 })
 
 describe('内置插件与可见性', () => {
+  it('两端只默认提供九个基础工具，移出的七个插件可从市场安装和卸载', () => {
+    expect([...BUNDLED_PLUGIN_IDS].sort()).toEqual([
+      'calculator', 'color-picker', 'crypto-tool', 'file-compare', 'json-format',
+      'memo', 'qr-code', 'timestamp', 'todo'
+    ])
+    for (const entry of getBundledPluginEntries()) {
+      expect(entry.targets.map((target) => target.platform).sort()).toEqual(['macos', 'windows'])
+    }
+    for (const id of ['base64image', 'google-auth', 'downloads-manager', 'batch-image', 'archive-manager', 'invoice-assistant', 'translator']) {
+      expect(isBundledPlugin(id), id).toBe(false)
+      expect(isClientProvidedPlugin(id), id).toBe(false)
+      expect(isStoreOfficialPlugin(id), id).toBe(true)
+      expect(getOfficialPluginsList().some((plugin) => plugin.pluginId === id), id).toBe(false)
+      expect(fs.existsSync(path.join(process.cwd(), 'public/bundled-plugins', id)), id).toBe(false)
+      expect(isPluginVisible({ pluginId: id, author: 'ZTools Team', entry: 'dist/index.js' }), id).toBe(true)
+    }
+  })
+
   it('内置插件清单与 public/bundled-plugins 一致，每个插件的入口文件与子模块都存在且未被 .gitignore 忽略', () => {
     const entries = getBundledPluginEntries()
     expect(entries.map((e) => e.pluginId).sort()).toEqual([...BUNDLED_PLUGIN_IDS].sort())
@@ -207,7 +226,7 @@ describe('内置插件与可见性', () => {
     expect(getBundledPluginEntries()[0].name).not.toBe('被改掉')
   })
 
-  it('[集成] 全部 11 款内置插件（含 json-format）通过真实 readBundledPluginFile 链路完整加载入口与相对子模块', async () => {
+  it('[集成] 全部内置插件通过真实 readBundledPluginFile 链路完整加载入口与相对子模块', async () => {
     vi.stubGlobal('fetch', async (url) => {
       const match = String(url).match(/bundled-plugins\/([^?#]+)$/)
       if (!match) return { ok: false, status: 404, text: async () => 'Not Found' }
@@ -523,10 +542,12 @@ describe('内置插件图标', () => {
 })
 
 describe('重复插件只保留一个', () => {
-  it('合并进来的旧插件解析到保留的内置插件，保留的一方必须是内置插件', () => {
+  it('合并进来的旧插件解析到仍可使用的内置或市场插件', () => {
     expect(resolveBundledReplacement('notes')).toBe('memo')
     expect(resolveBundledReplacement(' Notes ')).toBe('memo')
-    for (const target of Object.values(BUNDLED_PLUGIN_REPLACEMENTS)) expect(isBundledPlugin(target)).toBe(true)
+    for (const target of Object.values(BUNDLED_PLUGIN_REPLACEMENTS)) {
+      expect(isBundledPlugin(target) || isStoreOfficialPlugin(target), target).toBe(true)
+    }
     // 被合并的旧插件 id 自身不能也是内置插件，否则两个都会显示
     for (const legacy of Object.keys(BUNDLED_PLUGIN_REPLACEMENTS)) expect(isBundledPlugin(legacy)).toBe(false)
   })
@@ -554,12 +575,15 @@ describe('重复插件只保留一个', () => {
     expect(resolveBundledReplacementFeature('world-clock')).toBe('tz-world')
   })
 
-  it('[集成 + Beyond Happy Path] 子命令 featureCode 深链直达预设状态，且未知 featureCode 安全回退默认态不崩溃', async () => {
+  // 这些插件已改为市场分发；客户端公开仓库不带插件源仓库，此用例由插件工作区验证。
+  it.skipIf(!['batch-image', 'invoice-assistant', 'translator'].every((id) =>
+    fs.existsSync(path.resolve(process.cwd(), '../plugins', id, 'dist/index.js'))
+  ))('[集成] 市场插件从安装路径加载子命令，未知 featureCode 安全回退默认态', async () => {
     vi.stubGlobal('fetch', async (url) => {
-      const match = String(url).match(/bundled-plugins\/([^?#]+)$/)
+      const match = String(url).match(/^ztools:\/\/plugins\/([^?#]+)$/)
       if (!match) return { ok: false, status: 404, text: async () => 'Not Found' }
       const rel = match[1].split('/').map(decodeURIComponent).join('/')
-      const diskPath = path.join(process.cwd(), 'public/bundled-plugins', rel)
+      const diskPath = path.resolve(process.cwd(), '../plugins', rel)
       if (!fs.existsSync(diskPath)) {
         return { ok: false, status: 404, text: async () => 'Not Found' }
       }
@@ -572,7 +596,7 @@ describe('重复插件只保留一个', () => {
         featureCode: 'preset-to-jpg'
       })
       expect(toJpgLoaded.featureCode).toBe('preset-to-jpg')
-      expect(toJpgLoaded.title).toBe('PNG/WebP/BMP 批量转 JPG')
+      expect(toJpgLoaded.featureExplain).toBe('PNG/WebP/BMP 批量转 JPG')
       const toJpgTree = toJpgLoaded.command()
       expect(toJpgTree.props.searchBarAccessory.props.value).toBe('preset-to-jpg')
 

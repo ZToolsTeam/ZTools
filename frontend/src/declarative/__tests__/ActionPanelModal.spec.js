@@ -37,15 +37,16 @@ describe('ActionPanelModal 动作面板', () => {
     const wrapper = mountPanel({
       actions: [
         action('首项'),
+        action('次项'),
         action('缺 key', { shortcut: { modifiers: ['cmd'] } }),
         action('未知修饰', { shortcut: { modifiers: ['hyper', 'cmd', 'meta'], key: 'k' } }),
         action('非数组', { shortcut: { modifiers: 'cmd', key: 'x' } })
       ]
     })
     const items = wrapper.findAll('.action-panel-item')
-    expect(items[1].findAll('kbd')).toHaveLength(0)
-    expect(items[2].findAll('kbd')).toHaveLength(2)
-    expect(items[3].findAll('kbd')).toHaveLength(1)
+    expect(items[2].findAll('kbd')).toHaveLength(0)
+    expect(items[3].findAll('kbd')).toHaveLength(2)
+    expect(items[4].findAll('kbd')).toHaveLength(1)
     wrapper.unmount()
   })
 
@@ -221,6 +222,59 @@ describe('ActionPanelModal 动作面板', () => {
     expect(wrapper.find('.action-panel-item.is-selected .action-panel-title').text()).toBe('删除原文件')
     await panel.trigger('keydown', { key: 'Enter' })
     expect(wrapper.emitted('trigger')[0][0].props.title).toBe('删除原文件')
+    wrapper.unmount()
+  })
+
+  describe('键位提示按原始位置与视图类型计算', () => {
+    const kbdTexts = (item) => item.findAll('kbd').map((k) => k.text())
+
+    it('列表：第 1 个提示 Enter、第 2 个提示 ⌘/Ctrl+Enter，第 3 个及子菜单动作不提示', () => {
+      const wrapper = mountPanel({
+        actions: [action('打开'), action('复制'), action('删除'), { ...action('子项'), _fromSubmenu: true, _sectionTitle: '更多' }]
+      })
+      const items = wrapper.findAll('.action-panel-item')
+      expect(items[0].findAll('kbd')).toHaveLength(1)
+      expect(items[1].findAll('kbd')).toHaveLength(2)
+      expect(items[2].findAll('kbd')).toHaveLength(0)
+      expect(items[3].findAll('kbd')).toHaveLength(0)
+      wrapper.unmount()
+    })
+
+    it('[时序] 搜索过滤后提示仍跟着原动作，不会把 Enter 挪到过滤后的第 1 项', async () => {
+      const wrapper = mountPanel({ actions: [action('打开'), action('复制'), action('删除')] })
+      const enterText = kbdTexts(wrapper.findAll('.action-panel-item')[0])
+      await wrapper.find('input').setValue('删除')
+      const items = wrapper.findAll('.action-panel-item')
+      expect(items).toHaveLength(1)
+      expect(items[0].text()).toContain('删除')
+      expect(items[0].findAll('kbd')).toHaveLength(0)
+      await wrapper.find('input').setValue('复制')
+      const copy = wrapper.findAll('.action-panel-item')[0]
+      expect(copy.findAll('kbd')).toHaveLength(2)
+      expect(kbdTexts(copy)).not.toEqual(enterText)
+      wrapper.unmount()
+    })
+
+    it('表单：第 1 个动作提示 ⌘/Ctrl+Enter，第 2 个不提示（表单里 ⌘Enter 只提交）', () => {
+      const wrapper = mountPanel({ viewType: 'Form', actions: [action('保存'), action('清空')] })
+      const items = wrapper.findAll('.action-panel-item')
+      expect(items[0].findAll('kbd')).toHaveLength(2)
+      expect(items[1].findAll('kbd')).toHaveLength(0)
+      wrapper.unmount()
+    })
+
+    it('插件自己声明的快捷键优先于位置提示', () => {
+      const wrapper = mountPanel({ actions: [action('打开', { shortcut: { modifiers: ['cmd'], key: 'o' } })] })
+      expect(kbdTexts(wrapper.findAll('.action-panel-item')[0]).at(-1)).toBe('O')
+      wrapper.unmount()
+    })
+  })
+
+  it('危险动作带错误色样式类，普通动作没有', () => {
+    const wrapper = mountPanel({ actions: [action('打开'), action('删除', { style: 'destructive' })] })
+    const items = wrapper.findAll('.action-panel-item')
+    expect(items[0].classes()).not.toContain('is-destructive')
+    expect(items[1].classes()).toContain('is-destructive')
     wrapper.unmount()
   })
 })

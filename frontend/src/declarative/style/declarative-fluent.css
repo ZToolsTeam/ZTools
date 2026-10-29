@@ -56,3 +56,50 @@
 .declarative-scrollbar::-webkit-scrollbar-thumb:hover {
   background: var(--zt-scrollbar-thumb-hover);
 }
+
+/* 声明式 Detail 的 Markdown 正文：块间距只在这里控制，不依赖 prose / space-y 工具类 */
+.declarative-markdown {
+  font-size: 13px;
+  line-height: 1.7;
+  color: var(--rc-text-secondary);
+  overflow-wrap: anywhere;
+}
+
+.declarative-markdown > * {
+  margin-top: 0;
+  margin-bottom: 0;
+}
+
+.declarative-markdown > * + * {
+  margin-top: 10px;
+}
+
+/* 标题上方留白大、下方留白小，让标题和它后面的内容成组 */
+.declarative-markdown > h1 + *,
+.declarative-markdown > h2 + *,
+.declarative-markdown > h3 + * {
+  margin-top: 6px;
+}
+
+.declarative-markdown > * + h1,
+.declarative-markdown > * + h2 {
+  margin-top: 22px;
+}
+
+.declarative-markdown > * + h3 {
+  margin-top: 16px;
+}
+
+.declarative-markdown h1,
+.declarative-markdown h2,
+.declarative-markdown h3 {
+  line-height: 1.4;
+}
+
+/* 声明式视图内的按钮与可聚焦行：键盘聚焦时统一显示主题焦点环 */
+[data-declarative-root] button:focus-visible,
+[data-declarative-root] [role="option"]:focus-visible,
+[data-declarative-root] a:focus-visible {
+  outline: none;
+  box-shadow: var(--rc-focus-ring);
+}

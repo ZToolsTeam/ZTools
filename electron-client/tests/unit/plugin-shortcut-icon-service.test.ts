@@ -184,3 +184,36 @@ test('downloads supported icon formats into the plugin directory and records the
   assert.equal(await fs.readFile(path.join(root, 'icon.url'), 'utf8'), 'https://cdn.example/icon.png\n')
   assert.equal(recorded, 'https://cdn.example/icon.png')
 })
+
+test('图标下载在插件目录锁之外进行：下载期间不占锁，下载失败或超时不进入目录写入', async (context) => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'ztools-plugin-icon-lock-'))
+  context.after(() => fs.rm(root, { recursive: true, force: true }))
+  const state: PluginStateProvider = {
+    async readAll() { return {} },
+    async isEnabled() { return true },
+    async toggleEnabled() { return true },
+    async markUsed() {},
+    async setIconUrl() {},
+    async update() {}
+  }
+  let locked = 0
+  let lockedDuringFetch = false
+  let signalPassed = false
+  const directory = { withPluginDirectory: async <T>(_pluginId: string, action: (m: PluginManifest, r: string) => Promise<T>) => { locked++; try { return await action(manifest(), root) } finally { locked-- } } }
+  const ok = new PluginIconService(directory, state, (async (_url: URL, init?: RequestInit) => {
+    lockedDuringFetch = locked > 0
+    signalPassed = init?.signal instanceof AbortSignal
+    return new Response(new Uint8Array([7]), { status: 200, headers: { 'content-type': 'image/png' } })
+  }) as typeof fetch)
+  await ok.refresh('plugin.test', 'https://cdn.example/icon.png')
+  assert.equal(lockedDuringFetch, false)
+  assert.equal(signalPassed, true)
+
+  let entered = 0
+  const counting = { withPluginDirectory: async <T>(_pluginId: string, action: (m: PluginManifest, r: string) => Promise<T>) => { entered++; return action(manifest(), root) } }
+  const offline = new PluginIconService(counting, state, (async () => { throw new DOMException('timeout', 'TimeoutError') }) as typeof fetch)
+  await assert.rejects(offline.refresh('plugin.test', 'https://cdn.example/icon.png'), /下载插件图标失败/)
+  const notFound = new PluginIconService(counting, state, (async () => new Response('x', { status: 404 })) as typeof fetch)
+  await assert.rejects(notFound.refresh('plugin.test', 'https://cdn.example/icon.png'), /下载插件图标失败/)
+  assert.equal(entered, 0)
+})

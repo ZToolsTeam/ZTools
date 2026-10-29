@@ -18,6 +18,7 @@ import { callHostMethod } from './hostMethods.js'
 
 export const SESSION_RELEASE_GRACE_MS = 250
 export const SESSION_INFLIGHT_SETTLE_MAX_MS = 2_000
+export const SESSION_BUSY_RETRY_DELAYS_MS = [150, 400, 1_000, 2_000]
 
 const holders = new Map()
 
@@ -31,12 +32,13 @@ function logWarn(...args) {
 
 /**
  * @param {string} pluginId
- * @param {{ call?: typeof callHostMethod, graceMs?: number, settleMaxMs?: number }} [options]
+ * @param {{ call?: typeof callHostMethod, graceMs?: number, settleMaxMs?: number, busyRetryDelaysMs?: number[] }} [options]
  */
 export function createPluginSessionHolder(pluginId, options = {}) {
   const call = options.call || callHostMethod
   const graceMs = options.graceMs ?? SESSION_RELEASE_GRACE_MS
   const settleMaxMs = options.settleMaxMs ?? SESSION_INFLIGHT_SETTLE_MAX_MS
+  const busyRetryDelaysMs = options.busyRetryDelaysMs ?? SESSION_BUSY_RETRY_DELAYS_MS
   let refs = 0
   let token = null
   let sessionId = null
@@ -69,10 +71,22 @@ export function createPluginSessionHolder(pluginId, options = {}) {
     })
   }
 
+  /** 插件目录被安装 / 更新 / 图标刷新短暂独占时宿主回 PLUGIN_BUSY，稍等重试，不让插件整次打开都没有会话 */
+  async function openWithRetry(myGeneration) {
+    for (let attempt = 0; ; attempt += 1) {
+      try {
+        return await call('declarative_session_open', { pluginId })
+      } catch (error) {
+        if (error?.code !== 'PLUGIN_BUSY' || attempt >= busyRetryDelaysMs.length || myGeneration !== generation || refs === 0) throw error
+        await new Promise((resolve) => setTimeout(resolve, busyRetryDelaysMs[attempt]))
+      }
+    }
+  }
+
   async function open() {
     const myGeneration = generation
     try {
-      const result = await call('declarative_session_open', { pluginId })
+      const result = await openWithRetry(myGeneration)
       const data = result?.data
       if (!data || typeof data.token !== 'string' || typeof data.sessionId !== 'string') {
         throw Object.assign(new Error('宿主返回的插件会话无效'), { code: 'HOST_RESPONSE_INVALID' })

@@ -15,7 +15,7 @@ defineProps({
       hover ? 'hover:border-[var(--rc-border-highlight)] hover:shadow-sm' : ''
     ]"
   >
-    <div v-if="title || subtitle || $slots.header" class="flex items-center justify-between pb-3 mb-3 border-b border-[var(--rc-border)]/60">
+    <div v-if="title || subtitle || $slots.header" class="flex items-center justify-between pb-3 mb-3 border-b border-[var(--rc-border-subtle)]">
       <div>
         <h3 v-if="title" class="text-xs font-semibold text-[var(--rc-text-primary)] m-0">
           {{ title }}

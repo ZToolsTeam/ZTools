@@ -25,7 +25,7 @@ function pathIndexBlock(paths) {
 /**
  * 查看转换结果的二级详情页 (展示 JSON、TypeScript、Rust、Go 及 JSONPath)
  */
-export function JsonDetailView({ formatted, tsInterface, rustStruct, goStruct, stats, jsonPaths }) {
+export function JsonDetailView({ formatted, tsInterface, rustStruct, goStruct, stats, jsonPaths, indentLabel = "2 格" }) {
     const rustCode = rustStruct || jsonToRustStruct(formatted);
     const goCode = goStruct || jsonToGoStruct(formatted);
     const paths = jsonPaths || extractJsonPaths(formatted);
@@ -51,19 +51,43 @@ export function JsonDetailView({ formatted, tsInterface, rustStruct, goStruct, s
             React.createElement(Detail.Metadata.Separator, null),
             React.createElement(Detail.Metadata.TagList, { title: "\u8BED\u6CD5\u6821\u9A8C" },
                 React.createElement(Detail.Metadata.TagList.Item, { text: "\u8BED\u6CD5\u5408\u6CD5", color: Color.Green, icon: Icon.Check })))) : undefined, actions: React.createElement(ActionPanel, { title: "\u64CD\u4F5C\u9762\u677F" },
-            React.createElement(Action.CopyToClipboard, { title: "\u590D\u5236\u683C\u5F0F\u5316 JSON (2 \u683C)", content: formatted, icon: Icon.CopyClipboard }),
+            React.createElement(Action.CopyToClipboard, { title: `复制格式化 JSON (${indentLabel})`, content: formatted, icon: Icon.CopyClipboard }),
             React.createElement(Action.CopyToClipboard, { title: "\u590D\u5236 TypeScript Interface", content: tsInterface, icon: Icon.Code }),
             React.createElement(Action.CopyToClipboard, { title: "\u590D\u5236 Rust Struct", content: rustCode, icon: Icon.Terminal }),
             React.createElement(Action.CopyToClipboard, { title: "\u590D\u5236 Go Struct", content: goCode, icon: Icon.Globe }),
             React.createElement(Action.CopyToClipboard, { title: "\u590D\u5236\u538B\u7F29\u5355\u884C JSON", content: minifyJson(formatted), icon: Icon.Document }),
             paths.length > 0 && (React.createElement(Action.CopyToClipboard, { title: "\u590D\u5236\u5168\u90E8 JSONPath \u5217\u8868", content: paths.map((p) => `${p.path} = ${p.displayValue}`).join("\n"), icon: Icon.List }))) }));
 }
+/**
+ * json-codegen 命令的结果页：只放类型代码，不再重复格式化 JSON
+ */
+export function JsonCodegenView({ tsInterface, rustStruct, goStruct }) {
+    const markdown = [
+        "## TypeScript",
+        fencedCode(tsInterface, "typescript"),
+        "## Go",
+        fencedCode(goStruct, "go"),
+        "## Rust（serde）",
+        fencedCode(rustStruct, "rust")
+    ].join("\n\n");
+    return (React.createElement(Detail, { markdown: markdown, navigationTitle: "\u751F\u6210\u7684\u7C7B\u578B\u4EE3\u7801", actions: React.createElement(ActionPanel, null,
+            React.createElement(Action.CopyToClipboard, { title: "\u590D\u5236 TypeScript Interface", content: tsInterface, icon: Icon.Code }),
+            React.createElement(Action.CopyToClipboard, { title: "\u590D\u5236 Go Struct", content: goStruct, icon: Icon.Globe }),
+            React.createElement(Action.CopyToClipboard, { title: "\u590D\u5236 Rust Struct", content: rustStruct, icon: Icon.Terminal })) }));
+}
+function describeOutputError(err) {
+    if (err instanceof RangeError)
+        return "JSON 嵌套过深或体积过大，缩进后的结果超出可处理范围，请拆分后再处理";
+    return err instanceof Error ? err.message : String(err);
+}
 const isText = (v) => typeof v === "string";
 const isIndentStyle = (v) => v === 2 || v === 4 || v === "tab";
 /**
  * JSON 格式化与校验主命令组件
  */
-export default function JsonFormatCommand() {
+export default function JsonFormatCommand(props = {}) {
+    // json-codegen 命令：主动作直接生成类型代码并进入代码视图；其余入口是格式化
+    const codegen = props?.featureCode === "json-codegen";
     // 输入与缩进风格随「独立窗口」一起带走；带来的值不合法（如旧版本存下的形状）时用默认值
     const [jsonText, setJsonText] = usePopoutValue("jsonText", () => "", isText);
     const [indent, setIndent] = usePopoutValue("indent", () => 2, isIndentStyle);
@@ -72,20 +96,27 @@ export default function JsonFormatCommand() {
     const derived = useMemo(() => {
         const validation = validateJson(jsonText);
         if (!validation.valid)
-            return { validation, outputs: null };
-        return {
-            validation,
-            outputs: {
-                indent2: formatJson(jsonText, 2),
-                indent4: formatJson(jsonText, 4),
-                minified: minifyJson(jsonText),
-                ts: jsonToTsInterface(jsonText),
-                rust: jsonToRustStruct(jsonText),
-                go: jsonToGoStruct(jsonText)
-            }
-        };
+            return { validation, outputs: null, outputError: undefined };
+        try {
+            return {
+                validation,
+                outputError: undefined,
+                outputs: {
+                    indent2: formatJson(jsonText, 2),
+                    indent4: formatJson(jsonText, 4),
+                    minified: minifyJson(jsonText),
+                    ts: jsonToTsInterface(jsonText),
+                    rust: jsonToRustStruct(jsonText),
+                    go: jsonToGoStruct(jsonText)
+                }
+            };
+        }
+        catch (err) {
+            // 极深嵌套时缩进后的文本可能超过字符串上限（RangeError），如实提示而不是让整个页面崩溃
+            return { validation, outputs: null, outputError: describeOutputError(err) };
+        }
     }, [jsonText]);
-    const { validation, outputs } = derived;
+    const { validation, outputs, outputError } = derived;
     const handleSubmit = async (values) => {
         const text = typeof values.jsonInput === "string" ? values.jsonInput : jsonText;
         const res = validateJson(text);
@@ -93,13 +124,24 @@ export default function JsonFormatCommand() {
             await showToast(Toast.Style.Failure, "JSON 语法错误", res.error);
             return;
         }
-        const fmt = formatJson(text, indent);
-        const ts = jsonToTsInterface(text);
-        const rust = jsonToRustStruct(text);
-        const go = jsonToGoStruct(text);
-        const paths = extractJsonPaths(text);
+        let fmt, ts, rust, go, paths;
+        try {
+            fmt = formatJson(text, indent);
+            ts = jsonToTsInterface(text);
+            rust = jsonToRustStruct(text);
+            go = jsonToGoStruct(text);
+            paths = extractJsonPaths(text);
+        }
+        catch (err) {
+            await showToast(Toast.Style.Failure, "无法生成格式化结果", describeOutputError(err));
+            return;
+        }
+        if (codegen) {
+            push(() => React.createElement(JsonCodegenView, { tsInterface: ts, rustStruct: rust, goStruct: go }));
+            return;
+        }
         await showToast(Toast.Style.Success, "格式化与类型推导完成");
-        push(() => (React.createElement(JsonDetailView, { formatted: fmt, tsInterface: ts, rustStruct: rust, goStruct: go, stats: res.stats, jsonPaths: paths })));
+        push(() => (React.createElement(JsonDetailView, { formatted: fmt, tsInterface: ts, rustStruct: rust, goStruct: go, stats: res.stats, jsonPaths: paths, indentLabel: indent === "tab" ? "Tab" : `${indent} 格` })));
     };
     const handleLoadClipboard = async () => {
         let text = "";
@@ -107,7 +149,7 @@ export default function JsonFormatCommand() {
             text = await Clipboard.readText();
         }
         catch (err) {
-            await showToast(Toast.Style.Failure, "读取剪贴板失败", err?.message || String(err));
+            await showToast(Toast.Style.Failure, "读取剪贴板失败", err instanceof Error ? err.message : String(err));
             return;
         }
         if (!text || !text.trim()) {
@@ -128,23 +170,29 @@ export default function JsonFormatCommand() {
             await showToast(Toast.Style.Failure, "剪贴板内容存在语法错误", res.error);
         }
     };
-    return (React.createElement(Form, { navigationTitle: "JSON \u683C\u5F0F\u5316\u4E0E\u7C7B\u578B\u8F6C\u6362", actions: React.createElement(ActionPanel, { title: "\u5FEB\u6377\u52A8\u4F5C" },
-            React.createElement(Action.SubmitForm, { title: "\u683C\u5F0F\u5316\u5E76\u67E5\u770B\u8BE6\u60C5", icon: Icon.Eye, onSubmit: handleSubmit }),
-            outputs && (React.createElement(Action.CopyToClipboard, { title: "\u590D\u5236 2 \u683C\u683C\u5F0F\u5316\u7ED3\u679C", content: outputs.indent2, icon: Icon.CopyClipboard })),
-            outputs && (React.createElement(Action.CopyToClipboard, { title: "\u590D\u5236 4 \u683C\u683C\u5F0F\u5316\u7ED3\u679C", content: outputs.indent4, icon: Icon.CopyClipboard })),
-            outputs && (React.createElement(Action.CopyToClipboard, { title: "\u590D\u5236\u538B\u7F29\u5355\u884C (Minify)", content: outputs.minified, icon: Icon.Minus })),
-            outputs && (React.createElement(Action.CopyToClipboard, { title: "\u590D\u5236 TypeScript Interface", content: outputs.ts, icon: Icon.Code })),
+    return (React.createElement(Form, { navigationTitle: codegen ? "JSON 生成类型代码" : "JSON 格式化与类型转换", actions: React.createElement(ActionPanel, { title: "\u5FEB\u6377\u52A8\u4F5C" },
+            React.createElement(Action.SubmitForm, { title: codegen ? "生成类型代码" : "格式化并查看详情", icon: codegen ? Icon.Code : Icon.Eye, onSubmit: handleSubmit }),
+            codegen && outputs && (React.createElement(Action.CopyToClipboard, { title: "\u590D\u5236 TypeScript Interface", content: outputs.ts, icon: Icon.Code })),
+            !codegen && outputs && (React.createElement(Action.CopyToClipboard, { title: "\u590D\u5236 2 \u683C\u683C\u5F0F\u5316\u7ED3\u679C", content: outputs.indent2, icon: Icon.CopyClipboard })),
+            !codegen && outputs && (React.createElement(Action.CopyToClipboard, { title: "\u590D\u5236 4 \u683C\u683C\u5F0F\u5316\u7ED3\u679C", content: outputs.indent4, icon: Icon.CopyClipboard })),
+            !codegen && outputs && (React.createElement(Action.CopyToClipboard, { title: "\u590D\u5236\u538B\u7F29\u5355\u884C\u7ED3\u679C", content: outputs.minified, icon: Icon.Minus })),
+            !codegen && outputs && (React.createElement(Action.CopyToClipboard, { title: "\u590D\u5236 TypeScript Interface", content: outputs.ts, icon: Icon.Code })),
             outputs && (React.createElement(Action.CopyToClipboard, { title: "\u590D\u5236 Rust Struct", content: outputs.rust, icon: Icon.Terminal })),
             outputs && (React.createElement(Action.CopyToClipboard, { title: "\u590D\u5236 Go Struct", content: outputs.go, icon: Icon.Globe })),
-            React.createElement(Action, { title: "\u4ECE\u526A\u8D34\u677F\u7C98\u8D34\u5E76\u6821\u9A8C", icon: Icon.Clipboard, onAction: handleLoadClipboard }),
-            React.createElement(Action, { title: indent === 2 ? "切换为 4 格缩进" : "切换为 2 格缩进", icon: Icon.Repeat, onAction: () => setIndent(indent === 2 ? 4 : 2) })) },
-        React.createElement(Form.TextArea, { id: "jsonInput", title: "JSON \u8F93\u5165", placeholder: "\u5728\u6B64\u7C98\u8D34\u6216\u8F93\u5165\u5F85\u6821\u9A8C/\u683C\u5F0F\u5316\u7684 JSON \u5185\u5BB9...", value: jsonText, onChange: (val) => setJsonText(val), error: validation.valid || !jsonText.trim()
-                ? undefined
-                : validation.errorInfo
-                    ? `[第 ${validation.errorInfo.line} 行, 列 ${validation.errorInfo.column}] ${validation.errorInfo.message}`
-                    : validation.error }),
-        React.createElement(Form.Dropdown, { id: "indentType", title: "\u7F29\u8FDB\u98CE\u683C", value: String(indent), onChange: (v) => setIndent(v === "tab" ? "tab" : v === "4" ? 4 : 2) },
+            React.createElement(Action, { title: "\u4ECE\u526A\u8D34\u677F\u7C98\u8D34\u5E76\u6821\u9A8C", icon: Icon.Clipboard, onAction: handleLoadClipboard })) },
+        React.createElement(Form.TextArea, { id: "jsonInput", title: "JSON \u8F93\u5165", placeholder: codegen ? "粘贴 JSON 示例数据，按回车生成 TypeScript / Go / Rust 类型" : "在此粘贴或输入待校验/格式化的 JSON 内容...", value: jsonText, onChange: (val) => setJsonText(val), error: outputError
+                ? outputError
+                : validation.valid || !jsonText.trim()
+                    ? undefined
+                    : validation.errorInfo
+                        ? `[第 ${validation.errorInfo.line} 行, 列 ${validation.errorInfo.column}] ${validation.errorInfo.message}`
+                        : validation.error }),
+        !codegen && React.createElement(Form.Dropdown, { id: "indentType", title: "\u7F29\u8FDB\u98CE\u683C", value: String(indent), onChange: (v) => setIndent(v === "tab" ? "tab" : v === "4" ? 4 : 2) },
             React.createElement(Form.Dropdown.Item, { title: "2 \u7A7A\u683C\u7F29\u8FDB", value: "2" }),
             React.createElement(Form.Dropdown.Item, { title: "4 \u7A7A\u683C\u7F29\u8FDB", value: "4" }),
             React.createElement(Form.Dropdown.Item, { title: "Tab \u5236\u8868\u7B26\u7F29\u8FDB", value: "tab" }))));
 }
+export const commands = {
+    "json-beautify": () => JsonFormatCommand(),
+    "json-codegen": () => JsonFormatCommand({ featureCode: "json-codegen" })
+};

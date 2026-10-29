@@ -8,7 +8,9 @@ import { errorCodes, ZToolsError } from '../../src/contracts/errors.js'
 import { FileSystemService } from '../../src/main/services/file-system-service.js'
 import {
   createProcessWindowReader,
+  isMacosSystemProcess,
   ProcessService,
+  readOptionalCount,
   type ProcessWindowReader
 } from '../../src/main/services/process-service.js'
 import { createPlatformProcessDiscoveryAdapter } from '../../src/main/platform/process-discovery.js'
@@ -335,13 +337,6 @@ test('handleProcessMonitorCall provides rich snapshot, detail, services, and cri
     )
     assert.match(String((criticalKill.data as { error?: string }).error), /SECURITY_INTERCEPTED/)
 
-    const csrssKill = await context.service.handleProcessMonitorCall(
-      'TerminateProcessByPID',
-      { pid: 612, name: 'csrss.exe', mode: 'tree' },
-      signal()
-    )
-    assert.match(String((csrssKill.data as { error?: string }).error), /SECURITY_INTERCEPTED/)
-
     const invalidKill = await context.service.handleProcessMonitorCall(
       'TerminateProcessByPID',
       { pid: 0, name: 'Idle' },
@@ -384,4 +379,76 @@ test('macOS进程详情发现适配器失败时拒绝，不返回成功假进程
   const registry = { onRemoved: () => () => {} } as unknown as WindowRegistry
   const service = new ProcessService(registry, {} as FileSystemService, Date.now, 'darwin', { async list() { throw new Error('ps timeout') } })
   try { await assert.rejects(service.handleProcessMonitorCall('GetProcessDetail', { pid: 234 }, signal()), /ps timeout/) } finally { service.stop() }
+})
+
+
+test('旧进程入口按真实快照保护系统进程，不信任调用方伪造的名字或固定 PID', async () => {
+  const registry = { onRemoved: () => () => undefined } as unknown as WindowRegistry
+  let signals = 0
+  const service = new ProcessService(registry, {} as FileSystemService, Date.now, 'win32', undefined, undefined, undefined, {
+    snapshot: async () => [{ pid: 612, name: 'csrss.exe', ppid: 4 }], hostPid: 9991, hostPpid: 9992,
+    kill: (pid, value) => {
+      if (value === 0) {
+        if (pid === 612) return
+        throw Object.assign(new Error('进程已退出'), { code: 'ESRCH' })
+      }
+      signals++; throw new Error('不应发送进程信号')
+    },
+    runTaskkill: async () => { signals++; throw new Error('不应启动 taskkill') }
+  })
+  try {
+    const blocked = await service.handleProcessMonitorCall('TerminateProcessByPID', { pid: 612, name: 'ordinary.exe', mode: 'tree' }, signal())
+    assert.match(String((blocked.data as { error?: string }).error), /SECURITY_INTERCEPTED/)
+    const missing = await service.handleProcessMonitorCall('TerminateProcessByPID', { pid: 613, name: 'csrss.exe' }, signal())
+    assert.match(String((missing.data as { error?: string }).error), /PROCESS_NOT_FOUND/)
+    assert.equal(signals, 0)
+  } finally { service.stop() }
+})
+
+test('macOS 系统进程按 launchd 与受保护系统目录判定，不再按 pid<=4 粗判', () => {
+  assert.equal(isMacosSystemProcess(1, '/sbin/launchd'), true)
+  assert.equal(isMacosSystemProcess(1, ''), true)
+  for (const file of ['/System/Library/CoreServices/WindowServer', '/usr/libexec/logd', '/usr/sbin/mDNSResponder', '/sbin/launchd', '/Library/Apple/System/Library/CoreServices/XProtect.app/Contents/MacOS/XProtect']) {
+    assert.equal(isMacosSystemProcess(500, file), true, file)
+  }
+  // 自带应用（计算器、终端）是用户打开的程序；第三方 root 守护进程、用户程序、读不到路径都不算系统进程
+  for (const file of ['/System/Applications/Calculator.app/Contents/MacOS/Calculator', '/System/Applications/Utilities/Terminal.app/Contents/MacOS/Terminal',
+    '/Library/PrivilegedHelperTools/com.docker.vmnetd', '/usr/local/bin/node', '/Applications/Safari.app/Contents/MacOS/Safari', '/usr/bin/ssh', '', 'kernel_task', '/Systemish/x']) {
+    assert.equal(isMacosSystemProcess(500, file), false, file)
+  }
+  assert.equal(isMacosSystemProcess(2, ''), false)
+  assert.equal(isMacosSystemProcess(4, '/Applications/App.app/Contents/MacOS/App'), false)
+})
+
+test('读不到的计数保持 null，不用估算值或 1 冒充', () => {
+  for (const value of [undefined, null, '', 'abc', -1, Number.NaN, Infinity]) assert.equal(readOptionalCount(value), null, String(value))
+  assert.equal(readOptionalCount(0), 0)
+  assert.equal(readOptionalCount('12'), 12)
+  assert.equal(readOptionalCount(4096.4), 4096)
+})
+
+test('macOS 进程列表与详情：系统进程按路径判定；发布者、描述、命令行、产品名读不到就留空', async () => {
+  const registry = { onRemoved: () => () => {} } as unknown as WindowRegistry
+  const availability = { path: true, cpuUsage: true, memoryUsage: true }
+  const service = new ProcessService(registry, {} as FileSystemService, Date.now, 'darwin', {
+    async list() {
+      return [
+        { pid: 1, name: 'launchd', path: '/sbin/launchd', cpuUsage: 0, memoryUsage: 1024, parentPid: 0, fieldAvailability: availability },
+        { pid: 300, name: 'logd', path: '/usr/libexec/logd', cpuUsage: 0, memoryUsage: 1024, parentPid: 1, fieldAvailability: availability },
+        { pid: 3, name: 'Calculator', path: '/System/Applications/Calculator.app/Contents/MacOS/Calculator', cpuUsage: 0, memoryUsage: 1024, parentPid: 1, fieldAvailability: availability },
+        { pid: 400, name: 'node', path: '/usr/local/bin/node', cpuUsage: 1, memoryUsage: 2048, parentPid: 1, fieldAvailability: availability }
+      ]
+    }
+  })
+  try {
+    const list = ((await service.handleProcessMonitorCall('GetProcessList', {}, signal())).data as { processes: Array<Record<string, unknown>> }).processes
+    assert.deepEqual(list.map(p => [p.pid, p.isSystem]), [[1, true], [300, true], [3, false], [400, false]])
+    for (const p of list) {
+      assert.equal(p.description, ''); assert.equal(p.companyName, '')
+      assert.equal(p.privateBytes, null); assert.equal(p.threadCount, null)
+    }
+    const detail = (await service.handleProcessMonitorCall('GetProcessDetail', { pid: 400 }, signal())).data as Record<string, unknown>
+    assert.equal(detail.path, '/usr/local/bin/node')
+    for (const key of ['commandLine', 'companyName', 'fileDescription', 'productName', 'fileVersion', 'signerName']) assert.equal(detail[key], '', key)
+  } finally { service.stop() }
 })

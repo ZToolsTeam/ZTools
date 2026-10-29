@@ -8,7 +8,7 @@ import { isSymbolKey, shortcutKeys } from '@/utils/platform'
  */
 const props = defineProps({
   combo: { type: String, required: true },
-  /** onAccent：放在余烬橙实底按钮上时使用深色半透明键帽 */
+  /** inherit：放在彩色按钮上，键帽跟随文字颜色（半透明底 + 同色文字）；onAccent 为旧写法，等同 inherit */
   tone: { type: String, default: 'default' }
 })
 
@@ -30,10 +30,11 @@ const label = computed(() => keys.value.join(' '))
   vertical-align: middle;
 }
 
+.shortcut-keys.is-inherit .rc-kbd,
 .shortcut-keys.is-onAccent .rc-kbd {
-  background: rgba(26, 10, 4, 0.12);
-  border-color: rgba(26, 10, 4, 0.16);
-  box-shadow: inset 0 -1px 0 rgba(26, 10, 4, 0.16);
-  color: var(--rc-accent-contrast);
+  background: color-mix(in srgb, currentColor 14%, transparent);
+  border-color: color-mix(in srgb, currentColor 24%, transparent);
+  box-shadow: inset 0 -1px 0 color-mix(in srgb, currentColor 16%, transparent);
+  color: inherit;
 }
 </style>

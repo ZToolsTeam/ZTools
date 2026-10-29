@@ -5,9 +5,9 @@ import { createPinia, setActivePinia } from 'pinia'
 
 const candidates = ref([])
 const filteredCandidates = ref(null)
-const mocks = vi.hoisted(() => ({ load: vi.fn(), error: vi.fn(), success: vi.fn(), keys: {} }))
+const mocks = vi.hoisted(() => ({ load: vi.fn(), noView: vi.fn(), error: vi.fn(), success: vi.fn(), keys: {} }))
 vi.mock('@/composables/useCommandSearch', () => ({
-  useCommandSearch: () => ({ query: ref(''), matchedPlugins: candidates, filteredItems: filteredCandidates, search: vi.fn(), clearSearch: vi.fn(), recordUsage: vi.fn() })
+  useCommandSearch: () => ({ query: ref(''), matchedPlugins: candidates, filteredItems: filteredCandidates, search: vi.fn(), clearSearch: vi.fn(), recordUsage: vi.fn(), highlightParts: item => [{ text: item?.name || '', hit: false }] })
 }))
 vi.mock('@/utils/keymap', async (importOriginal) => {
   const actual = await importOriginal()
@@ -17,7 +17,7 @@ vi.mock('@/utils/keymap', async (importOriginal) => {
   } }
 })
 vi.mock('@/composables/useToast', () => ({ useToast: () => ({ error: mocks.error, success: mocks.success }) }))
-vi.mock('@/utils/declarativePluginLoader', () => ({ clearDeclarativePluginCache: vi.fn(), loadInstalledDeclarativePlugin: mocks.load }))
+vi.mock('@/utils/declarativePluginLoader', () => ({ clearDeclarativePluginCache: vi.fn(), loadInstalledDeclarativePlugin: mocks.load, executeDeclarativeNoViewCommand: mocks.noView }))
 vi.mock('@/utils/officialPlugins', () => ({
   OFFICIAL_PLUGIN_ALIASES: {},
   OFFICIAL_PLUGINS_MAP: {},
@@ -60,6 +60,7 @@ describe('工作台搜索子命令到宿主加载链路', () => {
     vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
     setActivePinia(createPinia())
     mocks.load.mockReset().mockResolvedValue({})
+    mocks.noView.mockReset()
     mocks.error.mockReset(); mocks.success.mockReset()
     store = usePluginsStore()
     store.installedPlugins = [{ pluginId: 'regex-cron', entry: 'dist/index.js', isDeclarative: true }]
@@ -84,6 +85,27 @@ describe('工作台搜索子命令到宿主加载链路', () => {
     expect(router.currentRoute.value.query).toEqual({ feature: 'cron-explainer' })
     await vi.advanceTimersByTimeAsync(500)
     expect(wrapper.emitted('search')).toBeUndefined()
+  })
+
+  it('无界面命令直接执行并提示插件返回的结果，不跳到空白的插件页面；执行失败如实提示', async () => {
+    const item = { key: 'audio-device:audio-mute-toggle', pluginId: 'audio-device', name: '静音', featureCode: 'audio-mute-toggle', mode: 'no-view', isDeclarative: true, type: 'plugin-feature' }
+    store.installedPlugins = [{ pluginId: 'audio-device', entry: 'dist/index.js', isDeclarative: true }]
+    mocks.noView.mockResolvedValueOnce({ success: true, message: '默认输出设备已静音' })
+    await prepare(item)
+    expect(mocks.keys.search.Enter()).toBe(true)
+    await flushPromises()
+    expect(mocks.noView).toHaveBeenCalledWith('audio-device', { featureCode: 'audio-mute-toggle', query: expect.any(String) })
+    expect(mocks.success).toHaveBeenCalledWith('默认输出设备已静音')
+    expect(router.currentRoute.value.name).toBe('my')
+    expect(mocks.load).not.toHaveBeenCalled()
+
+    mocks.noView.mockRejectedValueOnce(new Error('此设备不支持软件静音'))
+    await wrapper.find('input').trigger('focus')
+    await wrapper.find('input').setValue('mute')
+    expect(mocks.keys.search.Enter()).toBe(true)
+    await flushPromises()
+    expect(mocks.error).toHaveBeenCalledWith('此设备不支持软件静音')
+    expect(router.currentRoute.value.name).toBe('my')
   })
 
   it('搜索候选打开时，后挂载的市场页面不能抢走 Enter', async () => {
@@ -119,8 +141,9 @@ describe('工作台搜索子命令到宿主加载链路', () => {
     window.__ztoolsOpenLauncherDeclarative = vi.fn().mockResolvedValue({ success: true })
     await store.openPlugin('regex-cron', { featureCode: 'regex-tester' })
     expect(window.__ztoolsOpenLauncherDeclarative).toHaveBeenCalledWith('regex-cron', { featureCode: 'regex-tester' })
-    await store.openPlugin('dictionary')
-    expect(window.__ztoolsOpenLauncherDeclarative).toHaveBeenCalledWith('translator', { featureCode: 'translate-dict' })
+    // 旧的单位换算插件已合并进内置计算器：打开旧 id 直接进入计算器的单位换算子功能
+    await store.openPlugin('unit-converter')
+    expect(window.__ztoolsOpenLauncherDeclarative).toHaveBeenCalledWith('calculator', { featureCode: 'calc-unit' })
     expect(mocks.load).not.toHaveBeenCalled()
   })
 
@@ -194,5 +217,35 @@ describe('工作台搜索子命令到宿主加载链路', () => {
     await flushPromises()
     expect(mocks.error).toHaveBeenCalledWith('文件打开接口不可用')
     expect(mocks.load).not.toHaveBeenCalled()
+  })
+
+  it('输入只更新下拉候选，不会自己跳到插件市场；最后一条固定是「在插件市场搜索」，选它才跳', async () => {
+    await prepare()
+    await vi.advanceTimersByTimeAsync(1000)
+    expect(wrapper.emitted('search')).toBeUndefined()
+    expect(wrapper.text()).toContain('在插件市场搜索「cron」')
+    expect(wrapper.find('.is-active').text()).toContain('Cron 计算器')
+
+    expect(mocks.keys.search.ArrowUp()).toBe(true)
+    await flushPromises()
+    expect(wrapper.find('.is-active').text()).toContain('在插件市场搜索')
+    expect(mocks.keys.search.Enter()).toBe(true)
+    await flushPromises()
+    expect(wrapper.emitted('search')).toEqual([['cron']])
+    expect(mocks.load).not.toHaveBeenCalled()
+  })
+
+  it('本地没有任何匹配时下拉只剩「在插件市场搜索」，按 Enter 就去插件市场', async () => {
+    candidates.value = []
+    filteredCandidates.value = []
+    wrapper = mount(SearchBar, { global: { plugins: [router], stubs: {
+      RcSquircle: true, ShortcutKeys: true,
+      'a-input': { props: ['value'], emits: ['update:value', 'focus'], template: '<input :value="value" @input="$emit(\'update:value\', $event.target.value)" @focus="$emit(\'focus\')" />' }
+    } } })
+    await wrapper.find('input').trigger('focus')
+    await wrapper.find('input').setValue('没有这个插件')
+    expect(wrapper.find('.is-active').text()).toContain('在插件市场搜索「没有这个插件」')
+    expect(mocks.keys.search.Enter()).toBe(true)
+    expect(wrapper.emitted('search')).toEqual([['没有这个插件']])
   })
 })

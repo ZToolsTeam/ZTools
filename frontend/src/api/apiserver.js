@@ -31,6 +31,8 @@ export {
   setHotkey,
   getMinimizeToTray,
   setMinimizeToTray,
+  getShowTrayIcon,
+  setShowTrayIcon,
   getCloseConfirm,
   setCloseConfirm,
   downloadAppUpdate,

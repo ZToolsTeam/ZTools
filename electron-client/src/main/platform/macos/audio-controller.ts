@@ -54,11 +54,11 @@ export function parseAudioDevice(value: unknown): SystemAudioDevice {
 }
 export class MacAudioController implements AudioController {
   #changing = false
-  constructor(private readonly executable: string, private readonly platform: NodeJS.Platform = process.platform, private readonly runner: AudioRunner = execute) {
-    if (!path.isAbsolute(executable)) throw new Error('音频组件路径必须为绝对路径')
-  }
+  // 路径在真正调用时再校验：SystemService 构造时就会创建本对象，构造期抛错会让与音频无关的系统能力全部不可用
+  constructor(private readonly executable: string, private readonly platform: NodeJS.Platform = process.platform, private readonly runner: AudioRunner = execute) {}
   async #run(request: AudioRequest): Promise<Record<string, unknown>> {
     if (this.platform !== 'darwin') throw new ZToolsError(errorCodes.notSupported, '当前平台尚未接入此音频控制接口')
+    if (!path.isAbsolute(this.executable)) throw new ZToolsError(errorCodes.notSupported, '本地音频组件路径无效，请重新安装客户端')
     let stat: fs.Stats
     try { stat = fs.lstatSync(this.executable) }
     catch { throw new ZToolsError(errorCodes.notSupported, '本地音频组件未构建，请构建原生组件后重试') }

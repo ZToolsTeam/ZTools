@@ -10,6 +10,8 @@ export function resetHomeLayoutCache() {
 </script>
 
 <script setup>
+import { SpinnerIcon } from '@/utils/appIcons'
+import { confirmDialog } from '@/utils/confirmDialog'
 import { ref, computed, nextTick, onMounted, onUnmounted, watch } from 'vue'
 import ShortcutKeys from '@/components/base/ShortcutKeys.vue'
 import { usePluginsStore } from '@/stores/plugins'
@@ -21,13 +23,13 @@ import { useUIStore } from '@/stores/ui'
 import PluginCard3D from '@/components/PluginCard3D.vue'
 import PluginTile from '@/components/PluginTile.vue'
 import BrandMark from '@/components/BrandMark.vue'
-import { RcSegmented, RcSquircle } from '@/components/base'
-import { resolvePluginGlyph } from '@/utils/brandIcons'
+import { RcBannerLink, RcButton, RcEmpty, RcLoading, RcSegmented, RcSquircle } from '@/components/base'
+import { resolveKeywordGlyph, resolvePluginGlyph } from '@/utils/brandIcons'
 import { formatRelativeTime } from '@/utils/relativeTime'
 import { buildLaunchHotkeyMap } from '@/utils/launchHotkeyTargets'
 import { getPluginFeatureHotkeyItemByTrigger } from '@/utils/pluginFeatureHotkeys'
-import { Empty, Button, Modal, Spin } from 'ant-design-vue'
-import { RocketOutlined, AppstoreOutlined } from '@ant-design/icons-vue'
+import { Button } from 'ant-design-vue'
+import { LayoutGridIcon, RocketIcon, StarIcon } from '@lucide/vue'
 import {
   getDownloadSign,
   installPluginNative,
@@ -677,7 +679,7 @@ function handleUninstallPlugin(pluginId) {
     toastError('内置插件随客户端提供，不能卸载')
     return
   }
-  Modal.confirm({
+  confirmDialog({
     title: '确认卸载',
     content: '确定要卸载此插件吗？',
     okText: '卸载',
@@ -1051,7 +1053,7 @@ onUnmounted(() => {
   <div class="my-page">
     <!-- 加载状态 -->
     <div v-if="loading" class="loading-container">
-      <Spin size="large" tip="加载中..." />
+      <RcLoading />
     </div>
 
     <!-- 内容区域（加载完成后显示） -->
@@ -1060,7 +1062,7 @@ onUnmounted(() => {
       <section v-if="isNewUser" class="welcome-section">
         <div class="welcome-card">
           <div class="welcome-icon">
-            <RocketOutlined style="font-size: 48px; color: var(--zt-primary)" />
+            <RocketIcon style="font-size: 48px; color: var(--rc-accent)" />
           </div>
           <h2 class="welcome-title">欢迎使用 ZTools</h2>
           <p class="welcome-desc">
@@ -1069,7 +1071,7 @@ onUnmounted(() => {
           </p>
           <div class="welcome-actions">
             <Button type="primary" size="large" @click="goToMarket">
-              <AppstoreOutlined /> 浏览插件市场
+              <LayoutGridIcon /> 浏览插件市场
             </Button>
           </div>
         </div>
@@ -1083,6 +1085,7 @@ onUnmounted(() => {
         <div class="section-header">
           <RcSegmented
             v-model="activeTab"
+            aria-label="我的插件"
             :options="[
               { label: '已安装', value: 'plugins', count: installedCount },
               { label: '收藏', value: 'favorites', count: favoritesCount }
@@ -1101,16 +1104,15 @@ onUnmounted(() => {
         </div>
 
         <!-- 空状态 -->
-        <Empty
+        <RcEmpty
           v-if="displayedPlugins.length === 0"
-          :image="Empty.PRESENTED_IMAGE_SIMPLE"
-          :description="activeTab === 'plugins' ? '暂无已安装插件' : '暂无收藏'"
-          style="margin: 40px 0"
+          :icon="activeTab === 'plugins' ? LayoutGridIcon : StarIcon"
+          :title="activeTab === 'plugins' ? '暂无已安装插件' : '还没有收藏的插件'"
         >
-          <template #extra>
-            <Button type="primary" @click="goToMarket">浏览插件市场</Button>
+          <template #action>
+            <RcButton variant="secondary" size="md" @click="goToMarket">浏览插件市场</RcButton>
           </template>
-        </Empty>
+        </RcEmpty>
 
         <!-- 插件列表（统一卡片样式） -->
         <div v-else :ref="bindGridEl" class="plugin-tile-grid">
@@ -1171,8 +1173,8 @@ onUnmounted(() => {
           >
             <RcSquircle
               :glyph="resolvePluginGlyph(plugin)"
+              :fallback-glyph="resolveKeywordGlyph(plugin.name)"
               :src="plugin.localIconPath || (String(plugin.icon || '').startsWith('http') ? plugin.icon : '')"
-              icon="fa-cube"
               :size="30"
             />
             <span class="recent-text">
@@ -1210,14 +1212,16 @@ onUnmounted(() => {
       </section>
 
       <!-- 再拼一块：去插件市场 -->
-      <button v-if="!isNewUser" type="button" class="market-banner" @click="goToMarket">
-        <BrandMark :size="26" />
-        <span class="market-banner-text">
-          <span class="market-banner-title">再拼一块</span>
-          <span class="market-banner-desc">插件市场里的插件都经过官方审核，源码公开，免费安装</span>
-        </span>
-        <span class="market-banner-link">去插件市场 →</span>
-      </button>
+      <RcBannerLink
+        v-if="!isNewUser"
+        class="market-banner"
+        title="再拼一块"
+        description="插件市场里的插件都经过官方审核，源码公开，免费安装"
+        link-text="去插件市场"
+        @click="goToMarket"
+      >
+        <template #leading><BrandMark :size="26" /></template>
+      </RcBannerLink>
 
       <!-- 右键菜单 -->
       <div
@@ -1273,7 +1277,7 @@ onUnmounted(() => {
 
       <!-- 同步状态 -->
       <div v-if="syncing" class="sync-indicator">
-        <Spin size="small" />
+        <SpinnerIcon aria-hidden="true" />
         <span>同步中...</span>
       </div>
     </template>
@@ -1295,6 +1299,7 @@ onUnmounted(() => {
   min-height: 400px;
 }
 
+
 /* 欢迎引导卡片 */
 .welcome-section {
   margin-bottom: 40px;
@@ -1303,10 +1308,10 @@ onUnmounted(() => {
 .welcome-card {
   background: linear-gradient(
     135deg,
-    var(--zt-bg-elevated) 0%,
-    var(--zt-bg-secondary) 100%
+    var(--rc-surface) 0%,
+    var(--rc-canvas) 100%
   );
-  border: 1px solid var(--zt-border);
+  border: 1px solid var(--rc-border);
   border-radius: 16px;
   padding: 32px 24px;
   text-align: center;
@@ -1320,12 +1325,12 @@ onUnmounted(() => {
   font-size: 24px;
   font-weight: 600;
   margin-bottom: 12px;
-  color: var(--zt-text);
+  color: var(--rc-text-primary);
 }
 
 .welcome-desc {
   font-size: 15px;
-  color: var(--zt-text-secondary);
+  color: var(--rc-text-secondary);
   margin-bottom: 24px;
   line-height: 1.6;
 }
@@ -1365,29 +1370,8 @@ onUnmounted(() => {
   border: 1px solid var(--rc-border);
 }
 
-.tab-btn {
-  padding: 4px 12px;
-  border: none;
-  background: transparent;
-  border-radius: 6px;
-  cursor: pointer;
-  font-size: 12px;
-  font-weight: 500;
-  color: var(--rc-text-secondary);
-  transition: all 0.15s ease;
-  user-select: none;
-}
 
-.tab-btn:hover {
-  color: var(--rc-text-primary);
-}
 
-.tab-btn.active {
-  background: var(--rc-surface);
-  color: var(--rc-text-primary);
-  font-weight: 600;
-  box-shadow: var(--rc-shadow-sm);
-}
 
 /* 「常用」紧凑磁贴网格（设计稿：minmax(170px, 1fr)，间距 8px） */
 .plugin-tile-grid {
@@ -1470,54 +1454,21 @@ onUnmounted(() => {
   transition: opacity 0.15s ease;
 }
 
-.recent-row:hover .recent-open,
+/* 「打开 ↵」只跟随键盘焦点出现；鼠标悬停时回车打开的是网格里聚焦的卡片，这里不能同时提示 */
 .recent-row:focus-visible .recent-open {
   opacity: 1;
 }
 
-.market-banner {
-  width: 100%;
-  display: flex;
-  align-items: center;
-  gap: 14px;
-  padding: 14px 18px;
-  border-radius: var(--rc-radius-lg);
-  border: 1px solid var(--rc-border-highlight);
-  background: var(--rc-surface);
-  font: inherit;
-  text-align: left;
-  cursor: pointer;
-  transition: border-color 0.15s ease;
+.recent-row:focus-visible {
+  outline: none;
+  background: var(--rc-surface-active);
 }
 
-.market-banner:hover {
-  border-color: var(--rc-accent);
-}
 
-.market-banner-text {
-  flex: 1;
-  min-width: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-}
 
-.market-banner-title {
-  font-size: 13px;
-  font-weight: 500;
-  color: var(--rc-text-primary);
-}
 
-.market-banner-desc {
-  font-size: 12px;
-  color: var(--rc-text-muted);
-}
 
-.market-banner-link {
-  flex-shrink: 0;
-  font-size: 13px;
-  color: var(--rc-accent-text);
-}
+
 
 /* 推荐卡片网格 */
 .plugin-grid-3d {
@@ -1596,7 +1547,7 @@ onUnmounted(() => {
 }
 
 .menu-item:hover {
-  background-color: var(--zt-bg-hover);
+  background-color: var(--rc-surface-hover);
 }
 
 .menu-item.danger {
@@ -1609,7 +1560,7 @@ onUnmounted(() => {
 
 .menu-divider {
   height: 1px;
-  background-color: var(--zt-border);
+  background-color: var(--rc-border);
   margin: 4px 0;
 }
 
@@ -1622,11 +1573,11 @@ onUnmounted(() => {
   align-items: center;
   gap: 8px;
   padding: 12px 16px;
-  background: var(--zt-bg-elevated);
+  background: var(--rc-surface);
   border-radius: 8px;
   box-shadow: 0 4px 16px rgba(0, 0, 0, 0.15);
   font-size: 14px;
-  color: var(--zt-text-secondary);
+  color: var(--rc-text-secondary);
 }
 
 .is-card-focused {

@@ -40,17 +40,13 @@ function fakeSystem(commands: Record<string, CommandResult | CommandResult[]>, p
 /** 预设 PowerShell 输出 / 失败 */
 const psOut = (stdout: string) => async () => stdout
 const psFail = (exitCode: number, stderr = '') => async (): Promise<string> => { throw new PowerShellError(exitCode, stderr) }
-async function asWindows<T>(work: () => Promise<T>): Promise<T> {
-  const original = Object.getOwnPropertyDescriptor(process, 'platform')!
-  Object.defineProperty(process, 'platform', { ...original, value: 'win32' })
-  try { return await work() } finally { Object.defineProperty(process, 'platform', original) }
-}
+const asWindows = <T>(work: () => Promise<T>) => asPlatform('win32', work)
 async function withTempFile<T>(name: string, work: (file: string, dir: string) => Promise<T>): Promise<T> {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'ztools-legacy-system-'))
   try { const file = path.join(dir, name); await fs.writeFile(file, 'x'); return await work(file, dir) } finally { await fs.rm(dir, { recursive: true, force: true }) }
 }
 
-test('文件解锁：占用进程只来自 lsof 输出（非 Windows），调用方传入的模拟进程被忽略', async () => {
+test('文件解锁：占用进程只来自 lsof 输出（非 Windows），调用方传入的模拟进程被忽略', async () => asPlatform('darwin', async () => {
   await withTempFile('locked.docx', async (file) => {
     const lsof = ['p501', 'cWINWORD', `n${file}`, 'p4', 'cSystem', `n${file}`, `p${process.pid}`, 'cztools', 'pabc', ''].join('\n')
     const sys = fakeSystem({ lsof: ok(lsof) })
@@ -62,7 +58,7 @@ test('文件解锁：占用进程只来自 lsof 输出（非 Windows），调用
     const free = await new SystemRegistryHostPluginHandler(ctx, fakeSystem({ lsof: fail(1) }).deps).handleFileUnlock('inspect', { targetPath: file, mockProcesses: [{ pid: 999, name: 'fake.exe' }] }) as Result
     assert.equal(free.isUnlocked, true)
   })
-})
+}))
 
 test('文件解锁（Windows）：重启管理器检测超时、失败、输出畸形都如实报错，不能当成未被占用', async () => {
   await withTempFile('report.xlsx', async (file) => {
@@ -79,7 +75,7 @@ test('文件解锁（Windows）：重启管理器检测超时、失败、输出�
   })
 })
 
-test('文件解锁：权限不足来自真实结束进程的 EPERM，模拟拒绝参数无效；结束后确认退出才算成功', async () => {
+test('文件解锁：权限不足来自真实结束进程的 EPERM，模拟拒绝参数无效；结束后确认退出才算成功', async () => asPlatform('darwin', async () => {
   await withTempFile('db.sqlite', async (file) => {
     const denied = fakeSystem({ ps: ok('/usr/bin/sqlservr\n') }, [], { killProcess: () => { throw Object.assign(new Error('operation not permitted'), { code: 'EPERM' }) } })
     const deniedResult = await new SystemRegistryHostPluginHandler(ctx, denied.deps).handleFileUnlock('unlockPath', { pid: 8848, expectedName: 'sqlservr', targetPath: file }) as Result
@@ -96,9 +92,9 @@ test('文件解锁：权限不足来自真实结束进程的 EPERM，模拟拒�
     const mismatch = fakeSystem({ ps: ok('/Applications/Chrome\n') }, [], { killProcess: () => { throw new Error('不应结束') } })
     assert.equal((await new SystemRegistryHostPluginHandler(ctx, mismatch.deps).handleFileUnlock('unlockPath', { pid: 8848, expectedName: 'sqlservr' }) as Result).errorCode, 'PROCESS_IDENTITY_MISMATCH')
   })
-})
+}))
 
-test('文件解锁：结束占用后移入回收站失败时保留原文件、报告 TRASH_FAILED 且注明占用已解除；预览不结束进程也不动文件', async () => {
+test('文件解锁：结束占用后移入回收站失败时保留原文件、报告 TRASH_FAILED 且注明占用已解除；预览不结束进程也不动文件', async () => asPlatform('darwin', async () => {
   await withTempFile('budget.docx', async (file) => {
     // 非 Windows 旧入口没有回收站实现：绝不退化为永久删除
     const killed: number[] = []
@@ -131,7 +127,7 @@ test('文件解锁：结束占用后移入回收站失败时保留原文件、�
       assert.equal(badName.errorCode, 'INVALID_RENAME_TARGET')
     })
   })
-})
+}))
 
 test('启动项（Windows）：列表只来自注入的 PowerShell 扫描结果，过滤微软核心项并标记文件缺失；扫描失败如实报错', async () => {
   await withTempFile('Quark.exe', async (exe, dir) => {

@@ -301,8 +301,8 @@ async function windowsService(t: TestContext, locateGit: () => Promise<string>) 
   return { root, launched, service, call: (request: unknown) => service.handle(request, caller, signal()) }
 }
 
-test('Windows 平台的主机与代理服务：读取真实 Git/NPM 初始状态，终端请求走 Windows 启动器参数', { skip: !mac }, async t => {
-  const f = await windowsService(t, async () => '/usr/bin/git')
+test('Windows 平台的主机与代理服务：读取真实 Git/NPM 初始状态，终端请求走 Windows 启动器参数', { skip: !['darwin', 'win32'].includes(process.platform) }, async t => {
+  const f = await windowsService(t, () => process.platform === 'win32' ? findWindowsGit(process.env) : Promise.resolve('/usr/bin/git'))
   const snapshot = await f.call({ action: 'scan' }) as Snapshot
   assert.deepEqual(snapshot.ssh.hosts.map(host => host.alias), ['fixture'])
   for (const tool of ['git', 'npm'] as const) {

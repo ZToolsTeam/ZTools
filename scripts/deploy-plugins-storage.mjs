@@ -161,15 +161,19 @@ function getMimeType(filePath) {
   }
 }
 
+/** 发布脚本产出的截图路径：screenshots/<版本>/<两位序号>-<8 位十六进制内容哈希>.png（见 build-plugins-release.mjs） */
+const SCREENSHOT_OBJECT_PATTERN = /(^|\/)screenshots\/[0-9a-z.+-]+\/\d{2}-[0-9a-f]{8}\.png$/
+
 /**
  * 根据文件类型固化静态分发缓存策略
  * 1. 带版本号的发布包 (*.zip): 强缓存 30 天 (2592000s) + immutable
  * 2. 插件目录 catalog.json / plugins.json: 短缓存 5 分钟 (300s)，确保更新与下架尽快生效
- * 3. 其它静态资源 (如 icon 图标): 默认 7 天
+ * 3. 插件截图 (<作者>/<id>/screenshots/<版本>/<序号>-<内容哈希>.png): 地址带版本号与内容哈希，与安装包同样强缓存 30 天 + immutable
+ * 4. 其它静态资源 (如 icon 图标): 默认 7 天
  */
 export function getCacheControl(relPath) {
   const normalized = relPath.replace(/\\/g, '/').toLowerCase()
-  if (normalized.endsWith('.zip')) {
+  if (normalized.endsWith('.zip') || SCREENSHOT_OBJECT_PATTERN.test(normalized)) {
     return 'public, max-age=2592000, immutable'
   }
   if (normalized.endsWith('plugins.json') || normalized.endsWith('.json')) {

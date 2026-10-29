@@ -332,13 +332,13 @@ describe('Store Catalog & Plugin Item Validator (Beyond Happy Path)', () => {
     const base = { name: '测试', version: '1.0.0', description: '测试', entry: 'dist/index.js', icon: 'icon.svg', permissions: [], targets: buildPlatformTargets(['windows']), nativeComponents: [] }
     const authorErrors = (manifest) => validatePluginManifest(manifest).errors.filter((e) => e.includes('官方名称'))
 
-    it('名单来自 official-ids.json：51 个 ID、无重复、格式合法', () => {
+    it('名单来自 official-ids.json：107 个 ID、无重复、格式合法', () => {
       const raw = JSON.parse(fs.readFileSync(new URL('../official-ids.json', import.meta.url), 'utf8'))
-      assert.equal(raw.ids.length, 51)
+      assert.equal(raw.ids.length, 107)
       assert.equal(new Set(raw.ids).size, raw.ids.length)
       assert.deepEqual([...raw.ids].sort(), raw.ids, '名单按字母排序，方便审核 diff')
       for (const id of raw.ids) assert.match(id, /^[a-z][a-z0-9-]{1,63}$/, id)
-      assert.equal(OFFICIAL_PLUGIN_IDS.size, 51)
+      assert.equal(OFFICIAL_PLUGIN_IDS.size, 107)
     })
 
     it('官方作者名识别：大小写、空格、连字符变体都算；ZTools Community、普通名字不算', () => {
@@ -357,8 +357,8 @@ describe('Store Catalog & Plugin Item Validator (Beyond Happy Path)', () => {
       assert.equal(authorErrors({ ...base, id: 'my-tool', author: 'ZTools Community' }).length, 0)
       const listed = [...OFFICIAL_PLUGIN_IDS][0]
       assert.equal(authorErrors({ ...base, id: listed, author: 'ZTools Team' }).length, 0)
-      assert.equal(authorErrors({ ...base, id: 'hosts', author: 'ZTools Team', revoked: true, revokedReason: '已下架' }).length, 0)
-      assert.equal(authorErrors({ ...base, id: 'hosts', author: 'ZTools Team', revoked: false }).length, 1, 'revoked 必须是 true 才豁免')
+      assert.equal(authorErrors({ ...base, id: 'retired-unlisted', author: 'ZTools Team', revoked: true, revokedReason: '已下架' }).length, 0)
+      assert.equal(authorErrors({ ...base, id: 'retired-unlisted', author: 'ZTools Team', revoked: false }).length, 1, 'revoked 必须是 true 才豁免')
     })
   })
 })

@@ -43,7 +43,7 @@ export class MediaMetadataService {
       if (!outputMatchesType(p.outputPath!, summary.type)) throw new Error('请使用与原照片一致的扩展名')
       const cleaned = await cleanMediaCopy(temporary, p.mode!, tags, signal)
       signal.throwIfAborted()
-      const saved = await this.files.writeFile({ path: p.outputPath!, content: cleaned.toString('base64'), encoding: 'base64', overwrite: false }, caller, signal)
+      const saved = await this.files.writeFile({ path: p.outputPath!, content: cleaned.toString('base64'), encoding: 'base64', overwrite: false }, caller, signal, { replaceConfirmed: true, protectedPath: p.path })
       if (saved.success !== true || saved.size !== cleaned.length) throw new ZToolsError(errorCodes.fileWriteOutcomeUnknown, '副本保存结果未确认，请检查目标文件')
       return { success: true, status: 'committed', name: path.basename(p.outputPath!), size: cleaned.length }
     } catch (failure) {

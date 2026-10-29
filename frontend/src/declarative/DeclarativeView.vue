@@ -6,29 +6,15 @@
     class="declarative-mica-shell flex flex-col h-full w-full rounded-2xl overflow-hidden focus:outline-none relative select-none"
     @keydown="handleGlobalKeyDown"
   >
-    <!-- 顶部通用导航头 (显示 navigationTitle 与 返回按钮) -->
+    <!-- 顶部通用导航头：只显示 navigationTitle；返回入口只有底栏「返回 Esc」一个（同一功能只出现一次） -->
     <div
       v-if="hasHeader"
       class="px-4 py-2.5 border-b border-[var(--rc-border)] flex items-center justify-between bg-[var(--rc-surface-subtle)]"
     >
       <div class="flex items-center gap-2">
-        <button
-          v-if="canGoBack"
-          class="p-1 rounded-lg text-[var(--rc-text-muted)] hover:text-[var(--rc-text-primary)] hover:bg-[var(--rc-surface-hover)] transition-colors flex items-center gap-1 text-xs"
-          title="后退 (Esc)"
-          @click="handleBack"
-        >
-          <DeclarativeIcon icon="arrow-left" :size="14" />
-          <span>返回</span>
-        </button>
         <span class="font-medium text-sm text-[var(--rc-text-primary)]">
           {{ navigationTitle }}
         </span>
-      </div>
-
-      <div class="text-xs text-[var(--rc-text-muted)] flex items-center gap-1.5">
-        <span class="inline-block w-2 h-2 rounded-full bg-[var(--rc-success)]"></span>
-        <span>声明式运行时</span>
       </div>
     </div>
 
@@ -47,6 +33,7 @@
         @trigger-action="executeAction"
         @action-panel-change="onActionPanelChange"
         @open-action-panel="openActionPanel"
+        @action-error="onActionError"
       />
 
       <!-- 2. Detail 视图 -->
@@ -67,96 +54,113 @@
         ref="formRendererRef"
         :descriptor="currentDescriptor"
         :actions="activeActions"
-        :canCancel="canGoBack"
         @submit="handleFormSubmit"
-        @cancel="handleBack"
         @trigger-action="executeAction"
       />
 
       <!-- 空状态 -->
-      <div
+      <DeclEmptyState
         v-else
-        class="flex flex-col items-center justify-center h-full text-[var(--rc-text-muted)] text-sm gap-2"
-      >
-        <DeclarativeIcon icon="document" :size="32" class="text-[var(--rc-text-muted)]" />
-        <span>未识别的声明式视图或视图已卸载</span>
-      </div>
+        icon="document"
+        title="没有可显示的内容"
+        description="插件没有返回可识别的视图，或视图已关闭。"
+      />
     </div>
 
     <!-- 底部 Fluent / Raycast 风格三段式快捷动作栏 -->
     <div class="px-4 py-2 border-t border-[var(--rc-border)] flex items-center justify-between gap-3 bg-[var(--rc-surface-subtle)] text-xs text-[var(--rc-text-muted)]">
       <!-- 左侧：返回导航与分栏切换 -->
       <div class="flex items-center gap-3 min-w-0">
-        <div
+        <button
           v-if="canGoBack"
-          class="flex items-center gap-1 text-[var(--rc-text-muted)] cursor-pointer hover:text-[var(--rc-text-primary)] transition-colors flex-shrink-0"
-          title="后退上一级 (Esc)"
+          type="button"
+          class="decl-foot-link"
+          title="返回上一级 (Esc)"
+          data-decl-back
           @click="handleBack"
         >
-          <span>后退</span>
+          <span>返回</span>
           <ShortcutKeys combo="Escape" />
-        </div>
-        <div
+        </button>
+        <button
           v-else-if="!isPopout"
-          class="flex items-center gap-1 text-[var(--rc-text-muted)] cursor-pointer hover:text-[var(--rc-text-primary)] transition-colors flex-shrink-0"
+          type="button"
+          class="decl-foot-link"
           title="返回工作台 (Esc)"
+          data-decl-exit
           @click="emit('exit')"
         >
           <span>返回工作台</span>
           <ShortcutKeys combo="Escape" />
-        </div>
-        <div
+        </button>
+        <span
           v-else
-          class="flex items-center gap-1.5 text-[var(--rc-success)] font-mono text-[11px] flex-shrink-0"
-          title="独立常驻模式下按 Esc 仅清空搜索框，防止误触关闭盯盘窗口"
+          class="flex items-center gap-1 text-[11px] text-[var(--rc-text-muted)] flex-shrink-0"
+          title="独立窗口里按 Esc 只清空搜索框，不会关闭窗口"
+          data-decl-popout-hint
         >
-          <span class="inline-block w-1.5 h-1.5 rounded-full bg-[var(--rc-success)]"></span>
-          <span>独立常驻防误关 (Esc 仅清过滤)</span>
-        </div>
+          <span>独立窗口</span>
+          <span class="text-[var(--rc-text-faint)]">·</span>
+          <ShortcutKeys combo="Escape" />
+          <span>只清空搜索</span>
+        </span>
 
-        <div
+        <button
           v-if="toggleDetailAction"
-          class="flex items-center gap-1.5 cursor-pointer hover:text-[var(--rc-text-primary)] transition-colors flex-shrink-0"
-          :title="cleanActionTitle(toggleDetailAction.props?.title)"
+          type="button"
+          class="decl-foot-link"
+          :title="cleanUiText(toggleDetailAction.props?.title)"
+          data-decl-toggle-detail
           @click="executeAction(toggleDetailAction)"
         >
-          <span class="text-[var(--rc-text-secondary)]">{{ cleanActionTitle(toggleDetailAction.props?.title) }}</span>
-          <ShortcutKeys combo="Ctrl+D" />
-        </div>
+          <span class="text-[var(--rc-text-secondary)]">{{ cleanUiText(toggleDetailAction.props?.title) }}</span>
+          <ShortcutKeys :combo="formatActionShortcut(toggleDetailAction)" />
+        </button>
       </div>
 
       <!-- 右侧：对齐 Raycast「主动作 (Enter) + 次动作 (Ctrl+Enter) + 动作面板 (Ctrl+K)」三段式直观按钮栏 -->
       <div class="flex items-center gap-2 flex-shrink-0">
-        <button
+        <RcButton
           v-if="primaryAction"
-          type="button"
-          class="flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-[var(--rc-accent-subtle)] hover:brightness-110 text-[var(--rc-accent-text)] border border-[var(--rc-border-highlight)] font-medium transition-all cursor-pointer"
+          :variant="isDestructiveAction(primaryAction) ? 'danger' : 'soft'"
+          size="sm"
+          class="decl-foot-btn"
+          :class="isDestructiveAction(primaryAction) ? 'is-destructive' : 'is-primary'"
+          :kbd="primaryShortcutCombo"
           :title="`执行首要动作 (${primaryShortcutCombo})`"
+          data-decl-primary
           @click="executeAction(primaryAction)"
         >
-          <span class="truncate max-w-[180px]">{{ cleanActionTitle(primaryAction.props?.title) }}</span>
-          <ShortcutKeys :combo="primaryShortcutCombo" />
-        </button>
+          <span class="truncate max-w-[180px]">{{ cleanUiText(primaryAction.props?.title) }}</span>
+        </RcButton>
 
-        <button
+        <RcButton
           v-if="secondaryAction"
-          type="button"
-          class="flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-[var(--rc-surface-hover)] hover:bg-[var(--rc-surface-active)] text-[var(--rc-text-primary)] border border-[var(--rc-border)] transition-all cursor-pointer"
+          :variant="isDestructiveAction(secondaryAction) ? 'danger' : 'secondary'"
+          size="sm"
+          class="decl-foot-btn"
+          :class="isDestructiveAction(secondaryAction) ? 'is-destructive' : 'is-neutral'"
+          :kbd="secondaryShortcutCombo"
           :title="`执行次要动作 (${secondaryShortcutCombo})`"
+          data-decl-secondary
           @click="executeAction(secondaryAction)"
         >
-          <span class="truncate max-w-[160px]">{{ cleanActionTitle(secondaryAction.props?.title) }}</span>
-          <ShortcutKeys :combo="secondaryShortcutCombo" />
-        </button>
+          <span class="truncate max-w-[160px]">{{ cleanUiText(secondaryAction.props?.title) }}</span>
+        </RcButton>
 
-        <button
-          type="button"
-          class="flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-[var(--rc-surface-hover)] hover:bg-[var(--rc-surface-active)] text-[var(--rc-text-secondary)] border border-[var(--rc-border)] transition-colors cursor-pointer"
+        <!-- 只有还有收起的动作时才显示；数量只计没在底栏露出的动作 -->
+        <RcButton
+          v-if="collapsedActionCount > 0"
+          variant="secondary"
+          size="sm"
+          class="decl-foot-btn is-neutral"
+          kbd="Ctrl+K"
+          title="动作面板 (Ctrl+K)"
+          data-decl-action-panel
           @click="toggleActionPanel"
         >
-          <span>动作面板{{ activeActions.length > 0 ? ` (${activeActions.length})` : '' }}</span>
-          <ShortcutKeys combo="Ctrl+K" />
-        </button>
+          <span>动作面板 ({{ collapsedActionCount }})</span>
+        </RcButton>
       </div>
     </div>
 
@@ -165,6 +169,7 @@
       :visible="actionPanelVisible"
       :actions="activeActions"
       :target-title="panelTargetTitle"
+      :view-type="currentDescriptor?.type || 'List'"
       placement="corner"
       @close="closeActionPanel"
       @trigger="executeAction"
@@ -178,15 +183,17 @@
 <script setup>
 import { ref, computed, watch, nextTick, onUnmounted } from "vue";
 import ShortcutKeys from '@/components/base/ShortcutKeys.vue'
+import { RcButton } from '@/components/base'
 
 import "./style/declarative-fluent.css";
-import DeclarativeIcon from "./components/DeclarativeIcon.vue";
+import DeclEmptyState from "./components/DeclEmptyState.vue";
 import ListRenderer from "./components/ListRenderer.vue";
 import DetailRenderer from "./components/DetailRenderer.vue";
 import FormRenderer from "./components/FormRenderer.vue";
 import ActionPanelModal from "./components/ActionPanelModal.vue";
 import ToastOverlay from "./components/ToastOverlay.vue";
 import { getHostMethods } from "./hostMethods.js";
+import { cleanUiText, formatActionShortcut, isDestructiveAction } from "./uiText.js";
 import { useDeclarativeStack, assertClipboardText, hasOpenConfirm } from "./composables/useDeclarativeStack.js";
 import { useKeymap, registerKeyHandler, KEYMAP_SCOPES, dispatchKeyEvent, isComposingEvent } from "@/utils/keymap.js";
 import { isMacOS } from "@/utils/platform.js";
@@ -225,10 +232,15 @@ const props = defineProps({
   initialPopoutState: {
     type: Object,
     default: null
+  },
+  // 宿主页面已有标题栏（面包屑）时为 true：子页面标题通过 title-change 交给宿主显示，视图内不再叠第二条标题栏
+  hostTitleBar: {
+    type: Boolean,
+    default: false
   }
 });
 
-const emit = defineEmits(["exit", "action-executed", "native-callback"]);
+const emit = defineEmits(["exit", "action-executed", "native-callback", "title-change"]);
 
 // 元素引用
 const rootRef = ref(null);
@@ -324,9 +336,22 @@ const navigationTitle = computed(() => {
   return currentDescriptor.value?.props?.navigationTitle || "";
 });
 
-const hasHeader = computed(() => {
-  return canGoBack.value || (!props.hideRootTitle && Boolean(navigationTitle.value));
+// 当前应显示的页面标题：没有标题时为空；根页面受 hideRootTitle 控制，子页面不受影响
+const visibleTitle = computed(() => {
+  if (!navigationTitle.value) return "";
+  return canGoBack.value || !props.hideRootTitle ? navigationTitle.value : "";
 });
+
+// 顶部不放返回按钮；宿主有自己的标题栏时标题交给宿主，视图内不再显示第二条标题栏
+const hasHeader = computed(() => Boolean(visibleTitle.value) && !props.hostTitleBar);
+
+watch(
+  visibleTitle,
+  (title) => {
+    if (props.hostTitleBar) emit("title-change", title);
+  },
+  { immediate: true }
+);
 
 // 辅助函数：深度查找 List 描述符里的第一个 List.Item
 function findFirstItem(desc) {
@@ -409,9 +434,12 @@ const activeActions = computed(() => {
   const flat = [];
   const submenuFlat = [];
   const seen = new Set();
+  // 条目自己的动作已有同类型同标题的，合并进来的列表级动作不再重复出现
+  let itemActionKeys = null;
   function add(list, node, sectionTitle, fromSubmenu) {
     const dedupeKey = `${node.type}\u0000${node.props?.title ?? ""}\u0000${sectionTitle}`;
     if (seen.has(dedupeKey)) return;
+    if (itemActionKeys?.has(`${node.type}\u0000${node.props?.title ?? ""}`)) return;
     seen.add(dedupeKey);
     list.push(fromSubmenu ? { ...node, _sectionTitle: sectionTitle, _fromSubmenu: true } : { ...node, _sectionTitle: sectionTitle });
   }
@@ -440,18 +468,11 @@ const activeActions = computed(() => {
 
   extract(panel);
   if (fallbackPanel) {
+    itemActionKeys = new Set([...flat, ...submenuFlat].map((node) => `${node.type}\u0000${node.props?.title ?? ""}`));
     extract(fallbackPanel, "全局操作");
   }
   return [...flat, ...submenuFlat];
 });
-
-function cleanActionTitle(title) {
-  if (!title) return "";
-  return String(title)
-    .replace(/[\u{1F300}-\u{1FAFF}\u{2600}-\u{27BF}\u{FE0F}]/gu, "")
-    .replace(/\s+/g, " ")
-    .trim();
-}
 
 const isFormView = computed(() => currentDescriptor.value?.type === "Form");
 
@@ -471,31 +492,6 @@ const secondaryAction = computed(() => {
 
 const primaryShortcutCombo = computed(() => (isFormView.value ? "Ctrl+Enter" : "Enter"));
 
-const MODIFIER_COMBO = {
-  cmd: "Ctrl",
-  command: "Ctrl",
-  meta: "Ctrl",
-  ctrl: "Ctrl",
-  control: "Ctrl",
-  opt: "Alt",
-  option: "Alt",
-  alt: "Alt",
-  shift: "Shift"
-};
-
-function formatActionShortcut(action) {
-  const shortcut = action?.props?.shortcut;
-  if (!shortcut || typeof shortcut.key !== "string" || !shortcut.key.trim()) return "";
-  const modifiers = Array.isArray(shortcut.modifiers) ? shortcut.modifiers : [];
-  const parts = [];
-  for (const mod of modifiers) {
-    const name = MODIFIER_COMBO[String(mod).toLowerCase()];
-    if (name && !parts.includes(name)) parts.push(name);
-  }
-  parts.push(shortcut.key.trim());
-  return parts.join("+");
-}
-
 const secondaryShortcutCombo = computed(() => {
   if (!secondaryAction.value) return "Ctrl+Enter";
   return formatActionShortcut(secondaryAction.value) || "Ctrl+Enter";
@@ -507,18 +503,26 @@ const panelTargetTitle = computed(() => {
   return target?.props?.title ? String(target.props.title) : "";
 });
 
-// 详情切换 Action (例如 Ctrl+D 切换分栏预览)
+// 详情分栏切换动作：只在列表视图、且插件为它声明了快捷键时放到底栏左侧，显示的就是它真实的快捷键；
+// 按键由通用的动作快捷键处理（handleActionShortcut）负责，不再写死 Ctrl+D
+const DETAIL_TOGGLE_TITLE = /详情预览分栏|预览分栏|详情分栏|Toggle Details?/i;
 const toggleDetailAction = computed(() => {
-  return activeActions.value.find((act) => {
-    const title = act.props?.title || "";
-    const key = act.props?.shortcut?.key?.toLowerCase();
-    return (
-      key === "d" ||
-      title.includes("详情预览分栏") ||
-      title.includes("Toggle Details") ||
-      title.includes("预览分栏")
-    );
-  }) || null;
+  if (currentDescriptor.value?.type !== "List") return null;
+  return (
+    directActions.value.find(
+      (act) =>
+        act !== primaryAction.value &&
+        act !== secondaryAction.value &&
+        DETAIL_TOGGLE_TITLE.test(String(act.props?.title || "")) &&
+        Boolean(formatActionShortcut(act))
+    ) || null
+  );
+});
+
+// 收起在动作面板里的动作数量：不含已在底栏露出的主 / 次动作与详情切换
+const collapsedActionCount = computed(() => {
+  const shown = new Set([primaryAction.value, secondaryAction.value, toggleDetailAction.value].filter(Boolean));
+  return activeActions.value.filter((act) => !shown.has(act)).length;
 });
 
 function onItemSelected(item) {
@@ -590,6 +594,14 @@ function handleBack() {
   }
 }
 
+function fileManagerName() {
+  return isMacOS() ? "访达" : "资源管理器";
+}
+
+function onActionError(err) {
+  showToast?.({ title: "操作失败", message: failureMessage(err), style: "FAILURE" });
+}
+
 function failureMessage(err) {
   const message = err && typeof err.message === "string" ? err.message.trim() : "";
   return message || "未知错误";
@@ -656,12 +668,14 @@ async function executeAction(action) {
       }
     } else if (type === "Action.ShowInFinder") {
       const targetPath = props?.path || props?.target;
-      if (targetPath && electronMethods?.shell_show_item_in_folder) {
+      if (targetPath) {
+        // 宿主失败会抛错，由下方 catch 如实提示；没有该能力时不能报“已定位”
+        if (!electronMethods?.shell_show_item_in_folder) throw new Error("当前客户端不支持在文件管理器中定位");
         await electronMethods.shell_show_item_in_folder({ fullPath: String(targetPath) });
       }
       props?.onShow?.(targetPath);
       if (targetPath) {
-        showToast?.({ title: "已在文件管理器中定位", message: String(targetPath), style: "SUCCESS" });
+        showToast?.({ title: `已在${fileManagerName()}中显示`, message: String(targetPath), style: "SUCCESS" });
       }
     } else if (type === "Action.Open" || type === "Action.OpenWith") {
       const targetPath = props?.target || props?.path;
@@ -797,7 +811,7 @@ function hasTextSelection(el) {
   }
 }
 
-/** 输入框里的原生编辑组合键（全选 / 复制 / 粘贴 / 剪切 / 撤销 / 重做）保留给输入框本身 */
+/** 输入框里的原生编辑组合键（全选 / 复制 / 粘贴 / 剪切 / 撤销 / 重做 / 按词或整行删除）保留给输入框本身 */
 function isNativeEditCombo(e) {
   const target = e.target;
   if (!isTextField(target) || e.altKey) return false;
@@ -806,6 +820,8 @@ function isNativeEditCombo(e) {
   if (!e.shiftKey) {
     if (keyLower === "c" || keyLower === "x") return hasTextSelection(target);
     if (keyLower === "a" || keyLower === "v" || keyLower === "z" || keyLower === "y") return hasValue;
+    // ⌘⌫ / Ctrl+Backspace 删除光标前的整行或单词，⌘⌦ / Ctrl+Delete 删除光标后的内容
+    if (keyLower === "backspace" || keyLower === "delete") return hasValue;
     return false;
   }
   // ⌘⇧Z 重做
@@ -863,14 +879,6 @@ useKeymap(KEYMAP_SCOPES.DECLARATIVE, {
     }
     if (secondaryAction.value) {
       executeAction(secondaryAction.value);
-      return true;
-    }
-    return false;
-  },
-  'Ctrl+D': () => {
-    if (actionPanelVisible.value) return false;
-    if (toggleDetailAction.value) {
-      executeAction(toggleDetailAction.value);
       return true;
     }
     return false;
@@ -1022,3 +1030,27 @@ defineExpose({
   showToast
 });
 </script>
+
+<style scoped>
+/* 底栏左侧文字入口（返回、详情切换）：button 元素，键盘可聚焦 */
+.decl-foot-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  flex-shrink: 0;
+  padding: 2px 4px;
+  margin: -2px -4px;
+  border: 0;
+  border-radius: var(--rc-radius-sm);
+  background: transparent;
+  color: var(--rc-text-muted);
+  font: inherit;
+  cursor: pointer;
+  transition: color 0.12s ease;
+}
+
+.decl-foot-link:hover {
+  color: var(--rc-text-primary);
+}
+
+</style>

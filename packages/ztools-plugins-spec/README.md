@@ -10,6 +10,7 @@ ZTools 插件清单（`plugin.json`）的 JSON Schema 与校验函数。插件�
 - 必填字段：`id`、`name`、`version`、`description`、`author`、`entry`、`icon`、`permissions`、`targets`、`nativeComponents`（纯 JS 插件写 `[]`），完整定义见 [`plugin.schema.json`](plugin.schema.json)。
 - `id` 用小写字母开头，只用小写字母、数字和短横线（构建脚本不接受下划线），并与插件目录名一致。
 - `entry`、`icon` 必须是插件目录内的相对路径，不能用绝对路径或 `..`。
+- `screenshots`（可选）最多 5 张，只接受 `screenshots/` 下的 PNG，每张不超过 1 MB，宽 640–2560、高 400–1600 像素，见 [发布规则 · 截图](https://github.com/ZToolsTeam/ZTools-extensions/blob/main/docs/publishing.md#截图)。
 - `permissions` 是申请清单：扫描器会拦下用了却没声明权限的 Node 模块、网络请求和进程调用；高危权限会被标记为需要重点人工审核。
 
 ## 使用方式
@@ -26,4 +27,4 @@ if (!result.valid) {
 }
 ```
 
-传入 `baseDir` 时还会检查 `entry` 与 `icon` 指向的文件是否存在，所以要在编译出 `dist/` 之后再校验。
+传入 `baseDir` 时还会检查 `entry` 与 `icon` 指向的文件是否存在、截图文件是否符合要求，所以要在编译出 `dist/` 之后再校验。

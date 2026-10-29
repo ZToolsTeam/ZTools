@@ -1,5 +1,6 @@
 <script setup>
-import { CloseOutlined, ExportOutlined, RightOutlined } from '@ant-design/icons-vue'
+import { RcSelect } from '@/components/base'
+import { ChevronDownIcon, ChevronRightIcon, ChevronUpIcon, XIcon } from '@lucide/vue'
 import {
   ref,
   reactive,
@@ -22,12 +23,15 @@ import {
   setHotkey,
   getMinimizeToTray,
   setMinimizeToTray,
+  getShowTrayIcon,
+  setShowTrayIcon,
   getCloseConfirm,
   setCloseConfirm
 } from '@/api/apiserver'
-import { syncGlobalWakeHotkey } from '@/utils/globalWakeHotkey'
+import { DEFAULT_GLOBAL_WAKE_HOTKEY, syncGlobalWakeHotkey } from '@/utils/globalWakeHotkey'
+import { isMacOS } from '@/utils/platform'
+import { isHostDevBuild } from '@/utils/hostDevTools'
 import { setWakePreference, windowModeState, WAKE_PREFERENCES } from '@/utils/windowMode'
-import { openDevTools } from '@/utils/internalPlugins'
 import { vSwitchKeyboard } from '@/directives/switchKeyboard'
 import ScreenPermissionPanel from '@/components/ScreenPermissionPanel.vue'
 import ShortcutKeys from '@/components/base/ShortcutKeys.vue'
@@ -62,7 +66,8 @@ const autostartStatus = ref('')
 const autostartKnown = ref(false)
 const autostartSaving = ref(false)
 const autostartDescription = computed(() => ({
-  unavailable: '无法读取登录项状态，请重新打开设置后重试',
+  unavailable: '无法读取登录项状态',
+  'dev-unsupported': '开发版不支持开机启动，安装正式版后可用',
   'requires-approval': '请在系统设置的登录项中允许 ZTools；系统批准前不会自动启动',
   'not-found': '系统未找到登录项，请重新设置并检查应用安装位置',
   'not-registered': '未开启自启动'
@@ -85,9 +90,10 @@ const pluginHotkeyMapCache = ref({})
 
 const settings = reactive({
   autostart: false,
-  hotkey: 'Ctrl+Shift+Z',
+  hotkey: DEFAULT_GLOBAL_WAKE_HOTKEY,
   wakePreference: windowModeState.wakePreference || 'dashboard',
   minimizeToTray: true,
+  showTrayIcon: true,
   closeConfirm: true,
   superPanel: {
     enabled: true,
@@ -181,24 +187,42 @@ watch(hotkeyRecording, (val) => {
   }
 })
 
+// 读取登录项状态；失败时界面显示错误与「重试」，不用重新打开设置
+const loadAutostart = async () => {
+  autostartKnown.value = false
+  // macOS 开发版（未打包）主进程不接入系统登录项，读到的只是配置里存的值，开关无效，直接禁用
+  if (isMacOS() && (await isHostDevBuild())) {
+    autostartStatus.value = 'dev-unsupported'
+    return
+  }
+  try {
+    settings.autostart = await getAutostart()
+    autostartKnown.value = true
+    await refreshAutostartStatus()
+  } catch (e) {
+    console.error('Failed to load autostart:', e)
+    autostartStatus.value = 'unavailable'
+  }
+}
+
 const loadSettings = async () => {
   try {
-    autostartKnown.value = false
+    await loadAutostart()
+    // 空串表示用户已关闭全局唤醒，按原样显示「点击设置」，不能套默认值
     try {
-      settings.autostart = await getAutostart()
-      autostartKnown.value = true
-      await refreshAutostartStatus()
-    } catch {
-      autostartStatus.value = 'unavailable'
+      settings.hotkey = await getHotkey()
+    } catch (e) {
+      console.error('Failed to load wake hotkey:', e)
+      error('读取全局唤醒快捷键失败')
     }
-    const hotkey = await getHotkey()
-    settings.hotkey = hotkey || 'Ctrl+Shift+Z'
     try {
       settings.minimizeToTray = await getMinimizeToTray()
     } catch {}
     try {
       settings.closeConfirm = await getCloseConfirm()
     } catch {}
+    // getShowTrayIcon 读取失败时返回默认值 true，不会抛错
+    settings.showTrayIcon = await getShowTrayIcon()
     try {
       settings.wakePreference = windowModeState.wakePreference || 'dashboard'
     } catch {}
@@ -232,7 +256,6 @@ const wakeOptions = [
 const builtinShortcuts = [
   { label: '聚焦搜索', combo: 'Ctrl+F' },
   { label: '动作面板', combo: 'Ctrl+K' },
-  { label: '收起 / 展开侧栏', combo: 'Ctrl+B' },
   { label: '切换到悬浮条', combo: 'Ctrl+M' },
   { label: '打开设置', combo: 'Ctrl+,' },
   { label: '返回主页', combo: 'Escape' }
@@ -281,80 +304,85 @@ const saveAutostart = async enabled => {
   }
 }
 
-const saveSettings = async () => {
-  let hotkeySyncFailure = ''
+// 全局唤醒快捷键单独保存：超级面板等其它设置保存时不能连带改写它
+const saveWakeHotkey = async () => {
+  if (!(await setHotkey(settings.hotkey))) {
+    error('全局唤醒快捷键保存失败')
+    return
+  }
+  let result
   try {
-    await setHotkey(settings.hotkey)
+    result = await syncGlobalWakeHotkey({ hotkey: settings.hotkey })
+  } catch (err) {
+    console.error('同步全局快捷键失败:', err)
+    error('快捷键注册失败: ' + (err?.message || '未知错误'))
+    return
+  }
+  if (!result.success) {
+    const reasonMessages = {
+      trigger_unavailable: '快捷键服务暂不可用',
+      trigger_list_failed: '读取已有快捷键失败',
+      trigger_register_failed: '新快捷键注册失败，已尝试恢复原注册',
+      trigger_unregister_failed: '注销快捷键失败'
+    }
+    let message = reasonMessages[result.reason] || '快捷键服务返回失败'
+    if (result.message) message += `：${result.message}`
+    if (result.rollbackFailed) message += '；恢复原快捷键也失败，请重新设置'
+    console.warn('全局唤醒快捷键同步失败:', result)
+    error(`设置已保存，但全局唤醒快捷键同步失败：${message}`)
+    return
+  }
+  success(settings.hotkey ? '全局唤醒快捷键已保存' : '已关闭全局唤醒快捷键')
+  track('settings_change', '', { type: 'wake_hotkey' })
+}
 
-    try {
-      const result = await syncGlobalWakeHotkey({ hotkey: settings.hotkey })
-      if (result.success) {
-        if (settings.hotkey) {
-          console.log('全局唤醒快捷键已注册:', settings.hotkey)
-        } else {
-          console.log('全局唤醒快捷键已注销')
-        }
-      } else {
-        const reasonMessages = {
-          trigger_unavailable: '快捷键服务暂不可用',
-          trigger_list_failed: '读取已有快捷键失败',
-          trigger_register_failed: '新快捷键注册失败，已尝试恢复原注册',
-          trigger_unregister_failed: '注销快捷键失败'
-        }
-        hotkeySyncFailure = reasonMessages[result.reason] || '快捷键服务返回失败'
-        if (result.message) hotkeySyncFailure += `：${result.message}`
-        if (result.rollbackFailed) hotkeySyncFailure += '；恢复原快捷键也失败，请重新设置'
-        console.warn('全局唤醒快捷键同步失败:', result)
-      }
-    } catch (err) {
-      console.error('同步全局快捷键失败:', err)
-      error('快捷键注册失败: ' + err.message)
-      return
+const saveSuperPanelSettings = async () => {
+  try {
+    if (!window.ztools?.config) throw new Error('配置服务不可用')
+    await window.ztools.config.set('super_panel', settings.superPanel)
+    if (window.ztools?.sys?.reloadHotkeys) {
+      await window.ztools.sys.reloadHotkeys()
     }
-    try {
-      if (window.ztools?.config) {
-        await window.ztools.config.set('super_panel', settings.superPanel)
-        if (window.ztools?.sys?.reloadHotkeys) {
-          await window.ztools.sys.reloadHotkeys()
-        }
-      }
-    } catch (e) {
-      console.error('Failed to save super panel settings:', e)
-      error('超级面板设置保存失败：' + (e?.message || '未知错误'))
-      return
-    }
-    if (hotkeySyncFailure) {
-      error(`设置已保存，但全局唤醒快捷键同步失败：${hotkeySyncFailure}`)
-    } else {
-      success('设置已保存')
-    }
-    // 埋点：设置变更
-    track('settings_change', '', { type: 'general' })
   } catch (e) {
-    console.error('Failed to save settings:', e)
-    error('保存设置失败')
+    console.error('Failed to save super panel settings:', e)
+    error('超级面板设置保存失败：' + (e?.message || '未知错误'))
+    return
   }
+  success('设置已保存')
+  track('settings_change', '', { type: 'super_panel' })
 }
 
-const openExternalUrl = (url) => {
-  if (window.ztools?.shell?.openExternal) {
-    window.ztools.shell.openExternal(url)
-  } else {
-    window.open(url, '_blank')
+// 托盘图标的叫法随系统：macOS 是顶部菜单栏，Windows 是任务栏右下角
+const trayIconLabel = isMacOS() ? '菜单栏图标' : '托盘图标'
+const trayIconDesc = isMacOS() ? '在屏幕顶部菜单栏显示 ZTools 图标' : '在任务栏右下角显示 ZTools 图标'
+const minimizeToTrayLabel = isMacOS() ? '关闭后在后台运行' : '最小化到托盘'
+const closeConfirmDesc = isMacOS() ? '关闭主窗口时询问退出还是在后台继续运行' : '关闭主窗口时询问退出或最小化到托盘'
+// 鼠标触发超级面板依赖 Windows 原生输入进程，macOS 没有对应实现，设置项不显示
+const supportsMouseHotkey = !isMacOS()
+
+const saveShowTrayIcon = async (checked) => {
+  const ok = await setShowTrayIcon(!!checked)
+  if (!ok) {
+    settings.showTrayIcon = !checked
+    error(`保存${trayIconLabel}设置失败`)
+    return
   }
+  success(checked ? `已显示${trayIconLabel}` : `已隐藏${trayIconLabel}`)
+  track('settings_change', '', { type: 'tray_icon' })
 }
 
+// 两个 setter 失败时返回 false 而不抛错，必须检查返回值；失败后从配置重新读取，界面与实际保存的值保持一致
 const saveTraySettings = async () => {
-  try {
-    await setMinimizeToTray(!!settings.minimizeToTray)
+  const saved = await setMinimizeToTray(!!settings.minimizeToTray) &&
     await setCloseConfirm(!!settings.closeConfirm)
-    success('托盘设置已保存')
-    // 埋点：设置变更
-    track('settings_change', '', { type: 'tray' })
-  } catch (e) {
-    console.error('Failed to save tray settings:', e)
-    error('保存托盘设置失败')
+  if (!saved) {
+    settings.minimizeToTray = await getMinimizeToTray()
+    settings.closeConfirm = await getCloseConfirm()
+    error('关闭窗口设置保存失败')
+    return
   }
+  success('关闭窗口设置已保存')
+  track('settings_change', '', { type: 'tray' })
 }
 
 const handleHotkeyInput = (event) => {
@@ -379,12 +407,12 @@ const handleHotkeyInput = (event) => {
   settings.hotkey = result.hotkey
   hotkeyRecording.value = false
   hotkeyRecordingText.value = ''
-  saveSettings()
+  saveWakeHotkey()
 }
 
 const clearHotkey = () => {
   settings.hotkey = ''
-  saveSettings()
+  saveWakeHotkey()
 }
 
 const toggleHotkeyRecording = () => {
@@ -428,14 +456,14 @@ const handleSuperPanelKeyInput = (event) => {
   settings.superPanel.keyboardHotkey.key = keys[keys.length - 1]
   superPanelKeyRecording.value = false
   superPanelKeyRecordingText.value = ''
-  saveSettings()
+  saveSuperPanelSettings()
 }
 
 const clearSuperPanelHotkey = () => {
   resetHotkeyRecorderState()
   settings.superPanel.keyboardHotkey.modifiers = []
   settings.superPanel.keyboardHotkey.key = ''
-  saveSettings()
+  saveSuperPanelSettings()
 }
 
 const startSuperPanelRecording = () => {
@@ -636,7 +664,20 @@ onBeforeUnmount(() => {
               <div class="setting-info">
                 <div class="setting-text">
                   <span class="setting-label">开机自动启动</span>
-                  <span class="setting-desc" data-testid="autostart-status">{{ autostartDescription }}</span>
+                  <span
+                    class="setting-desc"
+                    :class="{ 'is-error': autostartStatus === 'unavailable' }"
+                    data-testid="autostart-status"
+                  >
+                    {{ autostartDescription }}
+                    <button
+                      v-if="autostartStatus === 'unavailable'"
+                      type="button"
+                      class="setting-inline-link"
+                      data-testid="autostart-retry"
+                      @click="loadAutostart"
+                    >重试</button>
+                  </span>
                 </div>
               </div>
               <a-switch
@@ -650,12 +691,29 @@ onBeforeUnmount(() => {
               />
             </div>
 
+            <!-- 托盘图标（Windows 通知区域 / macOS 菜单栏） -->
+            <div class="setting-item">
+              <div class="setting-info">
+                <div class="setting-text">
+                  <span class="setting-label">{{ trayIconLabel }}</span>
+                  <span class="setting-desc">{{ trayIconDesc }}</span>
+                </div>
+              </div>
+              <a-switch
+                v-switch-keyboard
+                size="small"
+                v-model:checked="settings.showTrayIcon"
+                data-testid="tray-icon-switch"
+                @change="saveShowTrayIcon"
+              />
+            </div>
+
             <!-- 退出确认 -->
             <div class="setting-item">
               <div class="setting-info">
                 <div class="setting-text">
                   <span class="setting-label">退出确认</span>
-                  <span class="setting-desc">关闭主窗口时询问退出或最小化到托盘</span>
+                  <span class="setting-desc">{{ closeConfirmDesc }}</span>
                 </div>
               </div>
               <a-switch
@@ -670,7 +728,7 @@ onBeforeUnmount(() => {
             <div v-if="!settings.closeConfirm" class="setting-item animate-in">
               <div class="setting-info">
                 <div class="setting-text">
-                  <span class="setting-label">最小化到托盘</span>
+                  <span class="setting-label">{{ minimizeToTrayLabel }}</span>
                   <span class="setting-desc">关闭窗口后在后台继续运行</span>
                 </div>
               </div>
@@ -722,14 +780,7 @@ onBeforeUnmount(() => {
                     }}
                   </span>
                   <div v-else class="hotkey-keys">
-                    <template v-if="settings.hotkey">
-                      <span
-                        v-for="key in formatHotkeyForPlatform(settings.hotkey, hotkeyPlatform, supportsDoubleModifierHotkeys).split('+')"
-                        :key="key"
-                        class="key-badge"
-                        >{{ key }}</span
-                      >
-                    </template>
+                    <ShortcutKeys v-if="settings.hotkey" :combo="formatHotkeyForPlatform(settings.hotkey, hotkeyPlatform, supportsDoubleModifierHotkeys)" />
                     <span v-else class="no-hotkey">点击设置</span>
                   </div>
                 </div>
@@ -739,7 +790,7 @@ onBeforeUnmount(() => {
                   @click="clearHotkey"
                   title="清除"
                 >
-                  <CloseOutlined  />
+                  <XIcon  />
                 </button>
               </div>
             </div>
@@ -771,9 +822,9 @@ onBeforeUnmount(() => {
                   <span class="setting-desc">为指定插件或本地应用设置全局独立启动热键</span>
                 </div>
               </div>
-              <span style="font-size: 12px; color: var(--zt-text-secondary)">
+              <span style="font-size: 12px; color: var(--rc-text-secondary)">
                 已配置 {{ pluginHotkeyCount }} 个快捷键
-                <RightOutlined  style="margin-left: 4px; font-size: 10px" />
+                <ChevronRightIcon  style="margin-left: 4px; font-size: 10px" />
               </span>
             </div>
 
@@ -788,9 +839,9 @@ onBeforeUnmount(() => {
                   <span class="setting-desc">为插件内置功能（如截图、文字识别）设置全局热键</span>
                 </div>
               </div>
-              <span style="font-size: 12px; color: var(--zt-text-secondary)">
+              <span style="font-size: 12px; color: var(--rc-text-secondary)">
                 已配置 {{ pluginFeatureHotkeyCount }} 个快捷键
-                <RightOutlined  style="margin-left: 4px; font-size: 10px" />
+                <ChevronRightIcon  style="margin-left: 4px; font-size: 10px" />
               </span>
             </div>
 
@@ -806,7 +857,7 @@ onBeforeUnmount(() => {
                 v-switch-keyboard
                 size="small"
                 v-model:checked="settings.superPanel.enabled"
-                @change="saveSettings"
+                @change="saveSuperPanelSettings"
               />
             </div>
 
@@ -825,7 +876,7 @@ onBeforeUnmount(() => {
                     v-switch-keyboard
                     size="small"
                     v-model:checked="settings.superPanel.keyboardHotkey.enabled"
-                    @change="saveSettings"
+                    @change="saveSuperPanelSettings"
                   />
                 </div>
 
@@ -861,14 +912,7 @@ onBeforeUnmount(() => {
                               settings.superPanel.keyboardHotkey.key
                             "
                           >
-                            <span
-                              v-for="key in formatSuperPanelHotkey(
-                                settings.superPanel.keyboardHotkey
-                              ).split(' + ')"
-                              :key="key"
-                              class="key-badge small"
-                              >{{ key }}</span
-                            >
+                            <ShortcutKeys :combo="formatSuperPanelHotkey(settings.superPanel.keyboardHotkey)" />
                           </template>
                           <span v-else class="no-hotkey">未设置</span>
                         </div>
@@ -879,15 +923,15 @@ onBeforeUnmount(() => {
                         @click="clearSuperPanelHotkey"
                         title="清除"
                       >
-                        <CloseOutlined  />
+                        <XIcon  />
                       </button>
                     </div>
                   </div>
                 </div>
               </div>
 
-              <!-- 鼠标热键 -->
-              <div class="sub-setting-group">
+              <!-- 鼠标热键（仅 Windows） -->
+              <div v-if="supportsMouseHotkey" class="sub-setting-group">
                 <div class="sub-setting-header">
                   <div class="sub-setting-info">
                     <span>鼠标热键</span>
@@ -896,7 +940,7 @@ onBeforeUnmount(() => {
                     v-switch-keyboard
                     size="small"
                     v-model:checked="settings.superPanel.mouseHotkey.enabled"
-                    @change="saveSettings"
+                    @change="saveSuperPanelSettings"
                   />
                 </div>
 
@@ -906,10 +950,10 @@ onBeforeUnmount(() => {
                 >
                   <div class="mouse-setting-row">
                     <span class="mouse-label">触发方式</span>
-                    <a-select
+                    <RcSelect
                       v-model:value="settings.superPanel.mouseHotkey.button"
                       style="width: 180px"
-                      @change="saveSettings"
+                      @change="saveSuperPanelSettings"
                     >
                       <a-select-option
                         v-for="option in mouseButtonOptions"
@@ -918,7 +962,7 @@ onBeforeUnmount(() => {
                       >
                         {{ option.label }}
                       </a-select-option>
-                    </a-select>
+                    </RcSelect>
                   </div>
 
                   <div v-if="isLongPress" class="slider-setting">
@@ -938,7 +982,7 @@ onBeforeUnmount(() => {
                       :max="500"
                       :step="50"
                       :marks="longPressMarks"
-                      @change="saveSettings"
+                      @change="saveSuperPanelSettings"
                     />
                   </div>
                 </div>
@@ -960,7 +1004,7 @@ onBeforeUnmount(() => {
                       variant="marker"
                       aria-label="面板位置"
                       :options="panelPositionOptions"
-                      @change="saveSettings"
+                      @change="saveSuperPanelSettings"
                     />
                   </div>
 
@@ -971,18 +1015,18 @@ onBeforeUnmount(() => {
                       variant="marker"
                       aria-label="面板大小"
                       :options="panelSizeOptions"
-                      @change="saveSettings"
+                      @change="saveSuperPanelSettings"
                     />
                   </div>
 
                   <div class="mouse-setting-row">
-                    <span class="mouse-label">默认选中 Tab</span>
+                    <span class="mouse-label">默认标签</span>
                     <RcSegmented
                       v-model="settings.superPanel.defaultTab"
                       variant="marker"
-                      aria-label="默认选中 Tab"
+                      aria-label="默认标签"
                       :options="defaultTabOptions"
-                      @change="saveSettings"
+                      @change="saveSuperPanelSettings"
                     />
                   </div>
 
@@ -993,8 +1037,11 @@ onBeforeUnmount(() => {
                       :min="5"
                       :max="20"
                       style="width: 88px"
-                      @change="saveSettings"
-                    />
+                      @change="saveSuperPanelSettings"
+                  >
+                    <template #upIcon><ChevronUpIcon aria-hidden="true" /></template>
+                    <template #downIcon><ChevronDownIcon aria-hidden="true" /></template>
+                  </a-input-number>
                   </div>
                 </div>
               </div>
@@ -1005,9 +1052,9 @@ onBeforeUnmount(() => {
                   <div class="sub-setting-info">
                     <span>快捷方式设置</span>
                   </div>
-                  <span style="font-size: 12px; color: var(--zt-text-secondary)">
+                  <span style="font-size: 12px; color: var(--rc-text-secondary)">
                     已配置 {{ shortcutCount }} 个快捷方式
-                    <RightOutlined  style="margin-left: 4px; font-size: 10px" />
+                    <ChevronRightIcon  style="margin-left: 4px; font-size: 10px" />
                   </span>
                 </div>
               </div>
@@ -1031,62 +1078,6 @@ onBeforeUnmount(() => {
 
         <!-- 隐私与权限卡片 -->
         <ScreenPermissionPanel class="wide-card" />
-
-        <!-- 开发者工具卡片 -->
-        <div class="settings-card wide-card">
-          <div class="card-header">
-            <h2 class="card-title">开发者工具</h2>
-          </div>
-
-          <div class="settings-list">
-            <div class="setting-item dev-item">
-              <div class="setting-info">
-                <div class="setting-text">
-                  <span class="setting-label">调试控制台</span>
-                  <span class="setting-desc"
-                    >执行 JS 代码、测试 API、调试插件</span
-                  >
-                </div>
-              </div>
-              <button class="open-btn" @click="openDevTools()">
-                <ExportOutlined  />
-                打开
-              </button>
-            </div>
-
-            <!-- 开源插件生态大仓 -->
-            <div class="setting-item dev-item">
-              <div class="setting-info">
-                <div class="setting-text">
-                  <span class="setting-label">开源插件生态大仓 (ZTools-extensions)</span>
-                  <span class="setting-desc"
-                    >官方扩展源码开源，支持通过 PR 投稿，审核后由官方发布</span
-                  >
-                </div>
-              </div>
-              <button class="open-btn" @click="openExternalUrl('https://github.com/ZToolsTeam/ZTools-extensions')">
-                <ExportOutlined  />
-                访问
-              </button>
-            </div>
-
-            <!-- 5分钟快速上手指南 -->
-            <div class="setting-item dev-item">
-              <div class="setting-info">
-                <div class="setting-text">
-                  <span class="setting-label">开发者极速上手指南</span>
-                  <span class="setting-desc"
-                    >纯声明式 UI 标准、一键脚手架生成、5分钟写出你的专属插件</span
-                  >
-                </div>
-              </div>
-              <button class="open-btn" @click="openExternalUrl('https://github.com/ZToolsTeam/ZTools-extensions#5-%E5%88%86%E9%92%9F%E8%B4%A1%E7%8C%AE%E4%BD%A0%E7%9A%84%E9%A6%96%E6%AC%BE%E6%8F%92%E4%BB%B6')">
-                <ExportOutlined  />
-                阅读
-              </button>
-            </div>
-          </div>
-        </div>
       </div>
     </div>
     <ShortcutSettingsModal v-model:open="shortcutModalOpen" />
@@ -1385,8 +1376,7 @@ onBeforeUnmount(() => {
   margin: 10px 22px 22px;
 }
 
-/* 下拉与数字输入统一为 32px 高、8px 圆角，与快捷键录入框一致 */
-.sub-settings :deep(.ant-select .ant-select-selector),
+/* 数字输入统一为 32px 高、8px 圆角，与快捷键录入框、下拉框（RcSelect）一致 */
 .sub-settings :deep(.ant-input-number) {
   height: 32px;
   border-radius: 8px;
@@ -1395,18 +1385,11 @@ onBeforeUnmount(() => {
   box-shadow: none;
 }
 
-.sub-settings :deep(.ant-select .ant-select-selector) {
-  align-items: center;
-  padding: 0 10px;
-}
-
 .sub-settings :deep(.ant-input-number .ant-input-number-input) {
   height: 30px;
 }
 
-.sub-settings :deep(.ant-select:hover .ant-select-selector),
 .sub-settings :deep(.ant-input-number:hover),
-.sub-settings :deep(.ant-select-focused .ant-select-selector),
 .sub-settings :deep(.ant-input-number-focused) {
   border-color: var(--rc-accent);
 }
@@ -1427,27 +1410,6 @@ onBeforeUnmount(() => {
   font-size: 12px;
   font-weight: 600;
   color: var(--rc-accent-text);
-}
-
-/* 开发者工具按钮 */
-.open-btn {
-  height: 30px;
-  padding: 0 12px;
-  border-radius: var(--rc-radius-md, 8px);
-  border: 1px solid var(--rc-border-highlight);
-  background: var(--rc-surface);
-  color: var(--rc-text-primary);
-  font-size: 12px;
-  font-weight: 500;
-  cursor: pointer;
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  transition: background-color 0.15s ease;
-}
-
-.open-btn:hover {
-  background: var(--rc-surface-hover);
 }
 
 /* 动画 */

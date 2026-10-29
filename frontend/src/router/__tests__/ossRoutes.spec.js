@@ -6,7 +6,7 @@ import { beforeAll, describe, expect, it, vi } from 'vitest'
 vi.mock('@edition', () => import('@/edition-oss/index.js'))
 
 const PUBLIC_ROUTE_NAMES = [
-  'about', 'advanced-settings', 'declarative', 'details', 'devtools', 'diagnostics',
+  'about', 'advanced-settings', 'declarative', 'details', 'diagnostics',
   'events', 'launcher', 'list', 'my', 'popout', 'welcome'
 ]
 

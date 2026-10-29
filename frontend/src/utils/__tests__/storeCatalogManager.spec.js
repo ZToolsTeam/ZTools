@@ -1,9 +1,5 @@
 import { describe, it, expect, vi, afterEach } from 'vitest'
-import {
-  StoreCatalogManager,
-  normalizeCdnCatalogPayload,
-  COMMUNITY_EXTENSION_IDS
-} from '@/utils/storeCatalogManager'
+import { StoreCatalogManager } from '@/utils/storeCatalogManager'
 import { isPluginSupportedOnCurrentPlatform } from '@/utils/platform'
 
 function asMac() {
@@ -155,41 +151,31 @@ describe('StoreCatalogManager 远程清单超时', () => {
   })
 })
 
-describe('StoreCatalogManager 开源社区扩展 (ZTools-extensions) 识别与过滤', () => {
-  it('normalizeCdnCatalogPayload 将 CDN 批量构建的社区扩展归类为 community，保留官方插件与独立作者', async () => {
-    expect(COMMUNITY_EXTENSION_IDS.has('snippets')).toBe(true)
-    expect(COMMUNITY_EXTENSION_IDS.has('todo')).toBe(false)
+describe('StoreCatalogManager 作者署名与来源分类', () => {
+  it('官方市场插件保留团队署名，社区独立插件保留作者的 GitHub 用户名', async () => {
     const rawPayload = {
       plugins: [
         { id: 'snippets', name: '快捷短语', author: 'ZTools Team', is_official: true },
-        { id: 'uuid-generator', name: 'UUID 生成器', author: 'Alice Dev', is_official: true },
+        { id: 'alice-tool', name: '社区工具', author: 'octocat', is_official: false },
         { id: 'cleaner', name: '系统清理', author: 'ZTools Team', is_official: true }
       ]
     }
-    const normalized = normalizeCdnCatalogPayload(rawPayload)
     const manager = new StoreCatalogManager({
       apiBaseUrl: '',
-      getStaticCatalog: async () => normalized,
+      getStaticCatalog: async () => rawPayload,
       getOfficialList: () => [builtinCalculator]
     })
 
     const communityRes = await manager.query({ sourceType: 'community' })
-    expect(communityRes.list.map((p) => p.pluginId).sort()).toEqual(['snippets', 'uuid-generator'])
-    const snippetsItem = communityRes.list.find((p) => p.pluginId === 'snippets')
-    expect(snippetsItem.author).toBe('ZTools Community')
-    expect(snippetsItem.is_official).toBe(false)
-    const uuidItem = communityRes.list.find((p) => p.pluginId === 'uuid-generator')
-    expect(uuidItem.author).toBe('Alice Dev')
+    expect(communityRes.list.map((p) => p.pluginId)).toEqual(['alice-tool'])
+    expect(communityRes.list[0]).toMatchObject({ author: 'octocat', is_official: false })
 
     const officialRes = await manager.query({ sourceType: 'official' })
-    expect(officialRes.list.map((p) => p.pluginId).sort()).toEqual(['calculator', 'cleaner'])
-  })
-
-  it('[破坏性] normalizeCdnCatalogPayload 面对 null、非对象或畸形条目安全返回不崩溃', () => {
-    expect(normalizeCdnCatalogPayload(null)).toBeNull()
-    expect(normalizeCdnCatalogPayload(undefined)).toBeUndefined()
-    expect(normalizeCdnCatalogPayload('invalid')).toBe('invalid')
-    expect(normalizeCdnCatalogPayload([null, { id: 'snippets', author: 'ZTools Team' }])[1].source_type).toBe('community')
+    expect(officialRes.list.map((p) => p.pluginId).sort()).toEqual(['calculator', 'cleaner', 'snippets'])
+    expect(officialRes.list.find((p) => p.pluginId === 'snippets')).toMatchObject({
+      author: 'ZTools Team', is_official: true, source_type: 'official'
+    })
+    expect(rawPayload.plugins[0].author).toBe('ZTools Team')
   })
 
   it('[集成] 远端 CDN 返回旧版冗长插件名称或英文分类时，自动对齐为 plugins 仓库最新精简名称与标准四字分类', async () => {
@@ -216,3 +202,41 @@ describe('StoreCatalogManager 开源社区扩展 (ZTools-extensions) 识别与�
   })
 })
 
+
+describe('StoreCatalogManager 搜索按匹配程度排序', () => {
+  const catalog = [
+    { id: 'ocr-pro', name: '图片识字增强', description: '截图后识别文字', downloads: 9000, author: 'alice', is_official: false, source_type: 'community' },
+    { id: 'screenshot', name: '截图历史', description: '查看截图', downloads: 10, author: 'ZTools Team', is_official: true },
+    { id: 'snip', name: '截图标注', description: '', downloads: 500, author: 'bob', is_official: false, source_type: 'community' },
+    { id: 'clipboard', name: '剪贴板', description: '', downloads: 99999, author: 'carol', is_official: false, source_type: 'community' },
+    { id: 'pdf-tools', name: 'PDF 工具箱', description: '合并拆分', keywords: ['pdf', '合并'], downloads: 3, author: 'dave', is_official: false, source_type: 'community' }
+  ]
+  const manager = () => new StoreCatalogManager({
+    apiBaseUrl: '',
+    getStaticCatalog: async () => ({ plugins: catalog }),
+    getOfficialList: () => []
+  })
+
+  it('有搜索词时先按匹配程度，同档官方在前、再按下载量；只在描述里出现的排最后', async () => {
+    const res = await manager().query({ keyword: '截图' })
+    expect(res.list.map((p) => p.pluginId)).toEqual(['screenshot', 'snip', 'ocr-pro'])
+    expect(res.total).toBe(3)
+  })
+
+  it('拼音、首字母与触发词都能搜到；没有搜索词时保持官方置顶 + 下载量排序', async () => {
+    const m = manager()
+    expect((await m.query({ keyword: 'jt' })).list[0].pluginId).toBe('screenshot')
+    expect((await m.query({ keyword: 'jietu' })).list.map((p) => p.pluginId)).toEqual(['screenshot', 'snip'])
+    expect((await m.query({ keyword: '合并' })).list.map((p) => p.pluginId)).toEqual(['pdf-tools'])
+    expect((await m.query({ keyword: 'alice' })).list.map((p) => p.pluginId)).toEqual(['ocr-pro'])
+    const all = await m.query({})
+    expect(all.list[0].pluginId).toBe('screenshot')
+    expect(all.list.slice(1).map((p) => p.pluginId)).toEqual(['clipboard', 'ocr-pro', 'snip', 'pdf-tools'])
+  })
+
+  it('[边界] 搜索词只有空白视为没有搜索词；匹配不到返回空页', async () => {
+    const m = manager()
+    expect((await m.query({ keyword: '   ' })).total).toBe(catalog.length)
+    expect(await m.query({ keyword: '不存在的插件' })).toMatchObject({ list: [], total: 0, lastPage: 1 })
+  })
+})

@@ -119,3 +119,32 @@ export function sanitizeStoredTodos(raw) {
     }
     return out;
 }
+/** 已保存的待办数据结构不对：携带读回的原值，便于先完整备份再重新开始 */
+export class CorruptTodosError extends Error {
+    raw;
+    constructor(raw) {
+        super("已保存的待办数据损坏，为保护原数据已暂停修改");
+        this.name = "CorruptTodosError";
+        this.raw = raw;
+    }
+}
+/**
+ * 把存储读回的值转成待办列表；结构不对（不是数组或有无法识别的条目）时抛 CorruptTodosError，绝不在它上面写入
+ */
+export function readStoredTodos(raw) {
+    const items = sanitizeStoredTodos(raw);
+    if (raw !== undefined && (!Array.isArray(raw) || items.length !== raw.length)) {
+        throw new CorruptTodosError(raw);
+    }
+    return items;
+}
+/**
+ * 列表行右侧的日期：没有记录时间（旧数据为 0）时不显示；不是今年的带上年份，避免跨年后分不清
+ */
+export function formatListDate(timestamp, now = Date.now()) {
+    if (!Number.isFinite(timestamp) || timestamp <= 0)
+        return "";
+    const date = new Date(timestamp);
+    const sameYear = date.getFullYear() === new Date(now).getFullYear();
+    return date.toLocaleDateString([], sameYear ? { month: "2-digit", day: "2-digit" } : { year: "numeric", month: "2-digit", day: "2-digit" });
+}

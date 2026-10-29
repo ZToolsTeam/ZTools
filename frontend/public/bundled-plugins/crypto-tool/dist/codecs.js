@@ -1,17 +1,33 @@
 export function encodeText(text, mode) {
+    if (mode !== "unicode" && hasLoneSurrogate(text))
+        throw new Error("输入包含不成对的 Unicode 代理项，无法按 UTF-8 编码");
     if (mode === "url")
         return encodeURIComponent(text);
     if (mode === "hex")
         return [...new TextEncoder().encode(text)].map(byte => byte.toString(16).padStart(2, "0")).join("");
     return text.split("").map(char => `\\u${char.charCodeAt(0).toString(16).padStart(4, "0")}`).join("");
 }
+/** 不成对的 UTF-16 代理项：不是合法的 Unicode 文本，复制出去会变成乱码或被替换为 U+FFFD */
+const LONE_SURROGATE = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/;
+export function hasLoneSurrogate(text) {
+    return LONE_SURROGATE.test(text);
+}
 export function decodeText(text, mode) {
-    if (mode === "url")
-        return decodeURIComponent(text);
+    if (mode === "url") {
+        try {
+            return decodeURIComponent(text);
+        }
+        catch {
+            throw new Error("不是合法的 URL 编码：% 后须是两位十六进制，且字节序列必须是 UTF-8");
+        }
+    }
     if (mode === "unicode") {
         if (!/^(?:\\u[0-9a-f]{4})*$/i.test(text))
             throw new Error("请输入完整的 \\uXXXX 序列");
-        return text.replace(/\\u([0-9a-f]{4})/gi, (_, hex) => String.fromCharCode(parseInt(hex, 16)));
+        const decoded = text.replace(/\\u([0-9a-f]{4})/gi, (_, hex) => String.fromCharCode(parseInt(hex, 16)));
+        if (hasLoneSurrogate(decoded))
+            throw new Error("代理项不成对：Emoji 等字符需要高低两个 \\uXXXX 连续出现");
+        return decoded;
     }
     const compact = text.replace(/\s/g, "");
     if (!/^(?:[0-9a-f]{2})*$/i.test(compact))

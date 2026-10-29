@@ -183,24 +183,34 @@ describe('sync-bundled-plugins.mjs', () => {
     expect(sync(ws.frontend, '--check').status).toBe(0)
   })
 
-  it('[故障] 符号链接按文件处理：不跟随链接进入目录，--check 报出，--ensure 只删链接本身', () => {
+  it.for([
+    { kind: '目录', relative: 'linked-dir', directory: true },
+    { kind: '文件', relative: 'dist/linked.js', directory: false }
+  ])('[故障] $kind 符号链接：--check 只读报出，--ensure 只删链接本身', ({ relative, directory }, context) => {
     const ws = makeWorkspace()
     expect(sync(ws.frontend).status).toBe(0)
     const outside = path.join(path.dirname(ws.frontend), 'outside-dir')
     write(outside, 'keep.js', 'export {}\n')
-    fs.symlinkSync(outside, path.join(ws.out, 'linked-dir'))
-    fs.symlinkSync(path.join(outside, 'keep.js'), path.join(ws.out, 'dist/linked.js'))
+    const link = path.join(ws.out, relative)
+    try {
+      fs.symlinkSync(directory ? outside : path.join(outside, 'keep.js'), link,
+        directory ? (process.platform === 'win32' ? 'junction' : 'dir') : 'file')
+    } catch (error) {
+      if (!directory && process.platform === 'win32' && ['EPERM', 'EACCES'].includes(error.code)) {
+        context.skip('当前 Windows 用户没有创建文件符号链接的权限；目录 junction 单独验证')
+      }
+      throw error
+    }
     const res = sync(ws.frontend, '--check')
     expect(res.status).toBe(1)
-    expect(res.stderr).toContain('多余：demo/linked-dir（同步时会被删除）')
-    expect(res.stderr).toContain('多余：demo/dist/linked.js（同步时会被删除）')
+    expect(res.stderr).toContain(`多余：demo/${relative}（同步时会被删除）`)
     expect(res.stderr).not.toContain('linked-dir/keep.js')
+    expect(fs.lstatSync(link).isSymbolicLink()).toBe(true)
 
     expect(sync(ws.frontend, '--ensure').status).toBe(0)
-    expect(fs.existsSync(path.join(ws.out, 'linked-dir'))).toBe(false)
-    expect(fs.existsSync(path.join(ws.out, 'dist/linked.js'))).toBe(false)
+    expect(fs.existsSync(link)).toBe(false)
     // 链接指向的真实文件不受影响
-    expect(fs.existsSync(path.join(outside, 'keep.js'))).toBe(true)
+    expect(fs.readFileSync(path.join(outside, 'keep.js'), 'utf8')).toBe('export {}\n')
     expect(sync(ws.frontend, '--check').status).toBe(0)
   })
 
@@ -227,5 +237,40 @@ describe('sync-bundled-plugins.mjs', () => {
     expect(res.status).toBe(1)
     expect(res.stderr).toContain('不一致：demo/dist/index.js')
     expect(fs.existsSync(ws.out)).toBe(false)
+  })
+
+  it('内置插件声明的截图：复制到副本并写进清单（不计入插件大小）；未声明的截图不复制；不合格时同步失败', () => {
+    const ws = makeWorkspace()
+    const specRoot = path.resolve(path.dirname(SCRIPT), '../../packages/ztools-plugins-spec')
+    for (const f of ['official-ids.json', 'reserved-ids.json', 'src/host-requirements.js', 'src/validator.js']) {
+      write(path.dirname(ws.frontend), `packages/ztools-plugins-spec/${f}`, fs.readFileSync(path.join(specRoot, f)))
+    }
+    const png = (w, h) => {
+      const buf = Buffer.alloc(33)
+      Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]).copy(buf)
+      buf.writeUInt32BE(13, 8)
+      buf.write('IHDR', 12, 'latin1')
+      buf.writeUInt32BE(w, 16)
+      buf.writeUInt32BE(h, 20)
+      return buf
+    }
+    const manifest = { id: 'demo', name: 'Demo', version: '1.0.0', author: 'ZTools Team', screenshots: [{ path: 'screenshots/01.png', title: '主界面' }] }
+    write(ws.plugins, 'demo/plugin.json', JSON.stringify(manifest) + '\n')
+    write(ws.plugins, 'demo/screenshots/01.png', png(1280, 800))
+    write(ws.plugins, 'demo/screenshots/old.png', png(1280, 800))
+    expect(sync(ws.frontend).status).toBe(0)
+    expect(fs.readFileSync(path.join(ws.out, 'screenshots/01.png'))).toEqual(png(1280, 800))
+    expect(fs.existsSync(path.join(ws.out, 'screenshots/old.png'))).toBe(false)
+    const entry = generatedConfig(ws.frontend).plugins.find((p) => p.id === 'demo')
+    expect(entry.screenshots).toEqual([{ path: 'screenshots/01.png', title: '主界面', width: 1280, height: 800 }])
+    const sizeWithout = ['plugin.json', 'icon.svg', 'dist/index.js', 'dist/chunk-a.js'].reduce((n, rel) => n + fs.statSync(path.join(ws.plugins, 'demo', rel)).size, 0)
+    expect(entry.size).toBe(sizeWithout)
+    expect(sync(ws.frontend, '--check').status).toBe(0)
+
+    // 截图被换成伪装 PNG：--check 报不一致，同步直接失败
+    write(ws.plugins, 'demo/screenshots/01.png', 'GIF89a')
+    const bad = sync(ws.frontend)
+    expect(bad.status).not.toBe(0)
+    expect(bad.stderr).toContain('不是有效的 PNG')
   })
 })

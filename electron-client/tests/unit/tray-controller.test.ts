@@ -15,6 +15,7 @@ import type {
 } from '../../src/main/native-host/native-host-client.js'
 import { decideCloseAction, readClosePreferences } from '../../src/main/windows/close-behavior.js'
 import {
+  buildTrayMenuTemplate,
   DEFAULT_TRAY_WAKE_ACCELERATOR,
   normalizeTrayAccelerator,
   TrayController,
@@ -108,8 +109,9 @@ test('normalizeTrayAccelerator handles empty, non-string, control-char, and over
   assert.equal(normalizeTrayAccelerator(undefined), DEFAULT_TRAY_WAKE_ACCELERATOR)
   assert.equal(normalizeTrayAccelerator(null), DEFAULT_TRAY_WAKE_ACCELERATOR)
   assert.equal(normalizeTrayAccelerator(12345), DEFAULT_TRAY_WAKE_ACCELERATOR)
-  assert.equal(normalizeTrayAccelerator(''), DEFAULT_TRAY_WAKE_ACCELERATOR)
-  assert.equal(normalizeTrayAccelerator('   '), DEFAULT_TRAY_WAKE_ACCELERATOR)
+  // 空串是用户关闭了全局唤醒，不能退回默认值
+  assert.equal(normalizeTrayAccelerator(''), '')
+  assert.equal(normalizeTrayAccelerator('   '), '')
   assert.equal(normalizeTrayAccelerator('Alt+Space\nInjected'), DEFAULT_TRAY_WAKE_ACCELERATOR)
   assert.equal(normalizeTrayAccelerator('Alt+\0Space'), DEFAULT_TRAY_WAKE_ACCELERATOR)
   assert.equal(normalizeTrayAccelerator('A'.repeat(65)), DEFAULT_TRAY_WAKE_ACCELERATOR)
@@ -324,8 +326,17 @@ test('Integration: TrayController + ConfigService + SuperPanelInputService + dec
     })
 
     assert.equal(tray.findItem('toggle-super-panel').checked, true)
-    assert.equal(tray.findItem('open-launcher').accelerator, 'Ctrl+Space')
+    // 设置里的 Ctrl 与全局快捷键注册一致转成 CommandOrControl（macOS 显示 ⌘，Windows 显示 Ctrl）
+    assert.equal(tray.findItem('open-launcher').accelerator, 'CommandOrControl+Space')
     assert.deepEqual(nativeInput.configurations.at(-1), { button: 'middle', action: 'long', longPressMs: 300 })
+
+    // 3b. 用户在设置里清除全局唤醒（存空串）-> 托盘菜单不再显示快捷键，也不退回默认的 Alt+Space
+    await configService.set('user_settings.json', 'hotkey.global', '', true)
+    trayController.updateState({
+      wakeAccelerator: await configService.get('user_settings.json', 'hotkey.global', 'Alt+Space')
+    })
+    assert.equal(trayController.state.wakeAccelerator, '')
+    assert.equal(tray.findItem('open-launcher').accelerator, undefined)
 
     // 4. Clicking Quit in Tray bypasses closeConfirm modal even when closeConfirm is true
     await configService.setSetting('closeConfirm', true)
@@ -344,4 +355,20 @@ test('Integration: TrayController + ConfigService + SuperPanelInputService + dec
   } finally {
     fs.rmSync(tempDir, { recursive: true, force: true })
   }
+})
+
+test('托盘菜单的唤醒快捷键与全局快捷键注册一致：设置里的 Ctrl 转为 CommandOrControl（macOS 显示 ⌘，不再显示成 Control）', () => {
+  const noop = (): void => undefined
+  const items = buildTrayMenuTemplate({
+    isSuperPanelEnabled: true,
+    wakeAccelerator: 'Ctrl+Shift+Z',
+    platform: 'darwin',
+    onOpenLauncher: noop,
+    onShowMainWindow: noop,
+    onToggleSuperPanel: noop,
+    onOpenSettings: noop,
+    onOpenAbout: noop,
+    onRequestExit: noop
+  })
+  assert.equal(items.find((item) => item.id === 'open-launcher')?.accelerator, 'CommandOrControl+Shift+Z')
 })

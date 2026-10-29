@@ -138,3 +138,40 @@ test('dir: scan rejects when root directory does not exist or cannot be read', p
     await fs.rm(root, { recursive: true, force: true })
   }
 })
+
+test('dir: scan does not follow or double-count symlinks (file, directory, dangling, loop)', posixOnly, async () => {
+  const root = await makeTempDir('ztools-dirscan-links-')
+  const outside = await makeTempDir('ztools-dirscan-outside-')
+  try {
+    // 仿 Homebrew 缓存：downloads/<哈希> 是真实文件，根目录「名称--版本」是指向它的链接
+    await fs.mkdir(path.join(root, 'downloads'))
+    const blob = path.join(root, 'downloads', 'abc123--mysql.tar.gz')
+    await fs.writeFile(blob, Buffer.alloc(4096, 1))
+    await fs.symlink('downloads/abc123--mysql.tar.gz', path.join(root, 'mysql@8.4--8.4.0'))
+    await fs.writeFile(path.join(root, 'top.txt'), Buffer.alloc(100, 2))
+    // 指向根内目录的链接、指向根外目录的链接、断开的链接、自身循环的链接
+    await fs.symlink(path.join(root, 'downloads'), path.join(root, 'downloads-link'))
+    await fs.writeFile(path.join(outside, 'secret.bin'), Buffer.alloc(8192, 3))
+    await fs.symlink(outside, path.join(root, 'outside-link'))
+    await fs.symlink(path.join(root, 'missing-target'), path.join(root, 'dangling'))
+    await fs.symlink(path.join(root, 'loop'), path.join(root, 'loop'))
+
+    const result = await scanDirectoryForSearch(root, 100, [], 2000, { measureDirectory: null })
+    const listed = result.files.map((file) => file.path).sort()
+    assert.deepEqual(listed, [blob, path.join(root, 'top.txt')].sort())
+    assert.equal(result.total_matches, 2)
+    assert.equal(result.total_bytes, 4096 + 100)
+    assert.deepEqual(result.subdirs?.map((sub) => [sub.name, sub.sizeBytes, sub.fileCount]), [['downloads', 4096, 1]])
+    assert.equal(result.truncated, false)
+
+    // 扫描根本身是链接时照常跟随（如 macOS 的 /tmp → /private/tmp），结果一致
+    const rootLink = path.join(outside, 'root-link')
+    await fs.symlink(root, rootLink)
+    const viaLink = await scanDirectoryForSearch(rootLink, 100, [], 2000, { measureDirectory: null })
+    assert.equal(viaLink.total_matches, 2)
+    assert.equal(viaLink.total_bytes, 4096 + 100)
+  } finally {
+    await fs.rm(root, { recursive: true, force: true })
+    await fs.rm(outside, { recursive: true, force: true })
+  }
+})

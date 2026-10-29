@@ -9,16 +9,17 @@
       ref="triggerBtnRef"
       type="button"
       class="launcher-trigger"
-      :title="wakeLabel ? `切到悬浮条 ${wakeLabel}` : '切到悬浮条'"
+      :title="`切到悬浮条 ${switchLabel}`"
       aria-label="切到悬浮条"
       @click="triggerGeekMode"
     >
-      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
         <rect x="3" y="9" width="18" height="6" rx="2" />
         <path d="M7 12h6" />
       </svg>
       <span class="launcher-trigger-text">悬浮条</span>
-      <ShortcutKeys v-if="wakeHotkey" :combo="wakeHotkey" />
+      <!-- 这里显示的是「切到悬浮条」本身的快捷键；全局唤醒键在悬停说明里介绍 -->
+      <ShortcutKeys combo="Ctrl+M" />
     </button>
 
     <!-- 悬停引导浮层 -->
@@ -35,31 +36,36 @@
         <div class="guide-card">
           <div class="guide-head">
             <BrandMark :size="16" />
-            <span>悬浮搜索条</span>
-          </div>
-
-          <!-- 微型悬浮条预览 -->
-          <div class="guide-preview">
-            <div class="guide-bar">
-              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
-                <circle cx="11" cy="11" r="7" />
-                <path d="m20 20-3.5-3.5" />
-              </svg>
-              <span>搜索插件、命令与文件</span>
-              <span class="guide-caret"></span>
+            <div class="guide-head-text">
+              <span class="guide-title">悬浮搜索条</span>
+              <span class="guide-sub">收起工作台，只留屏幕中央一条搜索框</span>
             </div>
-            <span class="guide-hint">屏幕居中 · 全键盘操作 · 用完即走</span>
           </div>
 
-          <p class="guide-text">
-            收起工作台，换成屏幕中央的悬浮搜索条。<template v-if="wakeHotkey">在任何地方按
-            <ShortcutKeys :combo="wakeHotkey" /> 都能唤起。</template><template v-else>全局唤醒快捷键已关闭，可在设置中开启。</template>
-          </p>
-
-          <div class="guide-foot">
-            <span>按 <ShortcutKeys combo="Ctrl+M" /> 回到工作台</span>
-            <button type="button" class="guide-btn" @click="triggerGeekMode">立即试用</button>
+          <!-- 微型悬浮条预览：光标在占位文字前，与真实输入框一致 -->
+          <div class="guide-preview" aria-hidden="true">
+            <div class="guide-bar">
+              <SearchIcon class="guide-bar-icon" />
+              <span class="guide-caret"></span>
+              <span class="guide-placeholder">搜索插件、命令与文件</span>
+            </div>
           </div>
+
+          <dl class="guide-keys">
+            <div class="guide-key-row">
+              <dt>随处唤起</dt>
+              <dd>
+                <ShortcutKeys v-if="wakeHotkey" :combo="wakeHotkey" />
+                <span v-else class="guide-key-off">未开启，可在设置中开启</span>
+              </dd>
+            </div>
+            <div class="guide-key-row">
+              <dt>回到工作台</dt>
+              <dd><ShortcutKeys combo="Ctrl+M" /></dd>
+            </div>
+          </dl>
+
+          <RcButton variant="primary" size="md" class="guide-btn" @click="triggerGeekMode">切到悬浮条</RcButton>
         </div>
       </div>
     </transition>
@@ -67,8 +73,10 @@
 </template>
 
 <script setup>
-import { ref, computed, onMounted, onBeforeUnmount } from 'vue'
+import { SearchIcon } from '@lucide/vue'
+import { ref, onMounted, onBeforeUnmount } from 'vue'
 import ShortcutKeys from '@/components/base/ShortcutKeys.vue'
+import { RcButton } from '@/components/base'
 import BrandMark from './BrandMark.vue'
 import { switchWindowMode, WINDOW_MODES } from '@/utils/windowMode'
 import { shortcutLabel } from '@/utils/platform'
@@ -76,7 +84,7 @@ import { currentGlobalWakeHotkey, refreshCurrentGlobalWakeHotkey } from '@/utils
 
 // 显示用户实际设置的唤醒键，而不是写死的默认值
 const wakeHotkey = currentGlobalWakeHotkey
-const wakeLabel = computed(() => (wakeHotkey.value ? shortcutLabel(wakeHotkey.value) : ''))
+const switchLabel = shortcutLabel('Ctrl+M')
 onMounted(() => { refreshCurrentGlobalWakeHotkey() })
 
 const triggerBtnRef = ref(null)
@@ -167,6 +175,9 @@ onBeforeUnmount(() => {
 }
 
 .guide-card {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
   padding: 14px;
   border-radius: var(--rc-radius-lg);
   border: 1px solid var(--rc-border-highlight);
@@ -177,82 +188,107 @@ onBeforeUnmount(() => {
 
 .guide-head {
   display: flex;
-  align-items: center;
-  gap: 8px;
-  padding-bottom: 10px;
-  border-bottom: 1px solid var(--rc-border);
+  align-items: flex-start;
+  gap: 10px;
+}
+
+.guide-head :deep(svg) {
+  margin-top: 2px;
+}
+
+.guide-head-text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.guide-title {
   font-size: 13px;
   font-weight: 600;
   color: var(--rc-text-primary);
 }
 
+.guide-sub {
+  font-size: 12px;
+  color: var(--rc-text-muted);
+}
+
+/* 预览：浅色画布上居中放一条缩小的悬浮条 */
 .guide-preview {
-  margin: 10px 0;
-  padding: 10px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 18px 14px;
   border-radius: var(--rc-radius-md);
   background: var(--rc-canvas);
-  border: 1px solid var(--rc-border);
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 6px;
 }
 
 .guide-bar {
   width: 100%;
-  height: 26px;
+  height: 30px;
   display: flex;
   align-items: center;
-  gap: 6px;
-  padding: 0 8px;
-  border-radius: 7px;
+  padding: 0 10px;
+  border-radius: 8px;
   background: var(--rc-surface);
   border: 1px solid var(--rc-border-highlight);
-  box-shadow: var(--rc-focus-ring);
+  box-shadow: var(--rc-shadow-lg);
+  color: var(--rc-text-faint);
+  font-size: 11.5px;
+}
+
+.guide-bar-icon {
+  flex-shrink: 0;
+  margin-right: 7px;
+  font-size: 13px;
   color: var(--rc-text-muted);
-  font-size: 11px;
 }
 
 .guide-caret {
+  flex-shrink: 0;
   width: 1.5px;
-  height: 12px;
-  margin-left: auto;
+  height: 13px;
+  margin-right: 1px;
+  border-radius: 1px;
   background: var(--rc-accent);
-  animation: guide-blink 1s steps(2, start) infinite;
+  animation: guide-blink 1.1s steps(2, start) infinite;
 }
 
-.guide-hint {
-  font-size: 11px;
-  color: var(--rc-text-faint);
+.guide-placeholder {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
-.guide-text {
-  margin-bottom: 12px;
-  line-height: 1.6;
+.guide-keys {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 0;
 }
 
-.guide-foot {
+.guide-key-row {
   display: flex;
   align-items: center;
   justify-content: space-between;
+  gap: 12px;
+  min-height: 22px;
+}
+
+.guide-key-row dt {
+  font-size: 12px;
+  color: var(--rc-text-secondary);
+}
+
+.guide-key-row dd {
+  margin: 0;
+  display: inline-flex;
+}
+
+.guide-key-off {
   font-size: 11px;
   color: var(--rc-text-faint);
-}
-
-.guide-btn {
-  height: 26px;
-  padding: 0 10px;
-  border: none;
-  border-radius: 6px;
-  background: var(--rc-accent);
-  color: var(--rc-accent-contrast);
-  font-size: 12px;
-  font-weight: 500;
-  cursor: pointer;
-}
-
-.guide-btn:hover {
-  background: var(--rc-accent-hover);
 }
 
 @keyframes guide-blink {

@@ -27,13 +27,17 @@
   --rc-text-muted: #6b6b72;
   --rc-text-faint: #77777e;
   --rc-text-inverse: #f2f2f0;
+  --rc-text-on-color: #ffffff;
 
   /* ===== 4. 品牌色：余烬橙 ===== */
   --rc-accent: #ff6b3d;
   --rc-accent-hover: #f25a2b;
   --rc-accent-text: #c2410c;
   --rc-accent-subtle: rgba(255, 107, 61, 0.1);
-  --rc-accent-contrast: #1a0a04;
+  /* 实心强调按钮：比品牌色略深一档的填充 + 白色文字与图标，避免橙底黑字发闷 */
+  --rc-accent-fill: #f0582a;
+  --rc-accent-fill-hover: #dc4a1e;
+  --rc-accent-contrast: #ffffff;
   --rc-focus-ring: 0 0 0 1px rgba(255, 107, 61, 0.6), 0 0 14px rgba(255, 107, 61, 0.14);
 
   /* 标志（积木 Z）：亮色淡光晕 */
@@ -41,6 +45,18 @@
   --rc-mark-glow-soft: 0.28;
   --rc-mark-glow-core: 0.35;
   --rc-marker-glow: 0 0 6px rgba(255, 107, 61, 0.35);
+
+  /* 应用图标固定使用深色底板与浅色标志，不随主题切换 */
+  --rc-app-icon-background: linear-gradient(180deg, #232327, #141416);
+  --rc-app-icon-ink: #f2f2f0;
+
+  --rc-wechat: #07c160;
+  --rc-wechat-subtle: rgba(7, 193, 96, 0.08);
+  /* 二维码底色：深浅主题都保持白底，保证手机能扫 */
+  --rc-qr-surface: #ffffff;
+  /* 盖在图片上的操作遮罩（如头像悬停显示相机）：深浅主题下都是半透明黑底白图标，保证在任意图片上看得清 */
+  --rc-media-overlay: rgba(0, 0, 0, 0.45);
+  --rc-media-overlay-fg: #ffffff;
 
   /* ===== 5. 快捷键键帽 ===== */
   --rc-kbd-bg: #f3f1ed;
@@ -187,7 +203,9 @@
   --rc-accent-hover: #ff8a63;
   --rc-accent-text: #ff8a63;
   --rc-accent-subtle: rgba(255, 107, 61, 0.14);
-  --rc-accent-contrast: #1a0a04;
+  --rc-accent-fill: #ec5a2d;
+  --rc-accent-fill-hover: #f46a3e;
+  --rc-accent-contrast: #ffffff;
   --rc-focus-ring: 0 0 0 1px rgba(255, 107, 61, 0.55), 0 0 18px rgba(255, 107, 61, 0.18);
 
   /* 标志：暗色完整光晕 */

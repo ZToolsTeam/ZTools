@@ -42,10 +42,23 @@ describe('syncGlobalWakeHotkey', () => {
     expect(result.hotkey).toBe('Alt+Z')
   })
 
-  it('hotkey 和 getHotkey 都为空且 useDefaultWhenEmpty 为 true 时使用默认值', async () => {
+  it('配置里是空串（用户已关闭全局唤醒）时启动同步注销触发器，不退回默认值', async () => {
     hotkeyMock.getHotkey.mockResolvedValue('')
-    const result = await syncGlobalWakeHotkey({ useDefaultWhenEmpty: true })
-    expect(result.hotkey).toBe(DEFAULT_GLOBAL_WAKE_HOTKEY)
+    triggerMock.list.mockResolvedValue({
+      data: [{ id: 'global_wake_hotkey', enabled: true, config: { key: DEFAULT_GLOBAL_WAKE_HOTKEY } }]
+    })
+    const result = await syncGlobalWakeHotkey()
+    expect(result).toEqual({ success: true, hotkey: '' })
+    expect(triggerMock.unregister).toHaveBeenCalledWith('global_wake_hotkey')
+    expect(triggerMock.register).not.toHaveBeenCalled()
+  })
+
+  it('[破坏性] 读取配置失败时抛错，不注销也不改动现有注册', async () => {
+    hotkeyMock.getHotkey.mockRejectedValue(new Error('IPC 超时'))
+    await expect(syncGlobalWakeHotkey()).rejects.toThrow('IPC 超时')
+    expect(triggerMock.list).not.toHaveBeenCalled()
+    expect(triggerMock.unregister).not.toHaveBeenCalled()
+    expect(triggerMock.register).not.toHaveBeenCalled()
   })
 
   it('trigger 不可用时返回失败', async () => {
@@ -263,11 +276,11 @@ describe('当前唤醒快捷键（界面提示用）', () => {
     expect(currentGlobalWakeHotkey.value).toBe('')
   })
 
-  it('从配置刷新：未设置按默认值显示；读取失败保留当前值', async () => {
+  it('从配置刷新：已关闭（空串）显示为空；读取失败保留当前值', async () => {
     hotkeyMock.getHotkey.mockResolvedValueOnce('  Ctrl+Shift+Z ')
     expect(await refreshCurrentGlobalWakeHotkey()).toBe('Ctrl+Shift+Z')
     hotkeyMock.getHotkey.mockResolvedValueOnce('')
-    expect(await refreshCurrentGlobalWakeHotkey()).toBe(DEFAULT_GLOBAL_WAKE_HOTKEY)
+    expect(await refreshCurrentGlobalWakeHotkey()).toBe('')
     currentGlobalWakeHotkey.value = 'Ctrl+Q'
     hotkeyMock.getHotkey.mockRejectedValueOnce(new Error('IPC 超时'))
     expect(await refreshCurrentGlobalWakeHotkey()).toBe('Ctrl+Q')

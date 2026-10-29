@@ -272,18 +272,18 @@ test('ZTools M1.5 Group 3 Geek Development & Intelligent Interaction Test Suite'
       // 空闲状态下暂停应抛出异常
       assert.throws(() => {
         focusService.pauseSession()
-      }, /No active running focus session/)
+      }, /当前没有进行中的计时/)
 
       // 空闲状态下恢复应抛出异常
       assert.throws(() => {
         focusService.resumeSession()
-      }, /No paused focus session/)
+      }, /当前没有暂停的计时/)
 
       // 启动一个会话后重复启动应被拒绝
       focusService.startSession({ durationMinutes: 10 })
       assert.throws(() => {
         focusService.startSession({ durationMinutes: 10 })
-      }, /already running/)
+      }, /已有进行中或暂停的计时/)
 
       // 取消当前会话
       const cancelled = focusService.cancelSession()

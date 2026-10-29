@@ -569,9 +569,17 @@ export interface SystemFileIconParams {
   filePath: string
 }
 
+/**
+ * all：文件与程序（默认）；files：只要文件（程序已在界面本地匹配）；
+ * applications：全部可启动的程序（忽略 query 与 limit）
+ */
+export type SystemSearchFilesScope = 'all' | 'files' | 'applications'
+const SYSTEM_SEARCH_FILES_SCOPES: readonly string[] = ['all', 'files', 'applications']
+
 export interface SystemSearchFilesParams {
   query: string
   limit?: number
+  scope?: SystemSearchFilesScope
 }
 
 export interface SystemShutdownParams {
@@ -1876,10 +1884,13 @@ export function validateMethodParams(method: AllowedMethod, params: unknown): vo
       requireFilePath(params, 'filePath')
       return
     case 'system_search_files':
-      rejectUnknownKeys(params, ['query', 'limit'])
+      rejectUnknownKeys(params, ['query', 'limit', 'scope'])
       requireString(params, 'query', { min: 0, max: 512 })
       if (params.limit !== undefined) {
         requireInteger(params, 'limit', { min: 1, max: 200 })
+      }
+      if (params.scope !== undefined && (typeof params.scope !== 'string' || !SYSTEM_SEARCH_FILES_SCOPES.includes(params.scope))) {
+        throw new ZToolsError(errorCodes.invalidRequest, 'scope 无效', { path: 'scope' })
       }
       return
     case 'system_shutdown':

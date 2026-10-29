@@ -26,7 +26,7 @@ import {
 import { createCoreServices, readWebVersion, type CoreServices } from './services/core-services.js'
 import { WebResourceService } from './services/web-resource-service.js'
 import { configureSessionSecurity, createMainWindow, updateMainWindowTheme } from './windows/main-window.js'
-import { loadApplicationIcon } from './windows/application-icon.js'
+import { loadApplicationIcon, loadTrayIcon } from './windows/application-icon.js'
 import {
   decideCloseAction,
   readClosePreferences,
@@ -512,25 +512,74 @@ function openLauncherWindow(): void {
   showMainWindow()
 }
 
-async function readTrayState(): Promise<{ isSuperPanelEnabled: boolean; wakeAccelerator: string }> {
+async function readTrayState(): Promise<{ isSuperPanelEnabled: boolean; wakeAccelerator: string; showTrayIcon: boolean }> {
   if (!services) {
-    return { isSuperPanelEnabled: true, wakeAccelerator: 'Alt+Space' }
+    return { isSuperPanelEnabled: true, wakeAccelerator: 'Alt+Space', showTrayIcon: true }
   }
-  const [rawSuperPanel, rawWakeHotkey] = await Promise.all([
+  const [rawSuperPanel, rawWakeHotkey, rawShowTrayIcon] = await Promise.all([
     services.config.get('user_settings.json', 'super_panel', {}).catch(() => '{}'),
-    services.config.get('user_settings.json', 'hotkey.global', 'Alt+Space').catch(() => 'Alt+Space')
+    services.config.get('user_settings.json', 'hotkey.global', 'Alt+Space').catch(() => 'Alt+Space'),
+    services.config.get('user_settings.json', 'system.showTrayIcon', 'true').catch(() => 'true')
   ])
   const superPanelConfig = decodeSuperPanelConfig(rawSuperPanel)
   return {
     isSuperPanelEnabled: superPanelConfig.enabled,
-    wakeAccelerator: String(rawWakeHotkey || 'Alt+Space').trim() || 'Alt+Space'
+    // 未设置时读到默认值；存的是空串表示用户已关闭全局唤醒，托盘菜单不显示快捷键
+    wakeAccelerator: String(rawWakeHotkey ?? '').trim(),
+    // 默认显示；只有明确存为 false / 0 才隐藏
+    showTrayIcon: !['false', '0'].includes(String(rawShowTrayIcon).trim().toLowerCase())
   }
 }
 
+function createTrayController(state: { isSuperPanelEnabled: boolean; wakeAccelerator: string }): TrayController {
+  if (!mainApplicationIcon) throw new Error('Application icon is not ready')
+  return new TrayController({
+    icon: loadTrayIcon(mainApplicationIcon),
+    ...state,
+    showMainWindow,
+    togglePrimaryWindow: toggleMainWindow,
+    openLauncher: openLauncherWindow,
+    openSettings: () => openMainWindowAt('/advanced-settings'),
+    openAbout: () => openMainWindowAt('/about'),
+    onToggleSuperPanel: setSuperPanelEnabledFromTray,
+    relaunchApp: () => {
+      if (applicationLifecycle.cancellationRequested) return
+      app.relaunch()
+      app.quit()
+    },
+    requestExit: () => { void requestMainWindowClose('trayMenu') }
+  })
+}
+
+// 托盘图标随「显示托盘图标」设置即时出现 / 消失；同步串行执行，避免连续切换时重复创建
+let trayApplyQueue: Promise<void> = Promise.resolve()
+
+function applyTrayState(state: { isSuperPanelEnabled: boolean; wakeAccelerator: string; showTrayIcon: boolean }): Promise<void> {
+  const { showTrayIcon, ...menuState } = state
+  if (!showTrayIcon) {
+    tray?.stop()
+    tray = null
+    return Promise.resolve()
+  }
+  if (tray) {
+    tray.updateState(menuState)
+    return Promise.resolve()
+  }
+  const created = createTrayController(menuState)
+  tray = created
+  return created.start().catch((error: unknown) => {
+    if (tray === created) tray = null
+    console.error('托盘图标创建失败', error)
+    lifecycleLog('ERROR', 'Tray creation failed', undefined, error)
+  })
+}
+
 function syncTrayState(): void {
-  if (!tray || applicationLifecycle.cancellationRequested) return
-  void readTrayState().then((state) => {
-    tray?.updateState(state)
+  if (!mainApplicationIcon || applicationLifecycle.cancellationRequested) return
+  trayApplyQueue = trayApplyQueue.catch(() => undefined).then(async () => {
+    const state = await readTrayState()
+    if (applicationLifecycle.cancellationRequested) return
+    await applyTrayState(state)
   }).catch(() => undefined)
 }
 
@@ -727,10 +776,13 @@ async function showNativeCloseConfirmation(): Promise<void> {
     result = await dialog.showMessageBox(window, {
       type: 'question',
       title: '退出 ZTools',
-      message: lifecyclePolicy.useSystemTray ? '要退出应用还是最小化到系统托盘？' : '要退出应用还是隐藏到 Dock？',
-      buttons: lifecyclePolicy.useSystemTray
-        ? ['立即退出', '最小化到托盘', '取消']
-        : ['立即退出', '隐藏到 Dock', '取消'],
+      // Windows 关掉托盘图标后没有托盘可去，改说「在后台运行」（仍可用全局快捷键或再次打开 ZTools 唤起）
+      message: !lifecyclePolicy.useSystemTray
+        ? '要退出应用还是隐藏到 Dock？'
+        : tray ? '要退出应用还是最小化到系统托盘？' : '要退出应用还是在后台运行？',
+      buttons: !lifecyclePolicy.useSystemTray
+        ? ['立即退出', '隐藏到 Dock', '取消']
+        : ['立即退出', tray ? '最小化到托盘' : '在后台运行', '取消'],
       defaultId: 1,
       cancelId: 2,
       noLink: true,
@@ -1066,26 +1118,8 @@ if (!app.requestSingleInstanceLock()) {
     if (healthCheckExitCode === undefined) {
       launcher.prewarm()
     }
-    if (lifecyclePolicy.useSystemTray) {
-      const initialTrayState = await readTrayState()
-      tray = new TrayController({
-        icon: mainApplicationIcon,
-        ...initialTrayState,
-        showMainWindow,
-        togglePrimaryWindow: toggleMainWindow,
-        openLauncher: openLauncherWindow,
-        openSettings: () => openMainWindowAt('/advanced-settings'),
-        openAbout: () => openMainWindowAt('/about'),
-        onToggleSuperPanel: setSuperPanelEnabledFromTray,
-        relaunchApp: () => {
-          if (applicationLifecycle.cancellationRequested) return
-          app.relaunch()
-          app.quit()
-        },
-        requestExit: () => { void requestMainWindowClose('trayMenu') }
-      })
-      await tray.start()
-    }
+    // Windows 通知区域与 macOS 菜单栏都显示托盘图标，可在设置中关闭
+    await applyTrayState(await readTrayState())
     if (!applicationLifecycle.canContinueStartup()) return
     await router.ready().catch((error: unknown) => {
       console.error('超级面板输入初始化失败', error)

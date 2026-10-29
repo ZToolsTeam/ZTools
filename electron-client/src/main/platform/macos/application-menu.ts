@@ -4,6 +4,21 @@ export interface MacosApplicationMenuOptions {
   readonly onOpenPreferences?: () => void
 }
 
+/**
+ * 显示菜单。正式版不放“重新载入 / 强制重新载入”：插件普遍用 ⌘R 作刷新，
+ * 插件动作未命中时菜单会重载整个主窗口、丢掉插件状态；开发版保留重新载入与开发者工具。
+ */
+export function macosViewMenuItems(isPackaged: boolean): MenuItemConstructorOptions[] {
+  return [
+    ...(isPackaged ? [] : [{ role: 'reload' }, { role: 'forceReload' }, { role: 'toggleDevTools' }, { type: 'separator' }] as MenuItemConstructorOptions[]),
+    { role: 'resetZoom' },
+    { role: 'zoomIn' },
+    { role: 'zoomOut' },
+    { type: 'separator' },
+    { role: 'togglefullscreen' }
+  ]
+}
+
 export function installMacosApplicationMenu(options: MacosApplicationMenuOptions = {}): void {
   const appSubmenu: MenuItemConstructorOptions[] = [
     { role: 'about' }
@@ -37,7 +52,10 @@ export function installMacosApplicationMenu(options: MacosApplicationMenuOptions
       submenu: appSubmenu
     },
     { role: 'editMenu' },
-    { role: 'viewMenu' },
+    {
+      label: '显示',
+      submenu: macosViewMenuItems(app.isPackaged)
+    },
     { role: 'windowMenu' }
   ])
   Menu.setApplicationMenu(menu)

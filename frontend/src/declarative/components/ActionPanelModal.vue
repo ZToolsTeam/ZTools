@@ -21,7 +21,7 @@
       </div>
 
       <!-- Action 列表 -->
-      <div class="action-panel-list declarative-scrollbar">
+      <div class="action-panel-list declarative-scrollbar" role="listbox" aria-label="动作列表">
         <div v-if="filteredActions.length === 0" class="action-panel-empty">无匹配动作</div>
 
         <template v-for="(action, idx) in filteredActions" :key="idx">
@@ -34,7 +34,7 @@
 
           <div
             class="action-panel-item"
-            :class="{ 'is-selected': selectedIndex === idx }"
+            :class="{ 'is-selected': selectedIndex === idx, 'is-destructive': isDestructiveAction(action) }"
             role="option"
             :aria-selected="selectedIndex === idx"
             @click="executeAction(action)"
@@ -46,8 +46,7 @@
               <span v-else class="action-panel-icon-slot" aria-hidden="true"></span>
             </template>
             <span class="action-panel-title">{{ action.props?.title || '未命名动作' }}</span>
-            <ShortcutKeys v-if="actionShortcutCombo(action)" :combo="actionShortcutCombo(action)" />
-            <ShortcutKeys v-else-if="idx === 0" combo="Enter" />
+            <ShortcutKeys v-if="keyHintOf(action)" :combo="keyHintOf(action)" />
           </div>
         </template>
       </div>
@@ -69,6 +68,7 @@
 import { ref, computed, watch, nextTick } from "vue";
 import ShortcutKeys from '@/components/base/ShortcutKeys.vue'
 import DeclarativeIcon from "./DeclarativeIcon.vue";
+import { actionKeyHint, isDestructiveAction } from "../uiText.js";
 
 const props = defineProps({
   visible: {
@@ -87,23 +87,34 @@ const props = defineProps({
   placement: {
     type: String,
     default: "center"
+  },
+  /** 当前视图类型（List / Detail / Form），决定第 1、2 个动作的 Enter / ⌘Enter 提示 */
+  viewType: {
+    type: String,
+    default: "List"
   }
 });
 
-const MODIFIER_COMBO = { cmd: "Ctrl", command: "Ctrl", meta: "Ctrl", ctrl: "Ctrl", control: "Ctrl", opt: "Alt", option: "Alt", alt: "Alt", shift: "Shift" };
-
-/** 把插件声明的 { modifiers: ['cmd'], key: 'c' } 转为统一写法 'Ctrl+C'；无法识别时不显示 */
-function actionShortcutCombo(action) {
-  const shortcut = action?.props?.shortcut;
-  if (!shortcut || typeof shortcut.key !== "string" || !shortcut.key.trim()) return "";
-  const modifiers = Array.isArray(shortcut.modifiers) ? shortcut.modifiers : [];
-  const parts = [];
-  for (const mod of modifiers) {
-    const name = MODIFIER_COMBO[String(mod).toLowerCase()];
-    if (name && !parts.includes(name)) parts.push(name);
+/**
+ * 每个动作的键位提示：按它在未过滤动作列表里的原始位置计算（搜索过滤后不会错位），
+ * 表单里第 1 个动作是 ⌘Enter（Enter 在多行输入里是换行），子菜单里的动作没有固定键位。
+ */
+const keyHints = computed(() => {
+  const map = new Map();
+  let directIndex = 0;
+  for (const action of props.actions || []) {
+    if (action?._fromSubmenu) {
+      map.set(action, actionKeyHint(action, -1, props.viewType));
+      continue;
+    }
+    map.set(action, actionKeyHint(action, directIndex, props.viewType));
+    directIndex += 1;
   }
-  parts.push(shortcut.key.trim());
-  return parts.join("+");
+  return map;
+});
+
+function keyHintOf(action) {
+  return keyHints.value.get(action) || "";
 }
 
 const emit = defineEmits(["close", "trigger"]);
@@ -307,7 +318,7 @@ function executeAction(action) {
 }
 .action-panel-item.is-selected .action-panel-marker {
   background: var(--rc-accent);
-  box-shadow: 0 0 8px rgba(255, 107, 61, 0.55);
+  box-shadow: var(--rc-marker-glow);
 }
 .action-panel-icon {
   flex-shrink: 0;
@@ -315,6 +326,18 @@ function executeAction(action) {
 }
 .action-panel-item.is-selected .action-panel-icon {
   color: var(--rc-accent-text);
+}
+/* 危险动作（Action.Style.Destructive）：错误色文字，选中时浅错误色底，不用强调色 */
+.action-panel-item.is-destructive,
+.action-panel-item.is-destructive .action-panel-icon {
+  color: var(--rc-error);
+}
+.action-panel-item.is-destructive.is-selected {
+  background: var(--rc-error-subtle);
+}
+.action-panel-item.is-destructive.is-selected .action-panel-marker {
+  background: var(--rc-error);
+  box-shadow: none;
 }
 .action-panel-title {
   flex: 1;

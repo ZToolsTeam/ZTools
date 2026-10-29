@@ -443,7 +443,7 @@ test('路径授权转交：不超过源窗口（只读→只读、递归祖先�
     const sibling = await touch(path.join(project, 'sibling.txt'))
     const ungranted = await touch(path.join(h.data, 'secret.txt'))
     const outside = await touch(path.join(h.root, 'outside', 'target.txt'))
-    await fs.symlink(path.dirname(outside), path.join(sub, 'escape'))
+    await fs.symlink(path.dirname(outside), path.join(sub, 'escape'), process.platform === 'win32' ? 'junction' : 'dir')
 
     await h.files.grantOpenPath(readOnly, h.mainCaller)
     await h.files.grantFolder(project, h.mainCaller)

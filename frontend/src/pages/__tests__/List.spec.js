@@ -5,6 +5,7 @@ import { createRouter, createMemoryHistory } from 'vue-router'
 
 import List from '../List.vue'
 import { usePluginsStore } from '@/stores/plugins'
+import { StoreCatalogManager } from '@/utils/storeCatalogManager'
 
 const apiMocks = vi.hoisted(() => ({
   getCategories: vi.fn(),
@@ -90,6 +91,8 @@ describe('List page', () => {
     // List 只依赖 store.loadWithCache（目录拉取 / 本地筛选分页由 StoreCatalogManager 负责，另有测试覆盖），
     // 这里把边界接到 apiMocks.getMarketPlugins 上，断言 List 传出的查询参数与竞态处理
     pluginsStore.loadWithCache = vi.fn((params) => apiMocks.getMarketPlugins(params))
+    // 来源数量在本地目录上统计（store 另有测试），这里固定返回，断言 List 的展示与刷新时机
+    pluginsStore.countPluginsBySource = vi.fn().mockResolvedValue({ all: 13, official: 10, community: 3 })
     pluginsStore.fetchInstalledPlugins = vi.fn().mockResolvedValue([])
     pluginsStore.shouldCheckUpdate = vi.fn().mockReturnValue(false)
 
@@ -145,6 +148,38 @@ describe('List page', () => {
     expect(toastSpies.toastSuccess).not.toHaveBeenCalled()
     if (outcome === 'failure') expect(toastSpies.toastError).toHaveBeenCalledWith(expect.stringContaining('插件已下架'))
     else expect(toastSpies.toastError).not.toHaveBeenCalled()
+  })
+
+  it('开源版不显示评分、不请求评分汇总：卡片收到的 ratingSummary 始终为 null，目录里的旧 rating 字段也不用', async () => {
+    const fetchSpy = vi.fn().mockRejectedValue(new Error('测试环境断网'))
+    vi.stubGlobal('fetch', fetchSpy)
+    apiMocks.getMarketPlugins.mockResolvedValue({
+      list: [{ pluginId: 'rated-plugin', name: '有旧评分', rating: 4.9 }],
+      total: 1
+    })
+    const received = []
+    wrapper = mount(List, {
+      global: {
+        plugins: [router],
+        stubs: {
+          PluginCard3D: {
+            props: ['plugin', 'ratingSummary'],
+            setup(props) {
+              received.push(props.ratingSummary)
+              return () => null
+            }
+          },
+          SkeletonCard: true,
+          APagination: true,
+          AButton: true
+        }
+      }
+    })
+    await flushPromises()
+    expect(received.length).toBeGreaterThan(0)
+    expect(received.every((v) => v === null)).toBe(true)
+    expect(fetchSpy.mock.calls.some(([url]) => String(url).includes('ratings'))).toBe(false)
+    expect(wrapper.text()).not.toContain('4.9')
   })
 
   it('keeps the latest search results when older requests resolve later', async () => {
@@ -277,7 +312,7 @@ describe('List page', () => {
     expect(toastSpies.toastError).toHaveBeenCalledWith('安装失败: 插件目录暂不可用')
   })
 
-  it('全部插件页按分类展示前 8 个并显示真实总数', async () => {
+  it('全部插件页按分类展示前 8 个，总数按完整目录去重而非累加分类或预览数量', async () => {
     apiMocks.getCategories.mockResolvedValue([
       {
         id: 1,
@@ -292,28 +327,17 @@ describe('List page', () => {
         pluginsCount: 2
       }
     ])
-    apiMocks.getMarketPlugins.mockImplementation(({ category }) => {
-      if (category === '系统工具') {
-        return Promise.resolve({
-          list: Array.from({ length: 8 }, (_, index) => ({
-            pluginId: `system-${index + 1}`,
-            name: `系统插件 ${index + 1}`,
-            category
-          })),
-          total: 12
-        })
-      }
-      if (category === '办公效率') {
-        return Promise.resolve({
-          list: [
-            { pluginId: 'office-1', name: '办公插件 1', category },
-            { pluginId: 'office-2', name: '办公插件 2', category }
-          ],
-          total: 2
-        })
-      }
-      return Promise.resolve({ list: [], total: 0 })
+    const manager = new StoreCatalogManager({
+      fetchRemote: async () => [
+        ...Array.from({ length: 12 }, (_, index) => ({
+          pluginId: `system-${index + 1}`,
+          name: `系统插件 ${index + 1}`,
+          category: index === 0 ? ['系统工具', '办公效率'] : ['系统工具']
+        })),
+        { pluginId: 'office-1', name: '办公插件 1', category: ['办公效率'] }
+      ]
     })
+    apiMocks.getMarketPlugins.mockImplementation((params) => manager.query(params))
 
     await router.push({ name: 'list' })
     wrapper = mount(List, {
@@ -336,8 +360,11 @@ describe('List page', () => {
     })
     await flushPromises()
 
-    // 远端 2 个分类 + 内置插件补上的分类，各取一次预览
-    expect(apiMocks.getMarketPlugins).toHaveBeenCalledTimes(EXPECTED_CATEGORIES.length)
+    // 各分类取一次预览，另从完整目录读取去重总数（只取一条，不拉取全量卡片）。
+    expect(apiMocks.getMarketPlugins).toHaveBeenCalledTimes(EXPECTED_CATEGORIES.length + 1)
+    expect(apiMocks.getMarketPlugins).toHaveBeenCalledWith({
+      sourceType: 'all', page: 1, per_page: 1
+    })
     expect(apiMocks.getMarketPlugins).toHaveBeenCalledWith({
       category: '系统工具',
       page: 1,
@@ -350,7 +377,10 @@ describe('List page', () => {
     })
     expect(wrapper.vm.previewGroups).toHaveLength(2)
     expect(wrapper.findAll('.plugin-card-stub')).toHaveLength(10)
-    expect(wrapper.text()).toContain('共 14 个')
+    // 数量显示在来源切换上，不再单独显示「共 N 个」
+    const sourceCounts = wrapper.findAll('[aria-label="来源"] .seg-btn').map((b) => b.find('.seg-count').text())
+    expect(sourceCounts).toEqual(['13', '10', '3'])
+    expect(wrapper.find('.market-total').exists()).toBe(false)
     expect(wrapper.text()).toContain('系统工具')
     expect(wrapper.text()).toContain('12')
     expect(wrapper.text()).toContain('办公效率')
@@ -573,16 +603,16 @@ describe('List page', () => {
     await flushPromises()
 
     expect(wrapper.find('.market-title').text()).toBe('插件市场')
-    const chips = wrapper.findAll('.market-chip')
+    const chips = wrapper.findAll('[aria-label="分类"] .seg-btn')
     // 远端与本地共用固定的中文分类顺序
     expect(chips.map((c) => c.text())).toEqual(['全部', ...EXPECTED_CATEGORIES])
-    expect(chips[0].classes()).toContain('is-on')
+    expect(chips[0].classes()).toContain('active')
 
     await chips[2].trigger('click')
     await flushPromises()
     expect(router.currentRoute.value.params.category).toBe('系统工具')
     expect(wrapper.find('.market-title').text()).toBe('系统工具')
-    expect(wrapper.findAll('.market-chip')[2].attributes('aria-pressed')).toBe('true')
+    expect(wrapper.findAll('[aria-label="分类"] .seg-btn')[2].attributes('aria-checked')).toBe('true')
 
     await router.push({ name: 'list', query: { q: 'json' } })
     await flushPromises()
@@ -611,5 +641,47 @@ describe('List page', () => {
     expect(toastSpies.toastSuccess).toHaveBeenCalled()
   })
 
-})
 
+  it('来源数量：只切换来源不重新统计；分类或搜索词变化时先占位再显示；统计失败时不显示数字', async () => {
+    const router = createRouter({ history: createMemoryHistory(), routes: [{ path: '/list/:category?', name: 'list', component: List }] })
+    await router.push('/list/系统工具')
+    let release
+    pluginsStore.countPluginsBySource = vi.fn()
+      .mockResolvedValueOnce({ all: 5, official: 4, community: 1 })
+      .mockImplementationOnce(() => new Promise((resolve) => { release = resolve }))
+      .mockRejectedValueOnce(new Error('目录不可用'))
+    pluginsStore.setSourceFilter = vi.fn(async (type) => { pluginsStore.sourceFilter = type })
+    const wrapper = mount(List, { global: { plugins: [router], stubs: { PluginCard3D: true, SkeletonCard: true, APagination: true, AButton: true } } })
+    const counts = () => wrapper.findAll('[aria-label="来源"] .seg-count').map((c) => (c.classes().includes('is-pending') ? '…' : c.text()))
+    try {
+      await flushPromises()
+      expect(pluginsStore.countPluginsBySource).toHaveBeenLastCalledWith({ category: '系统工具', keyword: '' })
+      expect(counts()).toEqual(['5', '4', '1'])
+
+      // 只切换来源：数量不变，不重新统计
+      await wrapper.findAll('[aria-label="来源"] .seg-btn')[1].trigger('click')
+      await flushPromises()
+      expect(pluginsStore.countPluginsBySource).toHaveBeenCalledTimes(1)
+      expect(counts()).toEqual(['5', '4', '1'])
+
+      // 换分类：统计期间占位（不显示数字但保留宽度）
+      await router.push('/list/办公效率')
+      await flushPromises()
+      expect(counts()).toEqual(['…', '…', '…'])
+      release({ all: 9, official: 9, community: 0 })
+      await flushPromises()
+      expect(counts()).toEqual(['9', '9', '0'])
+
+      // 统计失败：不显示数字，也不编造
+      await router.push('/list/开发工具')
+      await flushPromises()
+      expect(wrapper.findAll('[aria-label="来源"] .seg-count')).toHaveLength(0)
+
+      // [回归] 失败后同一分类再次加载（如网络恢复后切换来源重试）会重新统计，而不是一直不显示
+      pluginsStore.countPluginsBySource.mockResolvedValueOnce({ all: 6, official: 6, community: 0 })
+      await wrapper.findAll('[aria-label="来源"] .seg-btn')[0].trigger('click')
+      await flushPromises()
+      expect(counts()).toEqual(['6', '6', '0'])
+    } finally { wrapper.unmount() }
+  })
+})

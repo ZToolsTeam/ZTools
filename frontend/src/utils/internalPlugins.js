@@ -1,7 +1,7 @@
 /**
  * 内置插件统一唤起门面与注册体系
  *
- * 目标：支持设置面板与开发者工具的内置插件化体系，提供统一的唤起、传参与降级门面。
+ * 目标：支持设置面板的内置插件化体系，提供统一的唤起、传参与降级门面。
  * - 优先调用 window.ztools.plugin.open(pluginId, payload) 唤起原生插件；
  * - 若在纯开发调试/Web 环境，或插件唤起失败，优雅降级为本地路由组件或友好提示。
  */
@@ -12,8 +12,7 @@ import router from '@/router'
  * 内置插件唯一标识
  */
 export const INTERNAL_PLUGINS = Object.freeze({
-  SETTINGS: 'internal-settings',
-  DEVELOPER: 'internal-developer'
+  SETTINGS: 'internal-settings'
 })
 
 /**
@@ -24,11 +23,6 @@ export const INTERNAL_PLUGIN_DEFINITIONS = Object.freeze({
     pluginId: INTERNAL_PLUGINS.SETTINGS,
     name: '系统设置',
     fallbackRoute: Object.freeze({ name: 'advanced-settings' })
-  }),
-  [INTERNAL_PLUGINS.DEVELOPER]: Object.freeze({
-    pluginId: INTERNAL_PLUGINS.DEVELOPER,
-    name: '开发者工具',
-    fallbackRoute: Object.freeze({ name: 'devtools' })
   })
 })
 
@@ -72,7 +66,7 @@ function normalizePayload(payload) {
 /**
  * 统一唤起内置插件
  *
- * @param {string} pluginId - 内置插件 ID（如 'internal-settings' 或 'internal-developer'）
+ * @param {string} pluginId - 内置插件 ID（如 'internal-settings'）
  * @param {Record<string, unknown>} [payload] - 启动参数对象
  * @param {Object} [options] - 选项
  * @param {import('vue-router').Router} [options.router] - 自定义路由实例（默认使用全局 router）
@@ -180,16 +174,6 @@ export async function openSettings(options = {}) {
 }
 
 /**
- * 唤起开发者工具（门面便捷方法）
- * @param {Object} [options]
- * @param {import('vue-router').Router} [options.router]
- * @param {Object} [options.routeOptions]
- */
-export async function openDevTools(options = {}) {
-  return openInternalPlugin(INTERNAL_PLUGINS.DEVELOPER, undefined, options)
-}
-
-/**
  * 组合式 API
  */
 export function useInternalPlugins() {
@@ -198,7 +182,6 @@ export function useInternalPlugins() {
     INTERNAL_PLUGIN_DEFINITIONS,
     openInternalPlugin,
     openSettings,
-    openDevTools,
     isPluginApiAvailable
   }
 }

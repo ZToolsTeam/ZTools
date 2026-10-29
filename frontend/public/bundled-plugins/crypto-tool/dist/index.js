@@ -1,9 +1,15 @@
-import { List, Form, ActionPanel, Action, Icon, showToast, Toast, useState, useRef, useEffect, useNavigation } from "@ztools/declarative-ui";
-import { calculateMultiHash, decodeBase64, aesEncrypt, aesDecrypt, calculateHmac, valueMarkdown } from "./logic.js";
+import { List, Form, ActionPanel, Action, Icon, showToast, Toast, useState, useRef, useEffect, useNavigation, Clipboard } from "@ztools/declarative-ui";
+import { calculateMultiHash, decodeBase64, encodeBase64, aesEncrypt, aesDecrypt, calculateHmac, valueMarkdown } from "./logic.js";
 import { usePopoutValue } from "./popout-state.js";
-import { encodeText, decodeText } from "./codecs.js";
+import { encodeText, decodeText, hasLoneSurrogate } from "./codecs.js";
 import GenUuidCommand from "./uuid.js";
 export { default as genUuid } from "./uuid.js";
+const CODEC_LABEL = { url: "URL", unicode: "Unicode", hex: "Hex" };
+/** macOS 只写 ⌘，Windows 写 Ctrl */
+function modKey() {
+    const nav = globalThis.navigator;
+    return /Mac/i.test(String(nav?.platform || nav?.userAgent || "")) ? "⌘" : "Ctrl";
+}
 const HMAC_ALGORITHMS = ["sha256", "sha512", "sha1", "md5"];
 const DEFAULT_AES_DRAFT = { direction: "encrypt", text: "", iv: "" };
 const DEFAULT_HMAC_DRAFT = { algorithm: "sha256", text: "" };
@@ -89,12 +95,14 @@ export function HmacForm({ draft = DEFAULT_HMAC_DRAFT, onDraftChange } = {}) {
     const [key, setKey] = useState("");
     const setAlgorithm = (v) => { setAlgorithmState(v); onDraftChange?.({ algorithm: v, text }); };
     const setText = (v) => { setTextState(v); onDraftChange?.({ algorithm, text: v }); };
-    const value = calculateHmac(algorithm, text, key);
+    // 消息和密钥都没填时不展示空串的 HMAC，也不提供复制，避免把无意义的值当结果用
+    const hasInput = Boolean(text || key);
+    const value = hasInput ? calculateHmac(algorithm, text, key) : "";
     return Form({
         navigationTitle: "HMAC 计算",
-        actions: ActionPanel({ title: "HMAC" }, [
-            Action.CopyToClipboard({ title: "复制 HMAC", content: value, icon: Icon.CopyClipboard })
-        ])
+        actions: ActionPanel({ title: "HMAC" }, hasInput
+            ? [Action.CopyToClipboard({ title: "复制 HMAC", content: value, icon: Icon.CopyClipboard })]
+            : [])
     }, [
         Form.Dropdown({ id: "algorithm", title: "算法", value: algorithm, onChange: (v) => setAlgorithm(HMAC_ALGORITHMS.includes(v) ? v : "sha256") }, [
             Form.Dropdown.Item({ title: "HMAC-SHA256", value: "sha256" }),
@@ -104,7 +112,7 @@ export function HmacForm({ draft = DEFAULT_HMAC_DRAFT, onDraftChange } = {}) {
         ]),
         Form.TextArea({ id: "text", title: "消息", placeholder: "要签名的文字", value: text, onChange: (v) => setText(v) }),
         Form.PasswordField({ id: "key", title: "密钥", placeholder: "HMAC 密钥", value: key, onChange: (v) => setKey(v) }),
-        Form.Description({ title: "结果（十六进制）", text: value })
+        Form.Description({ title: "结果（十六进制）", text: hasInput ? value : "填写消息和密钥后，结果显示在这里" })
     ]);
 }
 export default function CryptoToolCommand() {
@@ -126,27 +134,65 @@ export default function CryptoToolCommand() {
         Action({ title: "HMAC 计算…", icon: Icon.Key, onAction: () => push(() => HmacForm({ draft: hmacDraft, onDraftChange: setHmacDraft })) }),
         Action({ title: "UUID 批量生成…", icon: Icon.Key, onAction: () => push(GenUuidCommand) })
     ];
+    // 空状态提示行的主动作：把剪贴板内容填进搜索框；AES / HMAC / UUID 只在动作面板（列表级动作）里
+    const pasteFromClipboard = async () => {
+        try {
+            const text = await Clipboard.readText();
+            if (!text) {
+                await showToast(Toast.Style.Failure, "剪贴板里没有文字");
+                return;
+            }
+            setInputText(text);
+        }
+        catch (err) {
+            await showToast(Toast.Style.Failure, "读取剪贴板失败", err instanceof Error ? err.message : String(err));
+        }
+    };
+    const emptyActions = ActionPanel({ title: "操作" }, [
+        Action({ title: "从剪贴板粘贴", icon: Icon.Clipboard, onAction: pasteFromClipboard })
+    ]);
+    // 错误行：主动作清空输入，次动作从剪贴板重新粘贴，都与当前任务相关
+    const errorActions = ActionPanel({ title: "操作" }, [
+        Action({ title: "清空输入", icon: Icon.Trash, onAction: () => setInputText("") }),
+        Action({ title: "从剪贴板粘贴", icon: Icon.Clipboard, onAction: pasteFromClipboard })
+    ]);
     const commonItemActions = (value, label) => ActionPanel({ title: label }, [
         Action.CopyToClipboard({ title: "复制", content: value, icon: Icon.CopyClipboard }),
-        ...globalActions,
-        Action({ title: "清空输入", icon: Icon.Trash, onAction: () => setInputText("") })
+        Action({ title: "清空输入", icon: Icon.Trash, onAction: () => setInputText("") }),
+        // AES / HMAC / UUID 是另开表单的全局工具，排在后面收进动作面板，不占回车与次动作位
+        ...globalActions
     ]);
     let items;
     if (mode === "url" || mode === "unicode" || mode === "hex") {
-        items = !inputText ? [List.Item({ id: "empty", title: "输入文字或编码内容", subtitle: "编码与解码结果分别显示", icon: Icon.Text })] : ["encode", "decode"].map(direction => {
+        items = !inputText ? [List.Item({ id: "empty", title: "输入文字或编码内容", subtitle: "编码与解码结果分别显示", icon: Icon.Text, actions: emptyActions })] : ["encode", "decode"].map(direction => {
             try {
                 const value = direction === "encode" ? encodeText(inputText, mode) : decodeText(inputText, mode);
-                return List.Item({ id: direction, title: value || "（空文本）", subtitle: `${mode.toUpperCase()} ${direction === "encode" ? "编码" : "解码"}`, icon: Icon.Text, detail: List.Item.Detail({ markdown: valueMarkdown(value) }), actions: commonItemActions(value, direction === "encode" ? "编码结果" : "解码结果") });
+                return List.Item({ id: direction, title: value || "（空文本）", subtitle: `${CODEC_LABEL[mode]} ${direction === "encode" ? "编码" : "解码"}`, icon: Icon.Text, detail: List.Item.Detail({ markdown: valueMarkdown(value) }), actions: commonItemActions(value, direction === "encode" ? "编码结果" : "解码结果") });
             }
             catch (err) {
-                return List.Item({ id: `${direction}-error`, title: direction === "encode" ? "无法编码" : "无法解码", subtitle: err instanceof Error ? err.message : String(err), icon: Icon.ExclamationMark });
+                return List.Item({ id: `${direction}-error`, title: direction === "encode" ? "无法编码" : "无法解码", subtitle: err instanceof Error ? err.message : String(err), icon: Icon.ExclamationMark, actions: errorActions });
             }
         });
     }
     else if (mode === "base64-decode") {
         const decoded = decodeBase64(inputText);
+        const encoded = inputText.trim()
+            ? (() => {
+                const value = encodeBase64(inputText);
+                return List.Item({
+                    id: "encoded",
+                    title: value,
+                    subtitle: "Base64 编码结果（UTF-8）",
+                    icon: Icon.Text,
+                    accessories: [{ text: `${value.length} 字符` }],
+                    detail: List.Item.Detail({ markdown: valueMarkdown(value) }),
+                    actions: commonItemActions(value, "编码结果")
+                });
+            })()
+            : null;
+        // 编码与解码都给：能解码的输入把解码结果放前面，否则编码结果放前面
         items = !inputText.trim()
-            ? [List.Item({ id: "empty", title: "在上方粘贴 Base64 字符串", subtitle: "支持标准与 URL-safe 两种写法", icon: Icon.Text, actions: ActionPanel({ title: "操作" }, globalActions) })]
+            ? [List.Item({ id: "empty", title: "输入文字或粘贴 Base64 字符串", subtitle: "编码与解码结果分别显示，解码支持标准与 URL-safe 两种写法", icon: Icon.Text, actions: emptyActions })]
             : decoded.success
                 ? [List.Item({
                         id: "decoded",
@@ -157,17 +203,29 @@ export default function CryptoToolCommand() {
                         // 解码结果往往是多行或很长的文本，列表行只能显示一行，右侧原样显示完整内容
                         detail: decoded.result ? List.Item.Detail({ markdown: valueMarkdown(decoded.result) }) : undefined,
                         actions: commonItemActions(decoded.result || "", "解码结果")
-                    })]
-                : [List.Item({ id: "decode-error", title: "无法解码", subtitle: decoded.error, icon: Icon.ExclamationMark, actions: ActionPanel({ title: "操作" }, globalActions) })];
+                    }), encoded]
+                : [encoded, List.Item({ id: "decode-error", title: "不是有效的 Base64，无法解码", subtitle: decoded.error, icon: Icon.ExclamationMark, actions: errorActions })];
     }
     else if (!inputText) {
         items = [
             List.Item({
                 id: "empty",
                 title: "在上方输入文字，实时计算 MD5 / SHA / Base64",
-                subtitle: "AES 加解密和 HMAC 请按 Ctrl+K 打开动作面板",
+                subtitle: `AES 加解密和 HMAC 请按 ${modKey()}+K 打开动作面板`,
                 icon: Icon.Key,
-                actions: ActionPanel({ title: "操作" }, globalActions)
+                actions: emptyActions
+            })
+        ];
+    }
+    else if (hasLoneSurrogate(inputText)) {
+        // TextEncoder 会把不成对的代理项替换成 U+FFFD 再算散列，encodeURIComponent 会直接抛错；如实提示而不是给出别的文字的散列
+        items = [
+            List.Item({
+                id: "invalid-text",
+                title: "输入包含不成对的 Unicode 代理项",
+                subtitle: "无法按 UTF-8 计算散列，请检查粘贴来源",
+                icon: Icon.ExclamationMark,
+                actions: ActionPanel({ title: "操作" }, [Action({ title: "清空输入", icon: Icon.Trash, onAction: () => setInputText("") })])
             })
         ];
     }
@@ -198,17 +256,21 @@ export default function CryptoToolCommand() {
         navigationTitle: "加解密与散列助手",
         // 只有存在结果时才开右侧预览；空状态、解码失败等提示行没有 detail，自动保持全宽
         isShowingDetail: Boolean(inputText),
-        searchBarPlaceholder: mode === "hash" ? "输入要计算散列或编码的文字..." : mode === "base64-decode" ? "粘贴要解码的 Base64..." : "输入文字或编码内容…",
+        searchBarPlaceholder: mode === "hash" ? "输入要计算散列或编码的文字..." : mode === "base64-decode" ? "输入要编码的文字或要解码的 Base64…" : "输入文字或编码内容…",
         searchText: inputText,
         onSearchTextChange: (text) => setInputText(text),
         searchBarAccessory: List.Dropdown({ tooltip: "模式", value: mode, onChange: (v) => setMode(isMode(v) ? v : "hash") }, [
             List.Dropdown.Item({ title: "散列与编码", value: "hash" }),
-            List.Dropdown.Item({ title: "Base64 解码", value: "base64-decode" }),
+            List.Dropdown.Item({ title: "Base64 编解码", value: "base64-decode" }),
             List.Dropdown.Item({ title: "URL 编解码", value: "url" }),
             List.Dropdown.Item({ title: "Unicode 编解码", value: "unicode" }),
             List.Dropdown.Item({ title: "Hex 编解码（UTF-8）", value: "hex" })
         ]),
-        actions: ActionPanel({ title: "全局操作" }, globalActions)
-    }, [List.Section({ title: mode === "hash" ? `散列与编码（输入 ${inputText.length} 字符）` : mode === "base64-decode" ? "Base64 解码" : `${mode.toUpperCase()} 编解码` }, items)]);
+        // AES / HMAC / UUID 是另开表单的工具，与当前页任务无关：放进子菜单，只在动作面板里出现，
+        // 不会因为空状态或错误行没有第 2 个动作而被顶到 ⌘↵ 次动作位
+        actions: ActionPanel({ title: "全局操作" }, [ActionPanel.Submenu({ title: "其他加解密工具", icon: Icon.Lock }, globalActions)])
+    }, 
+    // 模式名已在下拉框里，分组标题只说明内容，不重复“Base64 编解码”
+    [List.Section({ title: inputText ? `计算结果（输入 ${inputText.length} 字符）` : "计算结果" }, items)]);
 }
-export { AesForm as cipherAes };
+export { AesForm as cipherAes, HmacForm as cipherHmac };

@@ -1,143 +1,113 @@
 <template>
   <div ref="formRootRef" class="flex flex-col h-full overflow-hidden select-none">
     <!-- 表单滚动容器 -->
-    <div class="flex-1 overflow-y-auto declarative-scrollbar p-6 space-y-6 max-w-2xl mx-auto w-full">
+    <div class="flex-1 overflow-y-auto declarative-scrollbar p-6 space-y-5 max-w-2xl mx-auto w-full">
       <div
         v-for="(field, fIdx) in formFields"
         :key="field.props?.id || fIdx"
-        class="space-y-2 text-sm"
+        class="space-y-1.5 text-[13px]"
       >
-        <!-- 标签与信息提示 -->
-        <div class="flex items-center justify-between">
-          <label
-            :for="field.props?.id"
-            class="font-medium text-[var(--rc-text-primary)] flex items-center gap-1.5"
-          >
-            <span>{{ field.props?.title || field.props?.id }}</span>
-          </label>
-          <span v-if="field.props?.info" class="text-xs text-[var(--rc-text-muted)]">
-            {{ field.props.info }}
-          </span>
-        </div>
+        <!-- 标签：插件没写 title 时不显示标签行，不拿字段 id 充当标签 -->
+        <label
+          v-if="fieldTitle(field) && field.type !== 'Form.Checkbox'"
+          :for="field.props?.id"
+          class="block font-medium text-[var(--rc-text-primary)]"
+        >
+          {{ fieldTitle(field) }}
+        </label>
 
         <!-- 1. Form.TextField 单行输入 -->
-        <div v-if="field.type === 'Form.TextField'">
-          <input
-            :id="field.props?.id"
-            type="text"
-            data-form-text-field
-            :data-autofocus="field.props?.autoFocus ? '' : null"
-            :value="formValues[field.props.id] ?? field.props?.defaultValue ?? ''"
-            :placeholder="field.props?.placeholder"
-            class="w-full bg-[var(--rc-surface-hover)] border rounded-xl px-3.5 py-2.5 text-[var(--rc-text-primary)] placeholder:text-[var(--rc-text-faint)] outline-none transition-all duration-150"
-            :class="[
-              field.props?.error
-                ? 'border-[var(--rc-error)] focus:border-[var(--rc-error)] focus:ring-2 focus:ring-[var(--rc-error-subtle)]'
-                : 'border-[var(--rc-border)] focus:border-[var(--rc-accent)] focus:ring-2 focus:ring-[var(--rc-accent-subtle)]'
-            ]"
-            @input="e => updateFieldValue(field, e.target.value)"
-          />
-        </div>
+        <DeclInput
+          v-if="field.type === 'Form.TextField'"
+          :id="field.props?.id"
+          data-form-text-field
+          :data-autofocus="field.props?.autoFocus ? '' : null"
+          :model-value="fieldText(field)"
+          :placeholder="field.props?.placeholder"
+          :monospace="field.props?.monospace === true"
+          :invalid="Boolean(field.props?.error)"
+          :describedby="describedBy(field)"
+          @update:model-value="value => updateFieldValue(field, value)"
+        />
 
         <!-- 1b. Form.PasswordField 密码输入 -->
-        <div v-else-if="field.type === 'Form.PasswordField'" class="relative flex items-center">
-          <input
-            :id="field.props?.id"
-            :type="revealedPasswords[field.props?.id] ? 'text' : 'password'"
-            data-form-text-field
-            :data-autofocus="field.props?.autoFocus ? '' : null"
-            :value="formValues[field.props.id] ?? field.props?.defaultValue ?? ''"
-            :placeholder="field.props?.placeholder || '请输入密码...'"
-            class="w-full bg-[var(--rc-surface-hover)] border rounded-xl pl-3.5 pr-16 py-2.5 text-[var(--rc-text-primary)] placeholder:text-[var(--rc-text-faint)] outline-none transition-all duration-150 font-mono"
-            :class="[
-              field.props?.error
-                ? 'border-[var(--rc-error)] focus:border-[var(--rc-error)] focus:ring-2 focus:ring-[var(--rc-error-subtle)]'
-                : 'border-[var(--rc-border)] focus:border-[var(--rc-accent)] focus:ring-2 focus:ring-[var(--rc-accent-subtle)]'
-            ]"
-            @input="e => updateFieldValue(field, e.target.value)"
-          />
-          <button
-            type="button"
-            class="absolute right-2.5 px-2 py-1 rounded text-xs text-[var(--rc-text-muted)] hover:text-[var(--rc-text-primary)] bg-[var(--rc-surface-subtle)] border border-[var(--rc-border)] cursor-pointer"
-            @click="togglePasswordReveal(field.props?.id)"
-          >
-            {{ revealedPasswords[field.props?.id] ? '隐藏' : '显示' }}
-          </button>
-        </div>
+        <DeclInput
+          v-else-if="field.type === 'Form.PasswordField'"
+          :id="field.props?.id"
+          :type="revealedPasswords[field.props?.id] ? 'text' : 'password'"
+          data-form-text-field
+          :data-autofocus="field.props?.autoFocus ? '' : null"
+          :model-value="fieldText(field)"
+          :placeholder="field.props?.placeholder || '请输入密码'"
+          :invalid="Boolean(field.props?.error)"
+          :describedby="describedBy(field)"
+          @update:model-value="value => updateFieldValue(field, value)"
+        >
+          <template #trailing>
+            <button
+              type="button"
+              class="decl-reveal-btn"
+              :aria-pressed="revealedPasswords[field.props?.id] ? 'true' : 'false'"
+              @click="togglePasswordReveal(field.props?.id)"
+            >
+              {{ revealedPasswords[field.props?.id] ? '隐藏' : '显示' }}
+            </button>
+          </template>
+        </DeclInput>
 
-        <!-- 2. Form.TextArea 多行输入 -->
-        <div v-else-if="field.type === 'Form.TextArea'">
-          <textarea
-            :id="field.props?.id"
-            rows="5"
-            data-form-text-field
-            :data-autofocus="field.props?.autoFocus ? '' : null"
-            :value="formValues[field.props.id] ?? field.props?.defaultValue ?? ''"
-            :placeholder="field.props?.placeholder"
-            class="w-full bg-[var(--rc-surface-hover)] border rounded-xl px-3.5 py-2.5 text-[var(--rc-text-primary)] placeholder:text-[var(--rc-text-faint)] outline-none transition-all duration-150 resize-y font-mono text-xs leading-relaxed"
-            :class="[
-              field.props?.error
-                ? 'border-[var(--rc-error)] focus:border-[var(--rc-error)] focus:ring-2 focus:ring-[var(--rc-error-subtle)]'
-                : 'border-[var(--rc-border)] focus:border-[var(--rc-accent)] focus:ring-2 focus:ring-[var(--rc-accent-subtle)]'
-            ]"
-            @input="e => updateFieldValue(field, e.target.value)"
-          />
-        </div>
+        <!-- 2. Form.TextArea 多行输入：正文字体，插件声明 monospace 时才用等宽 -->
+        <DeclInput
+          v-else-if="field.type === 'Form.TextArea'"
+          :id="field.props?.id"
+          multiline
+          :rows="5"
+          data-form-text-field
+          :data-autofocus="field.props?.autoFocus ? '' : null"
+          :model-value="fieldText(field)"
+          :placeholder="field.props?.placeholder"
+          :monospace="field.props?.monospace === true"
+          :invalid="Boolean(field.props?.error)"
+          :describedby="describedBy(field)"
+          @update:model-value="value => updateFieldValue(field, value)"
+        />
 
-        <!-- 3. Form.Checkbox 复选框 -->
-        <div v-else-if="field.type === 'Form.Checkbox'" class="flex items-center gap-2.5 pt-1">
-          <input
-            :id="field.props?.id"
-            type="checkbox"
-            :checked="formValues[field.props.id] ?? field.props?.defaultValue ?? false"
-            class="w-4 h-4 rounded border-[var(--rc-border-highlight)] bg-[var(--rc-surface-hover)] text-[var(--rc-accent-text)] focus:ring-[var(--rc-accent-subtle)] focus:ring-offset-0 cursor-pointer"
-            @change="e => updateFieldValue(field, e.target.checked)"
-          />
-          <label
-            :for="field.props?.id"
-            class="text-sm text-[var(--rc-text-secondary)] cursor-pointer select-none"
-          >
-            {{ field.props?.label }}
-          </label>
-        </div>
+        <!-- 3. Form.Checkbox 复选框（有 title 时作为分组标题显示在上方） -->
+        <template v-else-if="field.type === 'Form.Checkbox'">
+          <div v-if="fieldTitle(field)" class="font-medium text-[var(--rc-text-primary)]">{{ fieldTitle(field) }}</div>
+          <div class="flex items-center gap-2.5">
+            <DeclCheckbox
+              :id="field.props?.id"
+              :checked="formValues[field.props.id] ?? field.props?.defaultValue ?? false"
+              :aria-label="field.props?.label || fieldTitle(field)"
+              :aria-invalid="field.props?.error ? 'true' : undefined"
+              :aria-describedby="describedBy(field) || undefined"
+              @change="value => updateFieldValue(field, value)"
+            />
+            <label
+              :for="field.props?.id"
+              class="text-[13px] text-[var(--rc-text-secondary)] cursor-pointer select-none"
+            >
+              {{ field.props?.label }}
+            </label>
+          </div>
+        </template>
 
         <!-- 4. Form.Dropdown 下拉选择 -->
         <div v-else-if="field.type === 'Form.Dropdown'">
-          <select
+          <RcSelect
             :id="field.props?.id"
-            :value="formValues[field.props.id] ?? field.props?.defaultValue"
-            class="w-full bg-[var(--rc-surface)] border border-[var(--rc-border)] rounded-xl px-3.5 py-2.5 text-[var(--rc-text-primary)] outline-none focus:border-[var(--rc-accent)] cursor-pointer transition-all"
-            @change="e => updateFieldValue(field, e.target.value)"
-          >
-            <template v-for="(group, gIdx) in getDropdownGroups(field)" :key="gIdx">
-              <optgroup v-if="group.title" :label="group.title">
-                <option
-                  v-for="(item, iIdx) in group.items"
-                  :key="iIdx"
-                  :value="item.props?.value"
-                  class="bg-[var(--rc-surface)] text-[var(--rc-text-primary)]"
-                >
-                  {{ item.props?.title }}
-                </option>
-              </optgroup>
-              <template v-else>
-                <option
-                  v-for="(item, iIdx) in group.items"
-                  :key="iIdx"
-                  :value="item.props?.value"
-                  class="bg-[var(--rc-surface)] text-[var(--rc-text-primary)]"
-                >
-                  {{ item.props?.title }}
-                </option>
-              </template>
-            </template>
-          </select>
+            class="w-full"
+            :value="dropdownDisplayValue(field)"
+            :options="getDropdownOptions(field)"
+            :aria-label="field.props?.title || undefined"
+            @update:value="value => updateFieldValue(field, value)"
+          />
         </div>
 
         <!-- 5. Form.Description 说明文字 -->
         <div
           v-else-if="field.type === 'Form.Description'"
-          class="px-3.5 py-2.5 rounded-xl bg-[var(--rc-surface-subtle)] border border-[var(--rc-border)] text-xs text-[var(--rc-text-secondary)] leading-relaxed whitespace-pre-wrap break-words select-text"
+          class="px-3 py-2.5 rounded-[var(--rc-radius-md)] bg-[var(--rc-surface-subtle)] border border-[var(--rc-border)] text-xs text-[var(--rc-text-secondary)] leading-relaxed whitespace-pre-wrap break-words select-text"
         >
           {{ field.props?.text }}
         </div>
@@ -145,49 +115,35 @@
         <!-- 6. Form.Separator 分割线 -->
         <hr v-else-if="field.type === 'Form.Separator'" class="border-[var(--rc-border)] my-3" />
 
-        <!-- 字段校验错误提示 -->
-        <div v-if="field.props?.error" class="text-xs text-[var(--rc-error)] flex items-center gap-1 mt-1">
-          <svg class="w-3.5 h-3.5 fill-current" viewBox="0 0 20 20">
-            <path fill-rule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7 4a1 1 0 11-2 0 1 1 0 012 0zm-1-9a1 1 0 00-1 1v4a1 1 0 102 0V6a1 1 0 00-1-1z" clip-rule="evenodd" />
-          </svg>
-          <span>{{ field.props.error }}</span>
-        </div>
-      </div>
+        <!-- 字段说明（info）：输入框下方的辅助文字；有错误时让位给错误提示 -->
+        <p
+          v-if="field.props?.info && !field.props?.error"
+          :id="infoId(field)"
+          class="decl-field-info text-xs leading-relaxed text-[var(--rc-text-muted)]"
+        >
+          {{ field.props.info }}
+        </p>
 
-      <!-- 表单内嵌可视化提交与取消按钮栏 (直观供鼠标点击) -->
-      <div class="pt-4 border-t border-[var(--rc-border)] flex items-center justify-end gap-3">
-        <button
-          v-if="canCancel"
-          type="button"
-          class="px-4 py-2 rounded-xl text-xs font-medium text-[var(--rc-text-secondary)] hover:text-[var(--rc-text-primary)] bg-[var(--rc-surface-hover)] border border-[var(--rc-border)] transition-all cursor-pointer"
-          @click="emit('cancel')"
+        <!-- 字段校验错误提示 -->
+        <p
+          v-if="field.props?.error"
+          :id="errorId(field)"
+          class="decl-field-error text-xs text-[var(--rc-error)] flex items-center gap-1"
         >
-          取消 / 返回 (Esc)
-        </button>
-        <button
-          v-for="(secAct, sIdx) in secondaryFormActions"
-          :key="sIdx"
-          type="button"
-          class="px-4 py-2 rounded-xl text-xs font-medium text-[var(--rc-text-primary)] bg-[var(--rc-surface-hover)] hover:bg-[var(--rc-surface-active)] border border-[var(--rc-border)] transition-all cursor-pointer"
-          @click="emit('trigger-action', secAct)"
-        >
-          {{ secAct.props?.title }}
-        </button>
-        <button
-          type="button"
-          class="px-5 py-2 rounded-xl text-xs font-semibold bg-[var(--rc-accent)] hover:bg-[var(--rc-accent-hover)] text-[var(--rc-accent-contrast)] shadow-sm transition-all cursor-pointer flex items-center gap-1.5"
-          @click="submitForm"
-        >
-          <span>✓</span>
-          <span>{{ submitActionTitle }} (Enter)</span>
-        </button>
+          <CircleAlertIcon class="w-3.5 h-3.5 flex-shrink-0" aria-hidden="true" />
+          <span>{{ field.props.error }}</span>
+        </p>
       </div>
     </div>
   </div>
 </template>
 
 <script setup>
+import { CircleAlertIcon } from '@lucide/vue'
+import { RcSelect } from '@/components/base'
 import { ref, computed, watch, onMounted, nextTick } from "vue";
+import DeclInput from "./DeclInput.vue";
+import DeclCheckbox from "./DeclCheckbox.vue";
 
 const props = defineProps({
   descriptor: {
@@ -197,14 +153,11 @@ const props = defineProps({
   actions: {
     type: Array,
     default: () => []
-  },
-  canCancel: {
-    type: Boolean,
-    default: false
   }
 });
 
-const emit = defineEmits(["submit", "cancel", "trigger-action"]);
+// 提交、取消与其它动作统一由宿主底栏（主动作 ⌘↵ / 后退 Esc / 动作面板 ⌘K）承担，表单内不再重复渲染按钮
+const emit = defineEmits(["submit", "trigger-action"]);
 
 const formRootRef = ref(null);
 const formValues = ref({});
@@ -228,16 +181,51 @@ const formFields = computed(() => {
   );
 });
 
-const submitActionTitle = computed(() => {
-  const first = (props.actions || [])[0];
-  return first?.props?.title || "提交保存";
-});
+/** 文本类字段当前显示的值 */
+function fieldText(field) {
+  const value = formValues.value[field.props?.id] ?? field.props?.defaultValue ?? "";
+  return value === null ? "" : value;
+}
 
-const secondaryFormActions = computed(() => {
-  return (props.actions || []).slice(1, 3);
-});
+// 错误与说明文字的元素 id：供输入框 aria-describedby 关联，读屏时一并朗读
+function errorId(field) {
+  return field?.props?.id ? `${field.props.id}-error` : undefined;
+}
 
-/** 下拉选项按分组展开：直接子项归入无标题分组，Form.Dropdown.Section 内的选项归入该分组（optgroup） */
+function infoId(field) {
+  return field?.props?.id ? `${field.props.id}-info` : undefined;
+}
+
+function describedBy(field) {
+  if (!field?.props?.id) return "";
+  if (field.props.error) return errorId(field);
+  if (field.props.info) return infoId(field);
+  return "";
+}
+
+function fieldTitle(field) {
+  const title = field?.props?.title;
+  if (title === undefined || title === null) return "";
+  return String(title).trim();
+}
+
+/** 转成 RcSelect 选项：无标题分组的选项平铺，有标题的分组用 { label, options } */
+function getDropdownOptions(field) {
+  return getDropdownGroups(field).flatMap((group) => {
+    const options = group.items.map((item) => ({ label: String(item.props?.title ?? ""), value: String(item.props?.value ?? "") }));
+    return group.title ? [{ label: group.title, options }] : options;
+  });
+}
+
+/** 下拉框显示的值：用户选的值 → defaultValue → 第一个选项（与原生 select 一致，不留空白） */
+function dropdownDisplayValue(field) {
+  const value = formValues.value[field.props.id] ?? field.props?.defaultValue;
+  if (value !== undefined && value !== null && value !== "") return String(value);
+  const first = getDropdownGroups(field)[0]?.items[0]?.props?.value;
+  return first === undefined || first === null ? undefined : String(first);
+}
+
+/** 下拉选项按分组展开：直接子项归入无标题分组，Form.Dropdown.Section 内的选项归入该分组 */
 function getDropdownGroups(field) {
   const groups = [];
   for (const child of field.children || []) {
@@ -343,3 +331,20 @@ defineExpose({
   focusFirstField
 });
 </script>
+
+<style scoped>
+.decl-reveal-btn {
+  height: 24px;
+  padding: 0 8px;
+  border-radius: var(--rc-radius-sm);
+  border: 1px solid var(--rc-border);
+  background: var(--rc-surface-subtle);
+  color: var(--rc-text-muted);
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.decl-reveal-btn:hover {
+  color: var(--rc-text-primary);
+}
+</style>

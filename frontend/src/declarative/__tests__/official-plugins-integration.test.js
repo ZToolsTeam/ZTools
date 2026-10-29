@@ -19,7 +19,6 @@ import * as apiServer from '@/api/apiserver'
 import { resolvePluginGlyph } from '@/utils/brandIcons'
 import { _resetKeymapForTesting } from '@/utils/keymap'
 import { BUNDLED_PLUGIN_IDS, isStoreOfficialPlugin } from '@/utils/bundledPlugins'
-import { COMMUNITY_EXTENSION_IDS } from '@/utils/storeCatalogManager'
 import { isPluginVisible } from '@/utils/pluginVisibility'
 import { isPluginSupportedOnCurrentPlatform } from '@/utils/platform'
 
@@ -162,16 +161,15 @@ describe('官方标杆声明式应用注册表与端到端集成测试', () => {
     it.each(['darwin', 'win32'])('网络测速使用市场真实实现，仅 macOS 开放入口（%s）', async (platform) => {
       vi.stubGlobal('__ZTOOLS_PLATFORM_OVERRIDE__', platform)
       const installed = {
-        pluginId: 'speedtest', name: '网络测速', author: 'ZTools Community',
+        pluginId: 'speedtest', name: '网络测速', author: 'ZTools Team',
         entry: 'dist/index.js', isDeclarative: true
       }
       vi.mocked(apiServer.getLocalPlugins).mockResolvedValue([installed])
       const store = usePluginsStore()
       await store.fetchInstalledPlugins()
 
-      // 网络测速归为社区插件，经插件市场分发
-      expect(isStoreOfficialPlugin('speedtest')).toBe(false)
-      expect(COMMUNITY_EXTENSION_IDS.has('speedtest')).toBe(true)
+      // 网络测速由官方维护，经插件市场分发，不使用同名旧内置实现
+      expect(isStoreOfficialPlugin('speedtest')).toBe(true)
       expect(getOfficialPlugin('speedtest')).toBeUndefined()
       expect(getOfficialPluginsList().some(p => p.pluginId === 'speedtest')).toBe(false)
       expect(isPluginVisible(' SPEEDTEST ')).toBe(true)
@@ -193,18 +191,20 @@ describe('官方标杆声明式应用注册表与端到端集成测试', () => {
       expect(apiServer.openPlugin).not.toHaveBeenCalled()
     })
 
-    it('表格互转安装后显示真实社区插件，旧内置实现不能抢占入口或改写作者', async () => {
+    it('表格互转安装后显示真实官方市场插件，旧内置实现不能抢占入口或改写作者', async () => {
       const installed = {
-        pluginId: 'table-converter', name: '表格互转', author: 'ZTools Community',
+        pluginId: 'table-converter', name: '表格互转', author: 'ZTools Team',
         version: '1.0.0', entry: 'dist/index.js', isDeclarative: true
       }
       vi.mocked(apiServer.getLocalPlugins).mockResolvedValue([installed])
       const store = usePluginsStore()
       await store.fetchInstalledPlugins()
 
-      expect(store.installedPlugins.filter((p) => p.pluginId === installed.pluginId)).toEqual([installed])
+      expect(store.installedPlugins.filter((p) => p.pluginId === installed.pluginId)).toEqual([
+        expect.objectContaining({ ...installed, isOfficial: true, is_official: true })
+      ])
       expect(getOfficialPlugin(installed.pluginId)).toBeUndefined()
-      expect(isOfficialPlugin(installed.pluginId)).toBe(false)
+      expect(isOfficialPlugin(installed.pluginId)).toBe(true)
       expect(isPluginVisible(' TABLE-CONVERTER ')).toBe(true)
       const result = await store.openPlugin(installed.pluginId)
       expect(result.isDeclarative).toBe(true)
@@ -401,11 +401,39 @@ describe('官方标杆声明式应用注册表与端到端集成测试', () => {
 
       await settle()
 
-      const backBtn = wrapper.find('button[title*="返回我的插件"]')
-      expect(backBtn.exists()).toBe(true)
-      await backBtn.trigger('click')
+      // 返回入口只有底栏「返回工作台 Esc」一个，顶栏不再重复放返回按钮
+      expect(wrapper.find('button[title*="返回我的插件"]').exists()).toBe(false)
+      const backBtns = wrapper.findAll('[data-decl-exit]')
+      expect(backBtns).toHaveLength(1)
+      expect(backBtns[0].element.tagName).toBe('BUTTON')
+      await backBtns[0].trigger('click')
 
       expect(mockPush).toHaveBeenCalledWith({ name: 'my' })
+    })
+
+    it('子页面标题并入顶栏面包屑，视图内不再叠第二条标题栏；切换插件后清空', async () => {
+      const wrapper = mount(DeclarativePage, {
+        props: { pluginId: 'qr-code' }
+      })
+
+      await settle()
+
+      expect(wrapper.find('[data-decl-page-subtitle]').exists()).toBe(false)
+      const view = wrapper.findComponent({ name: 'DeclarativeView' })
+      expect(view.props('hostTitleBar')).toBe(true)
+      view.vm.$emit('title-change', '编辑规则')
+      await nextTick()
+      expect(wrapper.find('[data-decl-page-subtitle]').text()).toBe('编辑规则')
+      // [边界] 非字符串标题不显示
+      view.vm.$emit('title-change', null)
+      await nextTick()
+      expect(wrapper.find('[data-decl-page-subtitle]').exists()).toBe(false)
+
+      view.vm.$emit('title-change', '编辑规则')
+      await nextTick()
+      await wrapper.setProps({ pluginId: 'calculator' })
+      await settle()
+      expect(wrapper.find('[data-decl-page-subtitle]').exists()).toBe(false)
     })
 
     it('点击【独立窗口】按钮时应携带状态弹出独立窗口，并在原生 IPC 异常时平滑降级至 /popout 路由', async () => {
@@ -439,7 +467,12 @@ describe('官方标杆声明式应用注册表与端到端集成测试', () => {
       expect(wrapper.find('.declarative-pin-btn').exists()).toBe(true)
       expect(wrapper.find('.declarative-dock-btn').exists()).toBe(true)
       expect(wrapper.find('.declarative-popout-btn').exists()).toBe(false)
-      expect(wrapper.text()).toContain('独立常驻防误关')
+      // Esc 只清空搜索的提示只在底栏出现一处，灰阶显示；不再有返回工作台入口
+      const hints = wrapper.findAll('[data-decl-popout-hint]')
+      expect(hints).toHaveLength(1)
+      expect(hints[0].text()).toContain('只清空搜索')
+      expect(wrapper.find('[data-decl-exit]').exists()).toBe(false)
+      expect(wrapper.html()).not.toContain('--rc-success')
 
       // 在独立常驻模式根视图下触发 exit 事件，handleExit 必须拦截，不得跳转回主页
       const view = wrapper.findComponent({ name: 'DeclarativeView' })
@@ -624,7 +657,9 @@ describe('官方标杆声明式应用注册表与端到端集成测试', () => {
       })
       expect(loadedSub.pluginId).toBe('third-party-suite')
       expect(loadedSub.featureCode).toBe('view-logs')
-      expect(loadedSub.title).toBe('查看运行日志')
+      // 标题用插件名，命令说明保留在 featureExplain 里作为提示
+      expect(loadedSub.title).toBe('极客工具箱')
+      expect(loadedSub.featureExplain).toBe('查看运行日志')
       expect(loadedSub.mode).toBe('view')
       expect(loadedSub.alias).toBe('vl')
       expect(typeof loadedSub.command).toBe('function')

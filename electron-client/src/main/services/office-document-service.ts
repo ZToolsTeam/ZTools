@@ -40,7 +40,7 @@ export class OfficeDocumentService {
       const entries = p.action === 'extract' ? officeImages(archive.entries) : p.cleanMetadata === true ? cleanOfficeMetadata(archive.entries) : archive.entries
       const bytes = await encodeVerifiedOfficeArchive(entries, signal)
       active()
-      const receipt = await this.files.writeFile({ path: output, encoding: 'base64', content: bytes.toString('base64'), overwrite: false }, caller, signal)
+      const receipt = await this.files.writeFile({ path: output, encoding: 'base64', content: bytes.toString('base64'), overwrite: false }, caller, signal, { replaceConfirmed: true, protectedPath: p.path })
       if (receipt.success !== true || receipt.size !== bytes.length) throw new ZToolsError(errorCodes.fileWriteOutcomeUnknown, '保存结果未确认，请检查新文件')
       return { success: true as const, status: 'committed' as const, name: path.basename(output), size: bytes.length, originalSize: archive.size, imageCount: summary.images.length }
     } catch (error) {

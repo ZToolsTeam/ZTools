@@ -114,7 +114,13 @@ test('system service exposes compatible queries and cleans caller-owned blockers
     assert.equal(Object.hasOwn(macInfo, 'osMajor'), false)
     assert.equal(typeof macInfo.kernelRelease, 'string')
     adapter.getProductVersion = () => 'Darwin Kernel Version 24.0.0'
-    assert.equal((await macService.getInfo(mainCaller)).osVersion, 'unknown')
+    // 读到的不是产品版本号：返回 null，不返回 'unknown' 占位
+    assert.equal((await macService.getInfo(mainCaller)).osVersion, null)
+    // 读取直接抛错：同样返回 null，getInfo 不因此失败
+    adapter.getProductVersion = () => { throw new Error('sw_vers 不可用') }
+    assert.equal((await macService.getInfo(mainCaller)).osVersion, null)
+    adapter.getProductVersion = () => '   '
+    assert.equal((await macService.getInfo(mainCaller)).osVersion, null)
     adapter.getProductVersion = () => '15.0.1'
 
     assert.deepEqual(service.getAppName(), { success: true, appName: 'ZTools' })
@@ -209,6 +215,31 @@ test('system service exposes compatible queries and cleans caller-owned blockers
     assert.deepEqual(blockerStops, [])
     for (const listener of removedListeners) listener(pluginCaller.webContentsId)
     assert.deepEqual(blockerStops, [7])
+
+    blockerStarts.length = 0
+    blockerStops.length = 0
+    let nextBlockerId = 0
+    adapter.startPreventSleep = () => { const id = nextBlockerId++; blockerStarts.push(id); return id }
+    const winService = new SystemService(files, registry, adapter, 'win32', power, browser)
+    try {
+      const on = await winService.executeSystemAction('toggle-caffeinate')
+      assert.deepEqual(on.state, { caffeinated: true })
+      winService.setPreventSleep({ enable: true }, pluginCaller)
+      const off = await winService.executeSystemAction('toggle-caffeinate')
+      assert.deepEqual(off.state, { caffeinated: false })
+      assert.deepEqual(blockerStops, [0], '关闭咖啡因不能释放其他调用方的 blocker')
+      winService.setPreventSleep({ enable: false }, pluginCaller)
+      assert.deepEqual(blockerStops, [0, 1])
+      adapter.startPreventSleep = () => { throw new Error('电源阻止器启动失败') }
+      await assert.rejects(winService.executeSystemAction('toggle-caffeinate'), /启动失败/)
+      adapter.startPreventSleep = () => 2
+      assert.deepEqual((await winService.executeSystemAction('toggle-caffeinate')).state, { caffeinated: true })
+      winService.stop()
+      winService.stop()
+      assert.deepEqual(blockerStops, [0, 1, 2], '退出只释放一次')
+    } finally {
+      winService.stop()
+    }
   } finally {
     macService.stop()
     service.stop()

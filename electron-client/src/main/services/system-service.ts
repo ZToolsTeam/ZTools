@@ -443,6 +443,7 @@ export class SystemService {
   readonly #preventSleepCallers = new Set<number>()
   readonly #removeListener: () => void
   #preventSleepId: number | undefined
+  #caffeinateBlockerId: number | undefined
   #caffeinateProcess: ChildProcess | null = null
   #cpuTimes = currentCpuTimes()
   #winBrewListCache: {
@@ -488,6 +489,10 @@ export class SystemService {
   }
 
   #stopCaffeinateProcess(): void {
+    if (this.#caffeinateBlockerId !== undefined) {
+      this.adapter.stopPreventSleep(this.#caffeinateBlockerId)
+      this.#caffeinateBlockerId = undefined
+    }
     if (this.#caffeinateProcess) {
       try {
         this.#caffeinateProcess.kill('SIGTERM')
@@ -524,7 +529,8 @@ export class SystemService {
       osVersion: isWindows
         ? release
         : this.runtimePlatform === 'darwin'
-          ? productVersion ?? 'unknown'
+          // 读不到产品版本时返回 null（调用方显示“未提供”），不返回 'unknown' 这类占位字符串
+          ? productVersion ?? null
           : os.version(),
       ...(windowsVersion ? {
         osMajor: windowsVersion[0] ?? 0,
@@ -548,7 +554,8 @@ export class SystemService {
     try {
       const value = this.adapter.getProductVersion?.().trim()
       return value && /^\d+(?:\.\d+){1,2}$/.test(value) ? value : undefined
-    } catch {
+    } catch (error) {
+      console.warn('[system] 读取 macOS 产品版本失败:', error)
       return undefined
     }
   }
@@ -903,12 +910,8 @@ export class SystemService {
       }
 
       case 'toggle-caffeinate': {
-        if (this.#caffeinateProcess) {
+        if (this.#caffeinateProcess || this.#caffeinateBlockerId !== undefined) {
           this.#stopCaffeinateProcess()
-          if (this.#preventSleepId !== undefined) {
-            this.adapter.stopPreventSleep(this.#preventSleepId)
-            this.#preventSleepId = undefined
-          }
           return {
             success: true,
             action: normalized,
@@ -916,6 +919,7 @@ export class SystemService {
             state: { caffeinated: false }
           }
         }
+        this.#caffeinateBlockerId = this.adapter.startPreventSleep()
         if (this.runtimePlatform === 'darwin') {
           try {
             const child = spawn('/usr/bin/caffeinate', ['-di'], {
@@ -936,9 +940,6 @@ export class SystemService {
           } catch {
             // fallback to powerSaveBlocker
           }
-        }
-        if (this.#preventSleepId === undefined) {
-          this.#preventSleepId = this.adapter.startPreventSleep()
         }
         return {
           success: true,

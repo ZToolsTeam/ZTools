@@ -2,14 +2,14 @@
 import { computed } from 'vue'
 import { GLYPHS, isGlyph } from '@/utils/brandIcons'
 
-/** 渲染品牌线性图形（不含底块），线宽随尺寸换算，保证 14–40px 下视觉粗细接近 1.5px */
+/** 渲染品牌线性图形（不含底块）。线宽固定 1.75，与界面 Lucide 图标一致（见 utils/appIcons.js） */
 const props = defineProps({
   kind: { type: String, required: true },
   size: { type: Number, default: 16 }
 })
 
 const elements = computed(() => (isGlyph(props.kind) ? GLYPHS[props.kind] : GLYPHS.cube))
-const strokeWidth = computed(() => Math.round(Math.min(2.4, Math.max(1.6, 36 / props.size)) * 100) / 100)
+const strokeWidth = 1.75
 </script>
 
 <template>

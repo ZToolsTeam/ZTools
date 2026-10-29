@@ -1,4 +1,5 @@
 <script setup>
+import { RcButton, RcDialog } from '@/components/base'
 import { ref, watch, computed } from 'vue'
 
 import { useUIStore } from '@/stores/ui'
@@ -70,25 +71,24 @@ const onExit = async () => {
 </script>
 
 <template>
-  <a-modal
+  <RcDialog
     v-model:open="dialogVisible"
     title="确定要退出 ZTools 吗？"
-    width="420px"
+    :width="420"
     :mask="false"
     :mask-closable="false"
     :keyboard="false"
-    :closable="true"
     wrap-class-name="close-confirm-modal"
     @cancel="onCancel"
   >
     <a-checkbox v-model:checked="doNotAskAgain">下次不再询问</a-checkbox>
     <template #footer>
       <div class="close-confirm-footer">
-        <a-button danger @click="onExit">立即退出</a-button>
-        <a-button type="primary" @click="onMinimize">最小化到托盘</a-button>
+        <RcButton variant="danger" size="md" @click="onExit">立即退出</RcButton>
+        <RcButton variant="primary" size="md" @click="onMinimize">最小化到托盘</RcButton>
       </div>
     </template>
-  </a-modal>
+  </RcDialog>
 </template>
 
 <style scoped>

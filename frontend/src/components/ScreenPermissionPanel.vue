@@ -1,5 +1,6 @@
 <script setup>
-import { ReloadOutlined, WarningOutlined } from '@ant-design/icons-vue'
+import { RcAlert, RcButton } from '@/components/base'
+import { RotateCwIcon, TriangleAlertIcon } from '@lucide/vue'
 import { ref, computed, onMounted, onBeforeUnmount } from 'vue'
 import { createScreenPermissionController } from '@/utils/screenPermissionController'
 
@@ -111,15 +112,10 @@ onBeforeUnmount(() => {
             </span>
           </div>
         </div>
-        <a-button
-          size="small"
-          :loading="state.loading"
-          :disabled="!canQuery"
-          @click="controller?.refresh()"
-        >
-          <ReloadOutlined class="mr-1" :class="{ 'fa-spin': state.loading }" />
+        <RcButton variant="secondary" size="sm" :loading="state.loading" :disabled="!canQuery" @click="controller?.refresh()">
+          <RotateCwIcon class="mr-1" :class="{ 'animate-spin': state.loading }" />
           重新检查
-        </a-button>
+        </RcButton>
       </div>
 
       <!-- 运行时授权保护 -->
@@ -137,11 +133,11 @@ onBeforeUnmount(() => {
         </span>
       </div>
 
-      <a-alert v-if="state.error" class="my-1 text-xs" type="warning" :message="state.error" show-icon />
+      <RcAlert v-if="state.error" class="my-1 text-xs" type="warning" :message="state.error" show-icon />
 
       <!-- macOS 权限异常时的极简引导 -->
       <div v-if="isMac && state.snapshot?.osPermission === 'denied'" class="flex items-center gap-2 px-3 py-2 rounded-lg bg-[var(--rc-warning-subtle)] border border-[var(--rc-border)] text-xs text-[var(--rc-warning)] my-1">
-        <WarningOutlined  />
+        <TriangleAlertIcon  />
         <span>请前往“系统设置 > 隐私与安全性 > 屏幕录制”允许 ZTools</span>
       </div>
 
@@ -149,13 +145,13 @@ onBeforeUnmount(() => {
       <div class="pt-4 pb-2" data-testid="screen-permission-grants">
         <div class="flex items-center justify-between mb-2">
           <span class="text-xs font-semibold text-[var(--rc-text-primary)]">已授权插件</span>
-          <a-button size="small" :loading="grantState.loading" @click="refreshGrants">
-            <ReloadOutlined class="mr-1" :class="{ 'fa-spin': grantState.loading }" />
+          <RcButton variant="secondary" size="sm" :loading="grantState.loading" @click="refreshGrants">
+            <RotateCwIcon class="mr-1" :class="{ 'animate-spin': grantState.loading }" />
             刷新
-          </a-button>
+          </RcButton>
         </div>
 
-        <a-alert v-if="grantState.error" class="my-1 text-xs" type="warning" :message="grantState.error" show-icon />
+        <RcAlert v-if="grantState.error" class="my-1 text-xs" type="warning" :message="grantState.error" show-icon />
 
         <div v-if="!grantState.loading && !grantState.error && grantState.grants.length === 0" class="py-3 text-center text-xs text-[var(--rc-text-secondary)] opacity-60">
           当前没有已授权的插件
@@ -175,16 +171,9 @@ onBeforeUnmount(() => {
               <code>{{ grant.pluginId }}</code> · <span data-testid="screen-permission-grant-capability">屏幕采集</span>
             </div>
           </div>
-          <a-button
-            data-testid="screen-permission-grant-revoke"
-            danger
-            size="small"
-            :loading="revokingGrantIds.has(grant.grantId)"
-            :disabled="grantState.loading || revokingGrantIds.has(grant.grantId)"
-            @click="revokeGrant(grant.grantId)"
-          >
+          <RcButton variant="danger" size="sm" data-testid="screen-permission-grant-revoke" :loading="revokingGrantIds.has(grant.grantId)" :disabled="grantState.loading || revokingGrantIds.has(grant.grantId)" @click="revokeGrant(grant.grantId)">
             撤销
-          </a-button>
+          </RcButton>
         </div>
       </div>
     </div>

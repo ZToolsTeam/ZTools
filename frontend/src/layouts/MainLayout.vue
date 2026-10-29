@@ -2,13 +2,14 @@
 import { computed, watch, onMounted } from 'vue'
 import ShortcutKeys from '@/components/base/ShortcutKeys.vue'
 import { useRoute, useRouter } from 'vue-router'
-import { storeToRefs } from 'pinia'
 
 import Header from '@/components/Header.vue'
 import Sidebar from '@/components/Sidebar.vue'
 
 import { useNavStore } from '@/stores/nav'
 import { useUIStore } from '@/stores/ui'
+import { useCategoriesStore } from '@/stores/categories'
+import { usePluginsStore } from '@/stores/plugins'
 import { useKeymap, KEYMAP_SCOPES } from '@/utils/keymap'
 import { switchWindowMode, WINDOW_MODES } from '@/utils/windowMode'
 import { layoutExtraComponents } from '@edition'
@@ -19,13 +20,23 @@ const route = useRoute()
 const router = useRouter()
 const nav = useNavStore()
 const uiStore = useUIStore()
+const categoriesStore = useCategoriesStore()
+const pluginsStore = usePluginsStore()
 
-const { declarativePrimaryAction } = storeToRefs(uiStore)
 
 const isDeclarativeView = computed(() => route.name === 'declarative')
 
+// 插件市场页只换搜索词时复用同一个页面（页面自己监听搜索词重新加载），其它情况按完整地址重建
+const routeViewKey = computed(() => {
+  if (route.name !== ROUTES.LIST.name) return route.fullPath
+  const { q: _q, ...rest } = route.query
+  return router.resolve({ name: ROUTES.LIST.name, params: route.params, query: rest }).fullPath
+})
+
+// 启动后预取分类与插件目录：分类给插件市场用；目录统计会同时同步下架状态，主页上已安装插件的「已下架」标记依赖它
 onMounted(() => {
-  // console.log('MainLayout mounted')
+  categoriesStore.fetchCategories()
+  pluginsStore.refreshCategoryCounts()
 })
 
 // 根据路由同步导航状态：列表页同步分类，其它页面同步页面标识
@@ -55,6 +66,15 @@ const handleBackToHome = () => {
   router.push('/')
 }
 
+const goBackFromDetails = () => {
+  if (window.history.state?.back) router.back()
+  else handleBackToHome()
+}
+
+// 底栏左侧「打开 ↵」只在能用回车打开插件的页面显示（主页、插件市场），其它页面按回车没有效果
+const showOpenHint = computed(() => route.name === 'my' || route.name === 'list')
+const isDetails = computed(() => route.name === 'details')
+
 // 全局基础快捷键调度 (GLOBAL 作用域)
 useKeymap(KEYMAP_SCOPES.GLOBAL, {
   'Ctrl+F': () => {
@@ -63,18 +83,6 @@ useKeymap(KEYMAP_SCOPES.GLOBAL, {
   },
   'Ctrl+K': () => {
     openGlobalActions()
-    return true
-  },
-  'Ctrl+B': () => {
-    uiStore.toggleSidebar()
-    return true
-  },
-  'Cmd+B': () => {
-    uiStore.toggleSidebar()
-    return true
-  },
-  'Cmd+S': () => {
-    uiStore.toggleSidebar()
     return true
   },
   'Ctrl+,': () => {
@@ -89,6 +97,11 @@ useKeymap(KEYMAP_SCOPES.GLOBAL, {
   'Escape': () => {
     if (route.name === 'declarative') {
       router.push('/')
+      return true
+    }
+    // 详情页的 Esc 与页面左上角「返回」一致：回到来时的页面（通常是插件市场）
+    if (route.name === 'details') {
+      goBackFromDetails()
       return true
     }
     if (route.name !== 'my') {
@@ -107,7 +120,7 @@ useKeymap(KEYMAP_SCOPES.GLOBAL, {
   >
     <Header v-if="!isDeclarativeView" />
     <div class="flex flex-1 overflow-hidden">
-      <Sidebar v-if="!isDeclarativeView" :activeCategory="nav.currentCategory" />
+      <Sidebar v-if="!isDeclarativeView" />
       <main
         class="flex-1 overflow-y-auto custom-scrollbar"
         :style="{
@@ -116,7 +129,7 @@ useKeymap(KEYMAP_SCOPES.GLOBAL, {
         }"
       >
         <router-view v-slot="{ Component }">
-          <component :is="Component" :key="$route.fullPath" />
+          <component :is="Component" :key="routeViewKey" />
         </router-view>
       </main>
     </div>
@@ -124,31 +137,22 @@ useKeymap(KEYMAP_SCOPES.GLOBAL, {
     <!-- 底部动作栏：左侧当前可执行动作，右侧全局快捷键；按平台显示 ⌘ / Ctrl -->
     <footer v-if="!isDeclarativeView" class="action-bar select-none">
       <div class="flex items-center gap-4">
-        <span class="action-hint is-primary">
-          {{ isDeclarativeView ? (declarativePrimaryAction?.title || '执行') : '打开' }}
+        <span v-if="showOpenHint" class="action-hint is-primary">
+          打开
           <ShortcutKeys combo="Enter" />
         </span>
         <button
           v-if="route.name !== 'my'"
           type="button"
           class="action-hint"
-          @click="handleBackToHome"
+          @click="isDetails ? goBackFromDetails() : handleBackToHome()"
         >
-          {{ isDeclarativeView ? '返回工作台' : '返回主页' }}
+          {{ isDetails ? '返回' : '返回主页' }}
           <ShortcutKeys combo="Escape" />
         </button>
       </div>
 
       <div class="flex items-center gap-1">
-        <button
-          type="button"
-          class="action-btn"
-          :title="uiStore.isSidebarCollapsed ? '展开分类侧栏' : '收起分类侧栏'"
-          @click="uiStore.toggleSidebar"
-        >
-          {{ uiStore.isSidebarCollapsed ? '展开侧栏' : '收起侧栏' }}
-          <ShortcutKeys combo="Ctrl+B" />
-        </button>
         <button type="button" class="action-btn" @click="openGlobalActions">
           动作
           <ShortcutKeys combo="Ctrl+K" />

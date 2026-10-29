@@ -42,7 +42,10 @@ export async function readSshConfigurationFile(file: string, signal: AbortSignal
   try { await fs.lstat(file) }
   catch (error) { if ((error as NodeJS.ErrnoException).code === 'ENOENT') return undefined; throw new Error('SSH 配置路径无法读取') }
   try { target = await fs.realpath(file) } catch { throw new Error('SSH 配置链接或路径无法读取') }
-  const handle = await fs.open(target, constants.O_RDONLY | constants.O_NONBLOCK | constants.O_NOFOLLOW)
+  const handle = await fs.open(target, constants.O_RDONLY | constants.O_NONBLOCK | constants.O_NOFOLLOW).catch((error: NodeJS.ErrnoException) => {
+    if (error.code === 'EISDIR') throw new Error('SSH 配置必须是可读取的普通文件且不超过 256 KiB')
+    throw error
+  })
   try {
     const stat = await handle.stat()
     if (!stat.isFile() || stat.size > 256 * 1024 || (process.getuid && stat.uid !== process.getuid() && stat.uid !== 0)) throw new Error('SSH 配置必须是可读取的普通文件且不超过 256 KiB')
@@ -75,9 +78,10 @@ export async function readSshDocuments(options: SshReadOptions, signal: AbortSig
       warnings.add('部分 Include 使用动态或未设置的路径，主机预览可能不完整；连接时由系统 SSH 解释原配置'); return { paths: [], unresolved: true }
     }
     const absolute = expanded.startsWith('~/') ? path.join(options.home, expanded.slice(2)) : path.resolve(base, expanded)
-    const pieces = absolute.split(path.sep).filter(Boolean)
+    const root = path.parse(absolute).root
+    const pieces = absolute.slice(root.length).split(path.sep).filter(Boolean)
     if (pieces.length > 32) throw new Error('SSH Include 路径层级超过限制')
-    let parents = [path.parse(absolute).root]
+    let parents = [root]
     for (const piece of pieces) {
       signal.throwIfAborted(); const next: string[] = []
       if (!/[*?[]/.test(piece)) { parents = parents.map(parent => path.join(parent, piece)); continue }

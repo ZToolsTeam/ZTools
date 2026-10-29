@@ -11,6 +11,12 @@ const signal = () => new AbortController().signal
 async function fixture(t: TestContext) {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), 'ztools-ssh-read-'))
   t.after(() => fs.rm(home, { recursive: true, force: true }))
+  if (process.platform === 'win32') {
+    // 系统 OpenSSH 会检查 Include 文件 ACL；只收紧本用例新建目录，不更改用户 SSH 配置。
+    const sid = execFileSync('whoami.exe', ['/user', '/fo', 'csv', '/nh'], { encoding: 'utf8', windowsHide: true }).match(/S-1-(?:\d+-)+\d+/)?.[0]
+    if (!sid) throw new Error('无法读取测试目录所有者 SID')
+    execFileSync('icacls.exe', [home, '/inheritance:r', '/grant:r', `*${sid}:(OI)(CI)F`], { stdio: 'pipe', windowsHide: true })
+  }
   const systemDirectory = path.join(home, 'system'), config = path.join(home, '.ssh', 'config')
   await fs.mkdir(systemDirectory)
   const put = async (relative: string, content: string | Buffer) => {
@@ -36,18 +42,19 @@ test('拆词遵循 SSH 的等号、注释、引号和转义；不展开命令或
   for (const line of ['User "bad', 'User bad\0', 'User ' + 'a'.repeat(32768), '=x']) assert.throws(() => sshConfigTokens(line))
 })
 
-test('真实文件与系统 SSH 对照：Include 排序、首值优先、负向 Host、带 # 的内容', { skip: process.platform === 'win32' }, async t => {
+test('真实文件与系统 SSH 对照：Include 排序、首值优先、负向 Host、带 # 的内容', async t => {
   const f = await fixture(t)
   // -F 不改变 OpenSSH 的用户家目录；对照夹具必须使用隔离目录的绝对 Include。
-  await f.put('.ssh/config', `Include "${path.join(f.home, '.ssh/conf.d/*.conf')}"\nHost alpha beta\n Port = 2222\n IdentityFile "~/.ssh/key #1"\nHost * !beta\n ProxyJump bastion\nHost *\n User fallback\n Port 22\n`)
+  await f.put('.ssh/config', `Include "${path.join(f.home, '.ssh/conf.d/*.conf').replaceAll('\\', '/')}"\nHost alpha beta\n Port = 2222\n IdentityFile "~/.ssh/key #1"\nHost * !beta\n ProxyJump bastion\nHost *\n User fallback\n Port 22\n`)
   await f.put('.ssh/conf.d/02.conf', 'Host alpha\n Port 2202\n HostName a.example\nHost beta\n HostName b.example\n')
   await f.put('.ssh/conf.d/01.conf', 'Host alpha beta\n User user#name\nHost alpha\n Port 2201\n')
   const before = await fs.readFile(f.config), result = sshProfiles(await f.read())
   assert.deepEqual(result.hosts.map(h => h.alias), ['alpha', 'beta'])
   for (const host of result.hosts) {
     // 仅此无 Match/ProxyCommand 的隔离夹具交给 ssh -G；从不对用户配置执行。
-    const output = execFileSync('/usr/bin/ssh', ['-G', '-F', f.config, host.alias], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], timeout: 5000 })
-    const get = (key: string) => output.split('\n').find(line => line.startsWith(key + ' '))?.slice(key.length + 1)
+    const ssh = process.platform === 'win32' ? path.join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'OpenSSH', 'ssh.exe') : '/usr/bin/ssh'
+    const output = execFileSync(ssh, ['-G', '-F', f.config, host.alias], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], timeout: 5000 })
+    const get = (key: string) => output.split(/\r?\n/).find(line => line.startsWith(key + ' '))?.slice(key.length + 1)
     assert.equal(host.hostName, get('hostname')); assert.equal(host.user, get('user')); assert.equal(host.port, Number(get('port')))
     assert.equal(host.proxyJump, get('proxyjump')); assert.deepEqual(host.identityFiles, ['~/.ssh/key #1']); assert.equal(host.previewComplete, true)
   }
@@ -64,6 +71,19 @@ test('Include 的作用域还原、相对路径基于 ~/.ssh、非活动 Include
   assert.deepEqual(result.hosts.map(h => h.alias), ['alpha', 'beta', 'blocked'])
   assert.equal(result.hosts[0]!.user, 'alice'); assert.equal(result.hosts[0]!.port, 2300)
   assert.equal(result.hosts[1]!.user, 'beta-user'); assert.equal(result.hosts[1]!.port, undefined)
+})
+
+test('真实绝对路径与通配 Include 保留盘符根、按文件名排序且不修改配置', async t => {
+  const f = await fixture(t)
+  const pattern = path.join(f.home, '.ssh', 'parts', '*.conf').replaceAll('\\', '/')
+  await f.put('.ssh/config', `Include "${pattern}"\nHost alpha\n Port 2222\n`)
+  await f.put('.ssh/parts/02.conf', 'Host alpha\n User second\n')
+  await f.put('.ssh/parts/01.conf', 'Host alpha\n User first\n')
+  const before = await fs.readFile(f.config)
+  const result = sshProfiles(await f.read())
+  assert.equal(result.hosts[0]?.user, 'first')
+  assert.equal(result.hosts[0]?.port, 2222)
+  assert.deepEqual(await fs.readFile(f.config), before)
 })
 
 test('未知 Match 的 Include 保持未知，不执行 Match exec、ProxyCommand 或 LocalCommand', async t => {

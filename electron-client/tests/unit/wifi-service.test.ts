@@ -159,7 +159,7 @@ test('Windows 列表：导出不带明文密钥，按配置去重、真实认证
     'notes.txt': 'ignored'
   } }))
   const profiles = await readWifiProfiles('win32', undefined, f.deps)
-  assert.deepEqual(profiles.sort((a, b) => a.ssid.localeCompare(b.ssid)), [
+  assert.deepEqual(profiles.sort((a, b) => a.ssid.localeCompare(b.ssid, 'en')), [
     { ssid: ' home ', current: true, security: 'WPA2-Personal' }, { ssid: 'cafe', current: false, security: 'Open' }, { ssid: 'corp', current: false, security: 'WPA2-Enterprise' }])
   assert.ok(f.calls[0]!.every(arg => arg !== 'key=clear'))
   assert.equal(JSON.stringify(profiles).includes('ENCRYPTED'), false)
@@ -192,12 +192,12 @@ test('Windows 列表：netsh 代码页把 SSID 变成问号、与所有配置都
   // 代码页外字符被替换成 "?"，解析出了已连接 SSID，但与任何配置都对不上
   const garbled = await windowsFixture(t, () => ({ files }), { stdout: interfacesZh.replace('家里 5G', '咖啡??'), exitCode: 0 })
   const unknown = await readWifiProfiles('win32', undefined, garbled.deps)
-  assert.deepEqual(unknown.sort((a, b) => a.ssid.localeCompare(b.ssid)), [{ ssid: 'cafe', security: 'WPA2-Personal' }, { ssid: '咖啡\u{1F375}', security: 'WPA2-Personal' }])
+  assert.deepEqual(unknown.sort((a, b) => a.ssid.localeCompare(b.ssid, 'en')), [{ ssid: 'cafe', security: 'WPA2-Personal' }, { ssid: '咖啡\u{1F375}', security: 'WPA2-Personal' }])
   assert.ok(unknown.every(profile => !('current' in profile)), '对不上时不能出现 current: false')
   // 双网卡：一个 SSID 对得上、另一个被替换成问号；对上的仍是已连接，其余未知
   const dual = interfacesZh + interfacesZh.replace('3f1a2b4c-1111', '3f1a2b4c-9999').replace('家里 5G', '??').replace('a4:b1:c1:d1:e1:f1', 'a4:b1:c1:d1:e1:f2')
   const partial = await windowsFixture(t, () => ({ files: { ...files, 'WLAN-home.xml': profileXml('home', { ssid: '家里 5G' }) } }), { stdout: dual, exitCode: 0 })
-  assert.deepEqual((await readWifiProfiles('win32', undefined, partial.deps)).sort((a, b) => a.ssid.localeCompare(b.ssid)), [
+  assert.deepEqual((await readWifiProfiles('win32', undefined, partial.deps)).sort((a, b) => a.ssid.localeCompare(b.ssid, 'en')), [
     { ssid: 'cafe', security: 'WPA2-Personal' }, { ssid: 'home', current: true, security: 'WPA2-Personal' }, { ssid: '咖啡\u{1F375}', security: 'WPA2-Personal' }])
   // 对照：已连接 SSID 能对上配置时，其余配置照常报未连接；确实没连接（无 SSID 行）时也照常报未连接
   const matched = await windowsFixture(t, () => ({ files: { ...files, 'WLAN-home.xml': profileXml('home', { ssid: '家里 5G' }) } }))

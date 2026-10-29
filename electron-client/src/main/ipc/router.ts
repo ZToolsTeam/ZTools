@@ -207,7 +207,7 @@ import {
 } from '../services/file-system-service.js'
 import { expandHomeDir } from '../platform/macos/file-indexer.js'
 import type { SearchFilesResult } from '../services/sidecar-manager.js'
-import { readMacosApplicationIcon } from '../platform/macos/application-icon.js'
+import { prefetchMacosApplicationIcons, readMacosApplicationIconCached } from '../platform/macos/application-icon.js'
 import { ClipboardService } from '../services/clipboard-service.js'
 import { DatabaseService } from '../services/database-service.js'
 import { electronCredentialProtection } from '../platform/electron-credential-protection.js'
@@ -231,7 +231,7 @@ import {
   RuntimeCapabilityService,
   type RuntimeCapabilityProviders
 } from '../services/runtime-capability-service.js'
-import { listSystemVolumes } from '../services/volume-service.js'
+import { listSystemVolumes, type SystemVolumeSnapshot } from '../services/volume-service.js'
 import { createRuntimeCapabilityProviders } from '../services/runtime-capability-providers.js'
 import { RUNTIME_CAPABILITY_CATALOG } from '../services/runtime-capability-catalog.js'
 import { RUNTIME_PERMISSION_CHANGED_EVENT, type RuntimeCapabilityRecord } from '../../contracts/runtime-capability.js'
@@ -317,7 +317,7 @@ export async function grantSearchResultsForCaller(
     await grantResultsForCaller(files, caller, entries, 'search')
     return
   }
-  // dir: 扫描会跟随子目录里的目录链接：只登记真实路径仍在扫描根之内的结果（扫描根本身可以是链接，如 /tmp）
+  // dir: 扫描已跳过子项里的链接；这里仍按真实路径核对（纵深防御）：只登记真实路径在扫描根之内的结果（扫描根本身可以是链接，如 /tmp）
   await grantResultsForCaller(files, caller, entries, 'dir-scan', { scanRoot: expandHomeDir(scanDir) })
 }
 
@@ -334,6 +334,19 @@ export async function grantProcessPathsForCaller(
     if (typeof value === 'string' && value !== '') entries.push({ path: value, isDir: false })
   }
   await grantResultsForCaller(files, caller, entries, 'process')
+}
+
+/** system_list_volumes 返回的卷根（主进程枚举出的挂载点）：只读、精确路径、不递归，让「打开此分区」能用；不给回收站，也不授权卷内任何内容 */
+export async function grantVolumeRootsForCaller(
+  snapshot: SystemVolumeSnapshot,
+  caller: CallerIdentity,
+  files: FileSystemService
+): Promise<void> {
+  const entries: ResultGrantEntry[] = []
+  for (const volume of Array.isArray(snapshot?.volumes) ? snapshot.volumes : []) {
+    if (typeof volume?.path === 'string' && volume.path !== '') entries.push({ path: volume.path, isDir: true })
+  }
+  await grantResultsForCaller(files, caller, entries, 'volume')
 }
 
 /** filesearch_open / reveal / sha256 / quick_look 的目标：与 shell_* 一样必须是调用窗口已授权（含结果授权）的路径 */
@@ -353,7 +366,7 @@ export async function searchFilesForCaller(
   sidecars: CoreServices['sidecars'],
   files: FileSystemService
 ) {
-  const result = await sidecars.searchFiles(params.query, params.limit ?? 20)
+  const result = await sidecars.searchFiles(params.query, params.limit ?? 20, params.scope ? { scope: params.scope } : {})
   await grantSearchResultsForCaller(params.query, result, caller, files)
   return result
 }
@@ -1216,7 +1229,7 @@ export class IpcRouter {
       },
       async getFileIcon(filePath) {
         if (nativePlatform === 'darwin' && filePath.toLowerCase().endsWith('.app')) {
-          return readMacosApplicationIcon(filePath)
+          return readMacosApplicationIconCached(filePath)
         }
         return (await mainApp.getFileIcon(filePath, { size: nativePlatform === 'darwin' ? 'normal' : 'large' })).toDataURL()
       },
@@ -1580,7 +1593,13 @@ export class IpcRouter {
         return system.getFileIcon(params as SystemFileIconParams, caller)
       },
       async system_search_files(params, caller) {
-        return searchFilesForCaller(params as SystemSearchFilesParams, caller, services.sidecars, files)
+        const input = params as SystemSearchFilesParams
+        const result = await searchFilesForCaller(input, caller, services.sidecars, files)
+        // 程序列表交给界面后，在后台把图标预取进缓存，搜索结果里的图标就不用再等
+        if (nativePlatform === 'darwin' && input.scope === 'applications') {
+          prefetchMacosApplicationIcons(result.files.map(file => file.path))
+        }
+        return result
       },
       async system_read_current_folder(_params, caller) {
         return system.readCurrentFolder(caller)
@@ -1706,8 +1725,10 @@ export class IpcRouter {
       async system_get_cpu_usage() {
         return system.getCpuUsage()
       },
-      async system_list_volumes() {
-        return listSystemVolumes()
+      async system_list_volumes(_params, caller) {
+        const result = await listSystemVolumes()
+        await grantVolumeRootsForCaller(result, caller, files)
+        return result
       },
       async system_get_memory_usage() {
         return system.getMemoryUsage()
@@ -1735,6 +1756,25 @@ export class IpcRouter {
       },
       async dllplugin_call(params, caller, signal) {
         const input = params as DllPluginCallParams
+        // 查看器的结构化只读操作属于宿主；SQLitePlugin 公共 DLL 使用另一套原生协议。
+        if (builtinPluginHost.normalizePluginName(input.plugin) === 'SqlitePlugin' &&
+            (input.func === 'inspectWorkspace' || input.func === 'executeQuery')) {
+          if (!isBuiltinPluginFallbackAllowed(caller, input.plugin, name => builtinPluginHost.normalizePluginName(name))) {
+            throw new ZToolsError(errorCodes.permissionDenied, '插件只能访问自身对应的 SQLite 查看能力')
+          }
+          await requirePluginPermission(caller, 'sqlite', plugins)
+          await requirePluginPermission(caller, 'fs', plugins)
+          const values = input.params ?? {}
+          const allowed = input.func === 'executeQuery' ? ['dbPath', 'tableName', 'limit'] : ['dbPath']
+          if (Object.keys(values).some(key => !allowed.includes(key)) ||
+              typeof values.dbPath !== 'string' || !values.dbPath.trim() ||
+              (input.func === 'executeQuery' && (typeof values.tableName !== 'string' || !values.tableName))) {
+            throw new ZToolsError(errorCodes.invalidRequest, 'SQLite 查看器只接受数据库路径和表名')
+          }
+          const result = await builtinPluginHost.handlePluginCall('SqlitePlugin', input.func,
+            { ...values, ...(input.func === 'executeQuery' ? { limit: 50 } : {}) }, signal, caller)
+          return { ...(result as Record<string, unknown>), data: result }
+        }
         // 原生 DLL 不可用时落到宿主内置实现；调用方只能使用与自己对应的兜底能力
         const hostFallback = async (error: unknown): Promise<unknown> => {
           const allowedProcessMonitorCaller = isProcessMonitorFallbackAllowed(caller)
@@ -2217,13 +2257,21 @@ export class IpcRouter {
           options.closeConfirmationResolved()
         }
       },
-      async clipboard_history_query(params) {
+      async clipboard_history_query(params, caller) {
         try {
           services.clipboardHistory.ensureInitialHostClipboardSeed(electronClipboard.readText())
         } catch {
           services.clipboardHistory.ensureInitialHostClipboardSeed()
         }
-        return services.clipboardHistory.queryItems(params as Parameters<typeof services.clipboardHistory.queryItems>[0])
+        const rows = services.clipboardHistory.queryItems(params as Parameters<typeof services.clipboardHistory.queryItems>[0])
+        // 系统采集的文件条目里的路径只读、精确、不递归授权，让「在访达 / 资源管理器中显示」能用；不给回收站
+        await grantResultsForCaller(
+          files,
+          caller,
+          services.clipboardHistory.systemCapturedFilePaths(rows).map((filePath) => ({ path: filePath, isDir: true })),
+          'clipboard'
+        )
+        return rows
       },
       async clipboard_history_restore(params, caller, signal) {
         const input = params as { id: string; paste?: boolean }
@@ -2669,14 +2717,15 @@ export class IpcRouter {
       },
       async screenshots_scan(params, caller) {
         const input = (params || {}) as { query?: string; limit?: number; pinnedFirst?: boolean; forceRefresh?: boolean }
-        const records = services.screenshots.scanScreenshots(input?.forceRefresh)
+        // 返回 { screenshots, failedDirs }：插件按 data.screenshots 取列表；failedDirs 为跳过的不可读目录及中文原因
+        const report = services.screenshots.scanScreenshotsReport(input?.forceRefresh)
         await grantResultsForCaller(
           files,
           caller,
-          records.map((record) => ({ path: record.path, isDir: false })),
+          report.screenshots.map((record) => ({ path: record.path, isDir: false })),
           'screenshot'
         )
-        return records
+        return report
       },
       async screenshots_paste_latest(_params, caller, signal) {
         return services.screenshots.pasteLatestScreenshot(async (filePath) => {
@@ -2856,20 +2905,24 @@ export class IpcRouter {
       async audio_get_devices() {
         return { devices: await system.getAudioDevices() }
       },
-      async audio_set_default_device(params) {
+      async audio_set_default_device(params, caller) {
+        await requirePluginPermission(caller, 'audio', plugins)
         const input = (params || {}) as { id?: string; name?: string; idOrName?: string; type?: 'output' | 'input' }
         const target = input?.idOrName ?? input?.id ?? input?.name ?? ''
         return system.setDefaultAudioDevice(target, input?.type ?? 'output')
       },
-      async audio_set_volume(params) {
+      async audio_set_volume(params, caller) {
+        await requirePluginPermission(caller, 'audio', plugins)
         const input = (params || {}) as { volume: number; type?: 'output' | 'input'; id?: string }
         return system.setAudioVolume(input?.volume, input?.type ?? 'output', input?.id)
       },
-      async audio_toggle_mute(params) {
+      async audio_toggle_mute(params, caller) {
+        await requirePluginPermission(caller, 'audio', plugins)
         const input = (params || {}) as { muted?: boolean; type?: 'output' | 'input'; id?: string }
         return system.toggleAudioMute(input?.muted, input?.type ?? 'output', input?.id)
       },
-      async wifi_get_profiles() {
+      async wifi_get_profiles(_params, caller) {
+        await requirePluginPermission(caller, 'system', plugins)
         return { profiles: await system.getWifiProfiles() }
       },
       async wifi_get_password(params, caller) {

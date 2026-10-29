@@ -121,3 +121,52 @@ export async function loadApplicationIcon(
   }
   return icon
 }
+
+export interface TrayIconDependencies {
+  readonly platform?: NodeJS.Platform
+  readonly getAppPath?: () => string
+  readonly createFromPath?: (filePath: string) => NativeImage
+}
+
+/**
+ * 托盘图标文件（构建时由 scripts/build.mjs 复制到 out/assets/tray，随安装包分发）：
+ * - macOS 菜单栏用单色模板图（trayTemplate.png 及 @2x/@3x），系统按浅色 / 深色菜单栏自动着色；
+ * - Windows 通知区域用多尺寸 ICO，系统按缩放比例挑 16 / 24 / 32 像素图层，避免把 32px 应用图标缩小后发糊。
+ */
+export function trayIconFile(platform: NodeJS.Platform = process.platform): string {
+  return platform === 'darwin' ? 'trayTemplate.png' : 'tray.ico'
+}
+
+export function resolveTrayIconCandidates(options: {
+  readonly platform: NodeJS.Platform
+  readonly appPath: string
+}): readonly string[] {
+  const file = trayIconFile(options.platform)
+  return [
+    path.join(options.appPath, 'out', 'assets', 'tray', file),
+    path.join(options.appPath, 'resources', 'app', options.platform === 'darwin' ? path.join('tray', file) : 'LOGO.ico')
+  ]
+}
+
+/** 加载托盘图标；专用文件都缺失时返回 fallback（应用图标），不让托盘因为少一个文件而无法显示 */
+export function loadTrayIcon(
+  fallback: NativeImage,
+  dependencies: TrayIconDependencies = {}
+): NativeImage {
+  const platform = dependencies.platform ?? process.platform
+  const appPath = dependencies.getAppPath ? dependencies.getAppPath() : app.getAppPath()
+  const createFromPath =
+    dependencies.createFromPath ?? ((target) => nativeImage.createFromPath(target))
+  for (const candidate of resolveTrayIconCandidates({ platform, appPath })) {
+    try {
+      const icon = createFromPath(candidate)
+      if (icon && !icon.isEmpty()) {
+        if (platform === 'darwin') icon.setTemplateImage(true)
+        return icon
+      }
+    } catch {
+      // 尝试下一个候选路径
+    }
+  }
+  return fallback
+}

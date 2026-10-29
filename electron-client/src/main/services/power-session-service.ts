@@ -17,16 +17,21 @@ interface PowerSession {
   timer?: ReturnType<typeof setTimeout>
 }
 
-/** 主进程持有定时器与电源断言；退出插件页面不影响任务，窗口销毁和应用退出会释放。 */
+/** 主进程持有定时器与电源断言；退出插件页面不影响任务，开启它的窗口销毁、插件卸载停用和应用退出会释放。 */
 export class PowerSessionService {
   readonly #sessions = new Map<string, PowerSession>()
   #sequence = 0
 
   constructor(private readonly adapter: PowerSessionAdapter) {}
 
+  /**
+   * 插件的防休眠按插件归属，不按窗口：在主窗口开启后，从悬浮条或独立窗口打开同一插件能看到并关闭它。
+   * 没有插件身份的调用仍按窗口区分。
+   */
   #owner(caller: CallerIdentity): string {
     if (caller.stalePluginSession) throw new Error('插件会话已失效，请重新打开插件')
-    return JSON.stringify([caller.webContentsId, caller.attributedPlugin?.pluginId ?? caller.pluginId ?? null])
+    const pluginId = caller.attributedPlugin?.pluginId ?? caller.pluginId ?? null
+    return pluginId ? JSON.stringify(['plugin', pluginId.toLowerCase()]) : JSON.stringify(['window', caller.webContentsId])
   }
 
   #release(owner: string): void {
@@ -96,13 +101,12 @@ export class PowerSessionService {
   /** 插件卸载、停用或下架后不再有界面可以关闭它的防休眠，必须一并释放（不论在哪个窗口建立） */
   releasePlugin(pluginId: string): void {
     const target = pluginId.trim().toLowerCase()
-    for (const [owner, session] of this.#sessions) {
-      const [, ownerPluginId] = JSON.parse(owner) as [number, string | null]
-      if (typeof ownerPluginId !== 'string' || ownerPluginId.toLowerCase() !== target) continue
-      this.#releaseSafely(owner, session)
-    }
+    const owner = JSON.stringify(['plugin', target])
+    const session = this.#sessions.get(owner)
+    if (session) this.#releaseSafely(owner, session)
   }
 
+  /** 窗口销毁时释放从这个窗口开启的防休眠（独立窗口关闭后不能留下无人可见的断言） */
   releaseWindow(windowId: number): void {
     for (const [owner, session] of this.#sessions) {
       if (session.windowId !== windowId) continue

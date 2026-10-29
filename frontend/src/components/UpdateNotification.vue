@@ -4,12 +4,10 @@
       <!-- 顶部：图标 + 标题 + 版本标签 + 关闭 -->
       <div class="update-header">
         <div class="update-icon">
-          <UpCircleOutlined  />
+          <CircleArrowUpIcon  />
         </div>
         <span class="update-title">发现新版本</span>
-        <span class="update-tag">{{
-          updateType === 'app' ? 'App' : 'Web'
-        }}</span>
+        <RcTag class="update-tag">{{ updateType === 'app' ? '客户端' : '界面' }}</RcTag>
         <span class="update-ver">v{{ version }}</span>
         <button
           v-if="!force"
@@ -17,7 +15,7 @@
           @click="dismiss"
           aria-label="关闭"
         >
-          <CloseOutlined  />
+          <XIcon  />
         </button>
       </div>
 
@@ -46,24 +44,23 @@
       <!-- 操作按钮 -->
       <div v-if="!updating || manualUpdate" class="update-actions">
         <template v-if="!force && !updating">
-          <button class="update-btn-text" @click="skipVersion">
-            此版本不再提醒
-          </button>
-          <button class="update-btn-ghost" @click="remindLater">
-            稍后提醒
-          </button>
+          <button type="button" class="update-skip" @click="skipVersion">此版本不再提醒</button>
+          <RcButton variant="secondary" size="sm" class="update-btn-ghost" @click="remindLater">稍后提醒</RcButton>
         </template>
-        <button class="update-btn-primary" :disabled="updating" @click="doUpdate">{{ manualUpdate ? '下载 macOS 安装包' : '立即更新' }}</button>
+        <RcButton variant="primary" size="sm" class="update-btn-primary" :disabled="updating" @click="doUpdate">
+          {{ manualUpdate ? '下载 macOS 安装包' : '立即更新' }}
+        </RcButton>
       </div>
       <div v-else class="update-actions">
-        <button class="update-btn-ghost" @click="cancelInProgress">取消更新</button>
+        <RcButton variant="secondary" size="sm" class="update-btn-ghost" @click="cancelInProgress">取消更新</RcButton>
       </div>
     </div>
   </Transition>
 </template>
 
 <script setup>
-import { CloseOutlined, UpCircleOutlined } from '@ant-design/icons-vue'
+import { RcButton, RcTag } from '@/components/base'
+import { CircleArrowUpIcon, XIcon } from '@lucide/vue'
 import { ref, computed, onMounted, onBeforeUnmount } from 'vue'
 import { useUpdateStore } from '@/stores/update'
 import { useAppUpdate } from '@/composables/useAppUpdate'
@@ -338,8 +335,8 @@ defineExpose({ show, dismiss })
   transform: translate(-50%, -50%);
   z-index: 9999;
   width: 340px;
-  background: var(--color-surface);
-  border: 1px solid var(--color-border);
+  background: var(--rc-surface);
+  border: 1px solid var(--rc-border);
   border-radius: var(--radius-xl);
   box-shadow: var(--shadow-xl);
   padding: 16px 18px;
@@ -359,11 +356,11 @@ defineExpose({ show, dismiss })
   width: 28px;
   height: 28px;
   border-radius: var(--radius-sm);
-  background: var(--gradient-blue-soft);
+  background: var(--rc-accent-subtle);
   display: flex;
   align-items: center;
   justify-content: center;
-  color: var(--color-primary);
+  color: var(--rc-accent);
   font-size: 14px;
   flex-shrink: 0;
 }
@@ -371,26 +368,14 @@ defineExpose({ show, dismiss })
 .update-title {
   font-size: var(--font-size-body-m);
   font-weight: var(--font-weight-semibold);
-  color: var(--color-text);
+  color: var(--rc-text-primary);
   white-space: nowrap;
 }
 
-.update-tag {
-  padding: 0 6px;
-  height: 18px;
-  line-height: 18px;
-  border-radius: 9px;
-  font-size: 10px;
-  font-weight: var(--font-weight-semibold);
-  background: var(--rc-accent);
-  color: var(--rc-accent-contrast);
-  flex-shrink: 0;
-  letter-spacing: 0.3px;
-}
 
 .update-ver {
   font-size: var(--font-size-body-s);
-  color: var(--color-text-secondary);
+  color: var(--rc-text-secondary);
   white-space: nowrap;
 }
 
@@ -400,7 +385,7 @@ defineExpose({ show, dismiss })
   height: 22px;
   border: none;
   background: transparent;
-  color: var(--color-text-disabled);
+  color: var(--rc-text-muted);
   cursor: pointer;
   border-radius: var(--radius-sm);
   display: flex;
@@ -412,21 +397,21 @@ defineExpose({ show, dismiss })
 }
 
 .update-close:hover {
-  background: var(--color-hover);
-  color: var(--color-text);
+  background: var(--rc-surface-hover);
+  color: var(--rc-text-primary);
 }
 
 /* 更新日志 */
 .update-changelog {
   font-size: var(--font-size-body-s);
-  color: var(--color-text-secondary);
+  color: var(--rc-text-secondary);
   line-height: 1.6;
   max-height: 200px;
   overflow-y: auto;
 }
 
 .update-changelog--empty {
-  color: var(--color-text-disabled);
+  color: var(--rc-text-muted);
   font-style: italic;
 }
 
@@ -439,25 +424,25 @@ defineExpose({ show, dismiss })
 .update-progress-row {
   display: flex;
   justify-content: space-between;
-  color: var(--color-text-secondary);
+  color: var(--rc-text-secondary);
   font-size: var(--font-size-body-s);
 }
 
 .update-progress-row strong {
-  color: var(--color-primary);
+  color: var(--rc-accent);
 }
 
 .update-progress-track {
   height: 6px;
   overflow: hidden;
   border-radius: 3px;
-  background: var(--color-border);
+  background: var(--rc-border);
 }
 
 .update-progress-value {
   height: 100%;
   border-radius: inherit;
-  background: var(--color-primary);
+  background: var(--rc-accent);
   transition: width 120ms ease-out;
 }
 
@@ -475,60 +460,21 @@ defineExpose({ show, dismiss })
   gap: 8px;
 }
 
-.update-btn-primary {
-  height: 32px;
-  padding: 0 20px;
-  border: none;
-  border-radius: var(--radius-md);
-  background: var(--rc-accent);
-  color: var(--rc-accent-contrast);
-  font-size: var(--font-size-body-s);
-  font-weight: var(--font-weight-medium);
-  cursor: pointer;
-  transition: all var(--duration-fast) var(--easing-smooth);
-}
-
-.update-btn-primary:hover {
-  background: var(--rc-accent-hover);
-}
-
-.update-btn-primary:active {
-  transform: scale(0.97);
-}
-
-.update-btn-ghost {
-  height: 32px;
-  padding: 0 14px;
-  border: 1px solid var(--color-border-strong);
-  border-radius: var(--radius-md);
-  background: transparent;
-  color: var(--color-text-secondary);
-  font-size: var(--font-size-body-s);
-  cursor: pointer;
-  transition: all var(--duration-fast) var(--easing-smooth);
-}
-
-.update-btn-ghost:hover {
-  border-color: var(--color-primary);
-  color: var(--color-primary);
-  background: rgba(var(--color-primary-rgb), 0.04);
-}
-
-/* 文本按钮（此版本不再提醒） */
-.update-btn-text {
-  height: 32px;
-  padding: 0 8px;
+/* 「此版本不再提醒」：弱化的文字按钮，主次按钮用 RcButton */
+.update-skip {
+  height: 28px;
+  margin-right: auto;
+  padding: 0 4px;
   border: none;
   background: transparent;
-  color: var(--color-text-disabled);
-  font-size: var(--font-size-body-xs, 11px);
+  color: var(--rc-text-muted);
+  font-size: 12px;
   cursor: pointer;
-  transition: all var(--duration-fast) var(--easing-smooth);
   white-space: nowrap;
 }
 
-.update-btn-text:hover {
-  color: var(--color-text-secondary);
+.update-skip:hover {
+  color: var(--rc-text-secondary);
 }
 
 /* 动画 */

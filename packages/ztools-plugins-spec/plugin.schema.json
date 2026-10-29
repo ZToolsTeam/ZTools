@@ -258,6 +258,24 @@
     "nativeComponents": {
       "type": "array",
       "description": "关联的原生动态库及组件声明；纯 JS 插件写 []"
+    },
+    "screenshots": {
+      "type": "array",
+      "maxItems": 5,
+      "description": "插件详情页展示的界面截图（可选）。只接受 screenshots/ 目录下的 PNG，每张不超过 1 MB，宽 640–2560、高 400–1600 像素；发布时随版本上传到 CDN，不进安装包",
+      "items": {
+        "type": "object",
+        "required": ["path"],
+        "properties": {
+          "path": {
+            "type": "string",
+            "pattern": "^screenshots/(?:[A-Za-z0-9_-]+/)*[A-Za-z0-9_-]+(?:\\.[A-Za-z0-9_-]+)*\\.png$",
+            "description": "截图文件相对插件目录的路径，如 screenshots/01.png"
+          },
+          "title": { "type": "string", "maxLength": 60, "description": "截图说明文字" }
+        },
+        "additionalProperties": false
+      }
     }
   },
   "additionalProperties": true

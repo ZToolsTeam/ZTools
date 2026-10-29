@@ -134,10 +134,19 @@ test('Windows 启动故障注入：spawn 异步报错、同步抛错、路径类
   await assert.rejects(launchWindowsProject(project(), 'terminal', signal(), deps({ dirs: [project().path], spawnMode: 'throw' }).value), /spawn EINVAL/)
   // 文件夹项目变成了文件 / 工作区文件变成了目录
   const changed = deps({ files: [project().path, exe] })
-  await assert.rejects(launchWindowsProject(project(), 'open', signal(), changed.value), /项目路径类型已改变，请重新扫描/); assert.equal(changed.spawns.length, 0)
+  await assert.rejects(launchWindowsProject(project(), 'open', signal(), changed.value), /项目路径类型已改变：记录的是文件夹.*请重新扫描/); assert.equal(changed.spawns.length, 0)
   await assert.rejects(launchWindowsProject(project({ kind: 'workspace' }), 'terminal', signal(), deps({ dirs: [project().path] }).value), /类型已改变/)
   const missing = deps({ files: [exe] })
-  await assert.rejects(launchWindowsProject(project(), 'open', signal(), missing.value), (e: NodeJS.ErrnoException) => e.code === 'ENOENT'); assert.equal(missing.spawns.length, 0)
+  // 路径不存在：给出中文原因，不把 Node 原始错误（ENOENT: no such file...）透给插件，原始错误保留在 cause
+  await assert.rejects(launchWindowsProject(project(), 'open', signal(), missing.value), (e: Error) =>
+    /^项目路径不存在/.test(e.message) && !/ENOENT|no such file/.test(e.message) && (e.cause as NodeJS.ErrnoException).code === 'ENOENT'); assert.equal(missing.spawns.length, 0)
+  // 无权限、上级不是目录、未知错误码均转成中文
+  for (const [code, pattern] of [['EACCES', /没有权限访问项目路径/], ['EPERM', /没有权限/], ['ENOTDIR', /上级不是文件夹/], ['ELOOP', /循环的符号链接/], ['EIO', /无法读取/], ['EWHATEVER', /无法读取项目路径（EWHATEVER）/]] as const) {
+    const failing = { ...deps({ files: [exe] }).value, stat: async () => { throw Object.assign(new Error(`${code}: raw node message`), { code }) } }
+    await assert.rejects(launchWindowsProject(project(), 'open', signal(), failing), (e: Error) => pattern.test(e.message) && !/raw node message/.test(e.message))
+  }
+  const noCode = { ...deps({ files: [exe] }).value, stat: async () => { throw new Error('raw') } }
+  await assert.rejects(launchWindowsProject(project(), 'open', signal(), noCode), /^Error: 无法读取项目路径，请重新扫描$/)
   const aborted = new AbortController(); aborted.abort(new Error('已取消')); const pre = deps({ files: [exe], dirs: [project().path] })
   await assert.rejects(launchWindowsProject(project(), 'open', aborted.signal, pre.value), /已取消/); assert.equal(pre.spawns.length, 0); assert.equal(pre.statCalls.length, 0)
 })

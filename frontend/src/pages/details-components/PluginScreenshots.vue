@@ -1,6 +1,8 @@
 <script setup>
-import { PictureOutlined } from '@ant-design/icons-vue'
-import { computed } from 'vue'
+import { ChevronLeftIcon, ChevronRightIcon, ImageIcon } from '@lucide/vue'
+import { computed, onUnmounted, ref, watch } from 'vue'
+import { RcDialog } from '@/components/base'
+import { isComposingEvent } from '@/utils/keymap'
 
 const props = defineProps({
   screenshots: {
@@ -18,58 +20,99 @@ const gridClass = computed(() => {
   if (count === 4) return 'grid-cols-2 lg:grid-cols-4'
   return 'grid-cols-2 lg:grid-cols-3'
 })
+
+// 大图查看：统一用 RcDialog，只保留看图需要的「上一张 / 下一张 / 关闭」
+const viewerOpen = ref(false)
+const viewerIndex = ref(0)
+const current = computed(() => props.screenshots?.[viewerIndex.value] || null)
+const total = computed(() => props.screenshots?.length || 0)
+
+const openViewer = (index) => {
+  viewerIndex.value = index
+  viewerOpen.value = true
+}
+const step = (delta) => {
+  if (total.value < 2) return
+  viewerIndex.value = (viewerIndex.value + delta + total.value) % total.value
+}
+// 对话框打开时页面快捷键已停用（keymap 识别到对话框），这里只处理左右切换
+const onViewerKeydown = (event) => {
+  if (isComposingEvent(event)) return
+  if (event.key === 'ArrowLeft') step(-1)
+  else if (event.key === 'ArrowRight') step(1)
+  else return
+  event.preventDefault()
+}
+watch(viewerOpen, (open, _old, onCleanup) => {
+  if (!open) return
+  window.addEventListener('keydown', onViewerKeydown)
+  onCleanup(() => window.removeEventListener('keydown', onViewerKeydown))
+})
+onUnmounted(() => window.removeEventListener('keydown', onViewerKeydown))
 </script>
 
 <template>
   <!-- 插件截图区 -->
   <div v-if="screenshots && screenshots.length > 0" class="screenshots-section">
     <h3 class="section-title">
-      <PictureOutlined  />
+      <ImageIcon  />
       插件截图
     </h3>
     <div class="screenshots-grid" :class="gridClass">
-      <a-image-preview-group>
-        <div
-          v-for="(screenshot, index) in screenshots"
-          :key="index"
-          class="screenshot-item"
+      <div
+        v-for="(screenshot, index) in screenshots"
+        :key="index"
+        class="screenshot-item"
+      >
+        <button
+          type="button"
+          class="screenshot-wrapper"
+          :aria-label="`查看大图：${screenshot.title || `截图 ${index + 1}`}`"
+          @click="openViewer(index)"
         >
-          <div class="screenshot-wrapper">
-            <a-image
-              :src="screenshot.url"
-              :alt="screenshot.title || `截图 ${index + 1}`"
-              class="screenshot-image"
-            />
-          </div>
-          <p v-if="screenshot.title" class="screenshot-title">
-            {{ screenshot.title }}
-          </p>
-        </div>
-      </a-image-preview-group>
-    </div>
-  </div>
-
-  <!-- 截图占位（如果没有截图） -->
-  <div v-else class="screenshots-section">
-    <h3 class="section-title">
-      <PictureOutlined  />
-      插件截图
-    </h3>
-    <div class="empty-screenshots">
-      <div v-for="i in 3" :key="i" class="empty-item">
-        <div class="empty-icon">
-          <PictureOutlined  />
-        </div>
-        <p>暂无截图</p>
+          <img
+            :src="screenshot.url"
+            :alt="screenshot.title || `截图 ${index + 1}`"
+            :width="screenshot.width"
+            :height="screenshot.height"
+            class="screenshot-image"
+            loading="lazy"
+          />
+        </button>
+        <p v-if="screenshot.title" class="screenshot-title">
+          {{ screenshot.title }}
+        </p>
       </div>
     </div>
+
+    <RcDialog v-model:open="viewerOpen" :width="960" wrap-class-name="screenshot-viewer">
+      <figure v-if="current" class="viewer">
+        <div class="viewer-stage">
+          <img :src="current.url" :alt="current.title || `截图 ${viewerIndex + 1}`" class="viewer-image" />
+        </div>
+        <figcaption class="viewer-bar">
+          <button v-if="total > 1" type="button" class="viewer-nav" aria-label="上一张" @click="step(-1)">
+            <ChevronLeftIcon aria-hidden="true" />
+          </button>
+          <span class="viewer-caption">
+            <span v-if="current.title" class="viewer-title">{{ current.title }}</span>
+            <span class="viewer-count">{{ viewerIndex + 1 }} / {{ total }}</span>
+          </span>
+          <button v-if="total > 1" type="button" class="viewer-nav" aria-label="下一张" @click="step(1)">
+            <ChevronRightIcon aria-hidden="true" />
+          </button>
+        </figcaption>
+      </figure>
+    </RcDialog>
   </div>
+
+  <!-- 没有截图时不渲染占位卡，详情 Tab 紧跟头部 -->
 </template>
 
 <style scoped>
 .screenshots-section {
-  background: var(--color-surface);
-  border: 1px solid var(--color-border);
+  background: var(--rc-surface);
+  border: 1px solid var(--rc-border);
   border-radius: 12px;
   padding: 16px;
   margin-bottom: 12px;
@@ -81,12 +124,12 @@ const gridClass = computed(() => {
   gap: 8px;
   font-size: 14px;
   font-weight: 600;
-  color: var(--zt-text);
+  color: var(--rc-text-primary);
   margin: 0 0 12px;
 }
 
-.section-title :deep(.anticon) {
-  color: var(--zt-primary);
+.section-title :deep(.lucide) {
+  color: var(--rc-text-muted);
 }
 
 /* 截图网格 */
@@ -132,33 +175,113 @@ const gridClass = computed(() => {
 
 .screenshot-wrapper {
   position: relative;
+  display: block;
+  width: 100%;
+  padding: 0;
+  border: 1px solid var(--rc-border-subtle);
   border-radius: 12px;
   overflow: hidden;
-  background: var(--color-background-secondary);
+  background: var(--rc-canvas);
   aspect-ratio: 16 / 10;
   cursor: zoom-in;
 }
 
-.screenshot-wrapper :deep(.ant-image) {
-  display: block;
-  width: 100%;
-  height: 100%;
+.screenshot-wrapper:focus-visible {
+  outline: none;
+  box-shadow: var(--rc-focus-ring);
 }
 
-.screenshot-wrapper :deep(.ant-image-img) {
+.screenshot-image {
+  display: block;
   width: 100%;
   height: 100%;
   object-fit: cover;
   transition: transform 0.3s ease;
 }
 
-.screenshot-wrapper:hover :deep(.ant-image-img) {
+.screenshot-wrapper:hover .screenshot-image {
   transform: scale(1.03);
+}
+
+/* 大图查看 */
+.viewer {
+  margin: 0;
+  padding-top: 28px;
+}
+
+.viewer-stage {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 240px;
+  max-height: 70vh;
+  border-radius: 10px;
+  background: var(--rc-surface-subtle);
+  overflow: hidden;
+}
+
+.viewer-image {
+  display: block;
+  max-width: 100%;
+  max-height: 70vh;
+  object-fit: contain;
+}
+
+.viewer-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: 12px;
+}
+
+.viewer-caption {
+  flex: 1;
+  display: flex;
+  align-items: baseline;
+  justify-content: center;
+  gap: 10px;
+  min-width: 0;
+}
+
+.viewer-title {
+  overflow: hidden;
+  color: var(--rc-text-primary);
+  font-size: 13px;
+  font-weight: 500;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.viewer-count {
+  color: var(--rc-text-muted);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+
+.viewer-nav {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  border: 1px solid var(--rc-border);
+  border-radius: var(--rc-radius-md);
+  background: var(--rc-surface);
+  color: var(--rc-text-secondary);
+  font-size: 16px;
+  cursor: pointer;
+  transition: background-color 0.15s ease, color 0.15s ease;
+}
+
+.viewer-nav:hover {
+  background: var(--rc-surface-hover);
+  color: var(--rc-text-primary);
 }
 
 .screenshot-title {
   font-size: 13px;
-  color: var(--zt-text-secondary);
+  color: var(--rc-text-secondary);
   text-align: center;
   margin: 10px 0 0;
   overflow: hidden;
@@ -166,48 +289,4 @@ const gridClass = computed(() => {
   white-space: nowrap;
 }
 
-/* 空状态 */
-.empty-screenshots {
-  display: grid;
-  grid-template-columns: repeat(3, 1fr);
-  gap: 16px;
-}
-
-@media (max-width: 640px) {
-  .empty-screenshots {
-    grid-template-columns: 1fr;
-  }
-}
-
-.empty-item {
-  aspect-ratio: 16 / 10;
-  border-radius: 12px;
-  background: var(--color-background-secondary);
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  gap: 8px;
-}
-
-.empty-icon {
-  width: 48px;
-  height: 48px;
-  border-radius: 12px;
-  background: var(--color-background);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-}
-
-.empty-icon :deep(.anticon) {
-  font-size: 20px;
-  color: var(--zt-text-disabled);
-}
-
-.empty-item p {
-  font-size: 13px;
-  color: var(--zt-text-disabled);
-  margin: 0;
-}
 </style>

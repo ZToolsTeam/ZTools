@@ -422,10 +422,127 @@ export function validatePluginManifest(manifest, options = {}) {
     }
   }
 
+  // 14. 截图（可选）
+  validateManifestScreenshots(manifest, options, errors)
+
   return {
     valid: errors.length === 0,
     errors,
     warnings
+  }
+}
+
+/**
+ * 插件截图规则：只在插件详情页展示（客户端与官网），发布时随版本上传 CDN，不进安装包。
+ * 只接受 screenshots/ 目录下的 PNG：安装包与公开仓库导出都按这个目录处理截图，放在别处会被打进安装包或被导出拒绝。
+ */
+export const SCREENSHOT_LIMITS = Object.freeze({
+  maxCount: 5,
+  maxBytes: 1024 * 1024,
+  minWidth: 640,
+  maxWidth: 2560,
+  minHeight: 400,
+  maxHeight: 1600,
+  maxTitleLength: 60
+})
+/** screenshots/ 下的相对路径：每段只用字母、数字、_ - 与段内的点，扩展名必须是小写 .png；不能有 ..、绝对路径、反斜杠 */
+export const SCREENSHOT_PATH_REGEX = /^screenshots\/(?:[A-Za-z0-9_-]+\/)*[A-Za-z0-9_-]+(?:\.[A-Za-z0-9_-]+)*\.png$/
+const SCREENSHOT_KEYS = new Set(['path', 'title'])
+const PNG_SIGNATURE = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])
+
+/**
+ * 读取 PNG 文件头（签名 + IHDR）里的宽高；不是 PNG（只改了扩展名、内容被截断）时返回 null
+ * @param {Buffer} buf - 文件开头至少 24 字节
+ * @returns {{ width: number, height: number } | null}
+ */
+export function readPngSize(buf) {
+  if (!Buffer.isBuffer(buf) || buf.length < 24) return null
+  if (!buf.subarray(0, 8).equals(PNG_SIGNATURE)) return null
+  // 第一个数据块必须是 IHDR（长度 13）
+  if (buf.readUInt32BE(8) !== 13 || buf.toString('latin1', 12, 16) !== 'IHDR') return null
+  return { width: buf.readUInt32BE(16), height: buf.readUInt32BE(20) }
+}
+
+/**
+ * 检查插件目录里的一张截图文件：在插件目录内（不经软链接跳出）、是普通文件、不超过 1 MB、确实是 PNG、尺寸在范围内。
+ * @param {string} baseDir - 插件目录
+ * @param {string} relPath - 清单里的 path（调用前已通过 SCREENSHOT_PATH_REGEX）
+ * @returns {{ ok: true, width: number, height: number, bytes: number } | { ok: false, error: string }}
+ */
+export function inspectScreenshotFile(baseDir, relPath) {
+  const fail = (error) => ({ ok: false, error })
+  const abs = path.resolve(baseDir, relPath)
+  if (!isPathInsideBaseDir(baseDir, relPath)) return fail(`截图路径越界: "${relPath}"`)
+  const stat = fs.lstatSync(abs, { throwIfNoEntry: false })
+  if (!stat) return fail(`截图文件不存在: ${relPath}`)
+  if (stat.isSymbolicLink()) return fail(`截图不能是软链接: ${relPath}`)
+  if (!stat.isFile()) return fail(`截图不是普通文件: ${relPath}`)
+  // 上级目录是软链接时 realpath 会跳出插件目录
+  let realBase
+  let realFile
+  try {
+    realBase = fs.realpathSync(baseDir)
+    realFile = fs.realpathSync(abs)
+  } catch (err) {
+    return fail(`无法读取截图 ${relPath}: ${err.message}`)
+  }
+  const rel = path.relative(realBase, realFile)
+  if (!rel || rel.startsWith('..') || path.isAbsolute(rel)) return fail(`截图路径越界: "${relPath}"`)
+  if (stat.size > SCREENSHOT_LIMITS.maxBytes) {
+    return fail(`截图 ${relPath} 为 ${(stat.size / 1024).toFixed(0)} KB，超过 ${SCREENSHOT_LIMITS.maxBytes / 1024} KB 上限，请压缩后再提交`)
+  }
+  const head = Buffer.alloc(24)
+  const fd = fs.openSync(abs, 'r')
+  let read
+  try {
+    read = fs.readSync(fd, head, 0, head.length, 0)
+  } finally {
+    fs.closeSync(fd)
+  }
+  const size = readPngSize(head.subarray(0, read))
+  if (!size) return fail(`截图 ${relPath} 不是有效的 PNG 文件（文件头不对，只改扩展名不行）`)
+  const { minWidth, maxWidth, minHeight, maxHeight } = SCREENSHOT_LIMITS
+  if (size.width < minWidth || size.width > maxWidth || size.height < minHeight || size.height > maxHeight) {
+    return fail(`截图 ${relPath} 尺寸为 ${size.width}×${size.height}，应在宽 ${minWidth}–${maxWidth}、高 ${minHeight}–${maxHeight} 像素之间`)
+  }
+  return { ok: true, width: size.width, height: size.height, bytes: stat.size }
+}
+
+function validateManifestScreenshots(manifest, options, errors) {
+  const list = manifest.screenshots
+  if (list === undefined) return
+  if (!Array.isArray(list)) {
+    errors.push('screenshots 必须为数组，例如 [{ "path": "screenshots/01.png", "title": "主界面" }]')
+    return
+  }
+  if (list.length > SCREENSHOT_LIMITS.maxCount) {
+    errors.push(`screenshots 最多 ${SCREENSHOT_LIMITS.maxCount} 张，当前 ${list.length} 张`)
+  }
+  const seen = new Set()
+  for (const [idx, shot] of list.entries()) {
+    const label = `screenshots[${idx}]`
+    if (!shot || typeof shot !== 'object' || Array.isArray(shot)) {
+      errors.push(`${label} 必须为对象，例如 { "path": "screenshots/01.png", "title": "主界面" }`)
+      continue
+    }
+    const unknownKeys = Object.keys(shot).filter((key) => !SCREENSHOT_KEYS.has(key))
+    if (unknownKeys.length > 0) errors.push(`${label} 包含未知字段: ${unknownKeys.join(', ')}`)
+    if (shot.title !== undefined && (typeof shot.title !== 'string' || shot.title.length > SCREENSHOT_LIMITS.maxTitleLength)) {
+      errors.push(`${label}.title 必须为不超过 ${SCREENSHOT_LIMITS.maxTitleLength} 个字符的字符串`)
+    }
+    if (typeof shot.path !== 'string' || !SCREENSHOT_PATH_REGEX.test(shot.path)) {
+      errors.push(`${label}.path 不合法: "${shot.path}"（必须是 screenshots/ 目录下的 .png 相对路径，如 screenshots/01.png，禁止绝对路径与 ..）`)
+      continue
+    }
+    if (seen.has(shot.path)) {
+      errors.push(`${label}.path 重复: ${shot.path}`)
+      continue
+    }
+    seen.add(shot.path)
+    if (options.baseDir) {
+      const result = inspectScreenshotFile(options.baseDir, shot.path)
+      if (!result.ok) errors.push(`${label}: ${result.error}`)
+    }
   }
 }
 
@@ -472,6 +589,20 @@ export function validateCatalogPluginItem(item) {
   }
   if (item.revoked !== undefined && typeof item.revoked !== 'boolean') {
     errors.push('revoked 字段必须为布尔值')
+  }
+  if (item.screenshots !== undefined) {
+    if (!Array.isArray(item.screenshots) || item.screenshots.length > SCREENSHOT_LIMITS.maxCount) {
+      errors.push(`screenshots 必须为不超过 ${SCREENSHOT_LIMITS.maxCount} 项的数组`)
+    } else {
+      for (const [idx, shot] of item.screenshots.entries()) {
+        const ok = shot && typeof shot === 'object' &&
+          typeof shot.url === 'string' && /^https:\/\/[^\s"'<>]+$/.test(shot.url) &&
+          (shot.title === undefined || typeof shot.title === 'string') &&
+          Number.isSafeInteger(shot.width) && shot.width > 0 &&
+          Number.isSafeInteger(shot.height) && shot.height > 0
+        if (!ok) errors.push(`screenshots[${idx}] 必须为 { url（https 地址）, title, width, height }`)
+      }
+    }
   }
 
   return {

@@ -1,7 +1,7 @@
 {
   "id": "color-picker",
   "name": "取色与配色",
-  "version": "2.1.5",
+  "version": "2.1.6",
   "description": "支持 HEX / RGB / HSL / CMYK 色值实时互转、WCAG 无障碍对比度检测与常用色板收藏",
   "author": "ZTools Team",
   "entry": "dist/index.js",
@@ -50,7 +50,7 @@
     },
     {
       "code": "contrast-check",
-      "explain": "WCAG 无障碍颜色对比度检测",
+      "explain": "前景色与背景色的 WCAG 无障碍对比度检测",
       "mode": "view",
       "cmds": [
         "对比度",

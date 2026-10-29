@@ -93,6 +93,7 @@ macOS 27 的局域网设备 MAC 地址读取还需要 **Network Topology Observa
 
 从源码构建得到的是**离线版**：
 
+- 与官方版默认内置相同的 9 个跨端基础工具，无需首次启动下载，见[默认内置插件](architecture.md#默认内置插件)；
 - 没有账号登录、端内反馈、插件评论与评分、云同步和检查更新，新版本请到 Releases 下载；
 - 不连接官方后台，也不上报任何使用统计；
 - 侧栏的「反馈建议」在浏览器里打开 [GitHub Issues](https://github.com/ZToolsTeam/ZTools/issues)；

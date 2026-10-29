@@ -2,7 +2,8 @@
 /**
  * 把 src/config/bundledPlugins.json 中列出的官方插件构建产物同步到 public/bundled-plugins/
  *
- *   node scripts/sync-bundled-plugins.mjs          从 ../plugins/<id>/ 复制 plugin.json、icon.svg、dist/*.js
+ *   node scripts/sync-bundled-plugins.mjs          从 ../plugins/<id>/ 复制 plugin.json、icon.svg、dist/*.js，以及 plugin.json
+ *                                                  的 screenshots 声明过的截图（详情页从本地副本显示，不联网）
  *   node scripts/sync-bundled-plugins.mjs --check  只校验已同步的副本与源仓库一致（内容不同、缺少文件，以及同步时会被删除的
  *                                                  多余文件都算不一致），不一致时退出码为 1；只读，不写也不删任何文件
  *
@@ -196,7 +197,25 @@ function sourceFiles(id) {
   }
   const entry = String(manifest.entry || 'dist/index.js')
   if (!files.includes(entry)) throw new Error(`[${id}] 缺少入口文件 ${entry}`)
-  return { dir, files, manifest }
+  const screenshots = bundledScreenshots(id, dir, manifest)
+  return { dir, files: [...files, ...screenshots.map((shot) => shot.path)], screenshots, manifest }
+}
+
+/** plugin.json 声明的截图：与插件市场发布同一套校验（screenshots/ 下的 PNG、≤ 1 MB、尺寸范围），不合格直接报错 */
+function bundledScreenshots(id, dir, manifest) {
+  const list = manifest.screenshots
+  if (list === undefined) return []
+  const { inspectScreenshotFile, SCREENSHOT_PATH_REGEX, SCREENSHOT_LIMITS } = screenshotRules
+  if (!Array.isArray(list) || list.length > SCREENSHOT_LIMITS.maxCount) throw new Error(`[${id}] screenshots 必须为不超过 ${SCREENSHOT_LIMITS.maxCount} 项的数组`)
+  const seen = new Set()
+  return list.map((shot, idx) => {
+    const rel = shot?.path
+    if (typeof rel !== 'string' || !SCREENSHOT_PATH_REGEX.test(rel) || seen.has(rel)) throw new Error(`[${id}] screenshots[${idx}].path 不合法或重复: ${JSON.stringify(rel)}`)
+    seen.add(rel)
+    const info = inspectScreenshotFile(dir, rel)
+    if (!info.ok) throw new Error(`[${id}] ${info.error}`)
+    return { path: rel, title: typeof shot.title === 'string' ? shot.title : '', width: info.width, height: info.height }
+  })
 }
 
 if (!fs.existsSync(pluginsRoot)) {
@@ -209,12 +228,22 @@ if (!fs.existsSync(pluginsRoot)) {
   process.exit(1)
 }
 
+// 截图校验规则来自插件规范包（与插件市场发布同一份）；只有内置插件声明了截图时才加载
+const declaresScreenshots = ids.some((id) => {
+  try {
+    return JSON.parse(fs.readFileSync(path.join(pluginsRoot, id, 'plugin.json'), 'utf8')).screenshots !== undefined
+  } catch {
+    return false
+  }
+})
+const screenshotRules = declaresScreenshots ? await import('../../packages/ztools-plugins-spec/src/validator.js') : null
+
 const index = []
 let mismatches = 0
 // 整个 public/bundled-plugins/ 下应当存在的文件（相对路径，/ 分隔）
 const expectedOutFiles = new Set(['index.json'])
 for (const id of ids) {
-  const { dir, files, manifest } = sourceFiles(id)
+  const { dir, files, screenshots, manifest } = sourceFiles(id)
   for (const rel of files) expectedOutFiles.add(`${id}/${rel.split(path.sep).join('/')}`)
   for (const rel of files) {
     const src = path.join(dir, rel)
@@ -241,6 +270,10 @@ for (const id of ids) {
     alias: typeof manifest.alias === 'string' ? manifest.alias : '',
     features: Array.isArray(manifest.features) ? manifest.features : [],
     targets: Array.isArray(manifest.targets) ? manifest.targets : [],
+    // 随客户端分发的文件总字节数（plugin.json、图标与 dist 脚本，不含截图），详情页据此显示插件大小
+    size: files.filter((rel) => !screenshots.some((shot) => shot.path === rel)).reduce((sum, rel) => sum + fs.statSync(path.join(dir, rel)).size, 0),
+    // 没有截图时不写这个字段，生成结果与以前一致
+    ...(screenshots.length ? { screenshots } : {}),
     files
   })
 }

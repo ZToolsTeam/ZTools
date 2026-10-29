@@ -1,7 +1,7 @@
 {
   "id": "qr-code",
   "name": "二维码生成",
-  "version": "2.1.6",
+  "version": "2.1.7",
   "description": "输入网址或文本实时生成高清二维码，支持生成 Wi-Fi 连网二维码、复制图片与导出 PNG",
   "author": "ZTools Team",
   "entry": "dist/index.js",

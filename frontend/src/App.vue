@@ -13,7 +13,8 @@ import { usePluginsStore } from './stores/plugins'
 import { useAppUpdate, isUpdateUnsupported } from '@/composables/useAppUpdate'
 import { onAppStart, setTrackingWebVersion } from '@edition'
 import { DEPRECATED_PLUGIN_FEATURE_HOTKEY_ITEMS } from '@/utils/pluginFeatureHotkeys'
-import { openDevTools, openSettings } from '@/utils/internalPlugins'
+import { openSettings } from '@/utils/internalPlugins'
+import { toggleHostDevTools } from '@/utils/hostDevTools'
 import {
   windowModeState,
   WINDOW_MODES,
@@ -116,7 +117,7 @@ const cleanupDeprecatedFeatureHotkeys = async () => {
   }
 }
 
-/** 全局快捷键监听：开发者工具 (F12, Ctrl+Shift+I) 与设置 (Ctrl+,) */
+/** 全局快捷键监听：开发者工具 (F12, Ctrl+Shift+I，仅开发版) 与设置 (Ctrl+,) */
 const handleGlobalKeydown = (event) => {
   const isDevToolsKey =
     event.key === 'F12' ||
@@ -126,7 +127,7 @@ const handleGlobalKeydown = (event) => {
 
   if (isDevToolsKey) {
     event.preventDefault()
-    openDevTools()
+    void toggleHostDevTools()
     return
   }
 
@@ -209,8 +210,8 @@ onMounted(async () => {
     }
   }
 
-  // 版本相关的启动动作（官方版静默上报今日上线；开源版什么都不做）
-  onAppStart()
+  // 版本相关的启动动作（官方版静默上报今日上线，已登录时同步已安装的插件 ID；开源版什么都不做）
+  onAppStart({ getInstalledPluginIds: () => pluginsStore.getCatalogInstalledPluginIds() })
 
   // 启动时检查版本（同步 IPC，Delphi 端异步推送已移除）
   // 需要前端主动处理返回结果并展示通知

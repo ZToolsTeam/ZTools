@@ -15,7 +15,7 @@ import {
 import { normalizedAccelerator } from '../services/trigger-service.js'
 
 const USER_SETTINGS_FILE = 'user_settings.json'
-/** 全局唤醒（悬浮条）未设置时，渲染进程启动会按这个默认值注册 */
+/** 全局唤醒（悬浮条）未设置时，渲染进程启动会按这个默认值注册；存的是空串表示用户已关闭 */
 export const DEFAULT_GLOBAL_WAKE_ACCELERATOR = 'Alt+Space'
 
 export interface NativeInputAdapter {
@@ -148,12 +148,13 @@ export class SuperPanelInputService {
     }
     let wake = ''
     try {
-      wake = String(await this.options.config.get(USER_SETTINGS_FILE, 'hotkey.global', '')).trim()
+      wake = String(await this.options.config.get(USER_SETTINGS_FILE, 'hotkey.global', DEFAULT_GLOBAL_WAKE_ACCELERATOR)).trim()
     } catch {
       // 读不到全局唤醒设置时不做迁移，维持原状
       return config
     }
-    if (normalizedAccelerator(wake || DEFAULT_GLOBAL_WAKE_ACCELERATOR) !== legacy) return config
+    // 空串表示用户已关闭全局唤醒，Alt+Space 不再被占用，保留超级面板原设置
+    if (normalizedAccelerator(wake) !== legacy) return config
 
     const migrated: SuperPanelConfig = {
       ...config,

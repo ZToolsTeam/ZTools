@@ -55,6 +55,19 @@ export interface ClipboardHistoryServiceOptions {
   sequenceTimeoutMs?: number
   retentionMaxItems?: number
   appBlacklist?: string[]
+  /** 判断文件记录路径格式用的平台，默认当前进程平台（测试可注入） */
+  platform?: NodeJS.Platform
+}
+
+/**
+ * 文件剪贴板记录里的路径是否为当前平台的本机绝对路径。
+ * Windows 只认盘符路径（C:\ 或 C:/）与 UNC（\\server\share）；「/foo」「\foo」只是当前盘根相对路径，不认。
+ * macOS / Linux 只认以 / 开头的 POSIX 路径；C:\…、\\server\… 等其它系统的路径一律不认，避免对它执行粘贴 / 定位。
+ */
+export function isNativeAbsoluteFilePath(value: unknown, platform: NodeJS.Platform = process.platform): value is string {
+  if (typeof value !== 'string' || value === '' || value.includes('\0')) return false
+  if (platform === 'win32') return /^[A-Za-z]:[\\/]/.test(value) || /^[\\/]{2}[^\\/]+[\\/][^\\/]+/.test(value)
+  return path.posix.isAbsolute(value)
 }
 
 /** 把图片 data URL 缩成列表预览用的小图 data URL；无法解码时返回空串 */
@@ -149,6 +162,7 @@ export class ClipboardHistoryService {
   private readonly sequenceTimeoutMs: number
   private readonly retentionMaxItems: number
   private readonly appBlacklist: Set<string>
+  private readonly platform: NodeJS.Platform
 
   // 流水粘贴状态机
   private sequencePointer = 0
@@ -163,6 +177,7 @@ export class ClipboardHistoryService {
     this.maxPreviewChars = options.maxPreviewChars ?? 300
     this.sequenceTimeoutMs = options.sequenceTimeoutMs ?? 60_000 // 60s
     this.retentionMaxItems = options.retentionMaxItems ?? 1000
+    this.platform = options.platform ?? process.platform
 
     this.appBlacklist = new Set(
       (options.appBlacklist || DEFAULT_APP_BLACKLIST).map((name) => name.toLowerCase())
@@ -418,8 +433,10 @@ export class ClipboardHistoryService {
   public recordClipboardEntry(entry: ClipboardHistoryEntry, now = Date.now()): ClipboardItemRecord | null {
     if (entry.type === 'text') return this.recordItem({ content: entry.text, format_type: 'text' }, now)
     if (entry.type === 'image') return this.recordItem({ content: entry.image, format_type: 'image', text_preview: '图片' }, now)
-    if (entry.files.length === 0) return null
-    const record = this.recordItem({ content: JSON.stringify(entry.files), format_type: 'files', text_preview: entry.files.join('\n') }, now)
+    // 只记录当前平台的本机绝对路径；全部不合格（例如其它系统的路径）时不记录
+    const files = entry.files.filter((file) => isNativeAbsoluteFilePath(file, this.platform))
+    if (files.length === 0) return null
+    const record = this.recordItem({ content: JSON.stringify(files), format_type: 'files', text_preview: files.join('\n') }, now)
     if (record) this.db!.prepare('UPDATE clipboard_items SET captured_from_system = 1 WHERE id = ?').run(record.id)
     return record
   }
@@ -435,6 +452,9 @@ export class ClipboardHistoryService {
       const parsed: unknown = JSON.parse(item.content)
       if (!Array.isArray(parsed) || parsed.length === 0 || !parsed.every((file): file is string => typeof file === 'string' && file.length > 0)) {
         throw new ZToolsError(errorCodes.invalidRequest, '剪贴板文件历史记录损坏')
+      }
+      if (!parsed.every((file) => isNativeAbsoluteFilePath(file, this.platform))) {
+        throw new ZToolsError(errorCodes.invalidRequest, '此文件历史包含不是本机的文件路径，无法恢复到剪贴板')
       }
       return { type: 'files', files: parsed }
     }
@@ -482,6 +502,35 @@ export class ClipboardHistoryService {
     const rows = stmt.all(...params) as unknown as ClipboardItemRecord[]
     this.fillMissingThumbnails(rows)
     return rows
+  }
+
+  /**
+   * 列表结果里由系统剪贴板采集的文件条目中的路径（供宿主登记只读结果授权，让「在访达 / 资源管理器中显示」可用）。
+   * 只取 captured_from_system = 1 的 files 记录：手工构造的文件记录（如旧版本或调试写入）不授予任何路径；
+   * 内容不是字符串数组、路径为空 / 非绝对路径 / 含 NUL 的条目逐个跳过，不影响其它条目。
+   */
+  public systemCapturedFilePaths(rows: readonly Pick<ClipboardItemRecord, 'id' | 'format_type'>[]): string[] {
+    if (!this.db) throw new Error('Database is closed')
+    const ids = [...new Set(rows.filter((row) => row?.format_type === 'files' && typeof row.id === 'string').map((row) => row.id))]
+    if (ids.length === 0) return []
+    const placeholders = ids.map(() => '?').join(',')
+    const captured = this.db
+      .prepare(`SELECT content FROM clipboard_items WHERE format_type = 'files' AND captured_from_system = 1 AND id IN (${placeholders})`)
+      .all(...ids) as unknown as Array<{ content: string }>
+    const paths = new Set<string>()
+    for (const row of captured) {
+      let parsed: unknown
+      try {
+        parsed = JSON.parse(row.content)
+      } catch {
+        continue
+      }
+      if (!Array.isArray(parsed)) continue
+      for (const value of parsed) {
+        if (isNativeAbsoluteFilePath(value, this.platform)) paths.add(value)
+      }
+    }
+    return [...paths]
   }
 
   /** 用户从历史里选中并恢复某条后把它移到最前（恢复写回剪贴板不会再被采集成新记录）。 */

@@ -7,6 +7,7 @@ import initSqlJs, { type SqlJsStatic } from 'sql.js'
 import yauzl from 'yauzl'
 import yazl from 'yazl'
 import type { CallerIdentity } from '../../../contracts/capabilities.js'
+import { errorCodes, ZToolsError } from '../../../contracts/errors.js'
 import {
   calculateDirectorySize,
   computeFileSha256,
@@ -768,6 +769,9 @@ export class StorageHostPluginHandler {
     const resolvedDbPath = await this.#ctx.authorizeExistingPath(dbPath, caller, isWriteCall ? 'write' : 'read')
 
     const fileBuf = await fs.readFile(resolvedDbPath)
+    if (!isWriteCall && !fileBuf.subarray(0, 16).equals(Buffer.from('SQLite format 3\0'))) {
+      throw new ZToolsError(errorCodes.dataCorrupt, '所选文件不是有效的 SQLite 数据库，请使用「打开数据库」选择其他文件')
+    }
     const db = new SQL.Database(new Uint8Array(fileBuf))
 
     try {

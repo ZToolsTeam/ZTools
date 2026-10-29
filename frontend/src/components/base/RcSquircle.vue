@@ -5,13 +5,14 @@ import { glyphHue, isGlyph } from '@/utils/brandIcons'
 
 /**
  * 插件 / 分类图标底块。
- * 优先级：品牌图形 glyph（官方插件，统一线性 + 大地色）> 插件自带图片 src > 字体图标 icon > 默认立方体。
+ * 优先级：品牌图形 glyph（官方插件，统一线性 + 大地色）> 插件自带图片 src > 关键词图形 fallbackGlyph（中性底块）> 默认立方体。
  * 圆角固定为边长的 28%，与积木 Z 标志的方块比例一致。
  */
 const props = defineProps({
   src: { type: String, default: '' },
-  icon: { type: String, default: '' },
   glyph: { type: String, default: '' },
+  // 没有品牌图形与图片时的同风格线性图形（按插件名称关键词挑选），显示在中性底块里
+  fallbackGlyph: { type: String, default: '' },
   size: { type: [Number, String], default: 38 },
   // 兼容旧调用：圆角已统一按尺寸计算，这两个参数不再生效
   rounded: { type: String, default: '' },
@@ -39,7 +40,6 @@ const tileStyle = computed(() => ({
   color: `var(--rc-h-${hue.value}-fg)`
 }))
 const glyphSize = computed(() => Math.round(sizePx.value * 0.58))
-const faSize = computed(() => `${Math.round(sizePx.value * 0.44)}px`)
 
 const onImgError = () => {
   imageFailed.value = true
@@ -67,8 +67,7 @@ const onImgLoad = () => {
         @error="onImgError"
       />
       <div v-if="!showImage || !imageLoaded" class="rc-squircle-fallback">
-        <i v-if="icon && icon.startsWith('fa') && icon !== 'fa-cube'" :class="['fa fa-fw', icon]" :style="{ fontSize: faSize }"></i>
-        <BrandGlyph v-else kind="cube" :size="glyphSize" />
+        <BrandGlyph :kind="isGlyph(fallbackGlyph) ? fallbackGlyph : 'cube'" :size="glyphSize" />
       </div>
     </template>
   </div>

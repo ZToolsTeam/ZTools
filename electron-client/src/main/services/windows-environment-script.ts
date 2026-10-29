@@ -1,6 +1,7 @@
 /** 请求只从标准输入读取；变量值不会进入 PowerShell 命令文本。 */
 export const WINDOWS_ENVIRONMENT_SCRIPT = String.raw`
 $ErrorActionPreference = 'Stop'
+$ProgressPreference = 'SilentlyContinue'
 [Console]::InputEncoding = New-Object System.Text.UTF8Encoding($false)
 [Console]::OutputEncoding = New-Object System.Text.UTF8Encoding($false)
 $OutputEncoding = [Console]::OutputEncoding

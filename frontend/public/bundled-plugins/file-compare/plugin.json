@@ -1,7 +1,7 @@
 {
   "id": "file-compare",
   "name": "文本对比",
-  "version": "2.0.5",
+  "version": "2.0.8",
   "description": "逐行对比两段文本、代码或配置文件，逐处列出增删的行，支持忽略空白与复制 unified diff 差异报告",
   "author": "ZTools Team",
   "entry": "dist/index.js",

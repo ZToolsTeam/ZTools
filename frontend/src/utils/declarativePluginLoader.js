@@ -797,7 +797,9 @@ export async function loadInstalledDeclarativePlugin(pluginId, options = {}) {
     : 'icon.svg'
 
   const effectiveMode = matchedFeature?.mode || manifest.mode || 'view'
-  const effectiveTitle = matchedFeature?.explain || manifest.name || pid
+  // 标题用插件名称；命令说明（explain）是一整句话，放进标题会挤掉返回按钮，只作为提示保留
+  const effectiveTitle = manifest.name || pid
+  const featureExplain = typeof matchedFeature?.explain === 'string' ? matchedFeature.explain : ''
 
   const loadedPlugin = {
     id: manifest.id || pid,
@@ -805,6 +807,7 @@ export async function loadInstalledDeclarativePlugin(pluginId, options = {}) {
     featureCode: requestedFeatureCode || '',
     name: effectiveTitle,
     title: effectiveTitle,
+    featureExplain,
     description: manifest.description || '',
     version: manifest.version || '1.0.0',
     author: typeof manifest.author === 'string' ? manifest.author : (manifest.author?.name || 'ZTools Official'),

@@ -2,7 +2,7 @@
 import { ref, onMounted, onBeforeUnmount, computed } from 'vue'
 import { useRouter } from 'vue-router'
 
-import PluginCard from '@/components/PluginCard.vue'
+import PluginCard3D from '@/components/PluginCard3D.vue'
 import SkeletonCard from '@/components/SkeletonCard.vue'
 
 import { usePluginsStore } from '@/stores/plugins'
@@ -207,13 +207,13 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <div class="space-y-4" style="color: var(--zt-text)">
+  <div class="space-y-4" style="color: var(--rc-text-primary)">
     <h2 class="text-lg font-semibold">推荐插件</h2>
     <div v-if="loading" class="grid grid-cols-1 md:grid-cols-2 gap-4">
       <SkeletonCard v-for="i in 12" :key="i" />
     </div>
     <div v-else class="grid grid-cols-1 md:grid-cols-2 gap-4">
-      <PluginCard
+      <PluginCard3D
         v-for="p in items"
         :key="getPluginId(p)"
         :plugin="p"
@@ -229,7 +229,7 @@ onBeforeUnmount(() => {
         @download="handleDownload"
       />
     </div>
-    <div v-if="error" class="text-sm" style="color: var(--zt-error)">
+    <div v-if="error" class="text-sm" style="color: var(--rc-error)">
       {{ error }}
     </div>
   </div>

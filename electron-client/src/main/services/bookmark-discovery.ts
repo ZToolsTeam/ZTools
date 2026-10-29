@@ -29,7 +29,7 @@ export function discoverBookmarks(env: BookmarkEnvironment) {
       if (!stats.isFile()) throw new Error('书签来源不是普通文件')
       const key = fs.realpathSync(source.file)
       if (!seen.has(key)) { seen.add(key); sources.push({ ...source, file: key }) }
-    } catch (error) { if (!missing(error)) warnings.push(`${source.browserLabel} / ${source.profile}：${errorMessage(error)}`) }
+    } catch (error) { if (!missing(error)) warnings.push(`${source.browserLabel} / ${source.profile}：${errorMessage(error, source.browser)}`) }
   }
   const entries = (dir: string, label: string) => {
     try {
@@ -78,8 +78,10 @@ export function discoverBookmarks(env: BookmarkEnvironment) {
   if (env.platform === 'darwin') add({ browser: 'safari', browserLabel: 'Safari', profile: '默认', file: path.join(env.home, 'Library', 'Safari', 'Bookmarks.plist'), format: 'safari' })
   return { sources, warnings }
 }
-export function errorMessage(error: unknown): string {
+export function errorMessage(error: unknown, browser?: string): string {
   const code = (error as NodeJS.ErrnoException)?.code
+  // Safari 书签在 ~/Library/Safari 下，macOS 只对拥有“完全磁盘访问”的应用开放
+  if ((code === 'EACCES' || code === 'EPERM') && browser === 'safari') return '没有读取权限；请在“系统设置 → 隐私与安全性 → 完全磁盘访问”中允许 ZTools，然后重新打开客户端'
   if (code === 'EACCES' || code === 'EPERM') return '没有读取权限；请在系统隐私设置中检查 ZTools 的文件访问权限'
   if (code === 'EBUSY' || code === 'SQLITE_BUSY') return '浏览器正在使用书签，请稍后刷新'
   return error instanceof Error ? error.message.slice(0, 1000) : '读取失败'

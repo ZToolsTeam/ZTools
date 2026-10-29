@@ -2,7 +2,7 @@
  * 开源版能力入口（@edition 在开源仓库指向这里，见 vite.config.js / vitest.config.js）
  *
  * 公共代码只通过 @edition 使用与版本相关的能力。开源版默认离线：
- * 不连接任何官方后台，没有账号、端内反馈、插件留言评分、云同步与在线统计；
+ * 不连接任何官方后台，没有账号、端内反馈、插件留言评分、安装上报、云同步与在线统计；
  * 插件市场、安装与更新只读取 CDN 静态插件目录（见 src/api/pluginCatalog.js）。
  * 官方发行版在同一套接口上提供这些在线能力。
  */
@@ -71,8 +71,34 @@ export function track() {}
 /** 使用统计附带的界面层版本号：开源版不上报，忽略 */
 export function setTrackingWebVersion() {}
 
-/** 应用启动钩子：开源版什么都不做 */
-export function onAppStart() {}
+/**
+ * 应用启动钩子：开源版什么都不做（不读取 ctx，也不上报已安装插件）
+ * @param {{ getInstalledPluginIds?: () => Promise<string[]|null> }} [_ctx]
+ */
+export function onAppStart(_ctx) {}
+
+/**
+ * 插件安装状态变化通知：开源版不上报，全部为空操作
+ * - onInstalled(pluginId)：插件市场插件安装成功
+ * - onUninstalled(pluginId)：插件卸载成功
+ */
+export const pluginLifecycle = Object.freeze({
+  enabled: false,
+  onInstalled: () => {},
+  onUninstalled: () => {}
+})
+
+/**
+ * 插件评分：开源版没有评分，汇总始终为空、不发请求，界面不显示任何评分
+ * - summaries：{ [pluginId]: { average: number|null, count } }
+ * - loadAll() / load(pluginId)：拉取汇总
+ */
+export const pluginRatings = Object.freeze({
+  enabled: false,
+  summaries: Object.freeze({}),
+  loadAll: async () => {},
+  load: async () => {}
+})
 
 /**
  * 云同步：开源版不提供，全部为空操作，公共代码可直接调用
