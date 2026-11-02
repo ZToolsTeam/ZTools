@@ -54,7 +54,7 @@ export function expectedWindowsArtifactMachine(file, { applicationRoot, installe
     return PE_MACHINE_X64
   }
 
-  if (resolvedFile === path.resolve(installerPath)) return PE_MACHINE_X86
+  if (resolvedFile === path.resolve(installerPath)) return PE_MACHINE_X64
   throw new Error(`未登记的 Windows PE 文件职责: ${file}`)
 }
 

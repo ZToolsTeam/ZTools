@@ -10,24 +10,12 @@ import {
   nextTick,
   computed
 } from 'vue'
-import { storeToRefs } from 'pinia'
 import { useRouter, useRoute } from 'vue-router'
 import { useToast } from '@/composables/useToast'
 import { track } from '@edition'
-import { useThemeStore } from '@/stores/theme'
+import AppearanceSettings from '@/components/settings/AppearanceSettings.vue'
 import { ROUTES } from '@/router/routes'
-import {
-  getAutostart,
-  setAutostart,
-  getHotkey,
-  setHotkey,
-  getMinimizeToTray,
-  setMinimizeToTray,
-  getShowTrayIcon,
-  setShowTrayIcon,
-  getCloseConfirm,
-  setCloseConfirm
-} from '@/api/apiserver'
+import { useAppPreferencesApi } from '@/composables/useAppPreferencesApi'
 import { DEFAULT_GLOBAL_WAKE_HOTKEY, syncGlobalWakeHotkey } from '@/utils/globalWakeHotkey'
 import { isMacOS } from '@/utils/platform'
 import { isHostDevBuild } from '@/utils/hostDevTools'
@@ -55,9 +43,18 @@ import {
 import { buildLaunchHotkeyMap } from '@/utils/launchHotkeyTargets'
 
 const { success, error } = useToast()
-const themeStore = useThemeStore()
-const { isDark, mode: themeMode } = storeToRefs(themeStore)
-const themeSaving = ref(false)
+const {
+  getAutostart,
+  setAutostart,
+  getHotkey,
+  setHotkey,
+  getMinimizeToTray,
+  setMinimizeToTray,
+  getShowTrayIcon,
+  setShowTrayIcon,
+  getCloseConfirm,
+  setCloseConfirm
+} = useAppPreferencesApi()
 const router = useRouter()
 const route = useRoute()
 const hotkeyPlatform = ref('unknown')
@@ -134,7 +131,10 @@ watch(shortcutModalOpen, async (newVal, oldVal) => {
         const config = await window.ztools.config.get('super_panel')
         shortcutCount.value = Array.isArray(config?.shortcuts) ? config.shortcuts.length : 0
       }
-    } catch {}
+    } catch (e) {
+      // 只影响快捷方式数量的显示，保留原数字
+      console.warn('刷新超级面板快捷方式数量失败:', e)
+    }
   }
 })
 
@@ -215,17 +215,20 @@ const loadSettings = async () => {
       console.error('Failed to load wake hotkey:', e)
       error('读取全局唤醒快捷键失败')
     }
+    // 以下两项读取失败时保留默认值，开关仍可操作并重新保存
     try {
       settings.minimizeToTray = await getMinimizeToTray()
-    } catch {}
+    } catch (e) {
+      console.warn('读取最小化到托盘设置失败，使用默认值:', e)
+    }
     try {
       settings.closeConfirm = await getCloseConfirm()
-    } catch {}
+    } catch (e) {
+      console.warn('读取退出确认设置失败，使用默认值:', e)
+    }
     // getShowTrayIcon 读取失败时返回默认值 true，不会抛错
     settings.showTrayIcon = await getShowTrayIcon()
-    try {
-      settings.wakePreference = windowModeState.wakePreference || 'dashboard'
-    } catch {}
+    settings.wakePreference = windowModeState.wakePreference || 'dashboard'
     try {
       if (window.ztools?.config) {
         const config = await window.ztools.config.get('super_panel')
@@ -244,11 +247,6 @@ const loadSettings = async () => {
   }
 }
 
-const themeOptions = [
-  { value: 'system', label: '跟随系统' },
-  { value: 'light', label: '浅色' },
-  { value: 'dark', label: '深色' }
-]
 const wakeOptions = [
   { value: 'launcher', label: '悬浮条' },
   { value: 'dashboard', label: '工作台' }
@@ -260,18 +258,6 @@ const builtinShortcuts = [
   { label: '打开设置', combo: 'Ctrl+,' },
   { label: '返回主页', combo: 'Escape' }
 ]
-const pickTheme = async (value) => {
-  if (themeMode.value === value || themeSaving.value) return
-  themeSaving.value = true
-  try {
-    await themeStore.setTheme(value)
-  } catch (err) {
-    error('主题设置保存失败：' + (err?.message || '未知错误'))
-  } finally {
-    themeSaving.value = false
-  }
-}
-
 const onWakePreferenceChange = (val) => {
   try {
     settings.wakePreference = val
@@ -623,34 +609,7 @@ onBeforeUnmount(() => {
       <!-- 设置卡片网格 -->
       <div class="settings-grid">
         <!-- 外观设置卡片 -->
-        <div class="settings-card">
-          <div class="card-header">
-            <h2 class="card-title">外观</h2>
-          </div>
-
-          <div class="settings-list">
-            <div class="theme-switcher" role="radiogroup" aria-label="界面主题">
-              <button
-                v-for="option in themeOptions"
-                :key="option.value"
-                type="button"
-                role="radio"
-                class="theme-btn"
-                :class="{ active: themeMode === option.value }"
-                :aria-checked="themeMode === option.value"
-                :disabled="themeSaving"
-                @click="pickTheme(option.value)"
-              >
-                <div class="theme-preview" :class="`${option.value === 'system' ? (isDark ? 'dark' : 'light') : option.value}-preview`" aria-hidden="true">
-                  <div class="preview-bar"><span class="preview-mark"></span></div>
-                  <div class="preview-line" style="width: 70%"></div>
-                  <div class="preview-line" style="width: 45%"></div>
-                </div>
-                <span class="theme-name"><span class="theme-marker" aria-hidden="true"></span>{{ option.label }}</span>
-              </button>
-            </div>
-          </div>
-        </div>
+        <AppearanceSettings />
 
         <!-- 常规设置卡片 -->
         <div class="settings-card">
@@ -1090,125 +1049,6 @@ onBeforeUnmount(() => {
 </template>
 
 <style scoped>
-/* 主题选择：选中项用余烬橙方块标记 */
-.theme-switcher {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
-  gap: 10px;
-  padding-top: 4px;
-}
-
-.theme-btn {
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-  padding: 8px 8px 10px;
-  border-radius: 12px;
-  border: 1px solid var(--rc-border);
-  background: var(--rc-surface);
-  color: var(--rc-text-secondary);
-  font: inherit;
-  text-align: left;
-  cursor: pointer;
-  transition: border-color 0.15s ease;
-}
-
-.theme-btn:hover {
-  border-color: var(--rc-border-highlight);
-}
-
-.theme-btn.active {
-  border-color: var(--rc-accent);
-}
-
-.theme-btn:focus-visible {
-  outline: 2px solid var(--rc-accent);
-  outline-offset: 2px;
-}
-
-.theme-preview {
-  height: 78px;
-  border-radius: 8px;
-  padding: 10px;
-  box-sizing: border-box;
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-}
-
-/* 预览卡固定展示「雾白 / 墨黑」两套真实配色，不随当前主题变化 */
-.light-preview {
-  background: #f4f3f0;
-  box-shadow: inset 0 0 0 1px #e7e5e0;
-}
-
-.dark-preview {
-  background: #0b0b0c;
-  box-shadow: inset 0 0 0 1px #202024;
-}
-
-.preview-bar {
-  height: 14px;
-  border-radius: 4px;
-  display: flex;
-  align-items: center;
-  padding-left: 5px;
-}
-
-.light-preview .preview-bar {
-  background: #ffffff;
-}
-
-.dark-preview .preview-bar {
-  background: #1a1a1d;
-}
-
-.preview-mark {
-  width: 4px;
-  height: 4px;
-  border-radius: 1px;
-  background: #ff6b3d;
-}
-
-.preview-line {
-  height: 6px;
-  border-radius: 2px;
-}
-
-.light-preview .preview-line {
-  background: #dbd8d2;
-}
-
-.dark-preview .preview-line {
-  background: #2c2c31;
-}
-
-.theme-name {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 0 2px;
-  font-size: 13px;
-}
-
-.theme-btn.active .theme-name {
-  color: var(--rc-text-primary);
-  font-weight: 600;
-}
-
-.theme-marker {
-  width: 6px;
-  height: 6px;
-  border-radius: 1.7px;
-  flex-shrink: 0;
-  background: transparent;
-}
-
-.theme-btn.active .theme-marker {
-  background: var(--rc-accent);
-  box-shadow: 0 0 8px rgba(255, 107, 61, 0.55);
-}
-
 /* 快捷键录入 */
 .hotkey-item {
   flex-wrap: wrap;

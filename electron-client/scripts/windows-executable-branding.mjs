@@ -1,6 +1,5 @@
 import path from 'node:path'
 import { execFileSync } from 'node:child_process'
-import { resedit } from '@electron/packager/resedit'
 
 export function readWindowsExecutableBranding(file) {
   const literal = `'${path.resolve(file).replaceAll("'", "''")}'`
@@ -26,6 +25,15 @@ export function readWindowsExecutableBranding(file) {
   }).trim())
 }
 
+// 版本校验只读取文件资源，避免启动要求管理员权限的部署程序。
+export function assertWindowsExecutableVersion(file, version) {
+  const actual = readWindowsExecutableBranding(file)
+  if (actual.fileVersion !== version || actual.productVersion !== version) {
+    throw new Error(`WINDOWS_VERSION_MISMATCH: 程序版本信息与 ${version} 不一致: ${file}`)
+  }
+  return actual
+}
+
 export function assertWindowsExecutableBranding(file, { icon, version }) {
   const actual = readWindowsExecutableBranding(file)
   const expected = readWindowsExecutableBranding(icon)
@@ -39,6 +47,7 @@ export function assertWindowsExecutableBranding(file, { icon, version }) {
 }
 
 export async function applyWindowsExecutableBranding(file, { icon, version }) {
+  const { resedit } = await import('@electron/packager/resedit')
   await resedit(file, {
     iconPath: icon,
     fileVersion: version,

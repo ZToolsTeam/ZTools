@@ -34,14 +34,14 @@ function writePe(file, machine, signature = 'PE\0\0') {
 test('selects one win32-x64 application package and keeps only its classic-level prebuild', () => {
   const options = createWindowsPackagerOptions({
     clientRoot: 'C:/workspace/electron-client',
-    outputRoot: 'C:/workspace/electron-client/artifacts/1.1.7.1/win32-x64',
+    outputRoot: 'C:/workspace/electron-client/artifacts/1.1.7.1/windows-x64',
     applicationIcon: 'C:/workspace/framework/Res/LOGO.ico'
   })
   const isIgnored = (filePath) => options.ignore.some((pattern) => pattern.test(filePath))
 
   assert.equal(WINDOWS_TARGET.platform, 'win32')
   assert.equal(WINDOWS_TARGET.arch, 'x64')
-  assert.equal(WINDOWS_TARGET.artifactDirectory, 'win32-x64')
+  assert.equal(WINDOWS_TARGET.artifactDirectory, 'windows-x64')
   assert.equal(WINDOWS_TARGET.applicationDirectory, 'ZTools-win32-x64')
   assert.equal(options.platform, 'win32')
   assert.equal(options.arch, 'x64')
@@ -100,9 +100,9 @@ test('records x64 main-process support and keeps isolated native processes expli
     { name: 'ZToolsPathAccessBroker', optional: true, status: 'unavailable', reason: 'not-built' }
   ])
   assert.equal(getWindowsArtifactRoot('C:/workspace/electron-client', '1.1.7.1'),
-    path.join('C:/workspace/electron-client', 'artifacts', '1.1.7.1', 'win32-x64'))
-  assert.equal(getWindowsInstallerFileName('1.1.7.1'), 'ZTools-1.1.7.1-win32-x64.exe')
-  assert.equal(getWindowsPortableZipFileName('1.1.7.1'), 'ZTools-1.1.7.1-win32-x64-portable.zip')
+    path.join('C:/workspace/electron-client', 'artifacts', '1.1.7.1', 'windows-x64'))
+  assert.equal(getWindowsInstallerFileName('1.1.7.1'), 'ZTools-1.1.7.1-windows-x64.exe')
+  assert.equal(getWindowsPortableZipFileName('1.1.7.1'), 'ZTools-1.1.7.1-windows-x64-portable.zip')
 })
 
 test('records and verifies optional PathAccessBroker status, SHA-256 and x64 PE without promoting SDK 1', () => {
@@ -172,8 +172,8 @@ test('records and verifies optional PathAccessBroker status, SHA-256 and x64 PE 
 })
 
 test('classifies x86 PE exceptions only by the exact runtime and installer file roles', () => {
-  const applicationRoot = path.resolve('artifacts/1.1.7.1/win32-x64/ZTools-win32-x64')
-  const installerPath = path.resolve('artifacts/1.1.7.1/win32-x64/ZTools-1.1.7.1-win32-x64.exe')
+  const applicationRoot = path.resolve('artifacts/1.1.7.1/windows-x64/ZTools-win32-x64')
+  const installerPath = path.resolve('artifacts/1.1.7.1/windows-x64/ZTools-1.1.7.1-windows-x64.exe')
 
   assert.equal(expectedWindowsArtifactMachine(path.join(applicationRoot, 'ZTools.exe'), {
     applicationRoot,
@@ -187,13 +187,21 @@ test('classifies x86 PE exceptions only by the exact runtime and installer file 
     applicationRoot,
     installerPath
   }), PE_MACHINE_X86)
+  assert.equal(expectedWindowsArtifactMachine(path.join(applicationRoot, 'ZToolsUpdater.exe'), {
+    applicationRoot,
+    installerPath
+  }), PE_MACHINE_X64)
+  assert.equal(expectedWindowsArtifactMachine(path.join(applicationRoot, 'ZToolsUninstall.exe'), {
+    applicationRoot,
+    installerPath
+  }), PE_MACHINE_X64)
   assert.equal(expectedWindowsArtifactMachine(path.join(
     applicationRoot,
     'resources',
     'native',
     'ZToolsNativeHost32.exe'
   ), { applicationRoot, installerPath }), PE_MACHINE_X86)
-  assert.equal(expectedWindowsArtifactMachine(installerPath, { applicationRoot, installerPath }), PE_MACHINE_X86)
+  assert.equal(expectedWindowsArtifactMachine(installerPath, { applicationRoot, installerPath }), PE_MACHINE_X64)
   assert.throws(() => expectedWindowsArtifactMachine(path.resolve('unclassified.exe'), {
     applicationRoot,
     installerPath
@@ -203,7 +211,7 @@ test('classifies x86 PE exceptions only by the exact runtime and installer file 
 test('verifies PE headers and rejects x86 Electron files or unlisted x86 helpers', () => {
   const temporaryRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'ztools-win32-x64-'))
   const applicationRoot = path.join(temporaryRoot, 'ZTools-win32-x64')
-  const installerPath = path.join(temporaryRoot, 'ZTools-1.1.7.1-win32-x64.exe')
+  const installerPath = path.join(temporaryRoot, 'ZTools-1.1.7.1-windows-x64.exe')
   const applicationExecutable = path.join(applicationRoot, 'ZTools.exe')
   const addon = path.join(
     applicationRoot,
@@ -223,11 +231,18 @@ test('verifies PE headers and rejects x86 Electron files or unlisted x86 helpers
     writePe(addon, PE_MACHINE_X64)
     writePe(nativeHost, PE_MACHINE_X86)
     writePe(service, PE_MACHINE_X86)
-    writePe(installerPath, PE_MACHINE_X86)
+    writePe(installerPath, PE_MACHINE_X64)
     assert.deepEqual(verifyWindowsArtifactPeFiles(
       [applicationExecutable, addon, nativeHost, service, installerPath],
       { applicationRoot, installerPath }
-    ), { x64: 2, x86: 3 })
+    ), { x64: 3, x86: 2 })
+
+    writePe(installerPath, PE_MACHINE_X86)
+    assert.throws(() => verifyWindowsArtifactPeFiles(
+      [installerPath],
+      { applicationRoot, installerPath }
+    ), /要求 x64/)
+    writePe(installerPath, PE_MACHINE_X64)
 
     writePe(applicationExecutable, PE_MACHINE_X86)
     assert.throws(() => verifyWindowsArtifactPeFiles(

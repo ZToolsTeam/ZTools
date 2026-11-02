@@ -1,9 +1,10 @@
 import {
   BrowserWindow,
   screen,
-  ipcMain
+  ipcMain,
+  nativeTheme
 } from 'electron'
-import { secureWebPreferences } from './main-window.js'
+import { getWindowBackgroundColor, isWindows11OrLater, secureWebPreferences } from './main-window.js'
 import type { WindowRegistry } from './window-registry.js'
 import { calculateCenteredBounds } from './display-bounds.js'
 import { FrameSyncManager } from '../services/frame-sync-manager.js'
@@ -192,11 +193,14 @@ export class LauncherController {
 
     this.#attachScreenListeners()
 
+    // Windows 11 由系统统一裁切圆角和绘制边框，避免矩形描边露出页面的透明圆角。
+    const nativeCorners = isWindows11OrLater()
     const window = new BrowserWindow({
       icon: this.options.icon,
       ...LAUNCHER_SIZE,
       frame: false,
-      transparent: true,
+      transparent: !nativeCorners,
+      roundedCorners: true,
       alwaysOnTop: true,
       skipTaskbar: true,
       resizable: false,
@@ -205,7 +209,7 @@ export class LauncherController {
       ...(process.platform === 'darwin'
         ? { type: 'panel', hasShadow: false }
         : {}),
-      backgroundColor: '#00000000',
+      backgroundColor: nativeCorners ? getWindowBackgroundColor(nativeTheme.shouldUseDarkColors) : '#00000000',
       autoHideMenuBar: true,
       webPreferences: {
         ...secureWebPreferences(),
@@ -255,7 +259,8 @@ export class LauncherController {
     })
     this.#frameSyncManager.attach(window)
 
-    void window.loadURL('ztools://web/index.html?mode=launcher#/launcher').catch((err) => {
+    const launcherUrl = `ztools://web/index.html?mode=launcher${nativeCorners ? '&nativeCorners=1' : ''}#/launcher`
+    void window.loadURL(launcherUrl).catch((err) => {
       console.error('极客悬浮窗加载失败:', err)
     })
 

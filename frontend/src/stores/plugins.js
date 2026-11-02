@@ -130,6 +130,7 @@ export const usePluginsStore = defineStore('plugins', {
     revokedMap: {}, // { [pluginId]: { revoked: true, reason: string } } 官方下架状态映射
     _downloadTimers: {}, // 下载超时定时器（内部使用）
     favoritePluginsList: [], // 收藏插件的完整信息列表
+    favoritePluginsLoaded: false, // 收藏详情是否已加载过一次（成功或回填都算）；之前收藏数只能看 favorites
     updateMap: {}, // { pluginId: updateInfo }
     lastUpdateCheckTime: 0, // 上次批量检查更新的时间戳
     loading: false,
@@ -575,6 +576,7 @@ export const usePluginsStore = defineStore('plugins', {
       const ids = normalizeIdList(Array.from(this.favorites))
       if (ids.length === 0) {
         this.favoritePluginsList = []
+        this.favoritePluginsLoaded = true
         return
       }
       try {
@@ -590,6 +592,8 @@ export const usePluginsStore = defineStore('plugins', {
           ids.includes(normalizePluginId(p.pluginId || p.id))
         )
         this.favoritePluginsList = localMatches
+      } finally {
+        this.favoritePluginsLoaded = true
       }
     },
 

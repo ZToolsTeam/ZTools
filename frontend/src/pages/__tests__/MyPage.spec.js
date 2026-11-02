@@ -82,6 +82,8 @@ describe('MyPage Component', () => {
     favoritePluginsList = [],
     recommendedItems = [],
     favorites = [],
+    // 默认与运行时加载完收藏详情后的状态一致；测试加载中的情况时传 false
+    favoritePluginsLoaded = true,
     config = {}
   } = {}) {
     configValues = {
@@ -102,6 +104,7 @@ describe('MyPage Component', () => {
       installedSet: new Set(installedPlugins.map((plugin) => plugin.pluginId)),
       installedPlugins,
       favoritePluginsList,
+      favoritePluginsLoaded,
       recommendedItems,
       downloadingSet: new Set(),
       updateMap: {}
@@ -735,6 +738,119 @@ describe('MyPage Component', () => {
       expect(wrapper.find('.recent-list').exists()).toBe(false)
       expect(wrapper.text()).not.toContain('热门推荐')
       expect(wrapper.find('.market-banner').exists()).toBe(true)
+    })
+
+    describe('切换「已安装 / 收藏」时高度不变', () => {
+      const switchTo = async (tab) => {
+        const seg = wrapper.findComponent({ name: 'RcSegmented' })
+        seg.vm.$emit('update:modelValue', tab)
+        seg.vm.$emit('change', tab)
+        await flushPromises()
+      }
+      const pane = (index) => wrapper.findAll('.my-plugins-pane')[index]
+      const tabCounts = () => wrapper.findComponent({ name: 'RcSegmented' }).props('options').map((o) => o.count)
+
+      it('两个标签叠放：当前标签显示真实磁贴，另一个是不可见、不可操作的同数量占位', async () => {
+        const favs = many.slice(0, 3)
+        await mountPage({ installedPlugins: many, favoritePluginsList: favs, favorites: favs.map((p) => p.pluginId) })
+        expect(wrapper.findAll('.my-plugins-pane')).toHaveLength(2)
+        // 已安装：真实磁贴（收起后 10 个）；收藏：3 个占位，隐藏且不可聚焦
+        expect(pane(0).classes()).toContain('is-active')
+        // 当前标签不能带 inert（带上就整块不可点击、不可聚焦）
+        expect(pane(0).attributes('inert')).toBeUndefined()
+        expect(pane(0).attributes('aria-hidden')).toBeUndefined()
+        expect(pane(0).findAll('.plugin-tile')).toHaveLength(10)
+        expect(pane(1).attributes('aria-hidden')).toBe('true')
+        expect(pane(1).attributes('inert')).toBeDefined()
+        expect(pane(1).findAll('.plugin-tile')).toHaveLength(0)
+        expect(pane(1).findAll('.plugin-tile-skeleton')).toHaveLength(3)
+
+        await switchTo('favorites')
+        expect(pane(1).classes()).toContain('is-active')
+        expect(pane(1).attributes('inert')).toBeUndefined()
+        expect(pane(0).attributes('inert')).toBeDefined()
+        expect(pane(1).findAll('.plugin-tile')).toHaveLength(3)
+        expect(pane(0).attributes('aria-hidden')).toBe('true')
+        expect(pane(0).findAll('.plugin-tile-skeleton')).toHaveLength(10)
+        // 全页只有当前标签的磁贴可点
+        expect(wrapper.findAll('.plugin-tile')).toHaveLength(3)
+      })
+
+      it('收藏为空：收藏标签的空状态与已安装磁贴叠放，切过去显示空状态', async () => {
+        await mountPage({ installedPlugins: basePlugins, favorites: [] })
+        expect(pane(1).find('.my-plugins-empty').exists()).toBe(true)
+        expect(pane(1).text()).toContain('还没有收藏的插件')
+        await switchTo('favorites')
+        expect(pane(1).classes()).toContain('is-active')
+        expect(pane(0).findAll('.plugin-tile-skeleton')).toHaveLength(basePlugins.length)
+      })
+
+      it('只有收藏没有已安装：已安装标签是空状态占位，收藏显示磁贴', async () => {
+        const favs = [{ pluginId: 'remote-only', name: '远程插件' }]
+        await mountPage({ installedPlugins: [], favoritePluginsList: favs, favorites: ['remote-only'] })
+        expect(pane(0).find('.my-plugins-empty').exists()).toBe(true)
+        await switchTo('favorites')
+        expect(pane(1).findAll('.plugin-tile')).toHaveLength(1)
+      })
+
+      it('收藏详情加载中：按收藏数显示占位，不先显示「还没有收藏」，加载完换成真实磁贴', async () => {
+        const favs = many.slice(0, 4)
+        await mountPage({
+          installedPlugins: basePlugins,
+          favoritePluginsList: [],
+          favoritePluginsLoaded: false,
+          favorites: favs.map((p) => p.pluginId)
+        })
+        // 数量先按收藏 ID 计，不显示 0
+        expect(tabCounts()).toEqual([basePlugins.length, 4])
+        await switchTo('favorites')
+        expect(pane(1).text()).not.toContain('还没有收藏的插件')
+        expect(pane(1).findAll('.plugin-tile-skeleton')).toHaveLength(4)
+        expect(pane(1).find('.plugin-tile-grid').attributes('aria-busy')).toBe('true')
+        expect(wrapper.vm.displayedPlugins).toEqual([])
+
+        pluginsStore.$patch({ favoritePluginsList: favs, favoritePluginsLoaded: true })
+        await flushPromises()
+        expect(pane(1).findAll('.plugin-tile')).toHaveLength(4)
+        expect(pane(1).findAll('.plugin-tile-skeleton')).toHaveLength(0)
+      })
+
+      it('只有收藏且详情还在加载：区块照常显示占位，不会等加载完才整块出现', async () => {
+        await mountPage({ installedPlugins: [], favoritePluginsList: [], favoritePluginsLoaded: false, favorites: ['a', 'b'] })
+        expect(wrapper.findAll('.my-plugins-pane')).toHaveLength(2)
+        expect(tabCounts()).toEqual([0, 2])
+      })
+
+      it('收藏加载失败回填后数量变少：按实际数量显示，空了就是空状态', async () => {
+        await mountPage({ installedPlugins: basePlugins, favoritePluginsList: [], favoritePluginsLoaded: false, favorites: ['gone-1', 'gone-2'] })
+        await switchTo('favorites')
+        expect(pane(1).findAll('.plugin-tile-skeleton')).toHaveLength(2)
+        pluginsStore.$patch({ favoritePluginsLoaded: true })
+        await flushPromises()
+        expect(tabCounts()).toEqual([basePlugins.length, 0])
+        expect(pane(1).text()).toContain('还没有收藏的插件')
+      })
+
+      it('超过两行时占位也只按收起后的数量，展开「查看全部」只影响当前标签', async () => {
+        const favs = many.slice(0, 12)
+        await mountPage({ installedPlugins: many, favoritePluginsList: favs, favorites: favs.map((p) => p.pluginId) })
+        expect(pane(1).findAll('.plugin-tile-skeleton')).toHaveLength(10)
+        wrapper.vm.showAllPlugins = true
+        await flushPromises()
+        expect(pane(0).findAll('.plugin-tile')).toHaveLength(15)
+        expect(pane(1).findAll('.plugin-tile-skeleton')).toHaveLength(10)
+        // 切换标签收起展开状态
+        await switchTo('favorites')
+        expect(wrapper.vm.showAllPlugins).toBe(false)
+        expect(pane(1).findAll('.plugin-tile')).toHaveLength(10)
+      })
+    })
+
+    it('去插件市场横幅只保留右侧箭头一个图标', async () => {
+      await mountPage({ installedPlugins: basePlugins })
+      const banner = wrapper.find('.market-banner')
+      expect(banner.exists()).toBe(true)
+      expect(banner.findAll('svg')).toHaveLength(1)
     })
 
     it('点击已安装磁贴即打开；收藏中未安装的磁贴进入详情页', async () => {

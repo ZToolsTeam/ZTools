@@ -6,7 +6,7 @@ import { assertPeMachine, PE_MACHINE_X64 } from './windows-pe-architecture.mjs'
 export const WINDOWS_TARGET = Object.freeze({
   platform: 'win32',
   arch: 'x64',
-  artifactDirectory: 'win32-x64',
+  artifactDirectory: 'windows-x64',
   applicationDirectory: 'ZTools-win32-x64'
 })
 

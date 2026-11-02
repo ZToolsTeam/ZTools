@@ -32,7 +32,8 @@ function readThemeVars() {
   const css = readFileSync(THEME_CSS, "utf8");
   const blocks = [...css.matchAll(/([^{}]+)\{([^{}]*)\}/g)].map((m) => ({ selector: m[1].trim(), body: m[2] }));
   const parse = (body) => Object.fromEntries([...body.matchAll(/(--[\w-]+)\s*:\s*([^;]+);/g)].map((m) => [m[1], m[2].trim()]));
-  const light = blocks.find((b) => /(^|\s|\/)\s*:root\s*$/.test(b.selector) || b.selector.endsWith(":root"));
+  // 浅色块的选择器可能是 ":root" 或 ":root, [data-theme='light']" 这样的列表
+  const light = blocks.find((b) => b.selector.split(",").some((part) => part.trim().endsWith(":root")));
   const dark = blocks.find((b) => /dark/.test(b.selector) && /--rc-text-primary/.test(b.body));
   if (!light || !dark) throw new Error("theme.css 中没有找到浅色 / 深色变量块");
   return { light: parse(light.body), dark: parse(dark.body) };

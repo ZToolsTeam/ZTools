@@ -349,6 +349,40 @@ function isDirectDownloadPath(downloadRoot: string, candidate: string): boolean 
   return path.dirname(normalized) === root
 }
 
+const CLEANUP_RETRY_DELAYS_MS = [350, 800, 1600, 3000] as const
+
+function isTransientCleanupLockError(error: unknown): boolean {
+  if (!error || typeof error !== 'object') return false
+  const code = (error as NodeJS.ErrnoException).code
+  return code === 'EBUSY' || code === 'EPERM' || code === 'EACCES' || code === 'ENOTEMPTY'
+}
+
+async function removePathWithRetry(
+  targetPath: string,
+  options: { recursive?: boolean | undefined; retryDelaysMs?: readonly number[] | undefined } = {}
+): Promise<boolean> {
+  const delays = options.retryDelaysMs ?? CLEANUP_RETRY_DELAYS_MS
+  for (let attempt = 0; attempt <= delays.length; attempt += 1) {
+    try {
+      await fs.rm(targetPath, {
+        force: true,
+        recursive: options.recursive === true
+      })
+      return true
+    } catch (error) {
+      if (!isTransientCleanupLockError(error) || attempt === delays.length) {
+        return false
+      }
+      const delayMs = delays[attempt] ?? 500
+      await new Promise<void>((resolve) => {
+        const timer = setTimeout(resolve, delayMs)
+        timer.unref?.()
+      })
+    }
+  }
+  return false
+}
+
 export class UpdateService {
   readonly #platform: NodeJS.Platform
   readonly #arch: string
@@ -884,6 +918,109 @@ export class UpdateService {
     this.cancel()
     await Promise.allSettled([...this.#activeDownloads])
     await this.#installQueue
+  }
+
+  /**
+   * 清理已消费（state === 'started'）或版本不高于当前运行版本的更新安装包及残留临时目录。
+   * 必须在主程序完成部署就绪握手（signalDeploymentReady）之后调用，遇到安装器进程尚未退出的文件锁时自动退避重试。
+   */
+  async cleanupConsumedDownloads(options: {
+    needCleanup?: boolean | undefined
+    retryDelaysMs?: readonly number[] | undefined
+  } = {}): Promise<void> {
+    if (this.#platform !== 'win32') return
+    try {
+      const downloadRoot = path.join(this.#runtimePaths.transactionRoot, 'Downloads')
+      const entries = await fs.readdir(downloadRoot, { withFileTypes: true }).catch(() => undefined)
+      const activePaths = new Set<string>()
+      for (const operation of this.#operations.values()) {
+        if (operation.state === 'downloading' || this.#installing.has(operation.operationId)) {
+          activePaths.add(path.resolve(operation.path))
+          activePaths.add(path.resolve(operation.metadataPath))
+        }
+      }
+
+      const retainedPackagePaths = new Set<string>()
+      if (entries) {
+        for (const entry of entries) {
+          if (!entry.isFile() || !entry.name.endsWith('.json')) continue
+          const metadataPath = path.resolve(downloadRoot, entry.name)
+          if (activePaths.has(metadataPath)) continue
+
+          let metadata: Partial<DownloadMetadata> | undefined
+          try {
+            metadata = JSON.parse(await fs.readFile(metadataPath, 'utf8')) as Partial<DownloadMetadata>
+          } catch {
+            await removePathWithRetry(metadataPath, { retryDelaysMs: options.retryDelaysMs })
+            continue
+          }
+
+          const rawTargetPath = typeof metadata.path === 'string' && isDirectDownloadPath(downloadRoot, metadata.path)
+            ? path.resolve(metadata.path)
+            : path.resolve(downloadRoot, entry.name.slice(0, -'.json'.length))
+
+          const currentBaseline = metadata.type === 'web' ? this.#webVersion : this.#appVersion
+          const versionOutdated = typeof metadata.version === 'string' &&
+            PRODUCT_VERSION_PATTERN.test(metadata.version) &&
+            compareVersions(metadata.version, currentBaseline) <= 0
+          const consumedOrStale =
+            metadata.state === 'started' ||
+            versionOutdated ||
+            (options.needCleanup === true && metadata.state === 'downloading')
+
+          if (!consumedOrStale) {
+            retainedPackagePaths.add(rawTargetPath)
+            continue
+          }
+
+          if (typeof metadata.operationId === 'string' && !this.#installing.has(metadata.operationId)) {
+            this.#operations.delete(metadata.operationId)
+          }
+          if (!activePaths.has(rawTargetPath)) {
+            await removePathWithRetry(rawTargetPath, { retryDelaysMs: options.retryDelaysMs })
+            await removePathWithRetry(rawTargetPath + '.tmp', { retryDelaysMs: options.retryDelaysMs })
+          }
+          await removePathWithRetry(metadataPath, { retryDelaysMs: options.retryDelaysMs })
+          await removePathWithRetry(metadataPath + '.tmp', { retryDelaysMs: options.retryDelaysMs })
+        }
+
+        if (options.needCleanup === true) {
+          const remaining = await fs.readdir(downloadRoot, { withFileTypes: true }).catch(() => undefined)
+          if (remaining) {
+            for (const entry of remaining) {
+              if (!entry.isFile() || entry.name.endsWith('.json')) continue
+              const candidatePath = path.resolve(downloadRoot, entry.name)
+              if (activePaths.has(candidatePath) || retainedPackagePaths.has(candidatePath)) continue
+              const lowerName = entry.name.toLowerCase()
+              if (
+                lowerName.endsWith('.tmp') ||
+                lowerName.endsWith('.part') ||
+                (lowerName.startsWith('app-') && lowerName.endsWith('.exe')) ||
+                ((lowerName.startsWith('app-') || lowerName.startsWith('web-')) && lowerName.endsWith('.zip'))
+              ) {
+                await removePathWithRetry(candidatePath, { retryDelaysMs: options.retryDelaysMs })
+              }
+            }
+          }
+        }
+      }
+
+      if (this.#installing.size === 0 && !this.#appHandoffStarted) {
+        const maintenanceRoot = path.join(this.#runtimePaths.transactionRoot, 'Maintenance')
+        const maintenanceEntries = await fs.readdir(maintenanceRoot, { withFileTypes: true }).catch(() => undefined)
+        if (maintenanceEntries) {
+          for (const entry of maintenanceEntries) {
+            const entryPath = path.join(maintenanceRoot, entry.name)
+            await removePathWithRetry(entryPath, {
+              recursive: entry.isDirectory(),
+              retryDelaysMs: options.retryDelaysMs
+            })
+          }
+        }
+      }
+    } catch (error) {
+      console.warn('清理已消费更新安装包失败:', error)
+    }
   }
 
   #publishProgress(progress: UpdateProgress): void {

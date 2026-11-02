@@ -28,6 +28,8 @@ export function resolveApplicationIconCandidates(options: {
   const { platform, appPath, resourcesPath } = options
   const primaryFile = developmentIconFile(platform)
   const candidates: string[] = [
+    // Windows 构建已将同一份品牌 ICO 放进 out/assets；resources/ 不进入 Windows 包。
+    ...(platform === 'win32' ? [path.join(appPath, 'out', 'assets', 'tray', 'tray.ico')] : []),
     path.join(appPath, 'resources', 'app', primaryFile),
     path.join(resourcesPath, 'app', primaryFile),
     path.join(resourcesPath, primaryFile)
@@ -69,18 +71,7 @@ export async function loadApplicationIcon(
 
   let icon: NativeImage | undefined
 
-  // 打包后的 Windows 可执行文件内嵌 LOGO.ico，优先提取可执行文件图标
-  if (isPackaged && platform === 'win32') {
-    try {
-      const exeIcon = await getFileIcon(exePath, { size: 'large' })
-      if (exeIcon && !exeIcon.isEmpty()) {
-        icon = exeIcon
-      }
-    } catch {
-      // 回退到候选文件列表
-    }
-  }
-
+  // 先读取随包分发的品牌资源。Shell 的非空结果可能仍是默认窗口图标。
   if (!icon || icon.isEmpty()) {
     const candidates = resolveApplicationIconCandidates({
       platform,
@@ -100,7 +91,7 @@ export async function loadApplicationIcon(
     }
   }
 
-  if ((!icon || icon.isEmpty()) && !(isPackaged && platform === 'win32')) {
+  if (!icon || icon.isEmpty()) {
     try {
       const fileIcon = await getFileIcon(exePath, { size: 'large' })
       if (fileIcon && !fileIcon.isEmpty()) {

@@ -252,7 +252,7 @@ import { LoginItemConfigService } from '../services/login-item-config-service.js
 import type { MacosLoginItemAdapter } from '../platform/macos/login-item.js'
 import { SystemService } from '../services/system-service.js'
 import { TriggerService, type KeyboardDoubleTapAdapter } from '../services/trigger-service.js'
-import { AutostartService } from '../services/autostart-service.js'
+import { AutostartService, initializeDefaultAutostart } from '../services/autostart-service.js'
 import { WindowService } from '../services/window-service.js'
 import {
   createSuperPanelInputService,
@@ -743,15 +743,31 @@ export class IpcRouter {
     return this.#events.publishHost('ui_close_confirm_request', { origin }).delivered > 0
   }
 
-  static create(
+  static async create(
     registry: WindowRegistry,
     services: CoreServices,
     options: IpcRouterOptions,
     mainApp: RouterAppAdapter = app
   ): Promise<IpcRouter> {
-    return constructWithRouterRollback((scope) =>
+    const router = await constructWithRouterRollback((scope) =>
       new IpcRouter(registry, services, options, mainApp, scope)
     )
+    if (mainApp.isPackaged && (process.platform === 'win32' || options.loginItems)) {
+      try {
+        const loginItems = options.loginItems
+        await initializeDefaultAutostart(services.dataRoot, services.config, {
+          getEnabled: () => loginItems ? loginItems.get().openAtLogin : router.#autostart.get().enabled,
+          setEnabled: (enabled) => {
+            if (loginItems) loginItems.setEnabled(enabled)
+            else router.#autostart.set(enabled)
+          }
+        })
+      } catch (error) {
+        // 登录项不可用不阻止启动，设置页仍从系统读取实际状态并允许用户重试。
+        console.warn('初始化默认开机自动启动失败', error)
+      }
+    }
+    return router
   }
 
   private constructor(

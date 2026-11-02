@@ -234,6 +234,32 @@ describe('usePluginsStore', () => {
   })
 
   // ── getters ───────────────────────────────────────────────────
+  describe('fetchFavoritePlugins：收藏详情加载标记', () => {
+    it('成功、失败回填、没有收藏三种结束方式都标记为已加载；失败时只回填本地已安装的收藏', async () => {
+      const store = usePluginsStore()
+      expect(store.favoritePluginsLoaded).toBe(false)
+
+      store.favorites = new Set(['fav-a', 'fav-b'])
+      store.loadWithCache = vi.fn().mockResolvedValue({ list: [{ pluginId: 'fav-a' }, { pluginId: 'fav-b' }] })
+      await store.fetchFavoritePlugins()
+      expect(store.favoritePluginsLoaded).toBe(true)
+      expect(store.favoritePluginsList.map((p) => p.pluginId)).toEqual(['fav-a', 'fav-b'])
+
+      store.favoritePluginsLoaded = false
+      store.installedPlugins = [{ pluginId: 'fav-b', name: '本地收藏' }, { pluginId: 'other' }]
+      store.loadWithCache = vi.fn().mockRejectedValue(new Error('目录不可用'))
+      await store.fetchFavoritePlugins()
+      expect(store.favoritePluginsLoaded).toBe(true)
+      expect(store.favoritePluginsList.map((p) => p.pluginId)).toEqual(['fav-b'])
+
+      store.favoritePluginsLoaded = false
+      store.favorites = new Set()
+      await store.fetchFavoritePlugins()
+      expect(store.favoritePluginsLoaded).toBe(true)
+      expect(store.favoritePluginsList).toEqual([])
+    })
+  })
+
   describe('getters', () => {
     it('isFavorite 正确判断收藏状态', () => {
       const store = usePluginsStore()

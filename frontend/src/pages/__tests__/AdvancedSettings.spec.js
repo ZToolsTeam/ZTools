@@ -153,6 +153,19 @@ describe('AdvancedSettings 设置页（单栏分组版式）', () => {
     wrapper.unmount()
   })
 
+  it('预览卡：未选中的“跟随系统”显示半浅半深，浅色、深色固定', async () => {
+    const wrapper = mountPage()
+    await flushPromises()
+    const theme = useThemeStore()
+    theme.mode = 'dark'
+    await wrapper.vm.$nextTick()
+    const card = (label) => wrapper.findAll('.theme-btn').find((c) => c.text() === label)
+    expect(card('跟随系统').findAll('.theme-preview').map((p) => p.attributes('data-theme'))).toEqual(['light', 'dark'])
+    expect(card('浅色').find('.theme-preview').attributes('data-theme')).toBe('light')
+    expect(card('深色').find('.theme-preview').attributes('data-theme')).toBe('dark')
+    wrapper.unmount()
+  })
+
   it('跟随系统时颜色变化不会把选项变成固定深色', async () => {
     const wrapper = mountPage()
     await flushPromises()

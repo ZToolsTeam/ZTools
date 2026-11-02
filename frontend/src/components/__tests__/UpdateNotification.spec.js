@@ -48,6 +48,14 @@ describe('更新通知的真实 SDK 链路', () => {
     expect(window.__ztoolsToast).not.toHaveBeenCalledWith('success', expect.anything())
   })
 
+  it('Mac 支持受信任 CDN 版本目录下的任意合法 .dmg 文件名，不耦合固定模板', async () => {
+    const customDmgUrl = 'https://cdn.ztools.cn/client-v2/1.1.8.3/ZTools-1.1.8.3-macos-arm64.dmg'
+    await show({ ...macInfo, downloadUrl: customDmgUrl })
+    await wrapper.get('.update-btn-primary').trigger('click')
+    await flushPromises()
+    expect(transport.call).toHaveBeenCalledWith('shell_open_external', { url: customDmgUrl })
+  })
+
   it('Mac 打开失败保留错误与重试按钮，不声称已经安装', async () => {
     transport.call.mockResolvedValue({ success: false })
     await show(macInfo)
@@ -62,12 +70,24 @@ describe('更新通知的真实 SDK 链路', () => {
     expect(window.__ztoolsToast).toHaveBeenCalledWith('info', expect.any(String))
   })
 
-  it('Mac 拒绝旧版地址与非 DMG 地址，不调用系统打开', async () => {
-    await show({ ...macInfo, downloadUrl: 'https://cdn.ztools.cn/app-setup/old.exe' })
-    await wrapper.get('.update-btn-primary').trigger('click')
-    await flushPromises()
-    expect(wrapper.text()).toContain('安装包信息无效')
-    expect(transport.call).not.toHaveBeenCalled()
+  it('Mac 拒绝非信任域名、跨版本目录、路径穿越与非 DMG 地址，不调用系统打开', async () => {
+    for (const badUrl of [
+      'https://cdn.ztools.cn/app-setup/old.exe',
+      'https://evil.example/client-v2/1.1.8.3/ZTools.dmg',
+      'https://cdn.ztools.cn/client-v2/1.1.8.2/ZTools-1.1.8.3.dmg',
+      'https://cdn.ztools.cn/client-v2/1.1.8.3/sub/ZTools.dmg',
+      'https://cdn.ztools.cn/client-v2/1.1.8.3/../1.1.8.2/ZTools.dmg',
+      'https://cdn.ztools.cn/client-v2/1.1.8.3/.dmg',
+      'https://cdn.ztools.cn/client-v2/1.1.8.3/ZTools.dmg?x=1',
+      'https://cdn.ztools.cn/client-v2/1.1.8.3/ZTools-1.1.8.3-windows-x64.exe'
+    ]) {
+      wrapper?.unmount()
+      await show({ ...macInfo, downloadUrl: badUrl })
+      await wrapper.get('.update-btn-primary').trigger('click')
+      await flushPromises()
+      expect(wrapper.text()).toContain('安装包信息无效')
+      expect(transport.call).not.toHaveBeenCalled()
+    }
   })
 
   it('Mac 等待系统打开期间不会重复发起下载', async () => {
@@ -84,7 +104,7 @@ describe('更新通知的真实 SDK 链路', () => {
 
   it('Windows 下载失败时不调用安装器，也不显示成功', async () => {
     transport.call.mockResolvedValue({ success: false, message: '下载校验失败' })
-    await show({ ...macInfo, manualUpdate: false, downloadUrl: 'https://cdn.ztools.cn/client-v2/1.1.8.3/ZTools-1.1.8.3-win32-x64.exe' })
+    await show({ ...macInfo, manualUpdate: false, downloadUrl: 'https://cdn.ztools.cn/client-v2/1.1.8.3/ZTools-1.1.8.3-windows-x64.exe' })
     expect(wrapper.get('.update-btn-primary').text()).toBe('立即更新')
     await wrapper.get('.update-btn-primary').trigger('click')
     await flushPromises()
@@ -94,7 +114,7 @@ describe('更新通知的真实 SDK 链路', () => {
   })
 
   it('Windows 下载和安装均成功后才提示安装器启动', async () => {
-    await show({ ...macInfo, manualUpdate: false, downloadUrl: 'https://cdn.ztools.cn/client-v2/1.1.8.3/ZTools-1.1.8.3-win32-x64.exe' })
+    await show({ ...macInfo, manualUpdate: false, downloadUrl: 'https://cdn.ztools.cn/client-v2/1.1.8.3/ZTools-1.1.8.3-windows-x64.exe' })
     await wrapper.get('.update-btn-primary').trigger('click')
     await flushPromises()
     expect(transport.call.mock.calls.map(([method]) => method)).toEqual(['update_download_start', 'update_install_start'])

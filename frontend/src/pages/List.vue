@@ -1,12 +1,12 @@
 <script setup>
-import { ChevronLeftIcon, ChevronRightIcon, ChevronsLeftIcon, ChevronsRightIcon, ArrowUpRightIcon, PlusIcon, SearchIcon } from '@lucide/vue'
+import { ChevronLeftIcon, ChevronRightIcon, ChevronsLeftIcon, ChevronsRightIcon, ExternalLinkIcon, SearchIcon } from '@lucide/vue'
 import { GithubLogo } from '@/utils/appIcons'
 import { ref, computed, onMounted, onBeforeUnmount, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 
 import PluginCard3D from '@/components/PluginCard3D.vue'
 import SkeletonCard from '@/components/SkeletonCard.vue'
-import { RcBannerLink, RcButton, RcEmpty, RcSegmented, RcSelect } from '@/components/base'
+import { RcBannerLink, RcButton, RcEmpty, RcSegmented } from '@/components/base'
 
 import { useNavStore } from '@/stores/nav'
 import { usePluginsStore } from '@/stores/plugins'
@@ -38,39 +38,14 @@ const { toastError, toastSuccess, toastWarning } = useToast()
 const { checkPluginCompat } = useVersionCompat()
 
 const CATEGORY_PREVIEW_LIMIT = 8
-const PAGE_SIZE_OPTIONS = ['10', '20', '50']
-const DEFAULT_PAGE_SIZE = 20
-const PAGE_SIZE_STORAGE_KEY = 'ztools_market_page_size'
-
-const normalizePageSize = (value, fallback = DEFAULT_PAGE_SIZE) => {
-  const normalized = Number(value)
-  return PAGE_SIZE_OPTIONS.includes(String(normalized))
-    ? normalized
-    : fallback
-}
-
-const loadPersistedPageSize = () => {
-  try {
-    return normalizePageSize(window.localStorage?.getItem(PAGE_SIZE_STORAGE_KEY))
-  } catch (e) {
-    console.warn('[List] 读取分页容量设置失败:', e)
-    return DEFAULT_PAGE_SIZE
-  }
-}
-
-const persistPageSize = (value) => {
-  try {
-    window.localStorage?.setItem(PAGE_SIZE_STORAGE_KEY, String(value))
-  } catch (e) {
-    console.warn('[List] 保存分页容量设置失败:', e)
-  }
-}
+// 每页固定 20 条，不提供每页条数切换
+const PAGE_SIZE = 20
 
 const items = ref([])
 const previewGroups = ref([])
 const total = ref(0)
 const page = ref(1)
-const pageSize = ref(loadPersistedPageSize())
+const pageSize = ref(PAGE_SIZE)
 const category = ref(route.params.category || '')
 const loading = ref(false)
 const loadingLocalPlugins = ref(false)
@@ -377,15 +352,8 @@ const goCategory = (categoryName) => {
   router.push(routeUtils.toListCategory(categoryName))
 }
 
-const handlePaginationChange = async (nextPage, nextPageSize) => {
-  const resolvedPageSize = normalizePageSize(nextPageSize, pageSize.value)
-  const sizeChanged = resolvedPageSize !== pageSize.value
-
-  pageSize.value = resolvedPageSize
-  page.value = sizeChanged ? 1 : Math.max(1, Number(nextPage) || 1)
-  if (sizeChanged) {
-    persistPageSize(resolvedPageSize)
-  }
+const handlePaginationChange = async (nextPage) => {
+  page.value = Math.max(1, Number(nextPage) || 1)
   await load()
 }
 
@@ -636,17 +604,16 @@ onBeforeUnmount(() => {
         <h1 class="market-title">{{ category || (searchKeyword ? `搜索「${searchKeyword}」` : '插件市场') }}</h1>
         <p class="market-subtitle">每个插件都经过官方审核，源码公开，免费安装。</p>
       </div>
-      <!-- 页面主操作：淡强调色；右侧斜箭头提示会在浏览器打开 GitHub -->
+      <!-- 页面主操作：淡强调色；只放一个外链图标，表示会在浏览器打开 GitHub -->
       <RcButton
         variant="soft"
         size="md"
-        :icon="PlusIcon"
+        :icon="ExternalLinkIcon"
         class="market-submit"
         title="插件投稿即向开源插件大仓提交 PR，官方审核后上架"
         @click="openExtensionsRepo"
       >
         提交插件
-        <ArrowUpRightIcon class="market-submit-external" aria-hidden="true" />
       </RcButton>
     </header>
 
@@ -797,13 +764,10 @@ onBeforeUnmount(() => {
     >
       <a-pagination
         show-less-items
-        show-size-changer
         size="small"
         :current="page"
         :page-size="pageSize"
-        :page-size-options="PAGE_SIZE_OPTIONS"
         :total="total"
-        :select-component-class="RcSelect"
         @change="handlePaginationChange"
       >
         <!-- 上一页 / 下一页换成 Lucide 图标，其余页码沿用默认渲染 -->
@@ -857,12 +821,6 @@ onBeforeUnmount(() => {
 
 .market-submit {
   flex-shrink: 0;
-}
-
-.market-submit-external {
-  margin-left: -2px;
-  font-size: 13px;
-  opacity: 0.7;
 }
 
 .market-filters {

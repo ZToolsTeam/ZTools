@@ -1128,6 +1128,11 @@ if (!app.requestSingleInstanceLock()) {
     reportApplicationStartupAnalytics()
     launchIntentReady = true
     signalDeploymentReady(initialLaunchIntent)
+    if (healthCheckExitCode === undefined) {
+      void services.update.cleanupConsumedDownloads({
+        needCleanup: Boolean(initialLaunchIntent?.needCleanup || initialLaunchIntent?.updated)
+      })
+    }
     if (initialLaunchIntent) acceptLaunchIntent(initialLaunchIntent)
     else showMainWindow()
     if (pendingWakeTarget) {

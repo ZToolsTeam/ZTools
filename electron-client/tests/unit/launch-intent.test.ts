@@ -92,3 +92,27 @@ test('launch intent deduplicator only suppresses explicit launch ids', () => {
   assert.equal(deduplicator.accept({ launchId: 'launch-1' }), true)
   assert.equal(deduplicator.accept({ launchId: 'launch-1' }), false)
 })
+
+test('launch intent parses --need-cleanup flag and ZTOOLS_NEED_CLEANUP without masking ZTOOLS_SOURCE', () => {
+  const environment: NodeJS.ProcessEnv = {
+    ZTOOLS_SOURCE: 'baidu',
+    ZTOOLS_REG_SOURCE: 'baidu',
+    ZTOOLS_LAUNCH_ID: '20261030150000001_ABCDEF',
+    ZTOOLS_NEED_CLEANUP: '1'
+  }
+  const intent = parseLaunchIntent(['ZTools.exe', '--install-session-id=sess-1'], environment)
+  assert.deepEqual(intent, {
+    source: 'baidu',
+    registrySource: 'baidu',
+    launchId: '20261030150000001_ABCDEF',
+    installSessionId: 'sess-1',
+    needCleanup: true
+  })
+  assert.equal(environment.ZTOOLS_NEED_CLEANUP, undefined)
+
+  assert.deepEqual(parseLaunchIntent(['ZTools.exe', '--updated', '--source=update', '--need-cleanup']), {
+    updated: true,
+    source: 'update',
+    needCleanup: true
+  })
+})

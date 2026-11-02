@@ -96,7 +96,55 @@ test('loadApplicationIcon falls back to getFileIcon on macOS when all static ico
   assert.equal(icon, fileIcon)
 })
 
-test('loadApplicationIcon on packaged win32 falls back to LOGO.ico when getFileIcon rejects', async () => {
+test('Windows 便携包优先读取内置 ICO，不采用 Shell 返回的非空默认图标', async () => {
+  const appPath = 'C:/Downloads/ZTools/resources/app.asar'
+  const bundledPath = path.join(appPath, 'out', 'assets', 'tray', 'tray.ico')
+  const branded = mockImage(false, 'ztools-ico')
+  const triedPaths: string[] = []
+  let shellCalls = 0
+  const icon = await loadApplicationIcon({
+    platform: 'win32',
+    isPackaged: true,
+    getAppPath: () => appPath,
+    getExePath: () => 'C:/Downloads/ZTools/ZTools.exe',
+    resourcesPath: 'C:/Downloads/ZTools/resources',
+    createFromPath: (target) => {
+      triedPaths.push(target)
+      return target === bundledPath ? branded : mockImage(true)
+    },
+    getFileIcon: async () => {
+      shellCalls += 1
+      return mockImage(false, 'generic-window-icon')
+    }
+  })
+  assert.equal(icon, branded)
+  assert.deepEqual(triedPaths, [bundledPath])
+  assert.equal(shellCalls, 0)
+})
+
+test('Windows 静态图标缺失或损坏时仍可从 EXE 提取图标', async () => {
+  const expected = mockImage(false, 'exe-icon')
+  const executable = 'C:/ZTools/ZTools.exe'
+  const icon = await loadApplicationIcon({
+    platform: 'win32',
+    isPackaged: true,
+    getAppPath: () => 'C:/ZTools/resources/app.asar',
+    getExePath: () => executable,
+    resourcesPath: 'C:/ZTools/resources',
+    createFromPath: (target) => {
+      if (target.endsWith('.ico')) throw new Error('damaged ICO')
+      return mockImage(true)
+    },
+    getFileIcon: async (target, options) => {
+      assert.equal(target, executable)
+      assert.equal(options.size, 'large')
+      return expected
+    }
+  })
+  assert.equal(icon, expected)
+})
+
+test('Windows 内置托盘资源缺失时可读取开发目录的 LOGO.ico', async () => {
   const fallbackIco = mockImage(false, 'win32-fallback-ico')
   const icon = await loadApplicationIcon({
     platform: 'win32',

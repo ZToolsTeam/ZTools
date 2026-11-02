@@ -15,7 +15,8 @@ const CONTEXT_ENVIRONMENT_KEYS = [
   'ZTOOLS_REG_SOURCE',
   'ZTOOLS_PLUGIN_ID',
   'ZTOOLS_AUTOSTART',
-  'ZTOOLS_UPDATED'
+  'ZTOOLS_UPDATED',
+  'ZTOOLS_NEED_CLEANUP'
 ] as const
 
 export interface LaunchIntent {
@@ -31,6 +32,7 @@ export interface LaunchIntent {
   registrySource?: string
   autostart?: boolean
   updated?: boolean
+  needCleanup?: boolean
 }
 
 function cleanValue(value: string): string {
@@ -180,6 +182,23 @@ function readArguments(argumentsList: readonly string[]): LaunchIntent {
     }
     if (argument === '--updated') {
       result.updated = true
+      continue
+    }
+    const updated = flagValue(argument, '--updated')
+    if (updated !== undefined) {
+      const value = booleanValue(updated)
+      if (value !== undefined) result.updated = value
+      continue
+    }
+    if (argument === '--need-cleanup') {
+      result.needCleanup = true
+      continue
+    }
+    const needCleanup = flagValue(argument, '--need-cleanup')
+    if (needCleanup !== undefined) {
+      const value = booleanValue(needCleanup)
+      if (value !== undefined) result.needCleanup = value
+      continue
     }
   }
   return result
@@ -198,6 +217,7 @@ function readEnvironment(environment: NodeJS.ProcessEnv): LaunchIntent {
   const registrySource = validContextValue(environment.ZTOOLS_REG_SOURCE ? cleanValue(environment.ZTOOLS_REG_SOURCE) : undefined)
   const autostart = booleanValue(environment.ZTOOLS_AUTOSTART)
   const updated = booleanValue(environment.ZTOOLS_UPDATED)
+  const needCleanup = booleanValue(environment.ZTOOLS_NEED_CLEANUP)
   const result: LaunchIntent = {
     ...(pluginId ? { pluginId } : {}),
     ...(source ? { source } : {}),
@@ -210,7 +230,8 @@ function readEnvironment(environment: NodeJS.ProcessEnv): LaunchIntent {
     ...(installerMode ? { installerMode } : {}),
     ...(registrySource ? { registrySource } : {}),
     ...(autostart !== undefined ? { autostart } : {}),
-    ...(updated !== undefined ? { updated } : {})
+    ...(updated !== undefined ? { updated } : {}),
+    ...(needCleanup !== undefined ? { needCleanup } : {})
   }
   for (const key of CONTEXT_ENVIRONMENT_KEYS) delete environment[key]
   return result
@@ -230,6 +251,7 @@ function mergeIntent(argumentIntent: LaunchIntent, environmentIntent: LaunchInte
     ...(environmentIntent.registrySource ? { registrySource: environmentIntent.registrySource } : {}),
     ...(environmentIntent.autostart !== undefined ? { autostart: environmentIntent.autostart } : {}),
     ...(environmentIntent.updated !== undefined ? { updated: environmentIntent.updated } : {}),
+    ...(environmentIntent.needCleanup !== undefined ? { needCleanup: environmentIntent.needCleanup } : {}),
     ...argumentIntent
   }
   if (merged.pluginId && !merged.source) merged.source = 'plugin-shortcut'

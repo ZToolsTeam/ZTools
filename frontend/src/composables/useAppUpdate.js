@@ -4,6 +4,51 @@ import { compareAppVersions } from '@/utils/version'
 // 防止 web 静默更新重复触发
 let _webUpdateInProgress = false
 
+const TRUSTED_CLIENT_RELEASE_ORIGIN = 'https://cdn.ztools.cn'
+const TRUSTED_CLIENT_RELEASE_BASE_PATH = '/client-v2'
+const SAFE_ARTIFACT_FILENAME_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]*$/
+const FOUR_PART_VERSION_PATTERN = /^(0|[1-9]\d*)(\.(0|[1-9]\d*)){3}$/
+
+/**
+ * 校验 macOS 手动更新 DMG 下载地址位于受信任官方 CDN 版本目录下且扩展名为 .dmg。
+ * 具体文件名以后台返回为准，不在前端硬编码锁死文件名模板。
+ * @param {unknown} rawUrl
+ * @param {unknown} version
+ * @returns {boolean}
+ */
+export function isTrustedMacManualUpdateUrl(rawUrl, version) {
+  if (typeof rawUrl !== 'string' || typeof version !== 'string' || !FOUR_PART_VERSION_PATTERN.test(version)) {
+    return false
+  }
+  if (!version.split('.').every((part) => Number.isSafeInteger(Number(part)))) {
+    return false
+  }
+  const expectedExtension = '.dmg'
+  const expectedPrefix = `${TRUSTED_CLIENT_RELEASE_ORIGIN}${TRUSTED_CLIENT_RELEASE_BASE_PATH}/${version}/`
+  if (!rawUrl.startsWith(expectedPrefix)) return false
+  const fileName = rawUrl.slice(expectedPrefix.length)
+  if (
+    fileName.length <= expectedExtension.length ||
+    !fileName.endsWith(expectedExtension) ||
+    !SAFE_ARTIFACT_FILENAME_PATTERN.test(fileName) ||
+    fileName.includes('..')
+  ) {
+    return false
+  }
+  try {
+    const parsed = new URL(rawUrl)
+    return (
+      parsed.href === rawUrl &&
+      parsed.origin === TRUSTED_CLIENT_RELEASE_ORIGIN &&
+      parsed.pathname === `${TRUSTED_CLIENT_RELEASE_BASE_PATH}/${version}/${fileName}` &&
+      parsed.search === '' &&
+      parsed.hash === ''
+    )
+  } catch {
+    return false
+  }
+}
+
 /**
  * 当前平台是否不支持更新操作（主进程以 NOT_SUPPORTED 明确声明）。
  * 这是能力边界而不是故障：启动检查应静默跳过，手动检查应提示用户去官网下载。
@@ -46,12 +91,12 @@ export function useAppUpdate() {
     _webUpdateInProgress = true
     try {
       // 获取当前 exe 版本，校验最低版本要求
-    const configuredMinAppVersion = data.minAppVersion
-    const minAppVersion = configuredMinAppVersion === null ||
-      configuredMinAppVersion === undefined ||
-      configuredMinAppVersion === ''
-      ? '1.0.0'
-      : configuredMinAppVersion
+      const configuredMinAppVersion = data.minAppVersion
+      const minAppVersion = configuredMinAppVersion === null ||
+        configuredMinAppVersion === undefined ||
+        configuredMinAppVersion === ''
+        ? '1.0.0'
+        : configuredMinAppVersion
       let currentAppVersion = '1.0.0'
       try {
         currentAppVersion = await window.ztools.sys.getAppVersion()
@@ -118,9 +163,7 @@ export function useAppUpdate() {
 
   /** macOS 由浏览器下载已发布 DMG，打开下载不等于完成安装。 */
   async function openManualUpdate(info) {
-    const version = info?.version
-    if (info?.manualUpdate !== true || typeof version !== 'string' || !/^\d+(\.\d+){3}$/.test(version) ||
-        info.downloadUrl !== `https://cdn.ztools.cn/client-v2/${version}/ZTools-${version}-darwin-universal.dmg`) {
+    if (info?.manualUpdate !== true || !isTrustedMacManualUpdateUrl(info?.downloadUrl, info?.version)) {
       throw new Error('macOS 安装包信息无效，请重新检查更新')
     }
     const opened = await window.ztools?.shell?.openExternal(info.downloadUrl)

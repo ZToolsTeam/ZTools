@@ -22,7 +22,7 @@ import { usePluginInstall } from '@/composables/usePluginInstall'
 import { useUIStore } from '@/stores/ui'
 import PluginCard3D from '@/components/PluginCard3D.vue'
 import PluginTile from '@/components/PluginTile.vue'
-import BrandMark from '@/components/BrandMark.vue'
+import PluginTileSkeleton from '@/components/PluginTileSkeleton.vue'
 import { RcBannerLink, RcButton, RcEmpty, RcLoading, RcSegmented, RcSquircle } from '@/components/base'
 import { resolveKeywordGlyph, resolvePluginGlyph } from '@/utils/brandIcons'
 import { formatRelativeTime } from '@/utils/relativeTime'
@@ -133,10 +133,12 @@ const MAX_PINNED_COUNT = 8
 const DEFAULT_ROWS = 2 // 「常用」默认显示行数
 const RECENT_LIMIT = 5 // 「最近使用」最多显示条数
 
-// 网格实际列数：auto-fill 会随窗口宽度变化，键盘上下移动与默认显示数量都以真实列数为准
+// 网格实际列数：auto-fill 会随窗口宽度变化，键盘上下移动与默认显示数量都以真实列数为准。
+// 观察的是两个标签共用的内容区（始终存在），从其中任一磁贴网格读列数：两个标签宽度相同，列数也相同
 const gridColumns = ref(homeLayoutCache.gridColumns)
 let gridObserver = null
-function measureGridColumns(el) {
+function measureGridColumns(container) {
+  const el = container?.querySelector?.('.plugin-tile-grid')
   if (!el) return
   const template = getComputedStyle(el).gridTemplateColumns || ''
   const count = template.split(' ').filter((part) => part && part !== 'none').length
@@ -236,9 +238,31 @@ const hasMorePlugins = computed(() => {
   return currentTabList.value.length > gridColumns.value * DEFAULT_ROWS
 })
 
+// 收藏详情在首屏后才从市场接口加载：加载完之前只知道收藏了几个，用同样数量的占位磁贴，
+// 不先显示「还没有收藏的插件」再突然冒出磁贴
+const favoritesPending = computed(
+  () => pluginsStore.favorites.size > 0 && !pluginsStore.favoritePluginsLoaded
+)
+
 // Computed - 插件数量
 const installedCount = computed(() => installedPlugins.value.length)
-const favoritesCount = computed(() => favoritePlugins.value.length)
+const favoritesCount = computed(() =>
+  favoritesPending.value ? pluginsStore.favorites.size : favoritePlugins.value.length
+)
+
+// 两个标签叠放在同一格里，内容区高度取较高的一个，切换标签时下面的区块不会跳动
+const MY_PLUGIN_TABS = ['plugins', 'favorites']
+
+// 标签显示真实磁贴：当前标签、收藏详情已就绪且有内容
+function showsRealTiles(tab) {
+  return tab === activeTab.value && !(tab === 'favorites' && favoritesPending.value) && displayedPlugins.value.length > 0
+}
+
+// 占位磁贴数（收起状态，0 表示空状态）：用于另一个标签预留高度，以及收藏详情加载中
+function placeholderTileCount(tab) {
+  const total = tab === 'plugins' ? installedCount.value : favoritesCount.value
+  return Math.min(total, gridColumns.value * DEFAULT_ROWS)
+}
 
 // 切换标签时重置展开状态
 function switchTab(tab) {
@@ -1103,56 +1127,78 @@ onUnmounted(() => {
           </Button>
         </div>
 
-        <!-- 空状态 -->
-        <RcEmpty
-          v-if="displayedPlugins.length === 0"
-          :icon="activeTab === 'plugins' ? LayoutGridIcon : StarIcon"
-          :title="activeTab === 'plugins' ? '暂无已安装插件' : '还没有收藏的插件'"
-        >
-          <template #action>
-            <RcButton variant="secondary" size="md" @click="goToMarket">浏览插件市场</RcButton>
-          </template>
-        </RcEmpty>
-
-        <!-- 插件列表（统一卡片样式） -->
-        <div v-else :ref="bindGridEl" class="plugin-tile-grid">
+        <!-- 两个标签叠放：当前标签显示真实内容，另一个只放不可见、不可操作的同尺寸占位 -->
+        <div :ref="bindGridEl" class="my-plugins-body">
           <div
-            v-for="(plugin, index) in displayedPlugins"
-            :key="getPluginId(plugin)"
-            class="draggable-card"
-            :class="{
-              'is-draggable': activeTab === 'plugins',
-              'is-card-focused': focusedCardIndex === index,
-              'is-drag-over':
-                activeTab === 'plugins' &&
-                dragOverIndex === index &&
-                draggingPlugin &&
-                getPluginId(draggingPlugin) !== getPluginId(plugin),
-              'is-dragging':
-                activeTab === 'plugins' &&
-                draggingPlugin &&
-                getPluginId(draggingPlugin) === getPluginId(plugin)
-            }"
-            :draggable="activeTab === 'plugins'"
-            @click="focusedCardIndex = index; uiStore.focusGrid()"
-            @dragstart="handleDragStart(plugin, index)"
-            @dragover.prevent="handleDragOver(index)"
-            @dragenter.prevent="handleDragOver(index)"
-            @drop.prevent="handleDrop(index)"
-            @dragend="handleDragEnd"
+            v-for="tab in MY_PLUGIN_TABS"
+            :key="tab"
+            class="my-plugins-pane"
+            :class="{ 'is-active': tab === activeTab }"
+            :aria-hidden="tab === activeTab ? undefined : 'true'"
+            :inert="tab === activeTab ? undefined : true"
           >
-            <PluginTile
-              :plugin="plugin"
-              :focused="focusedCardIndex === index"
-              :pinned="isPinned(getPluginId(plugin))"
-              :revoked="pluginsStore.isRevoked(getPluginId(plugin))"
-              :revokedText="pluginsStore.getRevokedKind(getPluginId(plugin)) === 'platform' ? '不支持当前系统' : '已下架'"
-              :hasUpdate="hasUsableUpdate(getPluginId(plugin))"
-              :hotkey="launchHotkeys[getPluginId(plugin)] || ''"
-              :installed="installedSet.has(getPluginId(plugin))"
-              @open="onTileOpen"
-              @menu="showPluginMenu"
-            />
+            <!-- 插件列表（统一卡片样式） -->
+            <div v-if="showsRealTiles(tab)" class="plugin-tile-grid">
+              <div
+                v-for="(plugin, index) in displayedPlugins"
+                :key="getPluginId(plugin)"
+                class="draggable-card"
+                :class="{
+                  'is-draggable': activeTab === 'plugins',
+                  'is-card-focused': focusedCardIndex === index,
+                  'is-drag-over':
+                    activeTab === 'plugins' &&
+                    dragOverIndex === index &&
+                    draggingPlugin &&
+                    getPluginId(draggingPlugin) !== getPluginId(plugin),
+                  'is-dragging':
+                    activeTab === 'plugins' &&
+                    draggingPlugin &&
+                    getPluginId(draggingPlugin) === getPluginId(plugin)
+                }"
+                :draggable="activeTab === 'plugins'"
+                @click="focusedCardIndex = index; uiStore.focusGrid()"
+                @dragstart="handleDragStart(plugin, index)"
+                @dragover.prevent="handleDragOver(index)"
+                @dragenter.prevent="handleDragOver(index)"
+                @drop.prevent="handleDrop(index)"
+                @dragend="handleDragEnd"
+              >
+                <PluginTile
+                  :plugin="plugin"
+                  :focused="focusedCardIndex === index"
+                  :pinned="isPinned(getPluginId(plugin))"
+                  :revoked="pluginsStore.isRevoked(getPluginId(plugin))"
+                  :revokedText="pluginsStore.getRevokedKind(getPluginId(plugin)) === 'platform' ? '不支持当前系统' : '已下架'"
+                  :hasUpdate="hasUsableUpdate(getPluginId(plugin))"
+                  :hotkey="launchHotkeys[getPluginId(plugin)] || ''"
+                  :installed="installedSet.has(getPluginId(plugin))"
+                  @open="onTileOpen"
+                  @menu="showPluginMenu"
+                />
+              </div>
+            </div>
+
+            <!-- 空状态 -->
+            <RcEmpty
+              v-else-if="placeholderTileCount(tab) === 0"
+              class="my-plugins-empty"
+              :icon="tab === 'plugins' ? LayoutGridIcon : StarIcon"
+              :title="tab === 'plugins' ? '暂无已安装插件' : '还没有收藏的插件'"
+            >
+              <template #action>
+                <RcButton variant="secondary" size="md" @click="goToMarket">浏览插件市场</RcButton>
+              </template>
+            </RcEmpty>
+
+            <!-- 占位：另一个标签的预留高度，或收藏详情加载中 -->
+            <div
+              v-else
+              class="plugin-tile-grid"
+              :aria-busy="tab === activeTab ? 'true' : undefined"
+            >
+              <PluginTileSkeleton v-for="i in placeholderTileCount(tab)" :key="i" />
+            </div>
           </div>
         </div>
       </section>
@@ -1219,9 +1265,7 @@ onUnmounted(() => {
         description="插件市场里的插件都经过官方审核，源码公开，免费安装"
         link-text="去插件市场"
         @click="goToMarket"
-      >
-        <template #leading><BrandMark :size="26" /></template>
-      </RcBannerLink>
+      />
 
       <!-- 右键菜单 -->
       <div
@@ -1372,6 +1416,28 @@ onUnmounted(() => {
 
 
 
+
+/* 我的插件：两个标签叠放在同一格，高度取较高的一个 */
+.my-plugins-body {
+  display: grid;
+}
+
+.my-plugins-pane {
+  grid-area: 1 / 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.my-plugins-pane:not(.is-active) {
+  visibility: hidden;
+  pointer-events: none;
+}
+
+/* 空状态在预留高度里垂直居中 */
+.my-plugins-empty {
+  margin: auto 0;
+}
 
 /* 「常用」紧凑磁贴网格（设计稿：minmax(170px, 1fr)，间距 8px） */
 .plugin-tile-grid {

@@ -1,4 +1,39 @@
+import fs from 'node:fs/promises'
+import path from 'node:path'
 import { errorCodes, ZToolsError } from '../../contracts/errors.js'
+import type { ConfigService } from './config-service.js'
+
+/** 只为尚无用户配置的首次运行开启自启动，升级和用户后续关闭时保持原选择。 */
+export async function initializeDefaultAutostart(
+  dataRoot: string,
+  config: Pick<ConfigService, 'set'>,
+  loginItem: { getEnabled(): boolean; setEnabled(enabled: boolean): void }
+): Promise<void> {
+  try {
+    await fs.stat(path.join(dataRoot, 'user_settings.json'))
+    return
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
+  }
+
+  const previous = loginItem.getEnabled()
+  try {
+    if (!previous) loginItem.setEnabled(true)
+    if (!loginItem.getEnabled()) {
+      throw new ZToolsError(errorCodes.notSupported, '系统未确认开机自动启动已开启')
+    }
+    await config.set('user_settings.json', 'system.autostart', 'true', true)
+  } catch (error) {
+    if (!previous) {
+      try {
+        loginItem.setEnabled(false)
+      } catch (rollbackError) {
+        throw new AggregateError([error, rollbackError], '初始化开机自动启动失败，且无法恢复系统登录项')
+      }
+    }
+    throw error
+  }
+}
 
 export interface LoginItemSettings {
   openAtLogin?: boolean

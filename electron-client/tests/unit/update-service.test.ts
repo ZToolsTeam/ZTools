@@ -313,3 +313,91 @@ test('update check without a source makes no request; source faults surface as t
     await fs.rm(root, { recursive: true, force: true })
   }
 })
+
+test('cleanupConsumedDownloads removes consumed, outdated, and orphan artifacts while preserving pending newer updates', async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'ztools-update-cleanup-'))
+  const runtimePaths = runtimePathsForBusinessDataRoot(path.join(root, 'DataV2'))
+  const downloadRoot = path.join(runtimePaths.transactionRoot, 'Downloads')
+  const maintenanceDir = path.join(runtimePaths.transactionRoot, 'Maintenance', 'stale-session')
+  await fs.mkdir(downloadRoot, { recursive: true })
+  await fs.mkdir(maintenanceDir, { recursive: true })
+
+  try {
+    // 1. 已消费的当前版本更新包（state = 'started'）-> 应被清理
+    const consumedExe = path.join(downloadRoot, 'app-2.0.0-op1.exe')
+    const consumedMeta = consumedExe + '.json'
+    await fs.writeFile(consumedExe, 'consumed-binary')
+    await fs.writeFile(consumedMeta, JSON.stringify({
+      schemaVersion: 1,
+      state: 'started',
+      operationId: 'op1',
+      type: 'app',
+      version: '2.0.0',
+      downloadUrl: 'https://cdn.example/ZTools-2.0.0.exe',
+      checksum: 'a'.repeat(64),
+      fileSize: 15,
+      path: consumedExe
+    }))
+
+    // 2. 低于当前版本的历史下载包（version = '1.5.0' < '2.0.0'）-> 应被清理
+    const outdatedExe = path.join(downloadRoot, 'app-1.5.0-op2.exe')
+    const outdatedMeta = outdatedExe + '.json'
+    await fs.writeFile(outdatedExe, 'outdated-binary')
+    await fs.writeFile(outdatedMeta, JSON.stringify({
+      schemaVersion: 1,
+      state: 'downloaded',
+      operationId: 'op2',
+      type: 'app',
+      version: '1.5.0',
+      downloadUrl: 'https://cdn.example/ZTools-1.5.0.exe',
+      checksum: 'b'.repeat(64),
+      fileSize: 15,
+      path: outdatedExe
+    }))
+
+    // 3. 高于当前版本且尚未消费的待安装包（version = '2.1.0' > '2.0.0', state = 'downloaded'）-> 必须保留
+    const futureExe = path.join(downloadRoot, 'app-2.1.0-op3.exe')
+    const futureMeta = futureExe + '.json'
+    await fs.writeFile(futureExe, 'future-binary')
+    await fs.writeFile(futureMeta, JSON.stringify({
+      schemaVersion: 1,
+      state: 'downloaded',
+      operationId: 'op3',
+      type: 'app',
+      version: '2.1.0',
+      downloadUrl: 'https://cdn.example/ZTools-2.1.0.exe',
+      checksum: 'c'.repeat(64),
+      fileSize: 13,
+      path: futureExe
+    }))
+
+    // 4. 无元数据的孤立安装包与残留 Maintenance 目录 -> needCleanup=true 时应被清理
+    const orphanExe = path.join(downloadRoot, 'app-1.9.0-orphan.exe')
+    const orphanTmp = path.join(downloadRoot, 'app-2.0.0-partial.exe.tmp')
+    await fs.writeFile(orphanExe, 'orphan')
+    await fs.writeFile(orphanTmp, 'partial')
+    await fs.writeFile(path.join(maintenanceDir, 'ZToolsUpdater.exe'), 'updater-copy')
+
+    const service = new UpdateService({
+      platform: 'win32',
+      runtimePaths,
+      appVersion: '2.0.0',
+      webVersion: '2.0.0'
+    })
+
+    await service.cleanupConsumedDownloads({ needCleanup: true, retryDelaysMs: [10, 20] })
+
+    await assert.rejects(fs.stat(consumedExe))
+    await assert.rejects(fs.stat(consumedMeta))
+    await assert.rejects(fs.stat(outdatedExe))
+    await assert.rejects(fs.stat(outdatedMeta))
+    await assert.rejects(fs.stat(orphanExe))
+    await assert.rejects(fs.stat(orphanTmp))
+    await assert.rejects(fs.stat(maintenanceDir))
+
+    assert.equal(await fs.readFile(futureExe, 'utf8'), 'future-binary')
+    assert.ok((await fs.stat(futureMeta)).isFile())
+  } finally {
+    await fs.rm(root, { recursive: true, force: true })
+  }
+})

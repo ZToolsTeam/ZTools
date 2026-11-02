@@ -509,21 +509,22 @@ describe('List page', () => {
     expect(wrapper.find('.pagination-stub').exists()).toBe(true)
     expect(wrapper.text()).not.toContain('查看全部')
 
+    // 翻页只换页码，每页条数固定 20（即使分页组件传回别的条数）
     await wrapper.vm.handlePaginationChange(2, 10)
     await flushPromises()
-    expect(wrapper.vm.page).toBe(1)
-    expect(wrapper.vm.pageSize).toBe(10)
-    expect(window.localStorage.getItem('ztools_market_page_size')).toBe('10')
+    expect(wrapper.vm.page).toBe(2)
+    expect(wrapper.vm.pageSize).toBe(20)
+    expect(window.localStorage.getItem('ztools_market_page_size')).toBe(null)
     expect(apiMocks.getMarketPlugins).toHaveBeenLastCalledWith({
       category: '',
-      page: 1,
-      per_page: 10,
+      page: 2,
+      per_page: 20,
       sourceType: 'all',
       keyword: '匹配'
     })
   })
 
-  it('分类恰好 10 个插件时仍显示分页容量选择器', async () => {
+  it('分类只有一页（恰好 10 个插件）时仍显示分页', async () => {
     apiMocks.getMarketPlugins.mockResolvedValue({
       list: Array.from({ length: 10 }, (_, index) => ({
         pluginId: `media-${index + 1}`,
@@ -557,7 +558,7 @@ describe('List page', () => {
     expect(wrapper.find('.pagination-stub').exists()).toBe(true)
   })
 
-  it('重新打开列表页时恢复上次选择的分页容量', async () => {
+  it('分页不提供每页条数切换：旧版本保存的分页容量不再生效，每页固定 20 条', async () => {
     window.localStorage.setItem('ztools_market_page_size', '50')
     apiMocks.getMarketPlugins.mockResolvedValue({
       list: [],
@@ -581,14 +582,18 @@ describe('List page', () => {
     })
     await flushPromises()
 
-    expect(wrapper.vm.pageSize).toBe(50)
+    expect(wrapper.vm.pageSize).toBe(20)
     expect(apiMocks.getMarketPlugins).toHaveBeenLastCalledWith({
       category: '系统工具',
       page: 1,
-      per_page: 50,
+      per_page: 20,
       sourceType: 'all',
       keyword: ''
     })
+    const pagination = wrapper.findComponent({ name: 'APagination' })
+    expect(pagination.exists()).toBe(true)
+    expect(pagination.attributes('show-size-changer')).toBeUndefined()
+    expect(pagination.attributes('page-size-options')).toBeUndefined()
   })
 
   it('页头显示「插件市场」，页面内分类筛选与侧栏同一导航，并随分类 / 搜索切换标题', async () => {

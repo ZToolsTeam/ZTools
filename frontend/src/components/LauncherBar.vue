@@ -4,7 +4,7 @@
     @keydown="handleKeyDown"
   >
     <!-- 悬浮搜索条主体：克制的中性面板，橙色只用于标志、选中标记与匹配高亮 -->
-    <div class="launcher-panel">
+    <div class="launcher-panel" :class="{ 'uses-native-corners': nativeCorners }">
       <!-- 声明式运行时形态（激活官方扩展或第三方 V2 声明式扩展时直接在悬浮条内打开） -->
       <template v-if="activeDeclarativePlugin && activeDeclarativePlugin.command">
         <div class="flex-1 flex flex-col overflow-hidden p-2">
@@ -168,6 +168,8 @@ import { win as nativeWin } from '@/api/apiserver'
 
 const router = useRouter()
 const pluginsStore = usePluginsStore()
+// 由宿主选择圆角策略；系统裁切时页面铺满窗口，避免两层圆角和边框互相露底。
+const nativeCorners = new URLSearchParams(window.location.search).get('nativeCorners') === '1'
 // 悬停提示是纯文本，按平台格式化（键帽展示统一走 ShortcutKeys）
 const workbenchHint = shortcutLabel('Ctrl+M')
 
@@ -931,6 +933,11 @@ watch(
   border: 1px solid var(--rc-border-highlight);
   background: var(--rc-surface);
   color: var(--rc-text-secondary);
+}
+
+.launcher-panel.uses-native-corners {
+  border: none;
+  border-radius: 0;
 }
 
 .launcher-head {
