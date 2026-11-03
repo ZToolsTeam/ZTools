@@ -3,25 +3,13 @@ import { ref, computed, shallowRef, onUnmounted, toRaw, h } from "vue";
 import { setDeclarativeBridge, renderDeclarativeRoot, getComponentFactory } from "@ztools/declarative-ui";
 import { createScreenColorPicker } from "../screenColorPicker.js";
 import { getHostMethods } from "../hostMethods.js";
+import { createHostClipboardBridge, markPageBridgeInstalled } from "../hostClipboardBridge.js";
+
+export { assertClipboardText } from "../hostClipboardBridge.js";
 
 
 /** 当前打开着的确认框，按打开顺序；最上面的才处理按键。插件页面卸载时一并关闭 */
 const openConfirms = [];
-
-/**
- * 校验要写入剪贴板 / 粘贴的文本：只接受字符串或数字，空内容直接报错（不能提示“已复制”却什么也没写）。
- * 注：DeclarativeView 已引用此函数但当时未实现（其他批次的未完成改动），这里补上最小实现以保证可构建。
- */
-export function assertClipboardText(content) {
-  if (typeof content === "number" && Number.isFinite(content)) return String(content);
-  if (typeof content !== "string") {
-    throw Object.assign(new Error("要复制的内容不是文本"), { code: "INVALID_PARAMS" });
-  }
-  if (content.length === 0) {
-    throw Object.assign(new Error("没有可复制的内容"), { code: "EMPTY_CONTENT" });
-  }
-  return content;
-}
 
 /** 是否有插件确认框正打开着（此时不能把焦点抢回页面） */
 export function hasOpenConfirm() {
@@ -352,62 +340,14 @@ export function useDeclarativeStack(initialRoot, options = {}) {
     }
   };
 
+  markPageBridgeInstalled();
   setDeclarativeBridge({
     showToast,
     navigation: {
       push,
       pop
     },
-    // 写剪贴板失败（宿主拒绝、超过上限、系统剪贴板被占用）必须抛给插件，插件才不会提示“已复制”
-    copyToClipboard: async (text) => {
-      const content = assertClipboardText(text);
-      const methods = getElectronMethods();
-      if (methods?.clipboard_copy_text) {
-        await methods.clipboard_copy_text({ text: content });
-        return;
-      }
-      if (typeof navigator !== "undefined" && navigator.clipboard?.writeText) {
-        await navigator.clipboard.writeText(content);
-        return;
-      }
-      throw Object.assign(new Error("当前环境不支持写入剪贴板"), { code: "NOT_SUPPORTED" });
-    },
-    clearClipboard: async () => {
-      const methods = getElectronMethods();
-      if (methods?.clipboard_clear) {
-        await methods.clipboard_clear({});
-        return;
-      }
-      if (typeof navigator !== "undefined" && navigator.clipboard?.writeText) {
-        await navigator.clipboard.writeText("");
-        return;
-      }
-      throw Object.assign(new Error("当前环境不支持清空剪贴板"), { code: "NOT_SUPPORTED" });
-    },
-    readClipboardText: async () => {
-      const methods = getElectronMethods();
-      if (methods?.clipboard_read_text) {
-        const res = await unwrapIpc(methods.clipboard_read_text({}), "");
-        return typeof res === "string" ? res : String(res?.text ?? "");
-      }
-      if (typeof navigator !== "undefined" && navigator.clipboard) {
-        return await navigator.clipboard.readText();
-      }
-      return "";
-    },
-    pasteToActive: async (text) => {
-      const methods = getElectronMethods();
-      if (methods?.clipboard_hide_and_paste_text) {
-        // 粘贴失败（如 macOS 未授权辅助功能）必须抛给插件，不能吞掉后让插件提示“已粘贴”
-        await methods.clipboard_hide_and_paste_text({ text: String(text) });
-        return;
-      }
-      if (typeof navigator !== "undefined" && navigator.clipboard) {
-        await navigator.clipboard.writeText(String(text));
-        throw Object.assign(new Error("当前宿主不支持自动粘贴，内容已复制，请手动粘贴"), { code: "NOT_SUPPORTED" });
-      }
-      throw Object.assign(new Error("当前宿主不支持自动粘贴"), { code: "NOT_SUPPORTED" });
-    },
+    ...createHostClipboardBridge(getElectronMethods),
     pickScreenColor: () => screenColorPicker.pick(),
     manageWindow: async (action) => {
       const methods = getElectronMethods();

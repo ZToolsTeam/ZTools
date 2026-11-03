@@ -34,7 +34,7 @@
   /* ===== 4. 品牌色：余烬橙 ===== */
   --rc-accent: #ff6b3d;
   --rc-accent-hover: #f25a2b;
-  --rc-accent-text: #c2410c;
+  --rc-accent-text: #b3390b;
   --rc-accent-subtle: rgba(255, 107, 61, 0.1);
   /* 实心强调按钮：比品牌色略深一档的填充 + 白色文字与图标，避免橙底黑字发闷 */
   --rc-accent-fill: #f0582a;

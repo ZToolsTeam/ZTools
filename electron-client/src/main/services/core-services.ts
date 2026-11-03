@@ -2,7 +2,7 @@ import fs from 'node:fs/promises'
 import path from 'node:path'
 import { ConfigService } from './config-service.js'
 import { JsonFileStore } from './json-file-store.js'
-import { UpdateService } from './update-service.js'
+import { UpdateService, type MacUpdateInstaller } from './update-service.js'
 import { SidecarManager } from './sidecar-manager.js'
 import type { WebResourceService } from './web-resource-service.js'
 import type { LibraryMetadataSource } from './library-integrity-pins.js'
@@ -110,7 +110,8 @@ export function createCoreServices(
   serviceClient: ServiceClient | null = null,
   nativeInput: NativeInputAdapter | null = null,
   webResources: WebResourceService | null = null,
-  edition: MainEdition = mainEdition()
+  edition: MainEdition = mainEdition(),
+  macUpdater?: MacUpdateInstaller
 ): CoreServices {
   const runtimePaths = typeof runtime === 'string'
     ? runtimePathsForBusinessDataRoot(runtime)
@@ -124,6 +125,7 @@ export function createCoreServices(
     appVersion,
     webVersion,
     updateSource,
+    ...(macUpdater ? { macUpdater } : {}),
     ...(webResources ? { webResources } : {})
   })
   const sidecars = new SidecarManager()

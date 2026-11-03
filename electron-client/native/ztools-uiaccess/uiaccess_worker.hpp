@@ -402,10 +402,11 @@ public:
   }
 
   // --- Window Management ---
-  WindowManagementResult ManageWindow(const std::string& action) {
+  WindowManagementResult ManageWindow(const std::string& action, uint64_t targetHwnd = 0, uint32_t targetPid = 0, uint32_t hostPid = 0) {
     static const std::vector<std::string> validActions = {
       "left-half", "right-half", "top-half", "bottom-half",
-      "maximize", "restore", "center",
+      "maximize", "center", "reasonable-size",
+      "top-left", "top-right", "bottom-left", "bottom-right",
       "first-third", "center-third", "last-third",
       "first-two-thirds", "last-two-thirds",
       "make-larger", "make-smaller",
@@ -454,10 +455,15 @@ public:
       }
     }
 
-    HWND hwnd = GetForegroundWindow();
-    if (!hwnd) {
-      res.success = false;
-      res.error = "No foreground window found";
+    HWND foreground = GetForegroundWindow();
+    HWND hwnd = targetHwnd ? reinterpret_cast<HWND>(targetHwnd) : foreground;
+    DWORD pid = 0;
+    if (!hwnd || !IsWindow(hwnd) || !GetWindowThreadProcessId(hwnd, &pid) || !pid) {
+      res.error = "No valid target window found";
+      return res;
+    }
+    if (pid == hostPid || (targetHwnd && (pid != targetPid || hwnd != foreground))) {
+      res.error = "Target window changed or belongs to ZTools";
       return res;
     }
 
@@ -479,7 +485,10 @@ public:
     res.monitor = monRect;
 
     RECT rcWin = {0};
-    GetWindowRect(hwnd, &rcWin);
+    if (!GetWindowRect(hwnd, &rcWin)) {
+      res.error = "Failed to query window bounds";
+      return res;
+    }
     WindowRect curWin{
       rcWin.left,
       rcWin.top,
@@ -517,8 +526,11 @@ public:
         res.rect.x = targetMonRect.x + static_cast<int>(relX * targetMonRect.width);
         res.rect.y = targetMonRect.y + static_cast<int>(relY * targetMonRect.height);
       } else {
-        res.rect = curWin;
+        res.error = "No additional display is available";
+        return res;
       }
+      res.rect.x = (std::max)(res.monitor.x, (std::min)(res.rect.x, res.monitor.x + res.monitor.width - res.rect.width));
+      res.rect.y = (std::max)(res.monitor.y, (std::min)(res.rect.y, res.monitor.y + res.monitor.height - res.rect.height));
     } else {
       res.rect = CalculateTargetRect(action, curWin, monRect);
     }
@@ -529,8 +541,12 @@ public:
 
     if (action == "maximize") {
       ShowWindow(hwnd, SW_MAXIMIZE);
+      if (!IsZoomed(hwnd)) {
+        res.error = "Failed to maximize window";
+        return res;
+      }
     } else {
-      SetWindowPos(
+      if (!SetWindowPos(
         hwnd,
         NULL,
         res.rect.x,
@@ -538,9 +554,18 @@ public:
         res.rect.width,
         res.rect.height,
         SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED
-      );
+      )) {
+        res.error = "Failed to move or resize window";
+        return res;
+      }
     }
 
+    RECT actual = {0};
+    if (!GetWindowRect(hwnd, &actual) || actual.right <= actual.left || actual.bottom <= actual.top) {
+      res.error = "Failed to confirm window bounds";
+      return res;
+    }
+    res.rect = {actual.left, actual.top, actual.right - actual.left, actual.bottom - actual.top};
     res.success = true;
     return res;
   }
@@ -734,19 +759,26 @@ private:
       r.y = mon.y + mon.height / 2;
       r.width = mon.width;
       r.height = mon.height - (mon.height / 2);
+    } else if (action == "top-left" || action == "top-right" || action == "bottom-left" || action == "bottom-right") {
+      const bool right = action == "top-right" || action == "bottom-right";
+      const bool bottom = action == "bottom-left" || action == "bottom-right";
+      r.x = mon.x + (right ? mon.width / 2 : 0);
+      r.y = mon.y + (bottom ? mon.height / 2 : 0);
+      r.width = right ? mon.width - mon.width / 2 : mon.width / 2;
+      r.height = bottom ? mon.height - mon.height / 2 : mon.height / 2;
     } else if (action == "maximize") {
       r.x = mon.x;
       r.y = mon.y;
       r.width = mon.width;
       r.height = mon.height;
-    } else if (action == "restore") {
-      r.width = static_cast<int>(mon.width * 0.7);
-      r.height = static_cast<int>(mon.height * 0.7);
+    } else if (action == "reasonable-size") {
+      r.width = static_cast<int>(mon.width * 0.6 + 0.5);
+      r.height = static_cast<int>(mon.height * 0.8 + 0.5);
       r.x = mon.x + (mon.width - r.width) / 2;
       r.y = mon.y + (mon.height - r.height) / 2;
     } else if (action == "center") {
-      r.width = (std::max)(300, (std::min)(cur.width, static_cast<int>(mon.width * 0.9)));
-      r.height = (std::max)(200, (std::min)(cur.height, static_cast<int>(mon.height * 0.9)));
+      r.width = (std::min)(cur.width, mon.width);
+      r.height = (std::min)(cur.height, mon.height);
       r.x = mon.x + (mon.width - r.width) / 2;
       r.y = mon.y + (mon.height - r.height) / 2;
     } else if (action == "first-third") {
@@ -767,7 +799,7 @@ private:
     } else if (action == "first-two-thirds") {
       r.x = mon.x;
       r.y = mon.y;
-      r.width = (mon.width / 3) * 2;
+      r.width = mon.width - mon.width / 3;
       r.height = mon.height;
     } else if (action == "last-two-thirds") {
       r.x = mon.x + mon.width / 3;
@@ -775,15 +807,15 @@ private:
       r.width = mon.width - mon.width / 3;
       r.height = mon.height;
     } else if (action == "make-larger") {
-      int addW = static_cast<int>(cur.width * 0.1);
-      int addH = static_cast<int>(cur.height * 0.1);
+      int addW = 100;
+      int addH = 100;
       r.width = (std::min)(mon.width, cur.width + addW);
       r.height = (std::min)(mon.height, cur.height + addH);
       r.x = (std::max)(mon.x, cur.x - addW / 2);
       r.y = (std::max)(mon.y, cur.y - addH / 2);
     } else if (action == "make-smaller") {
-      int subW = static_cast<int>(cur.width * 0.1);
-      int subH = static_cast<int>(cur.height * 0.1);
+      int subW = 100;
+      int subH = 100;
       r.width = (std::max)(300, cur.width - subW);
       r.height = (std::max)(200, cur.height - subH);
       r.x = cur.x + subW / 2;
@@ -791,6 +823,10 @@ private:
     } else {
       r = cur;
     }
+    r.width = (std::min)(r.width, mon.width);
+    r.height = (std::min)(r.height, mon.height);
+    r.x = (std::max)(mon.x, (std::min)(r.x, mon.x + mon.width - r.width));
+    r.y = (std::max)(mon.y, (std::min)(r.y, mon.y + mon.height - r.height));
     return r;
   }
 

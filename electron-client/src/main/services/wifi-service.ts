@@ -8,6 +8,8 @@ import { runCommand as runDecodedCommand } from './host-plugins/shared-utils.js'
 
 export interface SystemWifiProfile {
   ssid: string
+  /** Windows 配置标识用于查询密码；可以与实际无线网络名称不同。 */
+  profileName?: string | undefined
   current?: boolean | undefined
   security?: string | undefined
 }
@@ -129,14 +131,16 @@ export async function readWindowsWifiProfiles(deps: WindowsWifiDeps = windowsDep
   const connected = interfaces.exitCode === 0 ? parseWlanInterfaceSsids(interfaces.stdout) : undefined
   // netsh 按系统代码页输出，代码页外的字符会变成 "?"。有已连接 SSID 与所有配置都对不上时，无法判断它对应哪个配置：
   // 对上的仍标为已连接，其余一律未知（全部对不上即全部未知），不能把真正连着的网络报成“未连接”。
-  const known = new Set(exported.map(profile => profile.ssid ?? profile.name))
+  const known = new Set(exported.map(profile => profile.ssid))
   const unmatched = connected !== undefined && [...connected].some(ssid => !known.has(ssid))
   const result = new Map<string, SystemWifiProfile>()
   for (const profile of exported) {
+    if (!profile.ssid) throw new Error('无线网络配置缺少可识别的 SSID，无法生成正确的网络连接信息')
     const previous = result.get(profile.name), security = windowsWifiSecurity(profile)
-    const matched = connected?.has(profile.ssid ?? profile.name) === true || previous?.current === true
+    const matched = connected?.has(profile.ssid) === true || previous?.current === true
     const current = connected === undefined || (unmatched && !matched) ? previous?.current : matched
-    result.set(profile.name, { ssid: profile.name, ...(current === undefined ? {} : { current }), ...(security ?? previous?.security ? { security: security ?? previous?.security } : {}) })
+    result.set(profile.name, { ssid: profile.ssid, profileName: profile.name,
+      ...(current === undefined ? {} : { current }), ...(security ?? previous?.security ? { security: security ?? previous?.security } : {}) })
   }
   return [...result.values()]
 }

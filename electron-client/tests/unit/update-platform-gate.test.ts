@@ -8,7 +8,7 @@ import { errorCodes, ZToolsError } from '../../src/contracts/errors.js'
 import { runtimePathsForBusinessDataRoot } from '../../src/main/runtime/runtime-paths.js'
 import { UpdateService } from '../../src/main/services/update-service.js'
 
-test('Mac 允许离线检查，非 Windows 仍拒绝自动下载安装且不产生副作用', async () => {
+test('Mac 允许离线检查，未装配 Mac 更新器或不支持的平台拒绝安装且无副作用', async () => {
   for (const platform of ['darwin', 'linux'] as const) {
     const isolatedRoot = path.join(os.tmpdir(), `ztools-update-platform-${randomUUID()}`)
     let fetches = 0

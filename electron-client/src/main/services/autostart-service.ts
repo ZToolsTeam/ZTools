@@ -16,6 +16,11 @@ export async function initializeDefaultAutostart(
     if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
   }
 
+  // Windows 可能把非目录路径报为 ENOENT，开启登录项前先确认配置目录确实可用。
+  if (!(await fs.stat(dataRoot)).isDirectory()) {
+    throw Object.assign(new Error('配置根路径不是目录'), { code: 'ENOTDIR' })
+  }
+
   const previous = loginItem.getEnabled()
   try {
     if (!previous) loginItem.setEnabled(true)

@@ -19,6 +19,8 @@ const userDialogMethods = new Set([
 const infiniteTimeoutMethods = new Set([
   ...userDialogMethods,
   'update_install_start',
+  // 下载服务自行限制包大小和超时，不能被默认的 10 秒 IPC 截断。
+  'update_download_start',
   'process_wait'
 ])
 

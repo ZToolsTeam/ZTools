@@ -1,69 +1,66 @@
 <template>
-  <Transition name="update-slide">
-    <div v-if="visible" class="update-notification">
-      <!-- 顶部：图标 + 标题 + 版本标签 + 关闭 -->
-      <div class="update-header">
-        <div class="update-icon">
-          <CircleArrowUpIcon  />
-        </div>
-        <span class="update-title">发现新版本</span>
-        <RcTag class="update-tag">{{ updateType === 'app' ? '客户端' : '界面' }}</RcTag>
-        <span class="update-ver">v{{ version }}</span>
-        <button
-          v-if="!force"
-          class="update-close"
-          @click="dismiss"
-          aria-label="关闭"
-        >
-          <XIcon  />
-        </button>
-      </div>
+  <RcDialog
+    v-model:open="visible"
+    title="发现新版本"
+    aria-label="发现新版本"
+    :description="`${updateType === 'app' ? '客户端更新' : '界面更新'} · v${version}`"
+    :width="480"
+    :closable="!force && !updating"
+    :keyboard="!force && !updating"
+    :mask-closable="false"
+    destroy-on-close
+    @cancel="dismiss"
+  >
+    <template #icon>
+      <CircleArrowUpIcon class="update-heading-icon" aria-hidden="true" />
+    </template>
 
-      <!-- 更新日志 -->
+    <div class="update-body">
       <div v-if="changelog" class="update-changelog" v-html="formattedChangelog"></div>
-      <div v-else class="update-changelog update-changelog--empty">
-        新版本已就绪，建议立即更新
-      </div>
+      <p v-else class="update-empty">新版本已就绪，建议更新以获得更好的体验。</p>
 
-      <p v-if="manualUpdate" class="update-changelog">
-        下载完成后，退出 ZTools，打开 DMG，将应用拖入“应用程序”替换旧版。
+      <p v-if="!updating && updateType === 'app'" class="update-install-hint">
+        更新完成后将自动重启 ZTools。
       </p>
 
-      <div v-if="updating && !manualUpdate" class="update-progress" aria-live="polite">
+      <div v-if="updating" class="update-progress" aria-live="polite">
         <div class="update-progress-row">
-          <span>正在下载更新</span>
+          <span>{{ progress < 100 ? '正在下载更新' : '正在校验并准备重启' }}</span>
           <strong>{{ progress }}%</strong>
         </div>
-        <div class="update-progress-track">
+        <div class="update-progress-track" role="progressbar" aria-label="更新下载进度" :aria-valuenow="progress" aria-valuemin="0" aria-valuemax="100">
           <div class="update-progress-value" :style="{ width: `${progress}%` }"></div>
         </div>
       </div>
 
-      <div v-if="updateError" class="update-error">{{ updateError }}</div>
+      <p v-if="updateError" class="update-error" role="alert">{{ updateError }}</p>
+    </div>
 
-      <!-- 操作按钮 -->
-      <div v-if="!updating || manualUpdate" class="update-actions">
-        <template v-if="!force && !updating">
-          <button type="button" class="update-skip" @click="skipVersion">此版本不再提醒</button>
-          <RcButton variant="secondary" size="sm" class="update-btn-ghost" @click="remindLater">稍后提醒</RcButton>
-        </template>
-        <RcButton variant="primary" size="sm" class="update-btn-primary" :disabled="updating" @click="doUpdate">
-          {{ manualUpdate ? '下载 macOS 安装包' : '立即更新' }}
-        </RcButton>
+    <template #footer>
+      <div v-if="!updating" class="update-actions">
+        <button v-if="!force && !updating" type="button" class="update-skip" @click="skipVersion">跳过此版本</button>
+        <div class="update-primary-actions">
+          <RcButton v-if="!force && !updating" variant="secondary" size="md" class="update-btn-ghost" @click="remindLater">稍后提醒</RcButton>
+          <RcButton variant="soft" size="md" class="update-btn-primary" :loading="updating" @click="doUpdate">
+            立即更新
+          </RcButton>
+        </div>
       </div>
       <div v-else class="update-actions">
-        <RcButton variant="secondary" size="sm" class="update-btn-ghost" @click="cancelInProgress">取消更新</RcButton>
+        <RcButton v-if="progress < 100" variant="secondary" size="md" class="update-btn-ghost" :disabled="cancelling" @click="cancelInProgress">取消更新</RcButton>
+        <span v-else class="update-install-hint" role="status">安装准备中，请稍候…</span>
       </div>
-    </div>
-  </Transition>
+    </template>
+  </RcDialog>
 </template>
 
 <script setup>
-import { RcButton, RcTag } from '@/components/base'
-import { CircleArrowUpIcon, XIcon } from '@lucide/vue'
+import { RcButton, RcDialog } from '@/components/base'
+import { CircleArrowUpIcon } from '@lucide/vue'
 import { ref, computed, onMounted, onBeforeUnmount } from 'vue'
 import { useUpdateStore } from '@/stores/update'
 import { useAppUpdate } from '@/composables/useAppUpdate'
+import { renderMarkdown } from '@/declarative/markdown'
 
 // 更新偏好存储 key（LevelDB，pluginId = __system__）
 const SKIP_VERSION_KEY = 'update:skipVersion'
@@ -81,25 +78,18 @@ const updating = ref(false)
 const progress = ref(0)
 const updateError = ref('')
 const operationId = ref('')
-const manualUpdate = ref(false)
+const cancelling = ref(false)
 
-/** 将 changelog 中的 \n 转换为 <br> 标签，并转义 HTML 特殊字符 */
-const formattedChangelog = computed(() => {
-  if (!changelog.value) return ''
-  return changelog.value
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/\\n/g, '<br>')
-    .replace(/\n/g, '<br>')
-})
+// 复用宿主的安全 Markdown 渲染器，兼容旧接口使用字面量 \n 的说明。
+const formattedChangelog = computed(() => renderMarkdown(String(changelog.value).replace(/\\n/g, '\n')))
 
 const updateStore = useUpdateStore()
-const { downloadAndInstall, openManualUpdate, silentWebUpdate, cancelUpdate } = useAppUpdate()
+const { downloadAndInstall, silentWebUpdate, cancelUpdate } = useAppUpdate()
 
 let pendingType = null
 let pendingData = null
 let actionRevision = 0
+let cancellationTask = null
 
 /**
  * 从 LevelDB 读取更新偏好，判断是否应该展示通知
@@ -176,11 +166,10 @@ async function show(type, data) {
   const isForce = data.force || false
 
   // 检查是否应该展示
-  if (!(await shouldShowNotification(ver, isForce))) return
+  if (updating.value || !(await shouldShowNotification(ver, isForce)) || updating.value) return
 
   updateType.value = type
   actionRevision += 1
-  manualUpdate.value = type === 'app' && data.manualUpdate === true
   version.value = ver
   changelog.value = data.changelog || ''
   force.value = isForce
@@ -214,13 +203,27 @@ function handleUpdateProgress(envelope) {
 }
 
 function cancelInProgress() {
-  actionRevision += 1
-  cancelUpdate()
-  updating.value = false
-  updateError.value = '更新已取消'
-  visible.value = false
-  pendingType = null
-  pendingData = null
+  if (cancelling.value || progress.value >= 100) return
+  cancelling.value = true
+  cancellationTask = (async () => {
+    try {
+      const result = await cancelUpdate()
+      if (result?.installing) {
+        progress.value = 100
+        return
+      }
+      actionRevision += 1
+      updating.value = false
+      visible.value = false
+      pendingType = null
+      pendingData = null
+    } catch (error) {
+      updateError.value = error.message || '取消更新失败'
+    } finally {
+      cancelling.value = false
+    }
+  })()
+  void cancellationTask.finally(() => { cancellationTask = null })
 }
 
 /**
@@ -248,26 +251,12 @@ async function doUpdate() {
   // 在异步清理偏好前锁定按钮，避免重复打开下载或启动安装器。
   if (type === 'app') updating.value = true
   await clearUpdatePrefs()
+  if (cancellationTask) await cancellationTask
   if (revision !== actionRevision) return
-
-  if (type === 'app' && data.manualUpdate === true) {
-    updating.value = true
-    updateError.value = ''
-    try {
-      await openManualUpdate(data)
-      updating.value = false
-      dismiss()
-      window.__ztoolsToast?.('info', '已打开 macOS 安装包下载，请完成手动替换')
-    } catch (error) {
-      updateError.value = error.message || '无法打开安装包下载'
-    } finally {
-      updating.value = false
-    }
-    return
-  }
 
   if (type === 'app') {
     updating.value = true
+    operationId.value = ''
     progress.value = 0
     updateError.value = ''
     try {
@@ -283,21 +272,25 @@ async function doUpdate() {
         }
       })
       const result = await downloadAndInstall()
+      if (cancellationTask) await cancellationTask
+      if (revision !== actionRevision) return
       if (result?.operationId) operationId.value = result.operationId
       progress.value = 100
       updating.value = false
       visible.value = false
       pendingType = null
       pendingData = null
-      window.__ztoolsToast?.('success', '安装器已启动，应用即将重启')
+      window.__ztoolsToast?.('success', '更新已准备完成，应用即将重启')
     } catch (err) {
+      if (cancellationTask) await cancellationTask
+      if (revision !== actionRevision) return
       updating.value = false
       updateError.value = err.message || '未知错误'
       console.error('App 更新失败:', err)
       const cancelled = err.code === 'CANCELLED'
       window.__ztoolsToast?.(
         cancelled ? 'warning' : 'error',
-        cancelled ? '已取消 UAC 授权，更新未安装' : '更新失败: ' + (err.message || '未知错误')
+        cancelled ? '更新已取消' : '更新失败: ' + (err.message || '未知错误')
       )
     }
   } else {
@@ -328,114 +321,76 @@ defineExpose({ show, dismiss })
 </script>
 
 <style scoped>
-.update-notification {
-  position: fixed;
-  top: 50%;
-  left: 50%;
-  transform: translate(-50%, -50%);
-  z-index: 9999;
-  width: 340px;
-  background: var(--rc-surface);
-  border: 1px solid var(--rc-border);
-  border-radius: var(--radius-xl);
-  box-shadow: var(--shadow-xl);
-  padding: 16px 18px;
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-}
-
-/* 顶部行：图标 标题 标签 版本号 关闭 */
-.update-header {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-
-.update-icon {
-  width: 28px;
-  height: 28px;
-  border-radius: var(--radius-sm);
-  background: var(--rc-accent-subtle);
-  display: flex;
-  align-items: center;
-  justify-content: center;
+.update-heading-icon {
   color: var(--rc-accent);
-  font-size: 14px;
-  flex-shrink: 0;
 }
 
-.update-title {
-  font-size: var(--font-size-body-m);
-  font-weight: var(--font-weight-semibold);
-  color: var(--rc-text-primary);
-  white-space: nowrap;
-}
-
-
-.update-ver {
-  font-size: var(--font-size-body-s);
-  color: var(--rc-text-secondary);
-  white-space: nowrap;
-}
-
-.update-close {
-  margin-left: auto;
-  width: 22px;
-  height: 22px;
-  border: none;
-  background: transparent;
-  color: var(--rc-text-muted);
-  cursor: pointer;
-  border-radius: var(--radius-sm);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  transition: all var(--duration-fast) var(--easing-smooth);
-  font-size: 11px;
-  flex-shrink: 0;
-}
-
-.update-close:hover {
-  background: var(--rc-surface-hover);
-  color: var(--rc-text-primary);
-}
-
-/* 更新日志 */
-.update-changelog {
-  font-size: var(--font-size-body-s);
-  color: var(--rc-text-secondary);
-  line-height: 1.6;
-  max-height: 200px;
+/* 正文独立滚动，标题与操作栏始终可见。 */
+.update-body {
+  max-height: min(360px, calc(100dvh - 220px));
   overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
+  padding-right: 4px;
+  font-size: var(--font-size-body-m);
+  line-height: 1.7;
+  color: var(--rc-text-secondary);
+  overflow-wrap: anywhere;
 }
 
-.update-changelog--empty {
+.update-changelog :deep(> * + *) {
+  margin-top: 14px;
+}
+
+.update-changelog :deep(h1),
+.update-changelog :deep(h2),
+.update-changelog :deep(h3) {
+  margin-bottom: 10px;
+  padding: 0;
+  border: 0;
+  font-size: var(--font-size-body-m);
+  line-height: 1.5;
+  font-weight: var(--font-weight-semibold);
+}
+
+.update-changelog :deep(.space-y-1 > * + *) {
+  margin-top: 8px;
+}
+
+.update-empty {
+  margin: 0;
+}
+
+.update-install-hint {
+  margin: 20px 0 0;
+  padding-top: 14px;
+  border-top: 1px solid var(--rc-border-subtle);
   color: var(--rc-text-muted);
-  font-style: italic;
+  font-size: var(--font-size-body-m);
+  line-height: 1.7;
 }
 
 .update-progress {
   display: flex;
   flex-direction: column;
   gap: 8px;
+  margin-top: 20px;
 }
 
 .update-progress-row {
   display: flex;
   justify-content: space-between;
-  color: var(--rc-text-secondary);
-  font-size: var(--font-size-body-s);
 }
 
 .update-progress-row strong {
-  color: var(--rc-accent);
+  color: var(--rc-text-primary);
+  font-variant-numeric: tabular-nums;
 }
 
 .update-progress-track {
-  height: 6px;
+  height: 4px;
   overflow: hidden;
-  border-radius: 3px;
+  border-radius: var(--radius-sm);
   background: var(--rc-border);
 }
 
@@ -443,29 +398,41 @@ defineExpose({ show, dismiss })
   height: 100%;
   border-radius: inherit;
   background: var(--rc-accent);
-  transition: width 120ms ease-out;
+  transition: width var(--duration-fast) ease-out;
 }
 
 .update-error {
+  margin: 14px 0 0;
   color: var(--rc-error);
-  font-size: var(--font-size-body-s);
-  line-height: 1.4;
 }
 
-/* 按钮行 */
 .update-actions {
+  width: 100%;
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   justify-content: flex-end;
-  gap: 8px;
+  gap: 12px;
 }
 
-/* 「此版本不再提醒」：弱化的文字按钮，主次按钮用 RcButton */
+.update-primary-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-left: auto;
+}
+
+.update-btn-primary,
+.update-btn-ghost {
+  flex-shrink: 0;
+  white-space: nowrap;
+}
+
 .update-skip {
-  height: 28px;
-  margin-right: auto;
-  padding: 0 4px;
+  min-height: 36px;
+  padding: 0;
   border: none;
+  border-radius: var(--radius-sm);
   background: transparent;
   color: var(--rc-text-muted);
   font-size: 12px;
@@ -474,37 +441,11 @@ defineExpose({ show, dismiss })
 }
 
 .update-skip:hover {
-  color: var(--rc-text-secondary);
+  color: var(--rc-text-primary);
 }
 
-/* 动画 */
-.update-slide-enter-active {
-  animation: slideUp 0.35s var(--easing-ease-out);
-}
-
-.update-slide-leave-active {
-  animation: slideDown 0.25s var(--easing-smooth);
-}
-
-@keyframes slideUp {
-  from {
-    opacity: 0;
-    transform: translate(-50%, -50%) scale(0.9);
-  }
-  to {
-    opacity: 1;
-    transform: translate(-50%, -50%) scale(1);
-  }
-}
-
-@keyframes slideDown {
-  from {
-    opacity: 1;
-    transform: translate(-50%, -50%) scale(1);
-  }
-  to {
-    opacity: 0;
-    transform: translate(-50%, -50%) scale(0.9);
-  }
+.update-skip:focus-visible {
+  outline: none;
+  box-shadow: var(--rc-focus-ring);
 }
 </style>

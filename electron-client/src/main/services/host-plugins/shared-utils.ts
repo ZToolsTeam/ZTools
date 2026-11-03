@@ -399,13 +399,25 @@ function collectProcessOutput(command: string, args: string[], timeoutMs: number
     const stdout: Buffer[] = []
     const stderr: Buffer[] = []
     let settled = false
+    let timer: ReturnType<typeof setTimeout> | undefined
+    let child: ReturnType<typeof spawn> | undefined
     const finish = (exitCode: number, extraError = '') => {
       if (settled) return
       settled = true
+      clearTimeout(timer)
+      signal?.removeEventListener('abort', onAbort)
       resolve({ stdout: Buffer.concat(stdout), stderr: Buffer.concat(stderr), exitCode, extraError })
     }
+    const onAbort = () => {
+      if (settled) return
+      finish(130, '命令已取消')
+      try { child?.kill() } catch { /* 进程可能已退出；仍按取消报告。 */ }
+    }
 
-    let child: ReturnType<typeof spawn>
+    if (signal?.aborted) {
+      onAbort()
+      return
+    }
     try {
       child = spawn(command, args, { windowsHide: true })
     } catch (err) {
@@ -413,41 +425,26 @@ function collectProcessOutput(command: string, args: string[], timeoutMs: number
       return
     }
 
-    const timer = setTimeout(() => {
+    timer = setTimeout(() => {
+      finish(124, `命令执行超时（${timeoutMs} ms）`)
       try {
-        child.kill()
+        child?.kill()
       } catch {
         // 进程可能已退出；结果仍按超时（124）报告
       }
-      finish(124, `命令执行超时（${timeoutMs} ms）`)
     }, timeoutMs)
-
-    if (signal) {
-      signal.addEventListener(
-        'abort',
-        () => {
-          clearTimeout(timer)
-          try {
-            child.kill()
-          } catch {
-            // 进程可能已退出；结果仍按取消（130）报告
-          }
-          finish(130, '命令已取消')
-        },
-        { once: true }
-      )
-    }
 
     child.stdout?.on('data', (chunk: Buffer) => { stdout.push(Buffer.from(chunk)) })
     child.stderr?.on('data', (chunk: Buffer) => { stderr.push(Buffer.from(chunk)) })
     child.on('error', (err) => {
-      clearTimeout(timer)
       finish(1, err.message)
     })
     child.on('close', (code) => {
-      clearTimeout(timer)
       finish(code ?? 0)
     })
+    signal?.addEventListener('abort', onAbort, { once: true })
+    // spawn 与监听注册之间的取消不能丢失；监听先注册，再复查状态。
+    if (signal?.aborted) onAbort()
   })
 }
 
@@ -464,6 +461,7 @@ export async function runCommand(
   timeoutMs = 15_000,
   signal?: AbortSignal
 ): Promise<{ stdout: string; stderr: string; exitCode: number }> {
+  if (signal?.aborted) return { stdout: '', stderr: '命令已取消', exitCode: 130 }
   // 与命令并行探测，只在第一次执行时可能多等 reg 的几十毫秒；探测失败退回按界面语言解码
   const codePagePromise = process.platform === 'win32' ? probeSystemOemCodePage() : Promise.resolve(undefined)
   const raw = await collectProcessOutput(command, args, timeoutMs, signal)
@@ -515,6 +513,7 @@ export function buildPowerShellArgs(script: string): string[] {
  * 确认这类错误可以忽略的脚本要在末尾显式 exit 0，不能让可忽略的错误变成整体失败。
  */
 export async function runPowerShell(script: string, timeoutMs = 15_000, signal?: AbortSignal): Promise<string> {
+  if (signal?.aborted) throw new PowerShellError(130, '命令已取消')
   if (process.platform !== 'win32') {
     return ''
   }

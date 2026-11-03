@@ -380,7 +380,7 @@ test('WindowManagementService: 15+ Win32 Snapping Actions & HUD Notification Loo
   assert.equal(service.normalizeActionName('invalid-action-xyz'), null)
 
   // 3. 执行分屏吸附与 HUD 联动链路
-  const execLeft = await service.applyAction('left-half')
+  const execLeft = await service.applyAction('left-half', { windowId: '98765', targetProcessId: process.pid + 1 })
   assert.equal(execLeft.success, true)
   assert.equal(calledSidecarAction, 'left-half')
   assert.match(hudMessage, /左半屏/)

@@ -5,6 +5,7 @@
 #include <cstdio>
 #include <cstring>
 #include <cmath>
+#include <algorithm>
 NSDictionary *DispatchFonts(NSDictionary *value);
 
 static const NSUInteger MaxBytes = 16 * 1024 * 1024;
@@ -13,6 +14,12 @@ static bool ExactKeys(NSDictionary *value, NSArray *keys) {
   for (id key in value) if (![keys containsObject:key]) return false;
   return true;
 }
+static NSArray<NSString *> *RecognizableTypes(void) {
+  return @[@"public.png", @"public.jpeg", @"public.heic", @"public.tiff", @"com.microsoft.bmp", @"com.compuserve.gif", @"org.webmproject.webp"];
+}
+// Vision 在约 8Mi 像素内识别稳定；Retina 整屏截图常超出，先按比例缩小，返回的尺寸与归一化框仍对应原图。
+static const double MaxRecognizePixels = 8 * 1024 * 1024, MaxRecognizeEdge = 8192;
+static const double MaxSourcePixels = 128 * 1024 * 1024, MaxSourceEdge = 32768;
 static NSDictionary *Recognize(NSData *data, NSArray<NSString *> *languages) API_AVAILABLE(macos(10.15)) {
   if (!data.length || data.length > MaxBytes) return Failure(@"INVALID_IMAGE");
   CGImageSourceRef source = CGImageSourceCreateWithData((__bridge CFDataRef)data, nullptr);
@@ -20,24 +27,32 @@ static NSDictionary *Recognize(NSData *data, NSArray<NSString *> *languages) API
   NSString *type = (__bridge NSString *)CGImageSourceGetType(source);
   NSDictionary *properties = CFBridgingRelease(CGImageSourceCopyPropertiesAtIndex(source, 0, nullptr));
   const size_t count = CGImageSourceGetCount(source);
-  CFRelease(source);
-  if (count != 1 || ![@[@"public.png", @"public.jpeg"] containsObject:type]) return Failure(@"INVALID_IMAGE");
+  if (count < 1 || ![RecognizableTypes() containsObject:type]) { CFRelease(source); return Failure(@"INVALID_IMAGE"); }
   double w = [properties[(__bridge NSString *)kCGImagePropertyPixelWidth] doubleValue];
   double h = [properties[(__bridge NSString *)kCGImagePropertyPixelHeight] doubleValue];
-  if (!std::isfinite(w) || !std::isfinite(h) || std::floor(w) != w || std::floor(h) != h || w < 1 || h < 1 || w > 8192 || h > 8192 || w * h > 8 * 1024 * 1024) return Failure(@"IMAGE_TOO_LARGE");
+  if (!std::isfinite(w) || !std::isfinite(h) || std::floor(w) != w || std::floor(h) != h || w < 1 || h < 1 || w > MaxSourceEdge || h > MaxSourceEdge || w * h > MaxSourcePixels) { CFRelease(source); return Failure(@"IMAGE_TOO_LARGE"); }
   NSUInteger orientation = [properties[(__bridge NSString *)kCGImagePropertyOrientation] unsignedIntegerValue];
   if (orientation == 0) orientation = 1;
-  if (orientation > 8) return Failure(@"INVALID_IMAGE");
+  if (orientation > 8) { CFRelease(source); return Failure(@"INVALID_IMAGE"); }
+  const double scale = std::min(1.0, std::min(std::sqrt(MaxRecognizePixels / (w * h)), MaxRecognizeEdge / std::max(w, h)));
+  NSDictionary *thumbnailOptions = @{ (__bridge NSString *)kCGImageSourceCreateThumbnailFromImageAlways: @YES,
+    (__bridge NSString *)kCGImageSourceCreateThumbnailWithTransform: @NO, (__bridge NSString *)kCGImageSourceShouldCacheImmediately: @YES,
+    (__bridge NSString *)kCGImageSourceThumbnailMaxPixelSize: @(std::max(1.0, std::floor(std::max(w, h) * scale))) };
+  CGImageRef image = scale < 1 ? CGImageSourceCreateThumbnailAtIndex(source, 0, (__bridge CFDictionaryRef)thumbnailOptions) : CGImageSourceCreateImageAtIndex(source, 0, nullptr);
+  CFRelease(source);
+  if (!image) return Failure(@"INVALID_IMAGE");
   VNRecognizeTextRequest *request = [[VNRecognizeTextRequest alloc] init];
   request.recognitionLevel = VNRequestTextRecognitionLevelAccurate;
   request.usesLanguageCorrection = YES;
   NSError *error = nil;
   NSArray *supported = [VNRecognizeTextRequest supportedRecognitionLanguagesForTextRecognitionLevel:request.recognitionLevel revision:request.revision error:&error];
-  if (error || !supported.count) return Failure(@"LANGUAGES_UNAVAILABLE");
-  for (NSString *language in languages) if (![supported containsObject:language]) return Failure(@"LANGUAGE_UNSUPPORTED");
+  if (error || !supported.count) { CGImageRelease(image); return Failure(@"LANGUAGES_UNAVAILABLE"); }
+  for (NSString *language in languages) if (![supported containsObject:language]) { CGImageRelease(image); return Failure(@"LANGUAGE_UNSUPPORTED"); }
   if (languages.count) request.recognitionLanguages = languages;
-  VNImageRequestHandler *handler = [[VNImageRequestHandler alloc] initWithData:data orientation:(CGImagePropertyOrientation)orientation options:@{}];
-  if (![handler performRequests:@[request] error:&error] || error) return Failure(@"RECOGNITION_FAILED");
+  VNImageRequestHandler *handler = [[VNImageRequestHandler alloc] initWithCGImage:image orientation:(CGImagePropertyOrientation)orientation options:@{}];
+  const bool performed = [handler performRequests:@[request] error:&error] && !error;
+  CGImageRelease(image);
+  if (!performed) return Failure(@"RECOGNITION_FAILED");
   NSMutableArray *lines = [NSMutableArray array];
   NSMutableArray *texts = [NSMutableArray array];
   NSUInteger total = 0;
@@ -83,14 +98,14 @@ static NSDictionary *Dispatch(id input) API_AVAILABLE(macos(10.15)) {
   if (!data || ![[data base64EncodedStringWithOptions:0] isEqual:base64]) return Failure(@"INVALID_IMAGE");
   return Recognize(data, languages);
 }
-static NSData *Fixture(bool text) {
+static NSData *Fixture(bool text, size_t width = 1000, size_t height = 200, CGFloat fontSize = 64) {
   CGColorSpaceRef space = CGColorSpaceCreateDeviceRGB();
-  CGContextRef context = CGBitmapContextCreate(nullptr, 1000, 200, 8, 4000, space, kCGImageAlphaPremultipliedLast);
+  CGContextRef context = CGBitmapContextCreate(nullptr, width, height, 8, width * 4, space, kCGImageAlphaPremultipliedLast);
   CGColorSpaceRelease(space);
   if (!context) return nil;
-  CGContextSetRGBFillColor(context, 1, 1, 1, 1); CGContextFillRect(context, CGRectMake(0, 0, 1000, 200));
+  CGContextSetRGBFillColor(context, 1, 1, 1, 1); CGContextFillRect(context, CGRectMake(0, 0, width, height));
   if (text) {
-    CTFontRef font = CTFontCreateWithName(CFSTR("Helvetica"), 64, nullptr);
+    CTFontRef font = CTFontCreateWithName(CFSTR("Helvetica"), fontSize, nullptr);
     CGColorRef black = CGColorCreateGenericRGB(0, 0, 0, 1);
     NSDictionary *attributes = @{ (__bridge NSString *)kCTFontAttributeName: (__bridge id)font, (__bridge NSString *)kCTForegroundColorAttributeName: (__bridge id)black };
     NSAttributedString *string = [[NSAttributedString alloc] initWithString:@"ZTools OCR 123" attributes:attributes];
@@ -141,6 +156,9 @@ static NSDictionary *SelfTest(void) API_AVAILABLE(macos(10.15)) {
   ok = ok && [jpeg[@"success"] boolValue] && [jpeg[@"text"] containsString:@"OCR 123"];
   NSDictionary *oriented = Recognize(JpegFixture(Fixture(false), 5), @[@"en-US"]);
   ok = ok && [oriented[@"success"] boolValue] && [oriented[@"width"] isEqual:@200] && [oriented[@"height"] isEqual:@1000];
+  // 超过 8Mi 像素的大图缩小后识别，仍报告原图尺寸。
+  NSDictionary *large = Recognize(Fixture(true, 4200, 2400, 160), @[@"en-US"]);
+  ok = ok && [large[@"success"] boolValue] && [large[@"text"] containsString:@"OCR 123"] && [large[@"width"] isEqual:@4200] && [large[@"height"] isEqual:@2400];
   ok = ok && ![Dispatch(@{@"version": @YES, @"operation": @"languages"})[@"success"] boolValue];
   ok = ok && ![Dispatch(@{@"version": @1, @"operation": @"unknown"})[@"success"] boolValue];
 #if defined(__arm64__)
@@ -148,7 +166,7 @@ static NSDictionary *SelfTest(void) API_AVAILABLE(macos(10.15)) {
 #else
   NSString *architecture = @"x64";
 #endif
-  return @{ @"version": @1, @"success": @(ok), @"architecture": architecture, @"scope": @"vision-local-native", @"cases": @9 };
+  return @{ @"version": @1, @"success": @(ok), @"architecture": architecture, @"scope": @"vision-local-native", @"cases": @10 };
 }
 int main(int argc, char **argv) {
   @autoreleasepool {

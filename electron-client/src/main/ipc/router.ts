@@ -24,6 +24,11 @@ import { DnsBenchmarkService } from '../services/dns-benchmark-service.js'
 import { DnsBackupStore } from '../services/dns-backup-store.js'
 import { MacDnsNetworkProvider, macDnsHelperPath } from '../services/dns-network-provider.js'
 import { SystemFontProvider, macFontHelperPath } from '../services/font-provider.js'
+import { createMacOcrPorts } from '../platform/macos/mac-ocr.js'
+import { captureRegionPng, createRegionSelector } from '../platform/region-capture.js'
+import type { ScreenRectangle } from '../services/screen-service.js'
+import { MacRegionSelection } from '../platform/macos/region-selection.js'
+import { MacVisionRunner } from '../platform/macos/vision-runner.js'
 import { MediaMetadataService } from '../services/media-metadata-service.js'
 import { OfficeDocumentService } from '../services/office-document-service.js'
 import { MarkdownDocumentService } from '../services/markdown-document-service.js'
@@ -38,12 +43,14 @@ import {
   app,
   BrowserWindow,
   clipboard as electronClipboard,
+  desktopCapturer,
   dialog,
   globalShortcut,
   ipcMain,
   nativeTheme,
   nativeImage,
   powerSaveBlocker,
+  screen as electronScreen,
   shell as electronShell,
   systemPreferences,
   type IpcMainEvent,
@@ -51,6 +58,7 @@ import {
 } from 'electron'
 import { FILE_DROP_CHANNEL, FileDropService } from '../services/file-drop-service.js'
 import os from 'node:os'
+import { writeFile } from 'node:fs/promises'
 import path from 'node:path'
 import {
   canCall,
@@ -62,6 +70,7 @@ import {
   type CallerIdentity
 } from '../../contracts/capabilities.js'
 import { errorCodes, toPublicError, ZToolsError } from '../../contracts/errors.js'
+import type { ImageOcrRequest } from '../../contracts/image-ocr.js'
 import {
   RUNTIME_CAPABILITY_CONTRACT_VERSION,
   SDK_HOST_MAXIMUM_CONTRACT_VERSION
@@ -423,7 +432,7 @@ const credentialV1Methods = new Set([
 
 /** Only DLL-call failures log request-derived identifiers; credential payloads are never inspected. */
 /**
- * 平台能力边界：处理函数以 NOT_SUPPORTED 明确声明当前平台不提供该能力（例如 macOS 尚未开放更新安装链）。
+ * 平台能力边界：处理函数以 NOT_SUPPORTED 明确声明当前平台不提供该能力（例如开发环境不允许替换应用）。
  * 这类失败是可预期的，路由层只记 info，不打印堆栈；其余失败（包括普通 Error）照常按故障记录。
  */
 export function isIpcCapabilityBoundary(error: unknown): boolean {
@@ -901,6 +910,53 @@ export class IpcRouter {
       new BuiltinPluginHostService({
         processService: processes,
         shellService: shell,
+        mediaOcr: {
+          readClipboardImage: () => {
+            const image = electronClipboard.readImage()
+            return image.isEmpty() ? undefined : image.toPNG()
+          },
+          ...(process.platform === 'darwin' || process.platform === 'win32'
+            ? {
+                regionSelector: createRegionSelector({
+                  regionSelection: new MacRegionSelection(path.resolve(__dirname, '../../preload/main.js')),
+                  getDisplayBounds: () => electronScreen.getAllDisplays().map(display => ({ ...display.bounds }))
+                }),
+                // 框选前收起发起框选的 ZTools 窗口，免得挡住要识别的内容
+                hideCallerWindow: (caller: CallerIdentity | undefined) => {
+                  const contents = caller ? registry.getWebContents(caller.webContentsId) : undefined
+                  const window = contents ? BrowserWindow.fromWebContents(contents as Electron.WebContents) : null
+                  if (!window || window.isDestroyed() || !window.isVisible()) return undefined
+                  // 悬浮条失焦时由自己的控制器收起（含帧同步状态），框选遮罩获得焦点后会自动收起，这里不重复处理
+                  if (/[?&]mode=launcher(?:&|#|$)/.test(window.webContents.getURL())) return undefined
+                  window.hide()
+                  return () => {
+                    if (window.isDestroyed()) return
+                    window.show()
+                    window.focus()
+                  }
+                }
+              }
+            : {}),
+          ...(process.platform === 'darwin'
+            ? {
+                macOcr: createMacOcrPorts({ vision: new MacVisionRunner(macFontHelperPath(mainApp.isPackaged, process.resourcesPath)) }),
+                screenCapturePermission: () => systemPreferences.getMediaAccessStatus('screen')
+              }
+            : {}),
+          // Windows 按显示器物理像素截取所选区域（macOS 用系统 screencapture）
+          ...(process.platform === 'win32'
+            ? {
+                captureScreenRegionToPng: async (rect: ScreenRectangle, outputPath: string) => {
+                  const png = await captureRegionPng({
+                    getAllDisplays: () => electronScreen.getAllDisplays(),
+                    getSources: thumbnailSize => desktopCapturer.getSources({ types: ['screen'], thumbnailSize })
+                  }, rect)
+                  await writeFile(outputPath, png)
+                  return true
+                }
+              }
+            : {})
+        },
         clipboard: {
           getText: async () => electronClipboard.readText(),
           setText: async (text: string) => {
@@ -1476,8 +1532,8 @@ export class IpcRouter {
           webVersion: services.webResources?.version ?? services.webVersion
         }
       },
-      async update_download_start(params) {
-        return services.update.download(params as UpdatePackageParams)
+      async update_download_start(params, _caller, signal) {
+        return services.update.download(params as UpdatePackageParams, signal)
       },
       async update_install_start(params, _caller, signal) {
         const input = params as UpdatePackageParams
@@ -2367,8 +2423,14 @@ export class IpcRouter {
       async filesearch_quick_look(params, caller) {
         return services.fileSearch.quickLookSelection(await resolveFileSearchTarget(files, params, caller))
       },
-      async window_manage_action(params) {
+      async window_manage_action(params, caller, signal) {
         const input = params as { action: string }
+        if (nativePlatform === 'win32') {
+          const contents = registry.getWebContents(caller.webContentsId)
+          const window = contents ? BrowserWindow.fromWebContents(contents) : null
+          if (!window || window.isDestroyed()) throw new ZToolsError(errorCodes.callerDestroyed, '调用窗口已销毁')
+          return services.windowManagement.applyToExternalWindow(input?.action, window, signal)
+        }
         return services.windowManagement.applyAction(input?.action)
       },
       async window_manage_list_actions() {
@@ -2843,6 +2905,22 @@ export class IpcRouter {
           input.action === 'discover' ? 'discoverSources' : 'validateCustomDir',
           input.action === 'discover' ? { customDirs: input.customDirs } : { dirPath: input.dirPath }, signal, caller)
       },
+      async image_ocr(params, caller, signal) {
+        const input = params as ImageOcrRequest
+        const lang = input.lang ?? 'zh-Hans-CN'
+        if (input.action === 'captureRegion') {
+          await requirePluginPermission(caller, 'screen', plugins)
+          return builtinPluginHost.handlePluginCall('OcrPlugin', 'captureRegionAndRecognize',
+            { lang, restoreWindow: input.restoreWindow !== false }, signal, caller)
+        }
+        if (input.action === 'recognizeClipboard') {
+          await requirePluginPermission(caller, 'clipboard', plugins)
+          return builtinPluginHost.handlePluginCall('OcrPlugin', 'recognizeClipboard', { lang }, signal, caller)
+        }
+        // 只识别用户经文件对话框等方式授权过的图片
+        const file = await files.resolveAuthorizedPath(input.path, caller, 'read', false)
+        return builtinPluginHost.handlePluginCall('OcrPlugin', 'recognizeImage', { path: file, lang }, signal, caller)
+      },
       async keyboard_lock(params, caller, signal) {
         await requirePluginPermission(caller, 'system', plugins)
         return keyboardLock.handle(params, caller, signal)
@@ -3247,7 +3325,7 @@ export class IpcRouter {
       )
       return { messageId: request.messageId, success: true, data }
     } catch (error) {
-      // 平台能力边界（如 macOS 尚未开放的更新安装链）是明确声明的 NOT_SUPPORTED，不是宿主故障：
+      // 平台能力边界（如开发环境不允许替换应用）是明确声明的 NOT_SUPPORTED，不是宿主故障：
       // 不打印堆栈与 warn，只记一条 info；返回给调用方的错误与诊断记录保持不变
       const capabilityBoundary = isIpcCapabilityBoundary(error)
       if (!capabilityBoundary) {

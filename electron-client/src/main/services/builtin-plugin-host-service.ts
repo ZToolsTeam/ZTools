@@ -2,7 +2,7 @@ import path from 'node:path'
 import type { CallerIdentity } from '../../contracts/capabilities.js'
 import type { ProcessService } from './process-service.js'
 import type { ShellService } from './shell-service.js'
-import { MediaOcrHostPluginHandler } from './host-plugins/media-ocr-host.js'
+import { MediaOcrHostPluginHandler, type MediaOcrHostDeps } from './host-plugins/media-ocr-host.js'
 import { NetworkHostPluginHandler } from './host-plugins/network-host.js'
 import {
   isFullyQualifiedPath,
@@ -22,6 +22,8 @@ export interface BuiltinPluginHostServiceOptions {
   windowControl?: HostWindowControlPort | null | undefined
   pathAuthority?: HostPathAuthorityPort | null | undefined
   platform?: NodeJS.Platform | undefined
+  /** 文字识别插件用到的系统能力（macOS 本地识别、框选屏幕、读剪贴板图片） */
+  mediaOcr?: Partial<MediaOcrHostDeps> | undefined
 }
 
 export const SUPPORTED_PLUGIN_ALIASES: Record<string, string> = {
@@ -191,7 +193,7 @@ export class BuiltinPluginHostService {
     }
     this.#network = new NetworkHostPluginHandler(ctx)
     this.#storage = new StorageHostPluginHandler(ctx)
-    this.#mediaOcr = new MediaOcrHostPluginHandler(ctx)
+    this.#mediaOcr = new MediaOcrHostPluginHandler(ctx, options.mediaOcr)
     this.#systemRegistry = new SystemRegistryHostPluginHandler(ctx)
   }
 

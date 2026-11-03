@@ -26,7 +26,8 @@ describe('useAppUpdate', () => {
     window.ztools = {
       update: {
         check: vi.fn().mockResolvedValue({ hasUpdate: true }),
-        downloadAndInstall: vi.fn().mockResolvedValue({ success: true })
+        downloadAndInstall: vi.fn().mockResolvedValue({ success: true }),
+        cancel: vi.fn().mockResolvedValue({ success: true, installing: false })
       },
       sys: {
         getAppVersion: vi.fn().mockResolvedValue('2.0.0'),
@@ -238,9 +239,19 @@ describe('useAppUpdate', () => {
   })
 
   describe('cancelUpdate', () => {
-    it('调用 store.reset', () => {
+    it('未确认取消时保留更新状态并返回错误', async () => {
+      window.ztools.update.cancel.mockResolvedValue({ success: false })
+      await expect(useAppUpdate().cancelUpdate()).rejects.toThrow('取消更新失败')
+      expect(storeMock.reset).not.toHaveBeenCalled()
+    })
+    it('安装已接管时不重置状态', async () => {
+      window.ztools.update.cancel.mockResolvedValue({ success: true, installing: true })
+      await expect(useAppUpdate().cancelUpdate()).resolves.toMatchObject({ installing: true })
+      expect(storeMock.reset).not.toHaveBeenCalled()
+    })
+    it('调用 store.reset', async () => {
       const { cancelUpdate } = useAppUpdate()
-      cancelUpdate()
+      await cancelUpdate()
       expect(storeMock.reset).toHaveBeenCalled()
     })
   })

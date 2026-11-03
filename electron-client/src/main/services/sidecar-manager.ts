@@ -133,6 +133,8 @@ export interface SearchFilesResult {
   truncated?: boolean | undefined
   /** dir: 扫描体积是近似值（截断后部分子目录体积未能完整统计） */
   approximate?: boolean | undefined
+  /** dir: 部分路径读取失败时保留原因，仍返回已读到的结果 */
+  scan_error?: string | undefined
   /** 按范围检索时回显实际使用的范围；旧版主进程不返回，界面据此判断能否在本地匹配程序 */
   scope?: SystemSearchFilesScope | undefined
   visited_entries?: number | undefined
@@ -658,12 +660,15 @@ export class SidecarManager {
 
   public async manageWindow(
     action: string,
-    bounds?: MacosWindowBounds
+    bounds?: MacosWindowBounds,
+    target?: { hwnd: number; pid: number }
   ): Promise<{ success: boolean; action: string; rect?: MacosWindowBounds; error?: string; errorCode?: string }> {
     if (this.uiaccessProcess.state === 'running') {
       try {
         return await this.uiaccessProcess.sendRequest('manage_window', {
           action,
+          host_pid: process.pid,
+          ...(target ? { target_hwnd: target.hwnd, target_pid: target.pid } : {}),
           ...(bounds ? { bounds } : {})
         })
       } catch (err: unknown) {

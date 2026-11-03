@@ -456,11 +456,10 @@ export default {
     },
     {
       "id": "ocr",
-      "name": "图片识字",
-      "description": "用 Windows 系统文字识别在本机识别图片和屏幕截图中的简体中文、英文、日文、韩文文字，结果可复制到剪贴板或导出为文本文件",
+      "name": "文字识别",
+      "description": "框选屏幕、剪贴板或图片里的文字，用系统自带的文字识别（OCR）在本机识别简体中文、英文、日文、韩文，结果直接复制",
       "category": [
-        "办公效率",
-        "AI工具"
+        "办公效率"
       ]
     },
     {
@@ -642,7 +641,7 @@ export default {
     {
       "id": "system-backup",
       "name": "系统备份",
-      "description": "一键打包备份 Hosts、环境变量、SSH 密钥、终端与开发配置，换机或重装系统后秒级还原",
+      "description": "将 Hosts、SSH、Git、终端与编辑器配置打包为本地快照，并解压到新目录取回文件",
       "category": [
         "系统工具"
       ]
@@ -702,7 +701,7 @@ export default {
     {
       "id": "window-manager",
       "name": "窗口管理",
-      "description": "快速管理桌面活动窗口，支持左右分屏贴靠、一键窗口置顶、透明度调节与尺寸居中",
+      "description": "管理活动窗口的半屏、四角、三分屏、居中与跨显示器移动",
       "category": [
         "系统工具",
         "办公效率"
@@ -963,7 +962,7 @@ export default {
       "id": "file-compare",
       "name": "文本对比",
       "description": "逐行对比两段文本、代码或配置文件，逐处列出增删的行，支持忽略空白与复制 unified diff 差异报告",
-      "version": "2.0.8",
+      "version": "2.0.10",
       "author": "ZTools Team",
       "icon": "icon.svg",
       "category": [
@@ -992,7 +991,7 @@ export default {
           "arch": "any"
         }
       ],
-      "size": 31595
+      "size": 32424
     },
     {
       "id": "crypto-tool",

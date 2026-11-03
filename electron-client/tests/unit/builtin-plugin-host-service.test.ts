@@ -261,7 +261,7 @@ test('SqlitePlugin creates, queries, and persists real SQLite tables via sql.js'
   }
 })
 
-test('SystemBackupPlugin creates real ZIP archive and restores files accurately', async () => {
+test('SystemBackupPlugin creates a real snapshot and extracts it into a new directory', async () => {
   const host = new BuiltinPluginHostService()
   const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'ztools-backup-test-'))
   const sourceDir = path.join(tempDir, 'src')
@@ -290,11 +290,17 @@ test('SystemBackupPlugin creates real ZIP archive and restores files accurately'
     })) as {
       ok: boolean
       extractedCount: number
+      targetDir: string
     }
     assert.equal(restoreRes.ok, true)
-    assert.equal(restoreRes.extractedCount, 1)
+    assert.equal(restoreRes.extractedCount, 2)
+    assert.ok(restoreRes.targetDir.startsWith(restoreDir + path.sep))
 
-    const restoredContent = await fs.readFile(path.join(restoreDir, 'settings.json'), 'utf8')
+    const manifest = JSON.parse(await fs.readFile(path.join(restoreRes.targetDir, 'ztools-snapshot-manifest.json'), 'utf8')) as {
+      sources: Array<{ sourcePath: string; archivePath: string }>
+    }
+    assert.equal(manifest.sources[0]?.sourcePath, configFile)
+    const restoredContent = await fs.readFile(path.join(restoreRes.targetDir, manifest.sources[0]!.archivePath), 'utf8')
     assert.deepEqual(JSON.parse(restoredContent), { theme: 'dark', version: 2 })
   } finally {
     await fs.rm(tempDir, { recursive: true, force: true })
@@ -936,7 +942,7 @@ test('StorageHost plugins support DataRecovery, SystemBackup no-empty-ZIP guard,
       error?: string
     }
     assert.equal(emptyBackup.ok, false)
-    assert.match(String(emptyBackup.error), /未找到任何有效的待备份源文件/)
+    assert.match(String(emptyBackup.error), /ENOENT|不存在|未找到/)
 
     // Valid snapshot create + default targetDir restore
     const validSnap = (await host.handlePluginCall('SystemBackupPlugin', 'createSnapshotArchive', {
@@ -961,8 +967,16 @@ test('StorageHost plugins support DataRecovery, SystemBackup no-empty-ZIP guard,
       extractedCount: number
     }
     assert.equal(restoreSnap.ok, true)
-    assert.equal(restoreSnap.extractedCount, 1)
-    assert.ok(restoreSnap.targetDir.endsWith('snap-test_restored'))
+    assert.equal(restoreSnap.extractedCount, 2)
+    assert.ok(path.basename(restoreSnap.targetDir).startsWith('snap-test_extracted-'))
+    const extractedManifest = JSON.parse(await fs.readFile(path.join(restoreSnap.targetDir, 'ztools-snapshot-manifest.json'), 'utf8')) as {
+      sources: Array<{ sourcePath: string; archivePath: string }>
+    }
+    assert.equal(extractedManifest.sources[0]?.sourcePath, cachedFile)
+    assert.deepEqual(
+      await fs.readFile(path.join(restoreSnap.targetDir, extractedManifest.sources[0]!.archivePath)),
+      await fs.readFile(cachedFile)
+    )
 
     // 3. SqlitePlugin inspectWorkspace without dbPath + VACUUM via execute
     const wsRes = (await host.handlePluginCall('SqlitePlugin', 'inspectWorkspace', {
@@ -1013,7 +1027,7 @@ test('StorageHost plugins support DataRecovery, SystemBackup no-empty-ZIP guard,
   }
 })
 
-test('MediaOcrHost plugins enforce no-fake-fallback on ColorPicker, Record, BatchAudio format normalization, and Pdf pageRangeMode', async () => {
+test('MediaOcrHost plugins enforce no-fake-fallback on ColorPicker, Record, BatchAudio unsupported mode rejection, and Pdf pageRangeMode', async () => {
   const host = new BuiltinPluginHostService()
   const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'ztools-media-contract-'))
 
@@ -1060,24 +1074,15 @@ test('MediaOcrHost plugins enforce no-fake-fallback on ColorPicker, Record, Batc
       assert.equal(audioRes.volume, undefined)
     }
 
-    // 3. BatchAudioPlugin normalizes 'mp3_320k' -> '.mp3' and returns top-level outputPath & sizeBytes
+    // 未实现的复制模式必须拒绝，不能靠复制假 MP3 字节绕过音轨验证。
     const srcMp3 = path.join(tempDir, 'track.mp3')
     await fs.writeFile(srcMp3, 'MOCK_MP3_AUDIO_STREAM_BYTES', 'utf8')
-    const audioCopyRes = (await media.handleBatchMedia('BatchAudioPlugin', 'copyAudio', {
-      files: [srcMp3],
-      outputFormat: 'mp3_320k',
-      mode: 'copy',
-      outputDir: tempDir
-    })) as {
-      ok: boolean
-      outputPath: string
-      sizeBytes: number
-      outputBytes: number
-    }
-    assert.equal(audioCopyRes.ok, true)
-    assert.ok(audioCopyRes.outputPath.endsWith('track_processed.mp3'))
-    assert.ok(audioCopyRes.sizeBytes > 0)
-    assert.equal(audioCopyRes.sizeBytes, audioCopyRes.outputBytes)
+    const audioCopyRes = await media.handleBatchMedia('BatchAudioPlugin', 'copyAudio', {
+      files: [srcMp3], outputFormat: 'mp3', mode: 'copy', outputDir: tempDir
+    }) as { ok: boolean; error?: string; processedCount: number }
+    assert.equal(audioCopyRes.ok, false)
+    assert.match(audioCopyRes.error || '', /不支持的音频操作/)
+    assert.equal(audioCopyRes.processedCount, 0)
 
     // 4. PdfPlugin supports pageRangeMode ('odd', 'single_split'), PdfToHtml, and rejects PdfToWord
     const fourPagePdf = path.join(tempDir, 'four.pdf')

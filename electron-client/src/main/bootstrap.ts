@@ -1,5 +1,6 @@
 import {
   app,
+  autoUpdater,
   BrowserWindow,
   clipboard as electronClipboard,
   desktopCapturer,
@@ -24,6 +25,7 @@ import {
   type RuntimeLogLevel
 } from './services/runtime-logger.js'
 import { createCoreServices, readWebVersion, type CoreServices } from './services/core-services.js'
+import { MacAppUpdater } from './platform/macos/app-update.js'
 import { WebResourceService } from './services/web-resource-service.js'
 import { configureSessionSecurity, createMainWindow, updateMainWindowTheme } from './windows/main-window.js'
 import { loadApplicationIcon, loadTrayIcon } from './windows/application-icon.js'
@@ -184,6 +186,7 @@ let mainWindow: BrowserWindow | null = null
 let superPanel: SuperPanelController | null = null
 let tray: TrayController | null = null
 let launcher: LauncherController | null = null
+let macAppUpdater: MacAppUpdater | undefined
 let quitAllowed = false
 let closeHandling = false
 let closeConfirmationPending = false
@@ -371,7 +374,7 @@ function requestApplicationStop(event: ElectronEvent): void {
   quitRequestPromise = stopApplication().then(() => {
     quitAllowed = true
     lifecycleLog('INFO', 'Application cleanup finished; allowing Electron quit')
-    app.quit()
+    if (!macAppUpdater?.quitAndInstall()) app.quit()
   }).catch((error: unknown) => {
     console.error('Electron shutdown failed', error)
     lifecycleLog('ERROR', 'Application cleanup failed; forcing process exit', undefined, error)
@@ -424,8 +427,8 @@ function toggleMainWindow(): void {
     return
   }
 
-  // 若悬浮条当前可见，按下全局快捷键应直接收起悬浮条，绝不能把大工作台弹出来
-  if (launcher && launcher.isVisible()) {
+  // 只有前台正在交互的悬浮条才收起；跨桌面唤醒不能把其它 Space 上的窗口当作当前窗口。
+  if (launcher && launcher.isFocused()) {
     launcher.hide()
     return
   }
@@ -448,7 +451,7 @@ function toggleMainWindow(): void {
     mainWindow.focus()
     return
   }
-  if (mainWindow.isVisible()) {
+  if (mainWindow.isFocused()) {
     mainWindow.hide()
     return
   }
@@ -465,9 +468,7 @@ function showMainWindow(): void {
     return
   }
   lastActiveSurface = 'dashboard'
-  if (launcher && launcher.isVisible()) {
-    launcher.hide()
-  }
+  launcher?.hide()
   if (!mainWindow || mainWindow.isDestroyed()) {
     if (lifecyclePolicy.reopenMainWindowOnActivate && router && services) {
       createMainWindowInstance()
@@ -897,6 +898,7 @@ if (!app.requestSingleInstanceLock()) {
     acceptLaunchIntent(intent)
   })
   app.on('before-quit', requestApplicationStop)
+  app.on('will-quit', () => macAppUpdater?.dispose())
   app.whenReady().then(() => {
     const startupPromise = applicationLifecycle.start(async (signal) => {
     lifecycleLog('INFO', 'Electron app ready', { durationMs: Date.now() - processStartedAt })
@@ -961,6 +963,20 @@ if (!app.requestSingleInstanceLock()) {
     })
     const webVersion = await readWebVersion(activeWebRoot())
     if (!applicationLifecycle.canContinueStartup()) return
+    if (process.platform === 'darwin') {
+      macAppUpdater = new MacAppUpdater({
+        appPath: path.resolve(process.execPath, '../../..'),
+        isPackaged: app.isPackaged,
+        stagingRoot: path.join(runtimePaths.transactionRoot, 'MacUpdate'),
+        autoUpdater,
+        requestQuit: () => app.quit(),
+        reportRestartError: (error) => {
+          lifecycleLog('ERROR', 'macOS 更新重启失败', undefined, error)
+          dialog.showErrorBox('更新未完成', '无法重启安装更新，请重新打开 ZTools 后重试。\n' + error.message)
+          app.exit(1)
+        }
+      })
+    }
     services = createCoreServices(
       runtimePaths,
       app.getVersion(),
@@ -968,7 +984,9 @@ if (!app.requestSingleInstanceLock()) {
       nativeRuntime.nativeHost,
       nativeRuntime.serviceClient,
       nativeRuntime.nativeInput ?? null,
-      resources
+      resources,
+      undefined,
+      macAppUpdater
     )
     services.focus.setNotificationHandler(showDesktopNotification)
     await nativeRuntime.start(signal)
@@ -1108,7 +1126,7 @@ if (!app.requestSingleInstanceLock()) {
         lastActiveSurface = 'launcher'
       },
       hideMainWindow: () => {
-        if (mainWindow && !mainWindow.isDestroyed() && mainWindow.isVisible()) {
+        if (mainWindow && !mainWindow.isDestroyed()) {
           mainWindow.hide()
         }
       },

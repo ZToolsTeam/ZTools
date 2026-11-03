@@ -65,13 +65,13 @@ test('native test collector executes the selected real slice and rejects mismatc
           assert.deepEqual(args, [architecture === 'x64' ? '-x86_64' : '-arm64', executable, '--self-test'])
           assert.equal(options.shell, false)
           assert.equal(options.timeout, 60000)
-          return JSON.stringify({ version: 1, success: true, architecture, cases: 9, scope: 'vision-local-native' })
+          return JSON.stringify({ version: 1, success: true, architecture, cases: 10, scope: 'vision-local-native' })
         }
       })
       assert.equal(result.status, 'PASS')
     }
     assert.throws(() => runNativeVisionTests({ minimumOs: '13.0', inspectDeployment: () => '13.0', platform: 'darwin', executable, architecture: 'arm64',
-      exec: tool => tool === '/usr/bin/sw_vers' ? '13.0' : tool === '/usr/bin/lipo' ? 'arm64 x86_64' : JSON.stringify({ version: 1, success: true, architecture: 'x64', cases: 9, scope: 'vision-local-native' }) }), /NATIVE_TEST_CONTRACT_MISMATCH/)
+      exec: tool => tool === '/usr/bin/sw_vers' ? '13.0' : tool === '/usr/bin/lipo' ? 'arm64 x86_64' : JSON.stringify({ version: 1, success: true, architecture: 'x64', cases: 10, scope: 'vision-local-native' }) }), /NATIVE_TEST_CONTRACT_MISMATCH/)
     assert.deepEqual(runNativeVisionTests({ minimumOs: '13.0', inspectDeployment: () => '13.0', platform: 'win32' }), { status: 'NOT_RUN', code: 'DARWIN_REQUIRED' })
   } finally { fs.rmSync(root, { recursive: true, force: true }) }
 })

@@ -81,8 +81,6 @@ export interface UpdateInfo {
   downloadUrl: string
   checksum: string
   minAppVersion?: string
-  /** macOS 使用 DMG 手动替换，不进入 Windows 安装器。 */
-  manualUpdate?: boolean
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -383,6 +381,12 @@ async function removePathWithRetry(
   return false
 }
 
+export interface MacUpdateInstaller {
+  assertSupported(): void
+  prepare(dmgPath: string, version: string, signal: AbortSignal): Promise<void>
+  requestRestart(): void
+}
+
 export class UpdateService {
   readonly #platform: NodeJS.Platform
   readonly #arch: string
@@ -392,6 +396,7 @@ export class UpdateService {
   readonly #updateSource: UpdateSource | null
   readonly #fetch: typeof fetch
   readonly #webResources: WebResourceService | undefined
+  readonly #macUpdater: MacUpdateInstaller | undefined
   readonly #runUpdater: typeof runUpdaterAndWait
   readonly #operations = new Map<string, DownloadOperation>()
   readonly #downloadPromises = new Map<string, Promise<{
@@ -407,6 +412,7 @@ export class UpdateService {
   readonly #activeDownloads = new Set<Promise<unknown>>()
   #installQueue: Promise<void> = Promise.resolve()
   #appHandoffStarted = false
+  readonly #stopping = new AbortController()
 
   constructor(options: {
     platform?: NodeJS.Platform
@@ -419,6 +425,7 @@ export class UpdateService {
     fetchImpl?: typeof fetch
     webResources?: WebResourceService
     runUpdaterImpl?: typeof runUpdaterAndWait
+    macUpdater?: MacUpdateInstaller
   }) {
     this.#platform = options.platform ?? process.platform
     this.#arch = options.arch ?? process.arch
@@ -430,12 +437,16 @@ export class UpdateService {
     this.#fetch = options.fetchImpl ?? fetch
     this.#webResources = options.webResources
     this.#runUpdater = options.runUpdaterImpl ?? runUpdaterAndWait
+    this.#macUpdater = options.macUpdater
   }
 
-  #assertWindowsUpdate(): void {
-    if (this.#platform !== 'win32') {
-      throw new ZToolsError(errorCodes.notSupported, '应用内下载安装仅支持 Windows；macOS 请下载 DMG 手动替换')
+  #assertUpdateSupported(params: UpdatePackageParams): void {
+    if (this.#platform === 'win32') return
+    if (this.#platform === 'darwin' && this.#macUpdater && updateType(params) === 'app') {
+      this.#macUpdater.assertSupported()
+      return
     }
+    throw new ZToolsError(errorCodes.notSupported, '当前运行环境不支持此类应用内更新')
   }
 
   onProgress(listener: UpdateProgressListener): () => void {
@@ -529,7 +540,6 @@ export class UpdateService {
       if (this.#platform === 'darwin' && web) {
         throw new ZToolsError(errorCodes.dataCorrupt, 'macOS 更新必须使用完整安装包')
       }
-      if (app && this.#platform === 'darwin') app.manualUpdate = true
       return {
         success: true,
         source: params.source,
@@ -544,7 +554,7 @@ export class UpdateService {
     }
   }
 
-  async download(params: UpdatePackageParams): Promise<{
+  async download(params: UpdatePackageParams, signal: AbortSignal = new AbortController().signal): Promise<{
     success: true
     operationId: string
     status: 'downloaded'
@@ -552,7 +562,7 @@ export class UpdateService {
     version: string
     path: string
   }> {
-    this.#assertWindowsUpdate()
+    this.#assertUpdateSupported(params)
     const requestKey = JSON.stringify([
       params.type ?? 'app',
       params.version,
@@ -563,7 +573,7 @@ export class UpdateService {
     ])
     const inFlight = this.#downloadPromises.get(requestKey)
     if (inFlight) return inFlight
-    const task = this.#download(params)
+    const task = this.#download(params, signal)
     this.#downloadPromises.set(requestKey, task)
     this.#activeDownloads.add(task)
     try {
@@ -574,7 +584,7 @@ export class UpdateService {
     }
   }
 
-  async #download(params: UpdatePackageParams): Promise<{
+  async #download(params: UpdatePackageParams, requestSignal: AbortSignal): Promise<{
     success: true
     operationId: string
     status: 'downloaded'
@@ -582,6 +592,7 @@ export class UpdateService {
     version: string
     path: string
   }> {
+    requestSignal.throwIfAborted()
     const type = updateType(params)
     const version = normalizeVersion(params.version, '更新')
     const currentVersion = type === 'web' ? this.#webVersion : this.#appVersion
@@ -648,7 +659,7 @@ export class UpdateService {
     const operationId = randomUUID()
     const controller = new AbortController()
     const safeVersion = params.version.replace(/[^0-9A-Za-z.-]/g, '_')
-    const extension = downloadUrl.pathname.toLowerCase().endsWith('.zip') ? '.zip' : '.exe'
+    const extension = this.#platform === 'darwin' ? '.dmg' : downloadUrl.pathname.toLowerCase().endsWith('.zip') ? '.zip' : '.exe'
     const target = path.join(downloadRoot, type + '-' + safeVersion + '-' + operationId + extension)
     const temporary = target + '.tmp'
     const operation: DownloadOperation = {
@@ -665,32 +676,23 @@ export class UpdateService {
       started: false
     }
     this.#operations.set(operationId, operation)
+    const timeoutController = new AbortController()
+    let timeout: ReturnType<typeof setTimeout> | undefined
     try {
       await fs.mkdir(downloadRoot, { recursive: true })
       await persistDownloadMetadata(operation, 'downloading')
-      const timeoutController = new AbortController()
-      const timeout = setTimeout(() => {
+      timeout = setTimeout(() => {
         timeoutController.abort(new ZToolsError(errorCodes.networkError, '下载安装包超时'))
       }, timeoutMs)
-      const signal = AbortSignal.any([controller.signal, timeoutController.signal])
-      let response: Response
-      try {
-        response = await this.#fetch(params.downloadUrl, { signal })
-      } finally {
-        clearTimeout(timeout)
-      }
+      const signal = AbortSignal.any([controller.signal, timeoutController.signal, requestSignal, this.#stopping.signal])
+      const response = await this.#fetch(params.downloadUrl, { signal })
       if (!response.ok) throw new ZToolsError(errorCodes.networkError, '下载安装包失败: HTTP ' + response.status)
-      const downloadTimeoutController = new AbortController()
-      const downloadTimeout = setTimeout(() => {
-        downloadTimeoutController.abort(new ZToolsError(errorCodes.networkError, '下载安装包超时'))
-      }, timeoutMs)
-      const downloadSignal = AbortSignal.any([controller.signal, downloadTimeoutController.signal])
       const downloaded = await downloadResponseToFile(
         response,
         temporary,
-        downloadSignal,
-        type === 'web' ? fileSize : 0,
-        type === 'web' ? MAX_UPDATE_BYTES : Number.MAX_SAFE_INTEGER,
+        signal,
+        type === 'web' || this.#platform === 'darwin' ? fileSize : 0,
+        type === 'web' || this.#platform === 'darwin' ? MAX_UPDATE_BYTES : Number.MAX_SAFE_INTEGER,
         (downloadedBytes, totalBytes) => {
           this.#publishProgress({
             operationId,
@@ -700,7 +702,7 @@ export class UpdateService {
             percent: totalBytes > 0 ? Math.min(99, Math.floor(downloadedBytes * 100 / totalBytes)) : 0
           })
         }
-      ).finally(() => clearTimeout(downloadTimeout))
+      )
       if (expectedChecksum && downloaded.checksum !== expectedChecksum) {
         throw new ZToolsError(errorCodes.dataCorrupt, '更新包 SHA-256 校验失败')
       }
@@ -722,6 +724,10 @@ export class UpdateService {
       this.#operations.delete(operationId)
       if (error instanceof ZToolsError) throw error
       throw networkError(error, '下载安装包失败')
+    } finally {
+      clearTimeout(timeout)
+      // 同一 signal 覆盖响应头和正文；提前拒绝响应时也关闭底层连接。
+      timeoutController.abort()
     }
   }
 
@@ -736,9 +742,9 @@ export class UpdateService {
     reloadRequired?: boolean
     version?: string
   }> {
-    this.#assertWindowsUpdate()
+    this.#assertUpdateSupported(params)
     const previous = this.#installQueue
-    const task = previous.then(() => this.#install(params, signal))
+    const task = previous.then(() => this.#install(params, AbortSignal.any([signal, this.#stopping.signal])))
     this.#installQueue = task.then(() => undefined, () => undefined)
     return task
   }
@@ -755,14 +761,15 @@ export class UpdateService {
     version?: string
   }> {
     if (updateType(params) === 'web') return this.#installWeb(params, signal)
-    return this.#installApp(params)
+    return this.#installApp(params, signal)
   }
 
   async #resolveDownload(
     params: UpdatePackageParams,
     type: 'app' | 'web',
     version: string,
-    checksum: string
+    checksum: string,
+    signal: AbortSignal
   ): Promise<DownloadOperation | undefined> {
     let download = [...this.#operations.values()].find((operation) =>
       !operation.started &&
@@ -774,24 +781,26 @@ export class UpdateService {
       (!params.fileSize || operation.fileSize === params.fileSize)
     )
     if (!download && params.downloadUrl) {
-      const result = await this.download(params)
+      const result = await this.download(params, signal)
       download = this.#operations.get(result.operationId)
     }
     return download
   }
 
-  async #installApp(params: UpdatePackageParams): Promise<{
+  async #installApp(params: UpdatePackageParams, signal: AbortSignal): Promise<{
     success: true
     operationId: string
     state: 'started'
     restartRequired: true
   }> {
+    signal.throwIfAborted()
+    if (this.#appHandoffStarted) throw new ZToolsError(errorCodes.invalidRequest, 'App 更新已交接，请等待应用重启')
     const version = normalizeVersion(params.version, '更新')
     if (compareVersions(version, this.#appVersion) <= 0) {
       throw new ZToolsError(errorCodes.invalidRequest, '不允许安装低于或等于当前版本的 App 更新包')
     }
     const requestedChecksum = params.checksum ? normalizeChecksum(params.checksum) : ''
-    const download = await this.#resolveDownload(params, 'app', version, requestedChecksum)
+    const download = await this.#resolveDownload(params, 'app', version, requestedChecksum, signal)
     if (!download) throw new ZToolsError(errorCodes.invalidRequest, '没有可安装的 App 更新包')
     if (!download.checksum || !(await isUsableDownload(download))) {
       await fs.rm(download.path, { force: true }).catch(() => undefined)
@@ -799,6 +808,7 @@ export class UpdateService {
       this.#operations.delete(download.operationId)
       throw new ZToolsError(errorCodes.dataCorrupt, 'App 更新包文件不可用')
     }
+    signal.throwIfAborted()
     if (this.#installing.has(download.operationId)) {
       throw new ZToolsError(errorCodes.invalidRequest, '该 App 更新已在交接中')
     }
@@ -806,6 +816,15 @@ export class UpdateService {
     const maintenanceRoot = path.join(this.#runtimePaths.transactionRoot, 'Maintenance', randomUUID())
     const appHandoffWasStarted = this.#appHandoffStarted
     try {
+      if (this.#platform === 'darwin' && this.#macUpdater) {
+        await this.#macUpdater.prepare(download.path, version, signal)
+        download.started = true
+        download.state = 'started'
+        this.#appHandoffStarted = true
+        await persistDownloadMetadata(download, 'started').catch(error => console.warn('记录 macOS 更新交接状态失败', error))
+        this.#macUpdater.requestRestart()
+        return { success: true, operationId: download.operationId, state: 'started', restartRequired: true }
+      }
       await fs.mkdir(maintenanceRoot, { recursive: true })
       const updaterPath = path.join(maintenanceRoot, 'ZToolsUpdater.exe')
       await fs.copyFile(path.join(this.#runtimePaths.installRoot, 'ZToolsUpdater.exe'), updaterPath)
@@ -833,7 +852,7 @@ export class UpdateService {
       await persistDownloadMetadata(download, 'downloaded').catch(() => undefined)
       if (error instanceof ZToolsError) throw error
       const detail = error instanceof Error ? error.message.slice(0, 256) : String(error)
-      throw new ZToolsError(errorCodes.processError, '启动自提权更新器失败: ' + detail)
+      throw new ZToolsError(errorCodes.processError, '准备应用更新失败: ' + detail)
     } finally {
       await fs.rm(maintenanceRoot, { recursive: true, force: true }).catch(() => undefined)
       this.#installing.delete(download.operationId)
@@ -869,7 +888,7 @@ export class UpdateService {
         throw new ZToolsError(errorCodes.notSupported, '当前 App 版本低于 Web 更新要求')
       }
     }
-    const download = await this.#resolveDownload(params, 'web', version, requestedChecksum)
+    const download = await this.#resolveDownload(params, 'web', version, requestedChecksum, signal)
     if (!download) throw new ZToolsError(errorCodes.invalidRequest, '没有可安装的已校验 Web 更新包')
     if (!download.checksum || !(await isUsableDownload(download))) {
       await fs.rm(download.path, { force: true }).catch(() => undefined)
@@ -877,6 +896,7 @@ export class UpdateService {
       this.#operations.delete(download.operationId)
       throw new ZToolsError(errorCodes.dataCorrupt, 'Web 更新包已损坏或已被替换')
     }
+    signal.throwIfAborted()
     if (this.#installing.has(download.operationId)) {
       throw new ZToolsError(errorCodes.invalidRequest, '该 Web 更新已在切换中')
     }
@@ -901,7 +921,7 @@ export class UpdateService {
     if (this.#webResources) this.#webVersion = this.#webResources.version
   }
 
-  cancel(): { success: true; cancelled: string[] } {
+  cancel(): { success: true; cancelled: string[]; installing: boolean } {
     const cancelled: string[] = []
     for (const [operationId, operation] of this.#operations) {
       if (operation.started || this.#installing.has(operationId)) continue
@@ -911,10 +931,11 @@ export class UpdateService {
       this.#operations.delete(operationId)
       cancelled.push(operationId)
     }
-    return { success: true, cancelled }
+    return { success: true, cancelled, installing: this.#installing.size > 0 || this.#appHandoffStarted }
   }
 
   async stop(): Promise<void> {
+    this.#stopping.abort()
     this.cancel()
     await Promise.allSettled([...this.#activeDownloads])
     await this.#installQueue
@@ -928,7 +949,7 @@ export class UpdateService {
     needCleanup?: boolean | undefined
     retryDelaysMs?: readonly number[] | undefined
   } = {}): Promise<void> {
-    if (this.#platform !== 'win32') return
+    if (this.#platform !== 'win32' && this.#platform !== 'darwin') return
     try {
       const downloadRoot = path.join(this.#runtimePaths.transactionRoot, 'Downloads')
       const entries = await fs.readdir(downloadRoot, { withFileTypes: true }).catch(() => undefined)
@@ -995,7 +1016,7 @@ export class UpdateService {
               if (
                 lowerName.endsWith('.tmp') ||
                 lowerName.endsWith('.part') ||
-                (lowerName.startsWith('app-') && lowerName.endsWith('.exe')) ||
+                (lowerName.startsWith('app-') && (lowerName.endsWith('.exe') || lowerName.endsWith('.dmg'))) ||
                 ((lowerName.startsWith('app-') || lowerName.startsWith('web-')) && lowerName.endsWith('.zip'))
               ) {
                 await removePathWithRetry(candidatePath, { retryDelaysMs: options.retryDelaysMs })

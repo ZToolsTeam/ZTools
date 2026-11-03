@@ -2019,7 +2019,6 @@ export class SystemRegistryHostPluginHandler {
         const escapedFilesArray = candidates.files
           .map((f) => `'${escapePsSingleQuoted(f)}'`)
           .join(',')
-        const escapedTarget = escapePsSingleQuoted(resolved)
         const psScript = `
           $ErrorActionPreference = 'Stop'
           Add-Type -TypeDefinition @"
@@ -2095,22 +2094,6 @@ export class SystemRegistryHostPluginHandler {
                   name = $procName
                   executablePath = $exePath
                   serviceType = [string]$info.ApplicationType
-                }
-              }
-            }
-          }
-          $targetPrefix = '${escapedTarget}'
-          Get-CimInstance Win32_Process | ForEach-Object {
-            $pId = [int]$_.ProcessId
-            if ($pId -gt 0 -and $pId -ne $PID) {
-              $cmd = [string]$_.CommandLine
-              $exe = [string]$_.ExecutablePath
-              if (($exe -and $exe.StartsWith($targetPrefix, [System.StringComparison]::OrdinalIgnoreCase)) -or ($cmd -and $cmd.IndexOf($targetPrefix, [System.StringComparison]::OrdinalIgnoreCase) -ge 0)) {
-                $results += [PSCustomObject]@{
-                  pid = $pId
-                  name = [string]$_.Name
-                  executablePath = if ($exe) { $exe } else { [string]$_.Name }
-                  serviceType = '0'
                 }
               }
             }
@@ -2248,6 +2231,27 @@ export class SystemRegistryHostPluginHandler {
           expectedName,
           errorCode: 'PROCESS_PROTECTED',
           error: 'PROCESS_PROTECTED: 禁止终止 ZTools 宿主自身进程'
+        }
+      }
+
+      // 用户确认期间占用可能已经释放；只允许结束此刻仍由系统确认为目标占用者的进程。
+      // 先复查占用，再即时查询进程名，避免在耗时扫描前读取的身份过期。
+      if (params.dryRun !== true) {
+        const current = await this.handleFileUnlock('inspectLocks', { targetPath: rawTargetPath }, caller, signal) as {
+          ok?: boolean; error?: string; processes?: Array<{ pid: number; name: string; isProtected: boolean }>
+        }
+        if (current.ok !== true || !Array.isArray(current.processes)) {
+          return { ok: false, success: false, pid, expectedName, errorCode: 'LOCK_RECHECK_FAILED',
+            error: `LOCK_RECHECK_FAILED: 无法复核当前占用，未结束进程：${current.error || '占用检测结果无效'}` }
+        }
+        const lock = current.processes.find(item => item.pid === pid)
+        if (!lock || SystemRegistryHostPluginHandler.#normalizeProcessBaseName(lock.name) !== SystemRegistryHostPluginHandler.#normalizeProcessBaseName(expectedName)) {
+          return { ok: false, success: false, pid, expectedName, errorCode: 'LOCK_CHANGED',
+            error: 'LOCK_CHANGED: 该进程已不再被确认为目标占用者，未结束进程，请重新检测' }
+        }
+        if (lock.isProtected) {
+          return { ok: false, success: false, pid, expectedName, errorCode: 'PROCESS_PROTECTED',
+            error: 'PROCESS_PROTECTED: 当前占用者属于系统关键保护进程，禁止终止' }
         }
       }
 

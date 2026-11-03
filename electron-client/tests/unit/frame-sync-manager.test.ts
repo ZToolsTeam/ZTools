@@ -304,6 +304,40 @@ test('FrameSyncManager: warm show does not wait for renderer work', async () => 
   }
 })
 
+test('FrameSyncManager: 即使可见性报告为 false，隐藏仍撤下原生窗口，随后可以再次唤醒', async () => {
+  const window = new FakeManagedWindow()
+  window.visible = true
+  const manager = new FrameSyncManager({ platform: 'darwin' })
+  manager.attach(window)
+  try {
+    window.isVisible = () => false
+    manager.hideWindow()
+    assert.equal(window.hideCalledCount, 1)
+    assert.equal(window.visible, false)
+    await manager.showWindow()
+    assert.equal(window.visible, true)
+    assert.equal(window.focused, true)
+    assert.equal(manager.state, 'visible')
+  } finally {
+    manager.dispose()
+  }
+})
+
+test('FrameSyncManager: 已映射但未聚焦的窗口再次唤醒时重新 show，而非仅请求 focus', async () => {
+  const window = new FakeManagedWindow()
+  window.visible = true
+  const manager = new FrameSyncManager()
+  manager.attach(window)
+  try {
+    await manager.showWindow()
+    assert.equal(window.showCalledCount, 1)
+    assert.equal(window.focused, true)
+    assert.equal(window.webContents.executedScripts.length, 0)
+  } finally {
+    manager.dispose()
+  }
+})
+
 test('FrameSyncManager: hide cancels a pending show without reopening', async () => {
   const window = new FakeManagedWindow()
   window.webContents.rafDelayMs = 30

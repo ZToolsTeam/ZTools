@@ -338,6 +338,7 @@ type PreloadMethod =
   | 'startup_manager'
   | 'browser_bookmarks_scan'
   | 'downloads_manager'
+  | 'image_ocr'
   | 'keyboard_lock'
   | 'docker_manager'
   | 'environment_manager'
@@ -790,6 +791,7 @@ const bridge = Object.freeze({
       startup_manager: (request: unknown) => invokeMethod('startup_manager', request),
       browser_bookmarks_scan: (request: unknown) => invokeMethod('browser_bookmarks_scan', request),
       downloads_manager: (request: unknown) => invokeMethod('downloads_manager', request),
+      image_ocr: (request: unknown) => invokeMethod('image_ocr', request),
       keyboard_lock: (request: unknown) => invokeMethod('keyboard_lock', request),
       docker_manager: (request: unknown) => invokeMethod('docker_manager', request),
       environment_manager: (request: unknown) => invokeMethod('environment_manager', request),

@@ -376,6 +376,7 @@ export const methodCapabilities = {
   startup_manager: ['main', 'plugin'],
   browser_bookmarks_scan: ['main', 'plugin'],
   downloads_manager: ['main', 'plugin'],
+  image_ocr: ['main', 'plugin'],
   keyboard_lock: ['main', 'plugin'],
   docker_manager: ['main', 'plugin'],
   environment_manager: ['main', 'plugin'],

@@ -21,6 +21,8 @@ export type WindowActionName =
   | 'reasonable-size'
   | 'make-larger'
   | 'make-smaller'
+  | 'next-display'
+  | 'previous-display'
 
 export interface WindowActionMeta {
   name: WindowActionName
@@ -179,7 +181,9 @@ export const WINDOW_ACTIONS: Record<WindowActionName, WindowActionMeta> = {
     description: '将活动窗口各边向内收缩 50 像素',
     category: 'sizes',
     icon: 'window-minus'
-  }
+  },
+  'next-display': { name: 'next-display', title: '移到下一显示器', description: '将窗口移动到下一显示器的工作区', category: 'display', icon: 'monitor' },
+  'previous-display': { name: 'previous-display', title: '移到上一显示器', description: '将窗口移动到上一显示器的工作区', category: 'display', icon: 'monitor' }
 }
 
 export interface WindowBounds {
@@ -213,6 +217,7 @@ export interface ApplyWindowActionContext {
   currentBounds?: WindowBounds | undefined
   workArea?: WindowBounds | undefined
   isZToolsWindow?: boolean | undefined
+  targetProcessId?: number | undefined
 }
 
 /**
@@ -411,7 +416,7 @@ export class WindowManagementService {
    */
   public normalizeActionName(action: string): WindowActionName | null {
     if (!action || typeof action !== 'string') return null
-    const cleaned = action.trim().toLowerCase().replace(/_/g, '-') as WindowActionName
+    const cleaned = action.trim().toLowerCase().replace(/_/g, '-').replace(/^(top|bottom)-(left|right)-quarter$/, '$1-$2') as WindowActionName
     return WINDOW_ACTIONS[cleaned] ? cleaned : null
   }
 
@@ -419,7 +424,9 @@ export class WindowManagementService {
    * 获取所有支持的分屏动作清单
    */
   public listActions(): WindowActionMeta[] {
-    return Object.values(WINDOW_ACTIONS)
+    return Object.values(WINDOW_ACTIONS).filter(action => process.platform === 'win32'
+      ? action.name !== 'restore'
+      : action.name !== 'next-display' && action.name !== 'previous-display')
   }
 
   /**
@@ -437,6 +444,12 @@ export class WindowManagementService {
         title: actionName || '未知动作',
         error: `不支持的窗口调度动作: "${actionName}"`
       }
+    }
+
+    // Windows 的目标窗口、显示器与几何由原生进程读取，不能采用插件或缓存估算的坐标。
+    if (process.platform === 'win32') return this.applyWindowsAction(normalized, context)
+    if (normalized === 'next-display' || normalized === 'previous-display') {
+      return { success: false, action: normalized, title: WINDOW_ACTIONS[normalized].title, error: '当前平台不支持跨显示器动作' }
     }
 
     // 解析真实目标窗口（若当前传入的是 ZTools 主界面或未传，自动回退至 lastExternalForegroundHwnd）
@@ -590,4 +603,54 @@ export class WindowManagementService {
       previousRect: { ...currentBounds }
     }
   }
+  /** 与隐藏后粘贴相同：先让出前台，再获取真实外部窗口；失败恢复调用窗口。 */
+  public async applyToExternalWindow(
+    action: string,
+    window: { hide(): void; show(): void; focus(): void; isDestroyed(): boolean },
+    signal?: AbortSignal
+  ): Promise<WindowActionResult> {
+    const normalized = this.normalizeActionName(action)
+    const failure = (error: string): WindowActionResult => ({ success: false, action: normalized || 'center', title: action, error })
+    if (!normalized || !this.listActions().some(item => item.name === normalized)) return failure('不支持的窗口调度动作')
+    if (!this.options.sidecarManager || window.isDestroyed() || signal?.aborted) return failure('窗口管理不可用或操作已取消')
+    window.hide()
+    try {
+      // Windows 隐藏窗口后才会将前台交给下一个窗口，等待激活完成，避免读到自身。
+      await new Promise<void>(resolve => setTimeout(resolve, 80))
+      if (signal?.aborted) throw new Error('窗口操作已取消')
+      const target = await this.options.sidecarManager.getActiveWindow()
+      if (!target.active || !Number.isSafeInteger(target.hwnd) || target.hwnd <= 0 || !Number.isSafeInteger(target.pid) || target.pid <= 0 || target.pid === process.pid) {
+        throw new Error('未找到可操作的外部窗口，请先激活目标应用后重试')
+      }
+      if (signal?.aborted || window.isDestroyed()) throw new Error('窗口操作已取消')
+      const result = await this.applyAction(normalized, { windowId: String(target.hwnd), targetProcessId: target.pid })
+      if (!result.success) throw new Error(result.error || '窗口操作失败')
+      return result
+    } catch (error) {
+      if (!window.isDestroyed()) { window.show(); window.focus() }
+      return failure(error instanceof Error ? error.message : String(error))
+    }
+  }
+
+  private async applyWindowsAction(action: WindowActionName, context: ApplyWindowActionContext): Promise<WindowActionResult> {
+    const meta = WINDOW_ACTIONS[action]
+    const failure = (error: string): WindowActionResult => ({ success: false, action, title: meta.title, error })
+    if (action === 'restore') return failure('当前版本暂不支持还原窗口的上一位置')
+    if (!this.options.sidecarManager) return failure('窗口管理原生进程不可用')
+    const hwnd = Number(context.windowId), pid = context.targetProcessId
+    if (!Number.isSafeInteger(hwnd) || hwnd <= 0 || !pid || !Number.isSafeInteger(pid) || pid === process.pid) return failure('缺少已确认的外部目标窗口')
+    try {
+      const result = await this.options.sidecarManager.manageWindow(action, undefined, { hwnd, pid })
+      if (result?.success !== true) return failure(result?.error || '窗口操作未获确认')
+      const rect = result.rect
+      if (!rect || ![rect.x, rect.y, rect.width, rect.height].every(Number.isFinite) || rect.width <= 0 || rect.height <= 0) {
+        return failure('窗口操作未返回有效的实际位置')
+      }
+      void this.options.hudService?.showHUD(`窗口已${meta.title}`, { icon: meta.icon, durationMs: 1200 })
+      return { success: true, action, preset: action, title: meta.title, rect, bounds: rect }
+    } catch (error) {
+      return failure(error instanceof Error ? error.message : String(error))
+    }
+  }
+
 }

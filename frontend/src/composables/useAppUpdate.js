@@ -4,51 +4,6 @@ import { compareAppVersions } from '@/utils/version'
 // 防止 web 静默更新重复触发
 let _webUpdateInProgress = false
 
-const TRUSTED_CLIENT_RELEASE_ORIGIN = 'https://cdn.ztools.cn'
-const TRUSTED_CLIENT_RELEASE_BASE_PATH = '/client-v2'
-const SAFE_ARTIFACT_FILENAME_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]*$/
-const FOUR_PART_VERSION_PATTERN = /^(0|[1-9]\d*)(\.(0|[1-9]\d*)){3}$/
-
-/**
- * 校验 macOS 手动更新 DMG 下载地址位于受信任官方 CDN 版本目录下且扩展名为 .dmg。
- * 具体文件名以后台返回为准，不在前端硬编码锁死文件名模板。
- * @param {unknown} rawUrl
- * @param {unknown} version
- * @returns {boolean}
- */
-export function isTrustedMacManualUpdateUrl(rawUrl, version) {
-  if (typeof rawUrl !== 'string' || typeof version !== 'string' || !FOUR_PART_VERSION_PATTERN.test(version)) {
-    return false
-  }
-  if (!version.split('.').every((part) => Number.isSafeInteger(Number(part)))) {
-    return false
-  }
-  const expectedExtension = '.dmg'
-  const expectedPrefix = `${TRUSTED_CLIENT_RELEASE_ORIGIN}${TRUSTED_CLIENT_RELEASE_BASE_PATH}/${version}/`
-  if (!rawUrl.startsWith(expectedPrefix)) return false
-  const fileName = rawUrl.slice(expectedPrefix.length)
-  if (
-    fileName.length <= expectedExtension.length ||
-    !fileName.endsWith(expectedExtension) ||
-    !SAFE_ARTIFACT_FILENAME_PATTERN.test(fileName) ||
-    fileName.includes('..')
-  ) {
-    return false
-  }
-  try {
-    const parsed = new URL(rawUrl)
-    return (
-      parsed.href === rawUrl &&
-      parsed.origin === TRUSTED_CLIENT_RELEASE_ORIGIN &&
-      parsed.pathname === `${TRUSTED_CLIENT_RELEASE_BASE_PATH}/${version}/${fileName}` &&
-      parsed.search === '' &&
-      parsed.hash === ''
-    )
-  } catch {
-    return false
-  }
-}
-
 /**
  * 当前平台是否不支持更新操作（主进程以 NOT_SUPPORTED 明确声明）。
  * 这是能力边界而不是故障：启动检查应静默跳过，手动检查应提示用户去官网下载。
@@ -161,33 +116,20 @@ export function useAppUpdate() {
     }
   }
 
-  /** macOS 由浏览器下载已发布 DMG，打开下载不等于完成安装。 */
-  async function openManualUpdate(info) {
-    if (info?.manualUpdate !== true || !isTrustedMacManualUpdateUrl(info?.downloadUrl, info?.version)) {
-      throw new Error('macOS 安装包信息无效，请重新检查更新')
-    }
-    const opened = await window.ztools?.shell?.openExternal(info.downloadUrl)
-    if (opened !== true) throw new Error('无法打开安装包下载，请稍后重试')
-    return true
-  }
 
   /**
    * 取消更新
    */
-  function cancelUpdate() {
-    const update = window.ztools?.update
-    if (typeof update?.cancel === 'function') {
-      Promise.resolve().then(() => update.cancel()).catch((error) => {
-        console.warn('[update] 取消更新失败:', error)
-      })
-    }
-    updateStore.reset()
+  async function cancelUpdate() {
+    const result = await window.ztools?.update?.cancel?.()
+    if (result?.success !== true) throw new Error(result?.message || '取消更新失败，请重试')
+    if (!result.installing) updateStore.reset()
+    return result
   }
 
   return {
     checkVersion,
     downloadAndInstall,
-    openManualUpdate,
     cancelUpdate,
     silentWebUpdate
   }

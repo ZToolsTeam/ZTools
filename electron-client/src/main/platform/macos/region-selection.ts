@@ -9,8 +9,8 @@ export interface RegionSelectionBackend { select(bounds: ScreenRectangle[], sign
 interface RegionWindow {
   webContents: { id: number; mainFrame: unknown; getURL(): string; setZoomFactor(value: number): void }
   loadURL(url: string): Promise<unknown>; show(): void; destroy(): void; isDestroyed(): boolean
-  once(event: string, listener: (...args: any[]) => void): unknown
-  removeListener(event: string, listener: (...args: any[]) => void): unknown
+  once(event: string, listener: (...args: unknown[]) => void): unknown
+  removeListener(event: string, listener: (...args: unknown[]) => void): unknown
 }
 interface SelectionEvent { sender: unknown; senderFrame: unknown }
 type ScreenEventSource = Pick<typeof screen, 'on' | 'removeListener'>
@@ -41,7 +41,10 @@ function observeDisplayChanges(source: ScreenEventSource, listener: () => void):
 function bounded(rect: ScreenRectangle) {
   return rect && ['x', 'y', 'width', 'height'].every(key => Number.isSafeInteger(rect[key as keyof ScreenRectangle])) && Math.abs(rect.x) <= 100000 && Math.abs(rect.y) <= 100000 && rect.width > 0 && rect.height > 0 && rect.width <= 32768 && rect.height <= 32768 && rect.width * rect.height <= 32 * 1024 * 1024
 }
-/** idle -> observing/creating/selecting -> closing -> idle; the first result or cancellation wins. */
+/**
+ * 每个显示器一个透明遮罩，用户拖选区域后返回全局 DIP 坐标；macOS 与 Windows 共用（只有 macOS 使用原生面板）。
+ * idle -> observing/creating/selecting -> closing -> idle; the first result or cancellation wins.
+ */
 export class MacRegionSelection implements RegionSelectionBackend {
   readonly #windows = new Set<RegionWindow>()
   #stopped = false
@@ -55,7 +58,8 @@ export class MacRegionSelection implements RegionSelectionBackend {
     if (!path.isAbsolute(preload) || [dependencies.timeoutMs ?? 120000, dependencies.closeTimeoutMs ?? 2000].some(v => !Number.isSafeInteger(v) || v < 1 || v > 120000)) throw failed()
   }
   async select(bounds: ScreenRectangle[], signal: AbortSignal): Promise<ScreenRectangle | undefined> {
-    if ((this.dependencies.platform ?? process.platform) !== 'darwin') throw new ZToolsError(errorCodes.notSupported, '此区域选择provider需要macOS')
+    const platform = this.dependencies.platform ?? process.platform
+    if (platform !== 'darwin' && platform !== 'win32') throw new ZToolsError(errorCodes.notSupported, '当前系统不支持框选屏幕区域')
     if (this.#stopped || signal.aborted) throw cancelled()
     if (this.#active || this.#windows.size) throw new ZToolsError(errorCodes.pluginBusy, '区域选择正在处理中')
     if (!Array.isArray(bounds) || !bounds.length || bounds.length > 8 || bounds.some(rect => !bounded(rect))) throw failed()
@@ -94,7 +98,9 @@ export class MacRegionSelection implements RegionSelectionBackend {
           if (finished) break
           if (combined.aborted) { onAbort(); break }
           const window = (this.dependencies.createWindow ?? ((rect, token) => {
-            const overlay = new BrowserWindow({ ...rect, frame: false, transparent: true, resizable: false, movable: false,
+            // macOS 的 panel 自带跨桌面与覆盖全屏桌面的能力；不调用 setVisibleOnAllWorkspaces，它会隐藏 Dock 并改变整个应用的激活策略。
+            // Windows 用普通的置顶透明窗口（下面设为 screen-saver 层级）。
+            const overlay = new BrowserWindow({ ...rect, ...(platform === 'darwin' ? { type: 'panel' } : {}), frame: false, transparent: true, resizable: false, movable: false,
               hasShadow: false, show: false, alwaysOnTop: true, skipTaskbar: true, fullscreenable: false, acceptFirstMouse: true,
               webPreferences: { preload: this.preload, nodeIntegration: false, contextIsolation: true, sandbox: true, webSecurity: true,
                 additionalArguments: [`--ztools-region-selection=${token}`] } })
@@ -106,7 +112,7 @@ export class MacRegionSelection implements RegionSelectionBackend {
           window.webContents.setZoomFactor(1)
           if (!this.dependencies.createWindow) {
             const overlay = window as BrowserWindow
-            overlay.setMenu(null); overlay.setAlwaysOnTop(true, 'screen-saver'); overlay.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true })
+            overlay.setMenu(null); overlay.setAlwaysOnTop(true, 'screen-saver')
             overlay.webContents.setWindowOpenHandler(() => ({ action: 'deny' }))
             overlay.webContents.on('will-navigate', (event, url) => { if (url !== REGION_SELECTION_URL) event.preventDefault() })
           }

@@ -296,7 +296,7 @@ test('OCR（Windows）：Windows.Media.Ocr 失败、超时或输出异常时继�
       command === 'tesseract' ? { stdout: '发票号码 123\n金额 45.00', stderr: '', exitCode: 0 } : { stdout: '', stderr: '', exitCode: 1 }
     const tesseractMissing: MediaOcrHostDeps['runCommand'] = async () => ({ stdout: '', stderr: 'spawn tesseract ENOENT', exitCode: 1 })
     // PowerShell 失败（第一批起 runPowerShell 非零退出即抛错）不能跳过 tesseract 兜底
-    for (const brokenPs of [async () => { throw new PowerShellError(1, 'OcrEngine 不可用') }, async () => { throw new PowerShellError(124, '') }, async () => 'not json', async () => '{"text":"","lines":[]}']) {
+    for (const brokenPs of [async () => { throw new PowerShellError(1, 'OcrEngine 不可用') }, async () => { throw new PowerShellError(124, '') }, async () => 'not json', async () => '{"ok":false,"error":"OcrEngine 不可用"}']) {
       const ok = await handler({ runPowerShell: brokenPs, runCommand: tesseractOk }).handleOcr('recognize', { imagePath: img }) as Result
       assert.equal(ok.success, true); assert.equal(ok.engine, 'Tesseract-CLI'); assert.match(String(ok.text), /发票号码/)
     }

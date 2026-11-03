@@ -17,7 +17,7 @@ export function runNativeVisionTests({ executable, architecture, minimumOs, plat
   if (!exec('/usr/bin/lipo', ['-archs', executable], options).trim().split(/\s+/).includes(arch)) throw new Error('MISSING_NATIVE_SLICE')
   if (compareOsVersions(inspectDeployment(executable, arch), minimumOs) > 0) throw new Error('DEPLOYMENT_EXCEEDS_APPROVED_MINIMUM')
   const result = JSON.parse(exec('/usr/bin/arch', [arch === 'x86_64' ? '-x86_64' : '-arm64', executable, '--self-test'], options))
-  if (result.version !== 1 || result.success !== true || result.architecture !== architecture || result.scope !== 'vision-local-native' || result.cases !== 9) throw new Error('NATIVE_TEST_CONTRACT_MISMATCH')
+  if (result.version !== 1 || result.success !== true || result.architecture !== architecture || result.scope !== 'vision-local-native' || result.cases !== 10) throw new Error('NATIVE_TEST_CONTRACT_MISMATCH')
   return { status: 'PASS', minimumOs, ...result }
 }
 export function main(argv = process.argv.slice(2)) {

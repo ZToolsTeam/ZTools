@@ -16,6 +16,7 @@ import { isBundledPlugin, readBundledPluginFile, getBundledPluginIconUrl } from 
 import { createScopedLocalStorage } from './pluginStorage.js'
 import { createScopedHostBridge, createScopedWindow, getPluginSessionHolder } from '../declarative/pluginSession.js'
 import { createPluginHostApis } from '../declarative/pluginSecureStorage.js'
+import { ensureHostBridge } from '../declarative/hostClipboardBridge.js'
 
 export const V2_CATALOG_CDN_URL = 'https://cdn.ztools.cn/plugins-v2/catalog.json'
 
@@ -846,6 +847,8 @@ export async function loadInstalledDeclarativePlugin(pluginId, options = {}) {
  */
 export async function executeDeclarativeNoViewCommand(pluginId, options = {}) {
   const loaded = await loadInstalledDeclarativePlugin(pluginId, options)
+  // 本窗口可能还没打开过插件页面：补上宿主剪贴板 Bridge，避免 Clipboard.copy 退回内存后假装成功
+  ensureHostBridge()
   // 执行期间持有会话：命令里调用需要归属的能力（加密存储、结束进程）时带令牌
   const releaseSession = loaded.session ? await loaded.session.acquire() : null
   try {

@@ -141,3 +141,15 @@ test('配置路径访问异常不能视作首次运行', async (t) => {
   await assert.rejects(initializeDefaultAutostart(invalidRoot, config, loginItem), { code: 'ENOTDIR' })
   assert.deepEqual(writes, [])
 })
+
+test('配置目录尚未创建时不注册登录项，目录就绪后可重试', async (t) => {
+  const { root, writes, loginItem } = await createFixture(t)
+  const pendingRoot = path.join(root, 'pending')
+  const config = new ConfigService(new JsonFileStore(pendingRoot, ConfigService.allowedStoreFiles))
+  await assert.rejects(initializeDefaultAutostart(pendingRoot, config, loginItem), { code: 'ENOENT' })
+  assert.deepEqual(writes, [])
+  await fs.mkdir(pendingRoot)
+  await initializeDefaultAutostart(pendingRoot, config, loginItem)
+  assert.deepEqual(writes, [true])
+  assert.equal(await config.getSetting('autostart'), 'true')
+})

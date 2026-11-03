@@ -12,10 +12,10 @@ export const MAX_DIFF_LINES = 20000;
 export const MAX_DIFF_COST = 10_000_000;
 /** 近似对比的最大递归层数，防止病态输入导致栈溢出 */
 const MAX_ANCHOR_DEPTH = 64;
-export function splitLines(text) {
+export function splitLines(text, preserveLineEndings = false) {
     if (!text)
         return [];
-    const lines = text.replace(/\r\n?/g, "\n").split("\n");
+    const lines = (preserveLineEndings ? text : text.replace(/\r\n?/g, "\n")).split("\n");
     // 末尾换行不算作额外的一行
     if (lines.length > 0 && lines[lines.length - 1] === "")
         lines.pop();
@@ -235,13 +235,17 @@ function lcsMatch(a, b, maxCost) {
     return { matchA, approximate };
 }
 export function diffText(left, right, options = {}) {
-    const a = splitLines(left);
-    const b = splitLines(right);
+    // 补丁按 LF 分行，行内的 CR 是原始内容，必须保留以匹配 Windows 文件。
+    const a = splitLines(left, true);
+    const b = splitLines(right, true);
     if (a.length > MAX_DIFF_LINES || b.length > MAX_DIFF_LINES) {
         throw new Error(`文本超过 ${MAX_DIFF_LINES} 行，暂不支持对比`);
     }
-    const na = a.map((l) => normalize(l, options));
-    const nb = b.map((l) => normalize(l, options));
+    const leftUnterminated = a.length > 0 && !left.endsWith("\n");
+    const rightUnterminated = b.length > 0 && !right.endsWith("\n");
+    // 行结束状态参与匹配，避免把“same”与“same\n”当成同一行。
+    const na = a.map((l, i) => normalize(l, options) + (leftUnterminated && i === a.length - 1 ? "" : "\n"));
+    const nb = b.map((l, i) => normalize(l, options) + (rightUnterminated && i === b.length - 1 ? "" : "\n"));
     const { matchA, approximate } = lcsMatch(na, nb, options.maxCost ?? MAX_DIFF_COST);
     const lines = [];
     let j = 0;
@@ -264,6 +268,11 @@ export function diffText(left, right, options = {}) {
             lines.push({ op: "equal", text: b[j], leftNo: i + 1, rightNo: j + 1 });
             j++;
         }
+    }
+    for (const line of lines) {
+        if ((line.op === "remove" && leftUnterminated && line.leftNo === a.length) ||
+            (line.op !== "remove" && rightUnterminated && line.rightNo === b.length))
+            line.noNewline = true;
     }
     const context = options.context ?? 3;
     const hunks = [];
@@ -312,7 +321,8 @@ function hunkHeader(h) {
     return `@@ -${h.leftStart},${h.leftCount} +${h.rightStart},${h.rightCount} @@`;
 }
 export function formatHunk(h) {
-    const body = h.lines.map((l) => (l.op === "add" ? "+" : l.op === "remove" ? "-" : " ") + l.text).join("\n");
+    const body = h.lines.map((l) => (l.op === "add" ? "+" : l.op === "remove" ? "-" : " ") + l.text +
+        (l.noNewline ? "\n\\ No newline at end of file" : "")).join("\n");
     return `${hunkHeader(h)}\n${body}`;
 }
 /**
@@ -339,7 +349,7 @@ export function hunkPreviewMarkdown(h) {
 export function formatUnifiedDiff(result, leftName = "左侧", rightName = "右侧") {
     if (result.identical)
         return "";
-    return [`--- ${leftName}`, `+++ ${rightName}`, ...result.hunks.map(formatHunk)].join("\n");
+    return [`--- ${leftName}`, `+++ ${rightName}`, ...result.hunks.map(formatHunk), ""].join("\n");
 }
 export function describeHunk(h) {
     const parts = [];

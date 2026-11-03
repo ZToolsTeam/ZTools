@@ -26,6 +26,7 @@ type TcpProbe = (host: string, port: number, timeoutMs: number) => Promise<{ ok:
 /** 网络处理器的系统依赖：生产用真实实现，测试经构造参数注入替身（插件调用参数无法切换） */
 export interface NetworkHostDeps extends HostSystemCommands {
   probeTcp: TcpProbe
+  lookupDns: (hostname: string) => Promise<{ address: string }>
   /** 系统 hosts 文件路径（旧接口只读取）；未注入时按当前平台取系统路径 */
   hostsPath: string | undefined
 }
@@ -34,6 +35,7 @@ export class NetworkHostPluginHandler {
   readonly #ctx: HostPluginContext
   readonly #sys: HostSystemCommands
   readonly #probeTcp: TcpProbe
+  readonly #lookupDns: NetworkHostDeps['lookupDns']
   readonly #hostsPathOverride: string | undefined
   #lanShareStarting: Promise<void> | null = null
   readonly #lanShare: LanShareServerState = {
@@ -65,6 +67,7 @@ export class NetworkHostPluginHandler {
     this.#ctx = ctx
     this.#sys = resolveHostSystemCommands(deps)
     this.#probeTcp = deps.probeTcp ?? ((host, port, timeoutMs) => this.#probeTcpEndpoint(host, port, timeoutMs))
+    this.#lookupDns = deps.lookupDns ?? (hostname => dns.lookup(hostname))
     this.#hostsPathOverride = deps.hostsPath
   }
 
@@ -626,6 +629,31 @@ export class NetworkHostPluginHandler {
     return { ok, latencyMs: Math.max(1, Date.now() - start) }
   }
 
+  async #readWindowsNetworkStatus(signal?: AbortSignal): Promise<Record<string, unknown>> {
+    if (process.platform !== 'win32') return { error: '当前平台无法读取 Windows 网络服务和防火墙配置' }
+    try {
+      const raw = await this.#sys.runPowerShell(String.raw`
+        $result = @{}
+        try { $result.nlaStatus = (Get-Service -Name NlaSvc -ErrorAction Stop).Status.ToString() }
+        catch { $result.nlaError = $_.Exception.Message }
+        try { $result.firewallProfiles = @(Get-NetFirewallProfile -ErrorAction Stop | Select-Object Name, Enabled, DefaultInboundAction, DefaultOutboundAction) }
+        catch { $result.firewallError = $_.Exception.Message }
+        try {
+          $proxy = Get-ItemProperty 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Internet Settings' -ErrorAction Stop
+          $result.proxyEnabled = ($proxy.ProxyEnable -eq 1)
+          $result.proxyServer = [string]$proxy.ProxyServer
+        } catch { $result.proxyError = $_.Exception.Message }
+        ConvertTo-Json -InputObject $result -Compress -Depth 4
+      `, 10000, signal)
+      const parsed: unknown = JSON.parse(raw)
+      if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) throw new Error('系统返回的网络配置格式无效')
+      return parsed as Record<string, unknown>
+    } catch (err) {
+      signal?.throwIfAborted()
+      return { error: err instanceof Error ? err.message : String(err) }
+    }
+  }
+
   async handleNetworkRescue(
     fn: string,
     params: Record<string, unknown>,
@@ -633,7 +661,9 @@ export class NetworkHostPluginHandler {
   ): Promise<unknown> {
     const lowerFn = fn.toLowerCase()
     if (lowerFn === 'diagnose' || lowerFn === 'rundiagnostics' || lowerFn === 'checkall') {
+      signal?.throwIfAborted()
       const checks: Array<Record<string, unknown>> = []
+      const windowsStatus = await this.#readWindowsNetworkStatus(signal)
 
       const osNets = os.networkInterfaces()
       const activeIps: string[] = []
@@ -649,14 +679,13 @@ export class NetworkHostPluginHandler {
         name: '本地网卡与 DHCP IPv4 分配',
         category: '物理网卡',
         status: activeIps.length > 0 ? 'healthy' : 'error',
-        detail: activeIps.length > 0 ? `已分配内网地址: ${activeIps.join(', ')}` : '未检测到有效的非回环 IPv4 地址',
-        latencyMs: 1
+        detail: activeIps.length > 0 ? `本机 IPv4 地址: ${activeIps.join(', ')}（不代表 DHCP 租约已验证）` : '未检测到有效的非回环 IPv4 地址'
       })
 
       // 2. flush-dns (DNS 解析与缓存)
       const dnsStart = Date.now()
       try {
-        const resolved = await dns.lookup('www.baidu.com')
+        const resolved = await this.#lookupDns('www.baidu.com')
         checks.push({
           id: 'flush-dns',
           name: '公网域名解析与 DNS 缓存',
@@ -693,17 +722,19 @@ export class NetworkHostPluginHandler {
         id: 'clear-proxy',
         name: '系统代理与环境变量劫持检测',
         category: '系统代理',
-        status: envProxy ? 'warning' : 'healthy',
-        detail: envProxy ? `检测到代理环境变量: ${envProxy}` : '未检测到异常环境变量代理残留',
-        latencyMs: 1
+        status: envProxy || windowsStatus.proxyEnabled === true ? 'warning' : windowsStatus.proxyEnabled === false ? 'healthy' : 'unknown',
+        detail: envProxy ? '检测到代理环境变量，请确认是否为你主动配置'
+          : windowsStatus.proxyEnabled === true ? `系统代理已启用：${String(windowsStatus.proxyServer || '地址未提供')}，请确认是否仍需使用`
+          : windowsStatus.proxyEnabled === false ? '系统手动代理未启用；自动代理脚本未检测'
+          : `未能读取系统代理配置：${String(windowsStatus.proxyError || windowsStatus.error || '无有效结果')}`
       })
 
       // 5. check-hosts (Hosts 规则文件审计)
       const hostsStart = Date.now()
-      const hostsPath =
+      const hostsPath = this.#hostsPathOverride ?? (
         process.platform === 'win32'
           ? path.join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'drivers', 'etc', 'hosts')
-          : '/etc/hosts'
+          : '/etc/hosts')
       let hostsRuleCount = 0
       let hostsReadable = false
       try {
@@ -730,9 +761,8 @@ export class NetworkHostPluginHandler {
         id: 'reset-winsock',
         name: 'Winsock 套接字目录与传输栈',
         category: '协议栈',
-        status: activeIps.length > 0 ? 'healthy' : 'warning',
-        detail: activeIps.length > 0 ? 'TCP/IPv4 套接字协议栈工作正常' : '网络传输栈无活动连接',
-        latencyMs: 1
+        status: 'unknown',
+        detail: '尚未验证 Winsock 目录完整性；拥有 IPv4 地址不能证明协议栈健康'
       })
 
       // 7. reset-firewall (系统防火墙策略状态)
@@ -740,9 +770,10 @@ export class NetworkHostPluginHandler {
         id: 'reset-firewall',
         name: 'Windows Defender 防火墙策略检查',
         category: '安全策略',
-        status: 'healthy',
-        detail: '出入站基础网络通信未受阻断',
-        latencyMs: 1
+        status: 'unknown',
+        detail: Array.isArray(windowsStatus.firewallProfiles) && windowsStatus.firewallProfiles.length > 0
+          ? `已读取 ${windowsStatus.firewallProfiles.length} 个防火墙配置文件；尚未验证具体连接是否被规则阻断`
+          : `未能读取防火墙配置：${String(windowsStatus.firewallError || windowsStatus.error || '无有效结果')}`
       })
 
       // 8. restart-nla (NLA 网络位置感知服务)
@@ -750,11 +781,13 @@ export class NetworkHostPluginHandler {
         id: 'restart-nla',
         name: 'NLA 网络位置感知服务 (NlaSvc)',
         category: '系统服务',
-        status: activeIps.length > 0 ? 'healthy' : 'warning',
-        detail: activeIps.length > 0 ? '网络配置文件识别正常' : '网络位置感知未就绪',
-        latencyMs: 1
+        status: windowsStatus.nlaStatus === 'Running' ? 'healthy' : typeof windowsStatus.nlaStatus === 'string' && windowsStatus.nlaStatus ? 'warning' : 'unknown',
+        detail: typeof windowsStatus.nlaStatus === 'string' && windowsStatus.nlaStatus
+          ? `NlaSvc 服务状态：${windowsStatus.nlaStatus}（不代表外网连通）`
+          : `未能读取 NlaSvc 服务：${String(windowsStatus.nlaError || windowsStatus.error || '无有效结果')}`
       })
 
+      signal?.throwIfAborted()
       return { ok: true, success: true, checks }
     }
 

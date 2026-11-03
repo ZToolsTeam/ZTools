@@ -7747,6 +7747,7 @@
     class UpdateAPI {
       constructor(transport) {
         this.transport = transport
+        this.updateRevision = 0
       }
 
       /**
@@ -7775,6 +7776,7 @@
        * @returns {Promise<object>}
        */
       async downloadAndInstall(info) {
+        const revision = ++this.updateRevision
         const packageInfo = {
           type: 'app',
           version: info.version,
@@ -7782,7 +7784,8 @@
           checksum: info.checksum,
           fileSize: info.fileSize || 0
         }
-        const downloaded = await this.transport.call('update_download_start', packageInfo)
+        const downloaded = await this.transport.call('update_download_start', packageInfo, { timeout: Infinity })
+        if (revision !== this.updateRevision) throw Object.assign(new Error('更新已取消'), { code: 'CANCELLED' })
         if (!downloaded || downloaded.success !== true) return downloaded || { success: false }
         const installed = await this.transport.call('update_install_start', packageInfo, { timeout: Infinity })
         return installed || { success: false }
@@ -7793,6 +7796,7 @@
        * @returns {Promise<object>}
        */
       async cancel() {
+        this.updateRevision += 1
         return (await this.transport.call('update_cancel', {})) || { success: false }
       }
 
@@ -7805,7 +7809,7 @@
         const r = await this.transport.call('update_download_start', {
           type: 'app',
           ...info
-        })
+        }, { timeout: Infinity })
         return r && r.success === true
       }
 

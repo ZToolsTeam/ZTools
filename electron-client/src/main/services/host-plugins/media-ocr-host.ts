@@ -1,11 +1,16 @@
 import { spawn, type ChildProcess, type SpawnOptions } from 'node:child_process'
+import { randomUUID } from 'node:crypto'
 import fsSync from 'node:fs'
 import fs from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 import zlib from 'node:zlib'
 import { PNG } from 'pngjs'
+import { processAudioFiles } from './audio-processing.js'
 import type { CallerIdentity } from '../../../contracts/capabilities.js'
+import type { MacOcrPorts } from '../../platform/macos/mac-ocr.js'
+import type { RegionSelectorPort } from '../../platform/region-capture.js'
+import type { ScreenRectangle } from '../screen-service.js'
 import {
   buildMinimalValidPdf,
   captureScreenToPng,
@@ -30,6 +35,49 @@ export interface MediaOcrHostDeps extends HostSystemCommands {
   spawnProcess: (command: string, args: readonly string[], options: SpawnOptions) => ChildProcess
   /** 调用方窗口关闭时回调 onClosed，返回取消监听的函数（用于插件窗口关闭后收尾录制） */
   watchCallerClosed: (caller: CallerIdentity | undefined, onClosed: () => void) => () => void
+  /** macOS 本地文字识别；未提供时 macOS 上明确报组件不可用 */
+  macOcr: MacOcrPorts | undefined
+  /** 框选屏幕区域（macOS 与 Windows）；未提供时框选识别报不支持 */
+  regionSelector: RegionSelectorPort | undefined
+  /** 截取屏幕上的一块区域（全局 DIP 坐标）保存为 PNG，返回是否真的写出了文件 */
+  captureScreenRegionToPng: (rect: ScreenRectangle, outputPath: string, signal?: AbortSignal) => Promise<boolean>
+  /** 读取剪贴板里的图片（PNG 字节），剪贴板没有图片时返回 undefined */
+  readClipboardImage: (() => Buffer | undefined) | undefined
+  /** macOS 屏幕录制授权状态（granted / denied / restricted / not-determined / unknown） */
+  screenCapturePermission: (() => string) | undefined
+  /** 收起调用方窗口；返回重新显示它的函数，窗口本来就不可见时返回 undefined */
+  hideCallerWindow: ((caller: CallerIdentity | undefined) => (() => void) | undefined) | undefined
+}
+
+/** 插件传入的识别语言 → 各识别引擎的语言参数 */
+const OCR_LANGUAGES: Readonly<Record<string, { windows: string; tesseract: string; vision: readonly string[] }>> = {
+  'zh-hans-cn': { windows: 'zh-Hans-CN', tesseract: 'chi_sim+eng', vision: ['zh-Hans', 'en-US'] },
+  'chi_sim+eng': { windows: 'zh-Hans-CN', tesseract: 'chi_sim+eng', vision: ['zh-Hans', 'en-US'] },
+  'en-us': { windows: 'en-US', tesseract: 'eng', vision: ['en-US'] },
+  eng: { windows: 'en-US', tesseract: 'eng', vision: ['en-US'] },
+  'ja-jp': { windows: 'ja-JP', tesseract: 'jpn', vision: ['ja-JP', 'en-US'] },
+  jpn: { windows: 'ja-JP', tesseract: 'jpn', vision: ['ja-JP', 'en-US'] },
+  'ko-kr': { windows: 'ko-KR', tesseract: 'kor', vision: ['ko-KR', 'en-US'] },
+  kor: { windows: 'ko-KR', tesseract: 'kor', vision: ['ko-KR', 'en-US'] }
+}
+/** 中文、日文字符（汉字、假名、全角标点）；韩文按词用空格分隔，不在其中 */
+const CJK_CHARACTER = '[\\u2E80-\\u2FDF\\u3000-\\u303F\\u3040-\\u30FF\\u31F0-\\u31FF\\u3400-\\u4DBF\\u4E00-\\u9FFF\\uF900-\\uFAFF\\uFF00-\\uFF60\\uFFE0-\\uFFEF]'
+const SPACES_BETWEEN_CJK = new RegExp(`(?<=${CJK_CHARACTER})[ \\t]+(?=${CJK_CHARACTER})`, 'gu')
+
+/** Windows 文字识别把中文、日文的每个字当成一个词并用空格连接（“识 别 结 果”），去掉这些字之间的空格 */
+export function joinWindowsOcrWords(line: string): string {
+  return line.replace(SPACES_BETWEEN_CJK, '').trim()
+}
+
+/** macOS 本地识别单张图片的上限，与 Vision 助手一致 */
+const MAC_OCR_MAX_IMAGE_BYTES = 16 * 1024 * 1024
+
+async function captureScreenRegionWithScreencapture(sys: HostSystemCommands, rect: ScreenRectangle, outputPath: string, signal?: AbortSignal): Promise<boolean> {
+  if (process.platform !== 'darwin') return false
+  // -R 使用全局坐标（点），与 Electron 显示器 DIP 坐标一致；输出为屏幕原生分辨率
+  const region = [rect.x, rect.y, rect.width, rect.height].map(value => String(Math.round(value))).join(',')
+  const { exitCode } = await sys.runCommand('screencapture', ['-x', '-R', region, outputPath], 10_000, signal)
+  return exitCode === 0 && fsSync.existsSync(outputPath)
 }
 
 /** 批量图片旧接口真实支持的缩放预设（JS PNG 路径、GDI+ 脚本、ffmpeg 兜底三处都实现了），其余取值一律拒绝 */
@@ -166,6 +214,14 @@ export class MediaOcrHostPluginHandler {
   readonly #captureScreenToPng: typeof captureScreenToPng
   readonly #spawnProcess: MediaOcrHostDeps['spawnProcess']
   readonly #watchCallerClosed: MediaOcrHostDeps['watchCallerClosed']
+  readonly #macOcr: MediaOcrHostDeps['macOcr']
+  readonly #regionSelector: MediaOcrHostDeps['regionSelector']
+  readonly #captureScreenRegionToPng: MediaOcrHostDeps['captureScreenRegionToPng']
+  readonly #readClipboardImage: MediaOcrHostDeps['readClipboardImage']
+  readonly #screenCapturePermission: MediaOcrHostDeps['screenCapturePermission']
+  readonly #hideCallerWindow: MediaOcrHostDeps['hideCallerWindow']
+  /** 同一时间只允许一次框选识别，重复触发直接拒绝 */
+  #regionOcrActive = false
   readonly #activeRecordings = new Map<string, ActiveRecordingSession>()
   readonly #ffmpegRuns = new Map<string, FfmpegRecordingRun>()
   /** 录制会话对应的“调用方窗口关闭”监听的取消函数 */
@@ -177,12 +233,22 @@ export class MediaOcrHostPluginHandler {
     this.#captureScreenToPng = deps.captureScreenToPng ?? captureScreenToPng
     this.#spawnProcess = deps.spawnProcess ?? ((command, args, options) => spawn(command, [...args], options))
     this.#watchCallerClosed = deps.watchCallerClosed ?? watchCallerWebContentsClosed
+    this.#macOcr = deps.macOcr
+    this.#regionSelector = deps.regionSelector
+    this.#captureScreenRegionToPng = deps.captureScreenRegionToPng ??
+      ((rect, outputPath, signal) => captureScreenRegionWithScreencapture(this.#sys, rect, outputPath, signal))
+    this.#readClipboardImage = deps.readClipboardImage
+    this.#screenCapturePermission = deps.screenCapturePermission
+    this.#hideCallerWindow = deps.hideCallerWindow
   }
 
   async stop(): Promise<void> {
     // 宿主关闭时让 ffmpeg 正常收尾（直接结束进程会留下缺少文件尾、无法播放的视频）
     const sessions = Array.from(this.#activeRecordings.values())
-    await Promise.all(sessions.map((session) => this.#finalizeRecording(session, FFMPEG_SHUTDOWN_TIMEOUT_MS)))
+    await Promise.all([
+      ...sessions.map((session) => this.#finalizeRecording(session, FFMPEG_SHUTDOWN_TIMEOUT_MS)),
+      this.#regionSelector?.stop().catch((err) => console.warn('[MediaOcrHost] 关闭框选遮罩失败:', err))
+    ])
   }
 
   async handleOcr(
@@ -192,6 +258,7 @@ export class MediaOcrHostPluginHandler {
     signal?: AbortSignal
   ): Promise<unknown> {
     const lowerFn = fn.toLowerCase()
+    if (lowerFn === 'captureregionandrecognize') return this.#captureRegionAndRecognize(params, caller, signal)
     const rawImagePath = String(params.imagePath ?? params.filePath ?? params.path ?? '').trim()
     const isCaptureAndRecognize =
       lowerFn === 'captureandrecognize' || lowerFn === 'screenocr' || lowerFn === 'capturescreenocr'
@@ -199,6 +266,7 @@ export class MediaOcrHostPluginHandler {
     if (
       isCaptureAndRecognize ||
       lowerFn === 'recognize' ||
+      lowerFn === 'recognizeclipboard' ||
       lowerFn === 'ocrfile' ||
       lowerFn === 'extracttext' ||
       rawImagePath
@@ -225,6 +293,12 @@ export class MediaOcrHostPluginHandler {
         targetPath = path.join(os.tmpdir(), `ztools_ocr_${Date.now()}.png`)
         await fs.writeFile(targetPath, Buffer.from(rawB64, 'base64'))
         tempCreated = true
+      } else if (this.#readClipboardImage) {
+        const clipImage = this.#readClipboardImage()
+        if (!clipImage) return { ok: false, success: false, error: '剪贴板里没有图片' }
+        targetPath = path.join(os.tmpdir(), `ztools_ocr_clip_${randomUUID()}.png`)
+        await fs.writeFile(targetPath, clipImage)
+        tempCreated = true
       } else if (
         this.#ctx.clipboard &&
         typeof (this.#ctx.clipboard as { getImage?: () => Promise<Buffer | string | null> }).getImage === 'function'
@@ -247,124 +321,8 @@ export class MediaOcrHostPluginHandler {
       }
 
       const rawLang = String(params.lang ?? params.languageModelId ?? params.language ?? '').trim()
-      const normalizedWinLang = rawLang
-        ? rawLang.toLowerCase().includes('en')
-          ? 'en-US'
-          : rawLang.toLowerCase().includes('ja') || rawLang.toLowerCase().includes('jp')
-            ? 'ja-JP'
-            : rawLang.toLowerCase().includes('zh') || rawLang.toLowerCase().includes('chi')
-              ? 'zh-Hans-CN'
-              : rawLang.replace(/[^a-zA-Z0-9-]/g, '')
-        : ''
-
-      let windowsOcrIssue = ''
       try {
-        if (process.platform === 'win32') {
-          const escapedPath = escapePsSingleQuoted(targetPath)
-          const escapedLang = escapePsSingleQuoted(normalizedWinLang)
-          const psScript = `
-            $ErrorActionPreference = 'Stop'
-            Add-Type -AssemblyName System.Runtime.WindowsRuntime
-            $null = [Windows.Media.Ocr.OcrEngine, Windows.Foundation, ContentType = WindowsRuntime]
-            $null = [Windows.Graphics.Imaging.BitmapDecoder, Windows.Foundation, ContentType = WindowsRuntime]
-            $null = [Windows.Storage.StorageFile, Windows.Foundation, ContentType = WindowsRuntime]
-            $null = [Windows.Globalization.Language, Windows.Foundation, ContentType = WindowsRuntime]
-            $asTaskGeneric = ([System.WindowsRuntimeSystemExtensions].GetMethods() | Where-Object { $_.Name -eq 'AsTask' -and $_.GetParameters().Count -eq 1 -and $_.GetParameters()[0].ParameterType.Name -eq 'IAsyncOperation\`1' })[0]
-            Function Await($WinRtTask, $ResultType) {
-              $asTask = $asTaskGeneric.MakeGenericMethod($ResultType)
-              $netTask = $asTask.Invoke($null, @($WinRtTask))
-              $netTask.Wait(-1) | Out-Null
-              $netTask.Result
-            }
-            $file = Await ([Windows.Storage.StorageFile]::GetFileFromPathAsync('${escapedPath}')) ([Windows.Storage.StorageFile])
-            $stream = Await ($file.OpenAsync([Windows.Storage.FileAccessMode]::Read)) ([Windows.Storage.Streams.IRandomAccessStream])
-            $decoder = Await ([Windows.Graphics.Imaging.BitmapDecoder]::CreateAsync($stream)) ([Windows.Graphics.Imaging.BitmapDecoder])
-            $bitmap = Await ($decoder.GetSoftwareBitmapAsync()) ([Windows.Graphics.Imaging.SoftwareBitmap])
-            $engine = $null
-            if ('${escapedLang}' -ne '') {
-              try {
-                $langObj = New-Object Windows.Globalization.Language('${escapedLang}')
-                if ([Windows.Media.Ocr.OcrEngine]::IsLanguageSupported($langObj)) {
-                  $engine = [Windows.Media.Ocr.OcrEngine]::TryCreateFromLanguage($langObj)
-                }
-              } catch {}
-            }
-            if ($null -eq $engine) {
-              $engine = [Windows.Media.Ocr.OcrEngine]::TryCreateFromUserProfileLanguages()
-            }
-            if ($null -eq $engine) {
-              $engine = [Windows.Media.Ocr.OcrEngine]::TryCreateFromLanguage((New-Object Windows.Globalization.Language('en-US')))
-            }
-            $result = Await ($engine.RecognizeAsync($bitmap)) ([Windows.Media.Ocr.OcrResult])
-            $lines = @($result.Lines | ForEach-Object { $_.Text })
-            $stream.Dispose()
-            [PSCustomObject]@{
-              text = $result.Text
-              lines = $lines
-            } | ConvertTo-Json -Compress
-          `
-          // Windows.Media.Ocr 失败（脚本报错、超时、输出异常）只记下原因，继续尝试 tesseract，不能直接抛给调用方
-          let out = ''
-          try {
-            out = await this.#sys.runPowerShell(psScript, 20_000, signal)
-          } catch (err) {
-            windowsOcrIssue = errorText(err)
-          }
-          if (out) {
-            try {
-              const parsed = JSON.parse(out) as { text?: string; lines?: string[] }
-              const recognizedText = (parsed.text ?? (parsed.lines ?? []).join('\n')).trim()
-              if (recognizedText.length > 0) {
-                return {
-                  ok: true,
-                  success: true,
-                  text: recognizedText,
-                  lines: parsed.lines ?? recognizedText.split(/\r?\n/),
-                  engine: 'Windows.Media.Ocr'
-                }
-              }
-              windowsOcrIssue = '未识别到文字'
-            } catch (err) {
-              console.warn('[MediaOcrHost] Windows.Media.Ocr output JSON parse failed:', err)
-              windowsOcrIssue = `输出格式异常（${errorText(err)}）`
-            }
-          } else if (!windowsOcrIssue) {
-            windowsOcrIssue = '没有输出'
-          }
-          if (signal?.aborted) {
-            return { ok: false, success: false, error: 'OCR 识别已取消' }
-          }
-        }
-
-        const tesseractLang = rawLang
-          ? rawLang.toLowerCase().includes('en')
-            ? 'eng'
-            : 'chi_sim+eng'
-          : 'chi_sim+eng'
-        const tesseract = await this.#sys.runCommand('tesseract', [targetPath, 'stdout', '-l', tesseractLang], 15_000, signal)
-        if (tesseract.exitCode === 0 && tesseract.stdout.trim()) {
-          const text = tesseract.stdout.trim()
-          return {
-            ok: true,
-            success: true,
-            text,
-            lines: text.split(/\r?\n/),
-            engine: 'Tesseract-CLI'
-          }
-        }
-        const tesseractIssue =
-          tesseract.exitCode === 0
-            ? '未识别到文字'
-            : `退出码 ${tesseract.exitCode}${tesseract.stderr.trim() ? `：${tesseract.stderr.trim().slice(0, 300)}` : ''}`
-        const reasons = [windowsOcrIssue ? `Windows.Media.Ocr：${windowsOcrIssue}` : '', `Tesseract：${tesseractIssue}`]
-          .filter(Boolean)
-          .join('；')
-
-        return {
-          ok: false,
-          success: false,
-          error: `未检测到有效文字区域或 OCR 识别失败（${reasons}）`
-        }
+        return await this.#recognizeFile(targetPath, rawLang, signal)
       } finally {
         if (tempCreated) {
           await fs.unlink(targetPath).catch(() => undefined)
@@ -375,8 +333,202 @@ export class MediaOcrHostPluginHandler {
     return {
       ok: true,
       success: true,
-      supportedLanguages: ['zh-Hans-CN', 'en-US', 'ja-JP'],
-      engine: process.platform === 'win32' ? 'Windows.Media.Ocr' : 'SystemVision'
+      supportedLanguages: ['zh-Hans-CN', 'en-US', 'ja-JP', 'ko-KR'],
+      engine: process.platform === 'win32' ? 'Windows.Media.Ocr' : process.platform === 'darwin' ? 'Apple Vision' : 'Tesseract-CLI',
+      regionCapture: this.#regionSelector !== undefined
+    }
+  }
+
+  /** 识别一个图片文件：macOS 用系统 Vision；Windows 用系统文字识别，失败时再试 tesseract 命令行 */
+  async #recognizeFile(targetPath: string, rawLang: string, signal?: AbortSignal): Promise<Record<string, unknown>> {
+    const language = OCR_LANGUAGES[(rawLang || 'zh-Hans-CN').toLowerCase()]
+    const normalizedWinLang = language?.windows ?? ''
+    let windowsOcrIssue = ''
+    if (!language) return { ok: false, success: false, error: `不支持的 OCR 语言：${rawLang}` }
+    if (process.platform === 'darwin') return await this.#recognizeOnMac(targetPath, language.vision, signal)
+    if (process.platform === 'win32') {
+      const escapedPath = escapePsSingleQuoted(targetPath)
+      const escapedLang = escapePsSingleQuoted(normalizedWinLang)
+      const psScript = `
+        $ErrorActionPreference = 'Stop'
+        $ProgressPreference = 'SilentlyContinue'
+        try {
+        Add-Type -AssemblyName System.Runtime.WindowsRuntime
+        $null = [Windows.Media.Ocr.OcrEngine, Windows.Foundation, ContentType = WindowsRuntime]
+        $null = [Windows.Graphics.Imaging.BitmapDecoder, Windows.Foundation, ContentType = WindowsRuntime]
+        $null = [Windows.Storage.StorageFile, Windows.Foundation, ContentType = WindowsRuntime]
+        $null = [Windows.Globalization.Language, Windows.Foundation, ContentType = WindowsRuntime]
+        $asTaskGeneric = ([System.WindowsRuntimeSystemExtensions].GetMethods() | Where-Object { $_.Name -eq 'AsTask' -and $_.GetParameters().Count -eq 1 -and $_.GetParameters()[0].ParameterType.Name -eq 'IAsyncOperation\`1' })[0]
+        Function Await($WinRtTask, $ResultType) {
+          $asTask = $asTaskGeneric.MakeGenericMethod($ResultType)
+          $netTask = $asTask.Invoke($null, @($WinRtTask))
+          $netTask.Wait(-1) | Out-Null
+          $netTask.Result
+        }
+        $file = Await ([Windows.Storage.StorageFile]::GetFileFromPathAsync('${escapedPath}')) ([Windows.Storage.StorageFile])
+        $stream = Await ($file.OpenAsync([Windows.Storage.FileAccessMode]::Read)) ([Windows.Storage.Streams.IRandomAccessStream])
+        try {
+          $decoder = Await ([Windows.Graphics.Imaging.BitmapDecoder]::CreateAsync($stream)) ([Windows.Graphics.Imaging.BitmapDecoder])
+        } catch {
+          throw '无法读取图片，请确认文件未损坏且格式受支持'
+        }
+        # 超过识别引擎上限（MaxImageDimension）的大图按比例缩小，否则识别直接失败
+        $maxDimension = [Windows.Media.Ocr.OcrEngine]::MaxImageDimension
+        $width = [double]$decoder.OrientedPixelWidth
+        $height = [double]$decoder.OrientedPixelHeight
+        if ($width -gt $maxDimension -or $height -gt $maxDimension) {
+          $scale = [Math]::Min($maxDimension / $width, $maxDimension / $height)
+          $transform = New-Object Windows.Graphics.Imaging.BitmapTransform
+          $transform.ScaledWidth = [uint32][Math]::Max(1, [Math]::Floor($decoder.PixelWidth * $scale))
+          $transform.ScaledHeight = [uint32][Math]::Max(1, [Math]::Floor($decoder.PixelHeight * $scale))
+          $transform.InterpolationMode = [Windows.Graphics.Imaging.BitmapInterpolationMode]::Fant
+          $bitmap = Await ($decoder.GetSoftwareBitmapAsync([Windows.Graphics.Imaging.BitmapPixelFormat]::Bgra8, [Windows.Graphics.Imaging.BitmapAlphaMode]::Premultiplied, $transform, [Windows.Graphics.Imaging.ExifOrientationMode]::RespectExifOrientation, [Windows.Graphics.Imaging.ColorManagementMode]::DoNotColorManage)) ([Windows.Graphics.Imaging.SoftwareBitmap])
+        } else {
+          $bitmap = Await ($decoder.GetSoftwareBitmapAsync()) ([Windows.Graphics.Imaging.SoftwareBitmap])
+        }
+        $langObj = New-Object Windows.Globalization.Language('${escapedLang}')
+        if (-not [Windows.Media.Ocr.OcrEngine]::IsLanguageSupported($langObj)) {
+          throw '未安装所选语言的 Windows OCR 语言包：${escapedLang}'
+        }
+        $engine = [Windows.Media.Ocr.OcrEngine]::TryCreateFromLanguage($langObj)
+        if ($null -eq $engine) { throw '无法创建所选语言的 OCR 引擎：${escapedLang}' }
+        $result = Await ($engine.RecognizeAsync($bitmap)) ([Windows.Media.Ocr.OcrResult])
+        $lines = @($result.Lines | ForEach-Object { $_.Text })
+        $stream.Dispose()
+        [PSCustomObject]@{
+          text = $result.Text
+          lines = $lines
+        } | ConvertTo-Json -Compress
+        } catch {
+          # Windows PowerShell 的 stderr 会混入 CLIXML；通过结构化结果传递真实失败原因。
+          [PSCustomObject]@{ ok = $false; error = $_.Exception.GetBaseException().Message } | ConvertTo-Json -Compress
+        }
+      `
+      // Windows.Media.Ocr 失败（脚本报错、超时、输出异常）只记下原因，继续尝试 tesseract，不能直接抛给调用方
+      let out = ''
+      try {
+        out = await this.#sys.runPowerShell(psScript, 20_000, signal)
+      } catch (err) {
+        windowsOcrIssue = errorText(err)
+      }
+      if (signal?.aborted) {
+        return { ok: false, success: false, error: 'OCR 识别已取消' }
+      }
+      if (out) {
+        try {
+          const parsed = JSON.parse(out) as { text?: unknown; lines?: unknown; ok?: unknown; error?: unknown } | null
+          if (parsed?.ok === false && typeof parsed.error === 'string' && parsed.error.trim()) {
+            windowsOcrIssue = parsed.error.trim()
+          } else {
+            if (!parsed || parsed.ok === false || typeof parsed.text !== 'string' ||
+                !(typeof parsed.lines === 'string' || (Array.isArray(parsed.lines) && parsed.lines.every(line => typeof line === 'string')))) {
+              throw new Error('系统识别结果缺少有效的 text 或 lines 字段')
+            }
+            // OcrResult.Text 把各行用空格连成一行，按行拼接才能保留分行
+            const rawLines = Array.isArray(parsed.lines) ? parsed.lines : [parsed.lines]
+            const lines = rawLines.map(joinWindowsOcrWords).filter(line => line.length > 0)
+            const recognizedText = (lines.length > 0 ? lines.join('\n') : joinWindowsOcrWords(parsed.text)).trim()
+            if (recognizedText.length > 0) {
+              return {
+                ok: true,
+                success: true,
+                text: recognizedText,
+                lines: recognizedText.split(/\r?\n/),
+                engine: 'Windows.Media.Ocr'
+              }
+            }
+            // 有效空结果不是引擎故障，不应因回退引擎缺失而误报依赖错误。
+            return { ok: false, success: false, empty: true, error: '没有识别到文字' }
+          }
+        } catch (err) {
+          console.warn('[MediaOcrHost] Windows.Media.Ocr output JSON parse failed:', err)
+          windowsOcrIssue = `输出格式异常（${errorText(err)}）`
+        }
+      } else if (!windowsOcrIssue) {
+        windowsOcrIssue = '没有输出'
+      }
+    }
+
+    const tesseract = await this.#sys.runCommand('tesseract', [targetPath, 'stdout', '-l', language.tesseract], 15_000, signal)
+    if (tesseract.exitCode === 0 && tesseract.stdout.trim()) {
+      const text = tesseract.stdout.trim()
+      return {
+        ok: true,
+        success: true,
+        text,
+        lines: text.split(/\r?\n/),
+        engine: 'Tesseract-CLI'
+      }
+    }
+    const tesseractIssue =
+      tesseract.exitCode === 0
+        ? '未识别到文字'
+        : `退出码 ${tesseract.exitCode}${tesseract.stderr.trim() ? `：${tesseract.stderr.trim().slice(0, 300)}` : ''}`
+    const reasons = [windowsOcrIssue ? `Windows.Media.Ocr：${windowsOcrIssue}` : '', `Tesseract：${tesseractIssue}`]
+      .filter(Boolean)
+      .join('；')
+
+    return {
+      ok: false,
+      success: false,
+      error: `未检测到有效文字区域或 OCR 识别失败（${reasons}）`
+    }
+  }
+
+  /** macOS：用系统 Vision 在本机识别图片文字 */
+  async #recognizeOnMac(imagePath: string, languages: readonly string[], signal?: AbortSignal): Promise<Record<string, unknown>> {
+    if (!this.#macOcr) return { ok: false, success: false, error: '本地文字识别组件不可用，请重新构建或更新客户端' }
+    try {
+      const stat = await fs.stat(imagePath)
+      if (stat.size > MAC_OCR_MAX_IMAGE_BYTES) return { ok: false, success: false, error: '图片超过 16 MB，无法识别' }
+      const { text } = await this.#macOcr.recognizeLocal(await fs.readFile(imagePath), languages, signal)
+      const recognized = text.trim()
+      if (!recognized) return { ok: false, success: false, empty: true, error: '没有识别到文字' }
+      return { ok: true, success: true, text: recognized, lines: recognized.split(/\r?\n/), engine: 'Apple Vision' }
+    } catch (err) {
+      if (signal?.aborted) return { ok: false, success: false, error: 'OCR 识别已取消' }
+      return { ok: false, success: false, error: errorText(err) }
+    }
+  }
+
+  /** 用户框选屏幕区域后识别其中的文字（macOS 与 Windows）；取消框选返回 canceled，不当作失败 */
+  async #captureRegionAndRecognize(params: Record<string, unknown>, caller?: CallerIdentity, signal?: AbortSignal): Promise<Record<string, unknown>> {
+    const regionSelector = this.#regionSelector
+    if ((process.platform !== 'darwin' && process.platform !== 'win32') || !regionSelector) {
+      return { ok: false, success: false, error: '当前系统暂不支持框选识别' }
+    }
+    const rawLang = String(params.lang ?? params.languageModelId ?? params.language ?? '').trim()
+    const language = OCR_LANGUAGES[(rawLang || 'zh-Hans-CN').toLowerCase()]
+    if (!language) return { ok: false, success: false, error: `不支持的 OCR 语言：${rawLang}` }
+    const permission = this.#screenCapturePermission?.()
+    if (permission === 'denied' || permission === 'restricted') {
+      return { ok: false, success: false, error: '没有屏幕录制权限，请在系统设置的「隐私与安全性」中允许 ZTools 录制屏幕' }
+    }
+    if (this.#regionOcrActive) return { ok: false, success: false, error: '正在框选识别，请先完成或取消当前框选' }
+    this.#regionOcrActive = true
+    const capturePath = path.join(os.tmpdir(), `ztools_ocr_region_${randomUUID()}.png`)
+    let restoreWindow: (() => void) | undefined
+    try {
+      restoreWindow = this.#hideCallerWindow?.(caller)
+      const rect = await regionSelector.selectScreenRegion(signal)
+      if (!rect) return { ok: false, success: false, canceled: true, error: '已取消框选' }
+      if (!(await this.#captureScreenRegionToPng(rect, capturePath, signal))) {
+        return { ok: false, success: false, error: '截取所选区域失败' }
+      }
+      return await this.#recognizeFile(capturePath, rawLang, signal)
+    } catch (err) {
+      if (signal?.aborted) return { ok: false, success: false, canceled: true, error: '已取消框选' }
+      return { ok: false, success: false, error: errorText(err) }
+    } finally {
+      this.#regionOcrActive = false
+      await fs.unlink(capturePath).catch(() => undefined)
+      if (params.restoreWindow !== false) {
+        try {
+          restoreWindow?.()
+        } catch (err) {
+          console.warn('[MediaOcrHost] 重新显示窗口失败:', err)
+        }
+      }
     }
   }
 
@@ -1045,6 +1197,10 @@ export class MediaOcrHostPluginHandler {
     // 普通转码不能冒充 AI 模型推理；探测仍可用，处理必须等真实引擎接入。
     if (pluginName === 'AiVideoPlugin') {
       return { ok: false, success: false, processedCount: 0, errorCode: 'NOT_SUPPORTED', error: 'AI 视频补帧、超分和降噪引擎尚未接入，无法执行增强；普通转码不能代替 AI 处理' }
+    }
+
+    if (pluginName === 'BatchAudioPlugin') {
+      return processAudioFiles(this.#ctx, this.#sys, lowerFn, params, rawFiles, caller, signal)
     }
 
     if (rawFiles.length > 0) {

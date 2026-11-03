@@ -209,12 +209,6 @@ export class FrameSyncManager {
       win.restore()
     }
 
-    // 已完全可见且不需要帧同步唤醒
-    if (win.isVisible() && this.#state === 'visible') {
-      win.focus()
-      return Promise.resolve()
-    }
-
     // 取消挂起计时器
     this.#cancelSuspendTimer()
 
@@ -281,7 +275,8 @@ export class FrameSyncManager {
     if (!this.#window || this.#window.isDestroyed()) return
     this.#cancelResume()
     this.#cancelSuspendTimer()
-    if (this.#window.isVisible()) this.#window.hide()
+    // macOS 切换 Space / 遮挡时的可见性不能代替 hide；必须真正撤下原生窗口。
+    this.#window.hide()
     this.#state = 'suspend_pending'
     this.#scheduleSuspendTimer()
   }

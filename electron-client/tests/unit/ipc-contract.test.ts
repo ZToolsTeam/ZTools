@@ -239,6 +239,12 @@ test('parseRequest only permits explicit infinite waits for allowlisted methods'
     INFINITE_TIMEOUT
   )
   assert.equal(parseRequest({
+    messageId: 'update:download',
+    method: 'update_download_start',
+    params: { type: 'app', version: '1.1.8.9' },
+    timeoutMs: INFINITE_TIMEOUT
+  }).timeoutMs, INFINITE_TIMEOUT)
+  assert.equal(parseRequest({
     messageId: 'update:install',
     method: 'update_install_start',
     params: { type: 'app', version: '2.0.0' },

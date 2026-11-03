@@ -6,6 +6,7 @@ import path from 'node:path'
 import initSqlJs, { type SqlJsStatic } from 'sql.js'
 import yauzl from 'yauzl'
 import yazl from 'yazl'
+import { createSnapshotArchive, extractSnapshotArchive } from './snapshot-archive.js'
 import type { CallerIdentity } from '../../../contracts/capabilities.js'
 import { errorCodes, ZToolsError } from '../../../contracts/errors.js'
 import {
@@ -519,7 +520,7 @@ export class StorageHostPluginHandler {
       const backupDir = rawDirParam
         ? await this.#ctx.authorizeOutputPath(rawDirParam, caller)
         : defaultBackupDir
-      await fs.mkdir(backupDir, { recursive: true })
+      await fs.mkdir(backupDir, { recursive: true, mode: 0o700 })
       const entries = await fs.readdir(backupDir, { withFileTypes: true })
       const backups: Array<Record<string, unknown>> = []
       for (const entry of entries) {
@@ -566,147 +567,26 @@ export class StorageHostPluginHandler {
       const backupDir = rawDirParam
         ? await this.#ctx.authorizeOutputPath(rawDirParam, caller)
         : defaultBackupDir
-      await fs.mkdir(backupDir, { recursive: true })
-      const rawBackupName = String(
-        params.backupName ??
-          params.archiveName ??
-          params.name ??
-          `ztools-backup-${new Date().toISOString().replace(/[:.]/g, '-')}.zip`
-      )
-      const safeBackupFileName = path.basename(rawBackupName.endsWith('.zip') ? rawBackupName : `${rawBackupName}.zip`)
-      const outZipPath = await this.#ctx.authorizeOutputPath(path.join(backupDir, safeBackupFileName), caller)
-
-      const zipfile = new yazl.ZipFile()
-      let addedCount = 0
-
-      const addDirToZip = async (dirPath: string, zipPrefix: string) => {
-        const entries = await fs.readdir(dirPath, { withFileTypes: true })
-        for (const entry of entries) {
-          if (entry.isSymbolicLink()) continue
-          const full = path.join(dirPath, entry.name)
-          const rel = zipPrefix ? `${zipPrefix}/${entry.name}` : entry.name
-          if (entry.isFile()) {
-            zipfile.addFile(full, rel)
-            addedCount += 1
-          } else if (entry.isDirectory()) {
-            await addDirToZip(full, rel)
-          }
-        }
-      }
-
-      for (const src of rawSources) {
-        try {
-          const resolved = await this.#ctx.authorizeExistingPath(src, caller, 'read')
-          if (!fsSync.existsSync(resolved)) continue
-          const stat = await fs.lstat(resolved)
-          if (stat.isFile()) {
-            zipfile.addFile(resolved, path.basename(resolved))
-            addedCount += 1
-          } else if (stat.isDirectory()) {
-            await addDirToZip(resolved, path.basename(resolved))
-          }
-        } catch {
-          // skip unauthorized source
-        }
-      }
-
-      // 严禁在源文件均不存在时伪造 ztools-snapshot-manifest.json 打包空 ZIP
-      if (addedCount === 0) {
-        return {
-          ok: false,
-          success: false,
-          error: '未找到任何有效的待备份源文件或目录'
-        }
-      }
-
-      await new Promise<void>((resolve, reject) => {
-        const outStream = fsSync.createWriteStream(outZipPath)
-        outStream.on('close', () => resolve())
-        outStream.on('error', reject)
-        zipfile.outputStream.pipe(outStream)
-        zipfile.end()
+      await fs.mkdir(backupDir, { recursive: true, mode: 0o700 })
+      const rawName = params.backupName ?? params.archiveName ?? params.name
+      return createSnapshotArchive({
+        sources: rawSources,
+        backupDir,
+        ...(typeof rawName === 'string' ? { backupName: rawName } : {}),
+        authorizeSource: source => this.#ctx.authorizeExistingPath(source, caller, 'read'),
+        authorizeOutput: output => this.#ctx.authorizeOutputPath(output, caller)
       })
-
-      const stat = await fs.stat(outZipPath)
-      return {
-        ok: true,
-        success: true,
-        backupPath: outZipPath,
-        archivePath: outZipPath,
-        fileCount: addedCount,
-        sizeBytes: stat.size,
-        sizeText: formatBytes(stat.size)
-      }
     }
 
-    if (lowerFn === 'restorebackup' || lowerFn === 'restoresnapshotarchive' || lowerFn === 'restore') {
+    if (lowerFn === 'restorebackup' || lowerFn === 'restoresnapshotarchive' || lowerFn === 'restore' || lowerFn === 'extractsnapshotarchive') {
       const zipPath = String(
         params.backupPath ?? params.archivePath ?? params.filePath ?? params.path ?? params.zipPath ?? ''
       ).trim()
-      if (!zipPath) {
-        return { ok: false, success: false, error: '需指定备份归档路径 (backupPath / archivePath)' }
-      }
+      if (!zipPath) return { ok: false, success: false, error: '需指定快照归档路径' }
       const resolvedZipPath = await this.#ctx.authorizeExistingPath(zipPath, caller, 'read')
-      const rawTargetDir = String(params.targetDir ?? params.outputDir ?? params.restoreDir ?? '').trim()
-      const defaultRestoreDir = path.join(
-        path.dirname(resolvedZipPath),
-        `${path.parse(resolvedZipPath).name}_restored`
-      )
-      const resolvedTarget = await this.#ctx.authorizeOutputPath(rawTargetDir || defaultRestoreDir, caller)
-      await fs.mkdir(resolvedTarget, { recursive: true })
-      const extractedFiles: string[] = []
-
-      await new Promise<void>((resolve, reject) => {
-        yauzl.open(resolvedZipPath, { lazyEntries: true }, (err, zipfile) => {
-          if (err || !zipfile) {
-            reject(err ?? new Error('无法打开 ZIP 备份文件'))
-            return
-          }
-          zipfile.readEntry()
-          zipfile.on('entry', (entry) => {
-            const safeEntryPath = path.resolve(resolvedTarget, entry.fileName)
-            if (!safeEntryPath.startsWith(resolvedTarget + path.sep) && safeEntryPath !== resolvedTarget) {
-              zipfile.readEntry()
-              return
-            }
-            if (/\/$/.test(entry.fileName)) {
-              fs.mkdir(safeEntryPath, { recursive: true })
-                .then(() => zipfile.readEntry())
-                .catch(reject)
-            } else {
-              fs.mkdir(path.dirname(safeEntryPath), { recursive: true })
-                .then(() => {
-                  zipfile.openReadStream(entry, (streamErr, readStream) => {
-                    if (streamErr || !readStream) {
-                      reject(streamErr ?? new Error('读取归档条目失败'))
-                      return
-                    }
-                    const writeStream = fsSync.createWriteStream(safeEntryPath)
-                    writeStream.on('close', () => {
-                      extractedFiles.push(safeEntryPath)
-                      zipfile.readEntry()
-                    })
-                    writeStream.on('error', reject)
-                    readStream.pipe(writeStream)
-                  })
-                })
-                .catch(reject)
-            }
-          })
-          zipfile.on('end', () => resolve())
-          zipfile.on('error', reject)
-        })
-      })
-
-      return {
-        ok: true,
-        success: true,
-        extractedCount: extractedFiles.length,
-        restoredCount: extractedFiles.length,
-        targetDir: resolvedTarget,
-        restoreDir: resolvedTarget,
-        extractedFiles
-      }
+      const outputParent = String(params.targetDir ?? params.outputDir ?? '').trim() || path.dirname(resolvedZipPath)
+      const resolvedParent = await this.#ctx.authorizeOutputPath(outputParent, caller)
+      return extractSnapshotArchive(resolvedZipPath, resolvedParent)
     }
 
     return this.handleSystemBackup('listBackups', params, caller)

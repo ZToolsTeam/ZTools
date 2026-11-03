@@ -160,7 +160,7 @@ test('Windows 列表：导出不带明文密钥，按配置去重、真实认证
   } }))
   const profiles = await readWifiProfiles('win32', undefined, f.deps)
   assert.deepEqual(profiles.sort((a, b) => a.ssid.localeCompare(b.ssid, 'en')), [
-    { ssid: ' home ', current: true, security: 'WPA2-Personal' }, { ssid: 'cafe', current: false, security: 'Open' }, { ssid: 'corp', current: false, security: 'WPA2-Enterprise' }])
+    { ssid: 'cafe', profileName: 'cafe', current: false, security: 'Open' }, { ssid: 'corp', profileName: 'corp', current: false, security: 'WPA2-Enterprise' }, { ssid: '家里 5G', profileName: ' home ', current: true, security: 'WPA2-Personal' }])
   assert.ok(f.calls[0]!.every(arg => arg !== 'key=clear'))
   assert.equal(JSON.stringify(profiles).includes('ENCRYPTED'), false)
   assert.deepEqual(await f.leftovers(), [])
@@ -170,7 +170,7 @@ test('Windows 列表：当前连接读取失败或无法解析时保持未知；
   const one = { files: { 'WLAN-a.xml': profileXml('a') } }
   for (const interfaces of [{ stdout: '', exitCode: 1 }, { stdout: 'garbled', exitCode: 0 }]) {
     const f = await windowsFixture(t, () => one, interfaces)
-    assert.deepEqual(await readWifiProfiles('win32', undefined, f.deps), [{ ssid: 'a', security: 'WPA2-Personal' }])
+    assert.deepEqual(await readWifiProfiles('win32', undefined, f.deps), [{ ssid: 'a', profileName: 'a', security: 'WPA2-Personal' }])
   }
   const failures: Array<[Exported, RegExp]> = [
     [{ exitCode: 1, stdout: 'The Wireless AutoConfig Service (wlansvc) is not running.' }, /退出码 1.*wlansvc/],
@@ -192,19 +192,37 @@ test('Windows 列表：netsh 代码页把 SSID 变成问号、与所有配置都
   // 代码页外字符被替换成 "?"，解析出了已连接 SSID，但与任何配置都对不上
   const garbled = await windowsFixture(t, () => ({ files }), { stdout: interfacesZh.replace('家里 5G', '咖啡??'), exitCode: 0 })
   const unknown = await readWifiProfiles('win32', undefined, garbled.deps)
-  assert.deepEqual(unknown.sort((a, b) => a.ssid.localeCompare(b.ssid, 'en')), [{ ssid: 'cafe', security: 'WPA2-Personal' }, { ssid: '咖啡\u{1F375}', security: 'WPA2-Personal' }])
+  assert.deepEqual(unknown.sort((a, b) => a.ssid.localeCompare(b.ssid, 'en')), [{ ssid: 'cafe', profileName: 'cafe', security: 'WPA2-Personal' }, { ssid: '咖啡\u{1F375}', profileName: '咖啡\u{1F375}', security: 'WPA2-Personal' }])
   assert.ok(unknown.every(profile => !('current' in profile)), '对不上时不能出现 current: false')
   // 双网卡：一个 SSID 对得上、另一个被替换成问号；对上的仍是已连接，其余未知
   const dual = interfacesZh + interfacesZh.replace('3f1a2b4c-1111', '3f1a2b4c-9999').replace('家里 5G', '??').replace('a4:b1:c1:d1:e1:f1', 'a4:b1:c1:d1:e1:f2')
   const partial = await windowsFixture(t, () => ({ files: { ...files, 'WLAN-home.xml': profileXml('home', { ssid: '家里 5G' }) } }), { stdout: dual, exitCode: 0 })
   assert.deepEqual((await readWifiProfiles('win32', undefined, partial.deps)).sort((a, b) => a.ssid.localeCompare(b.ssid, 'en')), [
-    { ssid: 'cafe', security: 'WPA2-Personal' }, { ssid: 'home', current: true, security: 'WPA2-Personal' }, { ssid: '咖啡\u{1F375}', security: 'WPA2-Personal' }])
+    { ssid: 'cafe', profileName: 'cafe', security: 'WPA2-Personal' }, { ssid: '咖啡\u{1F375}', profileName: '咖啡\u{1F375}', security: 'WPA2-Personal' }, { ssid: '家里 5G', profileName: 'home', current: true, security: 'WPA2-Personal' }])
   // 对照：已连接 SSID 能对上配置时，其余配置照常报未连接；确实没连接（无 SSID 行）时也照常报未连接
   const matched = await windowsFixture(t, () => ({ files: { ...files, 'WLAN-home.xml': profileXml('home', { ssid: '家里 5G' }) } }))
-  assert.deepEqual((await readWifiProfiles('win32', undefined, matched.deps)).find(profile => profile.ssid === 'cafe'), { ssid: 'cafe', current: false, security: 'WPA2-Personal' })
+  assert.deepEqual((await readWifiProfiles('win32', undefined, matched.deps)).find(profile => profile.ssid === 'cafe'), { ssid: 'cafe', profileName: 'cafe', current: false, security: 'WPA2-Personal' })
   const idle = interfacesZh.replace(/    SSID .*\r\n    BSSID .*\r\n/, '').replace('已连接', '已断开连接')
   const disconnected = await windowsFixture(t, () => ({ files }), { stdout: idle, exitCode: 0 })
   assert.ok((await readWifiProfiles('win32', undefined, disconnected.deps)).every(profile => profile.current === false))
+})
+
+test('Windows 同一 SSID 多个配置各自保留标识，密码查询不混淆配置与网络名称', async t => {
+  const f = await windowsFixture(t, args => {
+    const requested = args.find(arg => arg.startsWith('name='))?.slice(5)
+    return { files: requested
+      ? { 'selected.xml': profileXml(requested, { ssid: 'Shared WiFi', key: `${requested}-password` }) }
+      : Object.fromEntries(['first-profile', 'second-profile'].map(name => [`${name}.xml`, profileXml(name, { ssid: 'Shared WiFi' })])) }
+  })
+  const profiles = await readWifiProfiles('win32', undefined, f.deps)
+  assert.equal(profiles.length, 2)
+  assert.deepEqual(profiles.map(profile => [profile.ssid, profile.profileName]), [['Shared WiFi', 'first-profile'], ['Shared WiFi', 'second-profile']])
+  for (const profile of profiles) {
+    const password = await readWifiPassword(profile.profileName!, 'win32', undefined, f.deps)
+    assert.equal(password.password, `${profile.profileName}-password`)
+  }
+  assert.deepEqual(f.calls.filter(args => args.includes('key=clear')).map(args => args.find(arg => arg.startsWith('name='))), ['name=first-profile', 'name=second-profile'])
+  assert.deepEqual(await f.leftovers(), [])
 })
 
 test('Windows 密码：仅按名称单独导出并读取 keyMaterial，保留空格，读取后删除含明文的导出文件', async t => {
@@ -233,4 +251,12 @@ test('Windows 密码：配置不存在、密钥受保护、开放/企业网络�
   const f = await windowsFixture(t, () => ({}))
   await assert.rejects(readWifiPassword('', 'win32', undefined, f.deps), /SSID 无效/)
   assert.equal(f.calls.length, 0)
+})
+
+
+test('Windows 配置缺少真实 SSID 时明确失败，不用配置名伪造网络名', async t => {
+  const xml = profileXml('Display Profile').replace(/<SSIDConfig>[\s\S]*?<\/SSIDConfig>/, '')
+  const f = await windowsFixture(t, () => ({ files: { 'profile.xml': xml } }))
+  await assert.rejects(readWifiProfiles('win32', undefined, f.deps), /缺少可识别的 SSID/)
+  assert.deepEqual(await f.leftovers(), [])
 })

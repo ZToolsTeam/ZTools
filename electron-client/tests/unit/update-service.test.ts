@@ -9,9 +9,7 @@ import { errorCodes, ZToolsError } from '../../src/contracts/errors.js'
 import { runtimePathsForBusinessDataRoot } from '../../src/main/runtime/runtime-paths.js'
 import { UpdateService, type UpdateSource } from '../../src/main/services/update-service.js'
 
-// 这些用例依赖 Windows 路径语义（C:\\ / E:\\）或 Windows 宿主能力（DLL、进程启动、更新安装链、本地 .exe 软件），
-// 在其他平台上功能代码按设计会拒绝执行，因此只在 Windows 宿主运行；Windows CI 上照常覆盖。
-const windowsOnly = { skip: process.platform === 'win32' ? false : '依赖 Windows 路径或宿主能力，仅在 Windows 上运行' }
+// Windows 更新器只在进程边界替换；路径、文件与下载服务使用真实实现，可跨平台回归。
 // 更新来源由主进程版本提供；这里用一个经测试 fetch 读取的通用来源，覆盖与版本无关的校验、比较与下载链路
 const TEST_LATEST_URL = 'https://updates.example/latest.json'
 function testUpdateSource(fetchImpl: typeof fetch): UpdateSource {
@@ -24,7 +22,7 @@ function testUpdateSource(fetchImpl: typeof fetch): UpdateSource {
 }
 
 
-test('update service preserves the legacy response shape and verifies downloads', windowsOnly, async () => {
+test('update service preserves the legacy response shape and verifies downloads', async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'ztools-update-service-'))
   const runtimePaths = runtimePathsForBusinessDataRoot(path.join(root, 'Data'))
   const body = Buffer.from('verified installer payload')
@@ -48,6 +46,7 @@ test('update service preserves the legacy response shape and verifies downloads'
     return new Response(body, { status: 200, headers: { 'content-length': String(body.length) } })
   }
   const service = new UpdateService({
+    platform: 'win32',
     runtimePaths,
     appVersion: '1.0.0',
     webVersion: '1.0.0',
@@ -75,6 +74,7 @@ test('update service preserves the legacy response shape and verifies downloads'
   assert.ok(progress.length >= 2)
   assert.equal(progress.at(-1), 100)
   const restartedService = new UpdateService({
+    platform: 'win32',
     runtimePaths,
     appVersion: '1.0.0',
     webVersion: '1.0.0',
@@ -106,9 +106,10 @@ test('update service preserves the legacy response shape and verifies downloads'
   await fs.rm(root, { recursive: true, force: true })
 })
 
-test('web package installation requires the independent resource service', windowsOnly, async () => {
+test('web package installation requires the independent resource service', async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'ztools-update-web-'))
   const service = new UpdateService({
+    platform: 'win32',
     runtimePaths: runtimePathsForBusinessDataRoot(path.join(root, 'Data')),
     appVersion: '1.0.0',
     webVersion: '1.0.0',
@@ -127,7 +128,7 @@ test('web package installation requires the independent resource service', windo
   await fs.rm(root, { recursive: true, force: true })
 })
 
-test('App package formats leave install-scope resolution to the native updater', windowsOnly, async () => {
+test('App package formats leave install-scope resolution to the native updater', async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'ztools-update-updater-'))
   const runtimePaths = runtimePathsForBusinessDataRoot(path.join(root, 'Data'))
   await fs.mkdir(runtimePaths.installRoot, { recursive: true })
@@ -140,7 +141,8 @@ test('App package formats leave install-scope resolution to the native updater',
     cwd: string
     updaterContents: string
   }> = []
-  const service = new UpdateService({
+  const createService = () => new UpdateService({
+    platform: 'win32',
     runtimePaths,
     appVersion: '1.0.0',
     webVersion: '1.0.0',
@@ -152,6 +154,7 @@ test('App package formats leave install-scope resolution to the native updater',
   })
 
   for (const extension of ['exe', 'zip']) {
+    const service = createService()
     const downloadUrl = `https://cdn.example/ZToolsSetup.${extension}`
     const result = await service.install({
       type: 'app',
@@ -170,12 +173,14 @@ test('App package formats leave install-scope resolution to the native updater',
     assert.deepEqual(launch.argumentsList.slice(2), ['--updated', '--need-cleanup'])
     assert.equal(launch.cwd, path.dirname(launch.executable))
     assert.equal(launch.updaterContents, 'updater')
+    await assert.rejects(service.install({ type: 'app', version: '3.0.0', downloadUrl, checksum, fileSize: payload.length }), /已交接/)
+    await service.stop()
   }
 
   await fs.rm(root, { recursive: true, force: true })
 })
 
-test('UAC cancellation and updater launch failures remain visible and retryable', windowsOnly, async () => {
+test('UAC cancellation and updater launch failures remain visible and retryable', async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'ztools-update-updater-errors-'))
   const runtimePaths = runtimePathsForBusinessDataRoot(path.join(root, 'Data'))
   await fs.mkdir(runtimePaths.installRoot, { recursive: true })
@@ -186,6 +191,7 @@ test('UAC cancellation and updater launch failures remain visible and retryable'
   let exitCode = 1223
   let downloadCalls = 0
   const service = new UpdateService({
+    platform: 'win32',
     runtimePaths,
     appVersion: '1.0.0',
     webVersion: '1.0.0',
@@ -209,7 +215,7 @@ test('UAC cancellation and updater launch failures remain visible and retryable'
   await assert.rejects(service.install(params), (error: unknown) =>
     error instanceof ZToolsError &&
     error.code === errorCodes.processError &&
-    error.message.includes('启动自提权更新器失败: spawn ENOENT')
+    error.message.includes('准备应用更新失败: spawn ENOENT')
   )
   launchError = undefined
   await assert.rejects(service.install(params), (error: unknown) =>
@@ -230,10 +236,11 @@ test('UAC cancellation and updater launch failures remain visible and retryable'
   await fs.rm(root, { recursive: true, force: true })
 })
 
-test('update service compares all four numeric version components and rejects malformed versions', windowsOnly, async () => {
+test('update service compares all four numeric version components and rejects malformed versions', async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'ztools-update-version-'))
   const runtimePaths = runtimePathsForBusinessDataRoot(path.join(root, 'Data'))
   const service = new UpdateService({
+    platform: 'win32',
     runtimePaths,
     appVersion: '1.0.0.9',
     webVersion: '1.0.0.9',
@@ -247,6 +254,7 @@ test('update service compares all four numeric version components and rejects ma
   assert.equal(checked.web, null)
 
   const malformed = new UpdateService({
+    platform: 'win32',
     runtimePaths,
     appVersion: '1.0.0.9',
     webVersion: '1.0.0.9',

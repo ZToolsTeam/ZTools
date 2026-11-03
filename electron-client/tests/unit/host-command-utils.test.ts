@@ -1,5 +1,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
+import childProcess from 'node:child_process'
+import { EventEmitter, getEventListeners } from 'node:events'
 import {
   buildPowerShellArgs,
   codePageToTextDecoderLabel,
@@ -119,18 +121,58 @@ test('[注入] PowerShell 单引号转义同时处理 ASCII 单引号与四种�
 })
 
 test('runCommand 如实返回退出码与错误输出；超时返回 124、取消返回 130、命令不存在返回非零', async () => {
-  const fail = await runCommand(process.execPath, ['-e', 'process.stderr.write("失败原因"); process.exit(3)'])
+  const completed = new AbortController()
+  const fail = await runCommand(process.execPath, ['-e', 'process.stderr.write("失败原因"); process.exit(3)'], 5_000, completed.signal)
   assert.equal(fail.exitCode, 3)
   assert.match(fail.stderr, /失败原因/)
-  const timeout = await runCommand(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], 200)
+  assert.equal(getEventListeners(completed.signal, 'abort').length, 0)
+  const expired = new AbortController()
+  const timeout = await runCommand(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], 200, expired.signal)
   assert.equal(timeout.exitCode, 124)
   assert.match(timeout.stderr, /超时/)
+  assert.equal(getEventListeners(expired.signal, 'abort').length, 0)
   const controller = new AbortController()
   const pending = runCommand(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], 5_000, controller.signal)
   controller.abort()
   assert.equal((await pending).exitCode, 130)
-  const missing = await runCommand('ztools-command-that-does-not-exist', [])
+  assert.equal(getEventListeners(controller.signal, 'abort').length, 0)
+  const unavailable = new AbortController()
+  const missing = await runCommand('ztools-command-that-does-not-exist', [], 5_000, unavailable.signal)
   assert.notEqual(missing.exitCode, 0)
+  assert.equal(getEventListeners(unavailable.signal, 'abort').length, 0)
+})
+
+test('已取消的信号不启动命令、PowerShell 或 Windows 代码页探测', async t => {
+  const platform = Object.getOwnPropertyDescriptor(process, 'platform')!
+  const controller = new AbortController()
+  controller.abort()
+  const spawn = t.mock.method(childProcess, 'spawn', () => { throw new Error('不应启动子进程') })
+  try {
+    Object.defineProperty(process, 'platform', { value: 'win32', configurable: true })
+    assert.equal((await runCommand(process.execPath, [], 5_000, controller.signal)).exitCode, 130)
+    await assert.rejects(runPowerShell('param($x)', 5_000, controller.signal),
+      error => error instanceof PowerShellError && error.exitCode === 130)
+    assert.equal(spawn.mock.callCount(), 0)
+  } finally { Object.defineProperty(process, 'platform', platform) }
+})
+
+test('进程启动后、abort监听注册前取消仍终止进程，并清理监听', async t => {
+  const controller = new AbortController()
+  const addListener = controller.signal.addEventListener.bind(controller.signal)
+  t.mock.method(controller.signal, 'addEventListener', (...args: Parameters<AbortSignal['addEventListener']>) => {
+    controller.abort()
+    addListener(...args)
+  })
+  let killed = 0
+  t.mock.method(childProcess, 'spawn', (command: string) => {
+    const child = new EventEmitter() as childProcess.ChildProcess
+    child.kill = () => { killed++; child.emit('close', 0); return true }
+    if (command === 'reg') queueMicrotask(() => child.emit('close', 0))
+    return child
+  })
+  assert.equal((await runCommand(process.execPath, [], 5_000, controller.signal)).exitCode, 130)
+  assert.equal(killed, 1)
+  assert.equal(getEventListeners(controller.signal, 'abort').length, 0)
 })
 
 test('PowerShellError 区分超时、取消与普通失败；非 Windows 上 runPowerShell 不执行并返回空字符串', async () => {

@@ -63,7 +63,7 @@ describe('插件安装完整性契约', () => {
     expect(transport.call).toHaveBeenNthCalledWith(1, 'update_download_start', {
       type: 'app',
       ...info
-    })
+    }, { timeout: Infinity })
     expect(transport.call).toHaveBeenNthCalledWith(2, 'update_install_start', {
       type: 'app',
       ...info

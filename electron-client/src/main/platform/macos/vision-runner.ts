@@ -33,6 +33,8 @@ export class MacVisionRunner implements VisionBackend {
           const value = JSON.parse(Buffer.concat(chunks).toString('utf8')) as Record<string, unknown>
           if (value.version !== 1 || value.success !== true || code !== 0) {
             if (value.code === 'LANGUAGE_UNSUPPORTED') throw new ZToolsError(errorCodes.invalidRequest, '当前Vision版本不支持所选语言')
+            if (value.code === 'IMAGE_TOO_LARGE') throw new ZToolsError(errorCodes.fileTooLarge, '图片尺寸过大，无法识别')
+            if (value.code === 'INVALID_IMAGE') throw new ZToolsError(errorCodes.invalidRequest, '无法读取图片，请使用 PNG、JPEG、HEIC、TIFF、BMP、GIF 或 WebP 图片')
             throw failed()
           }
           resolve(value)

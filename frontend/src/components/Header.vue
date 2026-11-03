@@ -21,8 +21,11 @@ const isMacPlatform = ref(
 
 const keyword = ref('')
 const searchBarRef = ref(null)
+const homeButtonRef = ref(null)
 const searchPlaceholder = ref('搜索插件、命令与文件')
-const searchFocusTimers = new Set()
+let searchFocusTimer = null
+let searchFocusRequest = 0
+let preserveHomeFocus = false
 
 const isDevelopment = import.meta.env.DEV
 const isNativeDebug = ref(false)
@@ -30,9 +33,7 @@ const isWindowsPlatform = ref(
   typeof navigator !== 'undefined' && navigator.userAgent.includes('Windows')
 )
 
-// 诊断/调试信息显示逻辑：
-// 只在「浏览器 + Mock 接口」的开发模式下提示：此时看到的是模拟数据，需要提醒。
-// 运行在客户端里时前端必然连着原生接口，常驻「Native」标记没有信息量，不再显示。
+// 浏览器开发模式显示连接类型；原生客户端默认隐藏该诊断标记。
 const showDebugInfo = computed(() => !isNative && isDevelopment)
 
 const showDiagnostics = computed(() => {
@@ -81,33 +82,57 @@ const goHome = () => {
   router.push(ROUTES.HOME)
 }
 
-const focusSearchInput = async () => {
+const focusSearchInput = async (force, request) => {
   await nextTick()
+  if (request !== searchFocusRequest) return
+  if (!force) {
+    // 激活窗口只恢复默认焦点；保留用户在表单、弹窗和键盘导航中的位置。
+    if (route.name !== ROUTES.HOME.name) return
+    const active = document.activeElement
+    if (active === homeButtonRef.value && preserveHomeFocus) return
+    if (active !== document.body && active !== document.documentElement && active !== homeButtonRef.value) return
+    if ([...document.querySelectorAll('[role="dialog"], [aria-modal="true"]')]
+      .some((dialog) => dialog.getClientRects().length > 0)) return
+  }
   searchBarRef.value?.focusInput?.()
 }
 
 const clearSearchFocusTimers = () => {
-  searchFocusTimers.forEach((timer) => window.clearTimeout(timer))
-  searchFocusTimers.clear()
+  searchFocusRequest += 1
+  if (searchFocusTimer !== null) window.clearTimeout(searchFocusTimer)
+  searchFocusTimer = null
 }
 
-const scheduleSearchFocus = () => {
+const scheduleSearchFocus = (force = false) => {
   clearSearchFocusTimers()
+  const request = searchFocusRequest
+  // 等本次原生焦点恢复完成后再处理，不依赖窗口在挂载后的固定毫秒数内出现。
+  searchFocusTimer = window.setTimeout(() => {
+    searchFocusTimer = null
+    void focusSearchInput(force, request)
+  }, 0)
+}
+const handleWindowFocus = () => scheduleSearchFocus()
+const focusHomeSearch = () => scheduleSearchFocus(true)
+const handleFocusNavigation = (event) => {
+  if (event.key === 'Tab') {
+    preserveHomeFocus = true
+    clearSearchFocusTimers()
+  }
+}
 
-  // 原生窗口首次显示时可能晚于 Vue 挂载，短延迟重试确保焦点落到输入框。
-  const focusDelays = [0, 120, 360]
-  focusDelays.forEach((delay) => {
-    const timer = window.setTimeout(() => {
-      searchFocusTimers.delete(timer)
-      focusSearchInput()
-    }, delay)
-    searchFocusTimers.add(timer)
-  })
+const handlePointerFocus = (event) => {
+  preserveHomeFocus = event.target instanceof Node && Boolean(homeButtonRef.value?.contains(event.target))
+  clearSearchFocusTimers()
 }
 
 // 初始化
 onMounted(async () => {
-  window.__ztoolsFocusHomeSearch = scheduleSearchFocus
+  window.__ztoolsFocusHomeSearch = focusHomeSearch
+  window.addEventListener('focus', handleWindowFocus)
+  window.addEventListener('blur', clearSearchFocusTimers)
+  window.addEventListener('keydown', handleFocusNavigation)
+  window.addEventListener('pointerdown', handlePointerFocus)
   scheduleSearchFocus()
 
   userStore.checkLoginStatus()
@@ -137,6 +162,10 @@ watch(
 onUnmounted(() => {
   clearSearchFocusTimers()
   clearListFilterTimer()
+  window.removeEventListener('focus', handleWindowFocus)
+  window.removeEventListener('blur', clearSearchFocusTimers)
+  window.removeEventListener('keydown', handleFocusNavigation)
+  window.removeEventListener('pointerdown', handlePointerFocus)
   delete window.__ztoolsFocusHomeSearch
   userStore.cleanupEventListeners()
 })
@@ -164,6 +193,8 @@ onUnmounted(() => {
       <div class="flex items-center" style="gap: 10px; -webkit-app-region: no-drag">
         <!-- Logo -->
         <button
+          ref="homeButtonRef"
+          aria-label="返回主页"
           @click="goHome"
           class="flex items-center hover:opacity-85 transition-opacity"
           style="gap: 10px; cursor: pointer"

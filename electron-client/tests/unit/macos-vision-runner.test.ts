@@ -31,4 +31,8 @@ test('Vision rejects malformed/duplicate/nonzero/oversized outputs and unsupport
     const f = runner(script); await assert.rejects(f.value.run(request, signal()), { code: 'FILE_ERROR' }); assert.equal(f.closed(), true)
   }
   const f = runner(`process.stdout.write('{"version":1,"success":false,"code":"LANGUAGE_UNSUPPORTED"}');process.exitCode=1`); await assert.rejects(f.value.run(request, signal()), { code: 'INVALID_REQUEST' })
+  const large = runner(`process.stdout.write('{"version":1,"success":false,"code":"IMAGE_TOO_LARGE"}');process.exitCode=1`)
+  await assert.rejects(large.value.run(request, signal()), { code: 'FILE_TOO_LARGE', message: '图片尺寸过大，无法识别' })
+  const invalid = runner(`process.stdout.write('{"version":1,"success":false,"code":"INVALID_IMAGE"}');process.exitCode=1`)
+  await assert.rejects(invalid.value.run(request, signal()), { code: 'INVALID_REQUEST', message: /无法读取图片/ })
 })

@@ -34,7 +34,8 @@ export const HOST_API_REQUIREMENTS = Object.freeze([
   { api: 'recent_projects', minAppVersion: '1.1.8.5', pattern: /\brecent_projects\b/ },
   { api: 'ssh_proxy', minAppVersion: '1.1.8.5', pattern: /\bssh_proxy\b/ },
   { api: 'startup_manager', minAppVersion: '1.1.8.5', pattern: /\bstartup_manager\b/ },
-  { api: 'tls_inspect', minAppVersion: '1.1.8.5', pattern: /\btls_inspect\b/ }
+  { api: 'tls_inspect', minAppVersion: '1.1.8.5', pattern: /\btls_inspect\b/ },
+  { api: 'image_ocr', minAppVersion: '1.1.8.9', pattern: /\bimage_ocr\b/ }
 ])
 
 export const APP_VERSION_REGEX = /^\d+(?:\.\d+){1,3}$/

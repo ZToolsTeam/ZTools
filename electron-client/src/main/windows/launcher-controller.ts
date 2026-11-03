@@ -133,6 +133,10 @@ export class LauncherController {
     return Boolean(this.#window && !this.#window.isDestroyed() && this.#window.isVisible())
   }
 
+  isFocused(): boolean {
+    return Boolean(this.#window && !this.#window.isDestroyed() && this.#window.isFocused())
+  }
+
   show(): void {
     this.options.onShow?.()
     const window = this.#ensureWindow()
@@ -154,14 +158,15 @@ export class LauncherController {
     if (this.#window && !this.#window.isDestroyed()) {
       if (this.#frameSyncManager) {
         this.#frameSyncManager.hideWindow()
-      } else if (this.#window.isVisible()) {
+      } else {
         this.#window.hide()
       }
     }
   }
 
   toggle(): void {
-    if (this.isVisible() || this.#frameSyncManager?.state === 'resuming') {
+    // 另一个 Space 上仍映射的窗口不算当前唤醒目标；只有正在交互时才切换为隐藏。
+    if (this.isFocused() || this.#frameSyncManager?.state === 'resuming') {
       this.hide()
     } else {
       this.show()
@@ -205,9 +210,10 @@ export class LauncherController {
       skipTaskbar: true,
       resizable: false,
       show: false,
-      // macOS 保留非激活面板和原生圆角，仅禁用原生阴影，避免透明留白出现额外外框。
+      // panel 自带跨桌面与全屏辅助窗口行为；自身不能成为全屏主窗口。
+      // 不再调用 setVisibleOnAllWorkspaces：它会改变整个应用的激活策略。
       ...(process.platform === 'darwin'
-        ? { type: 'panel', hasShadow: false }
+        ? { type: 'panel', fullscreenable: false, hasShadow: false }
         : {}),
       backgroundColor: nativeCorners ? getWindowBackgroundColor(nativeTheme.shouldUseDarkColors) : '#00000000',
       autoHideMenuBar: true,
@@ -218,20 +224,12 @@ export class LauncherController {
     })
 
     this.options.registry.registerMain(window.webContents)
-    if (process.platform === 'darwin') {
-      try {
-        window.setVisibleOnAllWorkspaces?.(true, { visibleOnFullScreen: true })
-      } catch {
-        // 兼容未提供该 API 的测试桩或旧版运行时
-      }
-    }
-
     window.webContents.on('before-input-event', (event, input) => {
       handleLauncherBeforeInputEvent(event, input, this)
     })
 
     window.on('blur', () => {
-      if (!window.isDestroyed() && window.isVisible()) {
+      if (!window.isDestroyed()) {
         this.hide()
       }
     })

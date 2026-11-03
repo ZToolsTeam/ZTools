@@ -1,5 +1,6 @@
 import { validateRecentProjectsRequest } from './recent-projects.js'
 import { validateDownloadsManagerRequest } from './downloads-manager.js'
+import { validateImageOcrRequest } from './image-ocr.js'
 import { validateStartupRequest } from './startup-manager.js'
 import { validateLanRequest } from './lan-network.js'
 import { validateSpeedtestRequest } from './network-speedtest.js'
@@ -2800,6 +2801,9 @@ export function validateMethodParams(method: AllowedMethod, params: unknown): vo
       return
     case 'downloads_manager':
       validateDownloadsManagerRequest(params)
+      return
+    case 'image_ocr':
+      validateImageOcrRequest(params)
       return
     case 'docker_manager':
       validateDockerRequest(params)

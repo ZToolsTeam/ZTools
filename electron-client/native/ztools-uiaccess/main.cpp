@@ -85,7 +85,10 @@ int main(int argc, char* argv[]) {
       if (action.empty()) {
         return JsonRpcResponse::Error(req.id, -32602, "Missing action param");
       }
-      WindowManagementResult res = worker.ManageWindow(action);
+      WindowManagementResult res = worker.ManageWindow(action,
+        static_cast<uint64_t>(req.params.get_int("target_hwnd", 0)),
+        static_cast<uint32_t>(req.params.get_int("target_pid", 0)),
+        static_cast<uint32_t>(req.params.get_int("host_pid", 0)));
       if (!res.success && res.error.rfind("Invalid window management action", 0) == 0) {
         return JsonRpcResponse::Error(req.id, -32602, res.error);
       }

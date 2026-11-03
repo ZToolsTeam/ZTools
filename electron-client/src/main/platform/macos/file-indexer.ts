@@ -696,6 +696,12 @@ export async function scanDirectoryForSearch(
   let rootFileBytes = 0
   /** 未遍历完的一级子目录名；'' 表示根目录自身的条目都没读完 */
   const incompleteTop = new Set<string>()
+  const failedTop = new Set<string>()
+  const scanErrors: string[] = []
+  const recordScanFailure = (target: string, top: string, error: unknown) => {
+    failedTop.add(top)
+    if (scanErrors.length < 3) scanErrors.push(`${target}：${error instanceof Error ? error.message : String(error)}`)
+  }
 
   // 只有扫描根本身可以是链接（如 macOS 的 /tmp → /private/tmp），按真实路径去重；子项里的链接在下面直接跳过
   const queue: Array<{ dirPath: string; topSubdir: string; isSymlink?: boolean }> = [
@@ -727,6 +733,7 @@ export async function scanDirectoryForSearch(
       if (!current.topSubdir && filesMap.size === 0 && subdirMap.size === 0) {
         throw new Error(`无法读取目录 ${resolvedRoot}: ${err instanceof Error ? err.message : String(err)}`, { cause: err })
       }
+      recordScanFailure(current.dirPath, current.topSubdir, err)
       continue
     }
 
@@ -748,7 +755,8 @@ export async function scanDirectoryForSearch(
       let statObj: fs.Stats
       try {
         statObj = await fs.promises.lstat(fullPath)
-      } catch {
+      } catch (error) {
+        recordScanFailure(fullPath, current.topSubdir, error)
         continue
       }
       if (statObj.isSymbolicLink()) continue
@@ -854,6 +862,11 @@ export async function scanDirectoryForSearch(
     totalBytes = rootFileBytes + Array.from(subdirMap.values()).reduce((acc, sub) => acc + sub.sizeBytes, 0)
     approximate = incompleteTop.has('') || incomplete.some((sub) => sub.approximate)
   }
+  // 独立体积测量不能补回读取失败的文件清单或数量，失败子树始终保持不完整标记。
+  for (const sub of subdirMap.values()) {
+    if (failedTop.has(sub.name)) sub.approximate = true
+  }
+  approximate ||= failedTop.size > 0
 
   const sortedSubdirs = Array.from(subdirMap.values()).sort((a, b) => b.sizeBytes - a.sizeBytes)
   for (const sub of sortedSubdirs) {
@@ -897,6 +910,7 @@ export async function scanDirectoryForSearch(
     total_indexed: totalBytes,
     truncated,
     approximate,
+    ...(scanErrors.length ? { scan_error: `部分路径读取失败：${scanErrors.join('；')}` } : {}),
     visited_entries: visitedCount,
     max_entries: entryCap,
     source: 'macos-fs'

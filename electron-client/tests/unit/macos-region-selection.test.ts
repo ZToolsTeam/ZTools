@@ -20,9 +20,15 @@ function fixture(timeoutMs = 10000, configure?: (window: Overlay, index: number)
   })
   return { selection, windows, screenEvents, detached: () => detached, message: (index: number, value: object, frame?: unknown) => { const window = windows[index]!; listener({ sender: window.webContents, senderFrame: frame ?? window.webContents.mainFrame }, { nonce, ...value }) }, spoof: (value: object) => listener({ sender: {}, senderFrame: {} }, { nonce, ...value }) }
 }
-test('Mac selector gates Windows/preabort/invalid display geometry without creating overlays', async () => {
-  const win = new MacRegionSelection(process.execPath, { platform: 'win32', createWindow: () => { throw Error('must not run') } })
-  await assert.rejects(win.select(bounds, new AbortController().signal), { code: 'NOT_SUPPORTED' })
+test('Region selector gates unsupported platforms/preabort/invalid display geometry without creating overlays', async () => {
+  const linux = new MacRegionSelection(process.execPath, { platform: 'linux', createWindow: () => { throw Error('must not run') } })
+  await assert.rejects(linux.select(bounds, new AbortController().signal), { code: 'NOT_SUPPORTED' })
+  // Windows 与 macOS 共用同一套遮罩：Windows 下照常创建遮罩并等待选择
+  let created = 0
+  const win = new MacRegionSelection(process.execPath, { platform: 'win32', screenEvents: { on() {}, removeListener() {} } as never, listen: () => () => {},
+    createWindow: () => { created++; throw Error('stop after create') } })
+  await assert.rejects(win.select(bounds, new AbortController().signal))
+  assert.equal(created, 1)
   const f = fixture(), c = new AbortController(); c.abort(); await assert.rejects(f.selection.select(bounds, c.signal), { code: 'CALLER_DESTROYED' }); assert.equal(f.windows.length, 0)
   for (const value of [[], Array(9).fill(bounds[0]), [{ x: 0, y: 0, width: 0, height: 1 }]]) await assert.rejects(f.selection.select(value, new AbortController().signal)); assert.equal(f.windows.length, 0)
 })

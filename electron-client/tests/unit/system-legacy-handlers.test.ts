@@ -39,6 +39,8 @@ function fakeSystem(commands: Record<string, CommandResult | CommandResult[]>, p
 }
 /** 预设 PowerShell 输出 / 失败 */
 const psOut = (stdout: string) => async () => stdout
+const locked = (pid: number, name: string) => psOut(JSON.stringify({ processes: [{ pid, name }] }))
+const lsofLock = (pid: number, name: string, file: string) => ok(`p${pid}\nc${name}\nn${file}\n`)
 const psFail = (exitCode: number, stderr = '') => async (): Promise<string> => { throw new PowerShellError(exitCode, stderr) }
 const asWindows = <T>(work: () => Promise<T>) => asPlatform('win32', work)
 async function withTempFile<T>(name: string, work: (file: string, dir: string) => Promise<T>): Promise<T> {
@@ -77,20 +79,20 @@ test('文件解锁（Windows）：重启管理器检测超时、失败、输出�
 
 test('文件解锁：权限不足来自真实结束进程的 EPERM，模拟拒绝参数无效；结束后确认退出才算成功', async () => asPlatform('darwin', async () => {
   await withTempFile('db.sqlite', async (file) => {
-    const denied = fakeSystem({ ps: ok('/usr/bin/sqlservr\n') }, [], { killProcess: () => { throw Object.assign(new Error('operation not permitted'), { code: 'EPERM' }) } })
+    const denied = fakeSystem({ ps: ok('/usr/bin/sqlservr\n'), lsof: lsofLock(8848, 'sqlservr', file) }, [], { killProcess: () => { throw Object.assign(new Error('operation not permitted'), { code: 'EPERM' }) } })
     const deniedResult = await new SystemRegistryHostPluginHandler(ctx, denied.deps).handleFileUnlock('unlockPath', { pid: 8848, expectedName: 'sqlservr', targetPath: file }) as Result
     assert.equal(deniedResult.errorCode, 'PROCESS_ACCESS_DENIED'); assert.match(deniedResult.error!, /权限不足/)
     // 调用方传 simulateAccessDenied 不再拦截：真实结束成功且确认退出
     const killed: number[] = []
-    const okSys = fakeSystem({ ps: [ok('/usr/bin/sqlservr\n'), fail(1)] }, [], { killProcess: (pid) => { killed.push(pid) } })
+    const okSys = fakeSystem({ ps: [ok('/usr/bin/sqlservr\n'), fail(1)], lsof: lsofLock(8848, 'sqlservr', file) }, [], { killProcess: (pid) => { killed.push(pid) } })
     const done = await new SystemRegistryHostPluginHandler(ctx, okSys.deps).handleFileUnlock('unlockPath', { pid: 8848, expectedName: 'sqlservr', targetPath: file, simulateAccessDenied: true }) as Result
     assert.equal(done.success, true); assert.deepEqual(killed, [8848])
     // 发送了结束请求但进程一直在：不能报告已解除占用
-    const stuck = fakeSystem({ ps: ok('/usr/bin/sqlservr\n') }, [], { killProcess: () => undefined })
-    assert.equal((await new SystemRegistryHostPluginHandler(ctx, stuck.deps).handleFileUnlock('unlockPath', { pid: 8848, expectedName: 'sqlservr' }) as Result).errorCode, 'TERMINATE_UNCONFIRMED')
+    const stuck = fakeSystem({ ps: ok('/usr/bin/sqlservr\n'), lsof: lsofLock(8848, 'sqlservr', file) }, [], { killProcess: () => undefined })
+    assert.equal((await new SystemRegistryHostPluginHandler(ctx, stuck.deps).handleFileUnlock('unlockPath', { pid: 8848, expectedName: 'sqlservr', targetPath: file }) as Result).errorCode, 'TERMINATE_UNCONFIRMED')
     // 进程名与预期不符：不结束
-    const mismatch = fakeSystem({ ps: ok('/Applications/Chrome\n') }, [], { killProcess: () => { throw new Error('不应结束') } })
-    assert.equal((await new SystemRegistryHostPluginHandler(ctx, mismatch.deps).handleFileUnlock('unlockPath', { pid: 8848, expectedName: 'sqlservr' }) as Result).errorCode, 'PROCESS_IDENTITY_MISMATCH')
+    const mismatch = fakeSystem({ ps: ok('/Applications/Chrome\n'), lsof: lsofLock(8848, 'sqlservr', file) }, [], { killProcess: () => { throw new Error('不应结束') } })
+    assert.equal((await new SystemRegistryHostPluginHandler(ctx, mismatch.deps).handleFileUnlock('unlockPath', { pid: 8848, expectedName: 'sqlservr', targetPath: file }) as Result).errorCode, 'PROCESS_IDENTITY_MISMATCH')
   })
 }))
 
@@ -98,7 +100,7 @@ test('文件解锁：结束占用后移入回收站失败时保留原文件、�
   await withTempFile('budget.docx', async (file) => {
     // 非 Windows 旧入口没有回收站实现：绝不退化为永久删除
     const killed: number[] = []
-    const mac = fakeSystem({ ps: [ok('/Applications/Word\n'), fail(1)] }, [], { killProcess: (pid) => { killed.push(pid) } })
+    const mac = fakeSystem({ ps: [ok('/Applications/Word\n'), fail(1)], lsof: lsofLock(501, 'Word', file) }, [], { killProcess: (pid) => { killed.push(pid) } })
     const macRes = await new SystemRegistryHostPluginHandler(ctx, mac.deps).handleFileUnlock('unlockPath', { pid: 501, expectedName: 'Word', targetPath: file, trashAfterUnlock: true }) as Result
     assert.equal(macRes.success, false); assert.equal(macRes.errorCode, 'TRASH_FAILED'); assert.match(macRes.error!, /TRASH_UNSUPPORTED/)
     assert.equal(macRes.unlocked, true); assert.deepEqual(killed, [501])
@@ -108,12 +110,12 @@ test('文件解锁：结束占用后移入回收站失败时保留原文件、�
       const tasklistAlive = ok('"WINWORD.EXE","501","Console","1","88,000 K"')
       const tasklistGone = ok('信息: 没有运行的任务匹配指定标准。')
       // PowerShell 回收站调用失败：原文件保留
-      const broken = fakeSystem({ tasklist: [tasklistAlive, tasklistGone] }, [async () => { throw new PowerShellError(1, '找不到程序集 Microsoft.VisualBasic') }], { killProcess: () => undefined })
+      const broken = fakeSystem({ tasklist: [tasklistAlive, tasklistGone] }, [locked(501, 'WINWORD.EXE'), async () => { throw new PowerShellError(1, '找不到程序集 Microsoft.VisualBasic') }], { killProcess: () => undefined })
       const failed = await new SystemRegistryHostPluginHandler(ctx, broken.deps).handleFileUnlock('unlockPath', { pid: 501, expectedName: 'WINWORD.EXE', targetPath: file, trashAfterUnlock: true }) as Result
       assert.equal(failed.errorCode, 'TRASH_FAILED'); assert.match(failed.error!, /Microsoft\.VisualBasic/); assert.equal(failed.unlocked, true)
       assert.equal(fsSync.existsSync(file), true)
       // PowerShell 报告成功但文件仍在：不能当成已移入回收站
-      const unconfirmed = fakeSystem({ tasklist: [tasklistAlive, tasklistGone] }, [async () => 'TRASH_OK'], { killProcess: () => undefined })
+      const unconfirmed = fakeSystem({ tasklist: [tasklistAlive, tasklistGone] }, [locked(501, 'WINWORD.EXE'), async () => 'TRASH_OK'], { killProcess: () => undefined })
       const stillThere = await new SystemRegistryHostPluginHandler(ctx, unconfirmed.deps).handleFileUnlock('unlockPath', { pid: 501, expectedName: 'WINWORD.EXE', targetPath: file, trashAfterUnlock: true }) as Result
       assert.equal(stillThere.errorCode, 'TRASH_FAILED'); assert.equal(fsSync.existsSync(file), true)
       // 预览：只查询进程，不结束进程、不移入回收站、不重命名
@@ -465,13 +467,13 @@ test('移入回收站（Windows）：没有回收站的位置、回收站关闭�
       const tasklistAlive = ok('"WINWORD.EXE","501","Console","1","88,000 K"')
       const tasklistGone = ok('信息: 没有运行的任务匹配指定标准。')
       const unlock = (target: string, ps: Array<(script: string) => Promise<string>>) => {
-        const sys = fakeSystem({ tasklist: [tasklistAlive, tasklistGone] }, ps, { killProcess: () => undefined })
+        const sys = fakeSystem({ tasklist: [tasklistAlive, tasklistGone] }, [locked(501, 'WINWORD.EXE'), ...ps], { killProcess: () => undefined })
         return { sys, run: () => new SystemRegistryHostPluginHandler(ctx, sys.deps).handleFileUnlock('unlockPath', { pid: 501, expectedName: 'WINWORD.EXE', targetPath: target, trashAfterUnlock: true }) as Promise<Result> }
       }
       // 脚本先确认本地固定卷、回收站策略与容量，再移入回收站
       const okRun = unlock(file, [async () => { await fs.rm(file); return 'TRASH_OK' }])
       assert.equal((await okRun.run()).trashed, true)
-      const script = okRun.sys.scripts[0]!
+      const script = okRun.sys.scripts[1]!
       assert.match(script, /DriveType -ne \[System\.IO\.DriveType\]::Fixed/); assert.match(script, /NukeOnDelete/); assert.match(script, /NoRecycleFiles/); assert.match(script, /MaxCapacity/)
       assert.ok(script.indexOf('TRASH_TOO_LARGE') < script.indexOf('SendToRecycleBin'), '容量检查必须在删除之前')
       // 路径经过目录联接 / 挂载的卷 / 符号链接时，按盘符做的检查不成立：先于删除拒绝
@@ -491,10 +493,10 @@ test('移入回收站（Windows）：没有回收站的位置、回收站关闭�
         assert.equal(r.unlocked, true); assert.equal(fsSync.existsSync(file), true)
       }
 
-      // UNC 路径：不调用 PowerShell 直接拒绝
+      // 目标无法重新核验时先拒绝结束进程，不会进入回收流程
       const unc = unlock('\\\\nas\\share\\report.docx', [])
       const uncRes = await unc.run()
-      assert.equal(uncRes.trashErrorCode, 'TRASH_UNSUPPORTED'); assert.ok(!unc.sys.calls.includes('powershell'))
+      assert.equal(uncRes.errorCode, 'LOCK_RECHECK_FAILED'); assert.ok(!unc.sys.calls.includes('tasklist'))
 
       // 软件管理移除残余目录同样走这里，错误码透传
       const appDir = path.join(dir, 'LeftoverApp'); await fs.mkdir(appDir)
