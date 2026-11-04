@@ -113,6 +113,8 @@ IPC 契约对两种版本相同：`user_get_info`、`user_set_token`、`user_log
 
 原生组件都作为独立进程运行，通过管道与主进程通信，崩溃不会拖垮主进程。没有编译原生组件时，相关功能不可用，其余功能照常运行。
 
+Windows 的文字识别在 Electron 的独立子进程（utilityProcess）里用 ONNX Runtime（WebAssembly 版）运行 PP-OCRv5 模型，第一次识别时启动，空闲一分钟后退出；模型缺失或子进程连续失败时改用 Windows 系统识别。macOS 使用系统 Vision。
+
 NativeHost32 与 ZToolsService 只接受清单中登记过的插件和函数。
 
 ## 后台资源

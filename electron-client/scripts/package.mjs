@@ -9,9 +9,12 @@ import {
   createWindowsApplicationManifest,
   createWindowsPackagerOptions,
   getWindowsArtifactRoot,
+  OCR_MODEL_RESOURCE_DIRECTORY,
   WINDOWS_CLASSIC_LEVEL_VERSION,
-  WINDOWS_ELECTRON_VERSION
+  WINDOWS_ELECTRON_VERSION,
+  WINDOWS_ONNXRUNTIME_WEB_VERSION
 } from './windows-package-contract.mjs'
+import { ensureOcrModels } from './fetch-ocr-models.mjs'
 import { stageWindowsPathAccessBroker } from './windows-path-access-broker.mjs'
 import { assertWindowsExecutableBranding } from './windows-executable-branding.mjs'
 
@@ -119,6 +122,7 @@ function prunePackagedApplication(applicationPath) {
 if (packageJson.devDependencies.electron !== electronVersion) throw new Error('Electron 版本未精确锁定')
 if (packageJson.dependencies?.['classic-level'] !== WINDOWS_CLASSIC_LEVEL_VERSION) throw new Error('classic-level 版本未精确锁定')
 if (packageJson.dependencies?.yauzl !== '3.4.0') throw new Error('yauzl 版本未精确锁定')
+if (packageJson.dependencies?.['onnxruntime-web'] !== WINDOWS_ONNXRUNTIME_WEB_VERSION) throw new Error('onnxruntime-web 版本未精确锁定')
 if (fs.existsSync(outputRoot)) throw new Error(`输出目录已存在，请归档后重试: ${outputRoot}`)
 if (!fs.existsSync(nativeHostSource)) throw new Error(`NativeHost32 产物不存在: ${nativeHostSource}`)
 if (!fs.existsSync(serviceSource)) throw new Error(`ZToolsService 产物不存在: ${serviceSource}`)
@@ -128,6 +132,8 @@ if (!fs.existsSync(privilegedManifestSource)) {
 }
 if (!fs.existsSync(applicationIcon)) throw new Error(`应用图标不存在: ${applicationIcon}`)
 const nativeHostManifest = readNativeHostManifest(root)
+// 文字识别模型（约 21 MB）：下载并按固定 SHA-256 校验，缺失或不一致直接失败
+const ocrModelDirectory = await ensureOcrModels()
 const privilegedManifest = createPrivilegedManifest()
 if (hostOnly) {
   console.warn(`未找到商业 DLL 目录 ${pluginSourceRoot}，只打包宿主：特权 DLL 清单为空`)
@@ -178,6 +184,8 @@ for (const applicationPath of applicationPaths) {
     nativeHostManifest,
     'utf8'
   )
+  const ocrDirectory = path.join(applicationPath, ...OCR_MODEL_RESOURCE_DIRECTORY.split('/'))
+  fs.cpSync(ocrModelDirectory, ocrDirectory, { recursive: true })
   const serviceDirectory = path.join(applicationPath, 'resources', 'service')
   fs.mkdirSync(serviceDirectory, { recursive: true })
   const packagedPrivilegedManifest = path.join(serviceDirectory, 'privileged-dlls-v1.xml')

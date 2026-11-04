@@ -284,6 +284,81 @@ test('Windows 识别：去掉中文日文字间空格、保留韩文与英文空
   }))
 })
 
+test('Windows 先用本机 PP-OCRv5：成功不调用系统识别，空结果直接提示，失败改用系统识别，韩文直接用系统识别', async () => {
+  await withImage(Buffer.from('png'), image => onPlatform('win32', async () => {
+    const calls: string[] = []
+    const localOcr = (result: () => Promise<string[]>) => ({
+      recognizeImage: async (imagePath: string) => { calls.push(imagePath); return result() },
+      stop: () => undefined
+    })
+    const scripts: string[] = []
+    const systemOcr = async (script: string) => { scripts.push(script); return JSON.stringify({ text: '系 统', lines: ['系 统'] }) }
+
+    const ok = handlerWith({ localOcr: localOcr(async () => ['第一行', ' Second line ']), runPowerShell: systemOcr })
+    const success = await ok.handler.handleOcr('recognizeImage', { path: image, lang: 'zh-Hans-CN' }) as OcrResult
+    assert.deepEqual([success.ok, success.text, success.engine], [true, '第一行\n Second line', 'PP-OCRv5'])
+    assert.deepEqual([calls, scripts, ok.commands], [[image], [], []])
+    const info = await ok.handler.handleOcr('info', {}) as { engine?: string }
+    assert.equal(info.engine, 'PP-OCRv5')
+
+    const empty = handlerWith({ localOcr: localOcr(async () => ['  ']), runPowerShell: systemOcr })
+    assert.deepEqual(await empty.handler.handleOcr('recognizeImage', { path: image, lang: 'en-US' }), { ok: false, success: false, empty: true, error: '没有识别到文字' })
+    assert.equal(scripts.length, 0, '本机识别的空结果不是故障，不再调用系统识别')
+
+    const broken = handlerWith({ localOcr: localOcr(async () => { throw new Error('文字识别进程意外退出') }), runPowerShell: systemOcr })
+    const fallback = await broken.handler.handleOcr('recognizeImage', { path: image, lang: 'ja-JP' }) as OcrResult
+    assert.deepEqual([fallback.ok, fallback.text, fallback.engine], [true, '系统', 'Windows.Media.Ocr'])
+    assert.equal(scripts.length, 1)
+
+    calls.length = 0
+    const korean = handlerWith({ localOcr: localOcr(async () => ['不应调用']), runPowerShell: systemOcr })
+    const ko = await korean.handler.handleOcr('recognizeImage', { path: image, lang: 'ko-KR' }) as OcrResult
+    assert.deepEqual([ko.ok, ko.engine, calls.length], [true, 'Windows.Media.Ocr', 0])
+
+    const allFailed = handlerWith({
+      localOcr: localOcr(async () => { throw new Error('无法读取图片') }),
+      runPowerShell: async () => { throw new Error('系统识别超时') }
+    })
+    const failed = await allFailed.handler.handleOcr('recognizeImage', { path: image }) as OcrResult
+    assert.equal(failed.ok, false)
+    assert.match(failed.error ?? '', /PP-OCRv5：无法读取图片；Windows.Media.Ocr：系统识别超时；Tesseract：/)
+  }))
+})
+
+test('Windows 本机识别中取消：直接返回已取消，不改用系统识别', async () => {
+  await withImage(Buffer.from('png'), image => onPlatform('win32', async () => {
+    const controller = new AbortController()
+    const scripts: string[] = []
+    const { handler, commands } = handlerWith({
+      localOcr: {
+        recognizeImage: async () => { controller.abort(); throw new Error('OCR 识别已取消') },
+        stop: () => undefined
+      },
+      runPowerShell: async script => { scripts.push(script); return '{}' }
+    })
+    assert.deepEqual(await handler.handleOcr('recognizeImage', { path: image }, undefined, controller.signal), { ok: false, success: false, error: 'OCR 识别已取消' })
+    assert.deepEqual([scripts, commands], [[], []])
+    const late = handlerWith({ localOcr: { recognizeImage: async () => { controller.abort(); return ['迟到的文字'] }, stop: () => undefined } })
+    const lateController = controller
+    assert.deepEqual(await late.handler.handleOcr('recognizeImage', { path: image }, undefined, lateController.signal), { ok: false, success: false, error: 'OCR 识别已取消' })
+  }))
+})
+
+test('Windows 系统识别小字时放大再识别一次；宿主退出时结束本机识别进程', async () => {
+  await withImage(Buffer.from('png'), image => onPlatform('win32', async () => {
+    const scripts: string[] = []
+    const { handler } = handlerWith({ runPowerShell: async script => { scripts.push(script); return JSON.stringify({ text: 'a', lines: ['a'] }) } })
+    await handler.handleOcr('recognizeImage', { path: image })
+    assert.match(scripts[0]!, /\$median -lt 20/)
+    assert.match(scripts[0]!, /32\.0 \/ \$median/)
+    assert.match(scripts[0]!, /BitmapInterpolationMode\]::Cubic/)
+  }))
+  let stopped = 0
+  const { handler } = handlerWith({ localOcr: { recognizeImage: async () => [], stop: () => { stopped++ } } })
+  await handler.stop()
+  assert.equal(stopped, 1)
+})
+
 test('Windows 有效空结果直接提示没有文字，不调用回退引擎', async () => {
   await withImage(Buffer.from('png'), image => onPlatform('win32', async () => {
     for (const output of [{ text: '', lines: [] }, { text: ' \n ', lines: [' ', '\n'] }, { text: '', lines: '' }]) {

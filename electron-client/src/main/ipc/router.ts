@@ -26,6 +26,7 @@ import { MacDnsNetworkProvider, macDnsHelperPath } from '../services/dns-network
 import { SystemFontProvider, macFontHelperPath } from '../services/font-provider.js'
 import { createMacOcrPorts } from '../platform/macos/mac-ocr.js'
 import { captureRegionPng, createRegionSelector } from '../platform/region-capture.js'
+import { createLocalOcr, paddleOcrModelDirectory } from '../services/ocr/paddle-ocr.js'
 import type { ScreenRectangle } from '../services/screen-service.js'
 import { MacRegionSelection } from '../platform/macos/region-selection.js'
 import { MacVisionRunner } from '../platform/macos/vision-runner.js'
@@ -53,6 +54,7 @@ import {
   screen as electronScreen,
   shell as electronShell,
   systemPreferences,
+  utilityProcess,
   type IpcMainEvent,
   type IpcMainInvokeEvent
 } from 'electron'
@@ -946,6 +948,11 @@ export class IpcRouter {
           // Windows 按显示器物理像素截取所选区域（macOS 用系统 screencapture）
           ...(process.platform === 'win32'
             ? {
+                localOcr: createLocalOcr({
+                  modelDirectory: paddleOcrModelDirectory(mainApp.isPackaged, process.resourcesPath),
+                  createImageFromPath: imagePath => nativeImage.createFromPath(imagePath),
+                  forkUtilityProcess: (modulePath, args, options) => utilityProcess.fork(modulePath, args, options)
+                }),
                 captureScreenRegionToPng: async (rect: ScreenRectangle, outputPath: string) => {
                   const png = await captureRegionPng({
                     getAllDisplays: () => electronScreen.getAllDisplays(),

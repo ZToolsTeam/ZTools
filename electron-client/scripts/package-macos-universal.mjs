@@ -64,7 +64,9 @@ const ignoredMacPackagingPaths = [
   /^\/node_modules\/(?:.*\/)?(?:AUTHORS|CHANGELOG|README|SECURITY|UPGRADING)\.md$/i,
   /^\/node_modules\/classic-level\/deps(?:\/|$)/,
   /^\/node_modules\/.*\.(?:c|cc|cpp|h|hpp|gyp|d\.ts)$/,
-  /^\/node_modules\/classic-level\/prebuilds\/(?!darwin-x64\+arm64(?:\/|$))/
+  /^\/node_modules\/classic-level\/prebuilds\/(?!darwin-x64\+arm64(?:\/|$))/,
+  // macOS 用系统 Vision 识别文字，Windows 本机识别用的 onnxruntime-web 及其依赖不打包
+  /^\/node_modules\/(?:onnxruntime-web|onnxruntime-common|@protobufjs|protobufjs|flatbuffers|guid-typescript|long|platform)(?:\/|$)/
 ]
 
 function errorMessage(error) {

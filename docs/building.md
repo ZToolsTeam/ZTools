@@ -51,6 +51,14 @@ npm --prefix electron-client run build:native-host32     # 32 位 DLL 插件宿�
 npm --prefix electron-client run build:native:sidecars   # 文件索引等辅助进程
 ```
 
+Windows 的文字识别优先使用本机 PP-OCRv5 模型（约 21 MB，在独立子进程中用 ONNX Runtime 运行，不联网）。模型不随源码提交，需要先下载一次（按固定校验值核对）：
+
+```bash
+npm --prefix electron-client run fetch:ocr-models   # 下载到 electron-client/out/ocr-models
+```
+
+没有下载模型时，文字识别改用 Windows 系统自带的识别，其余功能不受影响。
+
 ## macOS 打包
 
 只能在 macOS 上执行。先生成同时包含 Apple Silicon 与 Intel 架构的 `.app`：

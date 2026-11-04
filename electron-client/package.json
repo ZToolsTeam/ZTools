@@ -1,6 +1,6 @@
 {
   "name": "ztools-electron-client",
-  "version": "1.1.8.9",
+  "version": "1.1.8.10",
   "private": true,
   "license": "GPL-3.0-only",
   "description": "ZTools Electron Windows x64 client",
@@ -19,6 +19,7 @@
     "test:package:macos-universal": "node --test scripts/test-package-macos-universal.mjs",
     "test:package:macos-dmg": "node --test scripts/test-package-macos-dmg.mjs",
     "build": "node scripts/build.mjs",
+    "fetch:ocr-models": "node scripts/fetch-ocr-models.mjs",
     "build:native:sidecars": "node scripts/build-sidecars.mjs",
     "test:sidecars": "node scripts/test-sidecars.mjs",
     "build:native-host32": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build-native-host32.ps1 -Configuration Release",
@@ -94,6 +95,7 @@
     "gifenc": "1.0.3",
     "ini": "6.0.0",
     "marked": "18.1.1",
+    "onnxruntime-web": "1.31.1",
     "pinyin-pro": "3.28.1",
     "plist": "3.1.1",
     "pngjs": "7.0.0",
