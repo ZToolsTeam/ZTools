@@ -36,7 +36,10 @@ class NativeUpdater extends EventEmitter {
   quitAndInstall(): void { this.restarted++ }
 }
 
-async function fixture(t: test.TestContext, options: { version?: string; failTool?: string; nativeTimeoutMs?: number } = {}) {
+async function fixture(t: test.TestContext, options: {
+  releaseVersion?: string; shortVersion?: string; buildVersion?: string; bundleId?: string
+  failTool?: string; nativeTimeoutMs?: number
+} = {}) {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'ztools-mac-update-'))
   const current = path.join(root, 'ZTools.app')
   await fs.mkdir(current)
@@ -55,7 +58,15 @@ async function fixture(t: test.TestContext, options: { version?: string; failToo
       await fs.rmdir(path.join(args.at(-1)!, 'ZTools.app'))
     }
     if (file.endsWith('/plutil')) {
-      return { stdout: args[1] === 'CFBundleIdentifier' ? 'cn.ztools.test' : options.version ?? '1.1.8.9', stderr: '' }
+      const candidate = args.at(-1) !== path.join(current, 'Contents', 'Info.plist')
+      const values: Record<string, string> = {
+        CFBundleIdentifier: candidate ? options.bundleId ?? 'cn.ztools.test' : 'cn.ztools.test',
+        CFBundleShortVersionString: options.shortVersion ?? '1.1.8',
+        CFBundleVersion: options.buildVersion ?? '1.1.8009'
+      }
+      const value = values[args[1]!]
+      assert.notEqual(value, undefined, '只允许读取预期的包元数据')
+      return { stdout: value!, stderr: '' }
     }
     if (file.endsWith('/codesign') && args[0] === '--display') {
       return { stdout: 'designated => identifier "cn.ztools.test" and anchor apple generic', stderr: 'TeamIdentifier=ABCDEFGHIJ' }
@@ -69,7 +80,7 @@ async function fixture(t: test.TestContext, options: { version?: string; failToo
     reportRestartError: () => assert.fail('不应出现重启错误'), runCommand,
     ...(options.nativeTimeoutMs ? { nativeTimeoutMs: options.nativeTimeoutMs } : {}) })
   const payload = Buffer.from('verified dmg payload')
-  const params = { type: 'app' as const, version: '1.1.8.9', downloadUrl: 'https://updates.example/ZTools.dmg',
+  const params = { type: 'app' as const, version: options.releaseVersion ?? '1.1.8.9', downloadUrl: 'https://updates.example/ZTools.dmg',
     fileSize: payload.length, checksum: createHash('sha256').update(payload).digest('hex') }
   let fetches = 0
   const service = new UpdateService({ platform: 'darwin', runtimePaths, appVersion: '1.1.8.8', webVersion: '1.1.8.8', macUpdater: updater,
@@ -118,11 +129,55 @@ test('Mac 下载 SHA 错误或本地包被替换时拒绝挂载，不改动旧�
   assert.equal(f.quitRequests, 0)
 })
 
+test('四段发布版本按真实 Mac 显示版本与构建号校验，包括第四段两位数及跨补丁边界', async t => {
+  for (const [releaseVersion, shortVersion, buildVersion] of [
+    ['1.1.8.10', '1.1.8', '1.1.8010'],
+    ['1.1.8.999', '1.1.8', '1.1.8999'],
+    ['1.1.9.0', '1.1.9', '1.1.9000'],
+    ['2.0.0.0', '2.0.0', '2.0.0']
+  ] as const) {
+    const f = await fixture(t, { releaseVersion, shortVersion, buildVersion })
+    await f.service.download(f.params)
+    assert.equal((await f.service.install(f.params)).success, true)
+    assert.equal(f.native.feedRequests, 1)
+    assert.ok(f.commands.some(command => command.file.endsWith('/plutil') && command.args[1] === 'CFBundleVersion'))
+  }
+})
+
+test('1.1.8.10 更新不能接受同显示版本的旧构建或其他构建', async t => {
+  for (const buildVersion of ['1.1.8009', '1.1.8011']) {
+    const f = await fixture(t, { releaseVersion: '1.1.8.10', buildVersion })
+    await f.service.download(f.params)
+    await assert.rejects(f.service.install(f.params), {
+      code: 'DATA_CORRUPT', message: '更新包中的应用标识或版本与发布信息不一致'
+    })
+    assert.equal(f.native.feedRequests, 0)
+    assert.equal(f.quitRequests, 0)
+    assert.deepEqual(await fs.readdir(path.join(f.root, 'staging')), [])
+    assert.deepEqual(await fs.readdir(f.current), [])
+  }
+})
+
 test('Mac 拒绝错误版本及签名失败，卸载映像并保留旧版', async t => {
-  for (const options of [{ version: '1.1.8.7' }, { failTool: '/usr/bin/codesign' }, { failTool: '/usr/bin/ditto' }]) {
+  for (const options of [
+    { shortVersion: '1.1.7' }, { buildVersion: '1.1.8008' }, { bundleId: 'cn.other.app' },
+    { failTool: '/usr/bin/plutil' }, { failTool: '/usr/bin/codesign' }, { failTool: '/usr/bin/ditto' }
+  ]) {
     const f = await fixture(t, options)
     await f.service.download(f.params)
     await assert.rejects(f.service.install(f.params))
+    assert.equal(f.native.feedRequests, 0)
+    assert.equal(f.quitRequests, 0)
+    assert.deepEqual(await fs.readdir(path.join(f.root, 'staging')), [])
+    assert.deepEqual(await fs.readdir(f.current), [])
+  }
+})
+
+test('无效四段发布版本不能交给原生更新器，挂载目录正确清理', async t => {
+  for (const version of ['1.1.8', '1.1.8.1000', '01.1.8.9', '1.1.8.-1', '1.1.9007199254740991.9']) {
+    const f = await fixture(t)
+    await assert.rejects(f.updater.prepare(path.join(f.root, 'update.dmg'), version, new AbortController().signal),
+      { code: 'DATA_CORRUPT', message: 'macOS 更新发布版本号无效' })
     assert.equal(f.native.feedRequests, 0)
     assert.equal(f.quitRequests, 0)
     assert.deepEqual(await fs.readdir(path.join(f.root, 'staging')), [])

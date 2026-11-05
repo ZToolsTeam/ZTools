@@ -331,7 +331,7 @@ defineExpose({ show, dismiss })
   overflow-y: auto;
   overscroll-behavior: contain;
   scrollbar-gutter: stable;
-  padding-right: 4px;
+  padding-inline-end: 16px;
   font-size: var(--font-size-body-m);
   line-height: 1.7;
   color: var(--rc-text-secondary);

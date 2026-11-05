@@ -12,6 +12,19 @@ import type { MacUpdateInstaller } from '../../services/update-service.js'
 const execute = promisify(execFile)
 const TOOL_TIMEOUT_MS = 5 * 60 * 1000
 
+function expectedBundleVersions(version: string): { shortVersion: string; buildVersion: string } {
+  const parts = version.split('.')
+  const patch = Number(parts[2])
+  const build = Number(parts[3])
+  const merged = patch * 1000 + build
+  if (parts.length !== 4 || parts.some(part => !/^(0|[1-9][0-9]*)$/.test(part) || !Number.isSafeInteger(Number(part))) ||
+      build > 999 || !Number.isSafeInteger(merged)) {
+    throw new ZToolsError(errorCodes.dataCorrupt, 'macOS 更新发布版本号无效')
+  }
+  // 与发行包一致：X.Y.Z.W 对应显示版本 X.Y.Z、构建号 X.Y.(Z×1000+W)。
+  return { shortVersion: parts.slice(0, 3).join('.'), buildVersion: `${parts.slice(0, 2).join('.')}.${merged}` }
+}
+
 /** 原生边界由启动层注入，服务测试无需加载 Electron。 */
 export type MacAutoUpdater = Pick<Electron.AutoUpdater, 'on' | 'removeListener' | 'setFeedURL' | 'checkForUpdates' | 'quitAndInstall'>
 export type MacUpdateCommand = (file: string, args: string[], signal?: AbortSignal) => Promise<{ stdout: string; stderr: string }>
@@ -79,13 +92,15 @@ export class MacAppUpdater implements MacUpdateInstaller {
 
   async #verifyApplication(candidate: string, version: string, signal: AbortSignal): Promise<void> {
     const current = this.#options.appPath
+    const expected = expectedBundleVersions(version)
     const infoValue = async (appPath: string, key: string): Promise<string> => {
       const result = await this.#run('/usr/bin/plutil', ['-extract', key, 'raw', '-o', '-', path.join(appPath, 'Contents', 'Info.plist')], signal)
       return result.stdout.trim()
     }
     const currentId = await infoValue(current, 'CFBundleIdentifier')
     if (await infoValue(candidate, 'CFBundleIdentifier') !== currentId ||
-        await infoValue(candidate, 'CFBundleShortVersionString') !== version) {
+        await infoValue(candidate, 'CFBundleShortVersionString') !== expected.shortVersion ||
+        await infoValue(candidate, 'CFBundleVersion') !== expected.buildVersion) {
       throw new ZToolsError(errorCodes.dataCorrupt, '更新包中的应用标识或版本与发布信息不一致')
     }
     await this.#run('/usr/bin/codesign', ['--verify', '--deep', '--strict', current], signal)
