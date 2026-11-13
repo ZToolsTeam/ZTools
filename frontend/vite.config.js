@@ -3,7 +3,7 @@ import vue from '@vitejs/plugin-vue'
 import path from 'path'
 import Components from 'unplugin-vue-components/vite'
 import { AntDesignVueResolver } from 'unplugin-vue-components/resolvers'
-import { copyFileSync, mkdirSync, existsSync, readFileSync, readdirSync, rmSync } from 'fs'
+import { copyFileSync, mkdirSync, existsSync, readdirSync, rmSync } from 'fs'
 
 import cefIpcWatch from './vite-plugin-cef-ipc-watch.js'
 
@@ -32,36 +32,6 @@ function resolveDevProxy(mode) {
       target,
       changeOrigin: true,
       rewrite: (p) => p.replace(/^\/api/, '')
-    }
-  }
-}
-
-const pinyinProDistPath = path.resolve(__dirname, 'node_modules/pinyin-pro/dist/index.js')
-const pinyinProLicensePath = path.resolve(__dirname, 'node_modules/pinyin-pro/LICENSE')
-
-function pinyinProAsset() {
-  return {
-    name: 'pinyin-pro-asset',
-    configureServer(server) {
-      server.middlewares.use('/shared/pinyin-pro.js', (_request, response) => {
-        response.setHeader('Content-Type', 'application/javascript; charset=utf-8')
-        response.end(readFileSync(pinyinProDistPath))
-      })
-    },
-    buildStart() {
-      if (!existsSync(pinyinProDistPath) || !existsSync(pinyinProLicensePath)) {
-        throw new Error('pinyin-pro 依赖不完整，请先执行 npm install')
-      }
-      this.emitFile({
-        type: 'asset',
-        fileName: 'shared/pinyin-pro.js',
-        source: readFileSync(pinyinProDistPath)
-      })
-      this.emitFile({
-        type: 'asset',
-        fileName: 'shared/pinyin-pro.LICENSE.txt',
-        source: readFileSync(pinyinProLicensePath)
-      })
     }
   }
 }
@@ -98,7 +68,6 @@ export default defineConfig(({ mode }) => ({
       ]
     }),
     cefIpcWatch(),
-    pinyinProAsset(),
     {
       name: 'deploy-to-bin',
       closeBundle() {

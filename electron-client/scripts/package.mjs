@@ -1,5 +1,5 @@
 import { packager } from '@electron/packager'
-import { readNativeHostManifest } from './native-host-manifest.mjs'
+import { nativeDllSourceRoot, readNativeHostManifest } from './native-host-manifest.mjs'
 import fs from 'node:fs'
 import path from 'node:path'
 import { execFileSync } from 'node:child_process'
@@ -30,7 +30,8 @@ const outputRoot = getWindowsArtifactRoot(root, artifactVersion)
 const nativeHostSource = path.join(root, 'out', 'native', 'win32-ia32', 'ZToolsNativeHost32.exe')
 const serviceSource = path.join(root, 'out', 'native', 'service-win32-ia32', 'ZToolsService.exe')
 const pathAccessBrokerSource = path.join(root, 'out', 'native', 'win32-x64', 'bin', 'ZToolsPathAccessBroker.exe')
-const pluginSourceRoot = path.resolve(root, '..', 'bin', 'Data', 'Plugins')
+// 特权 DLL 与 NativeHost32 受信 DLL 共用唯一构建来源（DLLPlugins/outputs），不读取旧版运行时目录 bin/Data/Plugins
+const pluginSourceRoot = nativeDllSourceRoot(root)
 const privilegedManifestSource = path.join(
   root,
   'resources',
@@ -40,23 +41,8 @@ const privilegedManifestSource = path.join(
 // 应用图标随客户端仓库维护（resources/app/brand 为 SVG 源文件），不再依赖未纳入版本管理的旧 framework 目录
 const applicationIcon = path.join(root, 'resources', 'app', 'LOGO.ico')
 const retainedLocales = new Set(['en-US.pak', 'zh-CN.pak'])
-const privilegedDll = {
-  pluginId: 'context-menu',
-  dllId: 'ContextMenuPlugin',
-  path: 'lib/ContextMenuPlugin.dll',
-  functions: [
-    'CheckAdmin',
-    'ScanMenuItems',
-    'EnableMenuItem',
-    'DisableMenuItem',
-    'DeleteMenuItem',
-    'AddCustomMenuItem',
-    'InspectMenuItems',
-    'RefreshExplorer'
-  ]
-}
 
-// 公开源码没有 ../bin/Data/Plugins（商业 DLL 只在内部仓库）：只打包宿主，特权清单为空，ZToolsService 不加载任何特权 DLL
+// 公开源码没有 DLLPlugins/outputs（商业 DLL 只在内部仓库）：只打包宿主，特权清单为空，ZToolsService 不加载任何特权 DLL
 const hostOnly = !fs.existsSync(pluginSourceRoot)
 
 function createEmptyPrivilegedManifest() {
@@ -68,8 +54,9 @@ function createEmptyPrivilegedManifest() {
   ].join('\n')
 }
 
-function createPrivilegedManifest() {
+async function createPrivilegedManifest() {
   if (hostOnly) return createEmptyPrivilegedManifest()
+  const { PRIVILEGED_DLL: privilegedDll } = await import('./privileged-dll-declaration.mjs')
   const dllPath = path.join(
     pluginSourceRoot,
     privilegedDll.pluginId,
@@ -127,14 +114,14 @@ if (fs.existsSync(outputRoot)) throw new Error(`输出目录已存在，请归�
 if (!fs.existsSync(nativeHostSource)) throw new Error(`NativeHost32 产物不存在: ${nativeHostSource}`)
 if (!fs.existsSync(serviceSource)) throw new Error(`ZToolsService 产物不存在: ${serviceSource}`)
 if (!fs.existsSync(pathAccessBrokerSource)) throw new Error(`ZToolsPathAccessBroker 产物不存在: ${pathAccessBrokerSource}`)
-if (!fs.existsSync(privilegedManifestSource)) {
+if (!hostOnly && !fs.existsSync(privilegedManifestSource)) {
   throw new Error(`ZToolsService 生产特权清单不存在: ${privilegedManifestSource}`)
 }
 if (!fs.existsSync(applicationIcon)) throw new Error(`应用图标不存在: ${applicationIcon}`)
 const nativeHostManifest = readNativeHostManifest(root)
 // 文字识别模型（约 21 MB）：下载并按固定 SHA-256 校验，缺失或不一致直接失败
 const ocrModelDirectory = await ensureOcrModels()
-const privilegedManifest = createPrivilegedManifest()
+const privilegedManifest = await createPrivilegedManifest()
 if (hostOnly) {
   console.warn(`未找到商业 DLL 目录 ${pluginSourceRoot}，只打包宿主：特权 DLL 清单为空`)
 } else if (fs.readFileSync(privilegedManifestSource, 'utf8') !== privilegedManifest) {

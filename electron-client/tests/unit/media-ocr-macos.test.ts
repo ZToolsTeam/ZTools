@@ -234,18 +234,21 @@ test('image_ocr 请求只接受三种动作、绝对路径和已支持的语言�
   assert.equal(parseRequest({ messageId: 'ocr_1', method: 'image_ocr', params: { action: 'captureRegion' }, timeoutMs: 180_000 }).timeoutMs, 180_000)
 })
 
-test('框选前收起调用方窗口：工作台结束后重新显示，无界面命令保持收起，取消和失败也会恢复', async () => {
+test('框选前收起调用方窗口：截图完成后立即重新显示，不必等识别结束；无界面命令保持收起，取消和失败也会恢复', async () => {
   await onPlatform('darwin', async () => {
     const events: string[] = []
     const hideCallerWindow = () => { events.push('hide'); return () => { events.push('restore') } }
-    const capture = async (_rect: ScreenRectangle, file: string) => { await fs.writeFile(file, 'region'); return true }
-    const ok = fakeMacOcr({ selectScreenRegion: async () => { events.push('select'); return { x: 0, y: 0, width: 10, height: 10 } } })
+    const capture = async (_rect: ScreenRectangle, file: string) => { events.push('capture'); await fs.writeFile(file, 'region'); return true }
+    const ok = fakeMacOcr({
+      selectScreenRegion: async () => { events.push('select'); return { x: 0, y: 0, width: 10, height: 10 } },
+      recognizeLocal: async () => { events.push('recognize'); return { text: '识别结果' } }
+    })
     const handler = handlerWith({ macOcr: ok.ports, captureScreenRegionToPng: capture, hideCallerWindow }).handler
 
     await handler.handleOcr('captureRegionAndRecognize', { restoreWindow: true })
-    assert.deepEqual(events.splice(0), ['hide', 'select', 'restore'], '窗口要在弹出框选遮罩之前收起')
+    assert.deepEqual(events.splice(0), ['hide', 'select', 'capture', 'restore', 'recognize'], '窗口要在弹出框选遮罩之前收起，并在截图完成后、识别开始前立即恢复')
     await handler.handleOcr('captureRegionAndRecognize', { restoreWindow: false })
-    assert.deepEqual(events.splice(0), ['hide', 'select'])
+    assert.deepEqual(events.splice(0), ['hide', 'select', 'capture', 'recognize'])
 
     const cancel = fakeMacOcr({ selectScreenRegion: async () => undefined })
     await handlerWith({ macOcr: cancel.ports, hideCallerWindow }).handler.handleOcr('captureRegionAndRecognize', { restoreWindow: true })
@@ -253,6 +256,7 @@ test('框选前收起调用方窗口：工作台结束后重新显示，无界�
     const broken = fakeMacOcr({ recognizeLocal: async () => { throw new Error('识别崩溃') } })
     await handlerWith({ macOcr: broken.ports, captureScreenRegionToPng: capture, hideCallerWindow: () => () => { throw new Error('窗口已销毁') } })
       .handler.handleOcr('captureRegionAndRecognize', { restoreWindow: true })
+    assert.deepEqual(events.splice(0), ['capture'])
 
     const denied = await handlerWith({ macOcr: ok.ports, hideCallerWindow, screenCapturePermission: () => 'denied' }).handler.handleOcr('captureRegionAndRecognize', {}) as OcrResult
     assert.equal(denied.ok, false)

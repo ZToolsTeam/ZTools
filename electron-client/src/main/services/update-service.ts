@@ -825,20 +825,49 @@ export class UpdateService {
         this.#macUpdater.requestRestart()
         return { success: true, operationId: download.operationId, state: 'started', restartRequired: true }
       }
-      await fs.mkdir(maintenanceRoot, { recursive: true })
+      const canFallbackToDirectInstaller = path.extname(download.path).toLowerCase() === '.exe'
       const updaterPath = path.join(maintenanceRoot, 'ZToolsUpdater.exe')
-      await fs.copyFile(path.join(this.#runtimePaths.installRoot, 'ZToolsUpdater.exe'), updaterPath)
+      let useDirectInstallerFallback = false
+      try {
+        await fs.mkdir(maintenanceRoot, { recursive: true })
+        await fs.copyFile(path.join(this.#runtimePaths.installRoot, 'ZToolsUpdater.exe'), updaterPath)
+      } catch (stageError) {
+        if (!canFallbackToDirectInstaller) throw stageError
+        useDirectInstallerFallback = true
+        console.warn('准备临时 ZToolsUpdater.exe 失败，回退为直接静默运行已校验安装包', stageError)
+      }
       download.started = true
       download.state = 'started'
       this.#appHandoffStarted = true
       await persistDownloadMetadata(download, 'started').catch(() => undefined)
+      const runDirectInstaller = () => this.#runUpdater(
+        download.path,
+        ['/S', `/D=${this.#runtimePaths.installRoot}`, '--updated', '--need-cleanup'],
+        path.dirname(download.path)
+      )
       // Let the native updater resolve scope through the Unicode Win32 registry API.
-      const exitCode = await this.#runUpdater(updaterPath, [
-        '--source=' + download.path,
-        '--target=' + this.#runtimePaths.installRoot,
-        '--updated',
-        '--need-cleanup'
-      ], maintenanceRoot)
+      let exitCode: number
+      if (useDirectInstallerFallback) {
+        exitCode = await runDirectInstaller()
+      } else {
+        try {
+          exitCode = await this.#runUpdater(updaterPath, [
+            '--source=' + download.path,
+            '--target=' + this.#runtimePaths.installRoot,
+            '--updated',
+            '--need-cleanup'
+          ], maintenanceRoot)
+        } catch (launchError) {
+          const errnoCode =
+            launchError && typeof launchError === 'object' && 'code' in launchError
+              ? (launchError as { code?: unknown }).code
+              : undefined
+          const blockedBySystemPolicy = errnoCode === 'EACCES' || errnoCode === 'EPERM'
+          if (!canFallbackToDirectInstaller || !blockedBySystemPolicy) throw launchError
+          console.warn('临时 ZToolsUpdater.exe 被系统执行策略拦截，回退为直接静默运行已校验安装包', launchError)
+          exitCode = await runDirectInstaller()
+        }
+      }
       if (exitCode === UAC_CANCELLED_EXIT_CODE) {
         throw new ZToolsError(errorCodes.cancelled, '用户取消了 UAC 授权，更新未安装')
       }

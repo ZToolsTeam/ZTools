@@ -7,6 +7,7 @@ import Sidebar from '../Sidebar.vue'
 import { useNavStore } from '@/stores/nav'
 import { useCategoriesStore } from '@/stores/categories'
 import { usePluginsStore } from '@/stores/plugins'
+import { useUIStore } from '@/stores/ui'
 import { ROUTES } from '@/router/routes'
 import { feedbackEntry } from '@edition'
 
@@ -24,6 +25,7 @@ describe('Sidebar.vue 侧边栏高亮与导航测试', () => {
   let pinia
 
   beforeEach(() => {
+    localStorage.clear()
     pinia = createPinia()
     setActivePinia(pinia)
     mockPush.mockReset()
@@ -49,16 +51,31 @@ describe('Sidebar.vue 侧边栏高亮与导航测试', () => {
 
   const itemTexts = (wrapper) => wrapper.findAll('.sidebar-item').map((i) => i.text().trim())
 
-  it('侧栏只保留主导航与系统入口，不再重复列出分类（分类只在插件市场页顶部切换）', () => {
+  it('侧栏在「插件市场」下方列出插件分类，收起时只显示图标，展开显示图标和文字', async () => {
     const wrapper = mount(Sidebar, { global: { plugins: [pinia] } })
     const texts = itemTexts(wrapper)
-    expect(texts).not.toContain('系统工具')
-    expect(texts).not.toContain('办公效率')
-    expect(texts.some((t) => t.includes('重试分类'))).toBe(false)
-    expect(wrapper.text()).not.toContain('分类')
-    // 预取分类与目录已移到主布局，侧栏自己不再请求
-    expect(useCategoriesStore().fetchCategories).not.toHaveBeenCalled()
-    expect(pluginsStore.refreshCategoryCounts).not.toHaveBeenCalled()
+    expect(texts).toContain('主页')
+    expect(texts).toContain('插件市场')
+    expect(texts).toContain('系统工具')
+    expect(texts).toContain('办公效率')
+
+    // 点击边界居中的收起按钮：展开态显示左箭头，收起后显示右箭头，只保留图标、隐藏文字标签
+    const toggleBtn = wrapper.find('aside.sidebar-root > .sidebar-toggle-btn')
+    expect(toggleBtn.exists()).toBe(true)
+    expect(toggleBtn.find('.lucide-chevron-left').exists()).toBe(true)
+    await toggleBtn.trigger('click')
+    expect(useUIStore().isSidebarCollapsed).toBe(true)
+    expect(wrapper.find('aside.sidebar-root').classes()).toContain('is-collapsed')
+    expect(toggleBtn.find('.lucide-chevron-right').exists()).toBe(true)
+    expect(wrapper.findAll('.sidebar-label')).toHaveLength(0)
+    expect(wrapper.findAll('.sidebar-item svg').length).toBeGreaterThan(0)
+
+    // 再次点击展开：恢复显示图标和文字
+    await toggleBtn.trigger('click')
+    expect(useUIStore().isSidebarCollapsed).toBe(false)
+    expect(wrapper.find('aside.sidebar-root').classes()).not.toContain('is-collapsed')
+    expect(toggleBtn.find('.lucide-chevron-left').exists()).toBe(true)
+    expect(wrapper.findAll('.sidebar-label').length).toBeGreaterThan(0)
   })
 
   it('初始状态下“主页”为激活高亮状态', () => {
@@ -133,14 +150,14 @@ describe('Sidebar.vue 侧边栏高亮与导航测试', () => {
     delete window.ztools
   })
 
-  it('[边界] 在插件市场的任意分类下，侧栏都高亮「插件市场」，页面项互斥不高亮', async () => {
+  it('[边界] 在插件市场的具体分类下，侧栏高亮对应分类项，其它项互斥不高亮', async () => {
     const wrapper = mount(Sidebar, { global: { plugins: [pinia] } })
     const nav = useNavStore()
     nav.setCategory('系统工具')
     await wrapper.vm.$nextTick()
     const items = wrapper.findAll('.sidebar-item')
     const active = items.filter((i) => i.classes().includes('active')).map((i) => i.text().trim())
-    expect(active).toEqual(['插件市场'])
+    expect(active).toEqual(['系统工具'])
   })
 
   it('外部路由切换同步到 nav 与高亮', async () => {
@@ -158,12 +175,17 @@ describe('Sidebar.vue 侧边栏高亮与导航测试', () => {
     expect(aboutItem.classes()).toContain('active')
   })
 
-  it('点「插件市场」进入无分类的列表页并高亮', async () => {
+  it('点「插件市场」进入无分类的列表页并高亮，点具体分类进入对应分类页', async () => {
     const wrapper = mount(Sidebar, { global: { plugins: [pinia] } })
     const market = wrapper.findAll('.sidebar-item').find((i) => i.text().includes('插件市场'))
     await market.trigger('click')
     expect(mockPush).toHaveBeenCalledWith({ ...ROUTES.LIST, params: { category: '' } })
     expect(market.classes()).toContain('active')
+
+    const sysCat = wrapper.findAll('.sidebar-item').find((i) => i.text().includes('系统工具'))
+    await sysCat.trigger('click')
+    expect(mockPush).toHaveBeenCalledWith({ ...ROUTES.LIST, params: { category: '系统工具' } })
+    expect(sysCat.classes()).toContain('active')
   })
 
   it('「设置」项显示快捷键键帽', () => {

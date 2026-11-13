@@ -65,7 +65,6 @@ test('IpcRouter factory rolls back real service listeners after a late construct
   } as unknown as CoreServices
   const options = {
     toggleMainWindow() {},
-    toggleSuperPanel() {},
     async getPanelLocalApps() { return [] },
     closeConfirmationResolved() {},
     screenClipboardAdapters: {},

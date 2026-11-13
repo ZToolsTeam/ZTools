@@ -3,6 +3,35 @@ import { Detail, Form, ActionPanel, Action, Icon, Color, showToast, Toast, Clipb
 import { useMemo } from "@ztools/declarative-ui";
 import { validateJson, formatJson, minifyJson, jsonToTsInterface, jsonToRustStruct, jsonToGoStruct, extractJsonPaths, fencedCode } from "./logic.js";
 import { usePopoutValue } from "./popout-state.js";
+import { createCompatFileInputProps } from "./host-compat.js";
+let jsonFileSeq = 0;
+function isRecord(value) {
+    return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+async function readTextFileFromHost(filePath) {
+    const g = globalThis;
+    const methods = g.window?.__ztoolsElectron?.transport?.methods ?? g.__ztoolsElectron?.transport?.methods;
+    const fn = methods?.filesystem_read_file;
+    if (typeof fn !== "function") {
+        throw new Error("当前客户端不支持读取本地文件");
+    }
+    jsonFileSeq = (jsonFileSeq + 1) % 1_000_000;
+    const raw = await fn({
+        messageId: `json_file_${Date.now()}_${jsonFileSeq}`,
+        params: { path: filePath, encoding: "utf8" }
+    });
+    if (isRecord(raw) && raw.success === false) {
+        const err = raw.error;
+        const msg = isRecord(err) ? String(err.message || err.code || "读取文件失败") : String(err || "读取文件失败");
+        throw new Error(msg);
+    }
+    const data = isRecord(raw) && "data" in raw ? raw.data : raw;
+    if (typeof data === "string")
+        return data;
+    if (isRecord(data) && typeof data.content === "string")
+        return data.content;
+    throw new Error("文件读取结果无效");
+}
 /** JSONPath 索引在详情页里只展示前 N 项，取值过长时截断（复制动作给全量） */
 const PATH_PREVIEW_LIMIT = 15;
 const PATH_VALUE_MAX = 60;
@@ -170,7 +199,33 @@ export default function JsonFormatCommand(props = {}) {
             await showToast(Toast.Style.Failure, "剪贴板内容存在语法错误", res.error);
         }
     };
-    return (React.createElement(Form, { navigationTitle: codegen ? "JSON 生成类型代码" : "JSON 格式化与类型转换", actions: React.createElement(ActionPanel, { title: "\u5FEB\u6377\u52A8\u4F5C" },
+    const fileInputProps = createCompatFileInputProps(async (files) => {
+        const targetPath = files[0]?.trim();
+        if (!targetPath)
+            return;
+        try {
+            const content = await readTextFileFromHost(targetPath);
+            setJsonText(content);
+            const res = validateJson(content);
+            if (res.valid) {
+                await showToast(Toast.Style.Success, "已读取文件并成功校验");
+            }
+            else {
+                await showToast(Toast.Style.Failure, "文件内容存在语法错误", res.error);
+            }
+        }
+        catch (err) {
+            await showToast(Toast.Style.Failure, "读取文件失败", err instanceof Error ? err.message : String(err));
+        }
+    }, {
+        extensions: [".json", ".jsonl", ".txt"],
+        onTextPaste: (text) => {
+            if (text && text.trim()) {
+                setJsonText(text);
+            }
+        }
+    });
+    return (React.createElement(Form, { ...fileInputProps, navigationTitle: codegen ? "JSON 生成类型代码" : "JSON 格式化与类型转换", actions: React.createElement(ActionPanel, { title: "\u5FEB\u6377\u52A8\u4F5C" },
             React.createElement(Action.SubmitForm, { title: codegen ? "生成类型代码" : "格式化并查看详情", icon: codegen ? Icon.Code : Icon.Eye, onSubmit: handleSubmit }),
             codegen && outputs && (React.createElement(Action.CopyToClipboard, { title: "\u590D\u5236 TypeScript Interface", content: outputs.ts, icon: Icon.Code })),
             !codegen && outputs && (React.createElement(Action.CopyToClipboard, { title: "\u590D\u5236 2 \u683C\u683C\u5F0F\u5316\u7ED3\u679C", content: outputs.indent2, icon: Icon.CopyClipboard })),

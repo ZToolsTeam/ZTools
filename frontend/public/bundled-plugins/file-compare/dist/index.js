@@ -1,6 +1,7 @@
-import { List, Form, ActionPanel, Action, Icon, Clipboard, showToast, Toast, useState, useMemo, useNavigation } from '@ztools/declarative-ui';
+import { List, Form, ActionPanel, Action, Icon, Clipboard, showToast, Toast, useState, useEffect, useRef, useMemo, useNavigation } from '@ztools/declarative-ui';
 import { diffText, formatHunk, formatUnifiedDiff, describeHunk, hunkPreviewMarkdown, splitLines, MAX_DIFF_LINES } from './logic.js';
-import { pickTextFile } from './host.js';
+import { createCompatFileInputProps, isDeclarativeFileInputSupported } from './host-compat.js';
+import { pickTextFile, readTextFileByPath, extractDroppedFilePaths } from './host.js';
 import { usePopoutValue } from './popout-state.js';
 export * from './logic.js';
 const emptySide = (name) => ({ name, text: '' });
@@ -55,7 +56,100 @@ export function FileCompareCommand() {
     // 两侧都有内容才对比；只有一侧时进入「待选另一侧」状态，不拿空文本做整篇删除的假差异
     const hasLeft = left.source !== undefined || left.text.length > 0;
     const hasRight = right.source !== undefined || right.text.length > 0;
+    const hasLeftRef = useRef(hasLeft);
+    hasLeftRef.current = hasLeft;
+    const hasRightRef = useRef(hasRight);
+    hasRightRef.current = hasRight;
     const ready = hasLeft && hasRight;
+    const resolveTargetSide = (targetFieldId) => {
+        if (!targetFieldId)
+            return null;
+        const id = targetFieldId.trim();
+        if (!id)
+            return null;
+        if (/(?:right|target|fileb|^b$|[-_:]b$)/i.test(id))
+            return 'right';
+        if (/(?:left|source|filea|^a$|[-_:]a$)/i.test(id))
+            return 'left';
+        return null;
+    };
+    const handleInputFiles = async (paths, payload) => {
+        if (paths.length === 0)
+            return;
+        try {
+            const targetSide = resolveTargetSide(payload?.targetFieldId);
+            if (targetSide === 'right') {
+                const file = await readTextFileByPath(paths[0]);
+                setRight({ name: file.name, text: file.text, source: 'file' });
+                await showToast(Toast.Style.Success, '已设为右侧');
+            }
+            else if (targetSide === 'left') {
+                const file = await readTextFileByPath(paths[0]);
+                setLeft({ name: file.name, text: file.text, source: 'file' });
+                await showToast(Toast.Style.Success, '已设为左侧');
+            }
+            else if (paths.length >= 2) {
+                const [first, second] = await Promise.all([
+                    readTextFileByPath(paths[0]),
+                    readTextFileByPath(paths[1])
+                ]);
+                setLeft({ name: first.name, text: first.text, source: 'file' });
+                setRight({ name: second.name, text: second.text, source: 'file' });
+                await showToast(Toast.Style.Success, '已载入两个文件进行对比');
+            }
+            else {
+                const file = await readTextFileByPath(paths[0]);
+                if (!hasLeftRef.current || hasRightRef.current) {
+                    setLeft({ name: file.name, text: file.text, source: 'file' });
+                    await showToast(Toast.Style.Success, '已设为左侧');
+                }
+                else {
+                    setRight({ name: file.name, text: file.text, source: 'file' });
+                    await showToast(Toast.Style.Success, '已设为右侧');
+                }
+            }
+        }
+        catch (err) {
+            await showToast(Toast.Style.Failure, '读取文件失败', err instanceof Error ? err.message : String(err));
+        }
+    };
+    const fileInputProps = createCompatFileInputProps((files, payload) => handleInputFiles(files, payload), {
+        onTextPaste: async (text) => {
+            if (!text) {
+                await showToast(Toast.Style.Failure, '剪贴板里没有文字');
+                return;
+            }
+            if (!hasLeftRef.current || hasRightRef.current) {
+                setLeft({ name: '剪贴板', text, source: 'clipboard' });
+                await showToast(Toast.Style.Success, '已设为左侧');
+            }
+            else {
+                setRight({ name: '剪贴板', text, source: 'clipboard' });
+                await showToast(Toast.Style.Success, '已设为右侧');
+            }
+        }
+    });
+    useEffect(() => {
+        if (isDeclarativeFileInputSupported())
+            return;
+        const ztools = globalThis.window?.ztools;
+        if (typeof ztools?.events?.on !== 'function')
+            return;
+        const handler = (envelopeOrPayload) => {
+            const paths = extractDroppedFilePaths(envelopeOrPayload);
+            const record = envelopeOrPayload && typeof envelopeOrPayload === 'object' ? envelopeOrPayload : {};
+            const inner = record.payload && typeof record.payload === 'object' ? record.payload : record;
+            const targetFieldId = typeof inner.targetFieldId === 'string' ? inner.targetFieldId : undefined;
+            void handleInputFiles(paths, { files: paths, source: 'drop', ...(targetFieldId ? { targetFieldId } : {}) });
+        };
+        const off = ztools.events.on('plugin_files_dropped', handler);
+        return () => {
+            if (typeof off === 'function')
+                off();
+            else
+                ztools?.events?.off?.('plugin_files_dropped', handler);
+        };
+    }, []);
     // 只在输入变化时重新计算（交换、忽略空白、载入新内容），其余重渲染直接复用结果
     const { result, error, report } = useMemo(() => {
         if (!ready)
@@ -193,6 +287,7 @@ export function FileCompareCommand() {
         sections = [];
     }
     return List({
+        ...fileInputProps,
         navigationTitle: '文本对比',
         isShowingDetail: Boolean(result && result.hunks.length > 0) || Boolean(result?.identical),
         searchBarPlaceholder: result && result.hunks.length > 0 ? `按回车复制差异报告，${actionPanelKey()} 查看更多操作` : `按回车开始，${actionPanelKey()} 查看更多操作`,

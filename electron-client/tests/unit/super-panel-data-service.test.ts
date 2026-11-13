@@ -100,7 +100,8 @@ test('persists Delphi-compatible panel pins and local app usage', windowsOnly, a
   assert.equal(await service.togglePin('plugin.test', 'plugin'), true)
   assert.equal(await service.togglePin(localApp.id, 'local'), true)
   const data = await service.getData()
-  assert.equal(data.defaultTab, 'all')
+  // 旧超级面板的 shortcuts / defaultTab 已移除，getData 只返回 success 与 items
+  assert.deepEqual(Object.keys(data).sort(), ['items', 'success'])
   assert.equal(data.items.find((item) => item.id === 'plugin.test')?.pinned, true)
   assert.equal(data.items.find((item) => item.id === localApp.id)?.pinned, true)
 
@@ -397,6 +398,29 @@ test('orders plugin recents by last-used time and local apps by legacy usage ord
     data.items.filter((item) => item.type === 'local').map((item) => item.id),
     ['localapp:CCCCDDDD', 'localapp:AAAABBBB', 'localapp:EEEEFFFF']
   )
+})
+
+test('最近使用插件固定最多 10 条，忽略旧配置中的 maxRecentCount', async (context) => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'ztools-super-panel-recent-limit-'))
+  context.after(() => fs.rm(root, { recursive: true, force: true }))
+  const ids = Array.from({ length: 12 }, (_, index) => `plugin.recent${String(index).padStart(2, '0')}`)
+  // 越靠后的插件最后使用时间越新
+  await fs.writeFile(path.join(root, 'plugin_state.json'), JSON.stringify(Object.fromEntries(ids.map((id, index) => [
+    id,
+    { enabled: true, use_count: 1, last_used_at: `2024-01-${String(index + 1).padStart(2, '0')} 00:00:00` }
+  ]))), 'utf8')
+  const service = new SuperPanelDataService(
+    root,
+    {
+      get: async () => JSON.stringify({ maxRecentCount: 3, pinnedLocalApps: [] }),
+      set: async () => undefined
+    },
+    async () => ({ success: true, data: ids.map((id) => ({ id, name: id, enabled: true })) }),
+    async () => ''
+  )
+
+  const plugins = (await service.getData()).items.filter((item) => item.type === 'plugin')
+  assert.deepEqual(plugins.map((item) => item.id), [...ids].reverse().slice(0, 10))
 })
 
 test('launches legacy local app arguments without shell expansion', windowsOnly, async (context) => {

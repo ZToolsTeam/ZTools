@@ -43,6 +43,7 @@ function basePlugin(extra = {}) {
     version: '1.0.0',
     description: '截图校验',
     author: 'octocat',
+    category: ['图像媒体'],
     entry: 'dist/index.js',
     icon: 'icon.svg',
     permissions: [],

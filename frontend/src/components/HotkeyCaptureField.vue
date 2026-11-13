@@ -1,6 +1,7 @@
 <script setup>
 import { XIcon } from '@lucide/vue'
-import { nextTick, ref, watch } from 'vue'
+import { nextTick, onBeforeUnmount, ref, watch } from 'vue'
+import { notifyHotkeyRecorderActive } from '@/utils/hotkeyRecorder'
 import ShortcutKeys from '@/components/base/ShortcutKeys.vue'
 
 /**
@@ -19,13 +20,48 @@ const props = defineProps({
   emptyText: { type: String, default: '未设置' }
 })
 const emit = defineEmits(['start', 'cancel', 'keydown', 'clear'])
+const recorder = ref(null)
 const input = ref(null)
+let notifiedActive = false
 
-// 进入录入时聚焦隐藏输入框，按键才会进到这里
+// 检查页面中是否存在除当前实例外的其他激活快捷键录入框，避免多输入框切换时后置释放冲掉新激活态
+const hasOtherActiveRecorder = () => {
+  if (typeof document === 'undefined' || typeof document.querySelectorAll !== 'function') {
+    return false
+  }
+  const activeNodes = document.querySelectorAll('.hotkey-recorder.recording:not(.loading)')
+  for (const node of activeNodes) {
+    if (node !== recorder.value) return true
+  }
+  return false
+}
+
+const releaseRecorderActive = (deferCheck = true) => {
+  if (!notifiedActive) return
+  notifiedActive = false
+  if (!deferCheck) {
+    if (!hasOtherActiveRecorder()) notifyHotkeyRecorderActive(false)
+    return
+  }
+  void nextTick(() => {
+    if (!props.recording && !hasOtherActiveRecorder()) {
+      notifyHotkeyRecorderActive(false)
+    }
+  })
+}
+
+// 进入录入时聚焦隐藏输入框，按键才会进到这里；未进入录入的初始挂载不上报无效事件
 watch(
   () => props.recording,
   async (recording) => {
-    if (!recording) return
+    if (!recording) {
+      releaseRecorderActive(true)
+      return
+    }
+    if (!notifiedActive) {
+      notifiedActive = true
+      notifyHotkeyRecorderActive(true)
+    }
     await nextTick()
     input.value?.focus()
   },
@@ -44,16 +80,29 @@ const onKeydown = (event) => {
 }
 
 const onBlur = () => {
-  if (props.recording) emit('cancel')
+  if (!props.recording) return
+  emit('cancel')
+  if (notifiedActive) {
+    notifiedActive = false
+    void nextTick(() => {
+      if (!hasOtherActiveRecorder()) {
+        notifyHotkeyRecorderActive(false)
+      }
+    })
+  }
 }
 
 // 已按下的修饰键以 "...+" 结尾，键帽只显示真正按下的键，末尾补一个省略号表示还在等待主键
+onBeforeUnmount(() => {
+  releaseRecorderActive(false)
+})
 const pendingKeys = (text) => text.replace(/\.\.\.$/, '').replace(/\+$/, '')
 </script>
 
 <template>
   <div class="hotkey-field">
     <div
+      ref="recorder"
       class="hotkey-recorder"
       :class="{ recording, loading, disabled }"
       :aria-disabled="disabled || undefined"
@@ -63,6 +112,9 @@ const pendingKeys = (text) => text.replace(/\.\.\.$/, '').replace(/\+$/, '')
         ref="input"
         class="hotkey-hidden-input"
         readonly
+        inputmode="none"
+        autocomplete="off"
+        spellcheck="false"
         :tabindex="recording ? 0 : -1"
         :aria-label="hotkey ? `当前快捷键 ${hotkey}，点击重新录入` : '点击录入快捷键'"
         @keydown="onKeydown"

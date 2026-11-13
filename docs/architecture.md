@@ -115,6 +115,8 @@ IPC 契约对两种版本相同：`user_get_info`、`user_set_token`、`user_log
 
 Windows 的文字识别在 Electron 的独立子进程（utilityProcess）里用 ONNX Runtime（WebAssembly 版）运行 PP-OCRv5 模型，第一次识别时启动，空闲一分钟后退出；模型缺失或子进程连续失败时改用 Windows 系统识别。macOS 使用系统 Vision。
 
+公式识别（macOS 与 Windows）同样在独立子进程里用 ONNX Runtime 运行 Pix2Text-MFR 1.5 模型（MIT），输出 LaTeX。模型约 114 MB，不随安装包分发，用户第一次使用时由主进程下载到数据目录的 `Models/`（先试官方 CDN，再试 Hugging Face 的固定提交与该提交的镜像，所有来源逐个文件校验同一份 SHA-256），之后离线识别；下载只取模型文件，图片不离开本机。
+
 NativeHost32 与 ZToolsService 只接受清单中登记过的插件和函数。
 
 ## 后台资源

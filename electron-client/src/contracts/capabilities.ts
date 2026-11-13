@@ -377,6 +377,7 @@ export const methodCapabilities = {
   browser_bookmarks_scan: ['main', 'plugin'],
   downloads_manager: ['main', 'plugin'],
   image_ocr: ['main', 'plugin'],
+  formula_ocr: ['main', 'plugin'],
   keyboard_lock: ['main', 'plugin'],
   docker_manager: ['main', 'plugin'],
   environment_manager: ['main', 'plugin'],
@@ -437,7 +438,6 @@ export function canCall(method: AllowedMethod, caller: CallerIdentity): boolean 
  */
 export const TRUSTED_INTERNAL_PLUGINS = [
   'internal-settings',
-  'internal-super-panel',
   'internal-clipboard'
 ] as const
 

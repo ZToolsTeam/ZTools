@@ -260,7 +260,6 @@ async function main() {
         getOsPermission: () => 'unknown'
       },
       toggleMainWindow() {},
-      toggleSuperPanel() {},
       getPanelLocalApps: async () => [],
       launchLocalApp: async () => {},
       closeConfirmationResolved() {}

@@ -4,7 +4,7 @@ import { RcDialog } from '@/components/base'
 import { CircleXIcon, MonitorIcon, SearchIcon, SquarePlusIcon } from '@lucide/vue'
 /**
  * 启动快捷键管理弹窗
- * 展示所有已安装插件和已加入面板的本地软件，支持设置/修改/清除全局快捷键
+ * 展示所有已安装插件和悬浮条固定的本地软件，支持设置/修改/清除全局快捷键
  * 通过 IPC trigger 系列接口与原生宿主端交互
  */
 import { ref, computed, onBeforeUnmount } from 'vue'
@@ -34,7 +34,7 @@ const supportsDoubleModifierHotkeys = ref(false)
 const searchText = ref('')
 // 启动快捷键映射：{ targetId: { triggerId, triggerIds, key, kind, ownerId } }
 const pluginHotkeyMap = ref({})
-// 已加入超级面板的本地软件
+// 悬浮条固定的本地软件
 const localApps = ref([])
 // 当前正在录入快捷键的目标ID
 const recordingPluginId = ref(null)
@@ -66,7 +66,7 @@ const launchTargets = computed(() => {
     .map(([id]) => ({
       id,
       kind: 'localApp',
-      name: `${id}（已移出面板）`,
+      name: `${id}（已从悬浮条移除）`,
       invalid: true
     }))
   return [...plugins, ...apps, ...invalidApps]
@@ -155,9 +155,9 @@ async function loadLocalApps() {
     const apps = await window.ztools.sys.getPanelLocalApps()
     localApps.value = Array.isArray(apps) ? apps : []
   } catch (e) {
-    console.error('加载面板本地软件失败:', e)
+    console.error('加载悬浮条本地软件失败:', e)
     localApps.value = []
-    message.error('加载面板本地软件失败')
+    message.error('加载悬浮条本地软件失败')
   }
 }
 
@@ -181,7 +181,7 @@ const cancelRecording = () => {
 
 /** 录入框里的按键：Esc 取消、⌫ 清除，组合键完整后做冲突检测并保存 */
 const handleKeydown = async (event, target) => {
-  if (!recordingPluginId.value || recordingPluginId.value !== target.id) return
+  if (!recordingPluginId.value || recordingPluginId.value !== target.id || loadingPluginId.value) return
   const result = interpretRecorderKeydown(event, {
     platform: hotkeyPlatform.value,
     allowDoubleTap: supportsDoubleModifierHotkeys.value
@@ -251,14 +251,7 @@ async function handleHotkeyRecorded(target, hotkeyStr) {
       return
     }
 
-    // 2. 本地检测：与超级面板键盘热键冲突
-    const superPanelHotkey = await getSuperPanelHotkey()
-    if (superPanelHotkey && superPanelHotkey.toLowerCase() === hotkeyStr.toLowerCase()) {
-      message.warning('该快捷键与超级面板键盘热键冲突')
-      cancelRecording()
-      return
-    }
-
+    // 2. 本地检测：与同一目标的其他快捷键冲突
     if (await hasSameTargetHotkeyConflict(target, hotkeyStr)) {
       cancelRecording()
       return
@@ -322,23 +315,6 @@ async function handleHotkeyRecorded(target, hotkeyStr) {
 async function getGlobalWakeHotkey() {
   try {
     return await getHotkey() || ''
-  } catch {
-    return ''
-  }
-}
-
-/** 获取超级面板键盘热键 */
-async function getSuperPanelHotkey() {
-  try {
-    if (!window.ztools?.config) return ''
-    const config = await window.ztools.config.get('super_panel')
-    const kb = config?.keyboardHotkey
-    if (!kb?.enabled || !kb?.key) return ''
-    const mods = Array.isArray(kb.modifiers)
-      ? kb.modifiers.map(m => m.charAt(0).toUpperCase() + m.slice(1))
-      : []
-    const key = kb.key.charAt(0).toUpperCase() + kb.key.slice(1)
-    return [...mods, key].join('+')
   } catch {
     return ''
   }

@@ -286,6 +286,7 @@ export class ManagedSidecarProcess {
         this.pid = child.pid ?? null
 
         child.on('error', (err) => {
+          if (this.child !== child) return
           this.lastError = err.message
           if (!settled) {
             settled = true
@@ -296,6 +297,7 @@ export class ManagedSidecarProcess {
         })
 
         child.on('exit', (code, signal) => {
+          if (this.child !== child) return
           this.handleExit(code, signal)
           if (!settled) {
             settled = true
@@ -464,15 +466,23 @@ export class ManagedSidecarProcess {
   }
 
   private handleUnexpectedExit() {
+    this.stopHeartbeat()
     this.clearPendingRequests(new Error('Sidecar process exited unexpectedly'))
     if (this.rl) {
       this.rl.close()
       this.rl = null
     }
-    if (this.child && !this.child.killed) {
-      this.child.kill('SIGTERM')
+    if (this.child) {
+      const oldChild = this.child
       this.child = null
       this.pid = null
+      if (!oldChild.killed) {
+        oldChild.kill('SIGTERM')
+      }
+    }
+
+    if (this.intentionallyStopped || this.state === 'restarting' || this.state === 'degraded' || this.state === 'stopped') {
+      return
     }
 
     const now = Date.now()
@@ -942,7 +952,7 @@ export class SidecarManager {
   public async indexPath(targetPath: string, scanner: 'auto' | 'usn' | 'directory' = 'auto'): Promise<IndexPathResult> {
     if (this.indexerProcess.state === 'running') {
       try {
-        return await this.indexerProcess.sendRequest<IndexPathResult>('index_path', { path: targetPath, scanner })
+        return await this.indexerProcess.sendRequest<IndexPathResult>('index_path', { path: targetPath, scanner }, 60000)
       } catch (err) {
         console.warn('[SidecarManager] indexPath RPC failed, falling back:', err)
       }
@@ -957,7 +967,7 @@ export class SidecarManager {
 
   public async generateMockDataset(count = 1000000): Promise<MockDatasetResult> {
     if (this.indexerProcess.state === 'running') {
-      return await this.indexerProcess.sendRequest<MockDatasetResult>('generate_mock_dataset', { count })
+      return await this.indexerProcess.sendRequest<MockDatasetResult>('generate_mock_dataset', { count }, 30000)
     }
     return {
       total_indexed: 0,

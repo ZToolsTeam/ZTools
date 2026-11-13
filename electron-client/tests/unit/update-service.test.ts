@@ -236,6 +236,108 @@ test('UAC cancellation and updater launch failures remain visible and retryable'
   await fs.rm(root, { recursive: true, force: true })
 })
 
+test('Windows app update falls back to direct .exe installer when ZToolsUpdater.exe is missing or blocked by policy', async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'ztools-update-direct-fallback-'))
+  const runtimePaths = runtimePathsForBusinessDataRoot(path.join(root, 'Data'))
+  await fs.mkdir(runtimePaths.installRoot, { recursive: true })
+  const payload = Buffer.from('verified setup exe')
+  const checksum = createHash('sha256').update(payload).digest('hex')
+  const launches: Array<{ executable: string; argumentsList: string[]; cwd: string }> = []
+
+  // 1) 便携版安装目录缺失 ZToolsUpdater.exe 时，.exe 包自动回退直装，而 .zip 包拒绝作为进程启动
+  const portableZipService = new UpdateService({
+    platform: 'win32',
+    runtimePaths,
+    appVersion: '1.0.0',
+    webVersion: '1.0.0',
+    fetchImpl: async () => new Response(payload, { status: 200 }),
+    runUpdaterImpl: async (executable, argumentsList, cwd) => {
+      launches.push({ executable, argumentsList, cwd })
+      return 0
+    }
+  })
+  await assert.rejects(
+    portableZipService.install({
+      type: 'app',
+      version: '2.0.0',
+      downloadUrl: 'https://cdn.example/ZToolsPortable.zip',
+      checksum,
+      fileSize: payload.length
+    }),
+    (error: unknown) => error instanceof ZToolsError && error.code === errorCodes.processError
+  )
+  assert.equal(launches.length, 0)
+  await portableZipService.stop()
+
+  const portableExeService = new UpdateService({
+    platform: 'win32',
+    runtimePaths,
+    appVersion: '1.0.0',
+    webVersion: '1.0.0',
+    fetchImpl: async () => new Response(payload, { status: 200 }),
+    runUpdaterImpl: async (executable, argumentsList, cwd) => {
+      launches.push({ executable, argumentsList, cwd })
+      return 0
+    }
+  })
+  const directRes = await portableExeService.install({
+    type: 'app',
+    version: '2.0.0',
+    downloadUrl: 'https://cdn.example/ZToolsSetup.exe',
+    checksum,
+    fileSize: payload.length
+  })
+  assert.equal(directRes.success, true)
+  assert.equal(launches.length, 1)
+  assert.equal(path.extname(launches[0]?.executable ?? '').toLowerCase(), '.exe')
+  assert.notEqual(path.basename(launches[0]?.executable ?? ''), 'ZToolsUpdater.exe')
+  assert.deepEqual(launches[0]?.argumentsList, [
+    '/S',
+    `/D=${runtimePaths.installRoot}`,
+    '--updated',
+    '--need-cleanup'
+  ])
+  await portableExeService.stop()
+
+  // 2) ZToolsUpdater.exe 存在但临时目录执行被系统策略拦截（EACCES）时，自动回退直接运行已校验安装包
+  await fs.writeFile(path.join(runtimePaths.installRoot, 'ZToolsUpdater.exe'), 'updater')
+  launches.length = 0
+  const policyBlockedService = new UpdateService({
+    platform: 'win32',
+    runtimePaths,
+    appVersion: '1.0.0',
+    webVersion: '1.0.0',
+    fetchImpl: async () => new Response(payload, { status: 200 }),
+    runUpdaterImpl: async (executable, argumentsList, cwd) => {
+      launches.push({ executable, argumentsList, cwd })
+      if (path.basename(executable) === 'ZToolsUpdater.exe') {
+        const err = Object.assign(new Error('spawn EACCES'), { code: 'EACCES' })
+        throw err
+      }
+      return 0
+    }
+  })
+  const policyRes = await policyBlockedService.install({
+    type: 'app',
+    version: '2.0.1',
+    downloadUrl: 'https://cdn.example/ZToolsSetup-2.0.1.exe',
+    checksum,
+    fileSize: payload.length
+  })
+  assert.equal(policyRes.success, true)
+  assert.equal(launches.length, 2)
+  assert.equal(path.basename(launches[0]?.executable ?? ''), 'ZToolsUpdater.exe')
+  assert.deepEqual(launches[1]?.argumentsList, [
+    '/S',
+    `/D=${runtimePaths.installRoot}`,
+    '--updated',
+    '--need-cleanup'
+  ])
+  await policyBlockedService.stop()
+
+  await fs.rm(root, { recursive: true, force: true })
+})
+
 test('update service compares all four numeric version components and rejects malformed versions', async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'ztools-update-version-'))
   const runtimePaths = runtimePathsForBusinessDataRoot(path.join(root, 'Data'))

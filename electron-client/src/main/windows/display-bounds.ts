@@ -76,7 +76,7 @@ export function calculateCenteredBounds(
 }
 
 /**
- * 计算跟随光标或屏幕居中的自适应面板矩形（针对 SuperPanel 与浮动菜单）
+ * 计算跟随光标或屏幕居中的自适应面板矩形（针对悬浮条与浮动菜单）
  */
 export function calculateCursorRelativeBounds(
   dimensions: { width: number; height: number },

@@ -3,14 +3,19 @@ import path from 'node:path'
 import { createHash } from 'node:crypto'
 import { assertPeMachine, PE_MACHINE_X86 } from './windows-pe-architecture.mjs'
 
-/** 受信 DLL 的源目录（相对客户端仓库），商业 DLL 只存在于内部仓库 */
-export function nativeDllSourceRoot(clientRoot, source) {
-  return path.resolve(clientRoot, '..', ...(source === 'bin'
-    ? ['bin', 'Data', 'Plugins'] : ['plugins', 'create-plugin', 'src', 'plugins']))
+/**
+ * 受信 DLL 声明当前唯一允许的来源。
+ * bin/Data/Plugins 是旧版客户端运行时保存已下载插件的目录，不是构建输入，严禁再作为来源。
+ */
+export const NATIVE_DLL_SOURCES = Object.freeze(['dll-plugins'])
+
+/** 受信 DLL 的源目录（相对客户端仓库）：内部 DLLPlugins/outputs 子模块产物目录，商业 DLL 只存在于内部仓库 */
+export function nativeDllSourceRoot(clientRoot) {
+  return path.resolve(clientRoot, '..', 'DLLPlugins', 'outputs')
 }
 
 // This build-time allowlist is independent from untrusted plugin manifests.
-// 公开仓库没有商业 DLL 源目录：整个源目录不存在时跳过该条声明并告警（生成的清单不含它），
+// 公开仓库没有商业 DLL 产物目录（DLLPlugins/outputs）：整个源目录不存在时跳过该条声明并告警（生成的清单不含它），
 // 源目录存在但 DLL 缺失或不合规时仍然报错，内部构建行为不变。
 export function createNativeHostManifest(clientRoot, declarations, { warn = console.warn } = {}) {
   const seen = new Set()
@@ -18,7 +23,7 @@ export function createNativeHostManifest(clientRoot, declarations, { warn = cons
     const identifier = /^[A-Za-z_][A-Za-z0-9_.-]{0,127}$/
     if (!identifier.test(declaration.pluginId) || !identifier.test(declaration.dllId) ||
         !/^lib\/[A-Za-z_][A-Za-z0-9_.-]{0,127}\.dll$/.test(declaration.path) ||
-        !['bin', 'plugins'].includes(declaration.source) ||
+        !NATIVE_DLL_SOURCES.includes(declaration.source) ||
         !Array.isArray(declaration.functions) || declaration.functions.length === 0 ||
         declaration.functions.some((name) => !identifier.test(name)) ||
         new Set(declaration.functions).size !== declaration.functions.length ||
@@ -26,9 +31,9 @@ export function createNativeHostManifest(clientRoot, declarations, { warn = cons
       throw new Error('NativeHost32 构建信任声明无效')
     }
     seen.add(declaration.pluginId)
-    const pluginRoot = nativeDllSourceRoot(clientRoot, declaration.source)
+    const pluginRoot = nativeDllSourceRoot(clientRoot)
     if (!fs.existsSync(pluginRoot)) {
-      warn(`[native-host-manifest] 未找到 DLL 源目录，跳过 ${declaration.pluginId}/${declaration.dllId}（公开源码构建不含商业 DLL）: ${pluginRoot}`)
+      warn(`[native-host-manifest] 未找到 DLLPlugins/outputs 源目录，跳过 ${declaration.pluginId}/${declaration.dllId}（公开源码构建不含商业 DLL）: ${pluginRoot}`)
       return ''
     }
     const dllPath = path.join(pluginRoot, declaration.pluginId, ...declaration.path.split('/'))
@@ -53,8 +58,13 @@ export function createNativeHostManifest(clientRoot, declarations, { warn = cons
 }
 
 export function readNativeHostManifest(clientRoot, options = {}) {
-  const declarations = JSON.parse(fs.readFileSync(
-    path.join(clientRoot, 'resources', 'native', 'native-host-dlls.json'), 'utf8'))
+  const manifestPath = path.join(clientRoot, 'resources', 'native', 'native-host-dlls.json')
+  if (!fs.existsSync(manifestPath)) {
+    const warn = options.warn ?? console.warn
+    warn(`[native-host-manifest] 未找到商业 DLL 声明清单，生成空信任清单（公开源码构建）: ${manifestPath}`)
+    return createNativeHostManifest(clientRoot, [], options)
+  }
+  const declarations = JSON.parse(fs.readFileSync(manifestPath, 'utf8'))
   if (!Array.isArray(declarations) || declarations.length === 0) {
     throw new Error('NativeHost32 构建信任声明不能为空')
   }

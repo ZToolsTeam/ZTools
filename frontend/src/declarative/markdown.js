@@ -4,12 +4,13 @@
  * 安全模型：每一行先整体做 HTML 转义，之后只生成白名单标签；图片与链接地址只允许白名单协议，
  * 属性值再转义引号。插件与用户的原文一律原样显示（不删 Emoji、不改空白），代码块内容不做任何处理。
  *
- * 支持：围栏代码块（``` 或 ~~~，长度 ≥ 3，结束围栏同字符且不短于开头）、GFM 表格、# 标题、
+ * 支持：围栏代码块（``` 或 ~~~，长度 ≥ 3，结束围栏同字符且不短于开头；语言写 math 时显示为排版后的公式，见 math.js）、GFM 表格、# 标题、
  * 无序 / 有序 / 任务列表、> 引用（含 GFM 提示块 > [!NOTE] / [!TIP] / [!IMPORTANT] / [!WARNING] / [!CAUTION]）、分割线、段落内单换行、行内代码、图片、链接、加粗、斜体、删除线。
  */
 
 // 块级元素的上下间距统一由 declarative-fluent.css 的 .declarative-markdown 规则控制（标题上大下小），这里只写外观
 const CLS = {
+  math: "py-3 overflow-x-auto text-[var(--rc-text-primary)] text-center",
   pre: "bg-[var(--rc-surface-subtle)] border border-[var(--rc-border)] rounded-lg p-3 font-mono text-xs overflow-x-auto text-[var(--rc-text-primary)] leading-relaxed whitespace-pre-wrap break-words",
   inlineCode: "bg-[var(--rc-surface-active)] px-1.5 py-0.5 rounded text-[var(--rc-text-secondary)] border border-[var(--rc-border)] text-xs font-mono",
   h1: "text-lg font-semibold text-[var(--rc-text-primary)]",
@@ -186,6 +187,11 @@ export function renderMarkdown(markdown) {
         i++;
       }
       i++; // 跳过结束围栏（未闭合时到文末）
+      // math：先按源码显示，由 DetailRenderer 加载 KaTeX 后排版（渲染失败时保留源码）
+      if (/^math$/i.test(fence[2].trim()) && body.some((row) => row.trim())) {
+        blocks.push(`<div class="${CLS.math}" data-ztools-math><code>${escapeHtml(body.join("\n"))}</code></div>`);
+        continue;
+      }
       blocks.push(`<pre class="${CLS.pre}"><code>${escapeHtml(body.join("\n"))}</code></pre>`);
       continue;
     }

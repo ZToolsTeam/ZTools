@@ -162,11 +162,15 @@ test('canCall grants privileged methods to internal plugins while restricting no
   assert.equal(canCall('trigger_register', internalSettings), true)
   assert.equal(canCall('user_get_info', internalSettings), true)
 
-  // 调试控制台已删除，internal-developer 不再是受信任的内置插件，不能再拿到特权
+  // 调试控制台与超级面板已删除，不再是受信任的内置插件，不能再拿到特权
   const removedDeveloper = makePluginCaller('internal-developer')
   assert.equal(isInternalPlugin('internal-developer'), false)
   assert.equal(canCall('plugin_install', removedDeveloper), false)
   assert.equal(canCall('config_set', removedDeveloper), false)
+  const removedSuperPanel = makePluginCaller('internal-super-panel')
+  assert.equal(isInternalPlugin('internal-super-panel'), false)
+  assert.equal(canCall('config_set', removedSuperPanel), false)
+  assert.equal(canCall('settings_set', removedSuperPanel), false)
 
   // 普通第三方插件禁止调用限定 main 的管理类 API
   assert.equal(canCall('config_get', normalPlugin), false)
@@ -198,17 +202,17 @@ test('internal plugin can successfully authorize and invoke privileged methods',
   assert.doesNotThrow(() => authorizeIpcRequest(settingsCaller, setAutostartReq, settingsSender))
   assert.deepEqual(dispatchAuthorizedIpcRequest(settingsCaller, setAutostartReq, settingsSender), { success: true })
 
-  // 2. internal-super-panel 调用全局快捷键注册
-  const panelCaller = makePluginCaller('internal-super-panel')
-  const panelSender = makeSender('ztools://plugins/internal-super-panel/index.html')
+  // 2. internal-clipboard 调用全局快捷键注册
+  const clipboardCaller = makePluginCaller('internal-clipboard')
+  const clipboardSender = makeSender('ztools://plugins/internal-clipboard/index.html')
   const triggerReq = makeRequest('trigger_register', {
-    id: 'sp_hotkey',
+    id: 'global_wake_hotkey',
     type: 'hotkey',
     config: { key: 'Alt+Space' },
-    action: { mode: 'builtin', target: 'toggle_super_panel', params: {} }
+    action: { mode: 'builtin', target: 'toggle_main_window', params: {} }
   })
-  assert.doesNotThrow(() => authorizeIpcRequest(panelCaller, triggerReq, panelSender))
-  assert.deepEqual(dispatchAuthorizedIpcRequest(panelCaller, triggerReq, panelSender), { success: true })
+  assert.doesNotThrow(() => authorizeIpcRequest(clipboardCaller, triggerReq, clipboardSender))
+  assert.deepEqual(dispatchAuthorizedIpcRequest(clipboardCaller, triggerReq, clipboardSender), { success: true })
 
   // 3. internal-settings 调用热重载、性能监控与调试工具
   const devCaller = makePluginCaller('internal-settings')

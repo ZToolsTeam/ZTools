@@ -1,5 +1,5 @@
 <script setup>
-import { ChevronLeftIcon, ChevronRightIcon, ImageIcon } from '@lucide/vue'
+import { ChevronLeftIcon, ChevronRightIcon } from '@lucide/vue'
 import { computed, onUnmounted, ref, watch } from 'vue'
 import { RcDialog } from '@/components/base'
 import { isComposingEvent } from '@/utils/keymap'
@@ -52,12 +52,8 @@ onUnmounted(() => window.removeEventListener('keydown', onViewerKeydown))
 </script>
 
 <template>
-  <!-- 插件截图区 -->
+  <!-- 插件截图区：嵌在「插件详情」卡片顶部，不再自带卡框与标题 -->
   <div v-if="screenshots && screenshots.length > 0" class="screenshots-section">
-    <h3 class="section-title">
-      <ImageIcon  />
-      插件截图
-    </h3>
     <div class="screenshots-grid" :class="gridClass">
       <div
         v-for="(screenshot, index) in screenshots"
@@ -106,30 +102,12 @@ onUnmounted(() => window.removeEventListener('keydown', onViewerKeydown))
     </RcDialog>
   </div>
 
-  <!-- 没有截图时不渲染占位卡，详情 Tab 紧跟头部 -->
+  <!-- 没有截图时不渲染，详情卡直接从介绍开始 -->
 </template>
 
 <style scoped>
 .screenshots-section {
-  background: var(--rc-surface);
-  border: 1px solid var(--rc-border);
-  border-radius: 12px;
-  padding: 16px;
-  margin-bottom: 12px;
-}
-
-.section-title {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  font-size: 14px;
-  font-weight: 600;
-  color: var(--rc-text-primary);
-  margin: 0 0 12px;
-}
-
-.section-title :deep(.lucide) {
-  color: var(--rc-text-muted);
+  margin-bottom: 16px;
 }
 
 /* 截图网格 */

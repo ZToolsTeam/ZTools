@@ -10,6 +10,7 @@
     "version",
     "description",
     "author",
+    "category",
     "entry",
     "icon",
     "permissions",
@@ -99,13 +100,22 @@
     },
     "category": {
       "type": "array",
+      "minItems": 1,
+      "maxItems": 2,
+      "uniqueItems": true,
       "items": {
         "type": "string",
-        "minLength": 1,
-        "maxLength": 30
+        "enum": [
+          "办公效率",
+          "系统工具",
+          "文件管理",
+          "图像媒体",
+          "开发工具",
+          "网络工具",
+          "安全隐私"
+        ]
       },
-      "default": [],
-      "description": "插件分类标签列表"
+      "description": "插件所属标准分类列表（1-2 项，主分类在前）"
     },
     "keywords": {
       "type": "array",

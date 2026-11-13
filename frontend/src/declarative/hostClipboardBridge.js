@@ -70,6 +70,36 @@ export function createHostClipboardBridge(getMethods = getHostMethods) {
       }
       return "";
     },
+    readClipboardFiles: async () => {
+      const methods = getMethods();
+      if (methods?.clipboard_read_files) {
+        try {
+          const res = await methods.clipboard_read_files({});
+          const data = res && typeof res === "object" && "data" in res ? res.data : res;
+          return Array.isArray(data?.files) ? data.files : Array.isArray(data) ? data : [];
+        } catch (err) {
+          console.warn("[DeclarativeStack] clipboard_read_files 调用失败:", err);
+          return [];
+        }
+      }
+      return [];
+    },
+    readClipboardImage: async () => {
+      const methods = getMethods();
+      if (methods?.clipboard_read_image) {
+        try {
+          const res = await methods.clipboard_read_image({});
+          const data = res && typeof res === "object" && "data" in res ? res.data : res;
+          if (!data || typeof data !== "object") return null;
+          if (!data.useTempFile && !data.image) return null;
+          return data;
+        } catch (err) {
+          console.warn("[DeclarativeStack] clipboard_read_image 调用失败:", err);
+          return null;
+        }
+      }
+      return null;
+    },
     pasteToActive: async (text) => {
       const methods = getMethods();
       if (methods?.clipboard_hide_and_paste_text) {

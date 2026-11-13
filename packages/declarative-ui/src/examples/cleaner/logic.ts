@@ -105,14 +105,14 @@ const MOCK_CLEAN_GROUPS: CleanGroupItem[] = [
     category: 'system',
     description: '安装包解压残留、应用程序运行过程中丢弃的临时文件',
     riskLevel: 'safe',
-    pathHint: 'C:\\Users\\Admin\\AppData\\Local\\Temp',
+    pathHint: '%USERPROFILE%\\AppData\\Local\\Temp',
     fileCount: 6420,
     totalSizeBytes: 1880 * 1024 * 1024,
     checked: true,
     defaultChecked: true,
     sampleFiles: [
-      { path: 'C:\\Users\\Admin\\AppData\\Local\\Temp\\msedge_installer_tmp.exe', sizeBytes: 154 * 1024 * 1024 },
-      { path: 'C:\\Users\\Admin\\AppData\\Local\\Temp\\vscode-update-user-x64.zip', sizeBytes: 98 * 1024 * 1024 }
+      { path: '%USERPROFILE%\\AppData\\Local\\Temp\\msedge_installer_tmp.exe', sizeBytes: 154 * 1024 * 1024 },
+      { path: '%USERPROFILE%\\AppData\\Local\\Temp\\vscode-update-user-x64.zip', sizeBytes: 98 * 1024 * 1024 }
     ]
   },
   {
@@ -142,13 +142,13 @@ const MOCK_CLEAN_GROUPS: CleanGroupItem[] = [
     category: 'system',
     description: 'Windows 资源管理器生成的图片缩略图索引库与图标缓存',
     riskLevel: 'safe',
-    pathHint: 'C:\\Users\\Admin\\AppData\\Local\\Microsoft\\Windows\\Explorer',
+    pathHint: '%USERPROFILE%\\AppData\\Local\\Microsoft\\Windows\\Explorer',
     fileCount: 18,
     totalSizeBytes: 195 * 1024 * 1024,
     checked: true,
     defaultChecked: true,
     sampleFiles: [
-      { path: 'C:\\Users\\Admin\\AppData\\Local\\Microsoft\\Windows\\Explorer\\thumbcache_1920.db', sizeBytes: 95 * 1024 * 1024 }
+      { path: '%USERPROFILE%\\AppData\\Local\\Microsoft\\Windows\\Explorer\\thumbcache_1920.db', sizeBytes: 95 * 1024 * 1024 }
     ]
   },
   {
@@ -178,13 +178,13 @@ const MOCK_CLEAN_GROUPS: CleanGroupItem[] = [
     category: 'browser',
     description: 'Edge 浏览器磁盘缓存、Code Cache 与 ShaderCache (保留 Cookie 与密码)',
     riskLevel: 'safe',
-    pathHint: 'C:\\Users\\Admin\\AppData\\Local\\Microsoft\\Edge\\User Data\\Default\\Cache',
+    pathHint: '%USERPROFILE%\\AppData\\Local\\Microsoft\\Edge\\User Data\\Default\\Cache',
     fileCount: 5420,
     totalSizeBytes: 510 * 1024 * 1024,
     checked: true,
     defaultChecked: true,
     sampleFiles: [
-      { path: 'C:\\Users\\Admin\\AppData\\Local\\Microsoft\\Edge\\User Data\\Default\\Cache\\f_000412', sizeBytes: 42 * 1024 * 1024 }
+      { path: '%USERPROFILE%\\AppData\\Local\\Microsoft\\Edge\\User Data\\Default\\Cache\\f_000412', sizeBytes: 42 * 1024 * 1024 }
     ]
   },
   {
@@ -196,13 +196,13 @@ const MOCK_CLEAN_GROUPS: CleanGroupItem[] = [
     category: 'browser',
     description: 'Chrome 浏览器 Cache_Data、Code Cache 与 GPUCache (保留登录凭据)',
     riskLevel: 'safe',
-    pathHint: 'C:\\Users\\Admin\\AppData\\Local\\Google\\Chrome\\User Data\\Default\\Cache',
+    pathHint: '%USERPROFILE%\\AppData\\Local\\Google\\Chrome\\User Data\\Default\\Cache',
     fileCount: 7160,
     totalSizeBytes: 860 * 1024 * 1024,
     checked: true,
     defaultChecked: true,
     sampleFiles: [
-      { path: 'C:\\Users\\Admin\\AppData\\Local\\Google\\Chrome\\User Data\\Default\\Cache\\data_3', sizeBytes: 128 * 1024 * 1024 }
+      { path: '%USERPROFILE%\\AppData\\Local\\Google\\Chrome\\User Data\\Default\\Cache\\data_3', sizeBytes: 128 * 1024 * 1024 }
     ]
   },
   {
@@ -214,13 +214,13 @@ const MOCK_CLEAN_GROUPS: CleanGroupItem[] = [
     category: 'browser',
     description: 'Firefox Profiles 下的 cache2 离线网页静态缓存',
     riskLevel: 'safe',
-    pathHint: 'C:\\Users\\Admin\\AppData\\Local\\Mozilla\\Firefox\\Profiles',
+    pathHint: '%USERPROFILE%\\AppData\\Local\\Mozilla\\Firefox\\Profiles',
     fileCount: 1820,
     totalSizeBytes: 245 * 1024 * 1024,
     checked: true,
     defaultChecked: true,
     sampleFiles: [
-      { path: 'C:\\Users\\Admin\\AppData\\Local\\Mozilla\\Firefox\\Profiles\\default\\cache2\\entries\\8A91F0', sizeBytes: 26 * 1024 * 1024 }
+      { path: '%USERPROFILE%\\AppData\\Local\\Mozilla\\Firefox\\Profiles\\default\\cache2\\entries\\8A91F0', sizeBytes: 26 * 1024 * 1024 }
     ]
   },
   {
@@ -232,13 +232,13 @@ const MOCK_CLEAN_GROUPS: CleanGroupItem[] = [
     category: 'app',
     description: 'npm-cache (_cacache / _logs) 与 pnpm store 本地构建缓存副本',
     riskLevel: 'recommended',
-    pathHint: 'C:\\Users\\Admin\\AppData\\Local\\npm-cache',
+    pathHint: '%USERPROFILE%\\AppData\\Local\\npm-cache',
     fileCount: 3820,
     totalSizeBytes: 1650 * 1024 * 1024,
     checked: false,
     defaultChecked: false,
     sampleFiles: [
-      { path: 'C:\\Users\\Admin\\AppData\\Local\\npm-cache\\_cacache\\content-v2\\sha512\\3b', sizeBytes: 240 * 1024 * 1024 }
+      { path: '%USERPROFILE%\\AppData\\Local\\npm-cache\\_cacache\\content-v2\\sha512\\3b', sizeBytes: 240 * 1024 * 1024 }
     ]
   },
   {
@@ -250,13 +250,13 @@ const MOCK_CLEAN_GROUPS: CleanGroupItem[] = [
     category: 'app',
     description: 'pip http/wheels 缓存与 Cargo registry crate 源码归档缓存',
     riskLevel: 'recommended',
-    pathHint: 'C:\\Users\\Admin\\AppData\\Local\\pip\\cache',
+    pathHint: '%USERPROFILE%\\AppData\\Local\\pip\\cache',
     fileCount: 1290,
     totalSizeBytes: 920 * 1024 * 1024,
     checked: false,
     defaultChecked: false,
     sampleFiles: [
-      { path: 'C:\\Users\\Admin\\AppData\\Local\\pip\\cache\\wheels\\torch-2.2.0-cp311.whl', sizeBytes: 310 * 1024 * 1024 }
+      { path: '%USERPROFILE%\\AppData\\Local\\pip\\cache\\wheels\\torch-2.2.0-cp311.whl', sizeBytes: 310 * 1024 * 1024 }
     ]
   },
   {
@@ -268,13 +268,13 @@ const MOCK_CLEAN_GROUPS: CleanGroupItem[] = [
     category: 'app',
     description: 'VS Code CachedData、GPUCache 与 IDE 运行诊断日志',
     riskLevel: 'safe',
-    pathHint: 'C:\\Users\\Admin\\AppData\\Roaming\\Code\\CachedData',
+    pathHint: '%USERPROFILE%\\AppData\\Roaming\\Code\\CachedData',
     fileCount: 940,
     totalSizeBytes: 480 * 1024 * 1024,
     checked: true,
     defaultChecked: true,
     sampleFiles: [
-      { path: 'C:\\Users\\Admin\\AppData\\Roaming\\Code\\CachedData\\v8_compile_cache.bin', sizeBytes: 75 * 1024 * 1024 }
+      { path: '%USERPROFILE%\\AppData\\Roaming\\Code\\CachedData\\v8_compile_cache.bin', sizeBytes: 75 * 1024 * 1024 }
     ]
   },
   {
@@ -305,7 +305,7 @@ const MOCK_CLEAN_GROUPS: CleanGroupItem[] = [
     category: 'system',
     description: '历史蓝屏 MiniDump、WER 应用程序崩溃转储日志与故障快照',
     riskLevel: 'safe',
-    pathHint: 'C:\\Users\\Admin\\AppData\\Local\\CrashDumps',
+    pathHint: '%USERPROFILE%\\AppData\\Local\\CrashDumps',
     fileCount: 42,
     totalSizeBytes: 420 * 1024 * 1024,
     checked: true,
@@ -342,13 +342,13 @@ const MOCK_CLEAN_GROUPS: CleanGroupItem[] = [
     category: 'system',
     description: 'Direct3D D3DSCache 与显卡驱动历史着色器预编译缓存',
     riskLevel: 'safe',
-    pathHint: 'C:\\Users\\Admin\\AppData\\Local\\D3DSCache',
+    pathHint: '%USERPROFILE%\\AppData\\Local\\D3DSCache',
     fileCount: 315,
     totalSizeBytes: 360 * 1024 * 1024,
     checked: true,
     defaultChecked: true,
     sampleFiles: [
-      { path: 'C:\\Users\\Admin\\AppData\\Local\\D3DSCache\\82a9c104f1e2.val', sizeBytes: 64 * 1024 * 1024 }
+      { path: '%USERPROFILE%\\AppData\\Local\\D3DSCache\\82a9c104f1e2.val', sizeBytes: 64 * 1024 * 1024 }
     ]
   },
   {
@@ -360,13 +360,13 @@ const MOCK_CLEAN_GROUPS: CleanGroupItem[] = [
     category: 'app',
     description: 'WPS 与 Office 本地自动恢复备份、废弃模板与临时文档副本',
     riskLevel: 'safe',
-    pathHint: 'C:\\Users\\Admin\\AppData\\Local\\Kingsoft\\WPS Office\\backup',
+    pathHint: '%USERPROFILE%\\AppData\\Local\\Kingsoft\\WPS Office\\backup',
     fileCount: 145,
     totalSizeBytes: 310 * 1024 * 1024,
     checked: true,
     defaultChecked: true,
     sampleFiles: [
-      { path: 'C:\\Users\\Admin\\AppData\\Local\\Kingsoft\\WPS Office\\backup\\auto_recovered_backup_01.tmp', sizeBytes: 85 * 1024 * 1024 }
+      { path: '%USERPROFILE%\\AppData\\Local\\Kingsoft\\WPS Office\\backup\\auto_recovered_backup_01.tmp', sizeBytes: 85 * 1024 * 1024 }
     ]
   },
   {
@@ -378,13 +378,13 @@ const MOCK_CLEAN_GROUPS: CleanGroupItem[] = [
     category: 'app',
     description: '协作办公软件内置 WebView 缓存、日志与历史客户端升级包',
     riskLevel: 'safe',
-    pathHint: 'C:\\Users\\Admin\\AppData\\Local\\SquirrelTemp',
+    pathHint: '%USERPROFILE%\\AppData\\Local\\SquirrelTemp',
     fileCount: 680,
     totalSizeBytes: 540 * 1024 * 1024,
     checked: true,
     defaultChecked: true,
     sampleFiles: [
-      { path: 'C:\\Users\\Admin\\AppData\\Local\\SquirrelTemp\\feishu_update_delta.nupkg', sizeBytes: 142 * 1024 * 1024 }
+      { path: '%USERPROFILE%\\AppData\\Local\\SquirrelTemp\\feishu_update_delta.nupkg', sizeBytes: 142 * 1024 * 1024 }
     ]
   },
   {
@@ -396,13 +396,13 @@ const MOCK_CLEAN_GROUPS: CleanGroupItem[] = [
     category: 'app',
     description: 'Downloads 目录下已安装完毕遗留的大型安装程序文件',
     riskLevel: 'caution',
-    pathHint: 'C:\\Users\\Admin\\Downloads',
+    pathHint: '%USERPROFILE%\\Downloads',
     fileCount: 28,
     totalSizeBytes: 620 * 1024 * 1024,
     checked: false,
     defaultChecked: false,
     sampleFiles: [
-      { path: 'C:\\Users\\Admin\\Downloads\\Setup_Installer_x64.exe', sizeBytes: 120 * 1024 * 1024 }
+      { path: '%USERPROFILE%\\Downloads\\Setup_Installer_x64.exe', sizeBytes: 120 * 1024 * 1024 }
     ]
   },
   {
@@ -414,13 +414,13 @@ const MOCK_CLEAN_GROUPS: CleanGroupItem[] = [
     category: 'app',
     description: 'Downloads 目录下体积较大的历史压缩包与系统镜像残留',
     riskLevel: 'caution',
-    pathHint: 'C:\\Users\\Admin\\Downloads',
+    pathHint: '%USERPROFILE%\\Downloads',
     fileCount: 20,
     totalSizeBytes: 980 * 1024 * 1024,
     checked: false,
     defaultChecked: false,
     sampleFiles: [
-      { path: 'C:\\Users\\Admin\\Downloads\\Archive_Release_Bundle.zip', sizeBytes: 360 * 1024 * 1024 }
+      { path: '%USERPROFILE%\\Downloads\\Archive_Release_Bundle.zip', sizeBytes: 360 * 1024 * 1024 }
     ]
   }
 ]

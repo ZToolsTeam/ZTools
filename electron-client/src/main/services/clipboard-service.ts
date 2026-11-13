@@ -665,6 +665,40 @@ export class ClipboardService {
     }
   }
 
+  /**
+   * 供受控粘贴通道读取剪贴板文件或截图位图：
+   * 先通过 isFileClipboard 在内存同步预筛（非文件粘贴且未启用图片时 0 开销），
+   * 命中文件剪贴板时复用 #readFilePaths，支持截图位图时回退读取 #imageSnapshot。
+   */
+  async readPasteSource(
+    options: { allowImage?: boolean; signal?: AbortSignal } = {}
+  ): Promise<
+    | { kind: 'files'; files: string[] }
+    | { kind: 'image'; png: Buffer; width: number; height: number }
+    | { kind: 'none' }
+  > {
+    if (this.#stopped || this.#restoreInFlight > 0) return { kind: 'none' }
+    const formats = this.clipboard.availableFormats()
+    if (isPrivateMacClipboard(formats, this.clipboard)) return { kind: 'none' }
+    if (isFileClipboard(formats, this.clipboard)) {
+      const files = await this.#readFilePaths(options.signal)
+      if (this.#isRestoredClipboard(files)) return { kind: 'none' }
+      if (files.length > 0) return { kind: 'files', files }
+    }
+    if (options.allowImage) {
+      const snapshot = this.#imageSnapshot()
+      if (snapshot) {
+        return {
+          kind: 'image',
+          png: snapshot.png,
+          width: snapshot.size.width,
+          height: snapshot.size.height
+        }
+      }
+    }
+    return { kind: 'none' }
+  }
+
   clear(): { success: true } {
     const release = this.#beginClipboardOperation()
     try {

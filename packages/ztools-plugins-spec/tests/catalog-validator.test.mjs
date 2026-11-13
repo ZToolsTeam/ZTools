@@ -11,6 +11,7 @@ import {
   validateCatalogPluginItem,
   validateStoreCatalog,
   PERMISSIONS,
+  PLUGIN_CATEGORIES,
   HIGH_RISK_PERMISSIONS,
   OFFICIAL_PLUGIN_IDS,
   isOfficialAuthorName
@@ -213,6 +214,7 @@ describe('Store Catalog & Plugin Item Validator (Beyond Happy Path)', () => {
           version: '1.0.2',
           description: '结束占用端口的进程',
           author: { name: 'Plugin Dev' },
+          category: ['网络工具', '系统工具'],
           entry: 'dist/index.js',
           icon: 'icon.png',
           permissions: ['system', 'process'],
@@ -247,6 +249,7 @@ describe('Store Catalog & Plugin Item Validator (Beyond Happy Path)', () => {
           version: '1.0.0',
           description: '标准跨平台插件',
           author: { name: 'Plugin Dev' },
+          category: ['办公效率'],
           entry: 'dist/index.js',
           icon: 'icon.png',
           permissions: ['clipboard', 'network'],
@@ -278,6 +281,7 @@ describe('Store Catalog & Plugin Item Validator (Beyond Happy Path)', () => {
           version: '1.0.0',
           description: '校验 mode 取值',
           author: { name: 'Plugin Dev' },
+          category: ['开发工具'],
           entry: 'dist/index.js',
           icon: 'icon.png',
           permissions: [],
@@ -325,20 +329,50 @@ describe('Store Catalog & Plugin Item Validator (Beyond Happy Path)', () => {
       assert.ok(res.errors.some((e) => e.includes('未知的权限声明')))
       assert.ok(res.errors.some((e) => e.includes('重复声明的权限')))
       assert.ok(res.errors.some((e) => e.includes('缺少必填字段: targets')))
+      assert.ok(res.errors.some((e) => e.includes('缺少必填字段: category')))
+    })
+
+    it('category 只接受 1-2 个标准 7 大分类，拒绝漏填、非数组、重复、其他工具或英文别名；已下架条目豁免', () => {
+      const schema = JSON.parse(fs.readFileSync(new URL('../plugin.schema.json', import.meta.url), 'utf8'))
+      assert.ok(schema.required.includes('category'))
+      assert.deepEqual(schema.properties.category.items.enum, [...PLUGIN_CATEGORIES])
+
+      const base = {
+        id: 'cat-test',
+        name: '分类测试',
+        version: '1.0.0',
+        description: '测试分类白名单',
+        author: 'dev',
+        entry: 'index.js',
+        icon: 'icon.svg',
+        permissions: [],
+        targets: buildPlatformTargets(['windows']),
+        nativeComponents: []
+      }
+      for (const cat of PLUGIN_CATEGORIES) {
+        assert.equal(validatePluginManifest({ ...base, category: [cat] }).valid, true, cat)
+      }
+      assert.equal(validatePluginManifest({ ...base, category: ['文件管理', '系统工具'] }).valid, true)
+      assert.equal(validatePluginManifest({ ...base, revoked: true, revokedReason: '下架' }).valid, true)
+
+      for (const bad of [undefined, null, '', '系统工具', [], ['办公效率', '系统工具', '开发工具'], ['办公效率', '办公效率'], ['其他工具'], ['utility'], ['效率工具'], ['AI工具'], ['金融理财']]) {
+        const res = validatePluginManifest({ ...base, category: bad })
+        assert.equal(res.valid, false, `category=${JSON.stringify(bad)} 应被拦截`)
+      }
     })
   })
 
   describe('官方名单与官方作者名', () => {
-    const base = { name: '测试', version: '1.0.0', description: '测试', entry: 'dist/index.js', icon: 'icon.svg', permissions: [], targets: buildPlatformTargets(['windows']), nativeComponents: [] }
+    const base = { name: '测试', version: '1.0.0', description: '测试', category: ['办公效率'], entry: 'dist/index.js', icon: 'icon.svg', permissions: [], targets: buildPlatformTargets(['windows']), nativeComponents: [] }
     const authorErrors = (manifest) => validatePluginManifest(manifest).errors.filter((e) => e.includes('官方名称'))
 
-    it('名单来自 official-ids.json：107 个 ID、无重复、格式合法', () => {
+    it('名单来自 official-ids.json：109 个 ID、无重复、格式合法', () => {
       const raw = JSON.parse(fs.readFileSync(new URL('../official-ids.json', import.meta.url), 'utf8'))
-      assert.equal(raw.ids.length, 107)
+      assert.equal(raw.ids.length, 109)
       assert.equal(new Set(raw.ids).size, raw.ids.length)
       assert.deepEqual([...raw.ids].sort(), raw.ids, '名单按字母排序，方便审核 diff')
       for (const id of raw.ids) assert.match(id, /^[a-z][a-z0-9-]{1,63}$/, id)
-      assert.equal(OFFICIAL_PLUGIN_IDS.size, 107)
+      assert.equal(OFFICIAL_PLUGIN_IDS.size, 109)
     })
 
     it('官方作者名识别：大小写、空格、连字符变体都算；ZTools Community、普通名字不算', () => {

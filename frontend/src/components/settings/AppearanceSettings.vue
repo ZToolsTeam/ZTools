@@ -3,18 +3,27 @@ import { ref } from 'vue'
 import { storeToRefs } from 'pinia'
 import { useToast } from '@/composables/useToast'
 import { useThemeStore } from '@/stores/theme'
+import { ACCENT_OPTIONS, THEME_MODES } from '@/constants/themes'
 
-/** 设置页「外观」卡片：跟随系统 / 浅色 / 深色。白天黑夜自动切换交给操作系统（如 macOS 外观“自动”） */
+/** 设置页「外观」卡片：跟随系统 / 浅色 / 深色 + 6 款固定主题色（无自定义取色器） */
 const themeStore = useThemeStore()
-const { isDark, mode: themeMode } = storeToRefs(themeStore)
+const { isDark, mode: themeMode, accent: accentTheme } = storeToRefs(themeStore)
 const { error } = useToast()
 const themeSaving = ref(false)
+const accentSaving = ref(false)
 
-const themeOptions = [
-  { value: 'system', label: '跟随系统' },
-  { value: 'light', label: '浅色' },
-  { value: 'dark', label: '深色' }
-]
+const THEME_LABELS = {
+  system: '跟随系统',
+  light: '浅色',
+  dark: '深色'
+}
+
+const themeOptions = THEME_MODES.map((value) => ({
+  value,
+  label: THEME_LABELS[value]
+}))
+
+const accentOptions = ACCENT_OPTIONS
 
 // 预览卡：浅色、深色固定；“跟随系统”选中时显示当前实际颜色，
 // 未选中时显示半浅半深（客户端固定了深浅色时拿不到系统本身的深浅色）
@@ -34,6 +43,18 @@ const pickTheme = async (value) => {
     themeSaving.value = false
   }
 }
+
+const pickAccent = async (value) => {
+  if (accentTheme.value === value || accentSaving.value) return
+  accentSaving.value = true
+  try {
+    await themeStore.setAccent(value)
+  } catch (err) {
+    error('主题色设置保存失败：' + (err?.message || '未知错误'))
+  } finally {
+    accentSaving.value = false
+  }
+}
 </script>
 
 <template>
@@ -43,46 +64,77 @@ const pickTheme = async (value) => {
     </div>
 
     <div class="settings-list">
-      <div class="theme-switcher" role="radiogroup" aria-label="界面主题">
-        <button
-          v-for="option in themeOptions"
-          :key="option.value"
-          type="button"
-          role="radio"
-          class="theme-btn"
-          :class="{ active: themeMode === option.value }"
-          :aria-checked="themeMode === option.value"
-          :disabled="themeSaving"
-          @click="pickTheme(option.value)"
-        >
-          <div class="theme-preview-row" aria-hidden="true">
-            <div
-              v-for="preview in previewThemes(option.value)"
-              :key="preview"
-              class="theme-preview"
-              :class="`${preview}-preview`"
-              :data-theme="preview"
-            >
-              <div class="preview-bar"><span class="preview-mark"></span></div>
-              <div class="preview-line" style="width: 70%"></div>
-              <div class="preview-line" style="width: 45%"></div>
+      <div class="theme-switcher-section">
+        <div class="theme-switcher" role="radiogroup" aria-label="界面主题">
+          <button
+            v-for="option in themeOptions"
+            :key="option.value"
+            type="button"
+            role="radio"
+            class="theme-btn"
+            :class="{ active: themeMode === option.value }"
+            :aria-checked="themeMode === option.value"
+            :disabled="themeSaving"
+            @click="pickTheme(option.value)"
+          >
+            <div class="theme-preview-row" aria-hidden="true">
+              <div
+                v-for="preview in previewThemes(option.value)"
+                :key="preview"
+                class="theme-preview"
+                :class="`${preview}-preview`"
+                :data-theme="preview"
+              >
+                <div class="preview-bar"><span class="preview-mark"></span></div>
+                <div class="preview-line" style="width: 70%"></div>
+                <div class="preview-line" style="width: 45%"></div>
+              </div>
             </div>
-          </div>
-          <span class="theme-name"><span class="theme-marker" aria-hidden="true"></span>{{ option.label }}</span>
-        </button>
+            <span class="theme-name"><span class="theme-marker" aria-hidden="true"></span>{{ option.label }}</span>
+          </button>
+        </div>
       </div>
 
+      <div class="setting-item accent-setting-item">
+        <div class="setting-info">
+          <div class="setting-text">
+            <span class="setting-label">主题色</span>
+            <span class="setting-desc">用于标志、选中标记、主按钮与搜索框聚焦光晕</span>
+          </div>
+        </div>
+        <div class="accent-switcher" role="radiogroup" aria-label="主题色">
+          <button
+            v-for="item in accentOptions"
+            :key="item.value"
+            type="button"
+            role="radio"
+            class="accent-btn"
+            :class="{ active: accentTheme === item.value }"
+            :aria-checked="accentTheme === item.value"
+            :disabled="accentSaving"
+            :data-testid="`accent-option-${item.value}`"
+            @click="pickAccent(item.value)"
+          >
+            <span class="accent-swatch" :data-accent="item.value" aria-hidden="true"></span>
+            <span class="accent-label">{{ item.label }}</span>
+          </button>
+        </div>
+      </div>
     </div>
   </div>
 </template>
 
 <style scoped>
-/* 主题选择：选中项用余烬橙方块标记 */
+.theme-switcher-section {
+  padding: 12px 0 16px;
+  border-bottom: 1px solid var(--rc-border);
+}
+
+/* 主题选择：选中项用当前主题强调色方块标记 */
 .theme-switcher {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
   gap: 10px;
-  padding-top: 4px;
 }
 
 .theme-btn {
@@ -127,6 +179,8 @@ const pickTheme = async (value) => {
   display: flex;
   flex-direction: column;
   gap: 6px;
+  background: var(--rc-canvas);
+  box-shadow: inset 0 0 0 1px var(--rc-border);
 }
 
 /* 半浅半深：两块拼成一张卡 */
@@ -138,12 +192,6 @@ const pickTheme = async (value) => {
 .theme-preview:has(+ .theme-preview) {
   border-top-right-radius: 0;
   border-bottom-right-radius: 0;
-}
-
-/* 预览卡用 data-theme 固定展示「雾白 / 墨黑」两套真实配色，不随当前主题变化 */
-.theme-preview {
-  background: var(--rc-canvas);
-  box-shadow: inset 0 0 0 1px var(--rc-border);
 }
 
 .preview-bar {
@@ -192,5 +240,63 @@ const pickTheme = async (value) => {
 .theme-btn.active .theme-marker {
   background: var(--rc-accent);
   box-shadow: var(--rc-marker-glow);
+}
+
+/* 6 款固定主题色选择器 */
+.accent-switcher {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.accent-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 30px;
+  padding: 0 10px;
+  border-radius: 8px;
+  border: 1px solid var(--rc-border);
+  background: var(--rc-surface);
+  color: var(--rc-text-secondary);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+  transition: border-color 0.15s ease, background-color 0.15s ease, color 0.15s ease;
+}
+
+.accent-btn:hover:not(:disabled) {
+  border-color: var(--rc-border-highlight);
+  color: var(--rc-text-primary);
+}
+
+.accent-btn.active {
+  border-color: var(--rc-accent);
+  background: var(--rc-accent-subtle);
+  color: var(--rc-text-primary);
+  font-weight: 600;
+}
+
+.accent-btn:focus-visible {
+  outline: none;
+  box-shadow: var(--rc-focus-ring);
+}
+
+.accent-btn:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.accent-swatch {
+  width: 11px;
+  height: 11px;
+  border-radius: 9999px;
+  flex-shrink: 0;
+  background: var(--rc-accent);
+  box-shadow: inset 0 0 0 1px var(--rc-h-line);
+}
+
+.accent-label {
+  line-height: 1;
 }
 </style>

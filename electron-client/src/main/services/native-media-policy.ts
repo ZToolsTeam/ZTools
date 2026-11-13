@@ -1,7 +1,9 @@
 import fs from 'node:fs/promises'
+import os from 'node:os'
 import path from 'node:path'
 import type { CallerIdentity } from '../../contracts/capabilities.js'
 import { errorCodes, ZToolsError } from '../../contracts/errors.js'
+import { defaultProtectedTrashRoots } from './file-system-service.js'
 import { NativeMediaParameterPolicy } from './native-media-parameter-policy.js'
 
 const MAX_INPUT_BYTES = 512 * 1024 * 1024
@@ -231,6 +233,9 @@ export class NativeMediaPathPolicy {
     params: Record<string, unknown>,
     caller: CallerIdentity
   ): Promise<Record<string, unknown>> {
+    if (pathKeyForDll(dllId) === 'shredderplugin' && functionName === 'secureWipeFile') {
+      return await this.#authorizeShredderWipe(params, caller)
+    }
     const methods = this.#methods.get(pathKeyForDll(dllId))
     if (!methods) return params
 
@@ -355,6 +360,119 @@ export class NativeMediaPathPolicy {
     }
 
     return sanitized
+  }
+
+  async #authorizeShredderWipe(
+    params: Record<string, unknown>,
+    caller: CallerIdentity
+  ): Promise<Record<string, unknown>> {
+    if (!isRecord(params)) invalidMediaCall('文件粉碎参数必须是对象')
+    const rawTarget = typeof params.path === 'string' ? params.path : params.targetPath
+    validateRawPath(rawTarget)
+    if (!path.isAbsolute(rawTarget)) invalidMediaCall('文件粉碎路径必须为绝对路径')
+
+    let canonical: string
+    try {
+      canonical = await this.paths.resolveAuthorizedPath(rawTarget, caller, 'read', false)
+    } catch {
+      canonical = await this.#resolveAllowedScanTempPath(rawTarget)
+    }
+
+    if (this.#isProtectedWipePath(canonical)) {
+      throw new ZToolsError(errorCodes.permissionDenied, '禁止粉碎系统核心目录或受保护路径下的文件')
+    }
+
+    let stats: NativeMediaStat
+    try {
+      stats = await this.#stat(canonical)
+    } catch {
+      throw new ZToolsError(errorCodes.fileError, '待粉碎文件不存在或不可访问')
+    }
+    if (!stats.isFile()) {
+      throw new ZToolsError(errorCodes.invalidRequest, '仅允许粉碎普通文件')
+    }
+
+    const sanitized: Record<string, unknown> = { ...params }
+    if (typeof params.path === 'string') sanitized.path = canonical
+    if (typeof params.targetPath === 'string') sanitized.targetPath = canonical
+    return sanitized
+  }
+
+  async #resolveAllowedScanTempPath(rawTarget: string): Promise<string> {
+    const resolved = path.resolve(rawTarget)
+    let cursor = resolved
+    while (true) {
+      let lstatResult: import('node:fs').Stats
+      try {
+        lstatResult = await fs.lstat(cursor)
+      } catch {
+        throw new ZToolsError(errorCodes.permissionDenied, '待粉碎文件未获窗口授权且不在可信临时目录内')
+      }
+      if (lstatResult.isSymbolicLink()) {
+        throw new ZToolsError(errorCodes.permissionDenied, '待粉碎路径包含符号链接或重解析点')
+      }
+      const parent = path.dirname(cursor)
+      if (parent === cursor) break
+      cursor = parent
+    }
+    const real = await fs.realpath(resolved).catch(() => {
+      throw new ZToolsError(errorCodes.permissionDenied, '待粉碎文件未获窗口授权')
+    })
+    const allowedTempRoots = [
+      os.tmpdir(),
+      process.env.TEMP,
+      process.env.TMP,
+      process.env.LOCALAPPDATA ? path.join(process.env.LOCALAPPDATA, 'Temp') : undefined,
+      process.env.LOCALAPPDATA ? path.join(process.env.LOCALAPPDATA, 'CrashDumps') : undefined
+    ].filter((item): item is string => typeof item === 'string' && item.length > 0)
+
+    for (const rootCandidate of allowedTempRoots) {
+      const realRoot = await fs.realpath(rootCandidate).catch(() => path.resolve(rootCandidate))
+      if (this.#isSubPath(real, realRoot)) {
+        return real
+      }
+    }
+    throw new ZToolsError(errorCodes.permissionDenied, '目标文件未由当前窗口授权，拒绝执行物理粉碎')
+  }
+
+  #isProtectedWipePath(targetPath: string): boolean {
+    const resolved = path.resolve(targetPath)
+    const parsed = path.parse(resolved)
+    if (resolved === parsed.root) return true
+    const home = path.resolve(os.homedir())
+    if (this.#samePath(resolved, home)) return true
+
+    // 允许系统临时目录与 CrashDumps（它们可能位于 C:\Windows\Temp 或 AppData\Local\Temp）
+    const allowedTempRoots = [
+      os.tmpdir(),
+      process.env.TEMP,
+      process.env.TMP,
+      process.env.LOCALAPPDATA ? path.join(process.env.LOCALAPPDATA, 'Temp') : undefined,
+      process.env.LOCALAPPDATA ? path.join(process.env.LOCALAPPDATA, 'CrashDumps') : undefined
+    ].filter((item): item is string => typeof item === 'string' && item.length > 0)
+    for (const tempRoot of allowedTempRoots) {
+      if (this.#isSubPath(resolved, path.resolve(tempRoot))) return false
+    }
+
+    const protectedRoots = [
+      ...defaultProtectedTrashRoots(process.platform, process.env),
+      ...(process.platform === 'darwin' ? ['/Library', '/Applications', '/etc', '/var'] : [])
+    ]
+    for (const root of protectedRoots) {
+      if (!root) continue
+      const resolvedRoot = path.resolve(root)
+      if (this.#samePath(resolved, resolvedRoot) || this.#isSubPath(resolved, resolvedRoot)) {
+        return true
+      }
+    }
+    return false
+  }
+
+  #isSubPath(childPath: string, parentDir: string): boolean {
+    const normChild = process.platform === 'win32' ? path.normalize(childPath).toLowerCase() : path.normalize(childPath)
+    const normParent = process.platform === 'win32' ? path.normalize(parentDir).toLowerCase() : path.normalize(parentDir)
+    const prefix = normParent.endsWith(path.sep) ? normParent : `${normParent}${path.sep}`
+    return normChild.startsWith(prefix) && normChild.length > prefix.length
   }
 
   #samePath(left: string, right: string): boolean {

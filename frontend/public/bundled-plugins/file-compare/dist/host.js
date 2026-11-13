@@ -18,21 +18,39 @@ async function callHost(method, params = {}) {
 /** 单个文本文件读取上限 */
 export const MAX_TEXT_FILE_BYTES = 4 * 1024 * 1024;
 /**
+ * 按指定路径校验文件大小并以 UTF-8 读取文本
+ */
+export async function readTextFileByPath(filePath) {
+    const sizeRes = await callHost("filesystem_get_file_size", { path: filePath });
+    if (Number(sizeRes?.size) > MAX_TEXT_FILE_BYTES)
+        throw new Error("文件超过 4 MB，暂不支持对比");
+    let read;
+    try {
+        read = await callHost("filesystem_read_file", { path: filePath, encoding: "utf8" });
+    }
+    catch (err) {
+        throw new Error(/utf|decode|编码/i.test(String(err?.message)) ? "这个文件不是 UTF-8 文本，无法对比" : err?.message || "读取文件失败");
+    }
+    return { name: filePath.split(/[\\/]/).pop() || filePath, text: read.content };
+}
+/**
  * 弹出系统选文件窗口并按 UTF-8 读取；用户取消时返回 null
  */
 export async function pickTextFile(title) {
     const picked = await callHost("window_show_open_dialog", { title, properties: ["openFile"] });
     if (!picked || picked.canceled || !picked.filePath)
         return null;
-    const sizeRes = await callHost("filesystem_get_file_size", { path: picked.filePath });
-    if (Number(sizeRes?.size) > MAX_TEXT_FILE_BYTES)
-        throw new Error("文件超过 4 MB，暂不支持对比");
-    let read;
-    try {
-        read = await callHost("filesystem_read_file", { path: picked.filePath, encoding: "utf8" });
-    }
-    catch (err) {
-        throw new Error(/utf|decode|编码/i.test(String(err?.message)) ? "这个文件不是 UTF-8 文本，无法对比" : err?.message || "读取文件失败");
-    }
-    return { name: picked.filePath.split(/[\\/]/).pop() || picked.filePath, text: read.content };
+    return readTextFileByPath(picked.filePath);
+}
+/**
+ * 解析宿主拖拽事件 (plugin_files_dropped) 载荷中的文件路径列表
+ */
+export function extractDroppedFilePaths(envelopeOrPayload) {
+    const raw = envelopeOrPayload && typeof envelopeOrPayload === "object"
+        ? envelopeOrPayload
+        : {};
+    const list = Array.isArray(raw.payload?.files) ? raw.payload.files : Array.isArray(raw.files) ? raw.files : [];
+    return list
+        .filter((item) => typeof item === "string" && item.trim().length > 0)
+        .map((item) => item.trim());
 }

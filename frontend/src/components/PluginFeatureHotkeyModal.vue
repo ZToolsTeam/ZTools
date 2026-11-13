@@ -251,25 +251,6 @@ const getGlobalWakeHotkey = async () => {
   }
 }
 
-const getSuperPanelHotkey = async () => {
-  try {
-    if (!window.ztools?.config?.get) return ''
-    const config = await window.ztools.config.get('super_panel')
-    const hotkey = config?.keyboardHotkey
-    if (!hotkey?.enabled || !hotkey?.key) {
-      return ''
-    }
-
-    const modifiers = Array.isArray(hotkey.modifiers)
-      ? hotkey.modifiers.map((modifier) => modifier.charAt(0).toUpperCase() + modifier.slice(1))
-      : []
-    const key = hotkey.key.charAt(0).toUpperCase() + hotkey.key.slice(1)
-    return [...modifiers, key].join('+')
-  } catch {
-    return ''
-  }
-}
-
 const canApplyItem = () => true
 
 const hasSamePluginHotkeyConflict = async (item, hotkeyStr) => {
@@ -340,15 +321,6 @@ const registerHotkey = async (item, hotkeyStr) => {
       globalWakeHotkey.toLowerCase() === hotkeyStr.toLowerCase()
     ) {
       message.warning('该快捷键与全局唤醒快捷键冲突')
-      return false
-    }
-
-    const superPanelHotkey = await getSuperPanelHotkey()
-    if (
-      superPanelHotkey &&
-      superPanelHotkey.toLowerCase() === hotkeyStr.toLowerCase()
-    ) {
-      message.warning('该快捷键与超级面板键盘热键冲突')
       return false
     }
 
@@ -430,7 +402,7 @@ const clearHotkey = async (item) => {
 
 /** 录入框里的按键：Esc 取消、⌫ 清除，组合键完整后注册 */
 const handleKeydown = async (item, event) => {
-  if (recordingItemId.value !== item.id) return
+  if (recordingItemId.value !== item.id || loadingItemId.value) return
   const result = interpretRecorderKeydown(event, {
     platform: hotkeyPlatform.value,
     allowDoubleTap: supportsDoubleModifierHotkeys.value

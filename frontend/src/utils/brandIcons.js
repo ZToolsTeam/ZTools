@@ -229,16 +229,15 @@ export const CATEGORY_GLYPHS = Object.freeze({
   全部: 'grid',
   系统工具: 'wrench',
   办公效率: 'briefcase',
+  文件管理: 'folder',
   图像媒体: 'image',
-  AI工具: 'spark',
   其他工具: 'apps',
   媒体处理: 'image',
   图像视频: 'image',
   安全工具: 'shield',
   安全隐私: 'shield',
   网络工具: 'wifi',
-  开发工具: 'terminal',
-  金融理财: 'currency'
+  开发工具: 'terminal'
 })
 
 export function isGlyph(kind) {

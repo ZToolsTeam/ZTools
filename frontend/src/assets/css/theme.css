@@ -31,8 +31,9 @@
   --rc-text-inverse: #f2f2f0;
   --rc-text-on-color: #ffffff;
 
-  /* ===== 4. 品牌色：余烬橙 ===== */
+  /* ===== 4. 品牌色：默认余烬橙（支持 6 款固定主题色切换） ===== */
   --rc-accent: #ff6b3d;
+  --rc-accent-rgb: 255, 107, 61;
   --rc-accent-hover: #f25a2b;
   --rc-accent-text: #b3390b;
   --rc-accent-subtle: rgba(255, 107, 61, 0.1);
@@ -173,11 +174,11 @@
   --easing-standard: cubic-bezier(0.2, 0, 0, 1);
   --easing-smooth: cubic-bezier(0.4, 0, 0.2, 1);
   --font-weight-semibold: 600;
-  --color-primary-rgb: 255, 107, 61;
-  --color-orange-rgb: 255, 107, 61;
+  --color-primary-rgb: var(--rc-accent-rgb);
+  --color-orange-rgb: var(--rc-accent-rgb);
 }
 
-/* ===== 暗色「墨黑」 ===== */
+/* ===== 暗色「墨黑」（默认余烬橙） ===== */
 .dark,
 [data-theme='dark'] {
   color-scheme: dark;
@@ -202,6 +203,7 @@
   --rc-text-inverse: #18181b;
 
   --rc-accent: #ff6b3d;
+  --rc-accent-rgb: 255, 107, 61;
   --rc-accent-hover: #ff8a63;
   --rc-accent-text: #ff8a63;
   --rc-accent-subtle: rgba(255, 107, 61, 0.14);
@@ -280,6 +282,364 @@
   --shadow-sm: var(--rc-shadow-sm);
   --shadow-lg: var(--rc-shadow-lg);
   --shadow-xl: var(--rc-shadow-lg);
+  --color-primary-rgb: var(--rc-accent-rgb);
+  --color-orange-rgb: var(--rc-accent-rgb);
+}
+
+/* ===== 局部色卡独立预览：余烬橙（Ember） ===== */
+[data-accent='ember'],
+.dark [data-accent='ember'] {
+  --rc-accent: #ff6b3d;
+  --rc-accent-rgb: 255, 107, 61;
+}
+
+/* ===== 扩展主题色 1：冰川蓝（Glacier） ===== */
+[data-accent='glacier'],
+[data-accent='glacier'] [data-theme='light'] {
+  --rc-canvas: #f2f5f8;
+  --rc-canvas-acrylic: rgba(242, 245, 248, 0.86);
+  --rc-side: #eaeff5;
+  --rc-head: #f5f8fb;
+  --rc-surface: #ffffff;
+  --rc-surface-subtle: #f7f9fc;
+  --rc-surface-translucent: rgba(245, 248, 251, 0.88);
+  --rc-surface-active: #e3eaf2;
+  --rc-border: #dce3ec;
+  --rc-border-subtle: #e6ecf3;
+  --rc-border-highlight: #cbd5e1;
+  --rc-text-primary: #0f172a;
+  --rc-text-secondary: #334155;
+  --rc-text-muted: #64748b;
+  --rc-text-faint: #768599;
+  --rc-accent: #2563eb;
+  --rc-accent-rgb: 37, 99, 235;
+  --rc-accent-hover: #1d4ed8;
+  --rc-accent-text: #1d4ed8;
+  --rc-accent-subtle: rgba(37, 99, 235, 0.1);
+  --rc-accent-fill: #2563eb;
+  --rc-accent-fill-hover: #1d4ed8;
+  --rc-accent-contrast: #ffffff;
+  --rc-focus-ring: 0 0 0 1px rgba(37, 99, 235, 0.55), 0 0 14px rgba(37, 99, 235, 0.15);
+  --rc-mark-ink: #0f172a;
+  --rc-marker-glow: 0 0 6px rgba(37, 99, 235, 0.35);
+  --rc-kbd-bg: #edf2f7;
+  --rc-kbd-border: rgba(15, 23, 42, 0.12);
+  --rc-kbd-text: #475569;
+}
+
+[data-accent='glacier'].dark,
+.dark [data-accent='glacier'],
+[data-accent='glacier'] [data-theme='dark'] {
+  --rc-canvas: #0a0d12;
+  --rc-canvas-acrylic: rgba(10, 13, 18, 0.84);
+  --rc-side: #0d1117;
+  --rc-head: #0d1117;
+  --rc-surface: #131922;
+  --rc-surface-subtle: #19212d;
+  --rc-surface-translucent: rgba(13, 17, 23, 0.86);
+  --rc-surface-active: #1f2937;
+  --rc-border: #212b38;
+  --rc-border-subtle: #1a222d;
+  --rc-border-highlight: #2a3646;
+  --rc-text-primary: #f1f5f9;
+  --rc-text-secondary: #cbd5e1;
+  --rc-text-muted: #8494a9;
+  --rc-text-faint: #708096;
+  --rc-accent: #3b82f6;
+  --rc-accent-rgb: 59, 130, 246;
+  --rc-accent-hover: #60a5fa;
+  --rc-accent-text: #60a5fa;
+  --rc-accent-subtle: rgba(59, 130, 246, 0.16);
+  --rc-accent-fill: #2563eb;
+  --rc-accent-fill-hover: #3b82f6;
+  --rc-accent-contrast: #ffffff;
+  --rc-focus-ring: 0 0 0 1px rgba(59, 130, 246, 0.6), 0 0 18px rgba(59, 130, 246, 0.22);
+  --rc-mark-ink: #f1f5f9;
+  --rc-marker-glow: 0 0 10px rgba(59, 130, 246, 0.75);
+  --rc-kbd-bg: #1e2734;
+  --rc-kbd-border: rgba(255, 255, 255, 0.1);
+  --rc-kbd-text: #94a3b8;
+}
+
+/* ===== 扩展主题色 2：松石翠（Jade） ===== */
+[data-accent='jade'],
+[data-accent='jade'] [data-theme='light'] {
+  --rc-canvas: #f1f5f3;
+  --rc-canvas-acrylic: rgba(241, 245, 243, 0.86);
+  --rc-side: #e9efec;
+  --rc-head: #f4f8f6;
+  --rc-surface: #ffffff;
+  --rc-surface-subtle: #f6faf8;
+  --rc-surface-translucent: rgba(244, 248, 246, 0.88);
+  --rc-surface-active: #e0ebe5;
+  --rc-border: #d8e4dd;
+  --rc-border-subtle: #e4ede8;
+  --rc-border-highlight: #cad8d0;
+  --rc-text-primary: #111c17;
+  --rc-text-secondary: #33443c;
+  --rc-text-muted: #61746b;
+  --rc-text-faint: #73867d;
+  --rc-accent: #059669;
+  --rc-accent-rgb: 5, 150, 105;
+  --rc-accent-hover: #047857;
+  --rc-accent-text: #047857;
+  --rc-accent-subtle: rgba(5, 150, 105, 0.1);
+  --rc-accent-fill: #059669;
+  --rc-accent-fill-hover: #047857;
+  --rc-accent-contrast: #ffffff;
+  --rc-focus-ring: 0 0 0 1px rgba(5, 150, 105, 0.55), 0 0 14px rgba(5, 150, 105, 0.14);
+  --rc-mark-ink: #111c17;
+  --rc-marker-glow: 0 0 6px rgba(5, 150, 105, 0.35);
+  --rc-kbd-bg: #ebf2ee;
+  --rc-kbd-border: rgba(17, 28, 23, 0.12);
+  --rc-kbd-text: #495a52;
+}
+
+[data-accent='jade'].dark,
+.dark [data-accent='jade'],
+[data-accent='jade'] [data-theme='dark'] {
+  --rc-canvas: #090e0c;
+  --rc-canvas-acrylic: rgba(9, 14, 12, 0.84);
+  --rc-side: #0c1310;
+  --rc-head: #0c1310;
+  --rc-surface: #121b17;
+  --rc-surface-subtle: #17231e;
+  --rc-surface-translucent: rgba(12, 19, 16, 0.86);
+  --rc-surface-active: #1d2c26;
+  --rc-border: #1f2e27;
+  --rc-border-subtle: #18241f;
+  --rc-border-highlight: #283b32;
+  --rc-text-primary: #eef5f1;
+  --rc-text-secondary: #c4d4cc;
+  --rc-text-muted: #80948a;
+  --rc-text-faint: #6e8278;
+  --rc-accent: #10b981;
+  --rc-accent-rgb: 16, 185, 129;
+  --rc-accent-hover: #34d399;
+  --rc-accent-text: #34d399;
+  --rc-accent-subtle: rgba(16, 185, 129, 0.15);
+  --rc-accent-fill: #059669;
+  --rc-accent-fill-hover: #10b981;
+  --rc-accent-contrast: #ffffff;
+  --rc-focus-ring: 0 0 0 1px rgba(16, 185, 129, 0.55), 0 0 18px rgba(16, 185, 129, 0.2);
+  --rc-mark-ink: #eef5f1;
+  --rc-marker-glow: 0 0 10px rgba(16, 185, 129, 0.72);
+  --rc-kbd-bg: #1b2822;
+  --rc-kbd-border: rgba(255, 255, 255, 0.1);
+  --rc-kbd-text: #9ab0a5;
+}
+
+/* ===== 扩展主题色 3：星云紫（Iris） ===== */
+[data-accent='iris'],
+[data-accent='iris'] [data-theme='light'] {
+  --rc-canvas: #f4f3f8;
+  --rc-canvas-acrylic: rgba(244, 243, 248, 0.86);
+  --rc-side: #eceaf3;
+  --rc-head: #f6f5fa;
+  --rc-surface: #ffffff;
+  --rc-surface-subtle: #f8f7fc;
+  --rc-surface-translucent: rgba(246, 245, 250, 0.88);
+  --rc-surface-active: #e6e3f1;
+  --rc-border: #dfdbe9;
+  --rc-border-subtle: #eae7f2;
+  --rc-border-highlight: #d2cde0;
+  --rc-text-primary: #171426;
+  --rc-text-secondary: #3c3752;
+  --rc-text-muted: #6c6684;
+  --rc-text-faint: #7d7796;
+  --rc-accent: #7c3aed;
+  --rc-accent-rgb: 124, 58, 237;
+  --rc-accent-hover: #6d28d9;
+  --rc-accent-text: #6d28d9;
+  --rc-accent-subtle: rgba(124, 58, 237, 0.1);
+  --rc-accent-fill: #6d28d9;
+  --rc-accent-fill-hover: #5b21b6;
+  --rc-accent-contrast: #ffffff;
+  --rc-focus-ring: 0 0 0 1px rgba(124, 58, 237, 0.55), 0 0 14px rgba(124, 58, 237, 0.15);
+  --rc-mark-ink: #171426;
+  --rc-marker-glow: 0 0 6px rgba(124, 58, 237, 0.35);
+  --rc-kbd-bg: #efedf6;
+  --rc-kbd-border: rgba(23, 20, 38, 0.12);
+  --rc-kbd-text: #534d69;
+}
+
+[data-accent='iris'].dark,
+.dark [data-accent='iris'],
+[data-accent='iris'] [data-theme='dark'] {
+  --rc-canvas: #0b0a10;
+  --rc-canvas-acrylic: rgba(11, 10, 16, 0.84);
+  --rc-side: #0f0d16;
+  --rc-head: #0f0d16;
+  --rc-surface: #15131f;
+  --rc-surface-subtle: #1c1929;
+  --rc-surface-translucent: rgba(15, 13, 22, 0.86);
+  --rc-surface-active: #231f33;
+  --rc-border: #252136;
+  --rc-border-subtle: #1d192b;
+  --rc-border-highlight: #302b46;
+  --rc-text-primary: #f3f1f9;
+  --rc-text-secondary: #ccc7dc;
+  --rc-text-muted: #8c85a2;
+  --rc-text-faint: #78718f;
+  --rc-accent: #8b5cf6;
+  --rc-accent-rgb: 139, 92, 246;
+  --rc-accent-hover: #a78bfa;
+  --rc-accent-text: #a78bfa;
+  --rc-accent-subtle: rgba(139, 92, 246, 0.16);
+  --rc-accent-fill: #7c3aed;
+  --rc-accent-fill-hover: #8b5cf6;
+  --rc-accent-contrast: #ffffff;
+  --rc-focus-ring: 0 0 0 1px rgba(139, 92, 246, 0.58), 0 0 18px rgba(139, 92, 246, 0.22);
+  --rc-mark-ink: #f3f1f9;
+  --rc-marker-glow: 0 0 10px rgba(139, 92, 246, 0.72);
+  --rc-kbd-bg: #211d30;
+  --rc-kbd-border: rgba(255, 255, 255, 0.1);
+  --rc-kbd-text: #a59fbd;
+}
+
+/* ===== 扩展主题色 4：绯樱红（Crimson） ===== */
+[data-accent='crimson'],
+[data-accent='crimson'] [data-theme='light'] {
+  --rc-canvas: #f5f3f4;
+  --rc-canvas-acrylic: rgba(245, 243, 244, 0.86);
+  --rc-side: #efecee;
+  --rc-head: #f8f6f7;
+  --rc-surface: #ffffff;
+  --rc-surface-subtle: #faf8f9;
+  --rc-surface-translucent: rgba(248, 246, 247, 0.88);
+  --rc-surface-active: #ebe6e8;
+  --rc-border: #e5dfe2;
+  --rc-border-subtle: #eee9ec;
+  --rc-border-highlight: #d8d0d4;
+  --rc-text-primary: #191517;
+  --rc-text-secondary: #3f383b;
+  --rc-text-muted: #70676b;
+  --rc-text-faint: #82787c;
+  --rc-accent: #e11d48;
+  --rc-accent-rgb: 225, 29, 72;
+  --rc-accent-hover: #be123c;
+  --rc-accent-text: #be123c;
+  --rc-accent-subtle: rgba(225, 29, 72, 0.1);
+  --rc-accent-fill: #be123c;
+  --rc-accent-fill-hover: #9f1239;
+  --rc-accent-contrast: #ffffff;
+  --rc-focus-ring: 0 0 0 1px rgba(225, 29, 72, 0.55), 0 0 14px rgba(225, 29, 72, 0.14);
+  --rc-mark-ink: #191517;
+  --rc-marker-glow: 0 0 6px rgba(225, 29, 72, 0.35);
+  --rc-kbd-bg: #f2eef0;
+  --rc-kbd-border: rgba(25, 21, 23, 0.12);
+  --rc-kbd-text: #574f53;
+}
+
+[data-accent='crimson'].dark,
+.dark [data-accent='crimson'],
+[data-accent='crimson'] [data-theme='dark'] {
+  --rc-canvas: #0c0a0b;
+  --rc-canvas-acrylic: rgba(12, 10, 11, 0.84);
+  --rc-side: #100d0f;
+  --rc-head: #100d0f;
+  --rc-surface: #171315;
+  --rc-surface-subtle: #1f191c;
+  --rc-surface-translucent: rgba(16, 13, 15, 0.86);
+  --rc-surface-active: #272024;
+  --rc-border: #282124;
+  --rc-border-subtle: #1f191c;
+  --rc-border-highlight: #342b2f;
+  --rc-text-primary: #f5f1f3;
+  --rc-text-secondary: #d1c9cc;
+  --rc-text-muted: #91878b;
+  --rc-text-faint: #7d7377;
+  --rc-accent: #f43f5e;
+  --rc-accent-rgb: 244, 63, 94;
+  --rc-accent-hover: #fb7185;
+  --rc-accent-text: #fb7185;
+  --rc-accent-subtle: rgba(244, 63, 94, 0.16);
+  --rc-accent-fill: #e11d48;
+  --rc-accent-fill-hover: #f43f5e;
+  --rc-accent-contrast: #ffffff;
+  --rc-focus-ring: 0 0 0 1px rgba(244, 63, 94, 0.58), 0 0 18px rgba(244, 63, 94, 0.22);
+  --rc-mark-ink: #f5f1f3;
+  --rc-marker-glow: 0 0 10px rgba(244, 63, 94, 0.72);
+  --rc-kbd-bg: #241d20;
+  --rc-kbd-border: rgba(255, 255, 255, 0.1);
+  --rc-kbd-text: #aba0a5;
+}
+
+/* ===== 扩展主题色 5：钛金灰（Monochrome） ===== */
+[data-accent='mono'],
+[data-accent='mono'] [data-theme='light'] {
+  --rc-canvas: #f4f4f5;
+  --rc-canvas-acrylic: rgba(244, 244, 245, 0.86);
+  --rc-side: #ececee;
+  --rc-head: #f7f7f8;
+  --rc-surface: #ffffff;
+  --rc-surface-subtle: #fafafa;
+  --rc-surface-translucent: rgba(247, 247, 248, 0.88);
+  --rc-surface-active: #e4e4e7;
+  --rc-border: #e4e4e7;
+  --rc-border-subtle: #ededf0;
+  --rc-border-highlight: #d4d4d8;
+  --rc-text-primary: #09090b;
+  --rc-text-secondary: #3f3f46;
+  --rc-text-muted: #71717a;
+  --rc-text-faint: #82828c;
+  --rc-accent: #18181b;
+  --rc-accent-rgb: 24, 24, 27;
+  --rc-accent-hover: #27272a;
+  --rc-accent-text: #18181b;
+  --rc-accent-subtle: rgba(24, 24, 27, 0.08);
+  --rc-accent-fill: #18181b;
+  --rc-accent-fill-hover: #27272a;
+  --rc-accent-contrast: #ffffff;
+  --rc-focus-ring: 0 0 0 1px rgba(24, 24, 27, 0.55), 0 0 12px rgba(24, 24, 27, 0.1);
+  --rc-mark-ink: #52525b;
+  --rc-mark-glow-soft: 0.18;
+  --rc-mark-glow-core: 0.25;
+  --rc-marker-glow: 0 0 4px rgba(24, 24, 27, 0.25);
+  --rc-kbd-bg: #f1f1f3;
+  --rc-kbd-border: rgba(9, 9, 11, 0.14);
+  --rc-kbd-text: #52525b;
+}
+
+[data-accent='mono'].dark,
+.dark [data-accent='mono'],
+[data-accent='mono'] [data-theme='dark'] {
+  --rc-canvas: #09090b;
+  --rc-canvas-acrylic: rgba(9, 9, 11, 0.84);
+  --rc-side: #0c0c0e;
+  --rc-head: #0c0c0e;
+  --rc-surface: #141417;
+  --rc-surface-subtle: #1b1b1f;
+  --rc-surface-translucent: rgba(12, 12, 14, 0.86);
+  --rc-surface-active: #232329;
+  --rc-border: #242429;
+  --rc-border-subtle: #1c1c20;
+  --rc-border-highlight: #2e2e34;
+  --rc-text-primary: #fafafa;
+  --rc-text-secondary: #d4d4d8;
+  --rc-text-muted: #8e8e96;
+  --rc-text-faint: #787880;
+  --rc-accent: #f4f4f5;
+  --rc-accent-rgb: 244, 244, 245;
+  --rc-accent-hover: #ffffff;
+  --rc-accent-text: #fafafa;
+  --rc-accent-subtle: rgba(244, 244, 245, 0.12);
+  --rc-accent-fill: #f4f4f5;
+  --rc-accent-fill-hover: #e4e4e7;
+  --rc-accent-contrast: #09090b;
+  --rc-focus-ring: 0 0 0 1px rgba(244, 244, 245, 0.55), 0 0 16px rgba(244, 244, 245, 0.16);
+  --rc-mark-ink: #71717a;
+  --rc-mark-glow-soft: 0.55;
+  --rc-mark-glow-core: 0.72;
+  --rc-marker-glow: 0 0 8px rgba(244, 244, 245, 0.6);
+  --rc-kbd-bg: #222227;
+  --rc-kbd-border: rgba(255, 255, 255, 0.12);
+  --rc-kbd-text: #a1a1aa;
+}
+
+/* 确保实心浅底强调色（如暗色钛金灰）下 Ant Design 开关滑块保持对比度 */
+.ant-switch.ant-switch-checked .ant-switch-handle::before {
+  background-color: var(--rc-accent-contrast);
 }
 
 /* ===== 通用微类 ===== */

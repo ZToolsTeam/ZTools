@@ -109,7 +109,7 @@ module.exports = async (runner) => {
           `(function(){
             var hasLoading = !!document.querySelector(".skeleton-container, .skeleton-header");
             var hasError = !!document.querySelector(".error-container");
-            var hasContent = !!document.querySelector(".details-page .tab-container, .details-page .back-nav, .back-btn");
+            var hasContent = !!document.querySelector(".details-page .detail-card, .details-page .back-nav, .back-btn");
             return JSON.stringify({ hasLoading: hasLoading, hasError: hasError, hasContent: hasContent });
           })()`
         )

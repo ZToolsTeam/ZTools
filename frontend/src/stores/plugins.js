@@ -14,6 +14,7 @@ import {
   getPluginDetails as apiGetPluginDetails,
   getLocalPlugins as apiGetLocalPlugins,
   openPlugin as apiOpenPlugin,
+  batchCheckPlugins,
   getDownloadSign,
   installPluginNative
 } from '@/api/apiserver'
@@ -708,7 +709,11 @@ export const usePluginsStore = defineStore('plugins', {
         // 内置插件没有本地 icon 文件，请求刷新只会在主进程得到 PLUGIN_NOT_FOUND
         if (!p.builtin && remoteIcon && (p.localIconUrl || '') !== remoteIcon) {
           if (window.ztools?.plugin?.refreshIcon) {
-            window.ztools.plugin.refreshIcon(p.pluginId, remoteIcon).catch(() => {})
+            const prevLocalIconUrl = p.localIconUrl
+            p.localIconUrl = remoteIcon
+            Promise.resolve(window.ztools.plugin.refreshIcon(p.pluginId, remoteIcon)).catch(() => {
+              if (p.localIconUrl === remoteIcon) p.localIconUrl = prevLocalIconUrl
+            })
           }
         }
       }
@@ -1353,6 +1358,23 @@ export const usePluginsStore = defineStore('plugins', {
      */
     shouldCheckUpdate(intervalMs = 5 * 60 * 1000) {
       return Date.now() - this.lastUpdateCheckTime > intervalMs
+    },
+
+    /**
+     * 批量检查已安装插件更新（带节流，默认 5 分钟内不重复请求）
+     * @param {number} intervalMs - 最小间隔（毫秒），默认 5 分钟
+     */
+    async checkInstalledUpdates(intervalMs = 5 * 60 * 1000) {
+      if (!this.shouldCheckUpdate(intervalMs)) return
+      const locals = this.installedPlugins || []
+      if (locals.length === 0) return
+      const updates = await batchCheckPlugins({
+        plugins: locals.map((p) => ({
+          id: p.pluginId,
+          version: p.version || '1.0.0'
+        }))
+      })
+      await this.setUpdateInfo(updates)
     },
 
     // 下载状态管理

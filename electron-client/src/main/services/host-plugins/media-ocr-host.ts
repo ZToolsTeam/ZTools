@@ -10,6 +10,7 @@ import { processAudioFiles } from './audio-processing.js'
 import type { CallerIdentity } from '../../../contracts/capabilities.js'
 import type { MacOcrPorts } from '../../platform/macos/mac-ocr.js'
 import type { LocalOcrPort } from '../ocr/paddle-ocr.js'
+import { FORMULA_LOW_CONFIDENCE, type FormulaOcrPort } from '../ocr/formula-ocr.js'
 import type { RegionSelectorPort } from '../../platform/region-capture.js'
 import type { ScreenRectangle } from '../screen-service.js'
 import {
@@ -40,6 +41,8 @@ export interface MediaOcrHostDeps extends HostSystemCommands {
   macOcr: MacOcrPorts | undefined
   /** Windows 本机 PP-OCRv5 识别；未提供（模型缺失）或失败时改用系统文字识别 */
   localOcr: LocalOcrPort | undefined
+  /** 公式识别（macOS 与 Windows）；未提供时公式识别报不支持 */
+  formulaOcr: FormulaOcrPort | undefined
   /** 框选屏幕区域（macOS 与 Windows）；未提供时框选识别报不支持 */
   regionSelector: RegionSelectorPort | undefined
   /** 截取屏幕上的一块区域（全局 DIP 坐标）保存为 PNG，返回是否真的写出了文件 */
@@ -222,6 +225,7 @@ export class MediaOcrHostPluginHandler {
   readonly #watchCallerClosed: MediaOcrHostDeps['watchCallerClosed']
   readonly #macOcr: MediaOcrHostDeps['macOcr']
   readonly #localOcr: MediaOcrHostDeps['localOcr']
+  readonly #formulaOcr: MediaOcrHostDeps['formulaOcr']
   readonly #regionSelector: MediaOcrHostDeps['regionSelector']
   readonly #captureScreenRegionToPng: MediaOcrHostDeps['captureScreenRegionToPng']
   readonly #readClipboardImage: MediaOcrHostDeps['readClipboardImage']
@@ -242,6 +246,7 @@ export class MediaOcrHostPluginHandler {
     this.#watchCallerClosed = deps.watchCallerClosed ?? watchCallerWebContentsClosed
     this.#macOcr = deps.macOcr
     this.#localOcr = deps.localOcr
+    this.#formulaOcr = deps.formulaOcr
     this.#regionSelector = deps.regionSelector
     this.#captureScreenRegionToPng = deps.captureScreenRegionToPng ??
       ((rect, outputPath, signal) => captureScreenRegionWithScreencapture(this.#sys, rect, outputPath, signal))
@@ -258,6 +263,7 @@ export class MediaOcrHostPluginHandler {
       this.#regionSelector?.stop().catch((err) => console.warn('[MediaOcrHost] 关闭框选遮罩失败:', err))
     ])
     this.#localOcr?.stop()
+    this.#formulaOcr?.stop()
   }
 
   async handleOcr(
@@ -329,9 +335,8 @@ export class MediaOcrHostPluginHandler {
         return { ok: false, success: false, error: '未提供有效的待识别图像文件' }
       }
 
-      const rawLang = String(params.lang ?? params.languageModelId ?? params.language ?? '').trim()
       try {
-        return await this.#recognizeFile(targetPath, rawLang, signal)
+        return await this.#recognizeTarget(targetPath, params, signal)
       } finally {
         if (tempCreated) {
           await fs.unlink(targetPath).catch(() => undefined)
@@ -515,6 +520,35 @@ export class MediaOcrHostPluginHandler {
     }
   }
 
+  /** 按 mode 分发：formula 识别公式，其余识别文字 */
+  async #recognizeTarget(targetPath: string, params: Record<string, unknown>, signal?: AbortSignal): Promise<Record<string, unknown>> {
+    if (params.mode === 'formula') return this.#recognizeFormula(targetPath, signal, params.includePreview === true)
+    const rawLang = String(params.lang ?? params.languageModelId ?? params.language ?? '').trim()
+    return this.#recognizeFile(targetPath, rawLang, signal)
+  }
+
+  #formulaUnavailable(): Record<string, unknown> {
+    if (!this.#formulaOcr) return { ok: false, success: false, error: '当前客户端不支持公式识别' }
+    return { ok: false, success: false, modelMissing: true, error: '公式识别模型还没有下载' }
+  }
+
+  /** 识别图片里的公式，返回 LaTeX；分数偏低时标记 lowConfidence 提示用户核对 */
+  async #recognizeFormula(imagePath: string, signal?: AbortSignal, includePreview = false): Promise<Record<string, unknown>> {
+    const formulaOcr = this.#formulaOcr
+    if (!formulaOcr || (await formulaOcr.modelStatus()).state !== 'ready') return this.#formulaUnavailable()
+    try {
+      const stat = await fs.stat(imagePath)
+      if (stat.size > MAC_OCR_MAX_IMAGE_BYTES) return { ok: false, success: false, error: '图片超过 16 MB，无法识别' }
+      const { latex, score, previewDataUrl } = await formulaOcr.recognizeImage(imagePath, signal, { includePreview })
+      if (!latex) return { ok: false, success: false, empty: true, error: '没有识别到公式' }
+      return { ok: true, success: true, latex, score, lowConfidence: score < FORMULA_LOW_CONFIDENCE, engine: 'Pix2Text-MFR 1.5',
+        ...(includePreview && previewDataUrl ? { previewDataUrl } : {}) }
+    } catch (err) {
+      if (signal?.aborted) return { ok: false, success: false, error: '公式识别已取消' }
+      return { ok: false, success: false, error: errorText(err) }
+    }
+  }
+
   /** macOS：用系统 Vision 在本机识别图片文字 */
   async #recognizeOnMac(imagePath: string, languages: readonly string[], signal?: AbortSignal): Promise<Record<string, unknown>> {
     if (!this.#macOcr) return { ok: false, success: false, error: '本地文字识别组件不可用，请重新构建或更新客户端' }
@@ -537,9 +571,15 @@ export class MediaOcrHostPluginHandler {
     if ((process.platform !== 'darwin' && process.platform !== 'win32') || !regionSelector) {
       return { ok: false, success: false, error: '当前系统暂不支持框选识别' }
     }
-    const rawLang = String(params.lang ?? params.languageModelId ?? params.language ?? '').trim()
-    const language = OCR_LANGUAGES[(rawLang || 'zh-Hans-CN').toLowerCase()]
-    if (!language) return { ok: false, success: false, error: `不支持的 OCR 语言：${rawLang}` }
+    const formula = params.mode === 'formula'
+    if (formula) {
+      // 模型没下载时不必让用户先框选再报错
+      const status = await this.#formulaOcr?.modelStatus()
+      if (status?.state !== 'ready') return this.#formulaUnavailable()
+    } else {
+      const rawLang = String(params.lang ?? params.languageModelId ?? params.language ?? '').trim()
+      if (!OCR_LANGUAGES[(rawLang || 'zh-Hans-CN').toLowerCase()]) return { ok: false, success: false, error: `不支持的 OCR 语言：${rawLang}` }
+    }
     const permission = this.#screenCapturePermission?.()
     if (permission === 'denied' || permission === 'restricted') {
       return { ok: false, success: false, error: '没有屏幕录制权限，请在系统设置的「隐私与安全性」中允许 ZTools 录制屏幕' }
@@ -548,6 +588,16 @@ export class MediaOcrHostPluginHandler {
     this.#regionOcrActive = true
     const capturePath = path.join(os.tmpdir(), `ztools_ocr_region_${randomUUID()}.png`)
     let restoreWindow: (() => void) | undefined
+    const restoreCallerWindow = () => {
+      if (params.restoreWindow === false || !restoreWindow) return
+      const restore = restoreWindow
+      restoreWindow = undefined
+      try {
+        restore()
+      } catch (err) {
+        console.warn('[MediaOcrHost] 重新显示窗口失败:', err)
+      }
+    }
     try {
       restoreWindow = this.#hideCallerWindow?.(caller)
       const rect = await regionSelector.selectScreenRegion(signal)
@@ -555,20 +605,16 @@ export class MediaOcrHostPluginHandler {
       if (!(await this.#captureScreenRegionToPng(rect, capturePath, signal))) {
         return { ok: false, success: false, error: '截取所选区域失败' }
       }
-      return await this.#recognizeFile(capturePath, rawLang, signal)
+      // 截图已完成，立即恢复插件窗口以便界面展示“识别中”状态，不必等 OCR 推理结束
+      restoreCallerWindow()
+      return await this.#recognizeTarget(capturePath, params, signal)
     } catch (err) {
       if (signal?.aborted) return { ok: false, success: false, canceled: true, error: '已取消框选' }
       return { ok: false, success: false, error: errorText(err) }
     } finally {
       this.#regionOcrActive = false
       await fs.unlink(capturePath).catch(() => undefined)
-      if (params.restoreWindow !== false) {
-        try {
-          restoreWindow?.()
-        } catch (err) {
-          console.warn('[MediaOcrHost] 重新显示窗口失败:', err)
-        }
-      }
+      restoreCallerWindow()
     }
   }
 

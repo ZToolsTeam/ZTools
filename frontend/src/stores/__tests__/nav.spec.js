@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach } from 'vitest'
+import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { setActivePinia, createPinia } from 'pinia'
 import { useNavStore } from '../nav'
 
@@ -12,6 +12,9 @@ describe('useNavStore', () => {
     expect(store.currentCategory).toBe('')
     expect(store.currentPage).toBe('')
     expect(store.isInCategoryMode).toBe(false)
+    expect(store.lastWorkbenchRoute).toBeNull()
+    expect(store.canBackFromDeclarative).toBe(false)
+    expect(store.headerSearchKeyword).toBe('')
   })
 
   it('setCategory 设置分类并清空 page', () => {
@@ -47,5 +50,44 @@ describe('useNavStore', () => {
     expect(store.isInCategoryMode).toBe(false)
     store.setCategory('dev')
     expect(store.isInCategoryMode).toBe(true)
+  })
+
+  it('recordWorkbenchRoute 仅记录工作台路由并忽略 declarative/popout/launcher，exitDeclarativeToWorkbench 按优先级精准恢复', () => {
+    const store = useNavStore()
+    const router = {
+      back: vi.fn(),
+      push: vi.fn()
+    }
+
+    // 1. 无历史记录与工作台快照时，兜底返回首页
+    store.exitDeclarativeToWorkbench(router)
+    expect(router.push).toHaveBeenCalledWith({ name: 'my' })
+    router.push.mockClear()
+
+    // 2. 记录工作台路由（忽略非工作台路由）
+    store.recordWorkbenchRoute({
+      name: 'list',
+      path: '/list/系统工具',
+      fullPath: '/list/系统工具?q=清理',
+      params: { category: '系统工具' },
+      query: { q: '清理' }
+    })
+    store.recordWorkbenchRoute({
+      name: 'declarative',
+      path: '/declarative/kill-process',
+      fullPath: '/declarative/kill-process'
+    })
+    expect(store.lastWorkbenchRoute.name).toBe('list')
+    expect(store.lastWorkbenchRoute.fullPath).toBe('/list/系统工具?q=清理')
+
+    // 3. 从工作台正向推入 declarative 时，优先走 router.back()
+    store.markEnteredDeclarative(true)
+    store.exitDeclarativeToWorkbench(router)
+    expect(router.back).toHaveBeenCalledTimes(1)
+    expect(store.canBackFromDeclarative).toBe(false)
+
+    // 4. 非直接 back 场景（如从独立窗口收回后退出），回退到 lastWorkbenchRoute.fullPath
+    store.exitDeclarativeToWorkbench(router)
+    expect(router.push).toHaveBeenCalledWith('/list/系统工具?q=清理')
   })
 })

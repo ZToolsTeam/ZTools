@@ -44,8 +44,12 @@ export function useFeedbackIndicator() {
   return { hasUnread: computed(() => false) }
 }
 
-/** 插件详情页「详情」之后的附加 Tab：开源版没有 */
-export const pluginDetailTabs = Object.freeze([])
+/**
+ * 插件详情页附加区块：开源版没有（详情页只有头部与「插件详情」卡片）
+ * 每项为 { key, placement: 'detail' | 'card', component, props(ctx) }：
+ * 'detail' 放进「插件详情」卡片底部，'card' 作为详情卡下方的独立卡片
+ */
+export const pluginDetailSections = Object.freeze([])
 
 /** 账户相关：开源版没有账号，安装插件不需要登录 */
 export const auth = Object.freeze({

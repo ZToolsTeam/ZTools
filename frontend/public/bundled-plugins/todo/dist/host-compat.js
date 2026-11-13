@@ -27,3 +27,64 @@ export async function updateStorageItem(storage, key, update) {
         await storage.setItem(key, next);
     return next;
 }
+/**
+ * 从宿主事件信封、FileInputPayload 或裸路径数组中安全提取规范化非空文件路径列表
+ */
+export function extractCompatInputFiles(payload) {
+    if (Array.isArray(payload)) {
+        return payload
+            .map((item) => {
+            if (typeof item === 'string')
+                return item.trim();
+            if (item && typeof item === 'object' && typeof item.path === 'string') {
+                return String(item.path).trim();
+            }
+            return '';
+        })
+            .filter(Boolean);
+    }
+    if (!payload || typeof payload !== 'object')
+        return [];
+    const record = payload;
+    const inner = record.payload && typeof record.payload === 'object' ? record.payload : record;
+    if (Array.isArray(inner.files))
+        return extractCompatInputFiles(inner.files);
+    if (Array.isArray(inner.paths))
+        return extractCompatInputFiles(inner.paths);
+    return [];
+}
+/**
+ * 判断当前宿主渲染器是否已原生支持栈顶 <List/Form/Detail onFileInput={...}> 单点消费路由。
+ * - 新版宿主会注入 window.__ztoolsDeclarativeFeatures.fileInput === true；
+ * - 旧版宿主未注入该标记时，插件可保留原有的 plugin_files_dropped 事件订阅作为回退，避免新旧宿主双重触发。
+ */
+export function isDeclarativeFileInputSupported() {
+    if (typeof window === 'undefined')
+        return true;
+    const w = window;
+    return w.__ztoolsDeclarativeFeatures?.fileInput === true;
+}
+/**
+ * 生成可直接展开到 <List {...fileInputProps}> / <Form {...fileInputProps}> / <Detail {...fileInputProps}> 的属性对象。
+ * 旧版客户端会静默忽略未知的 descriptor.props.fileInput / onFileInput 属性而不报错；
+ * 新版客户端由 DeclarativeView 栈顶单点消费拖放与 Ctrl+V / ⌘V 粘贴输入。
+ */
+export function createCompatFileInputProps(onFiles, config) {
+    return {
+        fileInput: config ? { ...config } : {},
+        onFileInput: (raw) => {
+            const files = extractCompatInputFiles(raw);
+            if (files.length === 0)
+                return;
+            const normalizedPayload = Array.isArray(raw)
+                ? { files, source: 'drop' }
+                : {
+                    files,
+                    source: raw?.source || 'drop',
+                    ...(typeof raw?.targetFieldId === 'string' && raw.targetFieldId ? { targetFieldId: raw.targetFieldId } : {}),
+                    ...(typeof raw?.rejectedCount === 'number' ? { rejectedCount: raw.rejectedCount } : {})
+                };
+            void onFiles(files, normalizedPayload);
+        }
+    };
+}

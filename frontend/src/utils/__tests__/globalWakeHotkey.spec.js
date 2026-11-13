@@ -258,11 +258,11 @@ describe('当前唤醒快捷键（界面提示用）', () => {
     expect(currentGlobalWakeHotkey.value).toBe('Ctrl+Shift+Z')
   })
 
-  it('[破坏性] 注册被拒（例如已被超级面板占用）时提示保持原样，不显示没生效的键', async () => {
-    triggerMock.register.mockResolvedValueOnce({ success: false, error: { message: '快捷键 Alt+Space 已被「超级面板」占用，请换一个组合键' } })
+  it('[破坏性] 注册被拒（例如已被其他程序占用）时提示保持原样，不显示没生效的键', async () => {
+    triggerMock.register.mockResolvedValueOnce({ success: false, error: { message: '快捷键 Alt+Space 已被其他程序占用，请换一个组合键' } })
     const result = await syncGlobalWakeHotkey({ hotkey: 'Alt+Space' })
     expect(result.success).toBe(false)
-    expect(result.message).toContain('超级面板')
+    expect(result.message).toContain('已被其他程序占用')
     expect(currentGlobalWakeHotkey.value).toBe(DEFAULT_GLOBAL_WAKE_HOTKEY)
     currentGlobalWakeHotkey.value = 'Ctrl+Q'
     triggerMock.register.mockRejectedValueOnce(new Error('IPC 断开'))

@@ -90,7 +90,7 @@ const onMoreSelect = (key) => {
 
 <template>
   <div class="flex flex-wrap items-center justify-end gap-2">
-    <!-- 有留言时给一个跳到留言 Tab 的轻量入口；没有留言时不占位（留言 Tab 上也有数量） -->
+    <!-- 有留言时给一个滚动到「评价与留言」卡片的轻量入口；没有留言时不占位 -->
     <a-tooltip v-if="commentsCount > 0" title="查看留言" placement="top">
       <RcButton variant="ghost" size="md" class="comments-entry" :icon="MessageSquareIcon" @click="$emit('show-comments')">
         {{ commentsCount }}

@@ -31,8 +31,8 @@ const INIT_WECHAT_FILES: WechatScannedFileEntry[] = [
   {
     id: 'wx-init-107',
     name: 'sns_timeline_cache_01.data',
-    path: 'C:\\Users\\Admin\\AppData\\Roaming\\Tencent\\xwechat\\radium\\web\\sns_timeline_cache_01.data',
-    parentDir: 'C:\\Users\\Admin\\AppData\\Roaming\\Tencent\\xwechat\\radium\\web',
+    path: '%USERPROFILE%\\AppData\\Roaming\\Tencent\\xwechat\\radium\\web\\sns_timeline_cache_01.data',
+    parentDir: '%USERPROFILE%\\AppData\\Roaming\\Tencent\\xwechat\\radium\\web',
     ownerId: 107,
     ownerName: '朋友圈/网页缓存',
     accountId: 'wxid_geek001',
@@ -43,8 +43,8 @@ const INIT_WECHAT_FILES: WechatScannedFileEntry[] = [
   {
     id: 'wx-init-115',
     name: 'WeChatAppEx_Runtime_8555.pak',
-    path: 'C:\\Users\\Admin\\AppData\\Roaming\\Tencent\\xwechat\\xplugin\\Plugins\\WeChatAppEx_Runtime_8555.pak',
-    parentDir: 'C:\\Users\\Admin\\AppData\\Roaming\\Tencent\\xwechat\\xplugin\\Plugins',
+    path: '%USERPROFILE%\\AppData\\Roaming\\Tencent\\xwechat\\xplugin\\Plugins\\WeChatAppEx_Runtime_8555.pak',
+    parentDir: '%USERPROFILE%\\AppData\\Roaming\\Tencent\\xwechat\\xplugin\\Plugins',
     ownerId: 115,
     ownerName: '小程序/XPlugin',
     accountId: '公共组件 (Shared)',
@@ -55,8 +55,8 @@ const INIT_WECHAT_FILES: WechatScannedFileEntry[] = [
   {
     id: 'wx-init-113',
     name: 'mm_20261018.xlog',
-    path: 'C:\\Users\\Admin\\AppData\\Roaming\\Tencent\\xwechat\\log\\mm_20261018.xlog',
-    parentDir: 'C:\\Users\\Admin\\AppData\\Roaming\\Tencent\\xwechat\\log',
+    path: '%USERPROFILE%\\AppData\\Roaming\\Tencent\\xwechat\\log\\mm_20261018.xlog',
+    parentDir: '%USERPROFILE%\\AppData\\Roaming\\Tencent\\xwechat\\log',
     ownerId: 113,
     ownerName: '运行跟踪日志 (.xlog)',
     accountId: '公共组件 (Shared)',
@@ -67,8 +67,8 @@ const INIT_WECHAT_FILES: WechatScannedFileEntry[] = [
   {
     id: 'wx-init-999',
     name: 'message_0.db',
-    path: 'C:\\Users\\Admin\\Documents\\xwechat_files\\wxid_geek001\\db_storage\\message\\message_0.db',
-    parentDir: 'C:\\Users\\Admin\\Documents\\xwechat_files\\wxid_geek001\\db_storage\\message',
+    path: '%USERPROFILE%\\Documents\\xwechat_files\\wxid_geek001\\db_storage\\message\\message_0.db',
+    parentDir: '%USERPROFILE%\\Documents\\xwechat_files\\wxid_geek001\\db_storage\\message',
     ownerId: 999,
     ownerName: '核心聊天数据库 (受保护)',
     accountId: 'wxid_geek001',
@@ -92,7 +92,7 @@ function buildInitialCategories(): WechatCleanCategoryItem[] {
       category: rule.category,
       riskLevel: rule.riskLevel,
       safetyLevel: rule.riskLevel,
-      targetDir: catFiles[0]?.parentDir || 'C:\\Users\\Admin\\Documents\\xwechat_files',
+      targetDir: catFiles[0]?.parentDir || '%USERPROFILE%\\Documents\\xwechat_files',
       existsOnDisk: catFiles.length > 0,
       fileCount: catFiles.length,
       totalSizeBytes,
@@ -130,7 +130,7 @@ export default function WechatCleanerCommand() {
           {
             accountId: 'wxid_geek001',
             label: '微信号: wxid_geek001',
-            rootDir: 'C:\\Users\\Admin\\Documents\\xwechat_files\\wxid_geek001',
+            rootDir: '%USERPROFILE%\\Documents\\xwechat_files\\wxid_geek001',
             fileCount: 2,
             totalBytes: 416 * 1024 * 1024
           }
@@ -448,7 +448,7 @@ export default function WechatCleanerCommand() {
           })
         ]
       })
-    } as any)
+    } as Parameters<typeof List.Item>[0])
   })
 
   const activeCategory = categories.find(c => String(c.ownerId) === selectedOwnerId)

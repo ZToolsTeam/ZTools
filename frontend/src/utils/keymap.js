@@ -12,7 +12,7 @@
  * - Ctrl+F / Cmd+F: 聚焦搜索
  */
 
-import { onUnmounted, getCurrentInstance } from 'vue'
+import { onActivated, onDeactivated, onUnmounted, getCurrentInstance } from 'vue'
 
 export const KEYMAP_SCOPES = Object.freeze({
   ACTION_PANEL: 'action_panel',
@@ -79,6 +79,13 @@ export function isComposingEvent(event) {
 }
 
 /**
+ * 判断当前焦点是否在快捷键录入隐藏输入框中
+ */
+export function isHotkeyRecorderInput(target) {
+  return Boolean(target?.classList?.contains?.('hotkey-hidden-input'))
+}
+
+/**
  * 判断当前焦点是否在可输入控件中
  */
 export function isInputElement(target) {
@@ -124,6 +131,8 @@ export function dispatchKeyEvent(event) {
   if (!event) return false
   // 捕获阶段先让出输入法选字按键；不能 preventDefault，否则会打断文字确认。
   if (isComposingEvent(event)) return false
+  // 焦点在快捷键录入框时，按键全部归录入框处理（含 Esc 取消、Ctrl+F/M 录制等）
+  if (isHotkeyRecorderInput(event.target)) return false
   if (typeof event === 'object') {
     if (dispatchedEvents.has(event)) return false
     dispatchedEvents.add(event)
@@ -224,14 +233,15 @@ export function registerKeyHandler(scope, handler, options = {}) {
   ensureKeymapListener()
 
   const list = registry.get(scope)
+  const initialEnabled = options.enabled !== false
   const record = {
     handler,
-    enabled: options.enabled !== false
+    enabled: initialEnabled
   }
   list.push(record)
 
   let unregistered = false
-  return function unregister() {
+  function unregister() {
     if (unregistered) return
     unregistered = true
     const idx = list.indexOf(record)
@@ -239,15 +249,35 @@ export function registerKeyHandler(scope, handler, options = {}) {
       list.splice(idx, 1)
     }
   }
+  unregister.deactivate = () => {
+    if (unregistered) return
+    record.enabled = false
+  }
+  unregister.activate = () => {
+    if (unregistered) return
+    record.enabled = initialEnabled
+    const idx = list.indexOf(record)
+    if (idx !== -1 && idx !== list.length - 1) {
+      list.splice(idx, 1)
+      list.push(record)
+    }
+  }
+  return unregister
 }
 
 /**
  * Vue 3 Composition API 快捷键 hook
- * 在组件生命周期内自动注册并在卸载时成对销毁
+ * 在组件生命周期内自动注册并在卸载时成对销毁；支持 KeepAlive 激活/停用切换
  */
 export function useKeymap(scope, handler, options = {}) {
   const unregister = registerKeyHandler(scope, handler, options)
   if (getCurrentInstance()) {
+    onActivated(() => {
+      unregister.activate()
+    })
+    onDeactivated(() => {
+      unregister.deactivate()
+    })
     onUnmounted(() => {
       unregister()
     })

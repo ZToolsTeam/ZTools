@@ -72,12 +72,13 @@ describe('悬浮条本地程序列表：程序随按键当场出结果，文件�
     expect(state.isSearching.value).toBe(false)
   })
 
-  it('同一档里程序排在插件与内置命令前；英文名也能搜到程序；高亮区间来自排序结果', async () => {
+  it('同一档里按全局分类权重排序（1B 宿主内置指令 > 2B 已安装软件 > 3A 插件）；英文名也能搜到程序；高亮区间来自排序结果', async () => {
     const state = create()
     await settle()
     state.search('设置')
-    expect(state.filteredItems.value[0]).toMatchObject({ name: '系统设置', isApplication: true })
-    expect(names(state)).toContain('系统设置')
+    // 1B 宿主指令 (system-settings) 排第 1，2B 已安装软件 (System Settings.app) 排第 2
+    expect(state.filteredItems.value[0]).toMatchObject({ key: 'system-settings', name: '系统设置' })
+    expect(state.filteredItems.value[1]).toMatchObject({ name: '系统设置', isApplication: true })
     expect(state.highlightParts(state.filteredItems.value[0])).toEqual([
       { text: '系统', hit: false }, { text: '设置', hit: true }
     ])
@@ -104,7 +105,7 @@ describe('悬浮条本地程序列表：程序随按键当场出结果，文件�
     expect(names(state)).toContain('JSON 生成类型')
   })
 
-  it('输入同一个词时上次选中的那一项排第一（ps：选过 Photoshop 后它排在触发词完全一致的插件前）', async () => {
+  it('输入同一个词时选中的那一项排第一（ps：Photoshop 只是单词内字母命中，选 1 次不置顶防误点，选 2 次后排在触发词完全一致的插件前）', async () => {
     const state = create()
     await settle()
     state.search('ps')
@@ -113,6 +114,11 @@ describe('悬浮条本地程序列表：程序随按键当场出结果，文件�
     expect(photoshop).toBeTruthy()
     state.recordUsage(photoshop.key)
 
+    state.search('')
+    state.search('ps')
+    expect(state.filteredItems.value[0].name).toBe('Docker 管理')
+
+    state.recordUsage(photoshop.key)
     state.search('')
     state.search('ps')
     expect(state.filteredItems.value[0].name).toBe('Adobe Photoshop 2024')
@@ -232,10 +238,11 @@ describe('悬浮条本地程序列表：程序随按键当场出结果，文件�
     state.search('xtsz')
     await settle()
     expect(getFileIcon.mock.calls.filter(([path]) => path.includes('System Settings'))).toHaveLength(1)
-    expect(state.filteredItems.value[0].icon).toBe('')
+    const sysSettingsApp = state.filteredItems.value.find((item) => item.isApplication && item.name === '系统设置')
+    expect(sysSettingsApp?.icon).toBe('')
   })
 
-  it('空查询不展示程序；作用域销毁后晚到的程序列表与文件结果都不写回', async () => {
+  it('空查询不展示未使用过的系统程序，但展示用过的系统程序；作用域销毁后晚到的程序列表与文件结果都不写回', async () => {
     let releaseApps
     searchFiles.mockImplementationOnce(() => new Promise((resolve) => { releaseApps = resolve }))
     const state = create()

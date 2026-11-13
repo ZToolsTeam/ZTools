@@ -21,6 +21,50 @@ export const MATCH_TIERS = Object.freeze({
 /** 命中字段：同档时名称优先于触发词，触发词优先于插件标识，描述最后 */
 export const MATCH_FIELDS = Object.freeze({ NAME: 0, KEYWORD: 1, ID: 2, DESCRIPTION: 3 })
 
+/**
+ * 细分匹配档位基础分（TierScore）：
+ * 区分「原文命中」与「拼音 / 2 字首字母命中」，避免 2 字中文拼音首字母（如 cl → 测量）
+ * 拿到与原文全等相同的分值从而压死英文软件原文前缀（如 cl → Clash）。
+ */
+export const MATCH_TIER_SCORES = Object.freeze({
+  NONE: 0,
+  DESCRIPTION: 100,
+  INNER: 300,
+  PREFIX_PINYIN: 520,
+  SHORT_ACRONYM_EXACT: 550,
+  PREFIX_LITERAL: 600,
+  EXACT_PINYIN: 700,
+  EXACT_LITERAL: 800,
+  LEARNED: 920,
+  ALIAS: 1000
+})
+
+/** 命中字段质量加分 */
+export const MATCH_FIELD_WEIGHTS = Object.freeze({
+  [MATCH_FIELDS.NAME]: 40,
+  [MATCH_FIELDS.KEYWORD]: 25,
+  [MATCH_FIELDS.ID]: 10,
+  [MATCH_FIELDS.DESCRIPTION]: 0
+})
+
+/**
+ * 根据匹配档位、是否原文命中、是否 2 字纯首字母缩写计算档位基础分
+ */
+export function computeTierScore(tier, literal = false, shortAcronym = false) {
+  if (tier === MATCH_TIERS.ALIAS) return MATCH_TIER_SCORES.ALIAS
+  if (tier === MATCH_TIERS.EXACT) {
+    if (literal) return MATCH_TIER_SCORES.EXACT_LITERAL
+    if (shortAcronym) return MATCH_TIER_SCORES.SHORT_ACRONYM_EXACT
+    return MATCH_TIER_SCORES.EXACT_PINYIN
+  }
+  if (tier === MATCH_TIERS.PREFIX) {
+    return literal ? MATCH_TIER_SCORES.PREFIX_LITERAL : MATCH_TIER_SCORES.PREFIX_PINYIN
+  }
+  if (tier === MATCH_TIERS.INNER) return MATCH_TIER_SCORES.INNER
+  if (tier === MATCH_TIERS.DESCRIPTION) return MATCH_TIER_SCORES.DESCRIPTION
+  return MATCH_TIER_SCORES.NONE
+}
+
 const PINYIN_OPTIONS = Object.freeze({ toneType: 'none', type: 'array', v: true })
 const HAN_RE = /\p{Script=Han}/u
 const ASCII_ALNUM_RE = /^[a-z0-9]$/i
@@ -30,7 +74,13 @@ const PINYIN_QUERY_RE = /^[a-z0-9]+$/
 const MAX_PINYIN_QUERY_LENGTH = 64
 const TOKEN_CACHE_LIMIT = 5000
 
-const NO_TEXT_MATCH = Object.freeze({ tier: MATCH_TIERS.NONE, secondary: false, range: null, literal: false })
+const NO_TEXT_MATCH = Object.freeze({
+  tier: MATCH_TIERS.NONE,
+  secondary: false,
+  range: null,
+  literal: false,
+  shortAcronym: false
+})
 
 const charReadingsCache = new Map()
 const tokenCache = new Map()
@@ -169,11 +219,16 @@ function pinyinMatch(text, q, allowInner) {
   if (tokens.length === 0) return NO_TEXT_MATCH
   const toMatch = (startIndex, found, secondary) => {
     const exact = startIndex === 0 && !found.partial && found.end === tokens.length
+    const shortAcronym = exact &&
+      tokens.length === 2 &&
+      q.length === 2 &&
+      tokens.every((token) => token.han && (token.readings[0]?.length || 0) > 1)
     return {
       tier: exact ? MATCH_TIERS.EXACT : startIndex === 0 ? MATCH_TIERS.PREFIX : MATCH_TIERS.INNER,
       secondary,
       range: [tokens[startIndex].start, tokens[found.end - 1].end],
-      literal: false
+      literal: false,
+      shortAcronym
     }
   }
   for (const secondary of [false, true]) {
@@ -240,28 +295,32 @@ function lowerKeepLength(text) {
 
 function matchSingleTerm(text, q, allowInner, allowSubsequence) {
   const lower = lowerKeepLength(text)
-  if (lower === q) return { tier: MATCH_TIERS.EXACT, secondary: false, range: [0, text.length], literal: true }
-  if (lower.startsWith(q)) return { tier: MATCH_TIERS.PREFIX, secondary: false, range: [0, q.length], literal: true }
+  if (lower === q) return { tier: MATCH_TIERS.EXACT, secondary: false, range: [0, text.length], literal: true, shortAcronym: false }
+  if (lower.startsWith(q)) return { tier: MATCH_TIERS.PREFIX, secondary: false, range: [0, q.length], literal: true, shortAcronym: false }
   const fromPinyin = pinyinMatch(text, q, allowInner)
-  if (fromPinyin.tier >= MATCH_TIERS.PREFIX && !fromPinyin.secondary) return fromPinyin
+  if (fromPinyin.tier >= MATCH_TIERS.PREFIX && !fromPinyin.secondary && !fromPinyin.shortAcronym) return fromPinyin
   const inner = innerLiteralMatch(text, lower, q, allowInner)
   if (inner && (inner.wordStart || fromPinyin.tier < MATCH_TIERS.PREFIX)) {
     return {
       tier: inner.wordStart ? MATCH_TIERS.PREFIX : MATCH_TIERS.INNER,
       secondary: false,
       range: [inner.index, inner.index + q.length],
-      literal: true
+      literal: true,
+      shortAcronym: false
     }
   }
   if (fromPinyin.tier > MATCH_TIERS.NONE) return fromPinyin
   if (allowSubsequence && allowInner) {
     const range = wordSubsequenceRange(text, q)
-    if (range) return { tier: MATCH_TIERS.INNER, secondary: false, range, literal: false }
+    if (range) return { tier: MATCH_TIERS.INNER, secondary: false, range, literal: false, shortAcronym: false }
   }
   return NO_TEXT_MATCH
 }
 
 function betterTextMatch(a, b) {
+  const scoreA = computeTierScore(a.tier, a.literal, a.shortAcronym)
+  const scoreB = computeTierScore(b.tier, b.literal, b.shortAcronym)
+  if (scoreB !== scoreA) return scoreB > scoreA ? b : a
   if (b.tier !== a.tier) return b.tier > a.tier ? b : a
   return a.secondary && !b.secondary ? b : a
 }
@@ -433,6 +492,10 @@ const NO_ITEM_MATCH = Object.freeze({
   matched: false,
   score: 0,
   tier: MATCH_TIERS.NONE,
+  tierScore: MATCH_TIER_SCORES.NONE,
+  qualityScore: 0,
+  literal: false,
+  shortAcronym: false,
   secondary: false,
   field: MATCH_FIELDS.DESCRIPTION,
   range: null
@@ -452,7 +515,7 @@ function itemNames(item) {
 
 /**
  * 条目与查询的匹配结果
- * @returns {{ matched: boolean, score: number, tier: number, secondary: boolean, field: number, range: [number, number] | null }}
+ * @returns {{ matched: boolean, score: number, tier: number, tierScore: number, qualityScore: number, literal: boolean, shortAcronym: boolean, secondary: boolean, field: number, range: [number, number] | null }}
  *   range 是名称（name || title）里的命中区间；名称没命中，或只靠非常用读音碰上而最好的命中在别的字段时为 null
  */
 export function matchItemWithQuery(item, query) {
@@ -463,58 +526,80 @@ export function matchItemWithQuery(item, query) {
   // 只输入一个英文字母或数字时只认开头一致，避免名称中间、描述里碰巧出现的字母刷屏
   const singleAscii = q.length === 1 && ASCII_ALNUM_RE.test(q)
   const allowInner = !singleAscii
-  let best = { tier: MATCH_TIERS.NONE, secondary: false, field: MATCH_FIELDS.DESCRIPTION }
-  const consider = (tier, secondary, field) => {
+  let best = {
+    tier: MATCH_TIERS.NONE,
+    tierScore: MATCH_TIER_SCORES.NONE,
+    secondary: false,
+    field: MATCH_FIELDS.DESCRIPTION,
+    literal: false,
+    shortAcronym: false
+  }
+  const consider = (tier, secondary, field, literal = false, shortAcronym = false) => {
     if (tier === MATCH_TIERS.NONE) return
-    const better = tier !== best.tier
-      ? tier > best.tier
-      : secondary !== best.secondary
-        ? !secondary
-        : field < best.field
-    if (better) best = { tier, secondary, field }
+    const tierScore = computeTierScore(tier, literal, shortAcronym)
+    const better = tierScore !== best.tierScore
+      ? tierScore > best.tierScore
+      : tier !== best.tier
+        ? tier > best.tier
+        : secondary !== best.secondary
+          ? !secondary
+          : field < best.field
+    if (better) best = { tier, tierScore, secondary, field, literal, shortAcronym }
   }
 
   const alias = String(item.alias || '').trim().toLowerCase()
   if (alias) {
-    if (alias === q) consider(MATCH_TIERS.ALIAS, false, MATCH_FIELDS.NAME)
-    else if (alias.startsWith(q)) consider(MATCH_TIERS.PREFIX, false, MATCH_FIELDS.NAME)
+    if (alias === q) consider(MATCH_TIERS.ALIAS, false, MATCH_FIELDS.NAME, true, false)
+    else if (alias.startsWith(q)) consider(MATCH_TIERS.PREFIX, false, MATCH_FIELDS.NAME, true, false)
   }
 
   let nameMatch = null
   itemNames(item).forEach((name, index) => {
     const match = matchText(name, q, allowInner, true)
     if (index === 0 && match.tier !== MATCH_TIERS.NONE) nameMatch = match
-    consider(match.tier, match.secondary, MATCH_FIELDS.NAME)
+    consider(match.tier, match.secondary, MATCH_FIELDS.NAME, Boolean(match.literal), Boolean(match.shortAcronym))
   })
 
-  if (best.tier < MATCH_TIERS.EXACT) {
+  if (best.tierScore < MATCH_TIER_SCORES.EXACT_LITERAL) {
     for (const keyword of extractItemKeywords(item)) {
       const match = matchText(keyword, q, allowInner)
-      consider(match.tier, match.secondary, MATCH_FIELDS.KEYWORD)
-      if (best.tier >= MATCH_TIERS.EXACT) break
+      consider(match.tier, match.secondary, MATCH_FIELDS.KEYWORD, Boolean(match.literal), Boolean(match.shortAcronym))
+      if (best.tierScore >= MATCH_TIER_SCORES.EXACT_LITERAL) break
     }
   }
 
   if (allowInner && best.tier < MATCH_TIERS.INNER) {
     const ids = [item.pluginId || item.id, item.featureCode].map((v) => String(v || '').toLowerCase())
-    if (ids.some((id) => matchIdentifier(id, q))) consider(MATCH_TIERS.INNER, false, MATCH_FIELDS.ID)
+    if (ids.some((id) => matchIdentifier(id, q))) consider(MATCH_TIERS.INNER, false, MATCH_FIELDS.ID, true, false)
   }
 
   // 程序与文件的第二行是所在路径，不是描述，不参与匹配（否则 ys 会命中 /System/Applications 下的所有程序）
   if (q.length >= 2 && best.tier === MATCH_TIERS.NONE && item.type !== 'file') {
     const extra = [item.description || item.subtitle, item.category, item.author]
     if (extra.some((value) => typeof value === 'string' && value.toLowerCase().includes(q))) {
-      consider(MATCH_TIERS.DESCRIPTION, false, MATCH_FIELDS.DESCRIPTION)
+      consider(MATCH_TIERS.DESCRIPTION, false, MATCH_FIELDS.DESCRIPTION, true, false)
     }
   }
 
   if (best.tier === MATCH_TIERS.NONE) return NO_ITEM_MATCH
   // 靠触发词等其它字段命中时，不去高亮名称里靠多音字非常用读音碰巧对上的字
   const range = nameMatch && (!nameMatch.secondary || best.field === MATCH_FIELDS.NAME) ? nameMatch.range : null
+  const primaryNameLength = String(item.name || item.title || '').length
+  const readingBonus = best.secondary ? 0 : 30
+  const fieldBonus = MATCH_FIELD_WEIGHTS[best.field] ?? 0
+  const compactnessBonus = best.field === MATCH_FIELDS.NAME
+    ? Math.max(0, 20 - Math.min(20, Math.max(0, primaryNameLength - q.length)))
+    : 0
+  const qualityScore = readingBonus + fieldBonus + compactnessBonus
+
   return {
     matched: true,
-    score: best.tier * 100 + (best.secondary ? 0 : 50) + (3 - best.field) * 10,
+    score: best.tierScore + qualityScore,
     tier: best.tier,
+    tierScore: best.tierScore,
+    qualityScore,
+    literal: best.literal,
+    shortAcronym: best.shortAcronym,
     secondary: best.secondary,
     field: best.field,
     range
@@ -522,10 +607,13 @@ export function matchItemWithQuery(item, query) {
 }
 
 /**
- * 两个匹配结果的先后：档高的在前；同档时常用读音命中在前，再名称命中在前
+ * 两个匹配结果的先后：细分档位分高的在前；同档时常用读音命中在前，再名称命中在前
  */
 export function compareMatches(a, b) {
-  return (b?.tier ?? 0) - (a?.tier ?? 0) ||
+  const tierScoreA = a?.tierScore ?? ((a?.tier ?? 0) * 100)
+  const tierScoreB = b?.tierScore ?? ((b?.tier ?? 0) * 100)
+  return tierScoreB - tierScoreA ||
+    (b?.tier ?? 0) - (a?.tier ?? 0) ||
     Number(Boolean(a?.secondary)) - Number(Boolean(b?.secondary)) ||
     (a?.field ?? 0) - (b?.field ?? 0)
 }

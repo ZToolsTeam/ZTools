@@ -11,13 +11,6 @@ import { RcBannerLink, RcButton, RcEmpty, RcSegmented } from '@/components/base'
 import { useNavStore } from '@/stores/nav'
 import { usePluginsStore } from '@/stores/plugins'
 import { useCategoriesStore } from '@/stores/categories'
-import {
-  batchCheckPlugins,
-  getDownloadSign,
-  installPluginNative,
-  isPluginVersionIncompatibleError,
-  getPluginVersionIncompatibleMessage
-} from '@/api/apiserver'
 import { auth, onAuthRequired, pluginRatings, track } from '@edition'
 import { useToast } from '@/composables/useToast'
 import { usePluginInstall } from '@/composables/usePluginInstall'
@@ -54,7 +47,7 @@ let loadRequestId = 0
 
 // 是否为"全部"分类视图（需要分组展示）
 const isAllCategory = computed(() => !category.value || category.value === '')
-const searchKeyword = computed(() => String(route.query.q || '').trim())
+const searchKeyword = ref(String(route.query.q || '').trim())
 
 // 页面内分类筛选：与侧栏 selectCategory 行为一致（切换分类时清空搜索词）
 function selectMarketCategory(name) {
@@ -177,19 +170,8 @@ const load = async () => {
 
     // 批量检查更新的公共函数（后台执行，不阻塞列表渲染）
     const doBatchCheck = () => {
-      // 节流：5 分钟内不重复请求
-      if (!pluginsStore.shouldCheckUpdate()) return
-      const locals = pluginsStore.installedPlugins
-      if (locals.length === 0) return
-      batchCheckPlugins({
-        plugins: locals.map((p) => ({
-          id: p.pluginId,
-          version: p.version || '1.0.0'
-        }))
-      })
-        .then(async (updates) => {
-          await pluginsStore.setUpdateInfo(updates)
-        })
+      pluginsStore
+        .checkInstalledUpdates()
         .catch((e) => console.warn('批量检查更新失败:', e))
     }
 
@@ -317,9 +299,16 @@ const load = async () => {
 }
 
 watch(
-  [() => route.params.category, () => route.query.q],
-  ([v], [previousCategory]) => {
-    category.value = v || ''
+  [() => route.name, () => route.params.category, () => route.query.q],
+  ([name, v, q]) => {
+    if (name && name !== ROUTES.LIST.name) return
+    const nextCategory = v || ''
+    const nextKeyword = String(q || '').trim()
+    if (nextCategory === category.value && nextKeyword === searchKeyword.value) return
+    const previousCategory = category.value
+    category.value = nextCategory
+    searchKeyword.value = nextKeyword
+
     page.value = 1
     if (v !== previousCategory) {
       // 埋点：市场分类筛选
@@ -616,29 +605,6 @@ onBeforeUnmount(() => {
         提交插件
       </RcButton>
     </header>
-
-    <!-- 页面内筛选：分类（与侧栏同一导航）+ 来源 -->
-    <div class="market-filters">
-      <RcSegmented
-        variant="chips"
-        aria-label="分类"
-        :model-value="category || '全部'"
-        :options="visibleMarketCategories.map((c) => ({ label: c.name, value: c.name }))"
-        @change="selectMarketCategory"
-      />
-      <div class="market-filters-side">
-        <RcSegmented
-          aria-label="来源"
-          :model-value="selectedSourceType"
-          :options="[
-            { label: '全部', value: 'all', count: sourceCounts.all },
-            { label: '官方', value: 'official', count: sourceCounts.official },
-            { label: '社区', value: 'community', count: sourceCounts.community }
-          ]"
-          @change="switchSourceType"
-        />
-      </div>
-    </div>
     <!-- 加载骨架屏：等分类和插件列表都就绪后再渲染 -->
     <div
       v-if="isInitialLoading"
@@ -803,6 +769,8 @@ onBeforeUnmount(() => {
   justify-content: space-between;
   gap: 16px;
   flex-wrap: wrap;
+  padding-bottom: 10px;
+  border-bottom: 1px solid var(--rc-border);
 }
 
 .market-title {

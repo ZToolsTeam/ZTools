@@ -57,6 +57,25 @@ export function buildSidecar(name, sourceDir, options = {}) {
 
   assertCommandSucceeded(configRes, `Failed to configure ${name} (${cmake})`)
 
+  const exePath = path.join(outputBinDir, `${name}.exe`)
+  const staleExePath = path.join(outputBinDir, `${name}.old.exe`)
+  try {
+    if (fs.existsSync(staleExePath)) fs.unlinkSync(staleExePath)
+  } catch {
+    // Ignore if stale binary is still held by an exiting process
+  }
+  if (fs.existsSync(exePath)) {
+    try {
+      fs.unlinkSync(exePath)
+    } catch {
+      try {
+        fs.renameSync(exePath, staleExePath)
+      } catch {
+        // Proceed and let linker report if still locked
+      }
+    }
+  }
+
   console.log(`[build-sidecars] Building ${name} (Release)...`)
   const buildRes = run(cmake, [
     '--build', buildDir,
@@ -70,8 +89,6 @@ export function buildSidecar(name, sourceDir, options = {}) {
   })
 
   assertCommandSucceeded(buildRes, `Failed to build ${name} (${cmake})`)
-
-  const exePath = path.join(outputBinDir, `${name}.exe`)
   if (!fs.existsSync(exePath)) {
     throw new Error(`Output binary missing: ${exePath}`)
   }

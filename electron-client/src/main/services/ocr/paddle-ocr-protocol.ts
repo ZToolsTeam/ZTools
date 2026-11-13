@@ -1,4 +1,5 @@
 /** 主进程与文字识别子进程之间的消息格式，以及模型文件名（两边共用） */
+import type { OcrWorkerImageRequest } from './ocr-worker-engine.js'
 
 /** 模型目录里的文件：PP-OCRv5 移动版检测、识别模型与字符字典 */
 export const PADDLE_OCR_MODEL_FILES = Object.freeze({
@@ -7,14 +8,7 @@ export const PADDLE_OCR_MODEL_FILES = Object.freeze({
   dictionary: 'ppocrv5_dict.txt'
 })
 
-export interface PaddleOcrWorkerRequest {
-  type: 'recognize'
-  id: number
-  width: number
-  height: number
-  /** BGRA 像素 */
-  data: Uint8Array
-}
+export type PaddleOcrWorkerRequest = OcrWorkerImageRequest
 
 export type PaddleOcrWorkerResponse =
   | { id: number; ok: true; lines: string[] }

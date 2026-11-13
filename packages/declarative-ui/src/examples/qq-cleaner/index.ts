@@ -33,8 +33,8 @@ const INIT_QQ_FILES: QQScannedFileEntry[] = [
   {
     id: 'qq-init-203',
     name: 'QQ.tlg.1',
-    path: 'C:\\Users\\Admin\\AppData\\Roaming\\Tencent\\Logs\\QQ.tlg.1',
-    parentDir: 'C:\\Users\\Admin\\AppData\\Roaming\\Tencent\\Logs',
+    path: '%USERPROFILE%\\AppData\\Roaming\\Tencent\\Logs\\QQ.tlg.1',
+    parentDir: '%USERPROFILE%\\AppData\\Roaming\\Tencent\\Logs',
     groupId: 203,
     groupName: '运行跟踪日志 (.tlg/.log)',
     accountId: '公共组件 (Shared)',
@@ -46,8 +46,8 @@ const INIT_QQ_FILES: QQScannedFileEntry[] = [
   {
     id: 'qq-init-201',
     name: 'GroupPic_Cache_8942.png',
-    path: 'C:\\Users\\Admin\\Documents\\Tencent Files\\10086001\\Image\\Group\\GroupPic_Cache_8942.png',
-    parentDir: 'C:\\Users\\Admin\\Documents\\Tencent Files\\10086001\\Image\\Group',
+    path: '%USERPROFILE%\\Documents\\Tencent Files\\10086001\\Image\\Group\\GroupPic_Cache_8942.png',
+    parentDir: '%USERPROFILE%\\Documents\\Tencent Files\\10086001\\Image\\Group',
     groupId: 201,
     groupName: '聊天图片 (Image/Pic)',
     accountId: '10086001',
@@ -59,8 +59,8 @@ const INIT_QQ_FILES: QQScannedFileEntry[] = [
   {
     id: 'qq-init-208',
     name: 'MiscHead.db',
-    path: 'C:\\Users\\Admin\\Documents\\Tencent Files\\10086001\\MiscHead.db',
-    parentDir: 'C:\\Users\\Admin\\Documents\\Tencent Files\\10086001',
+    path: '%USERPROFILE%\\Documents\\Tencent Files\\10086001\\MiscHead.db',
+    parentDir: '%USERPROFILE%\\Documents\\Tencent Files\\10086001',
     groupId: 208,
     groupName: '头像缓存 (Head/MiscHead)',
     accountId: '10086001',
@@ -72,8 +72,8 @@ const INIT_QQ_FILES: QQScannedFileEntry[] = [
   {
     id: 'qq-init-999',
     name: 'Msg3.0.db',
-    path: 'C:\\Users\\Admin\\Documents\\Tencent Files\\10086001\\Msg3.0.db',
-    parentDir: 'C:\\Users\\Admin\\Documents\\Tencent Files\\10086001',
+    path: '%USERPROFILE%\\Documents\\Tencent Files\\10086001\\Msg3.0.db',
+    parentDir: '%USERPROFILE%\\Documents\\Tencent Files\\10086001',
     groupId: 999,
     groupName: '核心聊天数据库 (受保护)',
     accountId: '10086001',
@@ -99,7 +99,7 @@ function buildInitialQQCategories(): QQCleanCategoryItem[] {
       category: rule.category,
       riskLevel: rule.riskLevel,
       safetyLevel: rule.riskLevel,
-      targetDir: catFiles[0]?.parentDir || 'C:\\Users\\Admin\\Documents\\Tencent Files',
+      targetDir: catFiles[0]?.parentDir || '%USERPROFILE%\\Documents\\Tencent Files',
       existsOnDisk: catFiles.length > 0,
       fileCount: catFiles.length,
       totalSizeBytes,
@@ -137,7 +137,7 @@ export default function QQCleanerCommand() {
             accountId: '10086001',
             label: 'QQ 号 (UIN): 10086001',
             clientType: 'ClassicQQ / TIM',
-            rootDir: 'C:\\Users\\Admin\\Documents\\Tencent Files\\10086001',
+            rootDir: '%USERPROFILE%\\Documents\\Tencent Files\\10086001',
             fileCount: 3,
             totalBytes: 352 * 1024 * 1024
           }
@@ -415,7 +415,7 @@ export default function QQCleanerCommand() {
           })
         ]
       })
-    } as any)
+    } as Parameters<typeof List.Item>[0])
   })
 
   const activeCategory = categories.find(c => c.groupId === selectedGroupId)

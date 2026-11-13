@@ -5,6 +5,7 @@
       <div
         v-for="(field, fIdx) in formFields"
         :key="field.props?.id || fIdx"
+        :data-decl-field-id="field.props?.id || field.id || undefined"
         class="space-y-1.5 text-[13px]"
       >
         <!-- 标签：插件没写 title 时不显示标签行，不拿字段 id 充当标签 -->
@@ -104,7 +105,11 @@
           />
         </div>
 
-        <!-- 5. Form.Description 说明文字 -->
+        <!-- 5. Form.Description：普通说明或经宿主统一渲染的 Markdown 预览 -->
+        <MarkdownContent
+          v-else-if="field.type === 'Form.Description' && typeof field.props?.markdown === 'string'"
+          :markdown="field.props.markdown"
+        />
         <div
           v-else-if="field.type === 'Form.Description'"
           class="px-3 py-2.5 rounded-[var(--rc-radius-md)] bg-[var(--rc-surface-subtle)] border border-[var(--rc-border)] text-xs text-[var(--rc-text-secondary)] leading-relaxed whitespace-pre-wrap break-words select-text"
@@ -144,6 +149,7 @@ import { RcSelect } from '@/components/base'
 import { ref, computed, watch, onMounted, nextTick } from "vue";
 import DeclInput from "./DeclInput.vue";
 import DeclCheckbox from "./DeclCheckbox.vue";
+import MarkdownContent from "./MarkdownContent.vue";
 
 const props = defineProps({
   descriptor: {

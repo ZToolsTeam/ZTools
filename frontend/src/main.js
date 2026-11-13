@@ -63,31 +63,13 @@ window.__navigateTo = async (path, options) => {
     const res = await openSettings({ ...options, router })
     if (res?.fallback && res?.type === 'route') {
       nav.setPage('advanced-settings')
-      if (options?.scrollToSuperPanelSettings) {
-        setTimeout(() => {
-          window.dispatchEvent(new CustomEvent('ztools-scroll-to-super-panel-settings'))
-        }, 80)
-      }
     }
     return
   }
 
   if (pageName) nav.setPage(pageName)
-  if (options?.openShortcutSettings) {
-    window.__openShortcutSettings = true
-  }
-  if (options?.scrollToSuperPanelSettings) {
-    window.__scrollToSuperPanelSettings = true
-  }
 
   router.push({ name: pageName || 'my' })
-    .then(() => {
-      if (options?.scrollToSuperPanelSettings) {
-        setTimeout(() => {
-          window.dispatchEvent(new CustomEvent('ztools-scroll-to-super-panel-settings'))
-        }, 80)
-      }
-    })
     .catch((err) => {
       console.warn('[main] 路由导航失败:', err)
     })
@@ -126,7 +108,7 @@ document.addEventListener(
   'dragover',
   (e) => {
     e.preventDefault()
-    e.stopPropagation()
+    // 只阻止浏览器默认导航打开文件，保留事件冒泡以便声明式视图展示拖拽状态
   },
   true
 )
@@ -135,7 +117,7 @@ document.addEventListener(
   'drop',
   (e) => {
     e.preventDefault()
-    e.stopPropagation()
+    // 只阻止浏览器默认导航打开文件，保留事件冒泡以便声明式视图展示拖拽状态
   },
   true
 )

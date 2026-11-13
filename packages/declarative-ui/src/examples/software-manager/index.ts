@@ -51,7 +51,7 @@ export default function SoftwareManagerCommand() {
           {
             id: 'init-res-1',
             folderName: 'OldAppCache_Orphaned',
-            fullPath: 'C:\\Users\\Admin\\AppData\\Local\\OldAppCache_Orphaned',
+            fullPath: '%USERPROFILE%\\AppData\\Local\\OldAppCache_Orphaned',
             scope: 'AppData\\Local',
             sizeBytes: 185 * 1024 * 1024,
             fileCount: 340,
@@ -364,7 +364,7 @@ export default function SoftwareManagerCommand() {
                 })
               ]
             })
-          } as any)
+          } as Parameters<typeof List.Item>[0])
         })
 
   const selectableSoftware = filtered.filter(

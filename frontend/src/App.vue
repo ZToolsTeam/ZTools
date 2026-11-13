@@ -15,6 +15,8 @@ import { onAppStart, setTrackingWebVersion } from '@edition'
 import { DEPRECATED_PLUGIN_FEATURE_HOTKEY_ITEMS } from '@/utils/pluginFeatureHotkeys'
 import { openSettings } from '@/utils/internalPlugins'
 import { toggleHostDevTools } from '@/utils/hostDevTools'
+import { isHotkeyRecorderInput } from '@/utils/keymap'
+import { dispatchSyntheticRecorderHotkey } from '@/utils/hotkeyRecorder'
 import {
   windowModeState,
   WINDOW_MODES,
@@ -119,6 +121,8 @@ const cleanupDeprecatedFeatureHotkeys = async () => {
 
 /** 全局快捷键监听：开发者工具 (F12, Ctrl+Shift+I，仅开发版) 与设置 (Ctrl+,) */
 const handleGlobalKeydown = (event) => {
+  if (isHotkeyRecorderInput(event?.target)) return
+
   const isDevToolsKey =
     event.key === 'F12' ||
     ((event.ctrlKey || event.metaKey) &&
@@ -150,22 +154,18 @@ const handleGlobalKeydown = (event) => {
     return
   }
 
-  // Alt+Space 快速进入极客条模式（并阻止默认事件，阻止 Windows 原生系统菜单弹出）
+  // 阻止非录制状态下 Alt+Space 触发浏览器/系统默认窗口菜单行为
   const isAltSpace = event.altKey && (event.code === 'Space' || event.key === ' ' || event.keyCode === 32)
   if (isAltSpace) {
     event.preventDefault()
     event.stopPropagation()
-    switchWindowMode(
-      windowModeState.currentMode === WINDOW_MODES.LAUNCHER
-        ? WINDOW_MODES.DASHBOARD
-        : WINDOW_MODES.LAUNCHER
-    )
     return
   }
 }
 
 onMounted(async () => {
   // console.log('App component mounted')
+  window.__ztoolsDispatchRecorderHotkey = dispatchSyntheticRecorderHotkey
   initWindowMode()
   window.addEventListener('keydown', handleGlobalKeydown)
   events.init()

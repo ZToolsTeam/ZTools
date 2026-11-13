@@ -8,6 +8,7 @@ import { createRuntimeCapabilityRequestCancellationBridge } from './runtime-capa
 const IPC_CALL_CHANNEL = 'ztools:call'
 const IPC_EVENT_CHANNEL = 'ztools:event'
 const FILE_DROP_CHANNEL = 'ztools:native-file-drop'
+const FILE_PASTE_CHANNEL = 'ztools:native-file-paste'
 const IPC_LEGACY_FILE_CHANNEL = 'ztools:legacy-file-sync'
 let sequence = 0
 let messageCallback: ((msgType: string, msgData: unknown) => void) | null = null
@@ -339,6 +340,7 @@ type PreloadMethod =
   | 'browser_bookmarks_scan'
   | 'downloads_manager'
   | 'image_ocr'
+  | 'formula_ocr'
   | 'keyboard_lock'
   | 'docker_manager'
   | 'environment_manager'
@@ -411,12 +413,26 @@ ipcRenderer.on(IPC_EVENT_CHANNEL, (_event, value: unknown) => {
   messageCallback(value.msgType, value.msgData)
 })
 
+let fileInputConfig = { enabled: false, allowImage: false, allowDirectories: false }
+
+const extractTargetFieldId = (target: EventTarget | null): string | undefined => {
+  const element = target instanceof Element
+    ? target
+    : (target && typeof (target as Node).parentElement === 'object' ? (target as Node).parentElement : null)
+  const raw = element?.closest?.('[data-decl-field-id]')?.getAttribute('data-decl-field-id')
+  return typeof raw === 'string' && raw.length > 0 && raw.length <= 128 ? raw : undefined
+}
+
 // Keep disk File objects inside the isolated world; no path/grant method is exposed.
 const onNativeFileDrop = (event: DragEvent): void => {
   if (!event.isTrusted || !event.dataTransfer || event.dataTransfer.files.length === 0) return
   event.preventDefault()
+  const targetFieldId = extractTargetFieldId(event.target)
   if (event.dataTransfer.files.length > 100) {
-    void ipcRenderer.invoke(FILE_DROP_CHANNEL, { overflowCount: event.dataTransfer.files.length }).catch(() => undefined)
+    void ipcRenderer.invoke(FILE_DROP_CHANNEL, {
+      overflowCount: event.dataTransfer.files.length,
+      ...(targetFieldId ? { targetFieldId } : {})
+    }).catch(() => undefined)
     return
   }
   const files = Array.from(event.dataTransfer.files)
@@ -429,11 +445,42 @@ const onNativeFileDrop = (event: DragEvent): void => {
       paths.push(diskPath)
     } catch { return }
   }
-  void ipcRenderer.invoke(FILE_DROP_CHANNEL, paths).catch(() => undefined)
+  const payload = fileInputConfig.allowDirectories || targetFieldId
+    ? {
+        paths,
+        allowDirectories: fileInputConfig.allowDirectories,
+        ...(targetFieldId ? { targetFieldId } : {})
+      }
+    : paths
+  void ipcRenderer.invoke(FILE_DROP_CHANNEL, payload).catch(() => undefined)
 }
+
+const onNativeFilePaste = (event: ClipboardEvent): void => {
+  if (!event.isTrusted || !fileInputConfig.enabled) return
+  const clipboardData = event.clipboardData
+  if (!clipboardData) return
+  const types = Array.from(clipboardData.types || [])
+  const hasFiles = (clipboardData.files && clipboardData.files.length > 0) || types.includes('Files')
+  const plainText = clipboardData.getData('text/plain') || ''
+  // 四象限同步拦截矩阵：
+  // 1. 含 Files（含 macOS Finder 复制文件同时带文件名文本）
+  // 2. 纯文本为空（Windows Explorer CF_HDROP 复制非图片文件/目录，或纯截图位图）
+  // 3. 纯文本非空且无 Files：同步放行原生文本粘贴（0 次 IPC 调用，不抢夺富文本或输入框粘贴）
+  if (!hasFiles && plainText !== '') return
+  event.preventDefault()
+  const targetFieldId = extractTargetFieldId(event.target)
+  void ipcRenderer.invoke(FILE_PASTE_CHANNEL, {
+    allowImage: fileInputConfig.allowImage,
+    allowDirectories: fileInputConfig.allowDirectories,
+    ...(targetFieldId ? { targetFieldId } : {})
+  }).catch(() => undefined)
+}
+
 document.addEventListener('drop', onNativeFileDrop, true)
+document.addEventListener('paste', onNativeFilePaste, true)
 window.addEventListener('unload', () => {
   document.removeEventListener('drop', onNativeFileDrop, true)
+  document.removeEventListener('paste', onNativeFilePaste, true)
   messageCallback = null
 }, { once: true })
 
@@ -461,6 +508,18 @@ const cancellations = Object.freeze(Object.assign({},
 
 const bridge = Object.freeze({
   contractVersion: referenceTransport ? 2 : SDK_LEGACY_CONTRACT_VERSION,
+  setFileInputInterception: (config: unknown) => {
+    if (!config || typeof config !== 'object' || Array.isArray(config)) {
+      fileInputConfig = { enabled: false, allowImage: false, allowDirectories: false }
+      return
+    }
+    const record = config as Record<string, unknown>
+    fileInputConfig = {
+      enabled: record.enabled === true,
+      allowImage: record.allowImage === true,
+      allowDirectories: record.allowDirectories === true
+    }
+  },
   app: Object.freeze({
     ready: (params: unknown = { status: 'initialized' }) => invoke('app_ready', params),
     getDiagnostics: () => invoke('diagnostics_get', {})
@@ -792,6 +851,7 @@ const bridge = Object.freeze({
       browser_bookmarks_scan: (request: unknown) => invokeMethod('browser_bookmarks_scan', request),
       downloads_manager: (request: unknown) => invokeMethod('downloads_manager', request),
       image_ocr: (request: unknown) => invokeMethod('image_ocr', request),
+      formula_ocr: (request: unknown) => invokeMethod('formula_ocr', request),
       keyboard_lock: (request: unknown) => invokeMethod('keyboard_lock', request),
       docker_manager: (request: unknown) => invokeMethod('docker_manager', request),
       environment_manager: (request: unknown) => invokeMethod('environment_manager', request),
@@ -850,7 +910,13 @@ contextBridge.exposeInMainWorld('__ztoolsLauncher', Object.freeze({
     return res?.data ?? res
   },
   openPath: (targetPath: string) => invoke('shell_open_path', { fullPath: targetPath }),
-  showItemInFolder: (targetPath: string) => invoke('shell_show_item_in_folder', { fullPath: targetPath })
+  showItemInFolder: (targetPath: string) => invoke('shell_show_item_in_folder', { fullPath: targetPath }),
+  getPanelData: () => ipcRenderer.invoke('ztools:launcher_call', 'get_panel_data'),
+  togglePin: (id: string, itemType: string) =>
+    ipcRenderer.invoke('ztools:launcher_call', 'toggle_pin', { id, itemType }),
+  addLocalApp: () => ipcRenderer.invoke('ztools:launcher_call', 'add_local_app'),
+  openPanelItem: (id: string, itemType: string, query?: string) =>
+    ipcRenderer.invoke('ztools:launcher_call', 'open_panel_item', { id, itemType, query })
 }))
 
 const isLauncherWindow = process.argv.includes('--ztools-window-mode=launcher')

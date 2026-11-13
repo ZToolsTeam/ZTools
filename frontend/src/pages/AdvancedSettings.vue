@@ -1,6 +1,5 @@
 <script setup>
-import { RcSelect } from '@/components/base'
-import { ChevronDownIcon, ChevronRightIcon, ChevronUpIcon, XIcon } from '@lucide/vue'
+import { ChevronRightIcon, XIcon } from '@lucide/vue'
 import {
   ref,
   reactive,
@@ -24,7 +23,6 @@ import { vSwitchKeyboard } from '@/directives/switchKeyboard'
 import ScreenPermissionPanel from '@/components/ScreenPermissionPanel.vue'
 import ShortcutKeys from '@/components/base/ShortcutKeys.vue'
 import RcSegmented from '@/components/base/RcSegmented.vue'
-import ShortcutSettingsModal from '@/components/ShortcutSettingsModal.vue'
 import PluginHotkeyModal from '@/components/PluginHotkeyModal.vue'
 import PluginFeatureHotkeyModal from '@/components/PluginFeatureHotkeyModal.vue'
 import { useNavStore } from '@/stores/nav'
@@ -38,7 +36,8 @@ import {
   getHotkeyHostCapabilities,
   getHotkeyWaitText,
   parseSupportedHotkeyEvent,
-  resetHotkeyRecorderState
+  resetHotkeyRecorderState,
+  notifyHotkeyRecorderActive
 } from '@/utils/hotkeyRecorder'
 import { buildLaunchHotkeyMap } from '@/utils/launchHotkeyTargets'
 
@@ -91,95 +90,14 @@ const settings = reactive({
   wakePreference: windowModeState.wakePreference || 'dashboard',
   minimizeToTray: true,
   showTrayIcon: true,
-  closeConfirm: true,
-  superPanel: {
-    enabled: true,
-    keyboardHotkey: {
-      enabled: true,
-      // Alt+Space 留给全局唤醒（悬浮条），两者默认值不能相同
-      modifiers: ['Alt', 'Shift'],
-      key: 'Space'
-    },
-    mouseHotkey: {
-      enabled: true,
-      button: 'middle_long',
-      longPressMs: 300
-    },
-    panelPosition: 'center',
-    panelSize: 'small',
-    defaultTab: 'history',
-    maxRecentCount: 10
-  }
+  closeConfirm: true
 })
 const hotkeyRecording = ref(false)
 const hotkeyRecordingText = ref('')
 const hotkeyInput = ref(null)
-const superPanelKeyRecording = ref(false)
-const superPanelKeyRecordingText = ref('')
-const superPanelKeyInput = ref(null)
-const superPanelSettingRef = ref(null)
-
-// 快捷方式设置弹窗
-const shortcutModalOpen = ref(false)
-const shortcutCount = ref(0)
-
-// 弹窗关闭后刷新快捷方式数量（仅在值从 true 变为 false 时触发）
-watch(shortcutModalOpen, async (newVal, oldVal) => {
-  if (!newVal && oldVal) {
-    try {
-      if (window.ztools?.config) {
-        const config = await window.ztools.config.get('super_panel')
-        shortcutCount.value = Array.isArray(config?.shortcuts) ? config.shortcuts.length : 0
-      }
-    } catch (e) {
-      // 只影响快捷方式数量的显示，保留原数字
-      console.warn('刷新超级面板快捷方式数量失败:', e)
-    }
-  }
-})
-
-const mouseButtonOptions = [
-  { value: 'middle_press', label: '按下鼠标中键' },
-  { value: 'middle_long', label: '长按鼠标中键' },
-  { value: 'right_press', label: '按下鼠标右键' },
-  { value: 'right_long', label: '长按鼠标右键' },
-  { value: 'forward_press', label: '按下鼠标向前侧键' },
-  { value: 'forward_long', label: '长按鼠标向前侧键' },
-  { value: 'backward_press', label: '按下鼠标向后侧键' },
-  { value: 'backward_long', label: '长按鼠标向后侧键' }
-]
-
-const longPressMarks = {
-  200: '200ms',
-  300: '300ms',
-  400: '400ms',
-  500: '500ms'
-}
-
-const panelPositionOptions = [
-  { value: 'center', label: '屏幕中心' },
-  { value: 'cursor', label: '鼠标位置' }
-]
-
-const panelSizeOptions = [
-  { value: 'small', label: '小', hint: '400×300' },
-  { value: 'medium', label: '中', hint: '400×600' },
-  { value: 'large', label: '大', hint: '800×600' }
-]
-
-const defaultTabOptions = [
-  { value: 'history', label: '历史' },
-  { value: 'pinned', label: '固定' },
-  { value: 'local', label: '本地' },
-  { value: 'system_tools', label: '系统工具' },
-  { value: 'all', label: '全部' }
-]
-
-const isLongPress = computed(() => {
-  return settings.superPanel.mouseHotkey.button.endsWith('_long')
-})
 
 watch(hotkeyRecording, (val) => {
+  notifyHotkeyRecorderActive(Boolean(val))
   if (val) {
     nextTick(() => {
       hotkeyInput.value?.focus()
@@ -229,18 +147,6 @@ const loadSettings = async () => {
     // getShowTrayIcon 读取失败时返回默认值 true，不会抛错
     settings.showTrayIcon = await getShowTrayIcon()
     settings.wakePreference = windowModeState.wakePreference || 'dashboard'
-    try {
-      if (window.ztools?.config) {
-        const config = await window.ztools.config.get('super_panel')
-        if (config) {
-          Object.assign(settings.superPanel, config)
-          // 加载快捷方式数量
-          shortcutCount.value = Array.isArray(config.shortcuts) ? config.shortcuts.length : 0
-        }
-      }
-    } catch (e) {
-      console.error('Failed to load super panel settings:', e)
-    }
   } catch (e) {
     console.error('Failed to load settings:', e)
     error('加载设置失败')
@@ -290,7 +196,7 @@ const saveAutostart = async enabled => {
   }
 }
 
-// 全局唤醒快捷键单独保存：超级面板等其它设置保存时不能连带改写它
+// 全局唤醒快捷键单独保存：其它设置保存时不能连带改写它
 const saveWakeHotkey = async () => {
   if (!(await setHotkey(settings.hotkey))) {
     error('全局唤醒快捷键保存失败')
@@ -322,29 +228,11 @@ const saveWakeHotkey = async () => {
   track('settings_change', '', { type: 'wake_hotkey' })
 }
 
-const saveSuperPanelSettings = async () => {
-  try {
-    if (!window.ztools?.config) throw new Error('配置服务不可用')
-    await window.ztools.config.set('super_panel', settings.superPanel)
-    if (window.ztools?.sys?.reloadHotkeys) {
-      await window.ztools.sys.reloadHotkeys()
-    }
-  } catch (e) {
-    console.error('Failed to save super panel settings:', e)
-    error('超级面板设置保存失败：' + (e?.message || '未知错误'))
-    return
-  }
-  success('设置已保存')
-  track('settings_change', '', { type: 'super_panel' })
-}
-
 // 托盘图标的叫法随系统：macOS 是顶部菜单栏，Windows 是任务栏右下角
 const trayIconLabel = isMacOS() ? '菜单栏图标' : '托盘图标'
 const trayIconDesc = isMacOS() ? '在屏幕顶部菜单栏显示 ZTools 图标' : '在任务栏右下角显示 ZTools 图标'
 const minimizeToTrayLabel = isMacOS() ? '关闭后在后台运行' : '最小化到托盘'
 const closeConfirmDesc = isMacOS() ? '关闭主窗口时询问退出还是在后台继续运行' : '关闭主窗口时询问退出或最小化到托盘'
-// 鼠标触发超级面板依赖 Windows 原生输入进程，macOS 没有对应实现，设置项不显示
-const supportsMouseHotkey = !isMacOS()
 
 const saveShowTrayIcon = async (checked) => {
   const ok = await setShowTrayIcon(!!checked)
@@ -373,6 +261,7 @@ const saveTraySettings = async () => {
 
 const handleHotkeyInput = (event) => {
   event.preventDefault()
+  event.stopPropagation()
   if (!hotkeyRecording.value) return
 
   if (event.key === 'Escape') {
@@ -405,66 +294,6 @@ const toggleHotkeyRecording = () => {
   resetHotkeyRecorderState()
   hotkeyRecording.value = !hotkeyRecording.value
   hotkeyRecordingText.value = ''
-}
-
-const formatSuperPanelHotkey = (hotkey) => {
-  const modifiers = hotkey.modifiers?.map((m) => m.charAt(0).toUpperCase() + m.slice(1)) || []
-  const key = hotkey.key.charAt(0).toUpperCase() + hotkey.key.slice(1)
-  return formatHotkeyForPlatform(
-    [...modifiers, key].join('+'),
-    hotkeyPlatform.value,
-    false
-  ).replaceAll('+', ' + ')
-}
-
-const handleSuperPanelKeyInput = (event) => {
-  event.preventDefault()
-  if (!superPanelKeyRecording.value) return
-
-  if (event.key === 'Escape') {
-    resetHotkeyRecorderState()
-    superPanelKeyRecording.value = false
-    superPanelKeyRecordingText.value = ''
-    return
-  }
-
-  const result = parseSupportedHotkeyEvent(event, {
-    platform: hotkeyPlatform.value,
-    allowDoubleTap: false
-  })
-  if (result.status !== 'valid') {
-    superPanelKeyRecordingText.value = result.text
-    return
-  }
-
-  const keys = result.hotkey.split('+')
-  settings.superPanel.keyboardHotkey.modifiers = keys.slice(0, -1)
-  settings.superPanel.keyboardHotkey.key = keys[keys.length - 1]
-  superPanelKeyRecording.value = false
-  superPanelKeyRecordingText.value = ''
-  saveSuperPanelSettings()
-}
-
-const clearSuperPanelHotkey = () => {
-  resetHotkeyRecorderState()
-  settings.superPanel.keyboardHotkey.modifiers = []
-  settings.superPanel.keyboardHotkey.key = ''
-  saveSuperPanelSettings()
-}
-
-const startSuperPanelRecording = () => {
-  resetHotkeyRecorderState()
-  superPanelKeyRecording.value = true
-  superPanelKeyRecordingText.value = ''
-  nextTick(() => {
-    superPanelKeyInput.value?.focus()
-  })
-}
-
-const cancelSuperPanelRecording = () => {
-  resetHotkeyRecorderState()
-  superPanelKeyRecording.value = false
-  superPanelKeyRecordingText.value = ''
 }
 
 /** 从 Delphi 端加载插件和本地软件的启动快捷键数据并缓存 */
@@ -526,20 +355,11 @@ function onPluginFeatureHotkeyCountUpdate(count) {
   pluginFeatureHotkeyCount.value = count
 }
 
-function scrollToSuperPanelSettings() {
-  nextTick(() => {
-    superPanelSettingRef.value?.scrollIntoView({
-      behavior: 'smooth',
-      block: 'center'
-    })
-  })
-}
-
 onMounted(async () => {
   const capabilities = await getHotkeyHostCapabilities()
   hotkeyPlatform.value = capabilities.platform
   supportsDoubleModifierHotkeys.value = capabilities.supportsDoubleModifierHotkeys
-  // 确保 Sidebar 选中状态正确（从超级面板等外部跳转时）
+  // 确保 Sidebar 选中状态正确（从外部跳转时）
   useNavStore().setPage('advanced-settings')
   await loadSettings()
 
@@ -547,15 +367,6 @@ onMounted(async () => {
   loadPluginHotkeyCount()
   loadPluginFeatureHotkeyCount()
 
-  // 检测全局标志，自动打开快捷方式设置弹窗（从超级面板虚拟项跳转过来）
-  if (window.__openShortcutSettings) {
-    window.__openShortcutSettings = false
-    shortcutModalOpen.value = true
-  }
-  if (window.__scrollToSuperPanelSettings) {
-    window.__scrollToSuperPanelSettings = false
-    scrollToSuperPanelSettings()
-  }
   // 检测路由 query 参数，自动打开插件快捷键弹窗（供详情页跳转使用）
   if (route.query.openPluginHotkey === 'true') {
     nextTick(() => {
@@ -577,10 +388,6 @@ onMounted(async () => {
   }
   // 监听关闭确认弹窗修改配置后的通知
   window.addEventListener('ztools-settings-changed', onSettingsChanged)
-  window.addEventListener(
-    'ztools-scroll-to-super-panel-settings',
-    scrollToSuperPanelSettings
-  )
 })
 
 const onSettingsChanged = () => {
@@ -588,12 +395,9 @@ const onSettingsChanged = () => {
 }
 
 onBeforeUnmount(() => {
+  if (hotkeyRecording.value) notifyHotkeyRecorderActive(false)
   resetHotkeyRecorderState()
   window.removeEventListener('ztools-settings-changed', onSettingsChanged)
-  window.removeEventListener(
-    'ztools-scroll-to-super-panel-settings',
-    scrollToSuperPanelSettings
-  )
 })
 </script>
 
@@ -728,6 +532,9 @@ onBeforeUnmount(() => {
                     ref="hotkeyInput"
                     class="hotkey-hidden-input"
                     readonly
+                    inputmode="none"
+                    autocomplete="off"
+                    spellcheck="false"
                     @keydown="handleHotkeyInput"
                     @blur="hotkeyRecording = false; hotkeyRecordingText = ''"
                   />
@@ -803,222 +610,6 @@ onBeforeUnmount(() => {
                 <ChevronRightIcon  style="margin-left: 4px; font-size: 10px" />
               </span>
             </div>
-
-            <!-- 超级面板 -->
-            <div ref="superPanelSettingRef" class="setting-item">
-              <div class="setting-info">
-                <div class="setting-text">
-                  <span class="setting-label">超级面板</span>
-                  <span class="setting-desc">快速启动插件的便捷面板</span>
-                </div>
-              </div>
-              <a-switch
-                v-switch-keyboard
-                size="small"
-                v-model:checked="settings.superPanel.enabled"
-                @change="saveSuperPanelSettings"
-              />
-            </div>
-
-            <!-- 超级面板子设置 -->
-            <div
-              v-if="settings.superPanel.enabled"
-              class="sub-settings animate-in"
-            >
-              <!-- 键盘热键 -->
-              <div class="sub-setting-group">
-                <div class="sub-setting-header">
-                  <div class="sub-setting-info">
-                    <span>键盘热键</span>
-                  </div>
-                  <a-switch
-                    v-switch-keyboard
-                    size="small"
-                    v-model:checked="settings.superPanel.keyboardHotkey.enabled"
-                    @change="saveSuperPanelSettings"
-                  />
-                </div>
-
-                <div
-                  v-if="settings.superPanel.keyboardHotkey.enabled"
-                  class="sub-setting-content"
-                >
-                  <div class="hotkey-row">
-                    <span class="hotkey-label">快捷键</span>
-                    <div class="hotkey-input-group compact">
-                      <div
-                        class="hotkey-recorder small"
-                        :class="{ recording: superPanelKeyRecording }"
-                        @click="startSuperPanelRecording"
-                      >
-                        <input
-                          ref="superPanelKeyInput"
-                          class="hotkey-hidden-input"
-                          readonly
-                          @keydown="handleSuperPanelKeyInput"
-                          @blur="cancelSuperPanelRecording"
-                        />
-                        <span
-                          v-if="superPanelKeyRecording"
-                          class="recording-text small"
-                        >
-                          <span class="recording-dot" aria-hidden="true"></span>
-                          {{ superPanelKeyRecordingText || getHotkeyWaitText(hotkeyPlatform, false) }}
-                        </span>
-                        <div v-else class="hotkey-keys">
-                          <template
-                            v-if="
-                              settings.superPanel.keyboardHotkey.key
-                            "
-                          >
-                            <ShortcutKeys :combo="formatSuperPanelHotkey(settings.superPanel.keyboardHotkey)" />
-                          </template>
-                          <span v-else class="no-hotkey">未设置</span>
-                        </div>
-                      </div>
-                      <button
-                        v-if="settings.superPanel.keyboardHotkey.key"
-                        class="clear-btn small"
-                        @click="clearSuperPanelHotkey"
-                        title="清除"
-                      >
-                        <XIcon  />
-                      </button>
-                    </div>
-                  </div>
-                </div>
-              </div>
-
-              <!-- 鼠标热键（仅 Windows） -->
-              <div v-if="supportsMouseHotkey" class="sub-setting-group">
-                <div class="sub-setting-header">
-                  <div class="sub-setting-info">
-                    <span>鼠标热键</span>
-                  </div>
-                  <a-switch
-                    v-switch-keyboard
-                    size="small"
-                    v-model:checked="settings.superPanel.mouseHotkey.enabled"
-                    @change="saveSuperPanelSettings"
-                  />
-                </div>
-
-                <div
-                  v-if="settings.superPanel.mouseHotkey.enabled"
-                  class="sub-setting-content"
-                >
-                  <div class="mouse-setting-row">
-                    <span class="mouse-label">触发方式</span>
-                    <RcSelect
-                      v-model:value="settings.superPanel.mouseHotkey.button"
-                      style="width: 180px"
-                      @change="saveSuperPanelSettings"
-                    >
-                      <a-select-option
-                        v-for="option in mouseButtonOptions"
-                        :key="option.value"
-                        :value="option.value"
-                      >
-                        {{ option.label }}
-                      </a-select-option>
-                    </RcSelect>
-                  </div>
-
-                  <div v-if="isLongPress" class="slider-setting">
-                    <div class="slider-header">
-                      <span class="slider-label">长按响应时间</span>
-                      <span class="slider-value"
-                        >{{
-                          settings.superPanel.mouseHotkey.longPressMs
-                        }}ms</span
-                      >
-                    </div>
-                    <a-slider
-                      v-model:value="
-                        settings.superPanel.mouseHotkey.longPressMs
-                      "
-                      :min="200"
-                      :max="500"
-                      :step="50"
-                      :marks="longPressMarks"
-                      @change="saveSuperPanelSettings"
-                    />
-                  </div>
-                </div>
-              </div>
-
-              <!-- 其他设置 -->
-              <div class="sub-setting-group">
-                <div class="sub-setting-header">
-                  <div class="sub-setting-info">
-                    <span>其他设置</span>
-                  </div>
-                </div>
-
-                <div class="sub-setting-content">
-                  <div class="mouse-setting-row">
-                    <span class="mouse-label">面板位置</span>
-                    <RcSegmented
-                      v-model="settings.superPanel.panelPosition"
-                      variant="marker"
-                      aria-label="面板位置"
-                      :options="panelPositionOptions"
-                      @change="saveSuperPanelSettings"
-                    />
-                  </div>
-
-                  <div class="mouse-setting-row">
-                    <span class="mouse-label">面板大小</span>
-                    <RcSegmented
-                      v-model="settings.superPanel.panelSize"
-                      variant="marker"
-                      aria-label="面板大小"
-                      :options="panelSizeOptions"
-                      @change="saveSuperPanelSettings"
-                    />
-                  </div>
-
-                  <div class="mouse-setting-row">
-                    <span class="mouse-label">默认标签</span>
-                    <RcSegmented
-                      v-model="settings.superPanel.defaultTab"
-                      variant="marker"
-                      aria-label="默认标签"
-                      :options="defaultTabOptions"
-                      @change="saveSuperPanelSettings"
-                    />
-                  </div>
-
-                  <div class="mouse-setting-row">
-                    <span class="mouse-label">最近使用数量</span>
-                    <a-input-number
-                      v-model:value="settings.superPanel.maxRecentCount"
-                      :min="5"
-                      :max="20"
-                      style="width: 88px"
-                      @change="saveSuperPanelSettings"
-                  >
-                    <template #upIcon><ChevronUpIcon aria-hidden="true" /></template>
-                    <template #downIcon><ChevronDownIcon aria-hidden="true" /></template>
-                  </a-input-number>
-                  </div>
-                </div>
-              </div>
-
-              <!-- 快捷方式设置 -->
-              <div class="sub-setting-group">
-                <div class="sub-setting-header" style="cursor: pointer" @click="shortcutModalOpen = true">
-                  <div class="sub-setting-info">
-                    <span>快捷方式设置</span>
-                  </div>
-                  <span style="font-size: 12px; color: var(--rc-text-secondary)">
-                    已配置 {{ shortcutCount }} 个快捷方式
-                    <ChevronRightIcon  style="margin-left: 4px; font-size: 10px" />
-                  </span>
-                </div>
-              </div>
-
-            </div>
           </div>
         </div>
 
@@ -1039,7 +630,6 @@ onBeforeUnmount(() => {
         <ScreenPermissionPanel class="wide-card" />
       </div>
     </div>
-    <ShortcutSettingsModal v-model:open="shortcutModalOpen" />
     <PluginHotkeyModal ref="pluginHotkeyModalRef" @update:count="onPluginHotkeyCountUpdate" />
     <PluginFeatureHotkeyModal
       ref="pluginFeatureHotkeyModalRef"
@@ -1061,21 +651,6 @@ onBeforeUnmount(() => {
   gap: 8px;
 }
 
-.hotkey-row {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-}
-
-.hotkey-label {
-  font-size: 12px;
-  color: var(--rc-text-secondary);
-}
-
-.hotkey-input-group.compact {
-  margin-top: 0;
-}
-
 .hotkey-recorder {
   min-width: 132px;
   height: 32px;
@@ -1089,12 +664,6 @@ onBeforeUnmount(() => {
   cursor: pointer;
   transition: all 0.2s ease;
   position: relative;
-}
-
-.hotkey-recorder.small {
-  min-width: 120px;
-  height: 32px;
-  padding: 0 10px;
 }
 
 .hotkey-recorder:hover {
@@ -1122,10 +691,6 @@ onBeforeUnmount(() => {
   gap: 6px;
 }
 
-.recording-text.small {
-  font-size: 11px;
-}
-
 .recording-dot {
   display: inline-block;
   width: 6px;
@@ -1149,107 +714,6 @@ onBeforeUnmount(() => {
   display: flex;
   align-items: center;
   gap: 4px;
-}
-
-/* 子设置 (超级面板展开区) */
-.sub-settings {
-  margin: 0 0 16px;
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-}
-
-.sub-setting-group {
-  padding: 12px 14px;
-  background: var(--rc-surface-subtle);
-  border-radius: 10px;
-  border: 1px solid var(--rc-border);
-}
-
-.sub-setting-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-}
-
-.sub-setting-info {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  font-size: 13px;
-  font-weight: 500;
-  color: var(--rc-text-primary);
-}
-
-.sub-setting-content {
-  margin-top: 10px;
-  border-top: 1px solid var(--rc-border);
-}
-
-/* 子设置行：与主列表同构（左名称、右控件），行间细线分隔 */
-.mouse-setting-row {
-  min-height: 46px;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  flex-wrap: wrap;
-  gap: 8px 16px;
-  padding: 7px 0;
-  border-bottom: 1px solid var(--rc-border);
-}
-
-.sub-setting-content > :last-child {
-  border-bottom: none;
-}
-
-.mouse-label {
-  font-size: 13px;
-  color: var(--rc-text-secondary);
-}
-
-.slider-setting {
-  padding: 10px 0 4px;
-}
-
-/* 刻度文字居中于端点，两侧留出半个标签宽度，避免超出卡片 */
-.slider-setting :deep(.ant-slider) {
-  margin: 10px 22px 22px;
-}
-
-/* 数字输入统一为 32px 高、8px 圆角，与快捷键录入框、下拉框（RcSelect）一致 */
-.sub-settings :deep(.ant-input-number) {
-  height: 32px;
-  border-radius: 8px;
-  border-color: var(--rc-border-highlight);
-  background: transparent;
-  box-shadow: none;
-}
-
-.sub-settings :deep(.ant-input-number .ant-input-number-input) {
-  height: 30px;
-}
-
-.sub-settings :deep(.ant-input-number:hover),
-.sub-settings :deep(.ant-input-number-focused) {
-  border-color: var(--rc-accent);
-}
-
-.slider-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  margin-bottom: 8px;
-}
-
-.slider-label {
-  font-size: 12px;
-  color: var(--rc-text-secondary);
-}
-
-.slider-value {
-  font-size: 12px;
-  font-weight: 600;
-  color: var(--rc-accent-text);
 }
 
 /* 动画 */

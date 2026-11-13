@@ -1,5 +1,5 @@
 /**
- * 08 - 高级设置（快捷键、超级面板）
+ * 08 - 高级设置（快捷键）
  * 依赖：config API、trigger API（04 已验证事件系统）
  */
 const { logger } = require('./runner.cjs')
@@ -20,30 +20,6 @@ module.exports = async (runner) => {
             actionTarget: 'toggle_main_window'
           })
         `, '配置全局快捷键')
-      }
-    },
-    {
-      name: '配置超级面板键盘热键',
-      fn: async (exec) => {
-        await exec.exec(`
-          ztools.config.set('super_panel.keyboard_hotkey', JSON.stringify({
-            enabled: true,
-            modifiers: ['Alt'],
-            key: 'Space'
-          }))
-        `, '配置超级面板键盘热键')
-      }
-    },
-    {
-      name: '配置超级面板鼠标热键',
-      fn: async (exec) => {
-        await exec.exec(`
-          ztools.config.set('super_panel.mouse_hotkey', JSON.stringify({
-            enabled: true,
-            button: 'middle_long',
-            longPressMs: 300
-          }))
-        `, '配置超级面板鼠标热键')
       }
     },
     {

@@ -1,6 +1,7 @@
 import { List, Form, ActionPanel, Action, Icon, Clipboard, showToast, Toast, useState, useEffect, useNavigation, confirmAlert } from "@ztools/declarative-ui";
 import { generateQrSvg, generateQrPngBase64, detectQrContentType, buildWifiPayload, getQrHistory, saveQrItem, toggleFavoriteQrItem, deleteQrItem, clearQrHistory } from "./qr-generator.js";
-import { copyPngToClipboard, savePngFile } from "./host.js";
+import { copyPngToClipboard, savePngFile, decodeQrImageFile } from "./host.js";
+import { createCompatFileInputProps } from "./host-compat.js";
 export * from "./qr-generator.js";
 const LEVEL_LABEL = { L: "低（7%）", M: "中（15%）", Q: "较高（25%）", H: "高（30%）" };
 /**
@@ -253,7 +254,29 @@ export default function QrCodeCommand({ initialWifi = false } = {}) {
             ])
         }))));
     }
+    const fileInputProps = createCompatFileInputProps(async (files) => {
+        const targetPath = files[0]?.trim();
+        if (!targetPath)
+            return;
+        try {
+            const decoded = (await decodeQrImageFile(targetPath)).trim();
+            setSearchText(decoded);
+            await showToast(Toast.Style.Success, "已识别二维码内容", decoded.slice(0, 60));
+        }
+        catch (err) {
+            await showToast(Toast.Style.Failure, "识别二维码图片失败", err instanceof Error ? err.message : String(err));
+        }
+    }, {
+        extensions: [".png", ".jpg", ".jpeg", ".webp", ".bmp", ".gif"],
+        allowClipboardImage: true,
+        onTextPaste: (pasted) => {
+            const trimmed = pasted.trim();
+            if (trimmed)
+                setSearchText(trimmed);
+        }
+    });
     return List({
+        ...fileInputProps,
         navigationTitle: "二维码生成",
         // 只有在有二维码可预览（当前输入或历史）时才显示右侧详情栏
         isShowingDetail: Boolean(text) || matches.length > 0,

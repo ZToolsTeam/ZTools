@@ -5337,7 +5337,7 @@
       // ============ 快捷键管理 ============
 
       /**
-       * 重新加载超级面板热键配置
+       * 重新加载快捷键配置
        * @returns {Promise<boolean>}
        */
       async reloadHotkeys() {
@@ -5346,7 +5346,7 @@
       }
 
       /**
-       * 获取已加入超级面板的本地软件
+       * 获取悬浮条固定的本地软件
        * @returns {Promise<Array<{id: string, name: string}>>}
        */
       async getPanelLocalApps() {
@@ -7583,7 +7583,7 @@
        * @param {boolean} config.enabled - 是否启用
        * @param {Object} config.config - 触发器配置内容，如 { key: 'Ctrl+Alt+T' }
        * @param {Object} config.action - 触发动作配置
-       * @param {string} config.action.mode - 执行模式: 'builtin', 'dll', 'script', 'window'；内置的 launch_local_app 仅接受面板本地软件 ID
+       * @param {string} config.action.mode - 执行模式: 'builtin', 'dll', 'script', 'window'；内置的 launch_local_app 仅接受悬浮条固定的本地软件 ID
        * @param {string} config.action.target - 执行目标 (函数名/DLL名/脚本/窗口ID)
        * @param {Object} config.action.params - 执行参数
        * @returns {Promise<Object>} { success: boolean, triggerId: string }

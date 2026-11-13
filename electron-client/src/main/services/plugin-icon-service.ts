@@ -27,11 +27,17 @@ function iconSuffix(contentType: string): string {
   const normalized = contentType.split(';', 1)[0]?.trim().toLowerCase()
   if (normalized === 'image/png') return '.png'
   if (normalized === 'image/jpeg') return '.jpg'
+  if (normalized === 'image/svg+xml') return '.svg'
+  if (normalized === 'image/webp') return '.webp'
   if (normalized === 'image/x-icon' || normalized === 'image/vnd.microsoft.icon') return '.ico'
   throw new ZToolsError(errorCodes.notSupported, '图标格式暂不支持')
 }
 
 export class PluginIconService {
+  readonly #inFlight = new Map<
+    string,
+    { url: string; promise: Promise<{ success: true; pluginId: string; status: 'refreshing' }> }
+  >()
   constructor(
     private readonly manifests: PluginDirectoryProvider,
     private readonly state: PluginStateProvider,
@@ -40,6 +46,26 @@ export class PluginIconService {
 
   async refresh(pluginId: string, iconUrl: string): Promise<{ success: true; pluginId: string; status: 'refreshing' }> {
     const url = validateIconUrl(iconUrl)
+    const key = pluginId.trim().toLowerCase()
+    const existing = this.#inFlight.get(key)
+    if (existing && existing.url === url.href) {
+      return existing.promise
+    }
+    const task = existing
+      ? existing.promise.then(() => undefined, () => undefined).then(() => this.#refreshNow(pluginId, url))
+      : this.#refreshNow(pluginId, url)
+    const entry = { url: url.href, promise: task }
+    this.#inFlight.set(key, entry)
+    try {
+      return await task
+    } finally {
+      if (this.#inFlight.get(key) === entry) {
+        this.#inFlight.delete(key)
+      }
+    }
+  }
+
+  async #refreshNow(pluginId: string, url: URL): Promise<{ success: true; pluginId: string; status: 'refreshing' }> {
     // 先在插件目录锁之外下载：独占锁期间插件无法打开会话，不能让网络耗时（或断网挂起）占住它
     let response: Response
     try {

@@ -27,6 +27,10 @@ import { SystemFontProvider, macFontHelperPath } from '../services/font-provider
 import { createMacOcrPorts } from '../platform/macos/mac-ocr.js'
 import { captureRegionPng, createRegionSelector } from '../platform/region-capture.js'
 import { createLocalOcr, paddleOcrModelDirectory } from '../services/ocr/paddle-ocr.js'
+import { createFormulaOcr, type FormulaOcrPort } from '../services/ocr/formula-ocr.js'
+import { FormulaModelStore } from '../services/ocr/formula-model-store.js'
+import { FORMULA_MODEL } from '../services/ocr/formula-ocr-protocol.js'
+import type { FormulaOcrRequest } from '../../contracts/formula-ocr.js'
 import type { ScreenRectangle } from '../services/screen-service.js'
 import { MacRegionSelection } from '../platform/macos/region-selection.js'
 import { MacVisionRunner } from '../platform/macos/vision-runner.js'
@@ -50,6 +54,7 @@ import {
   ipcMain,
   nativeTheme,
   nativeImage,
+  net as electronNet,
   powerSaveBlocker,
   screen as electronScreen,
   shell as electronShell,
@@ -58,7 +63,7 @@ import {
   type IpcMainEvent,
   type IpcMainInvokeEvent
 } from 'electron'
-import { FILE_DROP_CHANNEL, FileDropService } from '../services/file-drop-service.js'
+import { FILE_DROP_CHANNEL, FILE_PASTE_CHANNEL, FileDropService } from '../services/file-drop-service.js'
 import os from 'node:os'
 import { writeFile } from 'node:fs/promises'
 import path from 'node:path'
@@ -265,10 +270,6 @@ import { SystemService } from '../services/system-service.js'
 import { TriggerService, type KeyboardDoubleTapAdapter } from '../services/trigger-service.js'
 import { AutostartService, initializeDefaultAutostart } from '../services/autostart-service.js'
 import { WindowService } from '../services/window-service.js'
-import {
-  createSuperPanelInputService,
-  type SuperPanelInputService
-} from '../super-panel/input-service.js'
 import type { WindowRegistry } from '../windows/window-registry.js'
 import { PluginWindowManager } from '../windows/plugin-window-manager.js'
 import { constructWithRouterRollback, type RouterConstructionScope } from './router-construction.js'
@@ -406,9 +407,9 @@ export interface IpcRouterOptions {
     pluginRoot: string
   }
   toggleMainWindow(): void
-  toggleSuperPanel(trigger: 'keyboard_hotkey' | 'mouse_hotkey'): void
   getPanelLocalApps(): Promise<Array<{ id: string; name: string }>>
   launchLocalApp?(appId: string): Promise<void>
+  forwardHotkeyToRecorder?(accelerator: string): Promise<boolean> | boolean
   closeConfirmationResolved(): void
   screenClipboardAdapters: ScreenClipboardAdapters
   systemPlatformAdapter: SystemPlatformAdapter
@@ -419,6 +420,7 @@ export interface IpcRouterOptions {
   reloadMainWindow?: () => Promise<void>
   pluginState?: PluginStateService
   onDarkModeChanged?: (enabled: boolean) => void
+  onAccentChanged?: (accent: 'ember' | 'glacier' | 'jade' | 'iris' | 'crimson' | 'mono') => void
   onTrayStatePossiblyChanged?: () => void
   /** 宿主关键子进程 pid（Electron 子进程、侧车、Native Host），结束进程时受保护；缺省按 app.getAppMetrics 等组装 */
   protectedProcessPids?: () => Promise<Iterable<number>> | Iterable<number>
@@ -608,9 +610,26 @@ export function dispatchAuthorizedIpcRequest(
   }
 }
 
+/**
+ * 处理宿主主窗口上报的快捷键录制激活态事件（hotkey_recorder_active）。
+ * 仅允许未归属第三方插件会话的真实宿主调用方控制主进程按键捕获开关。
+ */
+export function applyHostRecorderCaptureEvent(
+  params: EventEnvelopeParams,
+  caller: CallerIdentity,
+  triggers: { setRecorderCaptureActive(active: boolean): void }
+): void {
+  const envelope = params?.envelope
+  if (isHostCaller(caller) && envelope?.type === 'hotkey_recorder_active') {
+    const payload = envelope.payload as { active?: unknown } | null | undefined
+    triggers.setRecorderCaptureActive(Boolean(payload?.active))
+  }
+}
+
 export class IpcRouter {
   readonly #diagnosticFailures = new RuntimeDiagnosticFailureStore()
   readonly #pending = new Map<number, Map<string, PendingLegacyCall>>()
+  readonly #senderDestroyedCleanup = new Map<number, () => void>()
   readonly #capabilityRequestCancellations = new RuntimeCapabilityRequestCancellationService()
   readonly #networkRequestCancellations = new NetworkRequestCancellationService()
   readonly #networkRequestCancellationEndpoint: NetworkRequestCancellationEndpoint
@@ -637,7 +656,6 @@ export class IpcRouter {
   readonly #permissionMonitor: RuntimePermissionMonitorService
   readonly #stopPermissionOwnerEvents: () => void
   readonly #triggers: TriggerService
-  readonly #superPanelInput: SuperPanelInputService | null
   readonly #system: SystemService
   readonly #folderSync: FolderSyncService
   readonly #removeFolderSyncListener: () => void
@@ -705,14 +723,6 @@ export class IpcRouter {
     this.#diagnosticFailures.record(owner, failure)
   }
 
-  ready(): Promise<void> {
-    return this.#superPanelInput?.ready ?? Promise.resolve()
-  }
-
-  reloadSuperPanelInput(): Promise<void> {
-    return this.#superPanelInput?.reload() ?? Promise.resolve()
-  }
-
   listInstalledPlugins(): Promise<{ success: true; data: Record<string, unknown>[] }> {
     return this.#plugins.list()
   }
@@ -739,6 +749,10 @@ export class IpcRouter {
     if (!force && this.#lastDarkMode === enabled) return
     this.#lastDarkMode = enabled
     this.#events.publishHost('system.DarkModeChange', { isDark: enabled, mode: nativeTheme.themeSource })
+  }
+
+  publishAccentColorChange(accent: 'ember' | 'glacier' | 'jade' | 'iris' | 'crimson' | 'mono'): void {
+    this.#events.publishHost('system.AccentColorChange', { accent })
   }
 
   refreshPermissionOwner(webContentsId: number): Promise<void> {
@@ -908,11 +922,23 @@ export class IpcRouter {
       services.runtimePaths.businessDataRoot, services.runtimePaths.browserProfileRoot, services.runtimePaths.installRoot]), service => service.stop())
     this.#removeFileUnlockWindowListener = registry.onRemoved(id => { void fileUnlock.closeOwner(id).catch(error => console.error('文件解锁关闭失败', error)) })
     constructionScope.ownCleanup(this.#removeFileUnlockWindowListener)
+    // 公式识别（macOS 与 Windows）；模型按需下载到数据目录
+    const formulaOcr: FormulaOcrPort | undefined = process.platform === 'darwin' || process.platform === 'win32'
+      ? createFormulaOcr({
+          store: new FormulaModelStore({
+            directory: path.join(services.dataRoot, 'Models', FORMULA_MODEL.id),
+            fetch: (url, init) => electronNet.fetch(url, { signal: init.signal, cache: 'no-store' })
+          }),
+          createImageFromPath: imagePath => nativeImage.createFromPath(imagePath),
+          forkUtilityProcess: (modulePath, args, options) => utilityProcess.fork(modulePath, args, options)
+        })
+      : undefined
     this.#builtinPluginHost = constructionScope.own(
       new BuiltinPluginHostService({
         processService: processes,
         shellService: shell,
         mediaOcr: {
+          formulaOcr,
           readClipboardImage: () => {
             const image = electronClipboard.readImage()
             return image.isEmpty() ? undefined : image.toPNG()
@@ -1072,8 +1098,8 @@ export class IpcRouter {
         openPlugin: (params) => this.openPlugin(params),
         ...(keyboardPort ? { keyboard: keyboardPort } : {}),
         toggleMainWindow: options.toggleMainWindow,
-        toggleSuperPanel: (trigger) => options.toggleSuperPanel(trigger),
-        ...(options.launchLocalApp ? { launchLocalApp: options.launchLocalApp } : {})
+        ...(options.launchLocalApp ? { launchLocalApp: options.launchLocalApp } : {}),
+        ...(options.forwardHotkeyToRecorder ? { forwardHotkeyToRecorder: options.forwardHotkeyToRecorder } : {})
       }),
       (triggers) => triggers.stop()
     )
@@ -1204,16 +1230,6 @@ export class IpcRouter {
     const pluginState = this.#pluginState
     const pluginShortcuts = this.#pluginShortcuts
     const pluginIcons = this.#pluginIcons
-    this.#superPanelInput = constructionScope.own(
-      createSuperPanelInputService(
-        services.config,
-        this.#triggers,
-        services.nativeInput ?? null,
-        (trigger) => options.toggleSuperPanel(trigger)
-      ),
-      (superPanelInput) => superPanelInput.stop()
-    )
-    const superPanelInput = this.#superPanelInput
     const nativeInputCandidate: unknown = services.nativeInput
     const inputInjection = nativePlatform === 'win32' && nativeInputCandidate !== null && typeof nativeInputCandidate === 'object' &&
       ['getForegroundWindow', 'restoreForegroundWindow', 'injectKeyPress', 'injectKeyCombo', 'injectText', 'injectMouseMove', 'injectMouseClick', 'injectMouseWheel']
@@ -1349,8 +1365,7 @@ export class IpcRouter {
         const nativeRuntimeFallback = createNativeRuntimeDiagnosticsFallback(process.platform)
         const details = sanitizeRuntimeDiagnosticDetails({
           nativeHost: services.nativeHost?.diagnostics ?? nativeRuntimeFallback.nativeHost,
-          service: services.serviceClient?.diagnostics ?? nativeRuntimeFallback.service,
-          superPanelInput: superPanelInput?.diagnostics ?? nativeRuntimeFallback.superPanelInput
+          service: services.serviceClient?.diagnostics ?? nativeRuntimeFallback.service
         })
         return {
           schemaVersion: 1,
@@ -1373,6 +1388,19 @@ export class IpcRouter {
           const isDark = nativeTheme.shouldUseDarkColors
           options.onDarkModeChanged?.(isDark)
           this.publishDarkModeChange(isDark, true)
+        }
+        if (
+          input.file === 'user_settings.json' &&
+          input.path === 'ui.accent' &&
+          (input.value === 'ember' ||
+            input.value === 'glacier' ||
+            input.value === 'jade' ||
+            input.value === 'iris' ||
+            input.value === 'crimson' ||
+            input.value === 'mono')
+        ) {
+          options.onAccentChanged?.(input.value)
+          this.publishAccentColorChange(input.value)
         }
         options.onTrayStatePossiblyChanged?.()
         return { success: true }
@@ -1822,8 +1850,7 @@ export class IpcRouter {
         return system.getBatteryStatus()
       },
       async system_reload_hotkeys() {
-        if (!superPanelInput) return deferredCapability('超级面板热键重载', 'M5')
-        await superPanelInput.reload()
+        // 快捷键设置变更后刷新托盘菜单中的唤醒快捷键提示
         options.onTrayStatePossiblyChanged?.()
         return { success: true }
       },
@@ -1939,6 +1966,7 @@ export class IpcRouter {
         return events.unsubscribe(params as EventKeyParams, caller)
       },
       async event_publish(params, caller) {
+        applyHostRecorderCaptureEvent(params as EventEnvelopeParams, caller, triggers)
         return events.publish(params as EventEnvelopeParams, caller)
       },
       async event_request(params, caller) {
@@ -2928,6 +2956,26 @@ export class IpcRouter {
         const file = await files.resolveAuthorizedPath(input.path, caller, 'read', false)
         return builtinPluginHost.handlePluginCall('OcrPlugin', 'recognizeImage', { path: file, lang }, signal, caller)
       },
+      async formula_ocr(params, caller, signal) {
+        const input = params as FormulaOcrRequest
+        const formula = formulaOcr
+        if (!formula) return { ok: false, success: false, error: '当前系统暂不支持公式识别' }
+        if (input.action === 'modelStatus') return { ok: true, success: true, model: FORMULA_MODEL.label, ...await formula.modelStatus() }
+        if (input.action === 'downloadModel') return { ok: true, success: true, model: FORMULA_MODEL.label, ...await formula.downloadModel() }
+        if (input.action === 'cancelDownload') return { ok: true, success: true, model: FORMULA_MODEL.label, ...await formula.cancelDownload() }
+        if (input.action === 'captureRegion') {
+          await requirePluginPermission(caller, 'screen', plugins)
+          return builtinPluginHost.handlePluginCall('OcrPlugin', 'captureRegionAndRecognize',
+            { mode: 'formula', restoreWindow: input.restoreWindow !== false, includePreview: input.includePreview === true }, signal, caller)
+        }
+        if (input.action === 'recognizeClipboard') {
+          await requirePluginPermission(caller, 'clipboard', plugins)
+          return builtinPluginHost.handlePluginCall('OcrPlugin', 'recognizeClipboard', { mode: 'formula', includePreview: input.includePreview === true }, signal, caller)
+        }
+        // 只识别用户经文件对话框等方式授权过的图片
+        const file = await files.resolveAuthorizedPath(input.path, caller, 'read', false)
+        return builtinPluginHost.handlePluginCall('OcrPlugin', 'recognizeImage', { path: file, mode: 'formula', includePreview: input.includePreview === true }, signal, caller)
+      },
       async keyboard_lock(params, caller, signal) {
         await requirePluginPermission(caller, 'system', plugins)
         return keyboardLock.handle(params, caller, signal)
@@ -3135,16 +3183,27 @@ export class IpcRouter {
     )
   }
 
+  setRecorderCaptureActive(active: boolean): void {
+    this.#triggers.setRecorderCaptureActive(active)
+  }
+
   register(): void {
     if (this.#registered || this.#stopping) throw new Error('IpcRouter can only be registered once')
     this.#capabilityPrompt.register()
     ipcMain.handle(IPC_CALL_CHANNEL, (event, value) => this.#handle(event, value))
     ipcMain.handle(RUNTIME_CAPABILITY_REQUEST_CANCEL_CHANNEL, (event, value) => this.#handleRuntimeCapabilityRequestCancel(event, value))
     ipcMain.handle(NETWORK_REQUEST_CANCEL_CHANNEL, (event, value) => this.#handleNetworkRequestCancel(event, value))
-    const fileDrop = new FileDropService(this.registry, this.#files)
+    const fileDrop = new FileDropService(this.registry, this.#files, this.#clipboard)
     ipcMain.handle(FILE_DROP_CHANNEL, async (event, value: unknown) => {
       try {
         return await this.#handleFileDrop(event, value, fileDrop)
+      } catch (error) {
+        return { success: false, error: toPublicError(error) }
+      }
+    })
+    ipcMain.handle(FILE_PASTE_CHANNEL, async (event, value: unknown) => {
+      try {
+        return await this.#handleFilePaste(event, value, fileDrop)
       } catch (error) {
         return { success: false, error: toPublicError(error) }
       }
@@ -3201,6 +3260,7 @@ export class IpcRouter {
       attempt(() => ipcMain.removeHandler(RUNTIME_CAPABILITY_REQUEST_CANCEL_CHANNEL))
       attempt(() => ipcMain.removeHandler(NETWORK_REQUEST_CANCEL_CHANNEL))
       attempt(() => ipcMain.removeHandler(FILE_DROP_CHANNEL))
+      attempt(() => ipcMain.removeHandler(FILE_PASTE_CHANNEL))
       attempt(() => ipcMain.removeHandler(REFERENCE_CANCEL_CHANNEL))
       this.#registered = false
       if (this.#sdkLaneHandshakeListener) {
@@ -3213,6 +3273,8 @@ export class IpcRouter {
     for (const senderCalls of this.#pending.values()) {
       for (const call of senderCalls.values()) call.controller.abort(errorCodes.appStopping)
     }
+    for (const cleanup of this.#senderDestroyedCleanup.values()) attempt(cleanup)
+    this.#senderDestroyedCleanup.clear()
     this.#pending.clear()
     this.#stopPromise = (async () => {
       const settle = async (actions: readonly (() => unknown)[]): Promise<void> => {
@@ -3231,7 +3293,6 @@ export class IpcRouter {
         () => this.#pluginWindows.stop(),
         () => this.#plugins.stop(),
         () => this.#triggers.stop(),
-        () => this.#superPanelInput?.stop(),
         () => this.#processes.stop(),
         () => this.#builtinPluginHost.stop(),
         () => this.#system.stop(),
@@ -3477,7 +3538,19 @@ export class IpcRouter {
     if (!isCurrentTrustedSdkLaneContext(context)) {
       throw new ZToolsError(errorCodes.permissionDenied, '调用者身份或页面已失效')
     }
-    return this.#referenceRuntime.endpoint.acceptDrop(event, value)
+    const rawDropValue = typeof value === 'object' && value !== null && !Array.isArray(value) && 'paths' in value
+      ? (value as { paths: unknown }).paths
+      : value
+    return this.#referenceRuntime.endpoint.acceptDrop(event, rawDropValue)
+  }
+
+  async #handleFilePaste(
+    event: IpcMainInvokeEvent,
+    value: unknown,
+    legacyDrop: FileDropService
+  ): Promise<unknown> {
+    if (this.#stopping) throw new ZToolsError(errorCodes.appStopping, '应用正在退出')
+    return legacyDrop.acceptPaste(event.sender.id, value)
   }
 
   async #execute(
@@ -3502,11 +3575,24 @@ export class IpcRouter {
     const timeout = timeoutMs === 'infinite'
       ? undefined
       : setTimeout(() => controller.abort(errorCodes.requestTimeout), timeoutMs)
-    const onDestroyed = (): void => {
-      if (request.method === 'network_http_request') this.#networkRequestCancellations.closeOwner(event.sender.id)
-      controller.abort(errorCodes.callerDestroyed)
+    if (!this.#senderDestroyedCleanup.has(event.sender.id)) {
+      const sender = event.sender
+      const onDestroyed = (): void => {
+        this.#senderDestroyedCleanup.delete(sender.id)
+        const activeCalls = this.#pending.get(sender.id)
+        if (!activeCalls) return
+        for (const call of activeCalls.values()) {
+          if (call.method === 'network_http_request') {
+            this.#networkRequestCancellations.closeOwner(sender.id)
+            break
+          }
+        }
+        for (const call of activeCalls.values()) call.controller.abort(errorCodes.callerDestroyed)
+      }
+      sender.once('destroyed', onDestroyed)
+      this.#senderDestroyedCleanup.set(sender.id, () => sender.removeListener('destroyed', onDestroyed))
     }
-    event.sender.once('destroyed', onDestroyed)
+    // 同一 sender 复用单个 destroyed 监听器，避免并发 IPC 触发 MaxListenersExceededWarning
     let releaseCapabilityRequestCancellation: () => void = () => undefined
     let releaseNetworkRequestCancellation: () => void = () => undefined
     let removeNetworkNavigationListener: () => void = () => undefined
@@ -3571,9 +3657,16 @@ export class IpcRouter {
       removeNetworkNavigationListener()
       if (onAbort) controller.signal.removeEventListener('abort', onAbort)
       if (timeout) clearTimeout(timeout)
-      event.sender.removeListener('destroyed', onDestroyed)
+      // destroyed 监听器在当前 sender 在途请求全部结束时统一解绑
       senderCalls.delete(request.messageId)
-      if (senderCalls.size === 0) this.#pending.delete(event.sender.id)
+      if (senderCalls.size === 0) {
+        this.#pending.delete(event.sender.id)
+        const cleanup = this.#senderDestroyedCleanup.get(event.sender.id)
+        if (cleanup) {
+          this.#senderDestroyedCleanup.delete(event.sender.id)
+          cleanup()
+        }
+      }
     }
   }
 }

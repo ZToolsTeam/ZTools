@@ -1,4 +1,95 @@
 import { digest, hmac, bytesToHex, bytesToBase64, base64ToBytes, utf8ToBytes, bytesToUtf8 } from "./hash.js";
+let fileHashSeq = 0;
+function isRecord(value) {
+    return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+async function callHostMethod(method, params) {
+    const g = globalThis;
+    const methods = g.window?.__ztoolsElectron?.transport?.methods ?? g.__ztoolsElectron?.transport?.methods;
+    const fn = methods?.[method];
+    if (typeof fn !== "function") {
+        throw new Error(`当前客户端不支持 ${method}`);
+    }
+    fileHashSeq = (fileHashSeq + 1) % 1_000_000;
+    const raw = (await fn({
+        messageId: `crypto_file_${Date.now()}_${fileHashSeq}`,
+        params
+    }));
+    if (isRecord(raw) && raw.success === false) {
+        const err = raw.error;
+        const msg = isRecord(err) ? String(err.message || err.code || `${method} 调用失败`) : String(err || `${method} 调用失败`);
+        throw new Error(msg);
+    }
+    if (isRecord(raw) && "data" in raw && raw.data !== undefined) {
+        const outer = raw.data;
+        return isRecord(outer) && "data" in outer && outer.data !== undefined ? outer.data : outer;
+    }
+    return raw;
+}
+/**
+ * 读取本地文件真实字节计算哈希摘要（或调用宿主 filesearch_sha256），绝不将路径字符串当文本计算
+ */
+export async function calculateFileHash(filePath) {
+    const normalizedPath = (filePath ?? "").trim();
+    if (!normalizedPath) {
+        throw new Error("文件路径不能为空");
+    }
+    const fileName = normalizedPath.split(/[\\/]/).filter(Boolean).pop() || normalizedPath;
+    let readError;
+    try {
+        const data = await callHostMethod("filesystem_read_file", {
+            path: normalizedPath,
+            encoding: "base64"
+        });
+        const base64Content = typeof data === "string"
+            ? data
+            : isRecord(data) && typeof data.content === "string"
+                ? data.content
+                : isRecord(data) && typeof data.base64 === "string"
+                    ? data.base64
+                    : undefined;
+        if (typeof base64Content === "string") {
+            const bytes = base64ToBytes(base64Content);
+            const md5 = bytesToHex(digest("md5", bytes));
+            return {
+                fileName,
+                filePath: normalizedPath,
+                byteLength: bytes.byteLength,
+                md5,
+                md5Upper: md5.toUpperCase(),
+                sha1: bytesToHex(digest("sha1", bytes)),
+                sha256: bytesToHex(digest("sha256", bytes)),
+                sha512: bytesToHex(digest("sha512", bytes))
+            };
+        }
+    }
+    catch (err) {
+        readError = err instanceof Error ? err : new Error(String(err));
+    }
+    try {
+        const shaData = await callHostMethod("filesearch_sha256", { fullPath: normalizedPath, path: normalizedPath });
+        const sha256 = typeof shaData === "string"
+            ? shaData.trim().toLowerCase()
+            : isRecord(shaData) && typeof shaData.sha256 === "string"
+                ? shaData.sha256.trim().toLowerCase()
+                : isRecord(shaData) && typeof shaData.hash === "string"
+                    ? shaData.hash.trim().toLowerCase()
+                    : "";
+        if (/^[0-9a-f]{64}$/i.test(sha256)) {
+            return {
+                fileName,
+                filePath: normalizedPath,
+                sha256: sha256.toLowerCase()
+            };
+        }
+    }
+    catch (err) {
+        if (!readError) {
+            readError = err instanceof Error ? err : new Error(String(err));
+        }
+    }
+    throw readError ?? new Error("无法读取文件内容计算哈希");
+}
 /**
  * 实时计算所有常用哈希与编码对比（UTF-8 输入）
  */
@@ -32,7 +123,7 @@ export function decodeBase64(base64Str) {
         bytes = base64ToBytes(clean);
     }
     catch (err) {
-        return { success: false, error: err?.message || "Base64 解码失败" };
+        return { success: false, error: err instanceof Error ? err.message : "Base64 解码失败" };
     }
     try {
         return { success: true, result: bytesToUtf8(bytes) };
@@ -72,7 +163,7 @@ export async function aesEncrypt(plaintext, key, options = {}) {
         return { success: true, result: bytesToBase64(new Uint8Array(cipher)), iv: bytesToHex(ivBytes) };
     }
     catch (err) {
-        return { success: false, error: `AES 加密失败: ${err?.message || "参数错误"}` };
+        return { success: false, error: `AES 加密失败: ${err instanceof Error ? err.message : "参数错误"}` };
     }
 }
 /**

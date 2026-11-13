@@ -4,14 +4,32 @@ import {
   ipcMain,
   nativeTheme
 } from 'electron'
-import { getWindowBackgroundColor, isWindows11OrLater, secureWebPreferences } from './main-window.js'
+import {
+  getWindowBackgroundColor,
+  isWindows11OrLater,
+  secureWebPreferences,
+  suppressWindowsSystemMenu
+} from './main-window.js'
 import type { WindowRegistry } from './window-registry.js'
-import { calculateCenteredBounds } from './display-bounds.js'
+import { calculateCenteredBounds, calculateCursorRelativeBounds } from './display-bounds.js'
 import { FrameSyncManager } from '../services/frame-sync-manager.js'
+import { isShowingNativeDialog } from '../services/window-service.js'
 import { prewarmMacosApplicationCache } from '../platform/macos/file-indexer.js'
 
 export const LAUNCHER_CALL_CHANNEL = 'ztools:launcher_call' as const
 const LAUNCHER_SIZE = { width: 750, height: 480 }
+
+export interface LauncherShowOptions {
+  trigger?: 'keyboard_hotkey' | 'mouse_hotkey'
+  position?: 'center' | 'cursor'
+}
+
+export interface LauncherPanelBridge {
+  getData(): Promise<unknown>
+  togglePin(id: string, itemType: string): Promise<{ success: boolean; pinned?: boolean }>
+  addLocalApps(parentWindow: BrowserWindow | null): Promise<{ success: boolean; added: number }>
+  openItem(id: string, itemType: string, query?: string): Promise<{ success: boolean }>
+}
 
 export interface LauncherControllerOptions {
   icon: Electron.NativeImage
@@ -22,6 +40,7 @@ export interface LauncherControllerOptions {
   onShow?(): void
   /** 让主窗口跳到指定页面（hash 路由，如 /details/foo） */
   navigateMainWindow?(route: string): void
+  panelBridge?: LauncherPanelBridge
   sidecars?: {
     trimProcessMemory(pid?: number): Promise<{ success: boolean; pid: number; trimmed: boolean }>
   }
@@ -102,18 +121,52 @@ export class LauncherController {
   #frameSyncManager: FrameSyncManager | null = null
   #registered = false
   #screenListenerAttached = false
+  #ignoreBlur = false
 
   constructor(private readonly options: LauncherControllerOptions) {}
 
   register(): void {
     if (this.#registered) return
-    ipcMain.handle(LAUNCHER_CALL_CHANNEL, async (_event, action: unknown, payload?: unknown) => handleLauncherCall({
-      hide: () => this.hide(),
-      show: () => this.show(),
-      toggle: () => this.toggle(),
-      showMainWindow: () => this.options.showMainWindow(),
-      navigateMainWindow: (route) => this.options.navigateMainWindow?.(route)
-    }, action, payload))
+    ipcMain.handle(LAUNCHER_CALL_CHANNEL, async (_event, action: unknown, payload?: unknown) => {
+      const bridge = this.options.panelBridge
+      if (bridge) {
+        try {
+          if (action === 'get_panel_data') {
+            return await bridge.getData()
+          }
+          if (action === 'toggle_pin') {
+            const p = (typeof payload === 'object' && payload !== null ? payload : {}) as { id?: string; itemType?: string }
+            return await bridge.togglePin(String(p.id ?? ''), String(p.itemType ?? ''))
+          }
+          if (action === 'add_local_app') {
+            this.#ignoreBlur = true
+            try {
+              return await bridge.addLocalApps(this.#window)
+            } finally {
+              this.#ignoreBlur = false
+            }
+          }
+          if (action === 'open_panel_item') {
+            const p = (typeof payload === 'object' && payload !== null ? payload : {}) as { id?: string; itemType?: string; query?: string }
+            const res = await bridge.openItem(String(p.id ?? ''), String(p.itemType ?? ''), typeof p.query === 'string' ? p.query : undefined)
+            this.hide()
+            return res
+          }
+        } catch (error) {
+          return {
+            success: false,
+            error: error instanceof Error ? error.message : String(error)
+          }
+        }
+      }
+      return handleLauncherCall({
+        hide: () => this.hide(),
+        show: () => this.show(),
+        toggle: () => this.toggle(),
+        showMainWindow: () => this.options.showMainWindow(),
+        navigateMainWindow: (route) => this.options.navigateMainWindow?.(route)
+      }, action, payload)
+    })
     this.#registered = true
   }
 
@@ -137,10 +190,10 @@ export class LauncherController {
     return Boolean(this.#window && !this.#window.isDestroyed() && this.#window.isFocused())
   }
 
-  show(): void {
+  show(showOptions?: LauncherShowOptions): void {
     this.options.onShow?.()
     const window = this.#ensureWindow()
-    this.#positionWindow(window)
+    this.#positionWindow(window, showOptions?.position)
     if (this.#frameSyncManager) {
       this.options.hideMainWindow()
       void this.#frameSyncManager.showWindow().catch((error: unknown) => {
@@ -164,12 +217,12 @@ export class LauncherController {
     }
   }
 
-  toggle(): void {
+  toggle(showOptions?: LauncherShowOptions): void {
     // 另一个 Space 上仍映射的窗口不算当前唤醒目标；只有正在交互时才切换为隐藏。
     if (this.isFocused() || this.#frameSyncManager?.state === 'resuming') {
       this.hide()
     } else {
-      this.show()
+      this.show(showOptions)
     }
   }
 
@@ -224,12 +277,13 @@ export class LauncherController {
     })
 
     this.options.registry.registerMain(window.webContents)
+    suppressWindowsSystemMenu(window)
     window.webContents.on('before-input-event', (event, input) => {
       handleLauncherBeforeInputEvent(event, input, this)
     })
 
     window.on('blur', () => {
-      if (!window.isDestroyed()) {
+      if (!this.#ignoreBlur && !window.isDestroyed() && !isShowingNativeDialog(window)) {
         this.hide()
       }
     })
@@ -266,7 +320,7 @@ export class LauncherController {
     return window
   }
 
-  #positionWindow(window: BrowserWindow): void {
+  #positionWindow(window: BrowserWindow, positionMode: 'center' | 'cursor' = 'center'): void {
     const point = typeof screen?.getCursorScreenPoint === 'function'
       ? screen.getCursorScreenPoint()
       : { x: 0, y: 0 }
@@ -274,7 +328,9 @@ export class LauncherController {
       ? (screen.getDisplayNearestPoint(point) || (typeof screen?.getPrimaryDisplay === 'function' ? screen.getPrimaryDisplay() : undefined))
       : undefined
     const targetBounds = display
-      ? calculateCenteredBounds(LAUNCHER_SIZE, display, 0.12)
+      ? (positionMode === 'cursor'
+          ? calculateCursorRelativeBounds(LAUNCHER_SIZE, point, display, 'cursor')
+          : calculateCenteredBounds(LAUNCHER_SIZE, display, 0.12))
       : { x: 0, y: 0, ...LAUNCHER_SIZE }
     if (typeof window.getBounds === 'function') {
       const cur = window.getBounds()

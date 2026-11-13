@@ -44,7 +44,7 @@
             ref="inputRef"
             v-model="query"
             type="text"
-            placeholder="搜索插件、命令与文件"
+            placeholder="搜索插件、本地软件、系统工具、文件或输入 / 快捷方式"
             class="launcher-input"
             autocomplete="off"
             spellcheck="false"
@@ -62,6 +62,15 @@
           <button
             type="button"
             class="launcher-workbench-btn"
+            title="添加本地软件到悬浮条"
+            aria-label="添加本地软件"
+            @click="handleAddLocalApp"
+          >
+            + 添加软件
+          </button>
+          <button
+            type="button"
+            class="launcher-workbench-btn"
             :title="`展开为工作台 ${workbenchHint}`"
             @click="expandToDashboard()"
           >
@@ -70,6 +79,46 @@
           </button>
         </div>
         <div class="launcher-hairline" aria-hidden="true"></div>
+
+        <!-- 1.5 首屏固定磁贴宫格（搜索词为空且存在固定项时展示，输入搜索词自动收起让位） -->
+        <div
+          v-if="!query.trim() && pinnedItems.length > 0"
+          class="launcher-pinned-section"
+          aria-label="固定常用"
+        >
+          <div class="launcher-pinned-header">
+            <span class="launcher-pinned-title">固定常用 ({{ pinnedItems.length }})</span>
+            <span class="launcher-pinned-hint">Alt+1~9 直达 · Ctrl+P 固定/取消</span>
+          </div>
+          <div class="launcher-pinned-grid">
+            <div
+              v-for="(pinItem, pinIdx) in pinnedItems.slice(0, TOP_PINNED_GRID_LIMIT)"
+              :key="pinItem.key || pinItem.id || pinIdx"
+              class="launcher-pinned-tile"
+              role="button"
+              tabindex="-1"
+              :title="`${pinItem.name || pinItem.title} (Alt+${pinIdx + 1})`"
+              @click="executeItem(pinItem)"
+            >
+              <button
+                type="button"
+                class="launcher-pinned-unpin"
+                title="取消固定"
+                aria-label="取消固定"
+                @click.stop="handleTogglePin(pinItem)"
+              >
+                ×
+              </button>
+              <RcSquircle
+                :glyph="resolveItemGlyph(pinItem)"
+                :fallback-glyph="resolveKeywordGlyph(pinItem.name || pinItem.title)"
+                :src="isTileImageIcon(pinItem.icon) ? pinItem.icon : ''"
+                :size="24"
+              />
+              <span class="launcher-pinned-name">{{ pinItem.name || pinItem.title }}</span>
+            </div>
+          </div>
+        </div>
 
         <!-- 2. 候选结果 -->
         <div
@@ -114,6 +163,14 @@
           <span v-else>{{ filteredItems.length }} 个结果</span>
           <div class="flex items-center gap-4">
             <span class="launcher-foot-hint is-primary">打开 <ShortcutKeys combo="Enter" /></span>
+            <button
+              v-if="canPinActiveItem"
+              type="button"
+              class="launcher-foot-hint"
+              @click="handleTogglePin(visibleItems[activeIndex])"
+            >
+              {{ visibleItems[activeIndex]?.pinned ? '取消固定' : '固定' }} <ShortcutKeys combo="Ctrl+P" />
+            </button>
             <button type="button" class="launcher-foot-hint" @click="toggleActionPanel">
               动作 <ShortcutKeys combo="Ctrl+K" />
             </button>
@@ -154,14 +211,16 @@ import {
   useCommandSearch,
   isDeclarativePluginItem,
   normalizePluginFeatures,
-  copyInlineAnswerToClipboard
+  copyInlineAnswerToClipboard,
+  TOP_PINNED_GRID_LIMIT
 } from '@/composables/useCommandSearch'
 import { useKeymap, KEYMAP_SCOPES, dispatchKeyEvent } from '@/utils/keymap'
 import ActionPanelModal from '@/declarative/components/ActionPanelModal.vue'
 import DeclarativeView from '@/declarative/DeclarativeView.vue'
 import { requestPopoutWindow } from '@/declarative/popoutHandoff'
 import BrandMark from '@/components/BrandMark.vue'
-import { RcButton } from '@/components/base'
+import { RcButton, RcSquircle } from '@/components/base'
+import { resolveItemGlyph, resolveKeywordGlyph } from '@/utils/brandIcons'
 import SearchResultRow from '@/components/SearchResultRow.vue'
 import { shortcutLabel, isMacOS, isPluginSupportedOnCurrentPlatform } from '@/utils/platform'
 import { win as nativeWin } from '@/api/apiserver'
@@ -190,6 +249,7 @@ let declarativeLoadToken = 0
 let executingNoViewKey = ''
 let noViewStatusTimer = null
 
+const commandSearch = useCommandSearch({ enableFileSearch: true })
 const {
   query,
   fileResults,
@@ -201,7 +261,47 @@ const {
   clearSearch,
   recordUsage,
   highlightParts
-} = useCommandSearch({ enableFileSearch: true })
+} = commandSearch
+const pinnedItems = commandSearch.pinnedItems || computed(() => [])
+const toggleItemPin = commandSearch.toggleItemPin || (async () => ({ success: false }))
+const addLocalApp = commandSearch.addLocalApp || (async () => ({ success: false, added: 0 }))
+const refreshPanelData = commandSearch.refreshPanelData || (() => Promise.resolve())
+const prepareItemForLaunch = commandSearch.prepareItemForLaunch || (async (item) => item)
+
+function isTileImageIcon(icon) {
+  return typeof icon === 'string' && /^(https?:|data:image\/|ztools:)/.test(icon)
+}
+
+function canPinItem(item) {
+  if (!item || typeof item !== 'object') return false
+  return item.type === 'plugin' || item.type === 'local-app'
+}
+
+const canPinActiveItem = computed(() => canPinItem(visibleItems.value[activeIndex.value]))
+
+async function handleTogglePin(item) {
+  if (!canPinItem(item)) return
+  const res = await toggleItemPin(item)
+  if (res?.success) {
+    showNoViewFeedback(
+      res.pinned
+        ? `✓ 已固定「${item.name || item.title}」到悬浮条首屏`
+        : `✓ 已取消固定「${item.name || item.title}」`,
+      false
+    )
+  } else if (res?.error) {
+    showNoViewFeedback(res.error, true)
+  }
+}
+
+async function handleAddLocalApp() {
+  const res = await addLocalApp()
+  if (res?.added > 0) {
+    showNoViewFeedback(`✓ 已添加 ${res.added} 个本地软件`, false)
+  } else if (res?.error) {
+    showNoViewFeedback(res.error, true)
+  }
+}
 
 // 结果再多也只渲染前 50 条：键盘上下选择、Enter 与动作面板都只在这 50 条里进行
 const MAX_VISIBLE_ITEMS = 50
@@ -453,6 +553,31 @@ const activeItemActions = computed(() => {
     })
   }
 
+  if (canPinItem(item)) {
+    actions.push({
+      type: 'Action',
+      props: {
+        title: item.pinned ? '从悬浮条首屏取消固定' : '固定到悬浮条首屏',
+        shortcut: { modifiers: ['Ctrl'], key: 'P' },
+        onAction: () => {
+          actionPanelVisible.value = false
+          handleTogglePin(item)
+        }
+      }
+    })
+  }
+
+  actions.push({
+    type: 'Action',
+    props: {
+      title: '添加本地软件到悬浮条',
+      onAction: () => {
+        actionPanelVisible.value = false
+        handleAddLocalApp()
+      }
+    }
+  })
+
   if (item.pluginId) {
     actions.push({
       type: 'Action',
@@ -565,6 +690,24 @@ useKeymap(KEYMAP_SCOPES.PAGE, {
     toggleActionPanel()
     return true
   },
+  'Ctrl+P': () => {
+    if (activeDeclarativePlugin.value || loadingDeclarative.value || declarativeLoadError.value) return false
+    const cur = visibleItems.value[activeIndex.value]
+    if (canPinItem(cur)) {
+      handleTogglePin(cur)
+      return true
+    }
+    return false
+  },
+  'Alt+1': () => triggerPinnedByIndex(0),
+  'Alt+2': () => triggerPinnedByIndex(1),
+  'Alt+3': () => triggerPinnedByIndex(2),
+  'Alt+4': () => triggerPinnedByIndex(3),
+  'Alt+5': () => triggerPinnedByIndex(4),
+  'Alt+6': () => triggerPinnedByIndex(5),
+  'Alt+7': () => triggerPinnedByIndex(6),
+  'Alt+8': () => triggerPinnedByIndex(7),
+  'Alt+9': () => triggerPinnedByIndex(8),
   'Ctrl+M': () => {
     expandToDashboard()
     return true
@@ -648,14 +791,52 @@ function openFile(filePath) {
   return runFileAction(filePath, 'openPath', '打开文件失败')
 }
 
+/** 冷启动时用使用记录占位的程序：等程序列表返回、拿到打开授权后再打开 */
+async function openPendingApplication(item) {
+  const ready = await prepareItemForLaunch(item)
+  if (!ready) {
+    showNoViewFeedback('程序列表读取失败或该程序已卸载', true)
+    return
+  }
+  await openFile(ready.path)
+}
+
 function showInFolder(filePath) {
   return runFileAction(filePath, 'showItemInFolder', '定位文件失败')
+}
+
+function triggerPinnedByIndex(idx) {
+  if (activeDeclarativePlugin.value || loadingDeclarative.value || declarativeLoadError.value) return false
+  const target = pinnedItems.value[idx]
+  if (!target) return false
+  executeItem(target)
+  return true
+}
+
+async function openPanelEntry(item) {
+  if (!item?.id) return
+  const searchAtStart = query.value
+  try {
+    const bridge = window.__ztoolsLauncher
+    if (typeof bridge?.openPanelItem !== 'function') {
+      throw new Error('当前环境不支持启动该条目')
+    }
+    const itemType = item.panelItemType || (item.type === 'local-app' ? 'local' : 'system_tool')
+    const res = await bridge.openPanelItem(item.id, itemType, query.value)
+    if (res?.success === false) {
+      throw new Error(res?.error?.message || res?.error || '打开条目失败')
+    }
+    finishExternalLaunch(searchAtStart)
+  } catch (err) {
+    console.warn('[LauncherBar] 打开面板条目失败:', err)
+    showNoViewFeedback(err?.message || '打开条目失败', true)
+  }
 }
 
 function executeItem(item) {
   if (!item) return
   if (!item.omitFromFrecencyTracking) {
-    recordUsage(item.key || item.pluginId)
+    recordUsage(item.key || item.pluginId, item)
   }
   if (item.type === 'inline-calculator' || item.type === 'inline-color') {
     Promise.resolve(item.action?.()).then((ok) => {
@@ -667,8 +848,13 @@ function executeItem(item) {
     })
     return
   }
+  if (item.type === 'local-app' || item.type === 'system-tool') {
+    openPanelEntry(item)
+    return
+  }
   if (item.type === 'file') {
-    openFile(item.path)
+    if (item.pendingGrant) void openPendingApplication(item)
+    else openFile(item.path)
   } else if (typeof item.action === 'function') {
     item.action()
   } else if (item.mode === 'no-view' && item.pluginId) {
@@ -870,6 +1056,7 @@ function hideLauncher() {
 
 function handleWindowFocus() {
   actionPanelVisible.value = false
+  void refreshPanelData()
   if (!activeDeclarativePlugin.value && !loadingDeclarative.value && !declarativeLoadError.value) {
     inputRef.value?.focus()
     inputRef.value?.select?.()
@@ -1005,11 +1192,103 @@ watch(
   color: var(--rc-text-primary);
 }
 
-/* 余烬发丝线：从左侧淡入淡出，暗示「从这里点亮」 */
+/* 主题强调发丝线：从左侧淡入淡出，暗示「从这里点亮」 */
 .launcher-hairline {
   height: 1px;
   flex-shrink: 0;
-  background: linear-gradient(90deg, rgba(255, 107, 61, 0), rgba(255, 107, 61, 0.42) 14%, rgba(255, 107, 61, 0) 55%);
+  background: linear-gradient(90deg, rgba(var(--rc-accent-rgb), 0), rgba(var(--rc-accent-rgb), 0.42) 14%, rgba(var(--rc-accent-rgb), 0) 55%);
+}
+
+.launcher-pinned-section {
+  flex-shrink: 0;
+  padding: 8px 14px 10px;
+  border-bottom: 1px solid var(--rc-border);
+  background: var(--rc-surface);
+}
+
+.launcher-pinned-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 6px;
+  padding: 0 2px;
+}
+
+.launcher-pinned-title {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--rc-text-muted);
+}
+
+.launcher-pinned-hint {
+  font-size: 11px;
+  color: var(--rc-text-faint);
+}
+
+.launcher-pinned-grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.launcher-pinned-tile {
+  position: relative;
+  width: 68px;
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  padding: 6px 4px 5px;
+  border-radius: 8px;
+  border: 1px solid var(--rc-border);
+  background: var(--rc-surface-hover);
+  cursor: pointer;
+  transition: background-color 0.12s ease, border-color 0.12s ease;
+}
+
+.launcher-pinned-tile:hover {
+  border-color: var(--rc-border-highlight);
+  background: var(--rc-surface-active);
+}
+
+.launcher-pinned-unpin {
+  position: absolute;
+  top: 2px;
+  right: 2px;
+  width: 16px;
+  height: 16px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--rc-text-faint);
+  font-size: 12px;
+  line-height: 1;
+  opacity: 0;
+  cursor: pointer;
+}
+
+.launcher-pinned-tile:hover .launcher-pinned-unpin {
+  opacity: 1;
+}
+
+.launcher-pinned-unpin:hover {
+  background: var(--rc-surface);
+  color: var(--rc-text-primary);
+}
+
+.launcher-pinned-name {
+  max-width: 100%;
+  font-size: 11px;
+  line-height: 14px;
+  color: var(--rc-text-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .launcher-list {

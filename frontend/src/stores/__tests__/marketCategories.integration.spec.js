@@ -57,7 +57,7 @@ describe('市场分类从 CDN、本地快照和内置清单到筛选与统计', 
 
   it('别名归一、组合分类拆分、重复计数消除；未分类插件可从分组页找到', async () => {
     const categories = await getCategories()
-    expect(categories.map(({ name }) => name)).toEqual(['办公效率', '系统工具', '图像媒体', '网络工具', '其他工具'])
+    expect(categories.map(({ name }) => name)).toEqual(['办公效率', '系统工具', '文件管理', '图像媒体', '网络工具', '其他工具'])
     const manager = new StoreCatalogManager({
       fetchRemote: () => getMarketPlugins({ per_page: 100 }),
       getOfficialList: () => []
@@ -70,10 +70,11 @@ describe('市场分类从 CDN、本地快照和内置清单到筛选与统计', 
       expect(result.total, category.name).toBe(category.pluginsCount)
       expect(store.categoryCounts[category.name], category.name).toBe(result.total)
     }
-    expect((await manager.query({ category: '网络工具' })).list.map(({ id }) => id)).toEqual(['browser-history'])
+    expect((await manager.query({ category: '文件管理' })).list.map(({ id }) => id)).toEqual(['batch-rename'])
+    expect((await manager.query({ category: '网络工具' })).list.map(({ id }) => id)).toEqual(['browser-history', 'network-adapter'])
     expect((await manager.query({ category: '系统工具' })).list.map(({ id }) => id)).toEqual(['network-adapter'])
     expect((await manager.query({ category: '其他工具' })).total).toBe(3)
-    expect((await getMarketPlugins({ category: 'browser' })).list.map(({ id }) => id)).toEqual(['browser-history'])
+    expect((await getMarketPlugins({ category: 'browser' })).list.map(({ id }) => id)).toEqual(['browser-history', 'network-adapter'])
     expect((await manager.query({ category: '图像媒体' })).total).toBe(2)
   })
 
@@ -100,8 +101,9 @@ describe('市场分类从 CDN、本地快照和内置清单到筛选与统计', 
     })
     const result = await manager.ensureCatalog()
     expect(result.isFallback).toBe(true)
-    expect((await manager.query({ category: '办公效率' })).total).toBe(4)
-    expect((await manager.query({ category: '网络工具' })).total).toBe(1)
+    expect((await manager.query({ category: '办公效率' })).total).toBe(3)
+    expect((await manager.query({ category: '文件管理' })).total).toBe(1)
+    expect((await manager.query({ category: '网络工具' })).total).toBe(2)
     expect(result.catalog.every((entry) => Array.isArray(entry.category))).toBe(true)
   })
 
@@ -116,11 +118,11 @@ describe('市场分类从 CDN、本地快照和内置清单到筛选与统计', 
     } finally { wrapper.unmount() }
   })
 
-  it('离线的全部页面仍展示快照中的 AI 与未分类插件，并提供可用分类入口', async () => {
+  it('离线的全部页面仍展示快照中的文件管理与未分类插件，并提供可用分类入口', async () => {
     vi.spyOn(Date, 'now').mockReturnValue(Date.now() + 60001)
     vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new Error('断网')))
     const snapshot = [
-      { id: 'offline-ai', name: '离线 AI 插件', category: 'AI工具' },
+      { id: 'offline-files', name: '离线文件插件', category: '文件管理' },
       { id: 'offline-unknown', name: '离线未分类插件', category: [] }
     ]
     const manager = new StoreCatalogManager({
@@ -140,14 +142,12 @@ describe('市场分类从 CDN、本地快照和内置清单到筛选与统计', 
     } })
     try {
       await flushPromises()
-      expect(wrapper.findAll('article').map((item) => item.text())).toEqual(['离线 AI 插件', '离线未分类插件'])
-      const chips = wrapper.findAll('[aria-label="分类"] .seg-btn')
-      expect(chips.map((chip) => chip.text())).toEqual(['全部', 'AI工具', '其他工具'])
-      await chips.find((chip) => chip.text() === '其他工具').trigger('click')
+      expect(wrapper.findAll('article').map((item) => item.text())).toEqual(['离线文件插件', '离线未分类插件'])
+      expect(wrapper.vm.visibleMarketCategories.map((c) => c.name)).toEqual(['全部', '文件管理', '其他工具'])
+      await router.push('/list/其他工具')
       await flushPromises()
       expect(wrapper.findAll('article').map((item) => item.text())).toEqual(['离线未分类插件'])
-      // 来源切换上的「全部」数量按当前分类统计（真实目录，不打桩）
-      expect(wrapper.find('[aria-label="来源"] .seg-btn .seg-count').text()).toBe('1')
+      expect(wrapper.vm.sourceCounts.all).toBe(1)
     } finally { wrapper.unmount() }
   })
 })

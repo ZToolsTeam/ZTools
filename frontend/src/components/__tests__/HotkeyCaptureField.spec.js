@@ -86,4 +86,56 @@ describe('HotkeyCaptureField 录入框', () => {
     // 录入中不显示清除按钮
     expect(wrapper.find('.clear-btn').exists()).toBe(false)
   })
+
+  it('录制状态上报：默认未录制挂载零上报，切换录入框时后置释放不会冲掉新激活态', async () => {
+    const previousZtools = window.ztools
+    const [{ default: Events }, { validateMethodParams }] = await Promise.all([
+      import('../../../public/js/cef-ipc/src/core/events.js'),
+      import('../../../../electron-client/src/contracts/method-params.ts')
+    ])
+    const publishedPayloads = []
+    const transport = {
+      _debug: false,
+      call: async (method, params) => {
+        const cloned = structuredClone(params)
+        validateMethodParams(method, cloned)
+        if (method === 'event_publish' && cloned.envelope.type === 'hotkey_recorder_active') {
+          publishedPayloads.push(cloned.envelope.payload)
+        }
+        return { success: true }
+      }
+    }
+    window.ztools = { events: new Events(transport) }
+
+    try {
+      const first = mount(HotkeyCaptureField, { attachTo: document.body, props: { hotkey: 'Ctrl+1' } })
+      const second = mount(HotkeyCaptureField, { attachTo: document.body, props: { hotkey: 'Ctrl+2' } })
+      await nextTick()
+      // 初始未录制挂载多个录入框，不应发送任何无意义的 hotkey_recorder_active 事件
+      expect(publishedPayloads).toEqual([])
+
+      // 先激活第 2 个录入框
+      await second.setProps({ recording: true })
+      await nextTick()
+      expect(publishedPayloads.at(-1)).toEqual({ active: true })
+
+      // 从第 2 个录入框直接切换到第 1 个录入框：第 1 个开启（含 focusin 幂等上报），第 2 个释放时检测到仍有激活框绝不发 false
+      publishedPayloads.length = 0
+      await first.setProps({ recording: true })
+      await second.setProps({ recording: false })
+      await nextTick()
+      expect(publishedPayloads.length).toBeGreaterThanOrEqual(1)
+      expect(publishedPayloads.every((item) => item.active === true)).toBe(true)
+
+      // 结束第 1 个录入框录制，此时无其他激活录入框，正常发送 { active: false }
+      await first.setProps({ recording: false })
+      await nextTick()
+      expect(publishedPayloads.at(-1)).toEqual({ active: false })
+
+      first.unmount()
+      second.unmount()
+    } finally {
+      window.ztools = previousZtools
+    }
+  })
 })

@@ -215,7 +215,7 @@ describe('Details Page', () => {
     )
   })
 
-  it('开源版详情页只有「详情」Tab，不显示留言入口，切到不存在的 Tab 不生效', async () => {
+  it('开源版详情页只有头部与「插件详情」卡片：没有 Tab、留言卡与版本记录，误发「查看留言」不报错', async () => {
     apiMocks.getPluginDetails.mockResolvedValueOnce({
       pluginId: 'plugin-1',
       name: 'Plugin 1',
@@ -243,12 +243,16 @@ describe('Details Page', () => {
     })
     await flushPromises()
 
-    expect(wrapper.findAll('[aria-label="插件信息"] .seg-btn').map((b) => b.text())).toEqual(['详情'])
+    expect(wrapper.find('[aria-label="插件信息"]').exists()).toBe(false)
+    expect(wrapper.findAll('.detail-card').map((card) => card.attributes('data-section'))).toEqual(['detail'])
+    expect(wrapper.get('.detail-card .card-title').text()).toBe('插件详情')
+    expect(wrapper.find('.detail-card [data-test="description-panel"]').exists()).toBe(true)
+    // 插件数据里带了版本记录，开源版也不显示
+    expect(wrapper.text()).not.toContain('版本记录')
     expect(wrapper.get('[data-test="comments-action"]').text()).toBe('none')
 
-    // 头部误发「查看留言」或外部切换到不存在的 Tab：保持在详情，不报错
+    // 头部误发「查看留言」：没有留言卡，不滚动也不报错
     await wrapper.get('[data-test="comments-action"]').trigger('click')
-    wrapper.vm.handleTabChange('comments')
     await flushPromises()
     expect(wrapper.find('[data-test="description-panel"]').exists()).toBe(true)
   })

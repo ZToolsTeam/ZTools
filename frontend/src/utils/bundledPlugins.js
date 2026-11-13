@@ -81,13 +81,6 @@ export function isStoreOfficialPlugin(value) {
   return STORE_OFFICIAL_ID_SET.has(normalizeId(value))
 }
 
-const STORE_PLUGIN_DEFAULT_CATEGORIES = Object.freeze({
-  calendar: '办公效率',
-  'everything-file-search': '系统工具',
-  'kill-process': '系统工具',
-  'text-formatter': '办公效率'
-})
-
 /** 展示层保留可读字符串；市场筛选用 normalizeCategoryNames 拆分，不能把整串作为分类名。 */
 export function normalizePluginCategory(rawCategory, fallback = '') {
   const names = normalizeCategoryNames(rawCategory)
@@ -99,9 +92,6 @@ const STORE_OFFICIAL_META_MAP = new Map(
     .filter((p) => p && p.id)
     .map((p) => {
       const id = normalizeId(p.id)
-      const fallbackCat = Object.hasOwn(STORE_PLUGIN_DEFAULT_CATEGORIES, id)
-        ? STORE_PLUGIN_DEFAULT_CATEGORIES[id]
-        : ''
       return [
         id,
         Object.freeze({
@@ -110,7 +100,7 @@ const STORE_OFFICIAL_META_MAP = new Map(
           name: p.name || p.id,
           title: p.name || p.id,
           description: p.description || '',
-          category: normalizePluginCategory(p.category, fallbackCat)
+          category: normalizePluginCategory(p.category)
         })
       ]
     })

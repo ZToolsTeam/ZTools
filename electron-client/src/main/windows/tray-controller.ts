@@ -1,4 +1,4 @@
-import { Menu, Tray, type MenuItem, type MenuItemConstructorOptions } from 'electron'
+import { Menu, Tray, type MenuItemConstructorOptions } from 'electron'
 import { toElectronAccelerator } from '../platform/common/electron-global-shortcut.js'
 
 export const DEFAULT_TRAY_WAKE_ACCELERATOR = 'Alt+Space'
@@ -17,8 +17,6 @@ export interface TrayControllerDependencies {
 }
 
 export interface TrayControllerState {
-  /** 超级面板当前是否启用 */
-  isSuperPanelEnabled?: boolean
   /** 全局唤醒快捷键显示文案（默认 Alt+Space） */
   wakeAccelerator?: string
 }
@@ -35,8 +33,6 @@ export interface TrayControllerOptions extends TrayControllerState {
   openSettings?(): void
   /** 打开检查更新与关于页 (/about) */
   openAbout?(): void
-  /** 切换超级面板启用/暂停状态 */
-  onToggleSuperPanel?(enabled: boolean): void | Promise<void>
   /** 重启应用 */
   relaunchApp?(): void
   /** 退出应用 */
@@ -78,12 +74,10 @@ function invokeSafely(label: string, action: () => void | Promise<void>): void {
 }
 
 export interface BuildTrayMenuContext {
-  isSuperPanelEnabled: boolean
   wakeAccelerator: string
   platform: NodeJS.Platform
   onOpenLauncher(): void
   onShowMainWindow(): void
-  onToggleSuperPanel(menuItem?: Pick<MenuItem, 'checked'>): void
   onOpenSettings(): void
   onOpenAbout(): void
   onRelaunchApp?: (() => void) | undefined
@@ -108,13 +102,6 @@ export function buildTrayMenuTemplate(
       click: () => context.onShowMainWindow()
     },
     { type: 'separator' },
-    {
-      id: 'toggle-super-panel',
-      label: '启用超级面板',
-      type: 'checkbox',
-      checked: context.isSuperPanelEnabled,
-      click: (menuItem) => context.onToggleSuperPanel(menuItem)
-    },
     {
       id: 'open-settings',
       label: '偏好设置...',
@@ -148,19 +135,15 @@ export function buildTrayMenuTemplate(
 
 export class TrayController {
   #tray: TrayAdapter | null = null
-  #isSuperPanelEnabled: boolean
   #wakeAccelerator: string
-  #toggleQueue: Promise<void> = Promise.resolve()
   #stopped = false
 
   constructor(private readonly options: TrayControllerOptions) {
-    this.#isSuperPanelEnabled = options.isSuperPanelEnabled !== false
     this.#wakeAccelerator = normalizeTrayAccelerator(options.wakeAccelerator)
   }
 
   get state(): Required<TrayControllerState> {
     return {
-      isSuperPanelEnabled: this.#isSuperPanelEnabled,
       wakeAccelerator: this.#wakeAccelerator
     }
   }
@@ -196,10 +179,6 @@ export class TrayController {
   updateState(patch: TrayControllerState): void {
     if (this.#stopped) return
     let changed = false
-    if (typeof patch.isSuperPanelEnabled === 'boolean' && patch.isSuperPanelEnabled !== this.#isSuperPanelEnabled) {
-      this.#isSuperPanelEnabled = patch.isSuperPanelEnabled
-      changed = true
-    }
     if (patch.wakeAccelerator !== undefined) {
       const normalized = normalizeTrayAccelerator(patch.wakeAccelerator)
       if (normalized !== this.#wakeAccelerator) {
@@ -212,33 +191,10 @@ export class TrayController {
     }
   }
 
-  #handleToggleSuperPanel(menuItem?: Pick<MenuItem, 'checked'>): void {
-    const operation = this.#toggleQueue.catch(() => undefined).then(async () => {
-      if (this.#stopped) return
-      const previous = this.#isSuperPanelEnabled
-      const next = typeof menuItem?.checked === 'boolean' ? menuItem.checked : !previous
-      this.#isSuperPanelEnabled = next
-      this.#rebuildContextMenu()
-
-      if (typeof this.options.onToggleSuperPanel !== 'function') return
-      try {
-        await this.options.onToggleSuperPanel(next)
-      } catch (error) {
-        console.error('托盘切换超级面板状态失败，已回滚菜单勾选状态', error)
-        if (!this.#stopped) {
-          this.#isSuperPanelEnabled = previous
-          this.#rebuildContextMenu()
-        }
-      }
-    })
-    this.#toggleQueue = operation
-  }
-
   #rebuildContextMenu(): void {
     if (!this.#tray || this.#stopped) return
     const buildMenu = this.options.deps?.buildMenu ?? ((tpl) => Menu.buildFromTemplate(tpl))
     const template = buildTrayMenuTemplate({
-      isSuperPanelEnabled: this.#isSuperPanelEnabled,
       wakeAccelerator: this.#wakeAccelerator,
       platform: this.options.platform ?? process.platform,
       onOpenLauncher: () => invokeSafely('open-launcher', () => {
@@ -249,7 +205,6 @@ export class TrayController {
         }
       }),
       onShowMainWindow: () => invokeSafely('open-dashboard', () => this.options.showMainWindow()),
-      onToggleSuperPanel: (menuItem) => this.#handleToggleSuperPanel(menuItem),
       onOpenSettings: () => invokeSafely('open-settings', () => {
         if (typeof this.options.openSettings === 'function') {
           this.options.openSettings()

@@ -2,6 +2,9 @@ import path from 'node:path'
 import fs from 'node:fs'
 import { createHash } from 'node:crypto'
 import { assertPeMachine, PE_MACHINE_X64 } from './windows-pe-architecture.mjs'
+import { ONNXRUNTIME_WEB_IGNORED_PATHS, ONNXRUNTIME_WEB_PACKAGED_FILES, ONNXRUNTIME_WEB_UNPACK_DIR, ONNXRUNTIME_WEB_VERSION, pruneOnnxRuntimeDependencies } from './onnxruntime-package-contract.mjs'
+
+export { ONNXRUNTIME_WEB_PACKAGED_FILES }
 
 export const WINDOWS_TARGET = Object.freeze({
   platform: 'win32',
@@ -12,14 +15,7 @@ export const WINDOWS_TARGET = Object.freeze({
 
 export const WINDOWS_ELECTRON_VERSION = '43.4.1'
 export const WINDOWS_CLASSIC_LEVEL_VERSION = '3.0.0'
-export const WINDOWS_ONNXRUNTIME_WEB_VERSION = '1.31.1'
-/** 本机文字识别只用到 onnxruntime-web 的 Node 入口与 wasm 运行时，其余构建变体（webgpu/jsep 等，约 100 MB）不打包 */
-export const ONNXRUNTIME_WEB_PACKAGED_FILES = Object.freeze([
-  'package.json',
-  'dist/ort.node.min.js',
-  'dist/ort-wasm-simd-threaded.mjs',
-  'dist/ort-wasm-simd-threaded.wasm'
-])
+export const WINDOWS_ONNXRUNTIME_WEB_VERSION = ONNXRUNTIME_WEB_VERSION
 /** 识别模型复制到应用目录 resources/ocr（文件名与 fetch-ocr-models.mjs 一致） */
 export const OCR_MODEL_RESOURCE_DIRECTORY = 'resources/ocr'
 const PATH_ACCESS_BROKER_NAME = 'ZToolsPathAccessBroker.exe'
@@ -52,9 +48,7 @@ const ignoredWindowsPackagingPaths = [
   /^\/node_modules\/classic-level\/deps(?:\/|$)/,
   /^\/node_modules\/.*\.(?:c|cc|cpp|h|hpp|gyp|d\.ts)$/,
   /^\/node_modules\/classic-level\/prebuilds\/(?!win32-x64(?:\/|$))/,
-  new RegExp(`^/node_modules/onnxruntime-web/(?!(?:${ONNXRUNTIME_WEB_PACKAGED_FILES.map(file => file.replaceAll('.', '\\.')).join('|')}|dist)$)`),
-  // onnxruntime-web 的 Node 入口已打包全部依赖，只需要 onnxruntime-common
-  /^\/node_modules\/(?:@protobufjs|protobufjs|flatbuffers|guid-typescript|long|platform)(?:\/|$)/
+  ...ONNXRUNTIME_WEB_IGNORED_PATHS
 ]
 
 export function getWindowsArtifactRoot(clientRoot, artifactVersion) {
@@ -79,7 +73,8 @@ export function createWindowsPackagerOptions({ clientRoot, outputRoot, applicati
     electronVersion: WINDOWS_ELECTRON_VERSION,
     icon: applicationIcon,
     // onnxruntime-web 的工作线程要从真实文件加载 wasm 运行时，整个目录解到 asar 外
-    asar: { unpack: '**/{.**,**}/**/*.node', unpackDir: '{**/node_modules/exiftool-vendored.*,**/node_modules/onnxruntime-web}' },
+    asar: { unpack: '**/{.**,**}/**/*.node', unpackDir: `{**/node_modules/exiftool-vendored.*,${ONNXRUNTIME_WEB_UNPACK_DIR}}` },
+    afterPrune: [pruneOnnxRuntimeDependencies],
     overwrite: false,
     prune: true,
     ignore: [...ignoredWindowsPackagingPaths]

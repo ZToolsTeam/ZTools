@@ -68,13 +68,14 @@ describe('分类列表补上内置插件用到的分类', () => {
       expect(name.length).toBeLessThanOrEqual(6)
     }
     expect(normalizePluginCategory(['图像媒体', '办公效率'])).toBe('图像媒体 / 办公效率')
-    expect(normalizePluginCategory(['文件管理', '办公效率'])).toBe('办公效率')
+    expect(normalizePluginCategory(['文件管理', '办公效率'])).toBe('文件管理 / 办公效率')
     expect(normalizePluginCategory(['办公效率', '文档处理'])).toBe('办公效率')
     expect(normalizePluginCategory(['办公效率', '文本工具'])).toBe('办公效率')
+    expect(normalizePluginCategory(['效率工具', '办公工具'])).toBe('办公效率')
     expect(normalizePluginCategory('图像媒体 / 办公效率')).toBe('图像媒体 / 办公效率')
     expect(normalizePluginCategory('system')).toBe('系统工具')
     expect(normalizePluginCategory('utility')).toBe('办公效率')
-    expect(normalizePluginCategory(['图像媒体', 'AI工具'])).toBe('图像媒体 / AI工具')
+    expect(normalizePluginCategory(['文件管理', '系统工具'])).toBe('文件管理 / 系统工具')
     // 异常与边界输入防御
     expect(normalizePluginCategory(null, '系统工具')).toBe('系统工具')
     expect(normalizePluginCategory(undefined)).toBe('')

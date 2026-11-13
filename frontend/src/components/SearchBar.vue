@@ -38,6 +38,7 @@ const {
   search,
   clearSearch,
   recordUsage,
+  prepareItemForLaunch,
   highlightParts
 } = useCommandSearch({ enableFileSearch: true })
 
@@ -143,7 +144,7 @@ async function executeCandidate(item) {
     return
   }
   if (!item.omitFromFrecencyTracking) {
-    recordUsage(item.key || item.pluginId)
+    recordUsage(item.key || item.pluginId, item)
   }
   isDropdownOpen.value = false
 
@@ -157,7 +158,10 @@ async function executeCandidate(item) {
         ? window.__ztoolsLauncher
         : window.ztools?.shell
       if (typeof bridge?.openPath !== 'function') throw new Error('文件打开接口不可用')
-      const res = await bridge.openPath(item.path)
+      // 冷启动时用使用记录占位的程序：等程序列表返回、拿到打开授权后再打开
+      const target = item.pendingGrant ? await prepareItemForLaunch(item) : item
+      if (!target) throw new Error('程序列表读取失败或该程序已卸载')
+      const res = await bridge.openPath(target.path)
       if (res !== true && res?.success !== true) {
         throw new Error(res?.error?.message || res?.error || '打开文件失败')
       }

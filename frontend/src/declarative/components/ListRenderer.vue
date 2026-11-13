@@ -5,6 +5,7 @@
       <DeclarativeIcon icon="magnifying-glass" :size="16" class="text-[var(--rc-text-muted)] flex-shrink-0" />
       <input
         ref="searchInputRef"
+        data-decl-role="search-input"
         :value="descriptor.props?.searchText ?? localSearchText"
         type="text"
         :placeholder="descriptor.props?.searchBarPlaceholder || '搜索...'"
@@ -157,6 +158,7 @@
             <div
               v-for="field in workbenchPanelData.fields || []"
               :key="field.id"
+              :data-decl-field-id="field.id || undefined"
               class="flex items-start justify-between gap-2 py-1 border-b border-[var(--rc-border)]/50 last:border-b-0"
             >
               <span class="text-xs text-[var(--rc-text-secondary)] font-medium flex-shrink-0 pt-0.5">
@@ -773,7 +775,7 @@ const visibleGlobalActions = computed(() => {
         return !/^(批量清理|立即清理|一键清理|批量执行|开始批量|清理已选)/.test(text);
       })
     : actions;
-  return (filtered.length > 0 ? filtered : actions.slice(-1)).slice(0, 2);
+  return (filtered.length > 0 ? filtered : actions.slice(-1)).slice(0, 3);
 });
 
 const hasCompactSubHeader = computed(() => {

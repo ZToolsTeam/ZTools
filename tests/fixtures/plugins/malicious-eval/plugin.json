@@ -1,4 +1,7 @@
 {
+  "category": [
+    "办公效率"
+  ],
   "targets": [
     {
       "id": "windows-electron-any",

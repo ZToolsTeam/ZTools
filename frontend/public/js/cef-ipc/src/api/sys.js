@@ -716,7 +716,7 @@ class SystemAPI {
   // ============ 快捷键管理 ============
 
   /**
-   * 重新加载超级面板热键配置
+   * 重新加载快捷键配置
    * @returns {Promise<boolean>}
    */
   async reloadHotkeys() {
@@ -725,7 +725,7 @@ class SystemAPI {
   }
 
   /**
-   * 获取已加入超级面板的本地软件
+   * 获取悬浮条固定的本地软件
    * @returns {Promise<Array<{id: string, name: string}>>}
    */
   async getPanelLocalApps() {

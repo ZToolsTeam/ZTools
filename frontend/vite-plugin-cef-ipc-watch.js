@@ -63,14 +63,6 @@ export default function cefIpcWatch() {
                       `../bin/WebResources/sdk/${filename}`
                     ),
                     desc: 'bin/WebResources/sdk'
-                  },
-                  // create-plugin/public/sdk 目录
-                  {
-                    path: resolve(
-                      __dirname,
-                      `../plugins/create-plugin/public/sdk/${filename}`
-                    ),
-                    desc: 'plugins/create-plugin/public/sdk'
                   }
                 ]
 

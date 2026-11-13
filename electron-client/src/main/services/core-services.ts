@@ -11,7 +11,7 @@ import type { AccountService, HostAnalytics, MainEdition } from '../edition-type
 import { runtimePathsForBusinessDataRoot, type RuntimePaths } from '../runtime/runtime-paths.js'
 import type { OrdinaryNativeRuntimePort } from '../native-host/dll-client-port.js'
 import type { ServiceClient } from '../service/service-client.js'
-import type { NativeInputAdapter } from '../super-panel/input-service.js'
+import type { NativeInputAdapter } from '../platform/native-runtime.js'
 
 import { FrecencyRankingService } from './frecency-ranking-service.js'
 import { HudService } from './hud-service.js'

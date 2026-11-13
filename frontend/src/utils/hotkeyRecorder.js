@@ -1,9 +1,9 @@
 export const HOTKEY_RULE_DESCRIPTION =
-  '支持 Ctrl / Shift / Alt + A-Z、Space 或 F1-F24。'
+  '支持 Ctrl / Shift / Alt + A-Z、Space、反引号（`）、波浪号（~）或 F1-F24。'
 
 export const HOTKEY_WAIT_TEXT = '按下快捷键'
 export const HOTKEY_UNSUPPORTED_TEXT =
-  '仅支持 Ctrl、Shift、Alt 与 A-Z / Space / F1-F24 组合'
+  '仅支持 Ctrl、Shift、Alt 与 A-Z / Space / ` / ~ / F1-F24 组合'
 
 export const isDoubleModifierHotkey = (value) =>
   typeof value === 'string' && /^double(?:ctrl|control|alt|shift)$/i.test(value.replace(/[+\s]/g, ''))
@@ -45,7 +45,7 @@ export function getHotkeyUnsupportedText(platform = 'unknown', allowDoubleTap = 
     return '无法识别宿主平台，快捷键录制暂不可用'
   }
   if (platform === 'macos') {
-    return '仅支持 ⌘ / ⌃ / ⌥ / ⇧ 与 A-Z / Space / F1-F24 组合'
+    return '仅支持 ⌘ / ⌃ / ⌥ / ⇧ 与 A-Z / Space / ` / ~ / F1-F24 组合'
   }
   return allowDoubleTap
     ? `${HOTKEY_UNSUPPORTED_TEXT}，或双击 Ctrl / Alt / Shift`
@@ -100,7 +100,7 @@ export function getHotkeyRuleDescription(platform = 'unknown', allowDoubleTap = 
     return '无法识别宿主平台，暂不能录制快捷键。'
   }
   if (platform === 'macos') {
-    return '支持 ⌘ / ⌃ / ⌥ / ⇧ + A-Z、Space 或 F1-F24；不支持双击修饰键、方向键或数字。'
+    return '支持 ⌘ / ⌃ / ⌥ / ⇧ + A-Z、Space、反引号（`）、波浪号（~）或 F1-F24；不支持双击修饰键、方向键或数字。'
   }
   return allowDoubleTap
     ? HOTKEY_RULE_DESCRIPTION.replace(
@@ -136,10 +136,16 @@ export const isSupportedModifierKey = (key) => SUPPORTED_MODIFIER_KEYS.includes(
 
 export const isSupportedFunctionKey = (key) => /^F([1-9]|1[0-9]|2[0-4])$/i.test(key)
 
-export const isSupportedSpaceKey = (key) => key === ' ' || key === 'Space' || key === 'Spacebar'
+export const isSupportedSpaceKey = (key) =>
+  key === ' ' ||
+  key === 'Space' ||
+  key === 'Spacebar' ||
+  key === '\u00a0' ||
+  key === '\u3000'
 
 export const isSupportedMainKey = (key) =>
-  /^[a-z]$/i.test(key) || isSupportedSpaceKey(key) || isSupportedFunctionKey(key)
+  /^[a-z]$/i.test(key) || isSupportedSpaceKey(key) || isSupportedFunctionKey(key) ||
+  key === '`' || key === '~'
 
 export const resetHotkeyRecorderState = () => {
   lastModifierTap = {
@@ -158,18 +164,33 @@ const isStandaloneModifierTap = (event, modifiers) =>
 
 const normalizeMainKey = (key) => (isSupportedSpaceKey(key) ? 'Space' : key.toUpperCase())
 
+const getMainKeyFromCode = (event) => {
+  const code = event?.code || ''
+  if (code === 'Space') return 'Space'
+  const codeMatch = /^Key([A-Z])$/.exec(code)
+  if (codeMatch) return codeMatch[1]
+  if (/^F([1-9]|1[0-9]|2[0-4])$/i.test(code)) return code
+  if (code === 'Backquote') return event?.shiftKey ? '~' : '`'
+  return ''
+}
+
 const getMainKey = (event, platform) => {
-  if (isSupportedMainKey(event.key)) return event.key
-  // Option+letter produces characters such as π on macOS. Fall back to the
-  // physical key code only for an Option chord so it records as a stable A-Z
-  // accelerator instead of being rejected or storing a layout glyph.
-  if (platform === 'macos' && event.altKey) {
-    const codeMatch = /^Key([A-Z])$/.exec(event.code || '')
-    if (codeMatch) return codeMatch[1]
-    if (/^F([1-9]|1[0-9]|2[0-4])$/i.test(event.code || '')) return event.code
-    if (event.code === 'Space') return 'Space'
+  if (event?.code === 'Space' || isSupportedSpaceKey(event?.key) || event?.keyCode === 32) {
+    return 'Space'
   }
-  return event.key
+  // Option 可能把字母键变成 `、~ 等支持的字符，先还原物理字母键，避免录成另一颗键。
+  if (platform === 'macos' && event?.altKey) {
+    const codeMatch = /^Key([A-Z])$/.exec(event?.code || '')
+    if (codeMatch) return codeMatch[1]
+    if (isSupportedMainKey(event?.key)) return event.key
+    const codeKey = getMainKeyFromCode(event)
+    if (codeKey) return codeKey
+  }
+  if (isSupportedMainKey(event?.key)) return event.key
+  // Windows 中文输入法（IME）下按 Ctrl+Space / Shift+Space / Ctrl+字母 等可能产生 key='Process' (229)，从物理键码还原
+  const fallbackCodeKey = getMainKeyFromCode(event)
+  if (fallbackCodeKey) return fallbackCodeKey
+  return event?.key
 }
 
 export const parseSupportedHotkeyEvent = (event, options = {}) => {
@@ -279,4 +300,121 @@ export function interpretRecorderKeydown(event, options = {}) {
   const result = parseSupportedHotkeyEvent(event, options)
   const isKeys = result.status === 'valid' || (result.status === 'pending' && String(result.text).endsWith('...'))
   return { action: result.status, hotkey: result.hotkey, text: result.text, isKeys }
+}
+
+/**
+ * 供 Electron 主进程在拦截系统级组合键（如 Alt+Space / Ctrl+Space 或已注册全局热键）后，
+ * 将按键安全派发给当前正处于录制状态的隐藏输入框（.hotkey-hidden-input）。
+ * 返回 boolean 表示当前是否存在激活的录制框并已接收该按键。
+ */
+/**
+ * 通知 Electron 主进程当前是否有快捷键录入框处于激活录制状态，
+ * 以便主进程在录制期间临时在系统内核层捕获 Ctrl+Space / Alt+Space / Shift+Space 等组合键。
+ */
+export function notifyHotkeyRecorderActive(active) {
+  if (typeof window === 'undefined') return
+  const payload = { active: Boolean(active) }
+  try {
+    if (typeof window.ztools?.events?.emit === 'function') {
+      void Promise.resolve(window.ztools.events.emit('hotkey_recorder_active', payload)).catch(
+        () => undefined
+      )
+      return
+    }
+    const rawPublish = window.__ztoolsElectron?.transport?.methods?.event_publish
+    if (typeof rawPublish === 'function') {
+      void Promise.resolve(
+        rawPublish({
+          envelope: {
+            envelopeId:
+              typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
+                ? `rec_${crypto.randomUUID()}`
+                : `rec_${Date.now()}`,
+            version: 'v1',
+            timestamp: Date.now(),
+            type: 'hotkey_recorder_active',
+            scope: 'system',
+            source: { kind: 'page' },
+            target: { broadcast: true },
+            payload
+          }
+        })
+      ).catch(() => undefined)
+    }
+  } catch {
+    // 忽略非宿主环境异常
+  }
+}
+
+export function dispatchSyntheticRecorderHotkey(payload = {}) {
+  if (typeof document === 'undefined') return false
+  const active = document.activeElement
+  let targetInput =
+    active && active.classList?.contains?.('hotkey-hidden-input') ? active : null
+  if (!targetInput && typeof document.querySelector === 'function') {
+    targetInput = document.querySelector(
+      '.hotkey-recorder.recording:not(.loading) .hotkey-hidden-input'
+    )
+  }
+  if (!targetInput) return false
+  const recorder = targetInput.closest?.('.hotkey-recorder')
+  if (recorder && (!recorder.classList.contains('recording') || recorder.classList.contains('loading'))) {
+    return false
+  }
+  const key = typeof payload.key === 'string' && payload.key ? payload.key : ' '
+  const code = typeof payload.code === 'string' && payload.code ? payload.code : 'Space'
+  const event = new KeyboardEvent('keydown', {
+    key,
+    code,
+    keyCode: code === 'Space' ? 32 : 0,
+    which: code === 'Space' ? 32 : 0,
+    ctrlKey: Boolean(payload.ctrlKey),
+    altKey: Boolean(payload.altKey),
+    shiftKey: Boolean(payload.shiftKey),
+    metaKey: Boolean(payload.metaKey),
+    bubbles: true,
+    cancelable: true
+  })
+  targetInput.dispatchEvent(event)
+  return true
+}
+
+let recorderFocusListenersBound = false
+function bindGlobalRecorderFocusListeners() {
+  if (recorderFocusListenersBound || typeof document === 'undefined' || typeof document.addEventListener !== 'function') {
+    return
+  }
+  recorderFocusListenersBound = true
+  document.addEventListener(
+    'focusin',
+    (event) => {
+      const target = event?.target
+      if (target && target.classList?.contains?.('hotkey-hidden-input')) {
+        notifyHotkeyRecorderActive(true)
+      }
+    },
+    true
+  )
+  document.addEventListener(
+    'focusout',
+    (event) => {
+      const target = event?.target
+      if (!target || !target.classList?.contains?.('hotkey-hidden-input')) return
+      queueMicrotask(() => {
+        const stillFocused = document.activeElement?.classList?.contains?.('hotkey-hidden-input')
+        const stillRecording =
+          typeof document.querySelector === 'function' &&
+          Boolean(document.querySelector('.hotkey-recorder.recording:not(.loading)'))
+        if (!stillFocused && !stillRecording) {
+          notifyHotkeyRecorderActive(false)
+        }
+      })
+    },
+    true
+  )
+}
+
+if (typeof window !== 'undefined') {
+  window.__ztoolsDispatchRecorderHotkey = dispatchSyntheticRecorderHotkey
+  bindGlobalRecorderFocusListeners()
 }

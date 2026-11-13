@@ -48,6 +48,21 @@ export const PERMISSIONS = [
 export const PERMISSION_SET = new Set(PERMISSIONS)
 
 /**
+ * 插件市场 7 大标准分类（客户端与官网统一按此白名单归类，禁止填「其他工具」或非标英文别名）
+ */
+export const PLUGIN_CATEGORIES = Object.freeze([
+  '办公效率',
+  '系统工具',
+  '文件管理',
+  '图像媒体',
+  '开发工具',
+  '网络工具',
+  '安全隐私'
+])
+
+export const PLUGIN_CATEGORY_SET = new Set(PLUGIN_CATEGORIES)
+
+/**
  * 高危敏感权限集合（需官方人工审核）
  */
 export const HIGH_RISK_PERMISSIONS = new Set([
@@ -179,6 +194,27 @@ function validateTargets(manifest, errors) {
   }
   if (!Array.isArray(manifest.nativeComponents)) {
     errors.push('声明 targets 时 nativeComponents 必须为数组；纯 JS 插件写 []')
+  }
+}
+
+function validateCategories(manifest, errors) {
+  if (manifest.revoked === true) return
+  if (manifest.category === undefined || manifest.category === null || manifest.category === '') {
+    errors.push(`缺少必填字段: category（请选择 1-2 个标准分类: ${PLUGIN_CATEGORIES.join(' / ')}）`)
+    return
+  }
+  if (!Array.isArray(manifest.category) || manifest.category.length === 0 || manifest.category.length > 2) {
+    errors.push(`category 必须为包含 1-2 个标准分类的数组（可选: ${PLUGIN_CATEGORIES.join(' / ')}）`)
+    return
+  }
+  const seenCats = new Set()
+  for (const cat of manifest.category) {
+    if (typeof cat !== 'string' || !PLUGIN_CATEGORY_SET.has(cat)) {
+      errors.push(`未知或非标准的 category: "${cat}"。可选标准分类为: ${PLUGIN_CATEGORIES.join(' / ')}`)
+      continue
+    }
+    if (seenCats.has(cat)) errors.push(`category 中存在重复声明的分类: "${cat}"`)
+    seenCats.add(cat)
   }
 }
 
@@ -380,8 +416,9 @@ export function validatePluginManifest(manifest, options = {}) {
     }
   }
 
-  // 12. 平台声明（targets）
+  // 12. 平台声明（targets）与市场标准分类（category）
   validateTargets(manifest, errors)
+  validateCategories(manifest, errors)
 
   // 13. 发布状态：草稿（功能未完成，不发布）与下架（已发布后撤下）
   for (const [flag, reasonKey] of [['draft', 'draftReason'], ['revoked', 'revokedReason']]) {

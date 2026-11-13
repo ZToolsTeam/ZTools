@@ -78,6 +78,36 @@ export const Clipboard = {
   },
 
   /**
+   * 读取剪贴板中的文件路径列表（经宿主安全校验与授权后返回）
+   */
+  async readFiles(): Promise<string[]> {
+    const bridge = getDeclarativeBridge();
+    if (bridge?.readClipboardFiles) {
+      const files = await bridge.readClipboardFiles();
+      return Array.isArray(files) ? files.filter((item): item is string => typeof item === "string" && item.length > 0) : [];
+    }
+    return [];
+  },
+
+  /**
+   * 读取剪贴板中的图片（支持 Base64 dataUrl 或宿主生成的临时缓存文件路径）
+   */
+  async readImage(): Promise<{
+    image?: string;
+    useTempFile?: boolean;
+    tempFile?: string;
+    size?: number;
+    width?: number;
+    height?: number;
+  } | null> {
+    const bridge = getDeclarativeBridge();
+    if (bridge?.readClipboardImage) {
+      return await bridge.readClipboardImage();
+    }
+    return null;
+  },
+
+  /**
    * 清空剪贴板
    */
   async clear(): Promise<void> {

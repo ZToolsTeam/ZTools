@@ -81,7 +81,7 @@ test('文件历史只认当前平台的本机绝对路径：其它系统的路�
   for (const [value, darwin, win32] of [
     ['/Users/me/a.txt', true, false],
     ['/Users/me/带\\反斜杠.txt', true, false],
-    ['C:\\Users\\qihong\\Downloads\\ZTools-WinLive\\a.txt', false, true],
+    ['C:\\Users\\Geek\\Downloads\\sample\\a.txt', false, true],
     ['c:/Users/a.txt', false, true],
     ['\\\\server\\share\\a.txt', false, true],
     ['//server/share/a.txt', true, true],
@@ -98,7 +98,7 @@ test('文件历史只认当前平台的本机绝对路径：其它系统的路�
 
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'clipboard-foreign-'))
   const dbPath = path.join(directory, 'history.sqlite')
-  const foreign = 'C:\\Users\\qihong\\Downloads\\ZTools-WinLive-20261029-001331\\ZTools-OCR-English.txt'
+  const foreign = 'C:\\Users\\Geek\\Downloads\\sample-ocr\\ZTools-OCR-English.txt'
   let service = new ClipboardHistoryService({ dbPath, platform: 'darwin' })
   try {
     // 混合：只保留本机路径

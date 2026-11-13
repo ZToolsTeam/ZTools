@@ -679,7 +679,7 @@ export const OFFICIAL_PLUGINS_MAP = Object.freeze({
     name: '汇率换算',
     title: '汇率换算',
     description: '全球 160+ 国家法定与加密货币实时汇率牌价、离线缓存与多向极速换算',
-    category: '金融理财',
+    category: '办公效率',
     keyword: 'currency exchange 汇率 换算 货币 美元 人民币 欧元 rates',
     faIcon: 'fa-exchange',
     version: '1.0.0',

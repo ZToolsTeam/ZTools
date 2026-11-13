@@ -968,6 +968,21 @@ describe('MyPage Component', () => {
       expect(names(wrapper).slice(0, 1)).toEqual(['Plugin 2'])
     })
 
+    it('[回归] 切换标签、展开全部并移动卡片焦点后，从插件返回仍保持原标签、展开态与卡片焦点', async () => {
+      await mountPage({ installedPlugins: basePlugins })
+      wrapper.vm.activeTab = 'favorites'
+      wrapper.vm.showAllPlugins = true
+      wrapper.vm.focusedCardIndex = 2
+      await wrapper.vm.$nextTick()
+      wrapper.unmount()
+
+      wrapper = mount(MyPage, { ...mountOptions, global: { ...mountOptions.global, plugins: [router] } })
+      await wrapper.vm.$nextTick()
+      expect(wrapper.vm.activeTab).toBe('favorites')
+      expect(wrapper.vm.showAllPlugins).toBe(true)
+      expect(wrapper.vm.focusedCardIndex).toBe(2)
+    })
+
     it('首次启动仍显示加载状态', async () => {
       pluginsStore.$patch({ installedPlugins: basePlugins })
       router = createTestRouter()
@@ -999,6 +1014,145 @@ describe('MyPage Component', () => {
     pluginsStore.installingSet.delete('plugin-1')
     await wrapper.vm.handlePluginInstalled({ payload: { pluginId: 'plugin-1', operationId: 'external-update', success: true, isUpdate: true } })
     expect(toastSpies.toastSuccess).toHaveBeenCalled()
+  })
+
+  describe('方案A横向启动卡、悬浮快捷菜单与收藏未安装区分', () => {
+    const switchToFavorites = async () => {
+      const seg = wrapper.findComponent({ name: 'RcSegmented' })
+      seg.vm.$emit('update:modelValue', 'favorites')
+      seg.vm.$emit('change', 'favorites')
+      await flushPromises()
+    }
+
+    it('横向双行启动卡展示简介及缺失字段时的多级回退，骨架屏同步为双行结构', async () => {
+      const customInstalled = [
+        { pluginId: 'with-desc', name: '解压与压缩', description: '免解压预览压缩包', category: '办公效率' },
+        { pluginId: 'cat-only', name: '批量重命名', description: '   ', category: '文件工具' },
+        { pluginId: 'bare-item', name: '极简工具' }
+      ]
+      await mountPage({
+        installedPlugins: customInstalled,
+        favoritePluginsList: [customInstalled[0]],
+        favorites: ['with-desc'],
+        config: { 'my-page.pinned': '["with-desc"]' }
+      })
+
+      const tiles = wrapper.findAll('.plugin-tile')
+      expect(tiles[0].find('.tile-desc').text()).toBe('免解压预览压缩包')
+      expect(tiles[0].find('.tile-pin').exists()).toBe(true)
+      expect(tiles[1].find('.tile-desc').text()).toBe('文件工具')
+      expect(tiles[2].find('.tile-desc').text()).toBe('点击立即打开')
+
+      const skeleton = wrapper.find('.plugin-tile-skeleton')
+      expect(skeleton.find('.skeleton-name').exists()).toBe(true)
+      expect(skeleton.find('.skeleton-desc').exists()).toBe(true)
+    })
+
+    it('点击卡片右侧快捷菜单入口呼出菜单且不误触发打开插件，再次点击收起，跨卡片点击无缝切换且防视口溢出', async () => {
+      await mountPage({ installedPlugins: basePlugins })
+      const tiles = wrapper.findAll('.plugin-tile')
+      const moreBtn0 = tiles[0].find('.tile-more-btn')
+      const moreBtn1 = tiles[1].find('.tile-more-btn')
+      expect(moreBtn0.exists()).toBe(true)
+
+      // 模拟靠窗口右下角边缘的按钮矩形，验证菜单坐标防溢出钳制
+      vi.spyOn(moreBtn0.element, 'getBoundingClientRect').mockReturnValue({
+        left: 990,
+        right: 1014,
+        top: 740,
+        bottom: 764,
+        width: 24,
+        height: 24
+      })
+
+      await moreBtn0.trigger('click')
+      await flushPromises()
+      expect(pluginsStore.openPlugin).not.toHaveBeenCalled()
+      expect(wrapper.vm.showMenu).toBe(true)
+      expect(wrapper.vm.selectedPlugin).toEqual(basePlugins[0])
+      expect(wrapper.vm.menuPosition.x).toBeLessThanOrEqual((window.innerWidth || 1024) - 180)
+      expect(wrapper.vm.menuPosition.y).toBeLessThanOrEqual((window.innerHeight || 768) - 210)
+
+      // 跨卡片点击另一张卡的快捷入口：直接切换到第二张卡的菜单
+      await moreBtn1.trigger('click')
+      await flushPromises()
+      expect(wrapper.vm.showMenu).toBe(true)
+      expect(wrapper.vm.selectedPlugin).toEqual(basePlugins[1])
+
+      // 再次点击同一张卡的快捷入口：互斥收起菜单
+      await moreBtn1.trigger('click')
+      await flushPromises()
+      expect(wrapper.vm.showMenu).toBe(false)
+      expect(wrapper.vm.selectedPlugin).toBe(null)
+    })
+
+    it('收藏页区分已安装与未安装卡片：视觉类名、快捷菜单安装动作、下载中互斥与键盘回车/删除边界', async () => {
+      const favList = [
+        { pluginId: 'plugin-1', name: '已装收藏项', description: '本地可用' },
+        { pluginId: 'remote-fav', name: '未装收藏项', description: '待下载安装' }
+      ]
+      pluginsStore.installPlugin = vi.fn().mockResolvedValue({ success: true })
+
+      await mountPage({
+        installedPlugins: [favList[0]],
+        favoritePluginsList: favList,
+        favorites: ['plugin-1', 'remote-fav']
+      })
+      await switchToFavorites()
+
+      const favTiles = wrapper.findAll('.plugin-tile')
+      expect(favTiles).toHaveLength(2)
+      expect(favTiles[0].classes()).not.toContain('is-uninstalled')
+      expect(favTiles[0].find('.tile-uninstalled-badge').exists()).toBe(false)
+      expect(favTiles[1].classes()).toContain('is-uninstalled')
+      expect(favTiles[1].find('.tile-uninstalled-badge').exists()).toBe(true)
+      expect(favTiles[1].find('.tile-desc').text()).toBe('未安装 · 点击查看详情')
+
+      // 打开未安装收藏卡片的快捷菜单：展示「安装」「查看详情」「取消收藏」，不展示「打开」「固定到最前」「卸载」
+      await favTiles[1].find('.tile-more-btn').trigger('click')
+      await flushPromises()
+      const menuText = wrapper.find('.context-menu').text()
+      expect(menuText).toContain('安装')
+      expect(menuText).toContain('查看详情')
+      expect(menuText).toContain('取消收藏')
+      expect(menuText).not.toContain('打开')
+      expect(menuText).not.toContain('固定到最前')
+      expect(menuText).not.toContain('卸载')
+
+      // 点击菜单中的「安装」触发安装流程并自动收起菜单
+      const installItem = wrapper.findAll('.context-menu .menu-item').find((item) => item.text() === '安装')
+      await installItem.trigger('click')
+      await flushPromises()
+      expect(pluginsStore.installPlugin).toHaveBeenCalledWith('remote-fav', { autoOpen: true })
+      expect(wrapper.vm.showMenu).toBe(false)
+
+      // 并发下载中状态：菜单显示禁用态「安装中...」
+      pluginsStore.$patch({ downloadingSet: new Set(['remote-fav']) })
+      await favTiles[1].find('.tile-more-btn').trigger('click')
+      await flushPromises()
+      expect(wrapper.find('.context-menu .menu-item.disabled').text()).toBe('安装中...')
+      wrapper.vm.hideMenu()
+
+      // [破坏性边界] 聚焦到未安装收藏卡片按 Delete 不弹卸载确认框也不报错；按 Enter 跳转详情页而非启动报错
+      Modal.confirm.mockClear()
+      toastSpies.toastError.mockClear()
+      wrapper.vm.focusedCardIndex = 1
+      await flushPromises()
+
+      window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Delete', bubbles: true }))
+      await flushPromises()
+      expect(Modal.confirm).not.toHaveBeenCalled()
+      expect(pluginsStore.uninstallPlugin).not.toHaveBeenCalled()
+      expect(toastSpies.toastError).not.toHaveBeenCalled()
+
+      const pushSpy = vi.spyOn(router, 'push').mockResolvedValue(undefined)
+      window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }))
+      await flushPromises()
+      expect(pluginsStore.openPlugin).not.toHaveBeenCalled()
+      expect(pushSpy).toHaveBeenCalledWith(
+        expect.objectContaining({ name: 'details', params: { pluginId: 'remote-fav' } })
+      )
+    })
   })
 
 })

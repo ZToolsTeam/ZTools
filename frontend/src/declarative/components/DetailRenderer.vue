@@ -15,7 +15,7 @@
         <span>加载中…</span>
       </div>
       <!-- 块间距由 .declarative-markdown 自己的样式控制 -->
-      <div class="declarative-markdown" v-html="renderedHtml" />
+      <MarkdownContent :markdown="descriptor.props?.markdown || ''" />
     </div>
 
     <div
@@ -34,7 +34,7 @@
         <SpinnerIcon class="w-4 h-4" aria-hidden="true" />
         <span>加载中…</span>
       </div>
-      <div class="declarative-markdown" v-html="renderedHtml" />
+      <MarkdownContent :markdown="descriptor.props?.markdown || ''" />
     </div>
 
     <div
@@ -51,7 +51,7 @@
 import { SpinnerIcon } from '@/utils/appIcons'
 import { computed } from "vue";
 import DetailMetadata from "./DetailMetadata.vue";
-import { renderMarkdown } from "../markdown.js";
+import MarkdownContent from "./MarkdownContent.vue";
 
 const props = defineProps({
   descriptor: {
@@ -76,10 +76,6 @@ const metadataItems = computed(() => {
   return Array.isArray(children) ? children : [];
 });
 
-/**
- * Markdown 渲染（先转义再生成白名单标签，用户原文原样显示）：实现见 ../markdown.js
- */
-const renderedHtml = computed(() => renderMarkdown(props.descriptor.props?.markdown || ""));
 </script>
 
 <style scoped>

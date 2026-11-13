@@ -4,7 +4,7 @@
       "id": "json-format",
       "name": "JSON 格式化",
       "description": "JSON 语法校验、高亮美化与压缩转义，支持一键生成 TypeScript / Go / Rust 数据结构定义",
-      "version": "2.1.5",
+      "version": "2.1.6",
       "author": "ZTools Team",
       "icon": "icon.svg",
       "category": [
@@ -58,10 +58,11 @@
           "arch": "any"
         }
       ],
-      "size": 55174,
+      "size": 61552,
       "files": [
         "plugin.json",
         "icon.svg",
+        "dist/host-compat.js",
         "dist/index.js",
         "dist/logic.js",
         "dist/popout-state.js"
@@ -139,11 +140,11 @@
       "id": "calculator",
       "name": "计算器",
       "description": "输入算式即时计算，内置科学函数、单位换算、每日汇率、人民币大写金额转换与日期推算",
-      "version": "2.1.6",
+      "version": "2.1.7",
       "author": "ZTools Team",
       "icon": "icon.svg",
       "category": [
-        "效率工具"
+        "办公效率"
       ],
       "keywords": [
         "calc",
@@ -221,11 +222,11 @@
       "id": "qr-code",
       "name": "二维码生成",
       "description": "输入网址或文本实时生成高清二维码，支持生成 Wi-Fi 连网二维码、复制图片与导出 PNG",
-      "version": "2.1.7",
+      "version": "2.1.9",
       "author": "ZTools Team",
       "icon": "icon.svg",
       "category": [
-        "效率工具"
+        "办公效率"
       ],
       "keywords": [
         "qr",
@@ -271,10 +272,11 @@
           "arch": "any"
         }
       ],
-      "size": 40363,
+      "size": 46981,
       "files": [
         "plugin.json",
         "icon.svg",
+        "dist/host-compat.js",
         "dist/host.js",
         "dist/index.js",
         "dist/qr-encoder.js",
@@ -285,7 +287,7 @@
       "id": "file-compare",
       "name": "文本对比",
       "description": "逐行对比两段文本、代码或配置文件，逐处列出增删的行，支持忽略空白与复制 unified diff 差异报告",
-      "version": "2.0.11",
+      "version": "2.0.13",
       "author": "ZTools Team",
       "icon": "icon.svg",
       "category": [
@@ -314,10 +316,11 @@
           "arch": "any"
         }
       ],
-      "size": 32424,
+      "size": 41714,
       "files": [
         "plugin.json",
         "icon.svg",
+        "dist/host-compat.js",
         "dist/host.js",
         "dist/index.js",
         "dist/logic.js",
@@ -328,7 +331,7 @@
       "id": "crypto-tool",
       "name": "编码与加密",
       "description": "支持 Base64 / URL / Unicode / Hex 编码互转、MD5 / SHA 哈希计算、AES 加解密、HMAC 计算与 UUID 批量生成",
-      "version": "1.1.4",
+      "version": "1.1.5",
       "author": "ZTools Team",
       "icon": "icon.svg",
       "category": [
@@ -456,12 +459,13 @@
           "arch": "any"
         }
       ],
-      "size": 46505,
+      "size": 57102,
       "files": [
         "plugin.json",
         "icon.svg",
         "dist/codecs.js",
         "dist/hash.js",
+        "dist/host-compat.js",
         "dist/index.js",
         "dist/logic.js",
         "dist/popout-state.js",
@@ -472,11 +476,11 @@
       "id": "color-picker",
       "name": "取色与配色",
       "description": "支持 HEX / RGB / HSL / CMYK 色值实时互转、WCAG 无障碍对比度检测与常用色板收藏",
-      "version": "2.1.6",
+      "version": "2.1.7",
       "author": "ZTools Team",
       "icon": "icon.svg",
       "category": [
-        "设计工具"
+        "图像媒体"
       ],
       "keywords": [
         "color",
@@ -540,11 +544,11 @@
       "id": "memo",
       "name": "便签",
       "description": "轻量随手记便签，正文支持 Markdown，可加标签，按标题、正文或标签搜索",
-      "version": "1.0.7",
+      "version": "1.0.8",
       "author": "ZTools Team",
       "icon": "icon.svg",
       "category": [
-        "效率工具"
+        "办公效率"
       ],
       "keywords": [
         "memo",
@@ -581,11 +585,11 @@
       "id": "todo",
       "name": "待办清单",
       "description": "极简任务待办清单，回车快速添加任务，支持高优标记与完成状态筛选",
-      "version": "1.0.6",
+      "version": "1.0.8",
       "author": "ZTools Team",
       "icon": "icon.svg",
       "category": [
-        "效率工具"
+        "办公效率"
       ],
       "keywords": [
         "todo",
@@ -609,7 +613,7 @@
           "arch": "any"
         }
       ],
-      "size": 24410,
+      "size": 27048,
       "files": [
         "plugin.json",
         "icon.svg",

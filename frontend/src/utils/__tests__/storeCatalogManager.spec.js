@@ -198,7 +198,7 @@ describe('StoreCatalogManager 作者署名与来源分类', () => {
     expect(byId['context-menu'].name).toBe('右键菜单管理')
     expect(byId['disk-analyzer'].name).toBe('磁盘空间分析')
     expect(byId['network-adapter'].name).toBe('网卡管理')
-    expect(byId['network-adapter'].category).toEqual(['系统工具'])
+    expect(byId['network-adapter'].category).toEqual(['网络工具', '系统工具'])
   })
 })
 

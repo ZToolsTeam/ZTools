@@ -37,7 +37,6 @@ async function getAcorn() {
   const candidates = [
     'acorn',
     pathToFileURL(path.join(rootDir, 'frontend/node_modules/acorn/dist/acorn.mjs')).href,
-    pathToFileURL(path.join(rootDir, 'plugins/create-plugin/node_modules/acorn/dist/acorn.mjs')).href,
     pathToFileURL(path.join(rootDir, 'node_modules/acorn/dist/acorn.mjs')).href
   ]
   for (const candidate of candidates) {
@@ -930,7 +929,7 @@ async function runCli() {
       }
       const subEntries = fs.readdirSync(dir, { withFileTypes: true })
       for (const sub of subEntries) {
-        if (sub.isDirectory() && !['node_modules', '.git', 'dist', '.build-runs', '.test-runs', 'create-plugin'].includes(sub.name)) {
+        if (sub.isDirectory() && !['node_modules', '.git', 'dist', '.build-runs', '.test-runs'].includes(sub.name)) {
           findPluginDirs(path.join(dir, sub.name))
         }
       }

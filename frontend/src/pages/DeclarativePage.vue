@@ -123,6 +123,7 @@ import { ExternalLinkIcon, PinIcon, TriangleAlertIcon } from '@lucide/vue'
 import { computed, onMounted, onUnmounted, ref, shallowRef, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { getActivePinia } from 'pinia'
+import { useNavStore } from '@/stores/nav'
 import { useUIStore } from '@/stores/ui'
 import { getOfficialPlugin } from '@/utils/officialPlugins'
 import { isPluginVisible } from '@/utils/pluginVisibility'
@@ -134,24 +135,17 @@ import DeclEmptyState from '@/declarative/components/DeclEmptyState.vue'
 import { RcSquircle } from '@/components/base'
 import { resolveKeywordGlyph, resolvePluginGlyph } from '@/utils/brandIcons'
 import { ROUTES, routeUtils } from '@/router/routes'
-const loadHostWinApi = () => import("@/api/apiserver")
-const nativeWin = {
-  async setSize(width, height, animate) {
-    const mod = typeof window !== "undefined" ? (window.ztools?.window || window.ztools?.win) : null
-    if (mod?.setSize) return await mod.setSize(width, height, animate)
-    const api = await loadHostWinApi()
-    return await api.win.setSize(width, height, animate)
-  },
-  async setAlwaysOnTop(flag) {
-    const mod = typeof window !== "undefined" ? (window.ztools?.window || window.ztools?.win) : null
-    if (mod?.setAlwaysOnTop) return await mod.setAlwaysOnTop(flag)
-    const api = await loadHostWinApi()
-    return await api.win.setAlwaysOnTop(flag)
-  }
-}
+import { useHostWindowApi } from '@/composables/useHostWindowApi'
 import { getBundledPluginEntry, resolveBundledReplacement, resolveBundledReplacementFeature } from '@/utils/bundledPlugins'
 import { useDeclarativePluginSession } from '@/declarative/composables/useDeclarativePluginSession'
 import { isHandoffId, requestPopoutWindow, takePopoutHandoff } from '@/declarative/popoutHandoff'
+
+// 宿主窗口控制（弹出窗口调整尺寸、置顶），经 composable 访问，页面不直接依赖 api 层
+const nativeWin = useHostWindowApi()
+
+defineOptions({
+  name: 'DeclarativePage'
+})
 
 const props = defineProps({
   pluginId: {
@@ -217,7 +211,7 @@ onMounted(() => {
 
 onUnmounted(() => {
   if (getActivePinia()) {
-    useUIStore().focusGrid()
+    useUIStore().restoreFocusAfterDeclarative()
   }
   if (typeof window !== 'undefined') {
     window.removeEventListener('keydown', handleKeyDown)
@@ -426,8 +420,8 @@ async function handlePopout() {
     const collected = declarativeViewRef.value?.getPopoutState?.() || null
     const result = await requestPopoutWindow({ pluginId: id, query, collected })
     if (result.outcome === 'opened') {
-      // 单实例互斥接管：弹出独立窗口成功后，主窗口退回工作台首页（销毁主窗口内的轮询实例）
-      router.push(ROUTES.HOME)
+      // 单实例互斥接管：弹出独立窗口成功后，主窗口退回打开插件前的工作台界面（销毁主窗口内的轮询实例）
+      goBack()
       return
     }
     if (result.outcome === 'kept') {
@@ -481,6 +475,10 @@ async function dockBackToMain() {
 }
 
 function goBack() {
+  if (getActivePinia()) {
+    useNavStore().exitDeclarativeToWorkbench(router)
+    return
+  }
   router.push(ROUTES.HOME)
 }
 

@@ -15,24 +15,13 @@ test('native helper diagnostics distinguish unsupported platforms from closed Wi
       pipe: '',
       lastError: '',
       lastErrorMessage: ''
-    },
-    superPanelInput: {
-      mouseSupported: false,
-      mouseEnabled: false,
-      lastError: 'Native mouse input unsupported on macOS'
     }
   })
   assert.equal(createNativeRuntimeDiagnosticsFallback('win32').nativeHost.state, 'closed')
   assert.equal(createNativeRuntimeDiagnosticsFallback('linux').service.state, 'unsupported')
   assert.equal(createNativeRuntimeDiagnosticsFallback('plan9').nativeHost.state, 'unknown')
-  assert.equal(
-    createNativeRuntimeDiagnosticsFallback('linux').superPanelInput.lastError,
-    'Native mouse input unsupported on this platform'
-  )
-  assert.equal(
-    createNativeRuntimeDiagnosticsFallback('plan9').superPanelInput.lastError,
-    'Native mouse input status unknown on this platform'
-  )
+  // 旧超级面板输入诊断已移除，回退结构只剩 nativeHost 与 service
+  assert.deepEqual(Object.keys(createNativeRuntimeDiagnosticsFallback('win32')).sort(), ['nativeHost', 'service'])
 })
 
 test('runtime diagnostics hide raw helper, pipe, and platform error text', () => {
@@ -48,11 +37,6 @@ test('runtime diagnostics hide raw helper, pipe, and platform error text', () =>
       pipe: '\\\\.\\pipe\\ztools-private',
       lastError: 'SERVICE_UNAVAILABLE',
       lastErrorMessage: 'connect failed at C:\\Users\\alice\\private\\service.key'
-    },
-    superPanelInput: {
-      mouseSupported: 'yes' as unknown as boolean,
-      mouseEnabled: false,
-      lastError: 'open failed at /Users/alice/private/display'
     }
   })
 
@@ -68,11 +52,6 @@ test('runtime diagnostics hide raw helper, pipe, and platform error text', () =>
       pipe: '已配置',
       lastError: 'SERVICE_UNAVAILABLE',
       lastErrorMessage: 'ZToolsService 原始错误详情已隐藏'
-    },
-    superPanelInput: {
-      mouseSupported: false,
-      mouseEnabled: false,
-      lastError: 'SuperPanel 输入 原始错误详情已隐藏'
     }
   })
 
@@ -85,24 +64,9 @@ test('runtime diagnostics hide raw helper, pipe, and platform error text', () =>
         pipe: '',
         lastError: '',
         lastErrorMessage: ''
-      },
-      superPanelInput: { mouseSupported: true, mouseEnabled: true, lastError: '' }
+      }
     }).service.lastError,
     ''
-  )
-  assert.equal(
-    sanitizeRuntimeDiagnosticDetails({
-      nativeHost: { state: 'ready', stderr: '' },
-      service: {
-        state: 'ready',
-        protocolVersion: 1,
-        pipe: '',
-        lastError: '',
-        lastErrorMessage: ''
-      },
-      superPanelInput: { mouseSupported: true, mouseEnabled: true, lastError: '' }
-    }).superPanelInput.mouseSupported,
-    true
   )
   assert.equal(
     sanitizeRuntimeDiagnosticDetails({
@@ -113,8 +77,7 @@ test('runtime diagnostics hide raw helper, pipe, and platform error text', () =>
         pipe: '',
         lastError: 'C:\\Users\\alice\\secret.key',
         lastErrorMessage: ''
-      },
-      superPanelInput: { mouseEnabled: false, lastError: '' }
+      }
     }).service.lastError,
     'INTERNAL_ERROR'
   )

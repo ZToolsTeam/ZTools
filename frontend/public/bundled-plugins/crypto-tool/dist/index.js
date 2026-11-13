@@ -1,5 +1,6 @@
 import { List, Form, ActionPanel, Action, Icon, showToast, Toast, useState, useRef, useEffect, useNavigation, Clipboard } from "@ztools/declarative-ui";
-import { calculateMultiHash, decodeBase64, encodeBase64, aesEncrypt, aesDecrypt, calculateHmac, valueMarkdown } from "./logic.js";
+import { calculateMultiHash, calculateFileHash, decodeBase64, encodeBase64, aesEncrypt, aesDecrypt, calculateHmac, valueMarkdown } from "./logic.js";
+import { createCompatFileInputProps } from "./host-compat.js";
 import { usePopoutValue } from "./popout-state.js";
 import { encodeText, decodeText, hasLoneSurrogate } from "./codecs.js";
 import GenUuidCommand from "./uuid.js";
@@ -128,7 +129,33 @@ export default function CryptoToolCommand() {
     const [mode, setMode] = usePopoutValue("mode", () => defaultMode, isMode);
     const [aesDraft, setAesDraft] = usePopoutValue("aesDraft", () => DEFAULT_AES_DRAFT, isAesDraft);
     const [hmacDraft, setHmacDraft] = usePopoutValue("hmacDraft", () => DEFAULT_HMAC_DRAFT, isHmacDraft);
+    const [fileHash, setFileHash] = useState(null);
     const { push } = useNavigation();
+    const clearAllInput = () => {
+        setFileHash(null);
+        setInputText("");
+    };
+    const fileInputProps = createCompatFileInputProps(async (files) => {
+        const targetPath = files[0]?.trim();
+        if (!targetPath)
+            return;
+        try {
+            const res = await calculateFileHash(targetPath);
+            setFileHash(res);
+            setMode("hash");
+            await showToast(Toast.Style.Success, "已计算文件哈希", res.fileName);
+        }
+        catch (err) {
+            await showToast(Toast.Style.Failure, "计算文件哈希失败", err instanceof Error ? err.message : String(err));
+        }
+    }, {
+        onTextPaste: (text) => {
+            if (text) {
+                setFileHash(null);
+                setInputText(text);
+            }
+        }
+    });
     const globalActions = [
         Action({ title: "AES 加解密…", icon: Icon.Lock, onAction: () => push(() => AesForm({ draft: aesDraft, onDraftChange: setAesDraft })) }),
         Action({ title: "HMAC 计算…", icon: Icon.Key, onAction: () => push(() => HmacForm({ draft: hmacDraft, onDraftChange: setHmacDraft })) }),
@@ -142,6 +169,7 @@ export default function CryptoToolCommand() {
                 await showToast(Toast.Style.Failure, "剪贴板里没有文字");
                 return;
             }
+            setFileHash(null);
             setInputText(text);
         }
         catch (err) {
@@ -153,12 +181,12 @@ export default function CryptoToolCommand() {
     ]);
     // 错误行：主动作清空输入，次动作从剪贴板重新粘贴，都与当前任务相关
     const errorActions = ActionPanel({ title: "操作" }, [
-        Action({ title: "清空输入", icon: Icon.Trash, onAction: () => setInputText("") }),
+        Action({ title: "清空输入", icon: Icon.Trash, onAction: clearAllInput }),
         Action({ title: "从剪贴板粘贴", icon: Icon.Clipboard, onAction: pasteFromClipboard })
     ]);
     const commonItemActions = (value, label) => ActionPanel({ title: label }, [
         Action.CopyToClipboard({ title: "复制", content: value, icon: Icon.CopyClipboard }),
-        Action({ title: "清空输入", icon: Icon.Trash, onAction: () => setInputText("") }),
+        Action({ title: "清空输入", icon: Icon.Trash, onAction: clearAllInput }),
         // AES / HMAC / UUID 是另开表单的全局工具，排在后面收进动作面板，不占回车与次动作位
         ...globalActions
     ]);
@@ -205,6 +233,29 @@ export default function CryptoToolCommand() {
                         actions: commonItemActions(decoded.result || "", "解码结果")
                     }), encoded]
                 : [encoded, List.Item({ id: "decode-error", title: "不是有效的 Base64，无法解码", subtitle: decoded.error, icon: Icon.ExclamationMark, actions: errorActions })];
+    }
+    else if (fileHash && !inputText) {
+        const fileItems = [
+            { id: "file-sha256", title: fileHash.sha256, subtitle: `文件 SHA-256 · ${fileHash.fileName}`, value: fileHash.sha256, icon: Icon.Lock },
+            ...(fileHash.md5 ? [{ id: "file-md5-lower", title: fileHash.md5, subtitle: `文件 MD5（32 位小写）· ${fileHash.fileName}`, value: fileHash.md5, icon: Icon.Key }] : []),
+            ...(fileHash.md5Upper ? [{ id: "file-md5-upper", title: fileHash.md5Upper, subtitle: `文件 MD5（32 位大写）· ${fileHash.fileName}`, value: fileHash.md5Upper, icon: Icon.Key }] : []),
+            ...(fileHash.sha1 ? [{ id: "file-sha1", title: fileHash.sha1, subtitle: `文件 SHA-1 · ${fileHash.fileName}`, value: fileHash.sha1, icon: Icon.Lock }] : []),
+            ...(fileHash.sha512 ? [{ id: "file-sha512", title: fileHash.sha512, subtitle: `文件 SHA-512 · ${fileHash.fileName}`, value: fileHash.sha512, icon: Icon.Lock }] : [])
+        ];
+        const fileDetailHeader = [
+            `**文件名**：\`${fileHash.fileName}\``,
+            `**路径**：\`${fileHash.filePath}\``,
+            ...(typeof fileHash.byteLength === "number" ? [`**大小**：${fileHash.byteLength} 字节`] : [])
+        ].join("\n\n");
+        items = fileItems.map((item) => List.Item({
+            id: item.id,
+            title: item.title,
+            subtitle: item.subtitle,
+            icon: item.icon,
+            accessories: [{ text: fileHash.filePath }],
+            detail: List.Item.Detail({ markdown: `${fileDetailHeader}\n\n${valueMarkdown(item.value)}` }),
+            actions: commonItemActions(item.value, item.subtitle)
+        }));
     }
     else if (!inputText) {
         items = [
@@ -253,12 +304,13 @@ export default function CryptoToolCommand() {
         }));
     }
     return List({
+        ...fileInputProps,
         navigationTitle: "加解密与散列助手",
         // 只有存在结果时才开右侧预览；空状态、解码失败等提示行没有 detail，自动保持全宽
-        isShowingDetail: Boolean(inputText),
+        isShowingDetail: Boolean(inputText || fileHash),
         searchBarPlaceholder: mode === "hash" ? "输入要计算散列或编码的文字..." : mode === "base64-decode" ? "输入要编码的文字或要解码的 Base64…" : "输入文字或编码内容…",
         searchText: inputText,
-        onSearchTextChange: (text) => setInputText(text),
+        onSearchTextChange: (text) => { setFileHash(null); setInputText(text); },
         searchBarAccessory: List.Dropdown({ tooltip: "模式", value: mode, onChange: (v) => setMode(isMode(v) ? v : "hash") }, [
             List.Dropdown.Item({ title: "散列与编码", value: "hash" }),
             List.Dropdown.Item({ title: "Base64 编解码", value: "base64-decode" }),
@@ -271,6 +323,6 @@ export default function CryptoToolCommand() {
         actions: ActionPanel({ title: "全局操作" }, [ActionPanel.Submenu({ title: "其他加解密工具", icon: Icon.Lock }, globalActions)])
     }, 
     // 模式名已在下拉框里，分组标题只说明内容，不重复“Base64 编解码”
-    [List.Section({ title: inputText ? `计算结果（输入 ${inputText.length} 字符）` : "计算结果" }, items)]);
+    [List.Section({ title: fileHash && !inputText ? `文件哈希：${fileHash.fileName}（${fileHash.filePath}）` : inputText ? `计算结果（输入 ${inputText.length} 字符）` : "计算结果" }, items)]);
 }
 export { AesForm as cipherAes, HmacForm as cipherHmac };

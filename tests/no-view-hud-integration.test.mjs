@@ -17,6 +17,7 @@ test('集成规约测试：插件清单正确支持 mode: "no-view" 与 alias，
     version: '1.0.0',
     description: '轻量无视图后台命令，一键生成 UUID 并复制到剪贴板',
     author: 'Plugin Dev',
+    category: ['开发工具'],
     entry: 'index.js',
     icon: 'icon.png',
     permissions: ['clipboard'],

@@ -2,18 +2,28 @@
  * 调用 ZTools 宿主能力（复制图片到剪贴板、另存为文件）
  */
 let seq = 0;
+function isRecord(value) {
+    return typeof value === "object" && value !== null && !Array.isArray(value);
+}
 async function callHost(method, params = {}) {
-    const methods = globalThis.window?.__ztoolsElectron?.transport?.methods ?? globalThis.__ztoolsElectron?.transport?.methods;
+    const g = globalThis;
+    const methods = g.window?.__ztoolsElectron?.transport?.methods ?? g.__ztoolsElectron?.transport?.methods;
     const fn = methods?.[method];
     if (typeof fn !== "function")
         throw new Error(`当前环境不支持 ${method}`);
     seq = (seq + 1) % 1_000_000;
-    const envelope = await fn({ messageId: `qr_${Date.now()}_${seq}`, params });
-    if (!envelope || typeof envelope !== "object")
+    const envelope = await fn({
+        messageId: `qr_${Date.now()}_${seq}`,
+        params
+    });
+    if (!isRecord(envelope))
         throw new Error("宿主返回了无法识别的结果");
-    if (!envelope.success)
-        throw new Error(envelope.error?.message || `${method} 调用失败`);
-    return envelope.data;
+    if (envelope.success === false) {
+        const err = envelope.error;
+        const msg = isRecord(err) ? String(err.message || err.code || `${method} 调用失败`) : String(err || `${method} 调用失败`);
+        throw new Error(msg);
+    }
+    return ("data" in envelope ? envelope.data : envelope);
 }
 export async function copyPngToClipboard(pngBase64) {
     await callHost("clipboard_copy_image", { image: `data:image/png;base64,${pngBase64}` });
@@ -29,4 +39,31 @@ export async function savePngFile(pngBase64, defaultName) {
         return null;
     await callHost("filesystem_write_file", { path: picked.filePath, content: pngBase64, encoding: "base64" });
     return picked.filePath;
+}
+/** 调用宿主识别图片文件中的二维码内容 */
+export async function decodeQrImageFile(filePath) {
+    const normalizedPath = (filePath ?? "").trim();
+    if (!normalizedPath)
+        throw new Error("二维码图片路径不能为空");
+    const raw = await callHost("qr_scan", { path: normalizedPath, imagePath: normalizedPath });
+    if (typeof raw === "string" && raw.trim())
+        return raw.trim();
+    if (isRecord(raw)) {
+        const candidate = typeof raw.text === "string"
+            ? raw.text
+            : typeof raw.content === "string"
+                ? raw.content
+                : typeof raw.data === "string"
+                    ? raw.data
+                    : Array.isArray(raw.results) && raw.results.length > 0
+                        ? typeof raw.results[0] === "string"
+                            ? raw.results[0]
+                            : isRecord(raw.results[0]) && typeof raw.results[0].text === "string"
+                                ? raw.results[0].text
+                                : ""
+                        : "";
+        if (candidate.trim())
+            return candidate.trim();
+    }
+    throw new Error("未能从图片中识别出二维码");
 }

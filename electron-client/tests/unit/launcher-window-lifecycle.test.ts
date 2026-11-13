@@ -106,3 +106,71 @@ test('悬浮条跨窗口状态唤醒、失焦撤下及资源清理', async () =>
   assert.equal(screen.listenerCount('display-metrics-changed'), 0)
   assert.equal(screen.listenerCount('display-removed'), 0)
 })
+
+test('悬浮条：支持跟随鼠标位置弹出与面板数据/固定/添加软件 IPC 桥接', async () => {
+  const pinCalls: Array<{ id: string; itemType: string }> = []
+  const openCalls: Array<{ id: string; itemType: string; query?: string | undefined }> = []
+  let addLocalAppWindow: unknown = null
+
+  const controller = new Controller({
+    icon: {} as Electron.NativeImage,
+    registry: new WindowRegistry(),
+    showMainWindow: () => undefined,
+    hideMainWindow: () => undefined,
+    panelBridge: {
+      getData: async () => ({ success: true, data: { items: [{ id: 'json-format', type: 'plugin', pinned: true }] } }),
+      togglePin: async (id, itemType) => {
+        pinCalls.push({ id, itemType })
+        return { success: true }
+      },
+      addLocalApps: async (win) => {
+        addLocalAppWindow = win
+        // 模拟弹出文件选择框期间触发窗口 blur，验证悬浮条不会因失焦而意外关闭
+        NativeWindow.latest.emit('blur')
+        return { success: true, added: 2 }
+      },
+      openItem: async (id, itemType, query) => {
+        openCalls.push({ id, itemType, query })
+        return { success: true }
+      }
+    }
+  })
+
+  controller.register()
+  try {
+    controller.show({ position: 'cursor' })
+    await new Promise(resolve => setImmediate(resolve))
+    const window = NativeWindow.latest
+    assert.equal(window.visible, true)
+    // 鼠标在 (100, 100)，窗口应当按光标相对位置定位而非屏幕正中心 (585, 194)
+    assert.notEqual(window.bounds.x, 585)
+
+    // 与 launcher-controller 中 ipcMain.handle 的真实签名一致：(event, action, payload)
+    const callHandler = handlers.get('ztools:launcher_call') as (
+      event: unknown,
+      action: string,
+      payload?: Record<string, unknown>
+    ) => Promise<Record<string, unknown>>
+    assert.equal(typeof callHandler, 'function')
+
+    const panelDataRes = await callHandler({}, 'get_panel_data')
+    assert.equal(panelDataRes.success, true)
+    assert.equal((panelDataRes.data as { items: unknown[] }).items.length, 1)
+
+    const pinRes = await callHandler({}, 'toggle_pin', { id: 'json-format', itemType: 'plugin' })
+    assert.equal(pinRes.success, true)
+    assert.deepEqual(pinCalls, [{ id: 'json-format', itemType: 'plugin' }])
+
+    const addRes = await callHandler({}, 'add_local_app')
+    assert.equal(addRes.success, true)
+    assert.equal(addRes.added, 2)
+    assert.equal(addLocalAppWindow, window)
+    assert.equal(window.visible, true, '弹出文件对话框期间触发 blur 不应隐藏悬浮条')
+
+    const openRes = await callHandler({}, 'open_panel_item', { id: 'sys-calc', itemType: 'system_tool', query: 'calc' })
+    assert.equal(openRes.success, true)
+    assert.deepEqual(openCalls, [{ id: 'sys-calc', itemType: 'system_tool', query: 'calc' }])
+  } finally {
+    controller.stop()
+  }
+})

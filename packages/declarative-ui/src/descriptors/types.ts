@@ -279,6 +279,27 @@ export interface SubListProps {
   items?: ViewDescriptor<ListItemProps>[];
 }
 
+export interface FileInputConfig {
+  /** 允许的扩展名列表（如 ['.png', '.jpg']），不填表示允许任意扩展名 */
+  extensions?: string[];
+  /** 是否允许接收文件夹（默认 false） */
+  allowDirectories?: boolean;
+  /** 是否允许将剪贴板纯位图（截图）落盘为临时 PNG 接收（默认 false） */
+  allowClipboardImage?: boolean;
+  /** 拖放遮罩提示文案 */
+  dropTitle?: string;
+  dropSubtitle?: string;
+  /** 双模粘贴（文件优先，纯文本回退）：当焦点位于空搜索框或非输入区域且剪贴板仅含文本时触发 */
+  onTextPaste?: (text: string) => boolean | void | Promise<boolean | void>;
+}
+
+export interface FileInputPayload {
+  files: string[];
+  source: "drop" | "paste" | "launch";
+  targetFieldId?: string;
+  rejectedCount?: number;
+}
+
 export interface ListProps extends BaseProps {
   isLoading?: boolean;
   searchText?: string;
@@ -296,6 +317,8 @@ export interface ListProps extends BaseProps {
   filterBar?: FilterBarProps | ViewDescriptor;
   workbenchPanel?: WorkbenchPanelProps;
   subList?: SubListProps;
+  fileInput?: FileInputConfig;
+  onFileInput?: (payload: FileInputPayload) => void;
   actions?: ViewDescriptor | any;
   children?: any;
 }
@@ -334,6 +357,8 @@ export interface DetailProps extends BaseProps {
   markdown?: string;
   navigationTitle?: string;
   isLoading?: boolean;
+  fileInput?: FileInputConfig;
+  onFileInput?: (payload: FileInputPayload) => void;
   actions?: ViewDescriptor | any;
   metadata?: ViewDescriptor | any;
 }
@@ -351,6 +376,7 @@ export interface FormTextFieldProps extends BaseProps {
   error?: string;
   info?: string;
   autoFocus?: boolean;
+  monospace?: boolean;
 }
 
 export interface FormTextAreaProps extends BaseProps {
@@ -362,6 +388,8 @@ export interface FormTextAreaProps extends BaseProps {
   onChange?: (val: string) => void;
   error?: string;
   info?: string;
+  autoFocus?: boolean;
+  monospace?: boolean;
 }
 
 export interface FormCheckboxProps extends BaseProps {
@@ -392,7 +420,9 @@ export interface FormDropdownProps extends BaseProps {
 
 export interface FormDescriptionProps extends BaseProps {
   title?: string;
-  text: string;
+  text?: string;
+  /** Markdown 内容预览（客户端 1.1.8.11 起），与 Detail 使用相同的安全渲染；提供时优先于 text。 */
+  markdown?: string;
 }
 
 export interface FormPasswordFieldProps extends FormTextFieldProps {}
@@ -432,6 +462,8 @@ export interface SegmentedControlProps extends BaseProps {
 export interface FormProps extends BaseProps {
   navigationTitle?: string;
   isLoading?: boolean;
+  fileInput?: FileInputConfig;
+  onFileInput?: (payload: FileInputPayload) => void;
   actions?: ViewDescriptor | any;
   children?: any;
 }

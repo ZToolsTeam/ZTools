@@ -51,7 +51,6 @@ function mountPage() {
     global: {
       stubs: {
         ScreenPermissionPanel: true,
-        ShortcutSettingsModal: true,
         PluginHotkeyModal: true,
         PluginFeatureHotkeyModal: true,
         'a-switch': true,
@@ -208,7 +207,7 @@ describe('AdvancedSettings 设置页（单栏分组版式）', () => {
     wrapper.unmount()
   })
 
-  describe('超级面板子设置', () => {
+  describe('依赖 window.ztools 的设置项', () => {
     let config
     beforeEach(() => {
       config = { get: vi.fn().mockResolvedValue(null), set: vi.fn().mockResolvedValue(true) }
@@ -218,38 +217,22 @@ describe('AdvancedSettings 设置页（单栏分组版式）', () => {
       delete window.ztools
     })
 
-    it('面板位置、大小、默认 Tab 统一为分段按钮，切换后写入 super_panel', async () => {
+    it('超级面板设置区块已删除：不再渲染相关设置，也不读写 super_panel 配置', async () => {
       const wrapper = mountPage()
       await flushPromises()
-      expect(wrapper.findAll('a-radio-group-stub')).toHaveLength(0)
-      const labels = (name) => wrapper.find(`[aria-label="${name}"]`).findAll('.seg-btn').map((b) => b.text())
-      expect(labels('面板位置')).toEqual(['屏幕中心', '鼠标位置'])
-      expect(labels('面板大小')).toEqual(['小400×300', '中400×600', '大800×600'])
-      expect(labels('默认标签')).toEqual(['历史', '固定', '本地', '系统工具', '全部'])
-      expect(wrapper.find('.sub-setting-info i').exists()).toBe(false)
-
-      const cursor = wrapper.find('[aria-label="面板位置"]').findAll('.seg-btn')[1]
-      await cursor.trigger('click')
-      await flushPromises()
-      expect(config.set).toHaveBeenCalledWith('super_panel', expect.objectContaining({ panelPosition: 'cursor' }))
-      expect(cursor.attributes('aria-checked')).toBe('true')
-
-      // 点击已选中项不重复保存
-      config.set.mockClear()
-      await cursor.trigger('click')
-      await flushPromises()
-      expect(config.set).not.toHaveBeenCalled()
+      for (const text of ['超级面板', '鼠标热键', '面板位置', '面板大小', '默认标签', '最近使用数量', '快捷方式设置']) {
+        expect(wrapper.text()).not.toContain(text)
+      }
+      expect(config.get).not.toHaveBeenCalledWith('super_panel')
+      expect(config.set).not.toHaveBeenCalledWith('super_panel', expect.anything())
       wrapper.unmount()
     })
 
-    it('全局唤醒已关闭（空串）时显示「点击设置」；改超级面板设置不会连带改写唤醒快捷键', async () => {
+    it('全局唤醒已关闭（空串）时显示「点击设置」', async () => {
       api.getHotkey.mockResolvedValue('')
       const wrapper = mountPage()
       await flushPromises()
       expect(wrapper.find('.hotkey-item .no-hotkey').text()).toBe('点击设置')
-      await wrapper.find('[aria-label="面板大小"]').findAll('.seg-btn')[2].trigger('click')
-      await flushPromises()
-      expect(config.set).toHaveBeenCalledWith('super_panel', expect.objectContaining({ panelSize: 'large' }))
       expect(api.setHotkey).not.toHaveBeenCalled()
       wrapper.unmount()
     })
@@ -285,31 +268,30 @@ describe('AdvancedSettings 设置页（单栏分组版式）', () => {
       packaged.unmount()
     })
 
-    it('鼠标热键只在 Windows 显示，macOS 没有原生实现时隐藏', async () => {
-      const win = mountPage()
-      await flushPromises()
-      expect(win.text()).toContain('鼠标热键')
-      win.unmount()
-      mocks.isMac = true
-      const mac = mountPage()
-      await flushPromises()
-      expect(mac.text()).not.toContain('鼠标热键')
-      mac.unmount()
-    })
-
-    it('[破坏性] 写入超级面板配置失败时提示错误，不再误报「设置已保存」', async () => {
-      const spy = vi.spyOn(console, 'error').mockImplementation(() => {})
-      config.set.mockRejectedValue(new Error('磁盘只读'))
-      const wrapper = mountPage()
-      await flushPromises()
-      mocks.success.mockClear()
-      await wrapper.find('[aria-label="默认标签"]').findAll('.seg-btn')[4].trigger('click')
-      await flushPromises()
-      expect(mocks.error).toHaveBeenCalledWith(expect.stringContaining('磁盘只读'))
-      expect(mocks.success).not.toHaveBeenCalled()
-      expect(wrapper.find('[aria-label="默认标签"]').exists()).toBe(true)
-      spy.mockRestore()
-      wrapper.unmount()
+    it('快捷键录入框：录入 Alt+Space 时阻止事件冒泡，不触发外层 window keydown 监听', async () => {
+      window.ztools.sys = { getInfo: vi.fn().mockResolvedValue({ platform: 'windows' }) }
+      window.ztools.trigger = {
+        list: vi.fn().mockResolvedValue([]),
+        register: vi.fn().mockResolvedValue({ success: true, triggerId: 'global_wake_hotkey' })
+      }
+      const windowKeydownSpy = vi.fn()
+      window.addEventListener('keydown', windowKeydownSpy)
+      try {
+        const wrapper = mountPage()
+        await flushPromises()
+        const wakeRecorder = wrapper.find('.hotkey-item .hotkey-recorder')
+        await wakeRecorder.trigger('click')
+        const wakeInput = wakeRecorder.find('input.hotkey-hidden-input')
+        await wakeInput.trigger('keydown', { key: ' ', code: 'Space', altKey: true })
+        await flushPromises()
+        expect(windowKeydownSpy).not.toHaveBeenCalled()
+        expect(api.setHotkey).toHaveBeenCalledWith('Alt+Space')
+        // 设置页只剩一个快捷键录入框（全局唤醒）
+        expect(wrapper.findAll('.hotkey-recorder')).toHaveLength(1)
+        wrapper.unmount()
+      } finally {
+        window.removeEventListener('keydown', windowKeydownSpy)
+      }
     })
   })
 })

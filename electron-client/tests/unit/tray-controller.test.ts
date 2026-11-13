@@ -6,13 +6,6 @@ import test from 'node:test'
 import type { MenuItemConstructorOptions } from 'electron'
 import { ConfigService } from '../../src/main/services/config-service.js'
 import { JsonFileStore } from '../../src/main/services/json-file-store.js'
-import { decodeSuperPanelConfig } from '../../src/main/super-panel/config.js'
-import { SuperPanelInputService } from '../../src/main/super-panel/input-service.js'
-import type {
-  NativeHostLifecycleEvent,
-  NativeInputEvent,
-  NativeMouseTriggerConfig
-} from '../../src/main/native-host/native-host-client.js'
 import { decideCloseAction, readClosePreferences } from '../../src/main/windows/close-behavior.js'
 import {
   buildTrayMenuTemplate,
@@ -78,33 +71,6 @@ function createTrayHarness() {
   return { trays, deps }
 }
 
-class FakeNativeInput {
-  state = 'ready'
-  failNextConfigure: Error | null = null
-  readonly configurations: Array<NativeMouseTriggerConfig | null> = []
-  inputListener: ((event: NativeInputEvent) => void) | undefined
-  lifecycleListener: ((event: NativeHostLifecycleEvent) => void) | undefined
-
-  async configureMouseTrigger(config: NativeMouseTriggerConfig | null): Promise<void> {
-    if (this.failNextConfigure) {
-      const err = this.failNextConfigure
-      this.failNextConfigure = null
-      throw err
-    }
-    this.configurations.push(config ? { ...config } : null)
-  }
-
-  onInputEvent(listener: (event: NativeInputEvent) => void): () => void {
-    this.inputListener = listener
-    return () => { this.inputListener = undefined }
-  }
-
-  onLifecycleEvent(listener: (event: NativeHostLifecycleEvent) => void): () => void {
-    this.lifecycleListener = listener
-    return () => { this.lifecycleListener = undefined }
-  }
-}
-
 test('normalizeTrayAccelerator handles empty, non-string, control-char, and oversized inputs safely', () => {
   assert.equal(normalizeTrayAccelerator(undefined), DEFAULT_TRAY_WAKE_ACCELERATOR)
   assert.equal(normalizeTrayAccelerator(null), DEFAULT_TRAY_WAKE_ACCELERATOR)
@@ -157,7 +123,6 @@ test('TrayController builds Raycast-aligned menu items and dispatches actions ac
 
   const controller = new TrayController({
     icon: createFakeIcon(false),
-    isSuperPanelEnabled: true,
     wakeAccelerator: 'Option+Space',
     platform: 'darwin',
     showMainWindow: () => { events.push('showMainWindow') },
@@ -182,9 +147,8 @@ test('TrayController builds Raycast-aligned menu items and dispatches actions ac
   assert.equal(settingsItem.label, '偏好设置...')
   assert.equal(settingsItem.accelerator, 'Command+,')
 
-  const superPanelItem = tray.findItem('toggle-super-panel')
-  assert.equal(superPanelItem.type, 'checkbox')
-  assert.equal(superPanelItem.checked, true)
+  // 旧“启用超级面板”菜单项已移除
+  assert.equal(tray.latestMenu.some((item) => item.id === 'toggle-super-panel'), false)
 
   launcherItem.click?.({} as never, undefined, {} as never)
   tray.findItem('open-dashboard').click?.({} as never, undefined, {} as never)
@@ -240,48 +204,18 @@ test('TrayController falls back to showMainWindow when optional callbacks are om
   assert.equal(showCalls, 4)
 })
 
-test('Integration: TrayController + ConfigService + SuperPanelInputService + decideCloseAction end-to-end flow and error rollback', async () => {
+test('Integration: TrayController + ConfigService + decideCloseAction 端到端同步唤醒快捷键与退出决策', async () => {
   const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ztools-tray-integration-'))
   try {
     const store = new JsonFileStore(tempDir, ConfigService.allowedStoreFiles)
     const configService = new ConfigService(store)
-    const nativeInput = new FakeNativeInput()
-    const syncedHotkeys: Array<{ enabled: boolean; accelerator: string }> = []
-    const hiddenReasons: string[] = []
     let exitDecision: string | null = null
-
-    const superPanelInput = new SuperPanelInputService({
-      config: configService,
-      triggers: {
-        async syncSuperPanelHotkey(enabled, accelerator) {
-          syncedHotkeys.push({ enabled, accelerator })
-        }
-      },
-      nativeInput,
-      toggle: () => undefined
-    })
-    await superPanelInput.ready
-
-    // Initial state: super panel enabled by default
-    assert.equal(nativeInput.configurations.length, 1)
-    assert.deepEqual(nativeInput.configurations[0], { button: 'middle', action: 'long', longPressMs: 300 })
-
     const { trays, deps } = createTrayHarness()
-    const rawInitialSuperPanel = await configService.get('user_settings.json', 'super_panel', {})
-    const initialSuperPanel = decodeSuperPanelConfig(rawInitialSuperPanel)
 
     const trayController = new TrayController({
       icon: createFakeIcon(false),
-      isSuperPanelEnabled: initialSuperPanel.enabled,
       wakeAccelerator: await configService.get('user_settings.json', 'hotkey.global', 'Alt+Space'),
       showMainWindow: () => undefined,
-      onToggleSuperPanel: async (enabled) => {
-        await configService.set('user_settings.json', 'super_panel.enabled', String(enabled), false)
-        if (!enabled) {
-          hiddenReasons.push('tray_disabled')
-        }
-        await superPanelInput.reload()
-      },
       requestExit: () => {
         void (async () => {
           const prefs = await readClosePreferences(configService)
@@ -293,44 +227,18 @@ test('Integration: TrayController + ConfigService + SuperPanelInputService + dec
 
     await trayController.start()
     const tray = trays[0]!
-    assert.equal(tray.findItem('toggle-super-panel').checked, true)
+    // 旧“启用超级面板”菜单项已移除
+    assert.equal(tray.latestMenu.some((item) => item.id === 'toggle-super-panel'), false)
 
-    // 1. Disable Super Panel from Tray -> persists to disk, hides panel, unhooks mouse & keyboard
-    tray.findItem('toggle-super-panel').click?.({ checked: false } as never, undefined, {} as never)
-    await new Promise((resolve) => setTimeout(resolve, 30))
-
-    assert.equal(trayController.state.isSuperPanelEnabled, false)
-    assert.equal(tray.findItem('toggle-super-panel').checked, false)
-    assert.deepEqual(hiddenReasons, ['tray_disabled'])
-    assert.equal(nativeInput.configurations.at(-1), null)
-    assert.equal(syncedHotkeys.at(-1)?.enabled, false)
-
-    const persistedRaw = await configService.get('user_settings.json', 'super_panel', {})
-    assert.equal(decodeSuperPanelConfig(persistedRaw).enabled, false)
-
-    // 2. Simulate failure when re-enabling Super Panel -> TrayController must rollback checkbox to false
-    nativeInput.failNextConfigure = new Error('native hook busy')
-    tray.findItem('toggle-super-panel').click?.({ checked: true } as never, undefined, {} as never)
-    await new Promise((resolve) => setTimeout(resolve, 30))
-
-    assert.equal(trayController.state.isSuperPanelEnabled, false)
-    assert.equal(tray.findItem('toggle-super-panel').checked, false)
-
-    // 3. External settings update (user changes hotkey & enables super panel in Settings UI) -> syncs to Tray
+    // 1. 设置里修改全局唤醒快捷键 -> 同步到托盘菜单
     await configService.set('user_settings.json', 'hotkey.global', 'Ctrl+Space', true)
-    await configService.set('user_settings.json', 'super_panel.enabled', 'true', false)
-    await superPanelInput.reload()
     trayController.updateState({
-      isSuperPanelEnabled: decodeSuperPanelConfig(await configService.get('user_settings.json', 'super_panel', {})).enabled,
       wakeAccelerator: await configService.get('user_settings.json', 'hotkey.global', 'Alt+Space')
     })
-
-    assert.equal(tray.findItem('toggle-super-panel').checked, true)
     // 设置里的 Ctrl 与全局快捷键注册一致转成 CommandOrControl（macOS 显示 ⌘，Windows 显示 Ctrl）
     assert.equal(tray.findItem('open-launcher').accelerator, 'CommandOrControl+Space')
-    assert.deepEqual(nativeInput.configurations.at(-1), { button: 'middle', action: 'long', longPressMs: 300 })
 
-    // 3b. 用户在设置里清除全局唤醒（存空串）-> 托盘菜单不再显示快捷键，也不退回默认的 Alt+Space
+    // 2. 用户在设置里清除全局唤醒（存空串）-> 托盘菜单不再显示快捷键，也不退回默认的 Alt+Space
     await configService.set('user_settings.json', 'hotkey.global', '', true)
     trayController.updateState({
       wakeAccelerator: await configService.get('user_settings.json', 'hotkey.global', 'Alt+Space')
@@ -338,20 +246,18 @@ test('Integration: TrayController + ConfigService + SuperPanelInputService + dec
     assert.equal(trayController.state.wakeAccelerator, '')
     assert.equal(tray.findItem('open-launcher').accelerator, undefined)
 
-    // 4. Clicking Quit in Tray bypasses closeConfirm modal even when closeConfirm is true
+    // 3. 托盘菜单点击退出时，即使 closeConfirm 为 true 也直接退出
     await configService.setSetting('closeConfirm', true)
     await configService.setSetting('minimizeToTray', true)
     tray.findItem('quit').click?.({} as never, undefined, {} as never)
     await new Promise((resolve) => setTimeout(resolve, 20))
     assert.equal(exitDecision, 'quit')
 
-    // 5. After stop(), updateState() is a no-op
+    // 4. stop() 之后 updateState() 不再重建菜单
     const menuCountBeforeStop = tray.menus.length
     trayController.stop()
-    trayController.updateState({ isSuperPanelEnabled: false, wakeAccelerator: 'Alt+F1' })
+    trayController.updateState({ wakeAccelerator: 'Alt+F1' })
     assert.equal(tray.menus.length, menuCountBeforeStop)
-
-    await superPanelInput.stop()
   } finally {
     fs.rmSync(tempDir, { recursive: true, force: true })
   }
@@ -360,12 +266,10 @@ test('Integration: TrayController + ConfigService + SuperPanelInputService + dec
 test('托盘菜单的唤醒快捷键与全局快捷键注册一致：设置里的 Ctrl 转为 CommandOrControl（macOS 显示 ⌘，不再显示成 Control）', () => {
   const noop = (): void => undefined
   const items = buildTrayMenuTemplate({
-    isSuperPanelEnabled: true,
     wakeAccelerator: 'Ctrl+Shift+Z',
     platform: 'darwin',
     onOpenLauncher: noop,
     onShowMainWindow: noop,
-    onToggleSuperPanel: noop,
     onOpenSettings: noop,
     onOpenAbout: noop,
     onRequestExit: noop

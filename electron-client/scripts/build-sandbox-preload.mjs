@@ -55,5 +55,7 @@ export function buildRuntimeCapabilityPromptPreload({
 }
 
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
-  console.log(JSON.stringify(buildSandboxPreload()))
+  const mainOut = buildSandboxPreload()
+  const promptOut = buildRuntimeCapabilityPromptPreload()
+  console.log(JSON.stringify({ main: mainOut, prompt: promptOut }))
 }

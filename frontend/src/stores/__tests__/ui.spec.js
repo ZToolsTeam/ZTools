@@ -61,4 +61,22 @@ describe('useUIStore', () => {
     store.setFocusState('INVALID_STATE')
     expect(store.focusState).toBe('SEARCH')
   })
+
+  it('进入声明式舞台前记录焦点状态，退出后精准恢复 SEARCH 或 GRID 焦点', () => {
+    const store = useUIStore()
+
+    // 从 SEARCH 进入 DECLARATIVE，退出后恢复为 SEARCH
+    store.focusSearch()
+    store.focusDeclarative()
+    expect(store.focusState).toBe('DECLARATIVE')
+    store.restoreFocusAfterDeclarative()
+    expect(store.focusState).toBe('SEARCH')
+
+    // 从 GRID 进入 DECLARATIVE，退出后恢复为 GRID
+    store.focusGrid()
+    store.focusDeclarative()
+    expect(store.focusState).toBe('DECLARATIVE')
+    store.restoreFocusAfterDeclarative()
+    expect(store.focusState).toBe('GRID')
+  })
 })

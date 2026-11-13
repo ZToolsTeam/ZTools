@@ -53,7 +53,7 @@ async function stopFixture(failFolderCleanup: boolean): Promise<void> {
     update: { onProgress() { return () => {} } }, async stop() {}
   } as unknown as CoreServices
   const options = {
-    toggleMainWindow() {}, toggleSuperPanel() {}, async getPanelLocalApps() { return [] }, closeConfirmationResolved() {},
+    toggleMainWindow() {}, async getPanelLocalApps() { return [] }, closeConfirmationResolved() {},
     screenClipboardAdapters: {},
     pluginResources: { pluginRoot: path.join(dataRoot, 'Plugins'), ztoolsApiPath: 'missing-sdk', preloadPath: 'missing-preload' },
     systemPlatformAdapter: { userDataPath: dataRoot, getRuntimeTarget() {

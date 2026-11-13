@@ -92,7 +92,7 @@ const fixtures = [
       version: '1.2.0',
       description: '本地快速统计中文字数、词频与字符数的纯净小工具',
       author: 'ztools-dev',
-      category: ['text', 'utility'],
+      category: ['办公效率'],
       keywords: ['counter', 'word'],
       entry: 'index.html',
       icon: 'icon.png',
@@ -111,8 +111,8 @@ const fixtures = [
 export function generateFixtures() {
   for (const fix of fixtures) {
     fs.mkdirSync(fix.dir, { recursive: true })
-    // 夹具默认声明跨平台（targets 为必填），个别夹具可自行覆盖
-    const manifest = { targets: CROSS_PLATFORM_TARGETS, nativeComponents: [], ...fix.manifest }
+    // 夹具默认声明跨平台与标准分类（targets / category 为必填），个别夹具可自行覆盖
+    const manifest = { category: ['办公效率'], targets: CROSS_PLATFORM_TARGETS, nativeComponents: [], ...fix.manifest }
     fs.writeFileSync(path.join(fix.dir, 'plugin.json'), JSON.stringify(manifest, null, 2), 'utf8')
     fs.writeFileSync(path.join(fix.dir, 'icon.png'), iconBuffer)
     fs.writeFileSync(path.join(fix.dir, 'index.html'), '<!DOCTYPE html><html><body><script src="app.js"></script></body></html>', 'utf8')

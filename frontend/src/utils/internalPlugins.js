@@ -116,18 +116,6 @@ export async function openInternalPlugin(pluginId, payload, options = {}) {
         }
       }
 
-      // 将特定控制参数注入降级路由和全局状态
-      if (validPayload) {
-        if (validPayload.scrollToSuperPanelSettings) {
-          targetRoute.query.scrollToSuperPanelSettings = 'true'
-          window.__scrollToSuperPanelSettings = true
-        }
-        if (validPayload.openShortcutSettings) {
-          targetRoute.query.openShortcutSettings = 'true'
-          window.__openShortcutSettings = true
-        }
-      }
-
       await targetRouter.push(targetRoute)
       return { success: true, fallback: true, type: 'route', target: targetRoute }
     } catch (routeErr) {
@@ -155,22 +143,12 @@ export async function openInternalPlugin(pluginId, payload, options = {}) {
 /**
  * 唤起系统设置（门面便捷方法）
  * @param {Object} [options]
- * @param {boolean} [options.scrollToSuperPanelSettings]
- * @param {boolean} [options.openShortcutSettings]
  * @param {boolean} [options.preferRoute]
  * @param {import('vue-router').Router} [options.router]
  * @param {Object} [options.routeOptions]
  */
 export async function openSettings(options = {}) {
-  const payload = {}
-  if (options.scrollToSuperPanelSettings) payload.scrollToSuperPanelSettings = true
-  if (options.openShortcutSettings) payload.openShortcutSettings = true
-
-  return openInternalPlugin(
-    INTERNAL_PLUGINS.SETTINGS,
-    Object.keys(payload).length > 0 ? payload : undefined,
-    { preferRoute: true, ...options }
-  )
+  return openInternalPlugin(INTERNAL_PLUGINS.SETTINGS, undefined, { preferRoute: true, ...options })
 }
 
 /**

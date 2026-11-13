@@ -1,12 +1,12 @@
 <script setup>
-import { computed, watch, onMounted } from 'vue'
+import { ref, computed, watch, nextTick, onMounted } from 'vue'
 import ShortcutKeys from '@/components/base/ShortcutKeys.vue'
 import { useRoute, useRouter } from 'vue-router'
 
 import Header from '@/components/Header.vue'
 import Sidebar from '@/components/Sidebar.vue'
 
-import { useNavStore } from '@/stores/nav'
+import { useNavStore, isWorkbenchRouteName } from '@/stores/nav'
 import { useUIStore } from '@/stores/ui'
 import { useCategoriesStore } from '@/stores/categories'
 import { usePluginsStore } from '@/stores/plugins'
@@ -23,8 +23,18 @@ const uiStore = useUIStore()
 const categoriesStore = useCategoriesStore()
 const pluginsStore = usePluginsStore()
 
+const mainScrollRef = ref(null)
+const workbenchScrollPositions = new Map()
 
 const isDeclarativeView = computed(() => route.name === 'declarative')
+
+function onMainScroll(event) {
+  if (isDeclarativeView.value) return
+  const target = event?.target || mainScrollRef.value
+  if (target && typeof target.scrollTop === 'number' && route.fullPath) {
+    workbenchScrollPositions.set(route.fullPath, target.scrollTop)
+  }
+}
 
 // 插件市场页只换搜索词时复用同一个页面（页面自己监听搜索词重新加载），其它情况按完整地址重建
 const routeViewKey = computed(() => {
@@ -39,14 +49,48 @@ onMounted(() => {
   pluginsStore.refreshCategoryCounts()
 })
 
-// 根据路由同步导航状态：列表页同步分类，其它页面同步页面标识
+// 根据路由同步导航状态、记录打开插件前的工作台路由，并在进出未分离插件时保存/恢复主内容区滚动位置
 watch(
-  () => ({ name: route.name, category: route.params.category }),
-  (r) => {
-    if (r.name === 'list') {
-      nav.setCategory(r.category)
-    } else if (r.name) {
-      nav.setPage(r.name)
+  () => ({
+    name: route.name,
+    category: route.params.category,
+    path: route.path,
+    fullPath: route.fullPath,
+    params: route.params,
+    query: route.query
+  }),
+  (toRoute, fromRoute) => {
+    if (toRoute.name === 'list') {
+      nav.setCategory(toRoute.category)
+    } else if (toRoute.name) {
+      nav.setPage(toRoute.name)
+    }
+
+    if (isWorkbenchRouteName(toRoute.name)) {
+      nav.recordWorkbenchRoute(toRoute)
+      if (fromRoute?.name === 'declarative') {
+        nav.markEnteredDeclarative(false)
+        const savedScrollTop = workbenchScrollPositions.get(toRoute.fullPath) ?? 0
+        nextTick(() => {
+          if (mainScrollRef.value) {
+            mainScrollRef.value.scrollTop = savedScrollTop
+          }
+        })
+      }
+    } else if (toRoute.name === 'declarative') {
+      if (fromRoute && isWorkbenchRouteName(fromRoute.name)) {
+        if (
+          fromRoute.fullPath &&
+          !workbenchScrollPositions.has(fromRoute.fullPath) &&
+          mainScrollRef.value &&
+          typeof mainScrollRef.value.scrollTop === 'number'
+        ) {
+          workbenchScrollPositions.set(fromRoute.fullPath, mainScrollRef.value.scrollTop)
+        }
+        nav.markEnteredDeclarative(true)
+      } else {
+        nav.markEnteredDeclarative(false)
+      }
     }
   },
   { immediate: true }
@@ -85,6 +129,14 @@ useKeymap(KEYMAP_SCOPES.GLOBAL, {
     openGlobalActions()
     return true
   },
+  'Ctrl+B': () => {
+    uiStore.toggleSidebar()
+    return true
+  },
+  'Cmd+B': () => {
+    uiStore.toggleSidebar()
+    return true
+  },
   'Ctrl+,': () => {
     nav.setPage('advanced-settings')
     if (route.name !== 'advanced-settings') router.push(ROUTES.ADVANCED_SETTINGS)
@@ -96,7 +148,7 @@ useKeymap(KEYMAP_SCOPES.GLOBAL, {
   },
   'Escape': () => {
     if (route.name === 'declarative') {
-      router.push('/')
+      nav.exitDeclarativeToWorkbench(router)
       return true
     }
     // 详情页的 Esc 与页面左上角「返回」一致：回到来时的页面（通常是插件市场）
@@ -122,14 +174,18 @@ useKeymap(KEYMAP_SCOPES.GLOBAL, {
     <div class="flex flex-1 overflow-hidden">
       <Sidebar v-if="!isDeclarativeView" />
       <main
+        ref="mainScrollRef"
         class="flex-1 overflow-y-auto custom-scrollbar"
         :style="{
           background: 'var(--rc-canvas)',
           padding: isDeclarativeView ? '0' : '14px 18px'
         }"
+        @scroll.passive="onMainScroll"
       >
         <router-view v-slot="{ Component }">
-          <component :is="Component" :key="routeViewKey" />
+          <keep-alive :exclude="['DeclarativePage']" :max="8">
+            <component :is="Component" :key="routeViewKey" />
+          </keep-alive>
         </router-view>
       </main>
     </div>

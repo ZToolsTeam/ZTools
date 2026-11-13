@@ -3,14 +3,20 @@
  *
  * 1. 程序列表在窗口打开时取一次，与插件、子命令一起在本地当场匹配，按键后同一帧就有结果；
  * 2. 普通文件走主进程检索，晚到的结果单独排在下面一段，不让已显示的结果跳位；
- * 3. 排序：匹配档（见 pinyinSearch）→ 常用读音 → 名称命中 → 类型（程序 > 插件 > 子命令 > 系统指令）
- *    → 使用频率 → 名称长短；输入同一个词时上次选中的那一项排第一；
+ * 3. 全局 8 级分类权重：1B 宿主系统指令 > 1A 系统原生工具 > 2B 系统已安装软件 > 2A 用户自主加入软件
+ *    > 3A 已安装插件 > 3B 插件子命令 > 4A 本地文件夹 > 4B 本地普通文件；
  * 4. 连续输入时按请求序号丢弃过期的文件结果。
  */
 
 import { ref, computed, watch, getCurrentScope, onScopeDispose } from 'vue'
 import { usePluginsStore } from '@/stores/plugins'
-import { MATCH_TIERS, matchItemWithQuery, normalizeSearchQuery, splitHighlightParts } from '@/utils/pinyinSearch'
+import {
+  MATCH_TIERS,
+  MATCH_TIER_SCORES,
+  matchItemWithQuery,
+  normalizeSearchQuery,
+  splitHighlightParts
+} from '@/utils/pinyinSearch'
 import { openSettings } from '@/utils/internalPlugins'
 import { getOfficialPlugin } from '@/utils/officialPlugins'
 import { switchWindowMode, WINDOW_MODES } from '@/utils/windowMode'
@@ -20,6 +26,23 @@ import { evaluateCalculatorQuery, addCalculatorHistory } from '@/vendor/calculat
 const STORAGE_KEY_FRECENCY = 'ztools_command_frecency'
 const STORAGE_KEY_QUERY_CHOICES = 'ztools_command_query_choices'
 const MAX_QUERY_CHOICES = 300
+/** 每个搜索词最多记住的候选条目数 */
+const MAX_CHOICES_PER_QUERY = 5
+/** 顶部固定常用磁贴最多展示 9 个（Alt+1~9 直达） */
+export const TOP_PINNED_GRID_LIMIT = 9
+/** 使用频次的半衰期：30 天前的一次使用只算半次，长期不用的条目自然退场 */
+const FREQUENCY_HALF_LIFE_MS = 30 * 24 * 60 * 60 * 1000
+/** 搜索态 Frecency 加分上限；空查询直接用不封顶的原始分，避免常用项同时到顶后失去先后 */
+const FRECENCY_BOOST_CAP = 180
+/** 空查询活跃梯队门槛：低于该分（单次使用约 90 天后）回落到默认推荐梯队 */
+const EMPTY_QUERY_ACTIVE_MIN_FRECENCY = 3
+/** 空查询热度分档宽度：先分档再比较，分差很小时让分类权重决胜，同时保证比较器满足传递性 */
+const EMPTY_QUERY_HEAT_STEP = 5
+/** 搜索词选择记忆：每选一次，该词下其它候选的权重乘以该系数（权重上限 1 / (1 - 0.8) = 5） */
+const QUERY_CHOICE_DECAY = 0.8
+const QUERY_CHOICE_MAX_SCORE = 1 / (1 - QUERY_CHOICE_DECAY)
+/** 首选项权重达到该值（约连续选中 2 次）才算稳定习惯；只选过 1 次时要求匹配本身达到开头一致 */
+const QUERY_CHOICE_STABLE_SCORE = 1.5
 
 /**
  * 复制文本到系统剪贴板（兼容宿主 IPC 与浏览器 Clipboard API）
@@ -37,7 +60,7 @@ export async function copyInlineAnswerToClipboard(text) {
       return true
     }
   } catch (err) {
-    console.warn("[useCommandSearch] 复制剪贴板失败:", err)
+    console.warn('[useCommandSearch] 复制剪贴板失败:', err)
   }
   return false
 }
@@ -103,18 +126,18 @@ export function evaluateInlineCommandItem(rawQuery) {
         try {
           await addCalculatorHistory(res.expression, res.formattedAnswer, res.type)
         } catch (err) {
-          console.warn("[useCommandSearch] 写入计算历史失败:", err)
+          console.warn('[useCommandSearch] 写入计算历史失败:', err)
         }
         return res.formattedAnswer
       }
     }
   } catch (err) {
-    console.warn("[useCommandSearch] 内联计算求值异常:", err)
+    console.warn('[useCommandSearch] 内联计算求值异常:', err)
     return null
   }
 }
 
-// 内置快捷工具条目定义
+// 内置快捷工具条目定义（1B: 宿主系统指令）
 export const BUILTIN_COMMAND_ITEMS = Object.freeze([
   {
     key: 'system-settings',
@@ -124,7 +147,7 @@ export const BUILTIN_COMMAND_ITEMS = Object.freeze([
     actionLabel: '打开设置',
     faIcon: 'fa-sliders',
     action: () => {
-      switchWindowMode(WINDOW_MODES.DASHBOARD).catch((err) => console.warn("[useCommandSearch] 切换窗口模式失败:", err))
+      switchWindowMode(WINDOW_MODES.DASHBOARD).catch((err) => console.warn('[useCommandSearch] 切换窗口模式失败:', err))
       openSettings()
     }
   },
@@ -136,7 +159,7 @@ export const BUILTIN_COMMAND_ITEMS = Object.freeze([
     actionLabel: '展开',
     faIcon: 'fa-th-large',
     action: () => {
-      switchWindowMode(WINDOW_MODES.DASHBOARD).catch((err) => console.warn("[useCommandSearch] 切换窗口模式失败:", err))
+      switchWindowMode(WINDOW_MODES.DASHBOARD).catch((err) => console.warn('[useCommandSearch] 切换窗口模式失败:', err))
     }
   },
   {
@@ -170,6 +193,73 @@ export const BUILTIN_COMMAND_ITEMS = Object.freeze([
     }
   }
 ])
+
+const BUILTIN_COMMAND_KEY_SET = new Set(BUILTIN_COMMAND_ITEMS.map((item) => item.key))
+
+/**
+ * 全局 8 级分类权重顺序（1B > 1A > 2B > 2A > 3A > 3B > 4A > 4B）：
+ * 数值越小代表分类优先级越高
+ */
+export const CATEGORY_RANKS = Object.freeze({
+  HOST_BUILTIN: 1,      // 1B: 宿主系统指令 (BUILTIN_COMMAND_ITEMS)
+  SYSTEM_TOOL: 2,       // 1A: 系统原生工具 (system-tool)
+  INSTALLED_APP: 3,     // 2B: 系统已安装的软件 (isApplication && type !== 'local-app')
+  USER_LOCAL_APP: 4,    // 2A: 用户自主加入的软件 (local-app)
+  PLUGIN: 5,            // 3A: 已安装插件主入口 (plugin)
+  PLUGIN_FEATURE: 6,    // 3B: 插件子命令 (plugin-feature)
+  FILE_DIRECTORY: 7,    // 4A: 本地文件夹 (file && isDir)
+  FILE_REGULAR: 8       // 4B: 本地普通文件 (file && !isDir)
+})
+
+/** 搜索态各分类对应的附加权重分（CategoryWeight） */
+export const CATEGORY_WEIGHTS = Object.freeze({
+  [CATEGORY_RANKS.HOST_BUILTIN]: 80,
+  [CATEGORY_RANKS.SYSTEM_TOOL]: 70,
+  [CATEGORY_RANKS.INSTALLED_APP]: 60,
+  [CATEGORY_RANKS.USER_LOCAL_APP]: 50,
+  [CATEGORY_RANKS.PLUGIN]: 35,
+  [CATEGORY_RANKS.PLUGIN_FEATURE]: 20,
+  [CATEGORY_RANKS.FILE_DIRECTORY]: 10,
+  [CATEGORY_RANKS.FILE_REGULAR]: 0
+})
+
+/**
+ * 获取条目的全局分类等级（1 ~ 8，越小越优先）
+ */
+export function getCategoryRank(item) {
+  if (!item || typeof item !== 'object') return CATEGORY_RANKS.FILE_REGULAR
+  // 内置指令没有 type 字段，只按登记的 key 识别；同 key 的插件仍按插件归类
+  if (item.type === 'builtin-command' || (!item.type && BUILTIN_COMMAND_KEY_SET.has(item.key))) {
+    return CATEGORY_RANKS.HOST_BUILTIN
+  }
+  if (item.type === 'system-tool') {
+    return CATEGORY_RANKS.SYSTEM_TOOL
+  }
+  if (item.type === 'local-app') {
+    return CATEGORY_RANKS.USER_LOCAL_APP
+  }
+  if (item.isApplication) {
+    return CATEGORY_RANKS.INSTALLED_APP
+  }
+  if (item.type === 'plugin') {
+    return CATEGORY_RANKS.PLUGIN
+  }
+  if (item.type === 'plugin-feature') {
+    return CATEGORY_RANKS.PLUGIN_FEATURE
+  }
+  if (item.type === 'file') {
+    return item.isDir ? CATEGORY_RANKS.FILE_DIRECTORY : CATEGORY_RANKS.FILE_REGULAR
+  }
+  // 未登记的条目类型一律归最低档，新增类型不会悄悄排到最前面
+  return CATEGORY_RANKS.FILE_REGULAR
+}
+
+/**
+ * 获取条目的分类权重加分（0 ~ 80）
+ */
+export function getCategoryWeight(item) {
+  return CATEGORY_WEIGHTS[getCategoryRank(item)] ?? 0
+}
 
 // 语义矢量图标智能匹配
 export function resolveCommandFaIcon(name, category) {
@@ -226,10 +316,12 @@ export function loadFrecencyMap() {
     const parsed = JSON.parse(raw)
     return typeof parsed === 'object' && parsed !== null ? parsed : {}
   } catch (err) {
-    console.warn("[useCommandSearch] 读取 Frecency 缓存失败:", err)
+    console.warn('[useCommandSearch] 读取 Frecency 缓存失败:', err)
     return {}
   }
 }
+
+const frecencyVersion = ref(0)
 
 /**
  * 持久化 frecency 字典
@@ -239,47 +331,89 @@ export function saveFrecencyMap(map) {
     if (typeof localStorage !== 'undefined') {
       localStorage.setItem(STORAGE_KEY_FRECENCY, JSON.stringify(map))
     }
+    frecencyVersion.value++
   } catch (err) {
-    console.warn("[useCommandSearch] 保存 Frecency 缓存失败:", err)
+    console.warn('[useCommandSearch] 保存 Frecency 缓存失败:', err)
   }
 }
 
+function isValidUsageStats(stats) {
+  return Boolean(stats) && typeof stats.lastUsed === 'number' && Number.isFinite(stats.lastUsed) && stats.lastUsed > 0
+}
+
 /**
- * 计算单个条目的 Frecency 额外权重分数
+ * 截至 now 的衰减使用次数：每次使用记 1 次，按 30 天半衰期指数衰减。
+ * 旧记录没有 score 字段时用累计次数 count 代替。
  */
-export function calculateFrecencyBonus(stats, now = Date.now()) {
-  if (!stats || typeof stats.lastUsed !== 'number') return 0
-
+function decayedUsageScore(stats, now) {
+  const stored = Number(stats.score)
+  const base = Number.isFinite(stored) ? Math.max(0, stored) : Math.max(1, Number(stats.count) || 1)
   const ageMs = Math.max(0, now - stats.lastUsed)
-  const hours = ageMs / (1000 * 60 * 60)
+  return base * Math.pow(0.5, ageMs / FREQUENCY_HALF_LIFE_MS)
+}
 
-  let recencyBonus = 5
-  if (hours < 1) {
-    recencyBonus = 120
-  } else if (hours < 24) {
-    recencyBonus = 80
-  } else if (hours < 72) {
-    recencyBonus = 50
-  } else if (hours < 168) {
-    recencyBonus = 20
-  }
-
-  const frequencyBonus = Math.min((stats.count || 1) * 10, 100)
+/**
+ * 计算单个条目不封顶的 Frecency 原始分（0 ~ 220），空查询直接用它排序
+ */
+export function calculateFrecencyScore(stats, now = Date.now()) {
+  if (!isValidUsageStats(stats)) return 0
+  const hours = Math.max(0, now - stats.lastUsed) / (1000 * 60 * 60)
+  // 近期活跃度分：1 / (1 + t / 4h) 双曲衰减，4 小时时减半，随时间连续下降（消灭 1 小时内同分乱序问题）
+  const recencyBonus = 120 / (1 + hours / 4)
+  // 历史频次分：对衰减后的使用次数取对数防刷屏（封顶 100 分）
+  const frequencyBonus = Math.min(100, 25 * Math.log(1 + decayedUsageScore(stats, now)))
   return recencyBonus + frequencyBonus
 }
 
 /**
- * 记录条目使用历史
- * @param {string} itemKey 
+ * 搜索态的 Frecency 加分（0 ~ 180，取整后封顶）
  */
-export function recordCommandUsage(itemKey) {
-  if (!itemKey || String(itemKey).startsWith('inline-calc:')) return
-  const map = loadFrecencyMap()
-  const existing = map[itemKey] || { count: 0, lastUsed: 0 }
-  map[itemKey] = {
-    count: (existing.count || 0) + 1,
-    lastUsed: Date.now()
+export function calculateFrecencyBonus(stats, now = Date.now()) {
+  return Math.min(FRECENCY_BOOST_CAP, Math.round(calculateFrecencyScore(stats, now)))
+}
+
+/**
+ * 合并同一程序在多个 key 下的使用记录（如手动添加的软件与开始菜单里的同一个程序）
+ */
+function mergeUsageStats(list) {
+  const valid = list.filter(isValidUsageStats)
+  if (valid.length <= 1) return valid[0]
+  const lastUsed = Math.max(...valid.map((stats) => stats.lastUsed))
+  return {
+    count: valid.reduce((sum, stats) => sum + (Number(stats.count) || 0), 0),
+    score: valid.reduce((sum, stats) => sum + decayedUsageScore(stats, lastUsed), 0),
+    lastUsed
   }
+}
+
+/** 已安装程序的展示信息：冷启动时程序列表还没返回，空查询先用它显示用过的程序 */
+function normalizeUsageMeta(itemKey, item) {
+  if (!item || item.type !== 'file' || !item.isApplication) return null
+  const path = typeof item.path === 'string' ? item.path.slice(0, 1024) : ''
+  const name = String(item.name || item.title || '').slice(0, 256)
+  if (!path || !name || itemKey !== 'file:' + path) return null
+  return { name, path }
+}
+
+/**
+ * 记录条目使用历史
+ * @param {string} itemKey
+ * @param {object} [item] 被打开的条目；已安装程序会顺带记下名称与路径
+ */
+export function recordCommandUsage(itemKey, item) {
+  if (!itemKey || String(itemKey).startsWith('inline-calc:')) return
+  const now = Date.now()
+  const map = loadFrecencyMap()
+  const existing = map[itemKey] && typeof map[itemKey] === 'object' ? map[itemKey] : null
+  const previousScore = isValidUsageStats(existing) ? decayedUsageScore(existing, now) : 0
+  const next = {
+    count: (Number(existing?.count) || 0) + 1,
+    score: Math.round((previousScore + 1) * 1000) / 1000,
+    lastUsed: now
+  }
+  const meta = normalizeUsageMeta(itemKey, item) || existing?.meta
+  if (meta) next.meta = meta
+  map[itemKey] = next
   saveFrecencyMap(map)
 }
 
@@ -311,8 +445,8 @@ function getQueryChoicesSnapshot() {
 }
 
 /**
- * 读取「搜索词 → 上次选中项」记录
- * @returns {Record<string, { key: string, at: number }>}
+ * 读取「搜索词 → 选中项」记录
+ * @returns {Record<string, { key: string, at: number, counts?: Record<string, { score?: number, count?: number, at: number }> }>}
  */
 export function loadQueryChoices() {
   try {
@@ -325,15 +459,68 @@ export function loadQueryChoices() {
   }
 }
 
+/** 单个候选的选择权重；旧记录只有累计次数，按权重上限折算，避免历史大次数让习惯永远无法迁移 */
+function readChoiceScore(entry) {
+  if (!entry || typeof entry !== 'object') return 0
+  const stored = Number(entry.score)
+  const value = Number.isFinite(stored) ? stored : Number(entry.count) || 0
+  return Math.max(0, Math.min(QUERY_CHOICE_MAX_SCORE, value))
+}
+
+function readChoiceCounts(record) {
+  const counts = record?.counts
+  return counts && typeof counts === 'object' && !Array.isArray(counts) ? counts : null
+}
+
 /**
- * 记住这个搜索词最后选中的是哪一项，下次输入同一个词时它排第一；最多保留最近 300 个词
+ * 某个搜索词的首选项：权重最高的候选，同权重取最近选中的
+ * @returns {{ key: string, score: number } | null}
+ */
+export function resolveQueryChoice(record) {
+  if (!record || typeof record !== 'object') return null
+  const counts = readChoiceCounts(record)
+  // 最早的记录只存了一个 key，相当于只选过 1 次
+  if (!counts) return record.key ? { key: String(record.key), score: 1 } : null
+  let best = null
+  for (const [itemKey, entry] of Object.entries(counts)) {
+    const score = readChoiceScore(entry)
+    const at = Number(entry?.at) || 0
+    if (score <= 0) continue
+    if (!best || score > best.score || (score === best.score && at > best.at)) best = { key: itemKey, score, at }
+  }
+  return best ? { key: best.key, score: best.score } : null
+}
+
+/**
+ * 记住这个搜索词选中的是哪一项。
+ * 每选一次，该词下其它候选的权重乘以 0.8、选中项加 1（权重上限 5）：
+ * 偶发误点 1 次压不过旧习惯，连续改选 2~4 次即可完成习惯迁移，用得再久的旧习惯也不会永远锁死。
  */
 export function recordQueryChoice(rawQuery, itemKey) {
   const q = normalizeSearchQuery(rawQuery)
   const key = String(itemKey || '')
   if (!q || !key || key.startsWith('inline-calc:')) return
+  const now = Date.now()
   const choices = loadQueryChoices()
-  choices[q] = { key, at: Date.now() }
+  const prev = choices[q] && typeof choices[q] === 'object' ? choices[q] : null
+  const prevCounts = readChoiceCounts(prev) || (prev?.key ? { [prev.key]: { score: 1, at: Number(prev.at) || now } } : {})
+
+  const counts = {}
+  for (const [entryKey, entry] of Object.entries(prevCounts)) {
+    counts[entryKey] = {
+      score: Math.round(readChoiceScore(entry) * QUERY_CHOICE_DECAY * 1000) / 1000,
+      at: Number(entry?.at) || 0
+    }
+  }
+  counts[key] = { score: Math.round(((counts[key]?.score || 0) + 1) * 1000) / 1000, at: now }
+
+  // 只保留权重最高的几项；刚选中的这一项始终保留，否则新习惯永远攒不起来
+  const others = Object.entries(counts)
+    .filter(([entryKey]) => entryKey !== key)
+    .sort((a, b) => b[1].score - a[1].score || b[1].at - a[1].at)
+  for (const [staleKey] of others.slice(MAX_CHOICES_PER_QUERY - 1)) delete counts[staleKey]
+
+  choices[q] = { key: resolveQueryChoice({ counts })?.key || key, at: now, counts }
   const entries = Object.entries(choices)
   if (entries.length > MAX_QUERY_CHOICES) {
     entries.sort((a, b) => (b[1]?.at || 0) - (a[1]?.at || 0))
@@ -344,6 +531,20 @@ export function recordQueryChoice(rawQuery, itemKey) {
   } catch (err) {
     console.warn('[useCommandSearch] 保存搜索选择记录失败:', err)
   }
+}
+
+/**
+ * 收集以当前查询词 q 为前缀、且已形成稳定习惯的历史首选项（用于前缀意图继承加分）
+ */
+function collectPrefixLearnedKeys(choices, q) {
+  if (!q || q.length < 2 || !choices || typeof choices !== 'object') return new Set()
+  const set = new Set()
+  for (const [savedQuery, record] of Object.entries(choices)) {
+    if (savedQuery.length <= q.length || !savedQuery.startsWith(q)) continue
+    const choice = resolveQueryChoice(record)
+    if (choice && choice.score >= QUERY_CHOICE_STABLE_SCORE) set.add(choice.key)
+  }
+  return set
 }
 
 /**
@@ -400,17 +601,6 @@ export function normalizePluginFeatures(plugin) {
   return result
 }
 
-/** 同一档里的类型先后：程序 > 插件 > 插件子命令 > 系统指令 > 文件夹 > 文件 */
-function resultTypeRank(item) {
-  if (item?.isApplication) return 0
-  if (item?.type === 'plugin') return 1
-  if (item?.type === 'plugin-feature') return 2
-  if (item?.type === 'file') return item.isDir ? 4 : 5
-  return 3
-}
-
-/** 上次为同一个搜索词选中的结果排在所有匹配之前，只让位给用户设置的别名 */
-const LEARNED_TIER = MATCH_TIERS.EXACT + 0.5
 const FILE_SEARCH_DEBOUNCE_MS = 80
 const APPLICATION_REFRESH_INTERVAL_MS = 5000
 /** 主进程给结果路径的打开授权 30 分钟过期：窗口开着时每 10 分钟刷新一次程序列表（顺带续期），搜索时发现过旧也刷新 */
@@ -418,22 +608,113 @@ const APPLICATION_GRANT_REFRESH_MS = 10 * 60 * 1000
 const APPLICATION_ICON_BATCH = 24
 const MAX_APPLICATION_ICON_CACHE = 512
 
+const USER_PRIORITY_DIR_RE = /(?:^|[\\/])(?:Desktop|Documents|Downloads|桌面|文档|下载)(?:[\\/]|$)/i
+const SYSTEM_NOISE_DIR_RE = /(?:^|[\\/])(?:node_modules|\.git|AppData|Library[\\/]Caches)(?:[\\/]|$)/i
+
+function computeUserDirBoost(filePath) {
+  const p = String(filePath || '')
+  if (!p) return 0
+  if (SYSTEM_NOISE_DIR_RE.test(p)) return -1
+  if (USER_PRIORITY_DIR_RE.test(p)) return 1
+  return 0
+}
+
+const ABSOLUTE_PATH_RE = /^(?:[a-z]:[\\/]|\\\\|\/)/i
+
+function normalizeAppName(name) {
+  return String(name || '').trim().toLowerCase()
+}
+
+function normalizeAppPath(filePath) {
+  const p = String(filePath || '').trim()
+  return ABSOLUTE_PATH_RE.test(p) ? p.replace(/[\\/]+$/, '').toLowerCase() : ''
+}
+
+/**
+ * 去掉与「用户添加的软件（2A）」「系统工具（1A）」同路径或同名的已安装程序（2B），
+ * 保留优先级更高的那一条，并记下被合并程序的使用记录 key，排序时合并到保留的条目上。
+ * @returns {{ apps: object[], aliases: Map<string, string[]> }}
+ */
+function dedupeInstalledApps(apps, ownerItems) {
+  const aliases = new Map()
+  if (!apps.length || !ownerItems.length) return { apps, aliases }
+  const byPath = new Map()
+  const byName = new Map()
+  for (const owner of ownerItems) {
+    const path = owner.type === 'local-app' ? normalizeAppPath(owner.targetPath) : ''
+    if (path && !byPath.has(path)) byPath.set(path, owner.key)
+    const name = normalizeAppName(owner.name)
+    if (name && !byName.has(name)) byName.set(name, owner.key)
+  }
+  const kept = []
+  for (const app of apps) {
+    const ownerKey = byPath.get(normalizeAppPath(app.path)) || byName.get(normalizeAppName(app.name))
+    if (!ownerKey) {
+      kept.push(app)
+      continue
+    }
+    const list = aliases.get(ownerKey) || []
+    list.push(app.key)
+    aliases.set(ownerKey, list)
+  }
+  return { apps: kept, aliases }
+}
+
+/** 冷启动时程序列表还没返回：用使用记录里存下的名称与路径先显示用过的程序（打开前要等列表返回拿到授权） */
+function buildPendingApplicationItems(frecencyMap) {
+  const items = []
+  for (const [key, stats] of Object.entries(frecencyMap)) {
+    const meta = stats?.meta
+    if (!meta || typeof meta.path !== 'string' || typeof meta.name !== 'string') continue
+    if (key !== 'file:' + meta.path) continue
+    const fileName = meta.path.split(/[\\/]/).filter(Boolean).pop() || meta.path
+    items.push(Object.assign(
+      toFileItem({ path: meta.path, name: fileName, display_name: meta.name, kind: 'application', is_dir: false, size: 0, mtime: 0 }),
+      { pendingGrant: true }
+    ))
+  }
+  return items
+}
+
+/**
+ * 空查询（Zero-Query）排序比较器：
+ * 1. 梯队优先级：活跃未固定项 (0) > 未使用默认推荐项 (1) > 已在顶部固定宫格展示的项 (2)
+ * 2. 热度档：不封顶的 Frecency 原始分按 5 分一档取整后比较（先分档再比，保证比较器满足传递性）
+ * 3. 同一热度档内按全局分类等级决胜：1B(1) > 1A(2) > 2B(3) > 2A(4) > 3A(5) > 3B(6)
+ * 4. 最后使用时间戳决胜（确保刚用过的排在前面），再保持原始顺序
+ */
+export function compareEmptyQuery(a, b) {
+  return a.emptyBucket - b.emptyBucket ||
+    b.heatTier - a.heatTier ||
+    a.categoryRank - b.categoryRank ||
+    b.lastUsed - a.lastUsed ||
+    a.index - b.index
+}
+
+/**
+ * 搜索态主候选段排序比较器：
+ * 1. 综合得分 CompositeScore = TierScore + CategoryWeight + MatchQualityScore + FrecencyBoost + QueryPrefixBoost
+ * 2. 同分时严格按全局分类等级决胜：1B(1) > 1A(2) > 2B(3) > 2A(4) > 3A(5) > 3B(6) > 4A(7) > 4B(8)
+ * 3. 最后使用时间决胜，再按名称紧凑度与原始顺序稳定排列
+ */
 function compareRanked(a, b) {
-  return b.tier - a.tier ||
-    a.secondary - b.secondary ||
-    a.field - b.field ||
-    a.typeRank - b.typeRank ||
-    b.frecency - a.frecency ||
+  return b.compositeScore - a.compositeScore ||
+    a.categoryRank - b.categoryRank ||
+    b.lastUsed - a.lastUsed ||
     a.length - b.length ||
     a.index - b.index
 }
 
-/** 文件段：同档时最近修改的、路径浅的在前 */
+/**
+ * 本地文件段排序比较器（4A 本地文件夹 > 4B 本地普通文件）
+ */
 function compareFiles(a, b) {
-  return b.tier - a.tier ||
+  return b.tierScore - a.tierScore ||
+    b.tier - a.tier ||
     a.secondary - b.secondary ||
-    a.typeRank - b.typeRank ||
     b.frecency - a.frecency ||
+    a.categoryRank - b.categoryRank ||
+    b.userDirBoost - a.userDirBoost ||
     b.mtime - a.mtime ||
     a.depth - b.depth ||
     a.index - b.index
@@ -559,9 +840,12 @@ export function useCommandSearch(options = {}) {
   const applicationResults = ref([])
   // 主进程能按范围检索时程序在本地匹配；旧版主进程不认识范围，程序随文件结果一起返回
   const applicationsAvailable = ref(false)
+  // 第一次读取程序列表是否已结束（成功或失败）；结束前空查询用使用记录里的程序信息占位
+  const applicationsSettled = ref(!enableApplications)
   const isSearching = ref(false)
   const fileSearchError = ref('')
   const fileSearchDegraded = ref(false)
+  const panelRawItems = ref([])
   const applicationIcons = new Map()
   const failedIconPaths = new Set()
 
@@ -569,6 +853,7 @@ export function useCommandSearch(options = {}) {
   let fileSearchDebounceTimer = null
   let applicationsRequest = null
   let applicationsLoadedAt = 0
+  let panelDataRequest = null
   let disposed = false
 
   function launcherBridge() {
@@ -576,11 +861,103 @@ export function useCommandSearch(options = {}) {
     return typeof window.__ztoolsLauncher?.searchFiles === 'function' ? window.__ztoolsLauncher : null
   }
 
+  function panelBridge() {
+    if (typeof window === 'undefined') return null
+    return window.__ztoolsLauncher || null
+  }
+
+  /** 读取悬浮条首屏数据（固定项、已添加本地软件、系统工具） */
+  function refreshPanelData({ force = false } = {}) {
+    if (disposed) return Promise.resolve()
+    const bridge = panelBridge()
+    if (typeof bridge?.getPanelData !== 'function') return Promise.resolve()
+    if (panelDataRequest && !force) return panelDataRequest
+    panelDataRequest = (async () => {
+      try {
+        const res = await bridge.getPanelData()
+        if (disposed) return
+        const data = res?.data ?? res
+        if (Array.isArray(data?.items)) {
+          panelRawItems.value = data.items
+        }
+      } catch (err) {
+        console.warn('[useCommandSearch] 读取悬浮条首屏数据失败:', err)
+      } finally {
+        panelDataRequest = null
+      }
+    })()
+    return panelDataRequest
+  }
+
+  /** 切换插件或本地软件在悬浮条首屏的固定状态 */
+  async function toggleItemPin(item) {
+    if (!item || typeof item !== 'object') return { success: false }
+    const isLocal = item.type === 'local-app' || item.panelItemType === 'local'
+    const targetId = String(isLocal ? item.id : (item.pluginId || item.id || '')).trim()
+    if (!targetId) return { success: false }
+    const itemType = isLocal ? 'local' : 'plugin'
+    const nextPinned = !item.pinned
+
+    // 本地乐观更新，保证磁贴宫格与列表标签即时响应
+    const idx = panelRawItems.value.findIndex((entry) => entry?.id === targetId && entry?.type === itemType)
+    if (idx >= 0) {
+      const updated = [...panelRawItems.value]
+      updated[idx] = { ...updated[idx], pinned: nextPinned }
+      panelRawItems.value = updated
+    } else {
+      panelRawItems.value = [
+        ...panelRawItems.value,
+        {
+          id: targetId,
+          name: item.name || item.title || targetId,
+          description: item.description || item.subtitle || '',
+          iconUrl: item.icon || '',
+          type: itemType,
+          pinned: nextPinned,
+          recent: true
+        }
+      ]
+    }
+
+    const bridge = panelBridge()
+    if (typeof bridge?.togglePin === 'function') {
+      try {
+        await bridge.togglePin(targetId, itemType)
+        await refreshPanelData({ force: true })
+      } catch (err) {
+        console.warn('[useCommandSearch] 切换固定状态失败:', err)
+        return { success: false, error: err?.message || '切换固定状态失败' }
+      }
+    }
+    return { success: true, pinned: nextPinned }
+  }
+
+  /** 调用宿主文件选择器添加本地软件到悬浮条 */
+  async function addLocalApp() {
+    const bridge = panelBridge()
+    if (typeof bridge?.addLocalApp !== 'function') {
+      return { success: false, added: 0, error: '当前环境不支持添加本地软件' }
+    }
+    try {
+      const res = await bridge.addLocalApp()
+      const data = res?.data ?? res
+      if (data?.added > 0) {
+        await refreshPanelData({ force: true })
+      }
+      return { success: res?.success !== false, added: Number(data?.added) || 0 }
+    } catch (err) {
+      console.warn('[useCommandSearch] 添加本地软件失败:', err)
+      return { success: false, added: 0, error: err?.message || '添加本地软件失败' }
+    }
+  }
+
   /**
    * 记录使用：使用频率，以及「当前搜索词 → 选中项」
+   * @param {string} itemKey
+   * @param {object} [item] 被打开的条目，已安装程序会记下名称与路径供冷启动显示
    */
-  function recordUsage(itemKey) {
-    recordCommandUsage(itemKey)
+  function recordUsage(itemKey, item) {
+    recordCommandUsage(itemKey, item)
     recordQueryChoice(query.value, itemKey)
   }
 
@@ -588,7 +965,10 @@ export function useCommandSearch(options = {}) {
   function refreshApplications({ force = false } = {}) {
     if (!enableApplications || disposed) return Promise.resolve()
     const bridge = launcherBridge()
-    if (!bridge) return Promise.resolve()
+    if (!bridge) {
+      applicationsSettled.value = true
+      return Promise.resolve()
+    }
     if (applicationsRequest) return applicationsRequest
     if (!force && applicationsLoadedAt && Date.now() - applicationsLoadedAt < APPLICATION_REFRESH_INTERVAL_MS) {
       return Promise.resolve()
@@ -611,9 +991,20 @@ export function useCommandSearch(options = {}) {
         console.warn('[useCommandSearch] 读取程序列表失败:', err)
       } finally {
         applicationsRequest = null
+        if (!disposed) applicationsSettled.value = true
       }
     })()
     return applicationsRequest
+  }
+
+  /**
+   * 打开前的准备：冷启动占位的程序条目没有打开授权（主进程只放行程序列表里返回过的路径），
+   * 先等程序列表返回，再换成列表里的真实条目；程序已卸载或列表读取失败时返回 null。
+   */
+  async function prepareItemForLaunch(item) {
+    if (!item?.pendingGrant) return item
+    await refreshApplications({ force: !applicationsAvailable.value })
+    return applicationResults.value.find((app) => app.path === item.path) || null
   }
 
   /**
@@ -725,11 +1116,23 @@ export function useCommandSearch(options = {}) {
   }
 
   const onWindowFocus = () => {
+    // 重新取当前时间计算衰减分，并读取另一个窗口期间写入的使用记录
+    frecencyVersion.value++
     void refreshApplications()
+    void refreshPanelData()
+  }
+  // 悬浮条与工作台是两个窗口，共用同一份 localStorage：另一个窗口写入使用记录时重新排序
+  const onStorage = (event) => {
+    if (event.key === null || event.key === STORAGE_KEY_FRECENCY || event.key === STORAGE_KEY_QUERY_CHOICES) {
+      frecencyVersion.value++
+    }
   }
   let grantRefreshTimer = null
   if (getCurrentScope()) {
-    if (typeof window !== 'undefined') window.addEventListener('focus', onWindowFocus)
+    if (typeof window !== 'undefined') {
+      window.addEventListener('focus', onWindowFocus)
+      window.addEventListener('storage', onStorage)
+    }
     if (enableApplications) {
       grantRefreshTimer = setInterval(() => { void refreshApplications() }, APPLICATION_GRANT_REFRESH_MS)
     }
@@ -738,82 +1141,278 @@ export function useCommandSearch(options = {}) {
       searchRequestId++
       if (fileSearchDebounceTimer) clearTimeout(fileSearchDebounceTimer)
       if (grantRefreshTimer) clearInterval(grantRefreshTimer)
-      if (typeof window !== 'undefined') window.removeEventListener('focus', onWindowFocus)
+      if (typeof window !== 'undefined') {
+        window.removeEventListener('focus', onWindowFocus)
+        window.removeEventListener('storage', onStorage)
+      }
       applicationIcons.clear()
     })
   }
   void refreshApplications({ force: true })
+  void refreshPanelData({ force: true })
 
-  const commandCandidates = computed(() => buildCommandCandidates(pluginsStore))
+  const pinnedPluginIds = computed(() => {
+    const set = new Set()
+    for (const item of panelRawItems.value) {
+      if (item?.type === 'plugin' && item.pinned && item.id) {
+        set.add(String(item.id).trim())
+      }
+    }
+    return set
+  })
+
+  const panelLocalAppItems = computed(() =>
+    panelRawItems.value
+      .filter((item) => item?.type === 'local' && item.id)
+      .map((item) => ({
+        key: 'local-app:' + item.id,
+        id: String(item.id),
+        type: 'local-app',
+        panelItemType: 'local',
+        isApplication: true,
+        // 主进程把程序所在路径放在 description 里，用于和开始菜单 / 应用目录里的同一程序去重
+        targetPath: normalizeAppPath(item.path || item.description) ? String(item.path || item.description) : '',
+        name: String(item.name || item.id),
+        title: String(item.name || item.id),
+        description: String(item.description || '已添加本地软件'),
+        subtitle: String(item.description || '已添加本地软件'),
+        icon: String(item.iconUrl || ''),
+        faIcon: 'fa-th-large',
+        pinned: Boolean(item.pinned),
+        recent: Boolean(item.recent),
+        badge: '本地软件',
+        actionLabel: '启动'
+      }))
+  )
+
+  const panelSystemToolItems = computed(() =>
+    panelRawItems.value
+      .filter((item) => item?.type === 'system_tool' && item.id)
+      .map((item) => ({
+        key: 'system-tool:' + item.id,
+        id: String(item.id),
+        type: 'system-tool',
+        panelItemType: 'system_tool',
+        name: String(item.name || item.id),
+        title: String(item.name || item.id),
+        description: String(item.description || '系统内置工具'),
+        subtitle: String(item.description || '系统内置工具'),
+        icon: String(item.iconUrl || ''),
+        faIcon: resolveCommandFaIcon(item.name || item.id, 'system'),
+        keywords: Array.isArray(item.keywords) ? item.keywords : [],
+        cmds: Array.isArray(item.keywords) ? item.keywords : [],
+        badge: '系统工具',
+        actionLabel: '打开'
+      }))
+  )
+
+  const commandCandidates = computed(() => {
+    const base = buildCommandCandidates(pluginsStore).map((item) => {
+      // 只给插件主入口打固定标记：子命令不能单独固定，带上标记会误显示「已固定」
+      if (item.type === 'plugin' && pinnedPluginIds.value.has(String(item.pluginId || item.key || '').trim())) {
+        return { ...item, pinned: true }
+      }
+      return item
+    })
+    return [...base, ...panelLocalAppItems.value, ...panelSystemToolItems.value]
+  })
+
+  /** 已安装程序（2B）：去掉与用户添加的软件、系统工具重复的那一份 */
+  const installedApps = computed(() =>
+    dedupeInstalledApps(
+      applicationsAvailable.value ? applicationResults.value : [],
+      [...panelLocalAppItems.value, ...panelSystemToolItems.value]
+    )
+  )
+
+  /** 首屏置顶磁贴列表（包含用户固定的插件与本地软件） */
+  const pinnedItems = computed(() => {
+    const items = []
+    const seen = new Set()
+    for (const candidate of commandCandidates.value) {
+      if (candidate.type === 'plugin-feature') continue
+      if (candidate.pinned) {
+        const k = candidate.key || candidate.pluginId || candidate.id
+        if (k && !seen.has(k)) {
+          seen.add(k)
+          items.push(candidate)
+        }
+      }
+    }
+    // 兜底：若 panelRawItems 中有固定插件尚未出现在 commandCandidates 中，也补齐展示
+    for (const raw of panelRawItems.value) {
+      if (!raw?.pinned || !raw.id) continue
+      const k = raw.type === 'local' ? 'local-app:' + raw.id : String(raw.id)
+      if (seen.has(k) || seen.has(String(raw.id))) continue
+      seen.add(k)
+      items.push({
+        key: k,
+        id: String(raw.id),
+        pluginId: raw.type === 'plugin' ? String(raw.id) : undefined,
+        type: raw.type === 'local' ? 'local-app' : 'plugin',
+        panelItemType: raw.type === 'local' ? 'local' : 'plugin',
+        name: String(raw.name || raw.id),
+        title: String(raw.name || raw.id),
+        description: String(raw.description || ''),
+        subtitle: String(raw.description || ''),
+        icon: String(raw.iconUrl || ''),
+        pinned: true,
+        badge: raw.type === 'local' ? '本地软件' : '插件',
+        actionLabel: '启动'
+      })
+    }
+    return items
+  })
 
   /**
    * 排序结果：上段是即时计算、插件、子命令、内置命令与程序的混排，下段是普通文件
    */
   const ranking = computed(() => {
+    void frecencyVersion.value
     const rawQuery = query.value
     const q = normalizeSearchQuery(rawQuery)
     const frecencyMap = getFrecencySnapshot()
     const now = Date.now()
     const candidates = commandCandidates.value
     const ranges = new Map()
+    const appOwners = [...panelLocalAppItems.value, ...panelSystemToolItems.value]
 
-    if (!q) {
-      // 空查询：按使用频率排，子命令只展示用过的，保持首屏清爽
-      const commands = candidates
-        .filter((item) => item.type !== 'plugin-feature' || frecencyMap[item.key])
-        .map((item, index) => ({ item, frecency: calculateFrecencyBonus(frecencyMap[item.key], now), index }))
-        .sort((a, b) => b.frecency - a.frecency || a.index - b.index)
-        .map((entry) => entry.item)
-      return { commands, top: commands, files: [], ranges }
+    /** 条目的使用记录：被去重合并掉的同一程序的记录一并算上 */
+    const usageStatsOf = (item, aliases) => {
+      const own = frecencyMap[item.key]
+      const merged = aliases?.get(item.key)
+      return merged ? mergeUsageStats([own, ...merged.map((key) => frecencyMap[key])]) : own
     }
 
-    const learnedKey = getQueryChoicesSnapshot()[q]?.key || ''
+    if (!q) {
+      // 顶部固定宫格已展示的 key 集合：在下方列表中归入第 3 梯队后置沉底，避免首屏上下两处重复显示同一批图标
+      const topPinnedKeys = new Set(
+        pinnedItems.value
+          .slice(0, TOP_PINNED_GRID_LIMIT)
+          .map((item) => item.key || item.pluginId || item.id)
+          .filter(Boolean)
+      )
+
+      // 空查询纳入用过的本机已安装软件（2B）；未曾打开过的本机系统软件不塞入空查询，保持首屏清爽。
+      // 程序列表第一次返回前，用使用记录里存下的名称与路径占位，避免列表返回后用过的程序突然插到前面
+      const { apps, aliases } = applicationsAvailable.value || applicationsSettled.value
+        ? installedApps.value
+        : dedupeInstalledApps(buildPendingApplicationItems(frecencyMap), appOwners)
+      const usedSystemApps = apps.filter((app) => Boolean(frecencyMap[app.key]))
+
+      const emptyPool = [
+        ...candidates.filter((item) => item.type !== 'plugin-feature' || Boolean(frecencyMap[item.key])),
+        ...usedSystemApps
+      ]
+
+      const scoredEmpty = emptyPool
+        .map((item, index) => {
+          const stats = usageStatsOf(item, aliases)
+          // 空查询用不封顶的原始分：常用项不会同时到顶而失去先后
+          const frecency = calculateFrecencyScore(stats, now)
+          const lastUsed = Number(stats?.lastUsed) || 0
+          const categoryRank = getCategoryRank(item)
+          const itemKey = item.key || item.pluginId || item.id
+          const isTopPinned = Boolean(itemKey && topPinnedKeys.has(itemKey))
+          // 梯队 0：活跃未固定项；梯队 1：未使用或长期未用的默认推荐项（按 1B>1A>2B>2A>3A 排列）；梯队 2：顶部已展示固定项
+          const emptyBucket = isTopPinned ? 2 : (frecency >= EMPTY_QUERY_ACTIVE_MIN_FRECENCY ? 0 : 1)
+          return {
+            item,
+            emptyBucket,
+            heatTier: emptyBucket === 0 ? Math.floor(frecency / EMPTY_QUERY_HEAT_STEP) : 0,
+            lastUsed,
+            categoryRank,
+            index
+          }
+        })
+        .sort(compareEmptyQuery)
+
+      const top = scoredEmpty.map((entry) => entry.item)
+      const commands = top.filter((item) => !(item.isApplication && item.type !== 'local-app'))
+      return { commands, top, files: [], ranges }
+    }
+
+    const choicesSnapshot = getQueryChoicesSnapshot()
+    const choice = resolveQueryChoice(choicesSnapshot[q])
+    const learnedKey = choice?.key || ''
+    // 抗噪：首选项已形成稳定习惯（约选中 2 次以上），或只选过 1 次但匹配本身达到开头一致，才按 LEARNED 档置顶
+    const learnedStable = (choice?.score || 0) >= QUERY_CHOICE_STABLE_SCORE
+    const prefixLearnedKeys = collectPrefixLearnedKeys(choicesSnapshot, q)
+
+    const rawApps = applicationsAvailable.value
+      ? applicationResults.value
+      : fileResults.value.filter((item) => item?.isApplication)
+    const { apps: localApps, aliases } = applicationsAvailable.value
+      ? installedApps.value
+      : dedupeInstalledApps(rawApps, appOwners)
+
     const toEntry = (item, index, match) => {
       if (match.range && item.key) ranges.set(item.key, match.range)
-      const learned = learnedKey !== '' && item.key === learnedKey && match.tier < MATCH_TIERS.ALIAS
+      const categoryRank = getCategoryRank(item)
+      const categoryWeight = CATEGORY_WEIGHTS[categoryRank] ?? 0
+      const stats = usageStatsOf(item, aliases)
+      const frecency = calculateFrecencyBonus(stats, now)
+      const lastUsed = Number(stats?.lastUsed) || 0
+      const learned = learnedKey !== '' &&
+        item.key === learnedKey &&
+        match.tier < MATCH_TIERS.ALIAS &&
+        (learnedStable || match.tier >= MATCH_TIERS.PREFIX)
+      const prefixBonus = !learned && item.key && prefixLearnedKeys.has(item.key) ? 60 : 0
+      const tierScore = learned
+        ? MATCH_TIER_SCORES.LEARNED
+        : (match.tierScore ?? (match.tier * 100))
+      const qualityScore = match.qualityScore ?? ((match.secondary ? 0 : 30) + (3 - match.field) * 10)
+      const compositeScore = tierScore + categoryWeight + qualityScore + frecency + prefixBonus
+
       return {
         item,
-        tier: learned ? LEARNED_TIER : match.tier,
-        secondary: match.secondary ? 1 : 0,
-        field: match.field,
-        typeRank: resultTypeRank(item),
-        frecency: calculateFrecencyBonus(frecencyMap[item.key], now),
+        compositeScore,
+        categoryRank,
+        lastUsed,
         length: String(item.name || item.title || '').length,
         index
       }
     }
 
     const entries = []
-    const localApps = applicationsAvailable.value
-      ? applicationResults.value
-      : fileResults.value.filter((item) => item?.isApplication)
     ;[...candidates, ...localApps].forEach((item, index) => {
       const match = matchItemWithQuery(item, q)
       if (match.matched) entries.push(toEntry(item, index, match))
     })
     entries.sort(compareRanked)
 
-    const appPaths = new Set(localApps.map((item) => item.path))
+    // 文件段只按匹配档、使用记录与路径排序，不需要综合分
+    const appPaths = new Set(rawApps.map((item) => item.path))
     const fileEntries = []
     fileResults.value.forEach((item, index) => {
       if (!item || appPaths.has(item.path)) return
       // 主进程按文件名命中、前端规则没认出来的（如只命中扩展名）排在文件段最后，不丢弃
       const match = matchItemWithQuery(item, q)
+      if (match.matched && match.range && item.key) ranges.set(item.key, match.range)
+      const stats = frecencyMap[item.key]
       fileEntries.push({
-        ...toEntry(item, index, match.matched ? match : { tier: MATCH_TIERS.NONE, secondary: false, field: 3, range: null }),
+        item,
+        tierScore: match.matched ? (match.tierScore ?? match.tier * 100) : 0,
+        tier: match.matched ? match.tier : MATCH_TIERS.NONE,
+        secondary: match.matched && match.secondary ? 1 : 0,
+        frecency: calculateFrecencyBonus(stats, now),
+        categoryRank: getCategoryRank(item),
+        userDirBoost: computeUserDirBoost(item.path),
         mtime: Number(item.mtime) || 0,
-        depth: String(item.path).split(/[\\/]/).length
+        depth: String(item.path).split(/[\\/]/).length,
+        index
       })
     })
     fileEntries.sort(compareFiles)
 
     const ranked = entries.map((entry) => entry.item)
-    const commands = ranked.filter((item) => !item.isApplication)
+    const commands = ranked.filter((item) => !(item.isApplication && item.type !== 'local-app'))
     // Raycast rootSearch: 当输入命中有效算式/单位换算/汇率/日期/色值时，置顶展示临时结果卡片
     const inlineItem = evaluateInlineCommandItem(rawQuery)
+    const prefixItems = inlineItem ? [inlineItem] : []
     return {
-      commands: inlineItem ? [inlineItem, ...commands] : commands,
-      top: inlineItem ? [inlineItem, ...ranked] : ranked,
+      commands: [...prefixItems, ...commands],
+      top: [...prefixItems, ...ranked],
       files: fileEntries.map((entry) => entry.item),
       ranges
     }
@@ -856,8 +1455,13 @@ export function useCommandSearch(options = {}) {
     search,
     clearSearch,
     recordUsage,
+    prepareItemForLaunch,
     highlightParts,
     refreshApplications,
+    refreshPanelData,
+    pinnedItems,
+    toggleItemPin,
+    addLocalApp,
     builtinSystemItems: BUILTIN_COMMAND_ITEMS
   }
 }

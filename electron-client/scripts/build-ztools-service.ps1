@@ -100,11 +100,11 @@ if ($SelfTest) {
   }
   $fixtureId = 'service-manifest-{0}-{1}' -f $PID, [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
   $fixtureRoot = Join-Path $root "out-test\$fixtureId"
-  $fixtureDllSource = Join-Path $root '..\plugins\create-plugin\src\plugins\batch-rename\lib\BatchRenamePlugin.dll'
+  $fixtureDllSource = Join-Path $root '..\DLLPlugins\outputs\batch-rename\lib\BatchRenamePlugin.dll'
   if (-not (Test-Path -LiteralPath $fixtureDllSource -PathType Leaf)) {
     throw "Privileged manifest test DLL missing: $fixtureDllSource"
   }
-  $contextMenuDllSource = Join-Path $root '..\plugins\create-plugin\src\plugins\context-menu\lib\ContextMenuPlugin.dll'
+  $contextMenuDllSource = Join-Path $root '..\DLLPlugins\outputs\context-menu\lib\ContextMenuPlugin.dll'
   if (-not (Test-Path -LiteralPath $contextMenuDllSource -PathType Leaf)) {
     throw "Context menu Service test DLL missing: $contextMenuDllSource"
   }

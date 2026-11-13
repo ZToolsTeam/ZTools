@@ -183,6 +183,53 @@ test('downloads supported icon formats into the plugin directory and records the
   assert.deepEqual([...await fs.readFile(path.join(root, 'icon.png'))], [1, 2, 3])
   assert.equal(await fs.readFile(path.join(root, 'icon.url'), 'utf8'), 'https://cdn.example/icon.png\n')
   assert.equal(recorded, 'https://cdn.example/icon.png')
+
+  const svgService = new PluginIconService(
+    { withPluginDirectory: async (_pluginId, action) => action(manifest(), root) },
+    state,
+    (async () => new Response('<svg/>', { status: 200, headers: { 'content-type': 'image/svg+xml; charset=utf-8' } })) as typeof fetch
+  )
+  await svgService.refresh('plugin.test', 'https://cdn.example/icon.svg')
+  assert.equal(await fs.readFile(path.join(root, 'icon.svg'), 'utf8'), '<svg/>')
+  assert.equal(recorded, 'https://cdn.example/icon.svg')
+
+  const webpService = new PluginIconService(
+    { withPluginDirectory: async (_pluginId, action) => action(manifest(), root) },
+    state,
+    (async () => new Response(new Uint8Array([9, 8]), { status: 200, headers: { 'content-type': 'image/webp' } })) as typeof fetch
+  )
+  await webpService.refresh('plugin.test', 'https://cdn.example/icon.webp')
+  assert.deepEqual([...await fs.readFile(path.join(root, 'icon.webp'))], [9, 8])
+  assert.equal(recorded, 'https://cdn.example/icon.webp')
+
+  let activeWrites = 0
+  let fetchCalls = 0
+  const dedupService = new PluginIconService(
+    {
+      withPluginDirectory: async (_pluginId, action) => {
+        if (activeWrites > 0) throw Object.assign(new Error('插件正在执行其他操作'), { code: 'PLUGIN_BUSY' })
+        activeWrites++
+        try {
+          await new Promise((resolve) => setTimeout(resolve, 10))
+          return await action(manifest(), root)
+        } finally {
+          activeWrites--
+        }
+      }
+    },
+    state,
+    (async () => {
+      fetchCalls++
+      return new Response('<svg/>', { status: 200, headers: { 'content-type': 'image/svg+xml' } })
+    }) as typeof fetch
+  )
+  const [r1, r2] = await Promise.all([
+    dedupService.refresh('plugin.test', 'https://cdn.example/concurrent.svg'),
+    dedupService.refresh('PLUGIN.TEST', 'https://cdn.example/concurrent.svg')
+  ])
+  assert.equal(r1.status, 'refreshing')
+  assert.equal(r2.status, 'refreshing')
+  assert.equal(fetchCalls, 1)
 })
 
 test('图标下载在插件目录锁之外进行：下载期间不占锁，下载失败或超时不进入目录写入', async (context) => {

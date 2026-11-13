@@ -103,22 +103,6 @@ module.exports = async (runner) => {
       }
     },
     {
-      name: '读取超级面板配置',
-      fn: async (cdp, assert) => {
-        const raw = await cdp.evaluate(
-          '(async function(){ var c = await ztools.config.get("super_panel"); return JSON.stringify(c); })()'
-        )
-        if (!raw || raw === 'null' || raw === 'undefined') {
-          console.log('    ℹ️  超级面板配置为空，跳过')
-          return
-        }
-        const config = JSON.parse(raw)
-        assert.ok(config, '超级面板配置不应为空')
-        // 检查关键字段
-        assert.ok('enabled' in config, '应有 enabled 字段')
-      }
-    },
-    {
       name: '主题切换 Switch 存在',
       fn: async (cdp, assert) => {
         const hasTheme = await cdp.evaluate(

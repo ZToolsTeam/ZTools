@@ -41,9 +41,9 @@ export interface TriggerServiceOptions {
   shortcuts: GlobalShortcutAdapter
   events: Pick<EventService, 'publishHost'>
   toggleMainWindow(): void
-  toggleSuperPanel(trigger: 'keyboard_hotkey'): void
   openPlugin(params: PluginOpenParams): Promise<unknown>
   launchLocalApp?(appId: string): Promise<void>
+  forwardHotkeyToRecorder?(accelerator: string): Promise<boolean> | boolean
   store?: TriggerDocumentStore
   state?: PluginStateProvider
   keyboard?: KeyboardDoubleTapAdapter
@@ -223,9 +223,11 @@ export function normalizedAccelerator(key: string): string {
 
 /** 冲突提示里展示占用者：系统内置触发器用功能名，其余显示插件 ID */
 const SYSTEM_TRIGGER_NAMES: Record<string, string> = {
-  super_panel_keyboard_hotkey: '超级面板',
   global_wake_hotkey: '全局唤醒'
 }
+
+/** 旧超级面板键盘热键的触发器 ID：超级面板已移除，加载时清理遗留记录 */
+const RETIRED_SUPER_PANEL_TRIGGER_ID = 'super_panel_keyboard_hotkey'
 
 function triggerOwnerName(trigger: StoredTrigger): string {
   if (Object.hasOwn(SYSTEM_TRIGGER_NAMES, trigger.id)) return SYSTEM_TRIGGER_NAMES[trigger.id] as string
@@ -270,11 +272,38 @@ function isLocalAppId(value: unknown): value is string {
 function hasRuntimeAction(trigger: StoredTrigger, canLaunchLocalApp: boolean): boolean {
   if (trigger.action.mode === 'window') return isIdentifier(trigger.action.target)
   if (trigger.action.mode !== 'builtin') return false
-  if (trigger.action.target === 'toggle_main_window' || trigger.action.target === 'toggle_super_panel') return true
+  if (trigger.action.target === 'toggle_main_window') return true
   return canLaunchLocalApp && trigger.action.target === 'launch_local_app' && localAppIdOf(trigger) !== undefined
 }
 
+/**
+ * 快捷键录制框激活期间需要临时在系统内核层捕获的 Space 组合键：
+ * - Windows 下 Ctrl+Space / Shift+Space 默认被系统 IME 热键（00000010 / 00000011）拦截，
+ *   通过 RegisterHotKey 临时注册后在 win32k 内核热键链表中优先级高于系统 IME 热键；
+ * - Windows 下 Alt+Space 默认触发 WM_SYSCHAR -> SC_KEYMENU 弹出左上角系统窗口菜单并导致录制框失焦退出，
+ *   通过 RegisterHotKey 临时注册后直接转为 WM_HOTKEY 投递给录制框，不再触发系统菜单。
+ */
+const RECORDER_SPACE_ACCELERATORS: readonly string[] = [
+  'Ctrl+Space',
+  'Alt+Space',
+  'Shift+Space',
+  'Ctrl+Alt+Space',
+  'Ctrl+Shift+Space',
+  'Alt+Shift+Space',
+  'Ctrl+Alt+Shift+Space',
+  ...(process.platform === 'darwin'
+    ? [
+        'Control+Space',
+        'Control+Alt+Space',
+        'Control+Shift+Space',
+        'Control+Alt+Shift+Space'
+      ]
+    : [])
+]
+
 export class TriggerService {
+  readonly #recorderCaptured = new Set<string>()
+  #recorderCaptureActive = false
   readonly #store: TriggerDocumentStore
   readonly #triggers = new Map<string, StoredTrigger>()
   readonly #registered = new Map<string, string>()
@@ -442,68 +471,6 @@ export class TriggerService {
     })
   }
 
-  syncSuperPanelHotkey(enabled: boolean, accelerator: string): Promise<void> {
-    return this.#serialize(async () => {
-      const triggerId = 'super_panel_keyboard_hotkey'
-      const previous = this.#triggers.get(triggerId)
-      const previousAccelerator = previous?.enabled ? acceleratorOf(previous) : undefined
-      if (!enabled) {
-        if (previousAccelerator) this.#unregister(triggerId, previousAccelerator)
-        if (!previous) return
-        const next = new Map(this.#triggers)
-        next.delete(triggerId)
-        try {
-          await this.#persist(next)
-        } catch (error) {
-          if (previousAccelerator) this.#restore(triggerId, previousAccelerator)
-          throw error
-        }
-        this.#replaceTriggers(next)
-        await this.#syncKeyboardConfig()
-        return
-      }
-
-      const trigger: StoredTrigger = {
-        id: triggerId,
-        pluginId: 'system',
-        type: 'hotkey',
-        config: { key: accelerator },
-        action: { mode: 'builtin', target: 'toggle_super_panel', params: {} },
-        enabled: true,
-        priority: 0,
-        createTime: previous?.createTime || new Date().toISOString(),
-        raw: previous?.raw ?? {},
-        actionShape: previous?.actionShape ?? 'nested'
-      }
-      this.#requireSupported(trigger)
-      await this.#assertNoConflict(trigger)
-      const nextAccelerator = acceleratorOf(trigger)
-      if (!nextAccelerator) {
-        throw new ZToolsError(errorCodes.invalidRequest, '超级面板快捷键不能为空')
-      }
-      const registrationChanged = previousAccelerator !== nextAccelerator ||
-        this.#registered.get(triggerId) !== nextAccelerator
-      if (registrationChanged && previousAccelerator) this.#unregister(triggerId, previousAccelerator)
-      if (
-        registrationChanged &&
-        !this.#registerWithRestore(triggerId, nextAccelerator, previousAccelerator)
-      ) {
-        throw new ZToolsError(errorCodes.triggerConflict, '操作系统拒绝注册超级面板快捷键')
-      }
-      const next = new Map(this.#triggers)
-      next.set(triggerId, trigger)
-      try {
-        await this.#persist(next)
-      } catch (error) {
-        if (registrationChanged) this.#unregister(triggerId, nextAccelerator)
-        if (registrationChanged && previousAccelerator) this.#restore(triggerId, previousAccelerator)
-        throw error
-      }
-      this.#replaceTriggers(next)
-      await this.#syncKeyboardConfig()
-    })
-  }
-
   setEnabled(params: TriggerSetEnabledParams, caller: CallerIdentity): Promise<{ success: true; data: string }> {
     return this.#serialize(async () => {
       const previous = this.#requireTrigger(params.triggerId)
@@ -586,7 +553,19 @@ export class TriggerService {
     })
   }
 
+  setRecorderCaptureActive(active: boolean): void {
+    if (this.#stopping || !active) {
+      this.#recorderCaptureActive = false
+      this.#releaseRecorderCapture()
+      return
+    }
+    this.#recorderCaptureActive = true
+    this.#acquireRecorderCapture()
+  }
+
   stop(): Promise<void> {
+    this.#recorderCaptureActive = false
+    this.#releaseRecorderCapture()
     if (this.#stopPromise) return this.#stopPromise
     this.#stopping = true
     this.#removeKeyboardInputListener?.()
@@ -613,9 +592,14 @@ export class TriggerService {
     }
     const loaded = new Map<string, StoredTrigger>()
     const order: TriggerOrderItem[] = []
+    let retiredFound = false
     for (const [index, value] of values.entries()) {
       try {
         const trigger = parseStoredTrigger(value)
+        if (trigger.id === RETIRED_SUPER_PANEL_TRIGGER_ID) {
+          retiredFound = true
+          continue
+        }
         if (loaded.has(trigger.id)) {
           throw new ZToolsError(errorCodes.dataCorrupt, `触发器 ID 重复: ${trigger.id}`)
         }
@@ -628,6 +612,14 @@ export class TriggerService {
     }
     this.#document = document
     this.#order = order
+    if (retiredFound) {
+      try {
+        await this.#persist(loaded)
+      } catch (error) {
+        // 写回失败不影响本次运行：遗留记录已不在内存中，下次启动会再次清理
+        console.warn('清理旧超级面板快捷键记录失败', error)
+      }
+    }
     this.#replaceTriggers(loaded)
     for (const trigger of loaded.values()) {
       const accelerator = trigger.enabled ? acceleratorOf(trigger) : undefined
@@ -803,7 +795,62 @@ export class TriggerService {
     return caller.pluginId
   }
 
+  #isAcceleratorRegisteredByTrigger(accelerator: string): boolean {
+    const target = normalizedAccelerator(accelerator)
+    if (!target) return false
+    for (const registeredAccelerator of this.#registered.values()) {
+      if (normalizedAccelerator(registeredAccelerator) === target) {
+        return true
+      }
+    }
+    return false
+  }
+
+  #acquireRecorderCapture(): void {
+    if (this.#stopping || !this.#recorderCaptureActive) return
+    for (const accelerator of RECORDER_SPACE_ACCELERATORS) {
+      if (this.#recorderCaptured.has(accelerator)) continue
+      if (this.#isAcceleratorRegisteredByTrigger(accelerator)) continue
+      try {
+        const registered = this.options.shortcuts.register(accelerator, () => {
+          this.#handleRecorderCapturedHotkey(accelerator)
+        })
+        if (registered) {
+          this.#recorderCaptured.add(accelerator)
+        }
+      } catch {
+        // 忽略单个组合键被外部独占时的异常
+      }
+    }
+  }
+
+  #releaseRecorderCapture(): void {
+    if (this.#recorderCaptured.size === 0) return
+    const captured = [...this.#recorderCaptured]
+    this.#recorderCaptured.clear()
+    for (const accelerator of captured) {
+      if (this.#isAcceleratorRegisteredByTrigger(accelerator)) continue
+      try {
+        this.options.shortcuts.unregister(accelerator)
+      } catch {
+        // 忽略注销异常
+      }
+    }
+  }
+
+  #handleRecorderCapturedHotkey(accelerator: string): void {
+    this.#recorderCaptureActive = false
+    this.#releaseRecorderCapture()
+    if (this.#stopping || typeof this.options.forwardHotkeyToRecorder !== 'function') return
+    try {
+      void Promise.resolve(this.options.forwardHotkeyToRecorder(accelerator)).catch(() => false)
+    } catch {
+      // 忽略转发异常
+    }
+  }
+
   #register(triggerId: string, accelerator: string): boolean {
+    this.#releaseRecorderCapture()
     if (isDoubleModifier(accelerator)) {
       this.#registered.set(triggerId, accelerator)
       return true
@@ -857,6 +904,35 @@ export class TriggerService {
   #fire(triggerId: string): void {
     const trigger = this.#triggers.get(triggerId)
     if (!trigger?.enabled || this.#stopping) return
+    const accelerator = acceleratorOf(trigger)
+    if (accelerator && typeof this.options.forwardHotkeyToRecorder === 'function') {
+      if (this.#recorderCaptureActive || this.#recorderCaptured.size > 0) {
+        this.#recorderCaptureActive = false
+        this.#releaseRecorderCapture()
+      }
+      let maybeRecorded: Promise<boolean> | boolean = false
+      try {
+        maybeRecorded = this.options.forwardHotkeyToRecorder(accelerator)
+      } catch {
+        maybeRecorded = false
+      }
+      if (maybeRecorded === true) return
+      if (maybeRecorded && typeof (maybeRecorded as Promise<boolean>).then === 'function') {
+        void (maybeRecorded as Promise<boolean>)
+          .catch(() => false)
+          .then((recorded) => {
+            if (recorded || this.#stopping || this.#triggers.get(triggerId) !== trigger || !trigger.enabled) {
+              return
+            }
+            this.#fireAfterRecorderCheck(triggerId, trigger)
+          })
+        return
+      }
+    }
+    this.#fireAfterRecorderCheck(triggerId, trigger)
+  }
+
+  #fireAfterRecorderCheck(triggerId: string, trigger: StoredTrigger): void {
     if (!this.options.state || trigger.pluginId.toLowerCase() === 'system') {
       this.#dispatch(trigger)
       return
@@ -919,8 +995,6 @@ export class TriggerService {
     }
     if (trigger.action.mode === 'builtin' && trigger.action.target === 'toggle_main_window') {
       this.options.toggleMainWindow()
-    } else if (trigger.action.mode === 'builtin' && trigger.action.target === 'toggle_super_panel') {
-      this.options.toggleSuperPanel('keyboard_hotkey')
     } else if (trigger.action.mode === 'window') {
       try {
         void this.options.openPlugin({

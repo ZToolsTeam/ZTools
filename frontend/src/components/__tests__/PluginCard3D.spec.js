@@ -66,7 +66,7 @@ describe('PluginCard3D', () => {
     expect(wrapper.emitted('toggle-favorite')).toEqual([['plugin-2']])
   })
 
-  it('官方插件只显示盾形标记，标题行不占文字', () => {
+  it('卡片去除官方与社区 UI 显示区分：官方与社区插件均不显示官方盾形标记', () => {
     const wrapper = mount(PluginCard3D, {
       props: {
         plugin: {
@@ -77,10 +77,7 @@ describe('PluginCard3D', () => {
       }
     })
 
-    const mark = wrapper.find('.card-mark-official')
-    expect(mark.exists()).toBe(true)
-    expect(mark.attributes('title')).toBe('官方插件')
-    expect(mark.attributes('aria-label')).toBe('官方插件')
+    expect(wrapper.find('.card-mark-official').exists()).toBe(false)
     expect(wrapper.text()).not.toContain('官方插件')
     expect(wrapper.find('.card-title').attributes('title')).toBe('系统内存与进程')
 
@@ -119,17 +116,20 @@ describe('PluginCard3D', () => {
     expect(legacy.find('.card-platforms').exists()).toBe(false)
   })
 
-  it('官方标记以目录署名为准：目录标为社区的插件即使在官方名单里也不显示官方，与「官方 / 社区」筛选一致', () => {
-    // caffeine 在内部官方插件名单（storeOfficialIds）里，但目录署名为社区
+  it('底层官方判定逻辑保留，但界面不渲染官方角标 UI', () => {
     const community = mount(PluginCard3D, { props: { plugin: { pluginId: 'caffeine', name: '防休眠常亮', author: 'ZTools Community', source_type: 'community' } } })
     expect(community.find('.card-mark-official').exists()).toBe(false)
+    expect(community.vm.isOfficial).toBe(false)
     community.unmount()
+
     const official = mount(PluginCard3D, { props: { plugin: { pluginId: 'clipboard-manager', name: '剪贴板历史', author: 'ZTools Team', source_type: 'official', is_official: true } } })
-    expect(official.find('.card-mark-official').exists()).toBe(true)
+    expect(official.find('.card-mark-official').exists()).toBe(false)
+    expect(official.vm.isOfficial).toBe(true)
     official.unmount()
-    // 没写署名的条目（如内置插件列表）仍按官方名单识别
+
     const unattributed = mount(PluginCard3D, { props: { plugin: { pluginId: 'caffeine', name: '防休眠常亮' } } })
-    expect(unattributed.find('.card-mark-official').exists()).toBe(true)
+    expect(unattributed.find('.card-mark-official').exists()).toBe(false)
+    expect(unattributed.vm.isOfficial).toBe(true)
     unattributed.unmount()
   })
 

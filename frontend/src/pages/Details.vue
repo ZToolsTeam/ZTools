@@ -1,7 +1,7 @@
 <script setup>
-import { RcButton, RcSegmented } from '@/components/base'
+import { RcButton } from '@/components/base'
 import { confirmDialog } from '@/utils/confirmDialog'
-import { ArrowLeftIcon, RotateCwIcon, TriangleAlertIcon } from '@lucide/vue'
+import { ArrowLeftIcon, FileTextIcon, RotateCwIcon, TriangleAlertIcon } from '@lucide/vue'
 import { ref, watch, onMounted, onBeforeUnmount, computed, nextTick } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 
@@ -11,25 +11,14 @@ import PluginDescription from './details-components/PluginDescription.vue'
 
 import { useNavStore } from '@/stores/nav'
 import { usePluginsStore } from '@/stores/plugins'
-import {
-  openPlugin as apiOpenPlugin,
-  getDownloadSign,
-  installPluginNative,
-  uninstallPluginNative,
-  getPluginDetails,
-  createShortcut as apiCreateShortcut,
-  checkPluginUpdate,
-  downloadPluginUpdate,
-  isPluginVersionIncompatibleError,
-  getPluginVersionIncompatibleMessage
-} from '@/api/apiserver'
+import { usePluginDetailsApi } from '@/composables/usePluginDetailsApi'
 import { useToast } from '@/composables/useToast'
 import { usePluginInstall } from '@/composables/usePluginInstall'
 import { useVersionCompat } from '@/composables/useVersionCompat'
 import { ROUTES, routeUtils } from '@/router/routes'
 import { getPluginFeatureHotkeyItemByTrigger } from '@/utils/pluginFeatureHotkeys'
 import { isPluginSupportedOnCurrentPlatform, isWindows } from '@/utils/platform'
-import { pluginDetailTabs, pluginRatings, auth, onAuthRequired, track } from '@edition'
+import { pluginDetailSections, pluginRatings, auth, onAuthRequired, track } from '@edition'
 import { getOfficialPlugin, isClientProvidedPlugin } from '@/utils/officialPlugins'
 import { getBundledPluginEntry, isBundledPlugin } from '@/utils/bundledPlugins'
 import { loadInstalledDeclarativePlugin } from '@/utils/declarativePluginLoader'
@@ -40,10 +29,18 @@ const router = useRouter()
 const nav = useNavStore()
 const pluginsStore = usePluginsStore()
 const { installWithFeedback } = usePluginInstall()
+const {
+  getPluginDetails,
+  checkPluginUpdate,
+  downloadPluginUpdate,
+  uninstallPluginNative,
+  createShortcut: apiCreateShortcut
+} = usePluginDetailsApi()
 
 const plugin = ref({})
 const loading = ref(true)
-const routePluginId = computed(() => String(route.params.pluginId || ''))
+const currentDetailsPluginId = ref(String(route.params.pluginId || ''))
+const routePluginId = computed(() => currentDetailsPluginId.value)
 
 const pluginId = computed(() =>
   String(routePluginId.value || plugin.value?.pluginId || '')
@@ -52,7 +49,7 @@ const error = ref('')
 const { toastSuccess, toastError, toastWarning } = useToast()
 const { checkPluginCompat } = useVersionCompat()
 
-// 留言数（由官方版的留言 Tab 加载后回报；开源版没有留言）
+// 留言数（由官方版的「评价与留言」卡片加载后回报；开源版没有留言）
 const loadedCommentsCount = ref(0)
 
 const isFavorite = ref(false)
@@ -103,29 +100,21 @@ watch(isInstalled, (installed) => {
   }
 })
 
-// 「详情」之后的 Tab 由版本提供（官方版：留言、评分、版本记录；开源版没有）
-const tabs = ['detail', ...pluginDetailTabs.map((tab) => tab.key)]
-const tabNames = {
-  detail: '详情',
-  ...Object.fromEntries(pluginDetailTabs.map((tab) => [tab.key, tab.label]))
-}
-const hasCommentsTab = pluginDetailTabs.some((tab) => tab.key === 'comments')
-// 标签切换统一用 RcSegmented；留言 Tab 带上留言数
-const activeTab = ref('detail')
-const tabContainerRef = ref(null)
+// 详情页为单页垂直流：头部 →「插件详情」卡片（截图、介绍、版本附加的详情区块）→ 版本附加的独立卡片
+// 附加区块由版本提供（官方版：详情卡底部的版本记录 + 「评价与留言」卡片；开源版没有）
+const detailSections = pluginDetailSections.filter((section) => section.placement === 'detail')
+const cardSections = pluginDetailSections.filter((section) => section.placement === 'card')
+const hasCommentsSection = cardSections.some((section) => section.key === 'comments')
 let loadRequestId = 0
-// 点击「查看留言」后等留言加载完再校正一次滚动位置
+// 「评价与留言」卡片的根元素，头部「查看留言」据此滚动定位
+let commentsCardEl = null
+// 留言是否已完成首次加载；未完成时点击「查看留言」需在加载结束后再校正一次滚动位置
+const commentsReady = ref(false)
 let scrollToCommentsPending = false
-// 每次切到某个 Tab（包括再次点击当前 Tab）都会变化；附加 Tab 据此重新加载数据（如留言每次点开都重新拉取）
-const tabActivationToken = ref(0)
 
-const tabContext = computed(() => ({
-  pluginId: pluginId.value,
-  plugin: plugin.value,
-  isInstalled: isInstalled.value,
-  isRevoked: isRevoked.value,
-  activationToken: tabActivationToken.value
-}))
+const setSectionRef = (key, el) => {
+  if (key === 'comments') commentsCardEl = el
+}
 
 // 评分汇总由版本提供（官方版：真实评分；开源版没有评分，始终为 null，头部不显示）
 const ratingSummary = computed(() =>
@@ -133,7 +122,7 @@ const ratingSummary = computed(() =>
 )
 
 const commentsCount = computed(() => {
-  if (!hasCommentsTab) return null
+  if (!hasCommentsSection) return null
   const fields = [
     plugin.value?.commentsCount,
     plugin.value?.comments_count,
@@ -149,11 +138,14 @@ const commentsCount = computed(() => {
     : loadedCommentsCount.value
 })
 
-const tabOptions = computed(() => tabs.map((tab) => ({
-  label: tabNames[tab],
-  value: tab,
-  count: tab === 'comments' && commentsCount.value > 0 ? commentsCount.value : undefined
-})))
+// 传给版本附加区块的详情页上下文
+const sectionContext = computed(() => ({
+  pluginId: pluginId.value,
+  plugin: plugin.value,
+  isInstalled: isInstalled.value,
+  isRevoked: isRevoked.value,
+  commentsCount: commentsCount.value
+}))
 
 function resetDetailsState() {
   plugin.value = {}
@@ -167,6 +159,7 @@ function resetDetailsState() {
   libTotal.value = 0
   hotkeyText.value = ''
   loadedCommentsCount.value = 0
+  commentsReady.value = false
   scrollToCommentsPending = false
 }
 
@@ -346,19 +339,13 @@ const fetchPluginHotkey = async (pid) => {
   }
 }
 
-// 处理标签切换（各 Tab 组件自己加载数据）
-const handleTabChange = (tab) => {
-  if (!tabs.includes(tab)) return
-  activeTab.value = tab
-  tabActivationToken.value += 1
-}
-
-// 留言 Tab 的回报：count 为已加载留言数，loaded 表示一次加载结束
-const commentsTabListeners = {
+// 「评价与留言」卡片的回报：count 为已加载留言数，loaded 表示一次加载结束
+const commentsListeners = {
   count: (count) => {
     loadedCommentsCount.value = Number.isFinite(count) && count >= 0 ? count : 0
   },
   loaded: async () => {
+    commentsReady.value = true
     if (!scrollToCommentsPending) return
     scrollToCommentsPending = false
     await nextTick()
@@ -367,29 +354,25 @@ const commentsTabListeners = {
 }
 
 const scrollCommentsToTop = () => {
-  const tabContainer = tabContainerRef.value
-  const scrollContainer = tabContainer?.closest('main')
-  if (!tabContainer || !scrollContainer) return
+  const card = commentsCardEl
+  const scrollContainer = card?.closest('main')
+  if (!card || !scrollContainer) return
 
-  const tabRect = tabContainer.getBoundingClientRect()
+  const cardRect = card.getBoundingClientRect()
   const scrollRect = scrollContainer.getBoundingClientRect()
   scrollContainer.scrollTo({
     top: Math.max(
       0,
-      scrollContainer.scrollTop + tabRect.top - scrollRect.top
+      scrollContainer.scrollTop + cardRect.top - scrollRect.top
     ),
     behavior: 'smooth'
   })
 }
 
-const showComments = async () => {
-  if (!hasCommentsTab) return
-  // 切到留言 Tab 会重新加载留言，等加载回报后再校正一次位置
-  scrollToCommentsPending = true
-  handleTabChange('comments')
-
-  // 先对 loading 状态滚动，立即响应点击；留言加载完成后再校正最终位置（见 commentsTabListeners.loaded）
-  await nextTick()
+const showComments = () => {
+  if (!hasCommentsSection) return
+  // 留言还在加载时，加载完成后卡片高度会变化，等加载回报后再校正一次位置（见 commentsListeners.loaded）
+  scrollToCommentsPending = !commentsReady.value
   scrollCommentsToTop()
 }
 
@@ -640,8 +623,12 @@ onMounted(async () => {
 })
 
 watch(
-  () => route.params.pluginId,
-  () => {
+  [() => route.name, () => route.params.pluginId],
+  ([name, nextPluginId], prev) => {
+    if (name && name !== ROUTES.DETAILS.name) return
+    const normalized = String(nextPluginId || '')
+    if (prev && normalized === currentDetailsPluginId.value && Object.keys(plugin.value || {}).length > 0) return
+    currentDetailsPluginId.value = normalized
     load()
   },
   { immediate: true }
@@ -730,35 +717,36 @@ onBeforeUnmount(() => {
         @show-comments="showComments"
       />
 
-      <PluginScreenshots :screenshots="plugin.screenshots" />
+      <!-- 插件详情卡：截图、介绍，以及版本附加的详情区块（官方版：可折叠的版本记录） -->
+      <section class="detail-card" data-section="detail">
+        <h2 class="card-title">
+          <FileTextIcon aria-hidden="true" />
+          插件详情
+        </h2>
+        <PluginScreenshots :screenshots="plugin.screenshots" />
+        <PluginDescription :description="plugin.description" />
+        <component
+          :is="section.component"
+          v-for="section in detailSections"
+          :key="section.key"
+          v-bind="section.props(sectionContext)"
+        />
+      </section>
 
-      <!-- Tab分页 -->
-      <div ref="tabContainerRef" class="tab-container">
-        <div class="tab-header">
-          <RcSegmented
-            aria-label="插件信息"
-            :model-value="activeTab"
-            :options="tabOptions"
-            @update:model-value="handleTabChange"
-          />
-        </div>
-
-        <div class="tab-content">
-          <PluginDescription
-            v-if="activeTab === 'detail'"
-            :description="plugin.description"
-          />
-
-          <template v-for="tab in pluginDetailTabs" :key="tab.key">
-            <component
-              :is="tab.component"
-              v-if="activeTab === tab.key"
-              v-bind="tab.props(tabContext)"
-              v-on="tab.key === 'comments' ? commentsTabListeners : {}"
-            />
-          </template>
-        </div>
-      </div>
+      <!-- 版本附加的独立卡片（官方版：评价与留言；开源版没有） -->
+      <section
+        v-for="section in cardSections"
+        :key="section.key"
+        :ref="(el) => setSectionRef(section.key, el)"
+        class="detail-card"
+        :data-section="section.key"
+      >
+        <component
+          :is="section.component"
+          v-bind="section.props(sectionContext)"
+          v-on="section.key === 'comments' ? commentsListeners : {}"
+        />
+      </section>
     </div>
   </div>
 </template>
@@ -914,22 +902,30 @@ onBeforeUnmount(() => {
   margin: 0 0 20px;
 }
 
-/* Tab 容器 */
-.tab-container {
+/* 内容卡片：插件详情卡与版本附加的独立卡片，垂直排列 */
+.detail-card {
   background: var(--rc-surface);
   border: 1px solid var(--rc-border);
   border-radius: 12px;
-  overflow: hidden;
-}
-
-.tab-header {
-  padding: 8px 10px;
-  border-bottom: 1px solid var(--rc-border-subtle);
-  overflow-x: auto;
-}
-
-.tab-content {
   padding: 16px 20px 20px;
+}
+
+.detail-card + .detail-card {
+  margin-top: 12px;
+}
+
+.card-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0 0 14px;
+  color: var(--rc-text-primary);
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.card-title :deep(.lucide) {
+  color: var(--rc-text-muted);
 }
 
 /* 响应式 */

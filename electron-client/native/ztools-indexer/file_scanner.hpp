@@ -200,9 +200,16 @@ public:
 // High-performance Concurrent Multi-threaded Directory Scanner
 class ConcurrentDirectoryScanner : public IFileScanner {
 public:
+  static constexpr size_t kDefaultMaxEntries = 400000;
+
   const char* GetName() const override { return "concurrent_directory"; }
 
-  explicit ConcurrentDirectoryScanner(size_t thread_count = 0) {
+  explicit ConcurrentDirectoryScanner(
+    size_t thread_count = 0,
+    size_t max_entries = kDefaultMaxEntries,
+    const std::atomic<bool>* cancel_flag = nullptr,
+    size_t max_depth = 0
+  ) : max_entries_(max_entries), cancel_flag_(cancel_flag), max_depth_(max_depth) {
     if (thread_count == 0) {
       size_t hw = std::thread::hardware_concurrency();
       thread_count_ = (hw > 0) ? hw : 4;
@@ -211,22 +218,68 @@ public:
     }
   }
 
-  bool Scan(const std::wstring& target, std::vector<FileEntry>& out_entries) override {
-    std::wstring root = target;
-    if (root.empty()) root = L".";
-    while (root.size() > 1 && (root.back() == L'\\' || root.back() == L'/')) {
-      root.pop_back();
+  static std::vector<std::wstring> EnumerateFixedDrives() {
+    std::vector<std::wstring> drives;
+#ifdef _WIN32
+    wchar_t buf[512] = {0};
+    DWORD len = GetLogicalDriveStringsW(static_cast<DWORD>(sizeof(buf) / sizeof(wchar_t) - 1), buf);
+    if (len > 0 && len < sizeof(buf) / sizeof(wchar_t)) {
+      const wchar_t* curr = buf;
+      while (*curr != L'\0') {
+        std::wstring drive(curr);
+        UINT dtype = GetDriveTypeW(drive.c_str());
+        if (dtype == DRIVE_FIXED) {
+          drives.push_back(drive);
+        }
+        curr += drive.size() + 1;
+      }
     }
+    if (drives.empty()) {
+      drives.push_back(L"C:\\");
+    }
+#elif defined(__APPLE__)
+    drives.push_back(L"/Users");
+    drives.push_back(L"/Applications");
+    drives.push_back(L"/System/Applications");
+#else
+    drives.push_back(L"/");
+#endif
+    return drives;
+  }
 
-    std::queue<std::wstring> dir_queue;
+  bool Scan(const std::wstring& target, std::vector<FileEntry>& out_entries) override {
+    return ScanRoots({target}, out_entries);
+  }
+
+  bool ScanRoots(const std::vector<std::wstring>& targets, std::vector<FileEntry>& out_entries) {
+    struct QueueItem {
+      std::wstring path;
+      size_t depth;
+    };
+
+    std::queue<QueueItem> dir_queue;
     std::mutex queue_mutex;
     std::condition_variable cv;
     std::atomic<int> active_workers(0);
     std::atomic<bool> done(false);
+    std::atomic<size_t> total_collected(0);
 
     std::vector<std::vector<FileEntry>> thread_entries(thread_count_);
 
-    dir_queue.push(root);
+    for (const auto& t : targets) {
+      std::wstring root = t;
+      if (root.empty()) root = L".";
+      while (root.size() > 1 && (root.back() == L'\\' || root.back() == L'/')) {
+        if (root.size() == 3 && root[1] == L':') break; // Keep "C:\" intact for FindFirstFileExW("C:\*")
+        root.pop_back();
+      }
+      if (root.size() == 2 && root[1] == L':') {
+        root.push_back(L'\\');
+      }
+      dir_queue.push({root, 0});
+    }
+
+    if (dir_queue.empty()) return false;
 
     std::vector<std::thread> workers;
     workers.reserve(thread_count_);
@@ -234,10 +287,16 @@ public:
     for (size_t t = 0; t < thread_count_; ++t) {
       workers.emplace_back([&, t]() {
         std::vector<FileEntry>& local_entries = thread_entries[t];
-        local_entries.reserve(4096);
+        local_entries.reserve(8192);
 
         while (true) {
-          std::wstring current_dir;
+          if (cancel_flag_ && cancel_flag_->load(std::memory_order_relaxed)) {
+            done.store(true);
+            cv.notify_all();
+            break;
+          }
+
+          QueueItem current_item;
           {
             std::unique_lock<std::mutex> lock(queue_mutex);
             cv.wait(lock, [&]() {
@@ -249,7 +308,7 @@ public:
             }
 
             if (!dir_queue.empty()) {
-              current_dir = std::move(dir_queue.front());
+              current_item = std::move(dir_queue.front());
               dir_queue.pop();
               active_workers++;
             } else {
@@ -258,12 +317,29 @@ public:
           }
 
           std::vector<std::wstring> subdirs;
-          ScanSingleDirectory(current_dir, local_entries, subdirs);
+          if (!done.load(std::memory_order_relaxed)) {
+            ScanSingleDirectory(
+              current_item.path,
+              local_entries,
+              subdirs,
+              total_collected,
+              max_entries_,
+              cancel_flag_
+            );
+          }
 
           {
             std::lock_guard<std::mutex> lock(queue_mutex);
-            for (auto& sd : subdirs) {
-              dir_queue.push(std::move(sd));
+            const bool limit_reached = (max_entries_ > 0 && total_collected.load(std::memory_order_relaxed) >= max_entries_);
+            const bool cancelled = (cancel_flag_ && cancel_flag_->load(std::memory_order_relaxed));
+            const bool depth_allowed = (max_depth_ == 0 || current_item.depth + 1 < max_depth_);
+            if (!limit_reached && !cancelled && depth_allowed) {
+              for (auto& sd : subdirs) {
+                dir_queue.push({std::move(sd), current_item.depth + 1});
+              }
+            } else if (limit_reached || cancelled) {
+              std::queue<QueueItem> empty;
+              std::swap(dir_queue, empty);
             }
             active_workers--;
             if (active_workers.load() == 0 && dir_queue.empty()) {
@@ -295,13 +371,67 @@ public:
   }
 
 private:
+#ifdef _WIN32
+  static bool EqualsIgnoreCase(const wchar_t* a, const wchar_t* b) {
+    return _wcsicmp(a, b) == 0;
+  }
+
+  // 过滤 Windows 隐藏目录、系统底层目录及海量工程缓存目录（如 Windows / AppData / node_modules）
+  static bool ShouldSkipWindowsEntry(const WIN32_FIND_DATAW& find_data) {
+    const wchar_t* name = find_data.cFileName;
+    if (name[0] == L'\0' || name[0] == L'.') {
+      return true;
+    }
+    const DWORD attrs = find_data.dwFileAttributes;
+    if ((attrs & FILE_ATTRIBUTE_HIDDEN) != 0 ||
+        (attrs & FILE_ATTRIBUTE_SYSTEM) != 0 ||
+        (attrs & FILE_ATTRIBUTE_TEMPORARY) != 0) {
+      return true;
+    }
+    if ((attrs & FILE_ATTRIBUTE_DIRECTORY) != 0) {
+      if (EqualsIgnoreCase(name, L"Windows") ||
+          EqualsIgnoreCase(name, L"Windows.old") ||
+          EqualsIgnoreCase(name, L"WinSxS") ||
+          EqualsIgnoreCase(name, L"AppData") ||
+          EqualsIgnoreCase(name, L"ProgramData") ||
+          EqualsIgnoreCase(name, L"Program Files") ||
+          EqualsIgnoreCase(name, L"Program Files (x86)") ||
+          EqualsIgnoreCase(name, L"Windows Kits") ||
+          EqualsIgnoreCase(name, L"Microsoft Shared") ||
+          EqualsIgnoreCase(name, L"SymCache") ||
+          EqualsIgnoreCase(name, L"symbols") ||
+          EqualsIgnoreCase(name, L"PerfLogs") ||
+          EqualsIgnoreCase(name, L"node_modules") ||
+          EqualsIgnoreCase(name, L"__pycache__") ||
+          EqualsIgnoreCase(name, L"target") ||
+          EqualsIgnoreCase(name, L"CMakeFiles") ||
+          EqualsIgnoreCase(name, L"dist") ||
+          EqualsIgnoreCase(name, L"build") ||
+          EqualsIgnoreCase(name, L"coverage") ||
+          EqualsIgnoreCase(name, L"obj") ||
+          EqualsIgnoreCase(name, L"Packages") ||
+          EqualsIgnoreCase(name, L"venv") ||
+          EqualsIgnoreCase(name, L"bower_components") ||
+          EqualsIgnoreCase(name, L"$RECYCLE.BIN") ||
+          EqualsIgnoreCase(name, L"System Volume Information")) {
+        return true;
+      }
+    }
+    return false;
+  }
+#endif
+
   static void ScanSingleDirectory(
     const std::wstring& dir,
     std::vector<FileEntry>& files,
-    std::vector<std::wstring>& subdirs
+    std::vector<std::wstring>& subdirs,
+    std::atomic<size_t>& total_collected,
+    size_t max_entries,
+    const std::atomic<bool>* cancel_flag
   ) {
 #ifdef _WIN32
-    std::wstring search_pattern = dir + L"\\*";
+    const bool has_trailing_slash = !dir.empty() && (dir.back() == L'\\' || dir.back() == L'/');
+    std::wstring search_pattern = has_trailing_slash ? (dir + L"*") : (dir + L"\\*");
     WIN32_FIND_DATAW find_data;
     HANDLE hFind = FindFirstFileExW(
       search_pattern.c_str(),
@@ -315,12 +445,18 @@ private:
     if (hFind == INVALID_HANDLE_VALUE) return;
 
     do {
-      if (wcscmp(find_data.cFileName, L".") == 0 || wcscmp(find_data.cFileName, L"..") == 0) {
+      if (cancel_flag && cancel_flag->load(std::memory_order_relaxed)) {
+        break;
+      }
+      if (max_entries > 0 && total_collected.load(std::memory_order_relaxed) >= max_entries) {
+        break;
+      }
+      if (ShouldSkipWindowsEntry(find_data)) {
         continue;
       }
 
       std::wstring filename = find_data.cFileName;
-      std::wstring full_path = dir + L"\\" + filename;
+      std::wstring full_path = has_trailing_slash ? (dir + filename) : (dir + L"\\" + filename);
       bool is_directory = (find_data.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) != 0;
 
       FileEntry entry;
@@ -332,6 +468,7 @@ private:
 
       PinyinEngine::Convert(entry.name, entry.acronym, entry.pinyin_full, entry.name_lower);
       files.push_back(std::move(entry));
+      total_collected.fetch_add(1, std::memory_order_relaxed);
 
       if (is_directory && !(find_data.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT)) {
         subdirs.push_back(std::move(full_path));
@@ -347,6 +484,12 @@ private:
 
     struct dirent* de = nullptr;
     while ((de = readdir(dp)) != nullptr) {
+      if (cancel_flag && cancel_flag->load(std::memory_order_relaxed)) {
+        break;
+      }
+      if (max_entries > 0 && total_collected.load(std::memory_order_relaxed) >= max_entries) {
+        break;
+      }
       const char* cname = de->d_name;
       if (std::strcmp(cname, ".") == 0 || std::strcmp(cname, "..") == 0) continue;
       // Skip noisy/hidden directories on macOS/POSIX
@@ -374,6 +517,7 @@ private:
 
       PinyinEngine::Convert(entry.name, entry.acronym, entry.pinyin_full, entry.name_lower);
       files.push_back(std::move(entry));
+      total_collected.fetch_add(1, std::memory_order_relaxed);
 
       bool is_app_bundle = name.size() > 4 && name.compare(name.size() - 4, 4, ".app") == 0;
       if (is_directory && !is_symlink && !is_app_bundle) {
@@ -385,6 +529,9 @@ private:
   }
 
   size_t thread_count_ = 4;
+  size_t max_entries_ = kDefaultMaxEntries;
+  const std::atomic<bool>* cancel_flag_ = nullptr;
+  size_t max_depth_ = 0;
 };
 
 // Generates high-volume realistic mock datasets for stress testing & benchmarking

@@ -34,6 +34,39 @@ const MAX_POPOUT_WINDOWS = 8
 /** 新窗口必须在此时间内取走交接的状态，否则丢弃 */
 export const POPOUT_HANDOFF_TTL_MS = 60_000
 
+const nativeDialogWindows = new WeakSet<BrowserWindow>()
+
+/** 判断指定窗口当前是否正在展示系统原生文件/目录对话框（避免悬浮窗因失焦自动隐藏） */
+export function isShowingNativeDialog(win: BrowserWindow): boolean {
+  return nativeDialogWindows.has(win)
+}
+
+async function withNativeDialog<T>(owner: BrowserWindow, task: () => Promise<T>): Promise<T> {
+  nativeDialogWindows.add(owner)
+  try {
+    return await task()
+  } finally {
+    nativeDialogWindows.delete(owner)
+    if (typeof owner.isDestroyed === 'function' && !owner.isDestroyed() && typeof owner.focus === 'function') {
+      owner.focus()
+    }
+  }
+}
+
+function showOpenDialogWithGuard(
+  owner: BrowserWindow,
+  options: Electron.OpenDialogOptions
+): Promise<Electron.OpenDialogReturnValue> {
+  return withNativeDialog(owner, () => dialog.showOpenDialog(owner, options))
+}
+
+function showSaveDialogWithGuard(
+  owner: BrowserWindow,
+  options: Electron.SaveDialogOptions
+): Promise<Electron.SaveDialogReturnValue> {
+  return withNativeDialog(owner, () => dialog.showSaveDialog(owner, options))
+}
+
 /** 等待新窗口取走的插件状态（一个窗口只保留最新一份） */
 interface PendingPopoutHandoff {
   readonly id: string
@@ -613,7 +646,7 @@ export class WindowService {
   async showOpenDialog(params: WindowDialogParams, caller: CallerIdentity): Promise<unknown> {
     const properties = normalizeOpenDialogProperties(params.properties)
     const filters = parseDialogFilters(params.filters)
-    const result = await dialog.showOpenDialog(callerWindow(caller), {
+    const result = await showOpenDialogWithGuard(callerWindow(caller), {
       ...(params.title ? { title: params.title } : {}),
       ...(params.defaultPath ? { defaultPath: params.defaultPath } : {}),
       ...(filters ? { filters } : {}),
@@ -640,7 +673,7 @@ export class WindowService {
   async showSaveDialog(params: WindowDialogParams, caller: CallerIdentity): Promise<unknown> {
     const filters = parseDialogFilters(params.filters)
     const defaultPath = saveDefaultPath(params)
-    const result = await dialog.showSaveDialog(callerWindow(caller), {
+    const result = await showSaveDialogWithGuard(callerWindow(caller), {
       ...(params.title ? { title: params.title } : {}),
       ...(defaultPath ? { defaultPath } : {}),
       ...(filters ? { filters } : {})
@@ -651,7 +684,7 @@ export class WindowService {
   }
 
   async showSelectFolderDialog(params: WindowDialogParams, caller: CallerIdentity): Promise<unknown> {
-    const result = await dialog.showOpenDialog(callerWindow(caller), {
+    const result = await showOpenDialogWithGuard(callerWindow(caller), {
       ...(params.title ? { title: params.title } : {}),
       ...(params.defaultPath ? { defaultPath: params.defaultPath } : {}),
       properties: ['openDirectory', 'createDirectory']

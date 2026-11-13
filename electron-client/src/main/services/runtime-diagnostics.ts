@@ -31,7 +31,6 @@ export interface NativeRuntimeDiagnosticsFallback {
     lastError: string
     lastErrorMessage: string
   }
-  superPanelInput: { mouseSupported: false; mouseEnabled: false; lastError: string }
 }
 
 export interface RuntimeNativeHostDiagnostics {
@@ -50,16 +49,9 @@ export interface RuntimeServiceDiagnostics {
   lastErrorMessage: string
 }
 
-export interface RuntimeSuperPanelDiagnostics {
-  mouseSupported?: boolean
-  mouseEnabled: boolean
-  lastError: string
-}
-
 export interface RuntimeDiagnosticDetails {
   nativeHost: RuntimeNativeHostDiagnostics
   service: RuntimeServiceDiagnostics
-  superPanelInput: RuntimeSuperPanelDiagnostics
 }
 
 export interface RuntimeDiagnosticFailureInput {
@@ -198,11 +190,6 @@ export function sanitizeRuntimeDiagnosticDetails(
         ? safeDiagnosticErrorCode(details.service.lastError)
         : '',
       lastErrorMessage: redactDiagnosticText(details.service.lastErrorMessage, 'ZToolsService')
-    },
-    superPanelInput: {
-      ...details.superPanelInput,
-      mouseSupported: details.superPanelInput.mouseSupported === true,
-      lastError: redactDiagnosticText(details.superPanelInput.lastError, 'SuperPanel 输入')
     }
   }
 }
@@ -226,17 +213,6 @@ export function createNativeRuntimeDiagnosticsFallback(
       pipe: '',
       lastError: '',
       lastErrorMessage: ''
-    },
-    superPanelInput: {
-      mouseSupported: false,
-      mouseEnabled: false,
-      lastError: platform === 'darwin'
-        ? 'Native mouse input unsupported on macOS'
-        : nativeRuntimeState === 'unsupported'
-          ? 'Native mouse input unsupported on this platform'
-          : nativeRuntimeState === 'unknown'
-            ? 'Native mouse input status unknown on this platform'
-            : 'NativeHost32 unavailable'
     }
   }
 }

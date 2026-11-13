@@ -142,15 +142,6 @@ const { pluginGlyph, fallbackGlyph, displayIconUrl, iconFailed, showImgOverlay, 
             :src="displayIconUrl && !iconFailed ? displayIconUrl : ''"
             :size="36"
           />
-          <!-- 官方标记放在图标角上，标题行不再为四个字让位 -->
-          <span
-            v-if="isOfficial"
-            class="card-mark-official"
-            title="官方插件"
-            aria-label="官方插件"
-          >
-            <ShieldCheckIcon  aria-hidden="true" />
-          </span>
         </div>
 
         <!-- 中间信息 -->

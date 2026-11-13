@@ -12,7 +12,7 @@ import { buildDevelopmentClipboard } from './build-macos-clipboard.mjs'
 import { spawnSync } from 'node:child_process'
 import { readNativeHostManifest } from './native-host-manifest.mjs'
 import { buildRuntimeCapabilityPromptPreload, buildSandboxPreload } from './build-sandbox-preload.mjs'
-import { hasCommercialMainSource, minifyCommercialMainOutput, removeStaleEditionOutputs } from './edition-output.mjs'
+import { hasCommercialMainSource, removeStaleEditionOutputs } from './edition-output.mjs'
 import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -62,8 +62,9 @@ buildDevelopmentHotkeys(root)
 buildDevelopmentVision(root)
 buildDevelopmentPathAccess(root)
 
-// 官方构建：闭源主进程产物原地压缩并去掉注释与源码映射，发行包不带可直接阅读的闭源源码
+// 官方构建：闭源主进程产物原地压缩并去掉注释与源码映射
 if (hasCommercialMainSource(root)) {
+  const { minifyCommercialMainOutput } = await import('./minify-commercial-output.mjs')
   const esbuild = createRequire(path.join(frontendRoot, 'package.json'))('esbuild')
   const minified = minifyCommercialMainOutput(root, esbuild)
   console.log(`闭源主进程产物已压缩: ${minified.files.length} 个文件，删除源码映射 ${minified.removedMaps.length} 个`)

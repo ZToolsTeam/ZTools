@@ -94,13 +94,11 @@ function createService(store = new MemoryStore(), keyboard?: FakeKeyboard): {
   keyboard: FakeKeyboard | undefined
   events: Array<{ type: string; payload: unknown }>
   toggles: { count: number }
-  panelToggles: { count: number }
   localAppLaunches: string[]
 } {
   const shortcuts = new FakeShortcuts()
   const events: Array<{ type: string; payload: unknown }> = []
   const toggles = { count: 0 }
-  const panelToggles = { count: 0 }
   const localAppLaunches: string[] = []
   const service = new TriggerService({
     dataRoot: 'unused-in-memory-store',
@@ -113,12 +111,11 @@ function createService(store = new MemoryStore(), keyboard?: FakeKeyboard): {
       }
     },
     toggleMainWindow: () => { toggles.count += 1 },
-    toggleSuperPanel: () => { panelToggles.count += 1 },
     openPlugin: async () => undefined,
     launchLocalApp: async (appId) => { localAppLaunches.push(appId) },
     ...(keyboard ? { keyboard } : {})
   })
-  return { service, store, shortcuts, keyboard, events, toggles, panelToggles, localAppLaunches }
+  return { service, store, shortcuts, keyboard, events, toggles, localAppLaunches }
 }
 
 function flatTrigger(overrides: Record<string, unknown> = {}): Record<string, unknown> {
@@ -148,23 +145,14 @@ test('loads the Delphi trigger format and dispatches compatible hotkey events', 
         action: { mode: 'builtin', target: 'toggle_main_window', params: {} },
         priority: 0,
         createTime: '2026-08-24 12:00:00'
-      },
-      {
-        id: 'super_panel_keyboard_hotkey',
-        pluginId: 'system',
-        type: 'hotkey',
-        enabled: true,
-        config: { key: 'Alt+Space' },
-        action: { mode: 'builtin', target: 'toggle_super_panel', params: {} }
       }
     ]
   })
-  const { service, shortcuts, events, toggles, panelToggles } = createService(store)
+  const { service, shortcuts, events, toggles } = createService(store)
   const result = await service.list({ pluginId: '' }, mainCaller)
-  assert.equal(result.data.length, 2)
+  assert.equal(result.data.length, 1)
   assert.equal(result.data.every((trigger) => trigger.enabled && trigger.effectiveEnabled), true)
   assert.equal(shortcuts.callbacks.has('ctrl+shift+z'), true)
-  assert.equal(shortcuts.callbacks.has('alt+space'), true)
 
   shortcuts.fire('Ctrl+Shift+Z')
   assert.deepEqual(events, [{
@@ -172,8 +160,81 @@ test('loads the Delphi trigger format and dispatches compatible hotkey events', 
     payload: { id: 'global_wake_hotkey', keys: 'Ctrl+Shift+Z' }
   }])
   assert.equal(toggles.count, 1)
-  shortcuts.fire('Alt+Space')
-  assert.equal(panelToggles.count, 1)
+  await service.stop()
+})
+
+test('triggers.json 中遗留的超级面板快捷键记录：加载后不注册、不参与冲突检测，并从文件中清理', async () => {
+  const unknownRecord = { id: '../bad', pluginId: 'system' }
+  const store = new MemoryStore({
+    preserved: 'root-field',
+    triggers: [
+      {
+        id: 'super_panel_keyboard_hotkey',
+        pluginId: 'system',
+        type: 'hotkey',
+        enabled: true,
+        config: { key: 'Alt+Shift+Space' },
+        action: { mode: 'builtin', target: 'toggle_super_panel', params: {} }
+      },
+      unknownRecord,
+      flatTrigger()
+    ]
+  })
+  const { service, shortcuts } = createService(store)
+  const listed = await service.list({ pluginId: '' }, mainCaller)
+
+  // 只保留全局唤醒；遗留的超级面板组合键没有注册
+  assert.deepEqual(listed.data.map((item) => item.id), ['global_wake_hotkey'])
+  assert.equal(shortcuts.callbacks.has('alt+shift+space'), false)
+  assert.equal(shortcuts.callbacks.has('ctrl+shift+z'), true)
+
+  // 冲突检测不再把旧超级面板当作占用者
+  const conflict = await service.checkConflict({ key: 'Alt+Shift+Space', pluginId: 'another' }, mainCaller)
+  assert.equal(conflict.data.hasConflict, false)
+  // 该组合键可以被其它触发器正常注册
+  await service.register(flatTrigger({
+    id: 'reuse_old_super_panel_key',
+    pluginId: 'another',
+    config: { key: 'Alt+Shift+Space' }
+  }) as never, mainCaller)
+  assert.equal(shortcuts.callbacks.has('alt+shift+space'), true)
+
+  // 遗留记录已写回清理；无法解析的记录与根字段原样保留
+  const stored = store.document.triggers as unknown[]
+  assert.equal(stored.some((item) => (item as Record<string, unknown>).id === 'super_panel_keyboard_hotkey'), false)
+  assert.deepEqual(stored[0], unknownRecord)
+  assert.equal(store.document.preserved, 'root-field')
+  await service.stop()
+})
+
+test('遗留超级面板记录清理写回失败时不影响其它触发器加载', async () => {
+  const store = new MemoryStore({
+    triggers: [
+      {
+        id: 'super_panel_keyboard_hotkey',
+        pluginId: 'system',
+        type: 'hotkey',
+        enabled: true,
+        config: { key: 'Alt+Shift+Space' },
+        action: { mode: 'builtin', target: 'toggle_super_panel', params: {} }
+      },
+      flatTrigger()
+    ]
+  })
+  store.failReplace = true
+  const { service, shortcuts } = createService(store)
+  const originalWarn = console.warn
+  console.warn = () => undefined
+  try {
+    const listed = await service.list({ pluginId: '' }, mainCaller)
+    assert.deepEqual(listed.data.map((item) => item.id), ['global_wake_hotkey'])
+  } finally {
+    console.warn = originalWarn
+  }
+  assert.equal(shortcuts.callbacks.has('alt+shift+space'), false)
+  assert.equal(shortcuts.callbacks.has('ctrl+shift+z'), true)
+  // 写回失败时文件内容保持不变，下次启动会再次清理
+  assert.equal((store.document.triggers as unknown[]).length, 2)
   await service.stop()
 })
 
@@ -279,7 +340,6 @@ test('does not register a local-app action without the Main ID lookup port', asy
     shortcuts,
     events: { publishHost: () => ({ success: true, delivered: 0 }) },
     toggleMainWindow: () => undefined,
-    toggleSuperPanel: () => undefined,
     openPlugin: async () => undefined
   })
 
@@ -422,7 +482,6 @@ test('redacts event adapter exception details from hotkey logs', async () => {
       }
     },
     toggleMainWindow: () => undefined,
-    toggleSuperPanel: () => undefined,
     openPlugin: async () => undefined
   })
   await service.register(flatTrigger() as never, mainCaller)
@@ -544,7 +603,6 @@ test('dispatches plugin-window and local-app hotkey actions with their payloads'
     shortcuts,
     events: { publishHost: () => ({ success: true, delivered: 0 }) },
     toggleMainWindow: () => undefined,
-    toggleSuperPanel: () => undefined,
     openPlugin: async (params) => { opened.push(params) },
     launchLocalApp: async (appId) => { launched.push(appId) }
   })
@@ -626,7 +684,6 @@ test('retries an enabled shortcut that was unavailable during startup', async ()
     shortcuts,
     events: { publishHost: () => ({ success: true, delivered: 0 }) },
     toggleMainWindow: () => undefined,
-    toggleSuperPanel: () => undefined,
     openPlugin: async () => undefined,
     launchLocalApp: async () => undefined
   })
@@ -670,7 +727,6 @@ test('does not register or fire triggers for disabled plugins, but restores them
     shortcuts,
     events: { publishHost(type, payload) { events.push({ type, payload }); return { success: true, delivered: 1 } } },
     toggleMainWindow: () => undefined,
-    toggleSuperPanel: () => undefined,
     openPlugin: async () => undefined,
     launchLocalApp: async () => undefined
   })
@@ -690,7 +746,7 @@ test('does not register or fire triggers for disabled plugins, but restores them
 
 test('routes NativeHost double modifier events and cleans up keyboard configuration', async () => {
   const keyboard = new FakeKeyboard()
-  const { service, shortcuts, toggles, panelToggles } = createService(new MemoryStore(), keyboard)
+  const { service, shortcuts, toggles } = createService(new MemoryStore(), keyboard)
   await service.register({
     id: 'double-control',
     pluginId: 'system',
@@ -704,7 +760,6 @@ test('routes NativeHost double modifier events and cleans up keyboard configurat
 
   keyboard.emit({ type: 'keyboard-double-tap', modifier: 'ctrl' })
   assert.equal(toggles.count, 1)
-  assert.equal(panelToggles.count, 0)
 
   await assert.rejects(
     service.register({
@@ -713,7 +768,7 @@ test('routes NativeHost double modifier events and cleans up keyboard configurat
       type: 'hotkey',
       enabled: true,
       config: { key: 'DoubleControl' },
-      action: { mode: 'builtin', target: 'toggle_super_panel', params: {} }
+      action: { mode: 'builtin', target: 'toggle_main_window', params: {} }
     }, mainCaller),
     (error) => error instanceof ZToolsError && error.code === errorCodes.triggerConflict
   )
@@ -770,7 +825,6 @@ test('does not treat disabled plugin triggers as active conflicts', async () => 
     shortcuts,
     events: { publishHost: () => ({ success: true, delivered: 0 }) },
     toggleMainWindow: () => undefined,
-    toggleSuperPanel: () => undefined,
     openPlugin: async () => undefined,
     launchLocalApp: async () => undefined
   })
@@ -833,26 +887,33 @@ test('isolates a corrupt trigger record and preserves it across a later write', 
   await service.stop()
 })
 
-test('[回归] 超级面板与全局唤醒同属 system，用同一组合键时报出明确冲突，而不是「操作系统拒绝注册」', async () => {
+test('[回归] 系统内置触发器与全局唤醒用同一组合键时报出明确占用者，而不是「操作系统拒绝注册」', async () => {
   const { service, shortcuts } = createService()
-  await service.syncSuperPanelHotkey(true, 'Alt+Space')
+  await service.register(flatTrigger({ config: { key: 'Alt+Space' } }) as never, mainCaller)
   await assert.rejects(
-    service.register(flatTrigger({ config: { key: 'Alt+Space' } }) as never, mainCaller),
+    service.register(flatTrigger({ id: 'another_system_hotkey', config: { key: 'Alt+Space' } }) as never, mainCaller),
     (error) => error instanceof ZToolsError &&
       error.code === errorCodes.triggerConflict &&
-      /已被「超级面板」占用/.test(error.message)
+      /已被「全局唤醒」占用/.test(error.message)
   )
-  // 已注册的超级面板不受影响
+  // 已注册的全局唤醒不受影响
   assert.equal(shortcuts.callbacks.has('alt+space'), true)
-  // 反过来：全局唤醒先占用，超级面板再用同一组合键也明确报出占用者
-  const other = createService()
-  await other.service.register(flatTrigger({ config: { key: 'Alt+Space' } }) as never, mainCaller)
-  await assert.rejects(
-    other.service.syncSuperPanelHotkey(true, 'Alt+Space'),
-    (error) => error instanceof ZToolsError && /已被「全局唤醒」占用/.test(error.message)
-  )
   await service.stop()
-  await other.service.stop()
+})
+
+test('不再支持 toggle_super_panel 内置动作', async () => {
+  const { service, shortcuts, store } = createService()
+  await assert.rejects(
+    service.register(flatTrigger({
+      id: 'legacy_panel_action',
+      config: { key: 'Ctrl+Alt+P' },
+      actionTarget: 'toggle_super_panel'
+    }) as never, mainCaller),
+    (error) => error instanceof ZToolsError && error.code === errorCodes.notSupported
+  )
+  assert.equal(shortcuts.callbacks.size, 0)
+  assert.equal(store.document.triggers, undefined)
+  await service.stop()
 })
 
 test('[回归] 同一插件的两个不同触发器也不能共用一个组合键（同一组合键系统里只能注册一次）', async () => {
@@ -869,13 +930,56 @@ test('[回归] 同一插件的两个不同触发器也不能共用一个组合�
 
 test('[边界] 修饰键顺序、大小写、空白与别名（Option = Alt）不同也识别为同一组合键', async () => {
   const { service } = createService()
-  await service.syncSuperPanelHotkey(true, 'Alt+Shift+Space')
+  await service.register(flatTrigger({ config: { key: 'Alt+Shift+Space' } }) as never, mainCaller)
   for (const key of ['Shift+Alt+Space', ' alt + shift + space ', 'Option+Shift+Space']) {
     const conflict = await service.checkConflict({ key, pluginId: 'another' }, mainCaller)
     assert.equal(conflict.data.hasConflict, true, key)
-    assert.equal(conflict.data.conflicts[0]?.pluginName, '超级面板')
+    assert.equal(conflict.data.conflicts[0]?.pluginName, '全局唤醒')
   }
   const free = await service.checkConflict({ key: 'Alt+Space', pluginId: 'another' }, mainCaller)
+
+  // 验证录制态临时捕获未注册的 Ctrl+Space / Alt+Space 并在按下后立即释放
+  const forwarded: string[] = []
+  const recShortcuts = new FakeShortcuts()
+  const recorderService = new TriggerService({
+    dataRoot: 'unused-in-memory-store',
+    store: new MemoryStore(),
+    shortcuts: recShortcuts,
+    events: {
+      publishHost() {
+        return { success: true, delivered: 1 }
+      }
+    },
+    toggleMainWindow: () => undefined,
+    openPlugin: async () => undefined,
+    forwardHotkeyToRecorder: (accelerator) => {
+      forwarded.push(accelerator)
+      return true
+    }
+  })
+  // 另一个系统触发器占用 Alt+Shift+Space，验证录制态不会释放已注册的组合键
+  await recorderService.register(flatTrigger({
+    id: 'extra_system_hotkey',
+    config: { key: 'Alt+Shift+Space' }
+  }) as never, mainCaller)
+  recorderService.setRecorderCaptureActive(true)
+  assert.equal(recShortcuts.callbacks.has('ctrl+space'), true)
+  assert.equal(recShortcuts.callbacks.has('alt+space'), true)
+  recShortcuts.fire('Ctrl+Space')
+  assert.deepEqual(forwarded, ['Ctrl+Space'])
+  assert.equal(recShortcuts.callbacks.has('ctrl+space'), false)
+  assert.equal(recShortcuts.callbacks.has('alt+space'), false)
+  await recorderService.register(flatTrigger({ config: { key: 'Ctrl+Space' } }) as never, mainCaller)
+  assert.equal(recShortcuts.callbacks.has('ctrl+space'), true)
+  recorderService.setRecorderCaptureActive(true)
+  assert.equal(recShortcuts.callbacks.has('alt+space'), true)
+  recShortcuts.fire('Alt+Space')
+  assert.deepEqual(forwarded, ['Ctrl+Space', 'Alt+Space'])
+  assert.equal(recShortcuts.callbacks.has('alt+space'), false)
+  assert.equal(recShortcuts.callbacks.has('ctrl+space'), true)
+  assert.equal(recShortcuts.callbacks.has('alt+shift+space'), true)
+  recorderService.setRecorderCaptureActive(false)
+  await recorderService.stop()
   assert.equal(free.data.hasConflict, false)
   await service.stop()
 })

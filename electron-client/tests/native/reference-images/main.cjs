@@ -308,7 +308,7 @@ app.whenReady().then(async () => {
     const canvasTrace = message => fs.appendFileSync(path.join(output, 'canvas-progress.log'), message + '\n')
     canvasTrace('prepare-renderer')
     const ts = require('typescript')
-    const canvasSource = fs.readFileSync(path.resolve(__dirname, '../../../../plugins/create-plugin/src/plugins/image-tool/utils/canvasEffects.ts'), 'utf8')
+    const canvasSource = fs.readFileSync(path.resolve(__dirname, 'canvasEffects.fixture.ts'), 'utf8')
     const canvasCode = ts.transpileModule(canvasSource, { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.ESNext } }).outputText.replace(/^export /mg, '')
     const canvasWindow = new BrowserWindow({ show: false, webPreferences: { nodeIntegration: false, contextIsolation: true, sandbox: true, partition: 'reference-canvas-' + path.basename(output) } })
     try {

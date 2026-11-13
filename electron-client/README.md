@@ -13,8 +13,8 @@ ZTools 的 Electron 主程序（Electron 43，TypeScript）：主进程、预加
 | `src/contracts/` | IPC 请求格式、方法能力表、错误码等契约 |
 | `native/` | Windows 与 macOS 原生组件（C++ / Objective-C++，CMake 构建） |
 | `resources/` | 应用图标与随包资源 |
-| `scripts/` | 构建、打包与测试脚本 |
-| `tests/` | 单元与契约测试（`tests/unit/`） |
+| `scripts/` | 构建、打包与签名脚本 |
+| `tests/` | 单元与契约测试（`tests/unit/`）及测试脚本（`tests/scripts/`） |
 
 各部分如何配合见 [架构概览](../docs/architecture.md)。
 

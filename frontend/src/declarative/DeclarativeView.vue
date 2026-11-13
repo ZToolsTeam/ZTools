@@ -5,6 +5,11 @@
     data-declarative-root
     class="declarative-mica-shell flex flex-col h-full w-full rounded-2xl overflow-hidden focus:outline-none relative select-none"
     @keydown="handleGlobalKeyDown"
+    @paste="handleRootPaste"
+    @dragenter="handleFileDragEnter"
+    @dragover.prevent="handleFileDragOver"
+    @dragleave="handleFileDragLeave"
+    @drop.prevent="handleFileDrop"
   >
     <!-- 顶部通用导航头：只显示 navigationTitle；返回入口只有底栏「返回 Esc」一个（同一功能只出现一次） -->
     <div
@@ -175,6 +180,16 @@
       @trigger="executeAction"
     />
 
+    <!-- 外部文件拖入提示遮罩 -->
+    <div
+      v-if="isFileDragging"
+      data-decl-drop-overlay
+      class="pointer-events-none absolute inset-2 z-50 flex flex-col items-center justify-center rounded-xl border border-dashed border-[var(--rc-border-strong,var(--rc-border))] bg-[var(--rc-surface-elevated,var(--rc-surface-subtle))]/90 backdrop-blur-sm transition-opacity"
+    >
+      <div class="text-sm font-medium text-[var(--rc-text-primary)]">{{ dropOverlayTitle }}</div>
+      <div class="mt-1 text-xs text-[var(--rc-text-muted)]">{{ dropOverlaySubtitle }}</div>
+    </div>
+
     <!-- Toast 提示宿主 -->
     <ToastOverlay :toasts="toasts" />
   </div>
@@ -315,6 +330,238 @@ onUnmounted(() => {
 
 // 状态
 const actionPanelVisible = ref(false);
+const isFileDragging = ref(false);
+let fileDragDepth = 0;
+const sessionInputPaths = new Set();
+
+if (typeof window !== "undefined") {
+  window.__ztoolsDeclarativeFeatures = {
+    ...(window.__ztoolsDeclarativeFeatures || {}),
+    fileInput: true
+  };
+}
+
+const topFileInputHandler = computed(() => {
+  const fn = currentDescriptor.value?.props?.onFileInput;
+  return typeof fn === "function" ? fn : null;
+});
+
+const topFileInputConfig = computed(() => {
+  const cfg = currentDescriptor.value?.props?.fileInput;
+  return cfg && typeof cfg === "object" ? cfg : null;
+});
+
+const isFileInputActive = computed(() => {
+  return Boolean(topFileInputHandler.value) && !actionPanelVisible.value && !hasOpenConfirm();
+});
+
+const dropOverlayTitle = computed(() => {
+  const cfg = topFileInputConfig.value;
+  if (cfg?.dropTitle) return String(cfg.dropTitle);
+  return cfg?.allowDirectories ? "松开鼠标添加文件或文件夹" : "松开鼠标添加文件";
+});
+
+const dropOverlaySubtitle = computed(() => {
+  const cfg = topFileInputConfig.value;
+  if (cfg?.dropSubtitle) return String(cfg.dropSubtitle);
+  return "支持拖入或按 Ctrl+V / ⌘V 粘贴输入";
+});
+
+function syncPreloadFileInputInterception() {
+  if (typeof window === "undefined") return;
+  const setInterception = window.__ztoolsElectron?.setFileInputInterception;
+  if (typeof setInterception !== "function") return;
+  const active = isFileInputActive.value;
+  const cfg = topFileInputConfig.value;
+  setInterception({
+    enabled: active,
+    allowImage: Boolean(active && cfg?.allowClipboardImage),
+    allowDirectories: Boolean(active && cfg?.allowDirectories)
+  });
+}
+
+watch(
+  [isFileInputActive, topFileInputConfig],
+  () => {
+    syncPreloadFileInputInterception();
+    if (!isFileInputActive.value && isFileDragging.value) {
+      fileDragDepth = 0;
+      isFileDragging.value = false;
+    }
+  },
+  { immediate: true }
+);
+
+function normalizeAllowedExtension(ext) {
+  const trimmed = String(ext || "").trim().toLowerCase();
+  if (!trimmed) return "";
+  return trimmed.startsWith(".") ? trimmed : `.${trimmed}`;
+}
+
+function matchesExtensionFilter(filePath, allowedExtensions, allowDirectories) {
+  if (!Array.isArray(allowedExtensions) || allowedExtensions.length === 0) return true;
+  const normalizedList = allowedExtensions.map(normalizeAllowedExtension).filter(Boolean);
+  if (normalizedList.length === 0) return true;
+  const base = String(filePath || "").split(/[\\/]/).pop() || "";
+  const dotIdx = base.lastIndexOf(".");
+  if (dotIdx <= 0) {
+    return Boolean(allowDirectories);
+  }
+  const lowerBase = base.toLowerCase();
+  return normalizedList.some((ext) => lowerBase.endsWith(ext));
+}
+
+function handleHostFilesDropped(envelopeOrPayload) {
+  const record = envelopeOrPayload && typeof envelopeOrPayload === "object" ? envelopeOrPayload : {};
+  const payload = record.payload && typeof record.payload === "object" ? record.payload : record;
+  const rawFiles = Array.isArray(payload.files)
+    ? payload.files.filter((f) => typeof f === "string" && f.trim().length > 0).map((f) => f.trim())
+    : [];
+  for (const p of rawFiles) {
+    sessionInputPaths.add(p);
+  }
+  if (!isFileInputActive.value || !topFileInputHandler.value) return;
+
+  const cfg = topFileInputConfig.value;
+  const hostErrors = Array.isArray(payload.errors) ? payload.errors : [];
+  let extRejected = 0;
+  const acceptedFiles = [];
+
+  for (const filePath of rawFiles) {
+    if (matchesExtensionFilter(filePath, cfg?.extensions, cfg?.allowDirectories)) {
+      acceptedFiles.push(filePath);
+    } else {
+      extRejected += 1;
+    }
+  }
+
+  const totalRejected = hostErrors.length + extRejected;
+  if (acceptedFiles.length === 0) {
+    if (extRejected > 0 && Array.isArray(cfg?.extensions) && cfg.extensions.length > 0) {
+      showToast?.({
+        title: "文件格式不匹配",
+        message: `当前工具仅支持 ${cfg.extensions.join(" / ")} 格式`,
+        style: "FAILURE"
+      });
+    } else if (hostErrors.length > 0) {
+      const firstErr = hostErrors[0]?.message || "无法读取所选文件或文件夹";
+      showToast?.({
+        title: "文件输入未生效",
+        message: String(firstErr),
+        style: "FAILURE"
+      });
+    }
+    return;
+  }
+
+  if (totalRejected > 0) {
+    showToast?.({
+      title: `已接收 ${acceptedFiles.length} 项，忽略 ${totalRejected} 项不兼容内容`,
+      style: "SUCCESS"
+    });
+  }
+
+  try {
+    topFileInputHandler.value({
+      files: acceptedFiles,
+      source: payload.source === "paste" ? "paste" : "drop",
+      ...(typeof payload.targetFieldId === "string" && payload.targetFieldId ? { targetFieldId: payload.targetFieldId } : {}),
+      rejectedCount: totalRejected
+    });
+  } catch (err) {
+    onActionError(err);
+  }
+}
+
+let unlistenFileDrop = null;
+if (typeof window !== "undefined" && window.ztools?.events?.on) {
+  const maybeOff = window.ztools.events.on("plugin_files_dropped", handleHostFilesDropped);
+  unlistenFileDrop = typeof maybeOff === "function"
+    ? maybeOff
+    : () => window.ztools?.events?.off?.("plugin_files_dropped", handleHostFilesDropped);
+}
+
+onUnmounted(() => {
+  if (typeof unlistenFileDrop === "function") {
+    unlistenFileDrop();
+    unlistenFileDrop = null;
+  }
+  if (typeof window !== "undefined" && typeof window.__ztoolsElectron?.setFileInputInterception === "function") {
+    window.__ztoolsElectron.setFileInputInterception({ enabled: false, allowImage: false, allowDirectories: false });
+  }
+});
+
+function handleRootPaste(e) {
+  if (!isFileInputActive.value) return;
+  const onTextPaste = topFileInputConfig.value?.onTextPaste;
+  if (typeof onTextPaste !== "function") return;
+  const target = e?.target;
+  const tagName = String(target?.tagName || "").toUpperCase();
+  const isEditable = tagName === "INPUT" || tagName === "TEXTAREA" || Boolean(target?.isContentEditable);
+  const isEmptySearchInput = tagName === "INPUT" && target?.getAttribute?.("data-decl-role") === "search-input" && !target.value;
+  if (isEditable && !isEmptySearchInput) return;
+
+  const clipboardData = e?.clipboardData;
+  if (!clipboardData) return;
+  const types = Array.from(clipboardData.types || []);
+  const hasFiles = (clipboardData.files && clipboardData.files.length > 0) || types.includes("Files");
+  if (hasFiles) return;
+  const plainText = clipboardData.getData("text/plain") || "";
+  if (!plainText.trim()) return;
+
+  try {
+    const res = onTextPaste(plainText);
+    if (res !== false) {
+      e.preventDefault();
+    }
+  } catch (err) {
+    onActionError(err);
+  }
+}
+
+function getPopoutStateWithSessionPaths() {
+  const base = collectRootPopoutState?.() || { state: {}, paths: [] };
+  const mergedPaths = Array.from(new Set([...(Array.isArray(base.paths) ? base.paths : []), ...sessionInputPaths]));
+  return {
+    ...base,
+    paths: mergedPaths
+  };
+}
+
+function hasDraggedFiles(e) {
+  const types = e?.dataTransfer?.types;
+  if (!types) return false;
+  return Array.from(types).includes("Files");
+}
+
+function handleFileDragEnter(e) {
+  if (!hasDraggedFiles(e)) return;
+  if (topFileInputHandler.value && !isFileInputActive.value) return;
+  fileDragDepth += 1;
+  isFileDragging.value = true;
+}
+
+function handleFileDragOver(e) {
+  if (!hasDraggedFiles(e)) return;
+  if (topFileInputHandler.value && !isFileInputActive.value) return;
+  if (e.dataTransfer) {
+    e.dataTransfer.dropEffect = "copy";
+  }
+  isFileDragging.value = true;
+}
+
+function handleFileDragLeave(e) {
+  if (!hasDraggedFiles(e)) return;
+  fileDragDepth = Math.max(0, fileDragDepth - 1);
+  if (fileDragDepth === 0) {
+    isFileDragging.value = false;
+  }
+}
+
+function handleFileDrop() {
+  fileDragDepth = 0;
+  isFileDragging.value = false;
+}
 const currentSelectedItem = ref(null);
 // 右键某一行打开动作面板时，面板展示该行的动作（布局二左栏条目不参与底栏选中）
 const actionPanelTarget = ref(null);
@@ -1026,7 +1273,7 @@ defineExpose({
   executeAction,
   triggerPrimaryAction,
   getViewStateSnapshot,
-  getPopoutState: collectRootPopoutState,
+  getPopoutState: getPopoutStateWithSessionPaths,
   showToast
 });
 </script>

@@ -4,11 +4,8 @@
  */
 
 /** BGRA 像素（Electron nativeImage.toBitmap 的格式） */
-export interface BgraImage {
-  width: number
-  height: number
-  data: Uint8Array
-}
+export type { BgraImage } from './ocr-worker-engine.js'
+import type { BgraImage } from './ocr-worker-engine.js'
 
 /** 推理接口：输入 NCHW float32，返回原始输出；生产由 onnxruntime 实现，测试可替换 */
 export interface OcrModelRunner {

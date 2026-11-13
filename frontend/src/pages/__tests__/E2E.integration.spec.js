@@ -527,30 +527,6 @@ describe('Frontend E2E Integration Tests', () => {
       expect(mockZtools.config.set).toHaveBeenCalled()
     })
 
-    it('should configure super panel keyboard hotkey', async () => {
-      const config = {
-        enabled: true,
-        modifiers: ['Alt'],
-        key: 'Space'
-      }
-
-      await mockZtools.config.set('super_panel.keyboard_hotkey', config)
-
-      expect(mockZtools.config.set).toHaveBeenCalled()
-    })
-
-    it('should configure super panel mouse hotkey', async () => {
-      const config = {
-        enabled: true,
-        button: 'middle_long',
-        longPressMs: 300
-      }
-
-      await mockZtools.config.set('super_panel.mouse_hotkey', config)
-
-      expect(mockZtools.config.set).toHaveBeenCalled()
-    })
-
     it('should reload hotkeys after settings change', async () => {
       await mockZtools.sys.reloadHotkeys()
 

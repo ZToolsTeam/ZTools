@@ -18,9 +18,115 @@ export function isWindows11OrLater(): boolean {
 export const MAIN_TITLE_BAR_HEIGHT = 52
 export const POPOUT_TITLE_BAR_HEIGHT = 42
 
-/** 积木 Z × 余烬橙：窗口首帧底色（与 theme.css 的 --rc-canvas 一致，避免打开时闪出旧配色） */
-export function getWindowBackgroundColor(isDark: boolean): string {
-  return isDark ? '#0b0b0c' : '#f4f3f0'
+/** Win32 WM_SYSCHAR 消息：Alt+Space 经 TranslateMessage 生成该消息后触发 DefWindowProc 弹出系统窗口菜单 */
+export const WM_SYSCHAR = 0x0106
+
+export interface SystemMenuControllableWindow {
+  hookWindowMessage?(message: number, callback: (wParam: Buffer, lParam: Buffer) => void): void
+  on?(event: 'system-context-menu', listener: (event: { preventDefault(): void }) => void): unknown
+  removeMenu?(): void
+  setMenuBarVisibility?(visible: boolean): void
+}
+
+/**
+ * 抑制 Windows 原生窗口系统控制菜单（Alt+Space / 标题栏系统右键菜单 / 默认隐藏菜单栏抢焦），
+ * 确保快捷键录入框按下 Alt 或 Alt+Space 时不会触发系统菜单导致隐藏输入框失焦退出录制。
+ */
+export function suppressWindowsSystemMenu(
+  window: SystemMenuControllableWindow,
+  platform: NodeJS.Platform = process.platform
+): void {
+  if (platform !== 'win32') return
+  if (typeof window.removeMenu === 'function') {
+    window.removeMenu()
+  }
+  if (typeof window.setMenuBarVisibility === 'function') {
+    window.setMenuBarVisibility(false)
+  }
+  if (typeof window.hookWindowMessage === 'function') {
+    window.hookWindowMessage(WM_SYSCHAR, () => {
+      // 观测 WM_SYSCHAR，配合 removeMenu 与录制态 RegisterHotKey 阻止 SC_KEYMENU
+    })
+  }
+  if (typeof window.on === 'function') {
+    window.on('system-context-menu', (event) => {
+      event.preventDefault()
+    })
+  }
+}
+
+export type AccentTheme = 'ember' | 'glacier' | 'jade' | 'iris' | 'crimson' | 'mono'
+
+const WINDOW_THEME_PALETTES: Record<AccentTheme, {
+  lightCanvas: string
+  darkCanvas: string
+  lightHead: string
+  darkHead: string
+  lightSymbol: string
+  darkSymbol: string
+}> = {
+  ember: {
+    lightCanvas: '#f4f3f0',
+    darkCanvas: '#0b0b0c',
+    lightHead: '#f7f6f3',
+    darkHead: '#0e0e10',
+    lightSymbol: '#55555c',
+    darkSymbol: '#a0a0a8'
+  },
+  glacier: {
+    lightCanvas: '#f2f5f8',
+    darkCanvas: '#0a0d12',
+    lightHead: '#f5f8fb',
+    darkHead: '#0d1117',
+    lightSymbol: '#475569',
+    darkSymbol: '#94a3b8'
+  },
+  jade: {
+    lightCanvas: '#f1f5f3',
+    darkCanvas: '#090e0c',
+    lightHead: '#f4f8f6',
+    darkHead: '#0c1310',
+    lightSymbol: '#495a52',
+    darkSymbol: '#9ab0a5'
+  },
+  iris: {
+    lightCanvas: '#f4f3f8',
+    darkCanvas: '#0b0a10',
+    lightHead: '#f6f5fa',
+    darkHead: '#0f0d16',
+    lightSymbol: '#534d69',
+    darkSymbol: '#a59fbd'
+  },
+  crimson: {
+    lightCanvas: '#f5f3f4',
+    darkCanvas: '#0c0a0b',
+    lightHead: '#f8f6f7',
+    darkHead: '#100d0f',
+    lightSymbol: '#574f53',
+    darkSymbol: '#aba0a5'
+  },
+  mono: {
+    lightCanvas: '#f4f4f5',
+    darkCanvas: '#09090b',
+    lightHead: '#f7f7f8',
+    darkHead: '#0c0c0e',
+    lightSymbol: '#52525b',
+    darkSymbol: '#a1a1aa'
+  }
+}
+
+export function isAccentTheme(value: unknown): value is AccentTheme {
+  return typeof value === 'string' && Object.prototype.hasOwnProperty.call(WINDOW_THEME_PALETTES, value)
+}
+
+export function normalizeAccentTheme(value: unknown): AccentTheme {
+  return isAccentTheme(value) ? value : 'ember'
+}
+
+/** 窗口首帧底色（与 theme.css 的 --rc-canvas 一致，避免打开时闪出旧配色） */
+export function getWindowBackgroundColor(isDark: boolean, accent: AccentTheme = 'ember'): string {
+  const palette = WINDOW_THEME_PALETTES[normalizeAccentTheme(accent)]
+  return isDark ? palette.darkCanvas : palette.lightCanvas
 }
 
 /** macOS 红绿灯（12px 高）垂直居中到自定义标题栏 */
@@ -30,26 +136,33 @@ export function getTrafficLightPosition(titleBarHeight: number): Electron.Point 
 
 export function getTitleBarOverlayOptions(
   isDark: boolean,
-  height: number = MAIN_TITLE_BAR_HEIGHT
+  height: number = MAIN_TITLE_BAR_HEIGHT,
+  accent: AccentTheme = 'ember'
 ): Electron.TitleBarOverlayOptions {
+  const palette = WINDOW_THEME_PALETTES[normalizeAccentTheme(accent)]
   return {
     // 与 theme.css 的 --rc-head 一致，Windows 窗口控制按钮与标题栏融为一体
-    color: isDark ? '#0e0e10' : '#f7f6f3',
-    symbolColor: isDark ? '#a0a0a8' : '#55555c',
+    color: isDark ? palette.darkHead : palette.lightHead,
+    symbolColor: isDark ? palette.darkSymbol : palette.lightSymbol,
     height
   }
 }
 
-export function updateMainWindowTheme(window: BrowserWindow, isDark: boolean): void {
+export function updateMainWindowTheme(
+  window: BrowserWindow,
+  isDark: boolean,
+  accent: AccentTheme = 'ember'
+): void {
   if (window.isDestroyed()) return
+  const normalized = normalizeAccentTheme(accent)
   if (process.platform === 'win32' && typeof window.setTitleBarOverlay === 'function') {
     try {
-      window.setTitleBarOverlay(getTitleBarOverlayOptions(isDark))
+      window.setTitleBarOverlay(getTitleBarOverlayOptions(isDark, MAIN_TITLE_BAR_HEIGHT, normalized))
     } catch {
       // 容错处理
     }
   }
-  window.setBackgroundColor(getWindowBackgroundColor(isDark))
+  window.setBackgroundColor(getWindowBackgroundColor(isDark, normalized))
 }
 
 export interface MainWindowOptions {
@@ -58,6 +171,7 @@ export interface MainWindowOptions {
   registry: WindowRegistry
   showOnReady?: boolean
   darkMode?: boolean
+  accent?: AccentTheme
   initialSize?: { width: number; height: number }
   persistNormalBounds?: (bounds: Electron.Rectangle) => void
   onToggleLauncher?: (() => void) | undefined
@@ -110,6 +224,103 @@ export interface InputDetailsLike {
   meta?: boolean
 }
 
+export interface RecorderKeyPayload {
+  key: string
+  code: string
+  ctrlKey: boolean
+  altKey: boolean
+  shiftKey: boolean
+  metaKey: boolean
+}
+
+export function acceleratorToRecorderKeyPayload(
+  accelerator: string,
+  platform: NodeJS.Platform = process.platform
+): RecorderKeyPayload | null {
+  if (typeof accelerator !== 'string' || !accelerator.trim()) return null
+  const tokens = accelerator
+    .split('+')
+    .map((t) => t.trim())
+    .filter(Boolean)
+  if (tokens.length === 0) return null
+
+  let ctrlKey = false
+  let altKey = false
+  let shiftKey = false
+  let metaKey = false
+  let mainToken = ''
+
+  for (const token of tokens) {
+    const lower = token.toLowerCase()
+    if (lower === 'ctrl' || lower === 'commandorcontrol' || lower === 'cmdorctrl') {
+      if (platform === 'darwin') metaKey = true
+      else ctrlKey = true
+    } else if (lower === 'control') {
+      ctrlKey = true
+    } else if (lower === 'alt' || lower === 'option') {
+      altKey = true
+    } else if (lower === 'shift') {
+      shiftKey = true
+    } else if (lower === 'cmd' || lower === 'command' || lower === 'meta' || lower === 'super') {
+      metaKey = true
+    } else {
+      if (mainToken) return null
+      mainToken = token
+    }
+  }
+
+  if (!mainToken) return null
+  const lowerMain = mainToken.toLowerCase()
+  if (lowerMain === 'space' || mainToken === ' ') {
+    return { key: ' ', code: 'Space', ctrlKey, altKey, shiftKey, metaKey }
+  }
+  if (/^[a-z]$/i.test(mainToken)) {
+    const upper = mainToken.toUpperCase()
+    return { key: upper, code: `Key${upper}`, ctrlKey, altKey, shiftKey, metaKey }
+  }
+  if (/^f([1-9]|1[0-9]|2[0-4])$/i.test(mainToken)) {
+    const upper = mainToken.toUpperCase()
+    return { key: upper, code: upper, ctrlKey, altKey, shiftKey, metaKey }
+  }
+  if (mainToken === '`' || mainToken === '~') {
+    return { key: mainToken, code: 'Backquote', ctrlKey, altKey, shiftKey, metaKey }
+  }
+  return null
+}
+
+export function dispatchRecorderKeyToWebContents(
+  webContents:
+    | {
+        isDestroyed?: () => boolean
+        executeJavaScript?: (code: string, userGesture?: boolean) => Promise<unknown>
+      }
+    | undefined,
+  payload: RecorderKeyPayload
+): Promise<boolean> {
+  if (
+    !webContents ||
+    webContents.isDestroyed?.() ||
+    typeof webContents.executeJavaScript !== 'function'
+  ) {
+    return Promise.resolve(false)
+  }
+  const serialized = JSON.stringify({
+    key: payload.key,
+    code: payload.code,
+    ctrlKey: Boolean(payload.ctrlKey),
+    altKey: Boolean(payload.altKey),
+    shiftKey: Boolean(payload.shiftKey),
+    metaKey: Boolean(payload.metaKey)
+  })
+  return webContents
+    .executeJavaScript(
+      `Boolean(typeof window !== 'undefined' && typeof window.__ztoolsDispatchRecorderHotkey === 'function' && window.__ztoolsDispatchRecorderHotkey(${serialized}))`,
+      true
+    )
+    .then((handled) => handled === true)
+    .catch(() => false)
+}
+
 export function handleMainWindowBeforeInputEvent(
   event: BeforeInputEventLike,
   input: InputDetailsLike,
@@ -117,17 +328,24 @@ export function handleMainWindowBeforeInputEvent(
     onToggleLauncher?: (() => void) | undefined
     isDestroyed?: (() => boolean) | undefined
     sendIpc?: ((channel: string) => void) | undefined
+    forwardRecorderKey?: ((payload: RecorderKeyPayload) => void) | undefined
   }
 ): boolean {
-  // 对标 Raycast: 拦截 Windows 系统菜单快捷键 Alt+Space (SC_KEYMENU)，彻底切断原生系统菜单并切换极客条
-  if (input.alt && (input.key === ' ' || input.code === 'Space')) {
+  const isSpace =
+    input.code === 'Space' ||
+    input.key === ' ' ||
+    (typeof input.key === 'string' && input.key.toLowerCase() === 'space')
+  if ((input.alt || input.control) && isSpace) {
     event.preventDefault()
-    if (input.type === 'keyDown') {
-      if (typeof options.onToggleLauncher === 'function') {
-        options.onToggleLauncher()
-      } else if (!options.isDestroyed?.()) {
-        options.sendIpc?.('ztools:toggle_launcher_mode')
-      }
+    if (input.type === 'keyDown' && !options.isDestroyed?.()) {
+      options.forwardRecorderKey?.({
+        key: ' ',
+        code: 'Space',
+        ctrlKey: Boolean(input.control),
+        altKey: Boolean(input.alt),
+        shiftKey: Boolean(input.shift),
+        metaKey: Boolean(input.meta)
+      })
     }
     return true
   }
@@ -145,6 +363,7 @@ export function createMainWindow(options: MainWindowOptions): BrowserWindow {
   const width = Math.min(maxWidth, Math.max(minWidth, Math.min(8192, options.initialSize?.width ?? 1040)))
   const height = Math.min(maxHeight, Math.max(minHeight, Math.min(8192, options.initialSize?.height ?? 680)))
   const isDark = options.darkMode === true
+  const accent = normalizeAccentTheme(options.accent)
   const isWin = process.platform === 'win32'
   const isMac = process.platform === 'darwin'
   const hasMica = isWindows11OrLater()
@@ -156,12 +375,12 @@ export function createMainWindow(options: MainWindowOptions): BrowserWindow {
     minWidth,
     minHeight,
     show: false,
-    backgroundColor: getWindowBackgroundColor(isDark),
+    backgroundColor: getWindowBackgroundColor(isDark, accent),
     autoHideMenuBar: true,
     titleBarStyle: isMac ? 'hiddenInset' : 'hidden',
     ...(isMac ? { trafficLightPosition: getTrafficLightPosition(MAIN_TITLE_BAR_HEIGHT) } : {}),
     ...(isWin ? {
-      titleBarOverlay: getTitleBarOverlayOptions(isDark)
+      titleBarOverlay: getTitleBarOverlayOptions(isDark, MAIN_TITLE_BAR_HEIGHT, accent)
     } : {}),
     ...(hasMica ? {
       backgroundMaterial: 'mica'
@@ -172,6 +391,7 @@ export function createMainWindow(options: MainWindowOptions): BrowserWindow {
     webPreferences: secureWebPreferences()
   })
   options.registry.registerMain(window.webContents)
+  suppressWindowsSystemMenu(window)
 
   const onDisplayMetricsChanged = (): void => {
     if (window.isDestroyed() || window.isMinimized() || window.isMaximized() || window.isFullScreen()) return
@@ -229,7 +449,10 @@ export function createMainWindow(options: MainWindowOptions): BrowserWindow {
     handleMainWindowBeforeInputEvent(event, input, {
       ...(options.onToggleLauncher ? { onToggleLauncher: options.onToggleLauncher } : {}),
       isDestroyed: () => window.isDestroyed(),
-      sendIpc: (channel) => window.webContents.send(channel)
+      sendIpc: (channel) => window.webContents.send(channel),
+      forwardRecorderKey: (payload) => {
+        void dispatchRecorderKeyToWebContents(window.webContents, payload)
+      }
     })
   })
   if (options.showOnReady !== false) {

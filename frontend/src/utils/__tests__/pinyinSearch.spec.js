@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import {
   MATCH_TIERS,
+  MATCH_TIER_SCORES,
   compareMatches,
   filterAndRankItems,
   findPinyinMatchInText,
@@ -92,6 +93,18 @@ describe('搜索匹配：按匹配档取最好的一档，不累加', () => {
     expect(matchItemWithQuery(plugin('m', '微信多开'), 'wx').tier).toBe(MATCH_TIERS.PREFIX)
     expect(matchItemWithQuery(plugin('r', '批量重命名'), 'cmm').tier).toBe(MATCH_TIERS.INNER)
     expect(matchItemWithQuery(plugin('d', '通用工具', { description: '导出到微信' }), '微信').tier).toBe(MATCH_TIERS.DESCRIPTION)
+  })
+
+  it('2 字中文纯首字母命中（如 cl → 测量）基础分低于英文原文前缀（如 cl → Clash），但高于多字拼音前缀（如 cl → 测量工具）', () => {
+    const clash = matchItemWithQuery(app('Clash Verge', 'Clash Verge'), 'cl')
+    const celiang = matchItemWithQuery(plugin('measure', '测量'), 'cl')
+    const celiangTool = matchItemWithQuery(plugin('measure-tool', '测量工具'), 'cl')
+
+    expect(clash.tierScore).toBe(MATCH_TIER_SCORES.PREFIX_LITERAL)
+    expect(celiang.tierScore).toBe(MATCH_TIER_SCORES.SHORT_ACRONYM_EXACT)
+    expect(celiangTool.tierScore).toBe(MATCH_TIER_SCORES.PREFIX_PINYIN)
+    expect(compareMatches(clash, celiang)).toBeLessThan(0)
+    expect(compareMatches(celiang, celiangTool)).toBeLessThan(0)
   })
 
   it('英文名后面单词的开头算开头一致；单词内按顺序出现的字母（ps → Photoshop）只算中间一致', () => {

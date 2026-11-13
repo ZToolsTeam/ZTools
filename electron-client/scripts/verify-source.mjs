@@ -28,6 +28,7 @@ function collect(directory) {
 }
 collect(path.join(root, 'src'))
 collect(path.join(root, 'scripts'))
+collect(path.join(root, 'tests', 'scripts'))
 
 for (const file of sourceFiles) {
   const source = fs.readFileSync(file, 'utf8')
@@ -38,7 +39,6 @@ for (const file of sourceFiles) {
     /\bipcRenderer\b/.test(source) &&
     file !== currentFile &&
     !file.endsWith(path.join('preload', 'main.ts')) &&
-    !file.endsWith(path.join('preload', 'super-panel.ts')) &&
     !isRuntimeCapabilityPromptPreload
   ) {
     throw new Error(`${file} 暴露或引用了不允许的 ipcRenderer`)

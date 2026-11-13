@@ -46,7 +46,7 @@ npm --prefix electron-client run build:test   # 引用 electron-client/out-test/
 
 | 模块 | 位置与命名 |
 | --- | --- |
-| 主进程 | `electron-client/tests/unit/*.test.ts`，编译到 `out-test/` 后运行 |
+| 主进程 | `electron-client/tests/unit/*.test.ts`（编译到 `out-test/` 后运行）与 `electron-client/tests/scripts/` |
 | 界面层 | 被测文件旁的 `__tests__/*.spec.js` |
 | `packages/*` | 各包的 `tests/*.test.mjs` |
 | 跨模块 | 根目录 `tests/*.test.mjs` |

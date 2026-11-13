@@ -27,7 +27,15 @@ import {
 import { createCoreServices, readWebVersion, type CoreServices } from './services/core-services.js'
 import { MacAppUpdater } from './platform/macos/app-update.js'
 import { WebResourceService } from './services/web-resource-service.js'
-import { configureSessionSecurity, createMainWindow, updateMainWindowTheme } from './windows/main-window.js'
+import {
+  acceleratorToRecorderKeyPayload,
+  configureSessionSecurity,
+  createMainWindow,
+  dispatchRecorderKeyToWebContents,
+  normalizeAccentTheme,
+  updateMainWindowTheme,
+  type AccentTheme
+} from './windows/main-window.js'
 import { loadApplicationIcon, loadTrayIcon } from './windows/application-icon.js'
 import {
   decideCloseAction,
@@ -38,7 +46,6 @@ import { TrayController } from './windows/tray-controller.js'
 import { LauncherController } from './windows/launcher-controller.js'
 import { WindowRegistry } from './windows/window-registry.js'
 import { SuperPanelController } from './super-panel/controller.js'
-import { decodeSuperPanelConfig } from './super-panel/config.js'
 import { createPlatformNativeRuntime } from './platform/native-runtime.js'
 import { createMacosNativeRuntime } from './platform/macos/native-runtime.js'
 import { createWindowsNativeRuntime } from './platform/windows/native-runtime.js'
@@ -263,13 +270,24 @@ function activeWebRoot(): string {
   return webResources?.root ?? webRoot
 }
 
+let currentAccent: AccentTheme = 'ember'
+
 function applyDarkMode(enabled: boolean): void {
-  superPanel?.setDarkMode(enabled)
   const window = mainWindow
   if (!window || window.isDestroyed()) return
-  updateMainWindowTheme(window, enabled)
+  updateMainWindowTheme(window, enabled, currentAccent)
   void window.webContents.executeJavaScript(
     `document.documentElement.classList.toggle('dark', ${enabled ? 'true' : 'false'})`
+  ).catch(() => undefined)
+}
+
+function applyAccentTheme(accent: AccentTheme): void {
+  currentAccent = normalizeAccentTheme(accent)
+  const window = mainWindow
+  if (!window || window.isDestroyed()) return
+  updateMainWindowTheme(window, nativeTheme.shouldUseDarkColors, currentAccent)
+  void window.webContents.executeJavaScript(
+    `document.documentElement.dataset.accent = ${JSON.stringify(currentAccent)}`
   ).catch(() => undefined)
 }
 
@@ -513,18 +531,15 @@ function openLauncherWindow(): void {
   showMainWindow()
 }
 
-async function readTrayState(): Promise<{ isSuperPanelEnabled: boolean; wakeAccelerator: string; showTrayIcon: boolean }> {
+async function readTrayState(): Promise<{ wakeAccelerator: string; showTrayIcon: boolean }> {
   if (!services) {
-    return { isSuperPanelEnabled: true, wakeAccelerator: 'Alt+Space', showTrayIcon: true }
+    return { wakeAccelerator: 'Alt+Space', showTrayIcon: true }
   }
-  const [rawSuperPanel, rawWakeHotkey, rawShowTrayIcon] = await Promise.all([
-    services.config.get('user_settings.json', 'super_panel', {}).catch(() => '{}'),
+  const [rawWakeHotkey, rawShowTrayIcon] = await Promise.all([
     services.config.get('user_settings.json', 'hotkey.global', 'Alt+Space').catch(() => 'Alt+Space'),
     services.config.get('user_settings.json', 'system.showTrayIcon', 'true').catch(() => 'true')
   ])
-  const superPanelConfig = decodeSuperPanelConfig(rawSuperPanel)
   return {
-    isSuperPanelEnabled: superPanelConfig.enabled,
     // 未设置时读到默认值；存的是空串表示用户已关闭全局唤醒，托盘菜单不显示快捷键
     wakeAccelerator: String(rawWakeHotkey ?? '').trim(),
     // 默认显示；只有明确存为 false / 0 才隐藏
@@ -532,7 +547,7 @@ async function readTrayState(): Promise<{ isSuperPanelEnabled: boolean; wakeAcce
   }
 }
 
-function createTrayController(state: { isSuperPanelEnabled: boolean; wakeAccelerator: string }): TrayController {
+function createTrayController(state: { wakeAccelerator: string }): TrayController {
   if (!mainApplicationIcon) throw new Error('Application icon is not ready')
   return new TrayController({
     icon: loadTrayIcon(mainApplicationIcon),
@@ -542,7 +557,6 @@ function createTrayController(state: { isSuperPanelEnabled: boolean; wakeAcceler
     openLauncher: openLauncherWindow,
     openSettings: () => openMainWindowAt('/advanced-settings'),
     openAbout: () => openMainWindowAt('/about'),
-    onToggleSuperPanel: setSuperPanelEnabledFromTray,
     relaunchApp: () => {
       if (applicationLifecycle.cancellationRequested) return
       app.relaunch()
@@ -555,7 +569,7 @@ function createTrayController(state: { isSuperPanelEnabled: boolean; wakeAcceler
 // 托盘图标随「显示托盘图标」设置即时出现 / 消失；同步串行执行，避免连续切换时重复创建
 let trayApplyQueue: Promise<void> = Promise.resolve()
 
-function applyTrayState(state: { isSuperPanelEnabled: boolean; wakeAccelerator: string; showTrayIcon: boolean }): Promise<void> {
+function applyTrayState(state: { wakeAccelerator: string; showTrayIcon: boolean }): Promise<void> {
   const { showTrayIcon, ...menuState } = state
   if (!showTrayIcon) {
     tray?.stop()
@@ -584,17 +598,6 @@ function syncTrayState(): void {
   }).catch(() => undefined)
 }
 
-async function setSuperPanelEnabledFromTray(enabled: boolean): Promise<void> {
-  if (applicationLifecycle.cancellationRequested || !services) return
-  await services.config.set('user_settings.json', 'super_panel.enabled', String(enabled), false)
-  if (!enabled) {
-    superPanel?.hide('tray_disabled')
-  }
-  if (router) {
-    await router.reloadSuperPanelInput()
-  }
-}
-
 function createMainWindowInstance(): BrowserWindow {
   if (applicationLifecycle.cancellationRequested) {
     throw new Error('Application startup has been cancelled')
@@ -604,7 +607,7 @@ function createMainWindowInstance(): BrowserWindow {
   const window = createMainWindow({
     icon: mainApplicationIcon, webRoot: activeWebRoot(), registry,
     // 冷启动由就绪后的唤醒目标决定显示；重开窗口才使用自动显示。
-    showOnReady: launchIntentReady, darkMode: nativeTheme.shouldUseDarkColors,
+    showOnReady: launchIntentReady, darkMode: nativeTheme.shouldUseDarkColors, accent: currentAccent,
     ...(initialMainWindowSize ? { initialSize: initialMainWindowSize } : {}),
     persistNormalBounds: bounds => { void services?.config.setMainWindowSize(bounds.width, bounds.height).catch(error => console.warn('保存主窗口尺寸失败', error)) },
     onToggleLauncher: () => {
@@ -616,10 +619,10 @@ function createMainWindowInstance(): BrowserWindow {
     }
   })
   mainWindow = window
-  updateMainWindowTheme(window, nativeTheme.shouldUseDarkColors)
+  updateMainWindowTheme(window, nativeTheme.shouldUseDarkColors, currentAccent)
   window.once('ready-to-show', () => {
     if (!window.isDestroyed()) {
-      updateMainWindowTheme(window, nativeTheme.shouldUseDarkColors)
+      updateMainWindowTheme(window, nativeTheme.shouldUseDarkColors, currentAccent)
     }
   })
   window.on('close', (event) => {
@@ -627,7 +630,14 @@ function createMainWindowInstance(): BrowserWindow {
     event.preventDefault()
     void requestMainWindowClose('closeButton')
   })
+  window.on('blur', () => {
+    router?.setRecorderCaptureActive(false)
+  })
+  window.on('hide', () => {
+    router?.setRecorderCaptureActive(false)
+  })
   window.once('closed', () => {
+    router?.setRecorderCaptureActive(false)
     if (mainWindow === window) mainWindow = null
     if (!applicationLifecycle.cancellationRequested && !quitAllowed &&
         lifecyclePolicy.quitWhenMainWindowIsDestroyed) app.quit()
@@ -996,21 +1006,32 @@ if (!app.requestSingleInstanceLock()) {
     const activeServices = services
     if (activeServices) {
       void activeServices.sidecars.startAll().then(async () => {
+        const status = activeServices.sidecars.getStatus()
+        console.info('[SidecarManager] Sidecars started:', status)
         if (process.platform === 'win32' || process.platform === 'darwin') {
-          const home = os.homedir()
-          await activeServices.sidecars.indexPath(home, 'auto').catch(() => {})
+          const targetScope = process.platform === 'win32' ? '*' : os.homedir()
+          const indexRes = await activeServices.sidecars.indexPath(targetScope, 'auto').catch((err) => {
+            console.warn('[SidecarManager] Initial index warmup failed:', err)
+            return null
+          })
+          if (indexRes) {
+            console.info(`[SidecarManager] Indexed ${indexRes.total_indexed} files from ${targetScope === '*' ? 'all fixed drives' : targetScope} in ${indexRes.elapsed_ms}ms (${indexRes.scanner_used})`)
+          }
         }
       }).catch((err) => {
         console.warn('[Bootstrap] SidecarManager startAll error:', err)
       })
     }
     let persistedTheme = ''
+    let persistedAccent: unknown = 'ember'
     try {
       persistedTheme = await services.config.get('user_settings.json', 'ui.theme', '')
+      persistedAccent = await services.config.get('user_settings.json', 'ui.accent', 'ember')
       await services.config.get('user_settings.json', 'ui.wake_preference', 'dashboard').catch(() => 'dashboard')
     } catch (error) {
       console.warn('读取主题设置失败，将跟随系统:', error)
     }
+    currentAccent = normalizeAccentTheme(persistedAccent)
     nativeTheme.themeSource = persistedTheme === 'dark' || persistedTheme === 'light'
       ? persistedTheme
       : 'system'
@@ -1035,19 +1056,25 @@ if (!app.requestSingleInstanceLock()) {
         if (!router) throw new Error('IPC Router 尚未初始化')
         return router.openPlugin({ pluginId })
       },
-      systemTools: new SystemToolsService(),
-      getMainWindow: () => mainWindow
+      systemTools: new SystemToolsService()
     })
     router = await IpcRouter.create(registry, services, {
       pluginResources: { webRoot: () => activeWebRoot(), pluginRoot },
-      pluginState, onDarkModeChanged: applyDarkMode,
+      pluginState, onDarkModeChanged: applyDarkMode, onAccentChanged: applyAccentTheme,
       onTrayStatePossiblyChanged: syncTrayState,
       reloadMainWindow: async () => {
         if (!mainWindow || mainWindow.isDestroyed()) throw new Error('主窗口不可用')
         await mainWindow.loadURL('ztools://web/index.html')
       },
       toggleMainWindow,
-      toggleSuperPanel: (trigger) => superPanel?.toggle(trigger),
+      forwardHotkeyToRecorder: (accelerator) => {
+        if (!mainWindow || mainWindow.isDestroyed() || !mainWindow.isFocused()) {
+          return false
+        }
+        const payload = acceleratorToRecorderKeyPayload(accelerator, process.platform)
+        if (!payload) return false
+        return dispatchRecorderKeyToWebContents(mainWindow.webContents, payload)
+      },
       getPanelLocalApps: () => superPanel?.getPanelLocalApps() ?? Promise.resolve([]),
       ...(process.platform === 'win32' ? {
         launchLocalApp: (appId: string) => {
@@ -1102,7 +1129,6 @@ if (!app.requestSingleInstanceLock()) {
     permissionRefreshListenersInstalled = true
     app.on('browser-window-focus', refreshFocusedPermissions)
     powerMonitor.on('resume', refreshResumedPermissions)
-    superPanel.register()
     const installedPlugins = await router.listInstalledPlugins()
     if (!applicationLifecycle.canContinueStartup()) return
     console.info('Installed plugin inventory', installedPlugins.data.map((plugin) => ({
@@ -1130,6 +1156,12 @@ if (!app.requestSingleInstanceLock()) {
           mainWindow.hide()
         }
       },
+      panelBridge: {
+        getData: () => superPanel ? superPanel.getData() : Promise.resolve({ success: false }),
+        togglePin: (id, itemType) => superPanel ? superPanel.togglePin(id, itemType) : Promise.resolve({ success: false }),
+        addLocalApps: (parentWindow) => superPanel ? superPanel.addLocalAppsForWindow(parentWindow) : Promise.resolve({ success: false, added: 0 }),
+        openItem: (id, itemType, query) => superPanel ? superPanel.openPanelItem(id, itemType, query) : Promise.resolve({ success: false })
+      },
       sidecars: services.sidecars
     })
     launcher.register()
@@ -1139,10 +1171,6 @@ if (!app.requestSingleInstanceLock()) {
     // Windows 通知区域与 macOS 菜单栏都显示托盘图标，可在设置中关闭
     await applyTrayState(await readTrayState())
     if (!applicationLifecycle.canContinueStartup()) return
-    await router.ready().catch((error: unknown) => {
-      console.error('超级面板输入初始化失败', error)
-      lifecycleLog('ERROR', 'Super panel input initialization failed', undefined, error)
-    })
     reportApplicationStartupAnalytics()
     launchIntentReady = true
     signalDeploymentReady(initialLaunchIntent)

@@ -9,6 +9,9 @@
         try {
           var isDark = localStorage.getItem('ztools_theme') === 'dark'
           document.documentElement.classList.toggle('dark', !!isDark)
+          var accent = localStorage.getItem('ztools_accent')
+          var validAccents = ['ember', 'glacier', 'jade', 'iris', 'crimson', 'mono']
+          document.documentElement.dataset.accent = validAccents.indexOf(accent) !== -1 ? accent : 'ember'
         } catch (e) {}
       })()
     </script>

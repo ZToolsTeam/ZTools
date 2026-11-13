@@ -1,18 +1,18 @@
 <script>
 // 跨次挂载保留的首页状态：从插件返回时先按上次的样子直接画出来，
 // 不再先闪「加载中」、也不会先按默认列数 / 默认顺序排一遍再跳到正确位置
-const homeLayoutCache = { ready: false, gridColumns: 5, pinnedList: [], recentOrder: [] }
+const homeLayoutCache = { ready: false, gridColumns: 5, pinnedList: [], recentOrder: [], activeTab: 'plugins', showAllPlugins: false, focusedCardIndex: 0 }
 
 /** 仅供测试：清空跨挂载缓存，模拟应用刚启动 */
 export function resetHomeLayoutCache() {
-  Object.assign(homeLayoutCache, { ready: false, gridColumns: 5, pinnedList: [], recentOrder: [] })
+  Object.assign(homeLayoutCache, { ready: false, gridColumns: 5, pinnedList: [], recentOrder: [], activeTab: 'plugins', showAllPlugins: false, focusedCardIndex: 0 })
 }
 </script>
 
 <script setup>
 import { SpinnerIcon } from '@/utils/appIcons'
 import { confirmDialog } from '@/utils/confirmDialog'
-import { ref, computed, nextTick, onMounted, onUnmounted, watch } from 'vue'
+import { ref, computed, nextTick, onActivated, onDeactivated, onMounted, onUnmounted, watch } from 'vue'
 import ShortcutKeys from '@/components/base/ShortcutKeys.vue'
 import { usePluginsStore } from '@/stores/plugins'
 import { useUserStore, cloudSync, onAuthRequired } from '@edition'
@@ -30,12 +30,6 @@ import { buildLaunchHotkeyMap } from '@/utils/launchHotkeyTargets'
 import { getPluginFeatureHotkeyItemByTrigger } from '@/utils/pluginFeatureHotkeys'
 import { Button } from 'ant-design-vue'
 import { LayoutGridIcon, RocketIcon, StarIcon } from '@lucide/vue'
-import {
-  getDownloadSign,
-  installPluginNative,
-  isPluginVersionIncompatibleError,
-  getPluginVersionIncompatibleMessage
-} from '@/api/apiserver'
 import { routeUtils } from '@/router/routes'
 import { isClientProvidedPlugin } from '@/utils/officialPlugins'
 import { getHotkeyHostPlatform } from '@/utils/hotkeyRecorder'
@@ -123,10 +117,10 @@ const menuPosition = ref({ x: 0, y: 0 })
 const draggingPlugin = ref(null)
 const dragOverIndex = ref(null)
 const recentOrder = ref([...homeLayoutCache.recentOrder])
-const showAllPlugins = ref(false) // 控制"我的插件"折叠/展开
-const activeTab = ref('plugins') // 'plugins' | 'favorites' - 标签切换
+const showAllPlugins = ref(Boolean(homeLayoutCache.showAllPlugins)) // 控制"我的插件"折叠/展开
+const activeTab = ref(homeLayoutCache.activeTab || 'plugins') // 'plugins' | 'favorites' - 标签切换
 const pinnedList = ref([...homeLayoutCache.pinnedList]) // 响应式固定列表
-const focusedCardIndex = ref(0) // 键盘流当前聚焦的卡片索引
+const focusedCardIndex = ref(Number(homeLayoutCache.focusedCardIndex) || 0) // 键盘流当前聚焦的卡片索引
 
 // Constants
 const MAX_PINNED_COUNT = 8
@@ -598,10 +592,31 @@ function reorderPlugins(plugin, toIndex) {
 }
 
 // Menu handling
-function showPluginMenu(plugin, event) {
-  event.preventDefault()
+function showPluginMenu(plugin, event, meta = null) {
+  event?.preventDefault?.()
+  const incomingId = getPluginId(plugin)
+  // 点击同一张卡片的快捷菜单按钮时，再次点击可收起菜单
+  if (
+    meta?.source === 'button' &&
+    showMenu.value &&
+    incomingId &&
+    getPluginId(selectedPlugin.value) === incomingId
+  ) {
+    hideMenu()
+    return
+  }
+
   selectedPlugin.value = plugin
-  menuPosition.value = { x: event.clientX, y: event.clientY }
+  if (meta?.anchorRect) {
+    const viewportW = window.innerWidth || 1024
+    const viewportH = window.innerHeight || 768
+    menuPosition.value = {
+      x: Math.max(8, Math.min(viewportW - 180, Math.round(meta.anchorRect.right - 152))),
+      y: Math.max(8, Math.min(viewportH - 210, Math.round(meta.anchorRect.bottom + 6)))
+    }
+  } else {
+    menuPosition.value = { x: event?.clientX ?? 0, y: event?.clientY ?? 0 }
+  }
   showMenu.value = true
 }
 
@@ -691,12 +706,16 @@ async function handleToggleFavorite(pluginId) {
   }
 }
 
-// 随客户端提供的插件不能卸载；插件市场分发的官方插件可以正常卸载
+// 已安装且非随客户端内置的插件才允许卸载（收藏页中尚未安装的插件不显示卸载）
 function canUninstallPlugin(pluginId) {
-  return Boolean(pluginId) && !isClientProvidedPlugin(pluginId)
+  return Boolean(pluginId) && installedSet.value.has(pluginId) && !isClientProvidedPlugin(pluginId)
 }
 
 function handleUninstallPlugin(pluginId) {
+  if (!pluginId || !installedSet.value.has(pluginId)) {
+    if (showMenu.value) hideMenu()
+    return
+  }
   if (!canUninstallPlugin(pluginId)) {
     // 键盘 Delete 触发时菜单并没有打开，不能顺手清掉当前选中的插件
     if (showMenu.value) hideMenu()
@@ -909,7 +928,7 @@ useKeymap(KEYMAP_SCOPES.PAGE, {
     }
     const cur = displayedPlugins.value[focusedCardIndex.value]
     if (cur) {
-      handleOpenPlugin(getPluginId(cur))
+      onTileOpen(cur)
       return true
     }
     return false
@@ -999,6 +1018,32 @@ async function loadDragTipState() {
 // 固定列表与排序变化时同步到跨挂载缓存
 watch(pinnedList, (list) => { homeLayoutCache.pinnedList = Array.isArray(list) ? [...list] : [] })
 watch(recentOrder, (order) => { homeLayoutCache.recentOrder = Array.isArray(order) ? [...order] : [] })
+watch(activeTab, (tab) => { homeLayoutCache.activeTab = tab || 'plugins' })
+watch(showAllPlugins, (expanded) => { homeLayoutCache.showAllPlugins = Boolean(expanded) })
+watch(focusedCardIndex, (idx) => { homeLayoutCache.focusedCardIndex = Number(idx) || 0 })
+
+let windowListenersBound = false
+function bindMyPageWindowListeners() {
+  if (windowListenersBound) return
+  windowListenersBound = true
+  window.addEventListener('keydown', handleKeyDown)
+  window.addEventListener('click', hideMenu)
+}
+function unbindMyPageWindowListeners() {
+  if (!windowListenersBound) return
+  windowListenersBound = false
+  window.removeEventListener('keydown', handleKeyDown)
+  window.removeEventListener('click', hideMenu)
+}
+
+onActivated(() => {
+  bindMyPageWindowListeners()
+})
+
+onDeactivated(() => {
+  hideMenu()
+  unbindMyPageWindowListeners()
+})
 
 // Lifecycle
 onMounted(async () => {
@@ -1006,8 +1051,8 @@ onMounted(async () => {
   isUnmounted = false
   loading.value = !homeLayoutCache.ready // 已加载过则保留上次画面，后台静默刷新
 
-  window.addEventListener('keydown', handleKeyDown)
-  window.addEventListener('click', hideMenu)
+  bindMyPageWindowListeners()
+
 
   if (window.ztools && window.ztools.events) {
     window.ztools.events.on('plugin_install_complete', handlePluginInstalled)
@@ -1063,8 +1108,8 @@ onUnmounted(() => {
     reorderDebounceTimer = null
   }
 
-  window.removeEventListener('keydown', handleKeyDown)
-  window.removeEventListener('click', hideMenu)
+  unbindMyPageWindowListeners()
+
 
   if (window.ztools && window.ztools.events) {
     window.ztools.events.off('plugin_install_complete', handlePluginInstalled)
@@ -1282,11 +1327,25 @@ onUnmounted(() => {
           {{ pluginsStore.getRevokedKind(getPluginId(selectedPlugin)) === 'platform' ? '不支持当前系统（禁止启动）' : '已下架（禁止启动）' }}
         </div>
         <div
-          v-else
+          v-else-if="installedSet.has(getPluginId(selectedPlugin))"
           class="menu-item"
           @click="handleOpenPlugin(getPluginId(selectedPlugin))"
         >
           打开
+        </div>
+        <div
+          v-else-if="downloadingSet.has(getPluginId(selectedPlugin))"
+          class="menu-item disabled"
+          style="opacity: 0.6; cursor: not-allowed;"
+        >
+          安装中...
+        </div>
+        <div
+          v-else
+          class="menu-item"
+          @click="handleDownload(getPluginId(selectedPlugin)); hideMenu()"
+        >
+          安装
         </div>
         <div class="menu-item" @click="goDetails(getPluginId(selectedPlugin)); hideMenu()">
           查看详情
@@ -1301,7 +1360,11 @@ onUnmounted(() => {
               : '收藏'
           }}
         </div>
-        <div class="menu-item" @click="togglePin(getPluginId(selectedPlugin))">
+        <div
+          v-if="installedSet.has(getPluginId(selectedPlugin))"
+          class="menu-item"
+          @click="togglePin(getPluginId(selectedPlugin))"
+        >
           {{
             isPinned(getPluginId(selectedPlugin))
               ? '取消固定'
@@ -1439,10 +1502,10 @@ onUnmounted(() => {
   margin: auto 0;
 }
 
-/* 「常用」紧凑磁贴网格（设计稿：minmax(170px, 1fr)，间距 8px） */
+/* 「已安装 / 收藏」横向启动卡网格（minmax(184px, 1fr)，常规窗口 4 列，间距 8px） */
 .plugin-tile-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(168px, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(184px, 1fr));
   gap: 8px;
 }
 
@@ -1648,6 +1711,9 @@ onUnmounted(() => {
 
 .is-card-focused {
   border-radius: var(--rc-radius-lg, 12px);
+}
+
+.is-card-focused:not(.draggable-card) {
   box-shadow: var(--rc-focus-ring);
 }
 

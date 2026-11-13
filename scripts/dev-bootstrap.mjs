@@ -180,6 +180,17 @@ export function getLatestSourceMtimeMs(targetPath) {
   return maxMtime
 }
 
+export function isSandboxPreloadBundled(preloadFile) {
+  if (!preloadFile || !fs.existsSync(preloadFile)) return false
+  try {
+    const content = fs.readFileSync(preloadFile, 'utf8')
+    // tsc 直接输出的未打包 CJS 会包含 require("../contracts/...") 等相对路径调用，在 Electron sandbox 下会报错
+    return !/require\(\s*["']\.\.?\//.test(content)
+  } catch {
+    return false
+  }
+}
+
 /**
  * 判断是否需要重新执行全量构建
  */
@@ -190,6 +201,8 @@ export function shouldRebuildProject(
   const clientDir = path.join(rootDir, 'electron-client')
   const mainArtifact = path.join(clientDir, 'out', 'main', 'bootstrap.js')
   const webArtifact = path.join(clientDir, 'out', 'assets', 'web', 'index.html')
+  const preloadArtifact = path.join(clientDir, 'out', 'preload', 'main.js')
+  const promptPreloadArtifact = path.join(clientDir, 'out', 'preload', 'runtime-capability-prompt.js')
   const artifactsExist = fs.existsSync(mainArtifact) && fs.existsSync(webArtifact)
 
   if (noBuild) {
@@ -207,6 +220,10 @@ export function shouldRebuildProject(
 
   if (!artifactsExist) {
     return { rebuild: true, reason: 'missing-artifacts' }
+  }
+
+  if (!isSandboxPreloadBundled(preloadArtifact) || !isSandboxPreloadBundled(promptPreloadArtifact)) {
+    return { rebuild: true, reason: 'unbundled-sandbox-preload' }
   }
 
   const webArtifactMtime = fs.statSync(webArtifact).mtimeMs
@@ -366,6 +383,26 @@ export function startCrossPlatformDev({
         warn(
           '⚠️ [dev] 本机未安装 CMake 或 Visual Studio 2022 C++ 编译环境，已自动跳过可选的 32 位 NativeHost32 编译（不影响现代声明式 UI 与内置/社区插件运行）。'
         )
+      }
+    }
+
+    // 检查并增量编译 64 位原生侧车 (ztools-indexer & ztools-uiaccess)
+    const indexerExe = path.join(clientDir, 'out', 'native', 'win32-x64', 'bin', 'ztools-indexer.exe')
+    const uiaccessExe = path.join(clientDir, 'out', 'native', 'win32-x64', 'bin', 'ztools-uiaccess.exe')
+    const sidecarSourceMtime = Math.max(
+      getLatestSourceMtimeMs(path.join(clientDir, 'native', 'ztools-indexer')),
+      getLatestSourceMtimeMs(path.join(clientDir, 'native', 'ztools-uiaccess')),
+      getLatestSourceMtimeMs(path.join(clientDir, 'native', 'shared'))
+    )
+    const sidecarBinMtime =
+      fs.existsSync(indexerExe) && fs.existsSync(uiaccessExe)
+        ? Math.min(fs.statSync(indexerExe).mtimeMs, fs.statSync(uiaccessExe).mtimeMs)
+        : 0
+    if (sidecarSourceMtime > 0 && (sidecarBinMtime === 0 || sidecarSourceMtime > sidecarBinMtime)) {
+      log('🔧 [dev] 正在构建原生侧车组件 (ztools-indexer & ztools-uiaccess)...')
+      const sidecarStatus = runNpm(['run', 'build:native:sidecars'], clientDir, { env, platform, runner })
+      if (sidecarStatus !== 0) {
+        warn('⚠️ [dev] 原生侧车编译未完成，将自动使用内置降级模式运行。')
       }
     }
   }

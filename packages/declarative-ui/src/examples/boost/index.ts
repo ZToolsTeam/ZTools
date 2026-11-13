@@ -47,7 +47,7 @@ const INIT_BOOST_SNAPSHOT: BoostSnapshot = {
       id: 'boost-init-startup-1',
       type: 'startup_item',
       name: '[开机启动] SteamClientBootstrapper',
-      path: 'C:\\Users\\Admin\\AppData\\Roaming\\Microsoft\\Windows\\Start Menu\\Programs\\Startup\\Steam.lnk',
+      path: '%USERPROFILE%\\AppData\\Roaming\\Microsoft\\Windows\\Start Menu\\Programs\\Startup\\Steam.lnk',
       memoryOrSizeBytes: 320 * 1024 * 1024,
       cpuPercent: 1.2,
       isProtected: false,
@@ -59,7 +59,7 @@ const INIT_BOOST_SNAPSHOT: BoostSnapshot = {
       id: 'boost-init-temp-1',
       type: 'temp_cache',
       name: '[临时缓存] electron_crashpad_dump.dmp',
-      path: 'C:\\Users\\Admin\\AppData\\Local\\Temp\\electron_crashpad_dump.dmp',
+      path: '%USERPROFILE%\\AppData\\Local\\Temp\\electron_crashpad_dump.dmp',
       memoryOrSizeBytes: 180 * 1024 * 1024,
       cpuPercent: 0,
       isProtected: false,
@@ -349,7 +349,7 @@ export default function BoostCommand() {
             : [])
         ]
       })
-    } as any)
+    } as Parameters<typeof List.Item>[0])
   })
 
   const selectableFiltered = filtered.filter(i => !i.isProtected)
@@ -366,7 +366,7 @@ export default function BoostCommand() {
     searchBarAccessory: List.Dropdown({
       tooltip: '按加速影响等级筛选',
       value: impactFilter,
-      onChange: val => setImpactFilter(val as any),
+      onChange: val => setImpactFilter(val as 'all' | 'high' | 'cleanable'),
       children: [
         List.Dropdown.Item({ title: `全部加速候选 (${candidates.length})`, value: 'all' }),
         List.Dropdown.Item({

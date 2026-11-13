@@ -19,6 +19,7 @@ import path from 'node:path'
 import { spawnSync } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
 import { verifyMacosUniversalBundle } from './verify-macos-universal.mjs'
+import { ONNXRUNTIME_WEB_IGNORED_PATHS, ONNXRUNTIME_WEB_UNPACK_DIR, pruneOnnxRuntimeDependencies } from './onnxruntime-package-contract.mjs'
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const packageJson = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8'))
@@ -65,8 +66,8 @@ const ignoredMacPackagingPaths = [
   /^\/node_modules\/classic-level\/deps(?:\/|$)/,
   /^\/node_modules\/.*\.(?:c|cc|cpp|h|hpp|gyp|d\.ts)$/,
   /^\/node_modules\/classic-level\/prebuilds\/(?!darwin-x64\+arm64(?:\/|$))/,
-  // macOS 用系统 Vision 识别文字，Windows 本机识别用的 onnxruntime-web 及其依赖不打包
-  /^\/node_modules\/(?:onnxruntime-web|onnxruntime-common|@protobufjs|protobufjs|flatbuffers|guid-typescript|long|platform)(?:\/|$)/
+  // 文字识别用系统 Vision；公式识别用 onnxruntime-web，只带运行需要的文件（与 Windows 相同）
+  ...ONNXRUNTIME_WEB_IGNORED_PATHS
 ]
 
 function errorMessage(error) {
@@ -176,7 +177,9 @@ export function createMacUniversalPackagerOptions({ sourceRoot, outputRoot, appB
       NSAppleEventsUsageDescription: 'ZTools 需要控制其他应用，用于切换窗口、粘贴内容和读取应用图标。',
       ...(minimumOs ? { LSMinimumSystemVersion: minimumOs } : {})
     },
-    asar: { unpack: '**/{.**,**}/**/*.node', unpackDir: '**/node_modules/exiftool-vendored.*' },
+    // onnxruntime-web 的工作线程要从真实文件加载 wasm 运行时，整个目录解到 asar 外
+    asar: { unpack: '**/{.**,**}/**/*.node', unpackDir: `{**/node_modules/exiftool-vendored.*,${ONNXRUNTIME_WEB_UNPACK_DIR}}` },
+    afterPrune: [pruneOnnxRuntimeDependencies],
     // 打包器会把包内 package.json 的 version 改成 appVersion（三段式 Info.plist 版本），
     // 丢掉第 4 位后 app.getVersion() 与签名预检都会对不上；打 asar 前改回四段式完整版本
     ...(appPackageVersion ? { beforeAsar: [restorePackagedAppVersion(appPackageVersion)] } : {}),

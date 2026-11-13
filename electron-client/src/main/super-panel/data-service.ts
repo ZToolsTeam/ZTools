@@ -99,9 +99,10 @@ export interface SuperPanelItem {
 export interface SuperPanelData {
   success: true
   items: SuperPanelItem[]
-  shortcuts: Array<{ prefix: string; pluginId: string }>
-  defaultTab: 'history' | 'pinned' | 'local' | 'system_tools' | 'all'
 }
+
+/** 悬浮条展示的最近使用插件条数（原超级面板可配，现固定为默认值） */
+const RECENT_PLUGIN_LIMIT = 10
 
 interface PluginProvider {
   (): Promise<{ success: true; data: Record<string, unknown>[] }>
@@ -347,7 +348,7 @@ export class SuperPanelDataService {
       }
     }))
     localItems.sort(compareLocalUsage)
-    const recentLimit = configuration.maxRecentCount
+    const recentLimit = RECENT_PLUGIN_LIMIT
     const orderedPlugins = [
       ...pluginItems.filter(({ item }) => item.pinned),
       ...pluginItems
@@ -358,9 +359,7 @@ export class SuperPanelDataService {
     ].map(({ item }) => item)
     return {
       success: true,
-      items: [...orderedPlugins, ...localItems.map(({ item }) => item), ...systemTools],
-      shortcuts: configuration.shortcuts,
-      defaultTab: configuration.defaultTab
+      items: [...orderedPlugins, ...localItems.map(({ item }) => item), ...systemTools]
     }
   }
 

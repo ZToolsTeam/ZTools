@@ -63,7 +63,7 @@ function createTestRouter() {
   })
 }
 
-const EXPECTED_CATEGORIES = ['办公效率', '系统工具', '图像媒体', '开发工具', '网络工具', 'AI工具', '安全隐私', '金融理财', '其他工具']
+const EXPECTED_CATEGORIES = ['办公效率', '系统工具', '文件管理', '图像媒体', '开发工具', '网络工具', '安全隐私', '其他工具']
 
 describe('List page', () => {
   let wrapper
@@ -377,9 +377,8 @@ describe('List page', () => {
     })
     expect(wrapper.vm.previewGroups).toHaveLength(2)
     expect(wrapper.findAll('.plugin-card-stub')).toHaveLength(10)
-    // 数量显示在来源切换上，不再单独显示「共 N 个」
-    const sourceCounts = wrapper.findAll('[aria-label="来源"] .seg-btn').map((b) => b.find('.seg-count').text())
-    expect(sourceCounts).toEqual(['13', '10', '3'])
+    // 去除官方/社区来源切换 UI 显示
+    expect(wrapper.find('[aria-label="来源"]').exists()).toBe(false)
     expect(wrapper.find('.market-total').exists()).toBe(false)
     expect(wrapper.text()).toContain('系统工具')
     expect(wrapper.text()).toContain('12')
@@ -596,7 +595,7 @@ describe('List page', () => {
     expect(pagination.attributes('page-size-options')).toBeUndefined()
   })
 
-  it('页头显示「插件市场」，页面内分类筛选与侧栏同一导航，并随分类 / 搜索切换标题', async () => {
+  it('页头显示「插件市场」，随侧栏分类 / 搜索切换标题，页面内不再展示分类或官方社区筛选', async () => {
     apiMocks.getCategories.mockResolvedValue([
       { id: 1, name: '系统工具', pluginsCount: 1 },
       { id: 2, name: '办公效率', pluginsCount: 1 }
@@ -608,16 +607,13 @@ describe('List page', () => {
     await flushPromises()
 
     expect(wrapper.find('.market-title').text()).toBe('插件市场')
-    const chips = wrapper.findAll('[aria-label="分类"] .seg-btn')
-    // 远端与本地共用固定的中文分类顺序
-    expect(chips.map((c) => c.text())).toEqual(['全部', ...EXPECTED_CATEGORIES])
-    expect(chips[0].classes()).toContain('active')
+    expect(wrapper.find('[aria-label="分类"]').exists()).toBe(false)
+    expect(wrapper.find('[aria-label="来源"]').exists()).toBe(false)
 
-    await chips[2].trigger('click')
+    await router.push({ name: 'list', params: { category: '系统工具' } })
     await flushPromises()
     expect(router.currentRoute.value.params.category).toBe('系统工具')
     expect(wrapper.find('.market-title').text()).toBe('系统工具')
-    expect(wrapper.findAll('[aria-label="分类"] .seg-btn')[2].attributes('aria-checked')).toBe('true')
 
     await router.push({ name: 'list', query: { q: 'json' } })
     await flushPromises()
@@ -647,46 +643,16 @@ describe('List page', () => {
   })
 
 
-  it('来源数量：只切换来源不重新统计；分类或搜索词变化时先占位再显示；统计失败时不显示数字', async () => {
+  it('来源数量底层逻辑保留，但界面不渲染官方与社区切换 UI', async () => {
     const router = createRouter({ history: createMemoryHistory(), routes: [{ path: '/list/:category?', name: 'list', component: List }] })
     await router.push('/list/系统工具')
-    let release
-    pluginsStore.countPluginsBySource = vi.fn()
-      .mockResolvedValueOnce({ all: 5, official: 4, community: 1 })
-      .mockImplementationOnce(() => new Promise((resolve) => { release = resolve }))
-      .mockRejectedValueOnce(new Error('目录不可用'))
-    pluginsStore.setSourceFilter = vi.fn(async (type) => { pluginsStore.sourceFilter = type })
+    pluginsStore.countPluginsBySource = vi.fn().mockResolvedValue({ all: 5, official: 4, community: 1 })
     const wrapper = mount(List, { global: { plugins: [router], stubs: { PluginCard3D: true, SkeletonCard: true, APagination: true, AButton: true } } })
-    const counts = () => wrapper.findAll('[aria-label="来源"] .seg-count').map((c) => (c.classes().includes('is-pending') ? '…' : c.text()))
     try {
       await flushPromises()
       expect(pluginsStore.countPluginsBySource).toHaveBeenLastCalledWith({ category: '系统工具', keyword: '' })
-      expect(counts()).toEqual(['5', '4', '1'])
-
-      // 只切换来源：数量不变，不重新统计
-      await wrapper.findAll('[aria-label="来源"] .seg-btn')[1].trigger('click')
-      await flushPromises()
-      expect(pluginsStore.countPluginsBySource).toHaveBeenCalledTimes(1)
-      expect(counts()).toEqual(['5', '4', '1'])
-
-      // 换分类：统计期间占位（不显示数字但保留宽度）
-      await router.push('/list/办公效率')
-      await flushPromises()
-      expect(counts()).toEqual(['…', '…', '…'])
-      release({ all: 9, official: 9, community: 0 })
-      await flushPromises()
-      expect(counts()).toEqual(['9', '9', '0'])
-
-      // 统计失败：不显示数字，也不编造
-      await router.push('/list/开发工具')
-      await flushPromises()
-      expect(wrapper.findAll('[aria-label="来源"] .seg-count')).toHaveLength(0)
-
-      // [回归] 失败后同一分类再次加载（如网络恢复后切换来源重试）会重新统计，而不是一直不显示
-      pluginsStore.countPluginsBySource.mockResolvedValueOnce({ all: 6, official: 6, community: 0 })
-      await wrapper.findAll('[aria-label="来源"] .seg-btn')[0].trigger('click')
-      await flushPromises()
-      expect(counts()).toEqual(['6', '6', '0'])
+      expect(wrapper.vm.sourceCounts).toEqual({ all: 5, official: 4, community: 1 })
+      expect(wrapper.find('[aria-label="来源"]').exists()).toBe(false)
     } finally { wrapper.unmount() }
   })
 })

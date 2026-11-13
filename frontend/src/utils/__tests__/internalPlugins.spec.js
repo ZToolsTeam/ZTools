@@ -11,8 +11,6 @@ describe('internalPlugins 门面', () => {
   beforeEach(() => {
     delete window.ztools
     delete window.__ztoolsToast
-    delete window.__openShortcutSettings
-    delete window.__scrollToSuperPanelSettings
     vi.restoreAllMocks()
   })
 
@@ -65,25 +63,16 @@ describe('internalPlugins 门面', () => {
     expect(res.type).toBe('route')
   })
 
-  it('openSettings 传递控制参数并同步全局标记与降级路由 query', async () => {
+  it('openSettings 不携带启动参数，降级路由 query 为空', async () => {
+    const mockOpen = vi.fn().mockResolvedValue({ success: true })
+    window.ztools = { plugin: { open: mockOpen } }
+    await openSettings({ preferRoute: false })
+    expect(mockOpen).toHaveBeenCalledWith('internal-settings', undefined)
+
     const mockRouter = { push: vi.fn().mockResolvedValue(true) }
-
-    await openSettings({
-      scrollToSuperPanelSettings: true,
-      openShortcutSettings: true,
-      router: mockRouter
-    })
-
-    expect(window.__scrollToSuperPanelSettings).toBe(true)
-    expect(window.__openShortcutSettings).toBe(true)
+    await openSettings({ router: mockRouter })
     expect(mockRouter.push).toHaveBeenCalledWith(
-      expect.objectContaining({
-        name: 'advanced-settings',
-        query: expect.objectContaining({
-          scrollToSuperPanelSettings: 'true',
-          openShortcutSettings: 'true'
-        })
-      })
+      expect.objectContaining({ name: 'advanced-settings', query: {} })
     )
   })
 

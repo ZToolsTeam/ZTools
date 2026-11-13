@@ -15,6 +15,17 @@ export interface ZToolsDeclarativeBridge {
   /** 清空系统剪贴板 */
   clearClipboard?: () => Promise<void>;
   readClipboardText?: () => Promise<string>;
+  /** 读取剪贴板中的文件路径列表（经宿主安全授权后返回绝对路径数组） */
+  readClipboardFiles?: () => Promise<string[]>;
+  /** 读取剪贴板中的图片（小图返回 dataUrl，大图写入临时缓存文件返回 tempFile） */
+  readClipboardImage?: () => Promise<{
+    image?: string;
+    useTempFile?: boolean;
+    tempFile?: string;
+    size?: number;
+    width?: number;
+    height?: number;
+  } | null>;
   /** 宿主负责复制并粘贴；无法发送粘贴时必须拒绝，不能仅复制后返回成功。 */
   pasteToActive?: (text: string | number) => Promise<void>;
   manageWindow?: (action: string) => Promise<boolean>;

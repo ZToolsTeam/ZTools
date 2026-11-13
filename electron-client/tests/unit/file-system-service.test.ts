@@ -19,6 +19,7 @@ interface TestContext {
 
 const mainCaller: CallerIdentity = { type: 'main', webContentsId: 1 }
 const pluginCaller: CallerIdentity = { type: 'plugin', webContentsId: 2, pluginId: '../plugin-a' }
+const popoutMainCaller: CallerIdentity = { type: 'main', webContentsId: 3 }
 
 test('unknown file failures keep a stable code without exposing native error details', () => {
   const error = fileFailure(new Error('EACCES: open /Users/alice/private/report.txt'))
@@ -33,7 +34,8 @@ async function createContext(now: () => number = Date.now): Promise<TestContext>
   let removed: ((webContentsId: number) => void) | undefined
   const callers = new Map<number, CallerIdentity>([
     [mainCaller.webContentsId, mainCaller],
-    [pluginCaller.webContentsId, pluginCaller]
+    [pluginCaller.webContentsId, pluginCaller],
+    [popoutMainCaller.webContentsId, popoutMainCaller]
   ])
   const registry = {
     onRemoved(listener: (webContentsId: number) => void) {
@@ -655,6 +657,80 @@ test('drop rejects a closed sender after asynchronous granting and does not emit
     await assert.rejects(drop.accept(7, [source]), (error) => error instanceof ZToolsError && error.code === errorCodes.permissionDenied)
     assert.equal(sends, 0)
     assert.equal(await fs.readFile(source, 'utf8'), 'unchanged')
+  } finally { await dispose(context) }
+})
+
+test('native drop supports main caller windows for declarative plugins and grants read access', async () => {
+  const context = await createContext()
+  try {
+    const source = path.join(context.root, 'declarative-drop.txt')
+    await fs.writeFile(source, 'declarative-drop-data')
+    const mainCaller: CallerIdentity = { type: 'main', webContentsId: 11 }
+    const sent: Array<{ id: number; payload: unknown }> = []
+    const drop = new FileDropService(
+      { get: id => (id === 11 ? mainCaller : undefined), send: (id, _channel, payload) => { sent.push({ id, payload }); return true } },
+      context.service
+    )
+    const result = await drop.accept(11, [source])
+    assert.deepEqual(result, { success: true, accepted: 1, rejected: 0 })
+    assert.equal(sent.length, 1)
+    assert.equal(sent[0]!.id, 11)
+    const envelope = (sent[0]!.payload as { msgData: { envelope: { type: string; target: { window?: string }; payload: { files: string[] } } } }).msgData.envelope
+    assert.equal(envelope.type, 'plugin_files_dropped')
+    assert.deepEqual(envelope.target, { window: 'main' })
+    assert.deepEqual(envelope.payload.files, [await fs.realpath(source)])
+    assert.equal((await context.service.readFile({ path: source, encoding: 'utf8' }, mainCaller)).content, 'declarative-drop-data')
+  } finally { await dispose(context) }
+})
+
+test('native paste grants files, directories and clipboard images with targetFieldId and ignores plain text', async () => {
+  const context = await createContext()
+  try {
+    const pastedFile = path.join(context.root, 'pasted.txt')
+    const pastedDir = path.join(context.root, 'pasted-folder')
+    await fs.writeFile(pastedFile, 'pasted-content')
+    await fs.mkdir(pastedDir)
+    await fs.writeFile(path.join(pastedDir, 'child.txt'), 'in-dir')
+
+    const sent: Array<{ id: number; payload: unknown }> = []
+    let pasteSource:
+      | { kind: 'files'; files: string[] }
+      | { kind: 'image'; png: Buffer; width: number; height: number }
+      | { kind: 'none' } = { kind: 'files', files: [pastedFile, pastedDir] }
+
+    const drop = new FileDropService(
+      { get: id => (id === 1 ? mainCaller : undefined), send: (id, _channel, payload) => { sent.push({ id, payload }); return true } },
+      context.service,
+      { readPasteSource: async () => pasteSource }
+    )
+
+    const fileAndDirResult = await drop.acceptPaste(1, { allowDirectories: true, targetFieldId: 'sourceDir' })
+    assert.deepEqual(fileAndDirResult, { success: true, accepted: 2, rejected: 0 })
+    assert.equal(sent.length, 1)
+    const firstEnv = (sent[0]!.payload as { msgData: { envelope: { payload: { files: string[]; source?: string; targetFieldId?: string } } } }).msgData.envelope
+    assert.equal(firstEnv.payload.source, 'paste')
+    assert.equal(firstEnv.payload.targetFieldId, 'sourceDir')
+    assert.equal((await context.service.readFile({ path: pastedFile, encoding: 'utf8' }, mainCaller)).content, 'pasted-content')
+    const dirListing = await context.service.getDirectoryContents({ path: pastedDir }, mainCaller)
+    assert.equal(dirListing.files.some(f => f.name === 'child.txt'), true)
+
+    // 测试截图位图粘贴：自动写入缓存 PNG 并签发 grantOpenPath（使 transferGrants 可跨窗口转移读取授权）
+    const fakePng = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])
+    pasteSource = { kind: 'image', png: fakePng, width: 1, height: 1 }
+    const imgResult = await drop.acceptPaste(1, { allowImage: true })
+    assert.deepEqual(imgResult, { success: true, accepted: 1, rejected: 0 })
+    const secondEnv = (sent[1]!.payload as { msgData: { envelope: { payload: { files: string[]; source?: string } } } }).msgData.envelope
+    const generatedImgPath = secondEnv.payload.files[0]!
+    assert.match(path.basename(generatedImgPath), /^paste_[0-9a-f-]+\.png$/i)
+    const transferred = await context.service.transferGrants(mainCaller, popoutMainCaller.webContentsId, [generatedImgPath])
+    assert.equal(transferred.transferred, 1)
+    assert.equal((await context.service.readFile({ path: generatedImgPath, encoding: 'base64' }, popoutMainCaller)).content, fakePng.toString('base64'))
+
+    // 测试纯文本或空剪贴板：ignored: true 且不触发事件广播
+    pasteSource = { kind: 'none' }
+    const noneResult = await drop.acceptPaste(1, { allowImage: true })
+    assert.deepEqual(noneResult, { success: true, accepted: 0, rejected: 0, ignored: true })
+    assert.equal(sent.length, 2)
   } finally { await dispose(context) }
 })
 

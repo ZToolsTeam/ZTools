@@ -55,11 +55,13 @@ export default {
     "downloads-manager",
     "env-manager",
     "everything-file-search",
+    "exchange-rate",
     "file-inspector",
     "file-unlock",
     "flow-guard",
     "folder-sync",
     "font-manager",
+    "formula-ocr",
     "git-helper",
     "google-auth",
     "hardware-info",
@@ -128,8 +130,7 @@ export default {
       "name": "音频设备切换",
       "description": "秒级切换系统默认扬声器、耳机与麦克风，支持音量调节、快速静音，可按蓝牙、USB、显示器等连接方式搜索设备",
       "category": [
-        "系统工具",
-        "效率工具"
+        "系统工具"
       ]
     },
     {
@@ -162,7 +163,9 @@ export default {
       "id": "batch-rename",
       "name": "批量重命名",
       "description": "批量修改文件夹里的文件名：查找替换、加前缀 / 后缀 / 当天日期前缀、追加序号、去括号、下划线或全小写规范，执行前预览并确认，本次打开期间可撤销",
-      "category": "utility"
+      "category": [
+        "文件管理"
+      ]
     },
     {
       "id": "boost",
@@ -177,7 +180,6 @@ export default {
       "name": "网页书签",
       "description": "只读聚合本机浏览器的多个配置，支持中文、拼音、网址与文件夹检索，打开或复制书签；无法读取的来源会明确提示",
       "category": [
-        "效率工具",
         "网络工具"
       ]
     },
@@ -186,29 +188,31 @@ export default {
       "name": "防休眠常亮",
       "description": "阻止系统自动休眠与息屏，支持定时倒计时自动恢复与一键常亮切换",
       "category": [
-        "系统工具",
-        "效率工具"
+        "系统工具"
       ]
     },
     {
       "id": "calendar",
       "name": "日程日历",
       "description": "在本机记录和查看日程，用浏览器打开日程里的视频会议链接，可新建、删除日程并导出 ICS 日历文件",
-      "category": []
+      "category": [
+        "办公效率"
+      ]
     },
     {
       "id": "chmod-cidr-calc",
       "name": "网段与权限计算",
       "description": "IPv4 CIDR 子网掩码/可用地址池/32 位二进制掩码计算与 Linux chmod 八进制/符号权限位双向推演工具",
-      "category": []
+      "category": [
+        "开发工具"
+      ]
     },
     {
       "id": "clean-keyboard",
       "name": "键盘清洁锁",
       "description": "Mac 系统键盘清洁锁，可同时拦截鼠标，支持 5～300 秒倒计时、紧急解锁与失联自动解除",
       "category": [
-        "系统工具",
-        "效率工具"
+        "系统工具"
       ]
     },
     {
@@ -223,7 +227,9 @@ export default {
       "id": "clipboard-manager",
       "name": "剪贴板历史",
       "description": "查看客户端记录的剪贴板历史（文本、图片、文件），支持搜索、置顶、编辑，并粘贴回前台应用",
-      "category": "system"
+      "category": [
+        "系统工具"
+      ]
     },
     {
       "id": "context-menu",
@@ -237,13 +243,16 @@ export default {
       "id": "curl-http",
       "name": "轻量接口调试",
       "description": "解析 cURL 命令（bash / cmd 写法）或网址，由客户端发起 HTTP 请求查看响应，并生成 Fetch、Axios、Python、Go 请求代码",
-      "category": []
+      "category": [
+        "开发工具"
+      ]
     },
     {
       "id": "disk-analyzer",
       "name": "磁盘空间分析",
       "description": "快速分析各磁盘分区空间占用，按文件夹大小与大文件排行直观找出占满硬盘的文件",
       "category": [
+        "文件管理",
         "系统工具"
       ]
     },
@@ -260,42 +269,57 @@ export default {
       "id": "docker-manager",
       "name": "容器管控",
       "description": "查看本机 Docker 容器、端口和资源采样，支持启停、日志与确认后清理停止容器；需已安装并启动 Docker 环境",
-      "category": []
+      "category": [
+        "开发工具"
+      ]
     },
     {
       "id": "downloads-manager",
       "name": "下载管理",
       "description": "聚合已识别的系统下载、网盘与接收目录，支持自定义目录、筛选、打开和安全回收；扫描不完整时明确提示",
       "category": [
-        "效率工具",
-        "系统工具"
+        "文件管理"
       ]
     },
     {
       "id": "env-manager",
       "name": "环境变量",
       "description": "管理 Windows 注册表环境与 macOS 终端变量，查看只读进程快照，预览 PATH 清理，修改前保留可恢复备份",
-      "category": []
+      "category": [
+        "开发工具"
+      ]
     },
     {
       "id": "everything-file-search",
       "name": "文件秒搜",
       "description": "按文件名或扩展名搜索本机文件和文件夹，可打开、定位、预览、复制路径或移入回收站",
-      "category": []
+      "category": [
+        "文件管理"
+      ]
+    },
+    {
+      "id": "exchange-rate",
+      "name": "汇率计算",
+      "description": "实时汇率查询与多币种换算，支持 15 种主流法币以及黄金（盎司）、比特币，汇率本地缓存 30 分钟并显示更新时间",
+      "category": [
+        "办公效率"
+      ]
     },
     {
       "id": "file-inspector",
       "name": "文件透视与转码",
       "description": "按文件头识别真实格式并修正错误的扩展名；检查文本文件的编码与换行符，可另存为 UTF-8-BOM，解决 Excel 打开 CSV 乱码",
-      "category": []
+      "category": [
+        "文件管理"
+      ]
     },
     {
       "id": "file-unlock",
       "name": "文件解锁",
       "description": "检测文件、文件夹和外接磁盘的真实进程占用，确认后结束进程，支持不覆盖改名，或移入回收站 / 废纸篓以便恢复",
       "category": [
-        "系统工具",
-        "效率工具"
+        "文件管理",
+        "系统工具"
       ]
     },
     {
@@ -312,28 +336,39 @@ export default {
       "name": "目录同步",
       "description": "比对普通文件内容后增量或双向同步，覆盖前保留校验备份；macOS 另支持镜像模式，把目标独有文件移入废纸篓（单文件最大 2 GiB）",
       "category": [
-        "文件管理",
-        "效率工具"
+        "文件管理"
       ]
     },
     {
       "id": "font-manager",
       "name": "字体管理",
       "description": "检索本机已安装字体，输入文字查看真实字形，查看字体文件附带的许可与版权说明。",
-      "category": []
+      "category": [
+        "系统工具"
+      ]
+    },
+    {
+      "id": "formula-ocr",
+      "name": "公式识别",
+      "description": "框选屏幕、剪贴板或图片里的数学公式，在本机识别成 LaTeX，支持印刷体与手写，结果直接复制",
+      "category": [
+        "办公效率"
+      ]
     },
     {
       "id": "git-helper",
       "name": "Git救命锦囊",
       "description": "大白话场景检索Git回滚自救命令、交互式规范提交(Conventional Commits)生成器与多语言.gitignore模板合成",
-      "category": []
+      "category": [
+        "开发工具"
+      ]
     },
     {
       "id": "google-auth",
       "name": "2FA 验证码",
       "description": "桌面端两步验证动态口令（TOTP）管理工具，支持秒级复制 6 位验证码，密钥加密保存在本机",
       "category": [
-        "效率工具"
+        "安全隐私"
       ]
     },
     {
@@ -348,49 +383,58 @@ export default {
       "id": "hosts-switcher",
       "name": "域名映射",
       "description": "保存并切换多套 Hosts 方案；Mac 写入前预览、校验和备份，通过系统授权应用并支持恢复",
-      "category": []
+      "category": [
+        "网络工具"
+      ]
     },
     {
       "id": "hotkey-radar",
       "name": "热键侦测",
       "description": "检测全局快捷键注册情况，离线查询系统与常用软件快捷键；Mac 区分 ⌘ 与 ⌃，不推测占用进程",
       "category": [
-        "系统工具",
-        "效率工具"
+        "系统工具"
       ]
     },
     {
       "id": "id-watermark",
       "name": "防盗水印",
       "description": "本地为 JPG、PNG、WebP 图片添加斜向文字水印，保留原图，另存 PNG 新副本或复制图片",
-      "category": []
+      "category": [
+        "图像媒体",
+        "安全隐私"
+      ]
     },
     {
       "id": "invoice-assistant",
       "name": "发票助手",
       "description": "扫描下载、桌面、文档目录中的 PDF/XML 电子发票，识别发票号码、开票日期、销售方、购买方与金额（识别不到的字段需手动补全后才能导出），支持发票号查重、个人抬头提示、按模板复制规范命名的发票副本、导出报销明细 CSV 与复制表格文本",
       "category": [
-        "办公效率",
-        "文档处理"
+        "办公效率"
       ]
     },
     {
       "id": "jwt-url-codec",
       "name": "JWT与URL解析",
       "description": "离线解析 JWT Token（Header/Payload/生命周期倒计时/HMAC-SHA256 验签与签发）与深度 URL Query 参数拆解重组工具",
-      "category": []
+      "category": [
+        "开发工具"
+      ]
     },
     {
       "id": "kill-process",
       "name": "结束进程",
       "description": "按内存或 CPU 占用列出正在运行的进程，确认后结束单个进程或整个进程树，可用于关闭无响应的程序",
-      "category": []
+      "category": [
+        "系统工具"
+      ]
     },
     {
       "id": "lan-scanner",
       "name": "局域网扫描",
       "description": "探测局域网设备与常见 TCP 端口，支持 MAC 收藏及 Wake-on-LAN 广播唤醒；每次分段扫描最多 256 个地址",
-      "category": []
+      "category": [
+        "网络工具"
+      ]
     },
     {
       "id": "lan-share",
@@ -405,33 +449,41 @@ export default {
       "id": "linux-http-dict",
       "name": "命令与状态码",
       "description": "离线速查 Linux 常用命令示例、常见 HTTP 状态码含义与排查步骤、常用服务默认端口",
-      "category": []
+      "category": [
+        "开发工具"
+      ]
     },
     {
       "id": "md-to-office",
       "name": "AI文档转Word",
       "description": "本地将 Markdown 文本或文件转换为 Word 新副本，保留标题、列表、表格和代码块，支持公文、商务和学术排版及富文本复制",
-      "category": []
+      "category": [
+        "办公效率"
+      ]
     },
     {
       "id": "media-metadata",
       "name": "EXIF隐私抹除",
       "description": "本地读取照片与音视频元数据，清理照片定位及拍摄信息，校验图像数据后另存新副本",
-      "category": []
+      "category": [
+        "图像媒体",
+        "安全隐私"
+      ]
     },
     {
       "id": "mock-data",
       "name": "测试数据生成",
       "description": "一键生成符合国家校验位算法的虚拟测试用18位身份证号、手机号、统一社会信用代码、银行卡号及批量JSON测试数据",
-      "category": []
+      "category": [
+        "开发工具"
+      ]
     },
     {
       "id": "monitor-control",
       "name": "屏幕亮度与控制",
       "description": "读取显示器真实硬件状态，调节受支持的亮度与对比度；支持多屏统一亮度与系统熄屏命令",
       "category": [
-        "系统工具",
-        "效率工具"
+        "系统工具"
       ]
     },
     {
@@ -439,6 +491,7 @@ export default {
       "name": "C盘搬家",
       "description": "把 C 盘用户目录下的微信与 QQ 文件、下载、文档、视频和 npm / pip / NuGet 缓存复制到其他分区，并在原位置建立目录联接，软件仍按原路径访问",
       "category": [
+        "文件管理",
         "系统工具"
       ]
     },
@@ -446,13 +499,19 @@ export default {
       "id": "network-adapter",
       "name": "网卡管理",
       "description": "查看本机网卡的 IPv4 地址、子网掩码、MAC 地址、网关与 DNS，可刷新 DNS 缓存，或把网卡 DNS 设为 223.5.5.5、恢复自动获取（修改 DNS 需要管理员权限）",
-      "category": "system"
+      "category": [
+        "网络工具",
+        "系统工具"
+      ]
     },
     {
       "id": "network-rescue",
       "name": "网络修复",
       "description": "一键检测断网原因，支持刷新 DNS 缓存、重置网络配置与清除异常代理，快速恢复正常上网",
-      "category": "system"
+      "category": [
+        "网络工具",
+        "系统工具"
+      ]
     },
     {
       "id": "ocr",
@@ -467,8 +526,7 @@ export default {
       "name": "办公文档瘦身",
       "description": "本地重新压缩 Word、PPT、Excel 文档，保留图片原字节，可移除作者属性与批注、导出原图 ZIP；只另存新副本",
       "category": [
-        "办公工具",
-        "效率工具"
+        "办公效率"
       ]
     },
     {
@@ -476,8 +534,7 @@ export default {
       "name": "密码保险箱",
       "description": "在本机用主密码加密保存账号密码、API Key、服务器密码与软件激活码（AES-256-GCM），复制密码 30 秒后自动清除剪贴板",
       "category": [
-        "安全隐私",
-        "效率工具"
+        "安全隐私"
       ]
     },
     {
@@ -485,15 +542,16 @@ export default {
       "name": "纯文本与粘贴栈",
       "description": "一键清除剪贴板富文本脏格式转为纯文本；支持多项连续复制入栈、跨窗口依次顺序或倒序自动上屏粘贴",
       "category": [
-        "效率工具",
-        "办公工具"
+        "办公效率"
       ]
     },
     {
       "id": "pomodoro-focus",
       "name": "番茄倒数",
       "description": "25 分钟番茄专注与短长休息，离页继续计时、重启恢复状态；本地保存重要日程倒数日并发送系统通知",
-      "category": []
+      "category": [
+        "办公效率"
+      ]
     },
     {
       "id": "process-monitor",
@@ -515,13 +573,17 @@ export default {
       "id": "quick-folders",
       "name": "常用文件夹",
       "description": "一键打开桌面、下载、文档、AppData 与系统临时目录等高频文件夹，免去层层翻找",
-      "category": "system"
+      "category": [
+        "文件管理"
+      ]
     },
     {
       "id": "quicklinks",
       "name": "网页快开",
       "description": "聚合多平台快捷搜索与工作流网址组批量打开，支持自定义 {query} 变量与热键直达",
-      "category": []
+      "category": [
+        "办公效率"
+      ]
     },
     {
       "id": "record",
@@ -535,7 +597,9 @@ export default {
       "id": "regex-cron",
       "name": "正则与Cron",
       "description": "中国本土常用正则速查与实时测试高亮，支持Cron表达式中文语义解析与未来5次执行时间推算",
-      "category": []
+      "category": [
+        "开发工具"
+      ]
     },
     {
       "id": "screen-color-picker",
@@ -560,6 +624,7 @@ export default {
       "name": "文件粉碎",
       "description": "列出临时文件夹与崩溃转储目录里的文件，勾选并确认后多次覆写文件内容再删除",
       "category": [
+        "安全隐私",
         "系统工具"
       ]
     },
@@ -576,8 +641,7 @@ export default {
       "name": "快捷短语",
       "description": "管理常用开票税号、收件地址、客服话术与常用模板，支持动态日期/时间/剪贴板宏变量，一键穿透上屏或复制",
       "category": [
-        "效率工具",
-        "办公工具"
+        "办公效率"
       ]
     },
     {
@@ -601,7 +665,9 @@ export default {
       "id": "sql-helper",
       "name": "SQL格式化转换",
       "description": "SQL美化与精简、MyBatis日志参数核对、CREATE TABLE转TypeScript/Go/Java模型；支持多行编辑与剪贴板输入",
-      "category": []
+      "category": [
+        "开发工具"
+      ]
     },
     {
       "id": "sqlite-plugin",
@@ -615,28 +681,33 @@ export default {
       "id": "ssh-proxy-helper",
       "name": "主机与代理",
       "description": "管理 SSH 主机连接、端口转发及 Git、NPM 和新终端的本地代理配置",
-      "category": []
+      "category": [
+        "网络工具"
+      ]
     },
     {
       "id": "ssl-domain-check",
       "name": "域名与SSL诊断",
       "description": "查询域名真实 TLS 证书、信任与名称匹配状态、有效期和证书链，并查看 DNS 解析记录",
-      "category": []
+      "category": [
+        "网络工具"
+      ]
     },
     {
       "id": "startup-manager",
       "name": "启动管理",
       "description": "查看启动应用、后台服务与计划任务，管理自启状态；Mac 修改前保留可恢复的配置记录",
       "category": [
-        "系统工具",
-        "效率工具"
+        "系统工具"
       ]
     },
     {
       "id": "svg-icon-studio",
       "name": "SVG预览与压缩",
       "description": "静态 SVG 校验、清理与代码预览，保留文字和数值精度，导出 React TSX / Vue 3 SFC / Data URI",
-      "category": []
+      "category": [
+        "图像媒体"
+      ]
     },
     {
       "id": "system-backup",
@@ -658,28 +729,33 @@ export default {
       "id": "table-converter",
       "name": "表格互转",
       "description": "离线转换 Excel 复制文本/TSV/CSV、JSON 数组、Markdown、HTML 文字表格与 SQLite INSERT，保留长数字和 JSON 类型，回车复制",
-      "category": []
+      "category": [
+        "办公效率"
+      ]
     },
     {
       "id": "text-formatter",
       "name": "文本排版",
       "description": "中英文混排自动加空格、中英标点互转、全半角转换、大小写转换与清除多余空行空白",
-      "category": []
+      "category": [
+        "办公效率"
+      ]
     },
     {
       "id": "translator",
       "name": "划词翻译",
       "description": "中英互译常用词与办公短语（只查客户端内置的离线词库，收录有限），并把英文转成 camelCase / snake_case 变量名",
       "category": [
-        "办公效率",
-        "文本工具"
+        "办公效率"
       ]
     },
     {
       "id": "vscode-projects",
       "name": "最近项目",
       "description": "聚合检索 VS Code、Cursor、Trae、Windsurf 与 JetBrains 的本地最近项目，查看 Git 分支并打开编辑器或终端",
-      "category": []
+      "category": [
+        "开发工具"
+      ]
     },
     {
       "id": "wechat-cleaner",
@@ -713,7 +789,7 @@ export default {
       "id": "json-format",
       "name": "JSON 格式化",
       "description": "JSON 语法校验、高亮美化与压缩转义，支持一键生成 TypeScript / Go / Rust 数据结构定义",
-      "version": "2.1.5",
+      "version": "2.1.6",
       "author": "ZTools Team",
       "icon": "icon.svg",
       "category": [
@@ -767,7 +843,7 @@ export default {
           "arch": "any"
         }
       ],
-      "size": 55174
+      "size": 61552
     },
     {
       "id": "timestamp",
@@ -834,11 +910,11 @@ export default {
       "id": "calculator",
       "name": "计算器",
       "description": "输入算式即时计算，内置科学函数、单位换算、每日汇率、人民币大写金额转换与日期推算",
-      "version": "2.1.6",
+      "version": "2.1.7",
       "author": "ZTools Team",
       "icon": "icon.svg",
       "category": [
-        "效率工具"
+        "办公效率"
       ],
       "keywords": [
         "calc",
@@ -906,11 +982,11 @@ export default {
       "id": "qr-code",
       "name": "二维码生成",
       "description": "输入网址或文本实时生成高清二维码，支持生成 Wi-Fi 连网二维码、复制图片与导出 PNG",
-      "version": "2.1.7",
+      "version": "2.1.9",
       "author": "ZTools Team",
       "icon": "icon.svg",
       "category": [
-        "效率工具"
+        "办公效率"
       ],
       "keywords": [
         "qr",
@@ -956,13 +1032,13 @@ export default {
           "arch": "any"
         }
       ],
-      "size": 40363
+      "size": 46981
     },
     {
       "id": "file-compare",
       "name": "文本对比",
       "description": "逐行对比两段文本、代码或配置文件，逐处列出增删的行，支持忽略空白与复制 unified diff 差异报告",
-      "version": "2.0.11",
+      "version": "2.0.13",
       "author": "ZTools Team",
       "icon": "icon.svg",
       "category": [
@@ -991,13 +1067,13 @@ export default {
           "arch": "any"
         }
       ],
-      "size": 32424
+      "size": 41714
     },
     {
       "id": "crypto-tool",
       "name": "编码与加密",
       "description": "支持 Base64 / URL / Unicode / Hex 编码互转、MD5 / SHA 哈希计算、AES 加解密、HMAC 计算与 UUID 批量生成",
-      "version": "1.1.4",
+      "version": "1.1.5",
       "author": "ZTools Team",
       "icon": "icon.svg",
       "category": [
@@ -1125,17 +1201,17 @@ export default {
           "arch": "any"
         }
       ],
-      "size": 46505
+      "size": 57102
     },
     {
       "id": "color-picker",
       "name": "取色与配色",
       "description": "支持 HEX / RGB / HSL / CMYK 色值实时互转、WCAG 无障碍对比度检测与常用色板收藏",
-      "version": "2.1.6",
+      "version": "2.1.7",
       "author": "ZTools Team",
       "icon": "icon.svg",
       "category": [
-        "设计工具"
+        "图像媒体"
       ],
       "keywords": [
         "color",
@@ -1193,11 +1269,11 @@ export default {
       "id": "memo",
       "name": "便签",
       "description": "轻量随手记便签，正文支持 Markdown，可加标签，按标题、正文或标签搜索",
-      "version": "1.0.7",
+      "version": "1.0.8",
       "author": "ZTools Team",
       "icon": "icon.svg",
       "category": [
-        "效率工具"
+        "办公效率"
       ],
       "keywords": [
         "memo",
@@ -1228,11 +1304,11 @@ export default {
       "id": "todo",
       "name": "待办清单",
       "description": "极简任务待办清单，回车快速添加任务，支持高优标记与完成状态筛选",
-      "version": "1.0.6",
+      "version": "1.0.8",
       "author": "ZTools Team",
       "icon": "icon.svg",
       "category": [
-        "效率工具"
+        "办公效率"
       ],
       "keywords": [
         "todo",
@@ -1256,7 +1332,7 @@ export default {
           "arch": "any"
         }
       ],
-      "size": 24410
+      "size": 27048
     }
   ]
 }

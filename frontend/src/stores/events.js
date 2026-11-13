@@ -28,6 +28,9 @@ export const useEventsStore = defineStore('events', {
             .subscribe('system.DarkModeChange')
             .catch((err) => console.warn('[EventsStore] 订阅 system.DarkModeChange 失败:', err))
           window.ztools.events
+            .subscribe('system.AccentColorChange')
+            .catch((err) => console.warn('[EventsStore] 订阅 system.AccentColorChange 失败:', err))
+          window.ztools.events
             .subscribe('plugin_not_installed')
             .catch((err) => console.warn('[EventsStore] 订阅 plugin_not_installed 失败:', err))
 
@@ -46,6 +49,10 @@ export const useEventsStore = defineStore('events', {
           window.ztools.events.on(
             'system.DarkModeChange',
             this.handleDarkModeChange
+          )
+          window.ztools.events.on(
+            'system.AccentColorChange',
+            this.handleAccentColorChange
           )
           window.ztools.events.on(
             'plugin_not_installed',
@@ -76,6 +83,10 @@ export const useEventsStore = defineStore('events', {
         window.ztools.events.off(
           'system.DarkModeChange',
           this.handleDarkModeChange
+        )
+        window.ztools.events.off(
+          'system.AccentColorChange',
+          this.handleAccentColorChange
         )
         window.ztools.events.off(
           'plugin_not_installed',
@@ -114,6 +125,19 @@ export const useEventsStore = defineStore('events', {
         themeStore.handleSystemThemeChange(isDark, payload.mode)
       } catch (e) {
         console.error('[EventsStore] 处理系统主题变更失败:', e)
+      }
+    },
+
+    handleAccentColorChange(envelope) {
+      const themeStore = useThemeStore()
+      try {
+        const payload = envelope?.payload || {}
+        const accent = payload.accent ?? payload.value
+        if (typeof accent === 'string') {
+          themeStore.handleExternalAccentChange(accent)
+        }
+      } catch (e) {
+        console.error('[EventsStore] 处理主题色变更失败:', e)
       }
     },
 

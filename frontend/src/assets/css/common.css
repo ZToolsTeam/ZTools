@@ -22,7 +22,7 @@
   --zt-primary-hover: var(--rc-accent-hover);
   --zt-primary-active: var(--rc-accent-hover);
   --zt-primary-bg: var(--rc-accent-subtle);
-  --zt-primary-border: rgba(255, 107, 61, 0.35);
+  --zt-primary-border: rgba(var(--rc-accent-rgb), 0.35);
 
   /* ===== 状态色 (Ant Design 标准) ===== */
   --zt-success: var(--rc-success);
@@ -115,7 +115,7 @@
   --zt-primary-hover: var(--rc-accent-hover);
   --zt-primary-active: var(--rc-accent-hover);
   --zt-primary-bg: var(--rc-accent-subtle);
-  --zt-primary-border: rgba(255, 107, 61, 0.35);
+  --zt-primary-border: rgba(var(--rc-accent-rgb), 0.35);
 
   /* 状态色 - 与插件统一 */
   --zt-success: var(--rc-success);

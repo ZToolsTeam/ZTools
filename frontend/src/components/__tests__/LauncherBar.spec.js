@@ -5,9 +5,13 @@ import { createRouter, createMemoryHistory } from 'vue-router'
 import { createPinia, setActivePinia } from 'pinia'
 
 const items = ref([])
+const pinned = ref([])
 const searching = ref(false)
 const searchError = ref('')
 const searchQuery = ref('')
+const toggleItemPinMock = vi.fn().mockResolvedValue({ success: true, pinned: true })
+const addLocalAppMock = vi.fn().mockResolvedValue({ success: true, added: 1 })
+const prepareItemForLaunchMock = vi.fn(async (item) => item)
 vi.mock('@/composables/useCommandSearch', async importOriginal => ({
   ...await importOriginal(),
   normalizePluginFeatures: () => [],
@@ -18,6 +22,11 @@ vi.mock('@/composables/useCommandSearch', async importOriginal => ({
     fileSearchDegraded: ref(false),
     fileResults: ref([]),
     filteredItems: computed(() => items.value),
+    pinnedItems: computed(() => pinned.value),
+    toggleItemPin: (...args) => toggleItemPinMock(...args),
+    addLocalApp: (...args) => addLocalAppMock(...args),
+    refreshPanelData: vi.fn().mockResolvedValue(),
+    prepareItemForLaunch: (...args) => prepareItemForLaunchMock(...args),
     search: vi.fn(),
     clearSearch: () => { searchQuery.value = '' },
     recordUsage: vi.fn(),
@@ -537,6 +546,127 @@ describe('LauncherBar 拼音确认与快捷键隔离', () => {
         expect(openPath).toHaveBeenCalledExactlyOnceWith(path)
         expect(hide).toHaveBeenCalledOnce()
       }
+    } finally {
+      wrapper.unmount()
+    }
+  })
+})
+
+describe('LauncherBar 首屏固定磁贴、Ctrl+P、Alt+1~9 与本地软件/系统工具', () => {
+  beforeEach(() => {
+    setActivePinia(createPinia())
+    openPlugin.mockClear()
+    toggleItemPinMock.mockClear()
+    addLocalAppMock.mockClear()
+    searching.value = false
+    searchError.value = ''
+    searchQuery.value = ''
+    pinned.value = [
+      { key: 'local-app:app_1', id: 'app_1', type: 'local-app', panelItemType: 'local', name: 'VS Code', pinned: true }
+    ]
+    items.value = [
+      { key: 'plugin_1', pluginId: 'plugin_1', type: 'plugin', name: 'JSON 工具', pinned: false },
+      { key: 'sys_1', id: 'sys_1', type: 'system-tool', panelItemType: 'system_tool', name: '系统计算器' }
+    ]
+  })
+
+  afterEach(() => {
+    delete window.__ztoolsLauncher
+    vi.restoreAllMocks()
+    document.body.innerHTML = ''
+  })
+
+  it('空查询时展示首屏固定磁贴宫格，支持点击或按 Alt+1 直达打开本地软件，输入搜索词后自动收起磁贴', async () => {
+    const openPanelItem = vi.fn().mockResolvedValue({ success: true })
+    const hide = vi.fn().mockResolvedValue()
+    window.__ztoolsLauncher = { openPanelItem, hide }
+
+    const { wrapper } = await mountLauncher()
+    try {
+      const section = wrapper.find('.launcher-pinned-section')
+      expect(section.exists()).toBe(true)
+      expect(section.text()).toContain('VS Code')
+      const tile = section.find('.launcher-pinned-tile')
+      expect(tile.text()).not.toContain('Alt+1')
+      expect(tile.attributes('title')).toBe('VS Code (Alt+1)')
+
+      // 按 Alt+1 触发第一个固定磁贴
+      await wrapper.trigger('keydown', { key: '1', altKey: true })
+      await flushPromises()
+      expect(openPanelItem).toHaveBeenCalledWith('app_1', 'local', '')
+      expect(hide).toHaveBeenCalledOnce()
+
+      // 输入搜索词后首屏磁贴自动收起，把空间让给搜索结果
+      searchQuery.value = '系统'
+      await flushPromises()
+      expect(wrapper.find('.launcher-pinned-section').exists()).toBe(false)
+    } finally {
+      wrapper.unmount()
+    }
+  })
+
+  it('支持按 Ctrl+P 切换当前选中插件的固定状态，以及点击「+ 添加软件」按钮添加本地应用', async () => {
+    const { wrapper } = await mountLauncher()
+    try {
+      await wrapper.trigger('keydown', { key: 'p', ctrlKey: true })
+      await flushPromises()
+      expect(toggleItemPinMock).toHaveBeenCalledWith(expect.objectContaining({ pluginId: 'plugin_1' }))
+      expect(wrapper.text()).toContain('已固定「JSON 工具」到悬浮条首屏')
+
+      const addBtn = wrapper.find('button[aria-label="添加本地软件"]')
+      expect(addBtn.exists()).toBe(true)
+      await addBtn.trigger('click')
+      await flushPromises()
+      expect(addLocalAppMock).toHaveBeenCalledOnce()
+      expect(wrapper.text()).toContain('已添加 1 个本地软件')
+    } finally {
+      wrapper.unmount()
+    }
+  })
+
+  it('固定宫格 9 个磁贴都有快捷键：Alt+9 直达第 9 个，提示文案为 Alt+1~9', async () => {
+    pinned.value = Array.from({ length: 9 }, (_, i) => ({
+      key: `local-app:app_${i + 1}`, id: `app_${i + 1}`, type: 'local-app', panelItemType: 'local', name: `软件 ${i + 1}`, pinned: true
+    }))
+    const openPanelItem = vi.fn().mockResolvedValue({ success: true })
+    window.__ztoolsLauncher = { openPanelItem, hide: vi.fn().mockResolvedValue() }
+    const { wrapper } = await mountLauncher()
+    try {
+      const tiles = wrapper.findAll('.launcher-pinned-tile')
+      expect(tiles).toHaveLength(9)
+      expect(tiles[8].attributes('title')).toBe('软件 9 (Alt+9)')
+      expect(wrapper.find('.launcher-pinned-hint').text()).toContain('Alt+1~9')
+      await wrapper.trigger('keydown', { key: '9', altKey: true })
+      await flushPromises()
+      expect(openPanelItem).toHaveBeenCalledWith('app_9', 'local', '')
+    } finally {
+      wrapper.unmount()
+    }
+  })
+
+  it('冷启动占位的程序先等程序列表返回拿到授权再打开；程序已卸载时提示且不打开', async () => {
+    const pendingApp = { key: 'file:/Applications/WeChat.app', type: 'file', name: '微信', path: '/Applications/WeChat.app', isApplication: true, pendingGrant: true }
+    items.value = [pendingApp]
+    const openPath = vi.fn().mockResolvedValue({ success: true })
+    window.__ztoolsLauncher = { openPath, hide: vi.fn().mockResolvedValue() }
+    let release
+    prepareItemForLaunchMock.mockImplementationOnce(() => new Promise((resolve) => { release = resolve }))
+    const { wrapper } = await mountLauncher()
+    try {
+      await wrapper.find('.launcher-row').trigger('click')
+      await flushPromises()
+      expect(prepareItemForLaunchMock).toHaveBeenCalledWith(pendingApp)
+      expect(openPath).not.toHaveBeenCalled()
+      release({ ...pendingApp, pendingGrant: false })
+      await flushPromises()
+      expect(openPath).toHaveBeenCalledExactlyOnceWith('/Applications/WeChat.app')
+
+      openPath.mockClear()
+      prepareItemForLaunchMock.mockResolvedValueOnce(null)
+      await wrapper.find('.launcher-row').trigger('click')
+      await flushPromises()
+      expect(openPath).not.toHaveBeenCalled()
+      expect(wrapper.text()).toContain('程序列表读取失败或该程序已卸载')
     } finally {
       wrapper.unmount()
     }

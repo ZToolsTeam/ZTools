@@ -18,7 +18,7 @@ const EXPECTED_EXPORTS = {
   layoutExtraComponents: 'array',
   feedbackEntry: 'object',
   useFeedbackIndicator: 'function',
-  pluginDetailTabs: 'array',
+  pluginDetailSections: 'array',
   auth: 'object',
   useUserStore: 'function',
   onAuthRequired: 'function',
@@ -65,21 +65,22 @@ function assertContract(mod) {
   for (const name of ['cloudSync', 'pluginLifecycle', 'pluginRatings']) {
     expect(Object.isFrozen(mod[name]), `${name} 只读`).toBe(true)
   }
-  for (const tab of mod.pluginDetailTabs) {
-    expect(typeof tab.key).toBe('string')
-    expect(typeof tab.label).toBe('string')
-    expect(typeof tab.props).toBe('function')
-    expect(tab.component).toBeTruthy()
+  // 详情页附加区块：'detail' 放进「插件详情」卡片底部，'card' 作为独立卡片
+  for (const section of mod.pluginDetailSections) {
+    expect(typeof section.key).toBe('string')
+    expect(['detail', 'card']).toContain(section.placement)
+    expect(typeof section.props).toBe('function')
+    expect(section.component).toBeTruthy()
   }
   // 附加路由与组件都是只读列表，公共代码不能改动版本提供的内容
-  for (const name of ['rootRoutes', 'layoutRoutes', 'preloadRouteLoaders', 'headerExtraComponents', 'layoutExtraComponents', 'pluginDetailTabs']) {
+  for (const name of ['rootRoutes', 'layoutRoutes', 'preloadRouteLoaders', 'headerExtraComponents', 'layoutExtraComponents', 'pluginDetailSections']) {
     expect(Object.isFrozen(mod[name]), `${name} 只读`).toBe(true)
   }
 
 }
 
 describe('@edition 接口契约', () => {
-  it('开源版导出完整，且默认离线：不提供后台、云同步、附加页面与附加 Tab', async () => {
+  it('开源版导出完整，且默认离线：不提供后台、云同步、附加页面与详情页附加区块', async () => {
     assertContract(oss)
     expect(oss.EDITION).toBe('oss')
     expect(oss.isOnline).toBe(false)
@@ -87,7 +88,7 @@ describe('@edition 接口契约', () => {
     expect(oss.cloudSync.enabled).toBe(false)
     expect(oss.rootRoutes).toHaveLength(0)
     expect(oss.layoutRoutes).toHaveLength(0)
-    expect(oss.pluginDetailTabs).toHaveLength(0)
+    expect(oss.pluginDetailSections).toHaveLength(0)
     expect(oss.headerExtraComponents).toHaveLength(0)
     expect(oss.layoutExtraComponents).toHaveLength(0)
     expect(await oss.auth.isAuthenticated()).toBe(false)

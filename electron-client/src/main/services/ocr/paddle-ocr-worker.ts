@@ -3,10 +3,9 @@
  * 推理与模型内存都留在本进程，崩溃或被结束不影响主进程。模型目录由启动参数传入。
  */
 import fs from 'node:fs/promises'
-import os from 'node:os'
 import path from 'node:path'
-import { pathToFileURL } from 'node:url'
 import * as ort from 'onnxruntime-web'
+import { configureOnnxRuntime, serveRequests } from './ocr-worker-runtime.js'
 import { parseCharacterDictionary, recognizeText, type OcrModelRunner } from './paddle-ocr-pipeline.js'
 import { PADDLE_OCR_MODEL_FILES, type PaddleOcrWorkerRequest, type PaddleOcrWorkerResponse } from './paddle-ocr-protocol.js'
 
@@ -18,17 +17,9 @@ interface LoadedModels {
 const modelDirectory = process.argv[2] ?? ''
 let models: Promise<LoadedModels> | undefined
 
-/** onnxruntime 的 wasm 文件打包时解到 asar 外（工作线程不能从 asar 里加载），这里指向真实目录 */
-function configureRuntime(): void {
-  const distDirectory = path.dirname(require.resolve('onnxruntime-web'))
-    .replace(`app.asar${path.sep}`, `app.asar.unpacked${path.sep}`)
-  ort.env.wasm.wasmPaths = pathToFileURL(distDirectory + path.sep).href
-  ort.env.wasm.numThreads = Math.max(1, Math.min(4, Math.floor(os.availableParallelism() / 2)))
-}
-
 async function loadModels(): Promise<LoadedModels> {
   if (!modelDirectory) throw new Error('没有指定识别模型目录')
-  configureRuntime()
+  configureOnnxRuntime(ort)
   const [det, rec, dictionaryText] = await Promise.all([
     fs.readFile(path.join(modelDirectory, PADDLE_OCR_MODEL_FILES.detection)),
     fs.readFile(path.join(modelDirectory, PADDLE_OCR_MODEL_FILES.recognition)),
@@ -72,27 +63,4 @@ async function handle(request: PaddleOcrWorkerRequest): Promise<PaddleOcrWorkerR
   }
 }
 
-type Channel = { send(message: PaddleOcrWorkerResponse): void; onMessage(handler: (message: unknown) => void): void }
-
-function channel(): Channel {
-  const parentPort = (process as unknown as { parentPort?: { postMessage(value: unknown): void; on(event: 'message', handler: (event: { data: unknown }) => void): void } }).parentPort
-  if (parentPort) {
-    return { send: message => parentPort.postMessage(message), onMessage: handler => parentPort.on('message', event => handler(event.data)) }
-  }
-  if (!process.send) throw new Error('文字识别进程缺少通信通道')
-  return { send: message => process.send!(message), onMessage: handler => process.on('message', handler) }
-}
-
-function isRequest(value: unknown): value is PaddleOcrWorkerRequest {
-  const request = value as Partial<PaddleOcrWorkerRequest> | null
-  return !!request && request.type === 'recognize' && Number.isSafeInteger(request.id) &&
-    Number.isSafeInteger(request.width) && Number.isSafeInteger(request.height) && request.data instanceof Uint8Array
-}
-
-const port = channel()
-// 主进程逐个发送请求，这里按收到的顺序串行处理
-let queue = Promise.resolve()
-port.onMessage(message => {
-  if (!isRequest(message)) return
-  queue = queue.then(async () => port.send(await handle(message)))
-})
+serveRequests<PaddleOcrWorkerResponse>('文字识别', handle)

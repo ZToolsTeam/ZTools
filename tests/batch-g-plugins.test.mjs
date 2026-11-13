@@ -67,10 +67,10 @@ describe('Batch G Plugins (37 ~ 41) Integration & Exception Suite', () => {
 
     // URL inspection with nested URL and JSON query param
     const urlInfo = parseAndInspectUrl(
-      'https://auth.ztools.cn:8443/oauth/callback?redirect_uri=https%3A%2F%2Fapp.ztools.cn%2Fhome&meta=%7B%22env%22%3A%22prod%22%7D#done',
+      'https://auth.example.com:8443/oauth/callback?redirect_uri=https%3A%2F%2Fapp.example.com%2Fhome&meta=%7B%22env%22%3A%22prod%22%7D#done',
     )
     assert.equal(urlInfo.protocol, 'https')
-    assert.equal(urlInfo.hostname, 'auth.ztools.cn')
+    assert.equal(urlInfo.hostname, 'auth.example.com')
     assert.equal(urlInfo.port, '8443')
     assert.equal(urlInfo.queryParams.length, 2)
     assert.equal(urlInfo.queryParams[0].isNestedUrl, true)
@@ -87,17 +87,17 @@ describe('Batch G Plugins (37 ~ 41) Integration & Exception Suite', () => {
   })
 
   it('38-curl-http: parses multi-line bash/cmd/PowerShell cURL, generates 4 languages, and handles HTTP timeout/5MB truncation', async () => {
-    const rawCurl = `curl -X PUT ^\r\n  "https://api.ztools.cn/v1/items/42" \\\n  -H "Authorization: Bearer tok_123" \`\n  -H "Content-Type: application/json" -b "sid=abc" -d '{"enabled":true}'`
+    const rawCurl = `curl -X PUT ^\r\n  "https://api.example.com/v1/items/42" \\\n  -H "Authorization: Bearer tok_123" \`\n  -H "Content-Type: application/json" -b "sid=abc" -d '{"enabled":true}'`
     const parsed = parseCurlCommand(rawCurl)
     assert.equal(parsed.method, 'PUT')
-    assert.equal(parsed.url, 'https://api.ztools.cn/v1/items/42')
+    assert.equal(parsed.url, 'https://api.example.com/v1/items/42')
     assert.equal(parsed.headers['Authorization'], 'Bearer tok_123')
     assert.equal(parsed.headers['Cookie'], 'sid=abc')
     assert.equal(parsed.body, '{"enabled":true}')
 
     for (const lang of ['fetch', 'axios', 'python', 'go']) {
       const code = generateCodeFromCurl(parsed, lang)
-      assert.ok(code.includes('https://api.ztools.cn/v1/items/42'))
+      assert.ok(code.includes('https://api.example.com/v1/items/42'))
     }
 
     // Execute HTTP request with custom fetch mock + large payload truncation check
@@ -146,8 +146,8 @@ describe('Batch G Plugins (37 ~ 41) Integration & Exception Suite', () => {
     const fixedNow = new Date('2026-10-25T00:00:00Z').getTime()
     const healthyCert = evaluateSslCertInfo(
       {
-        domain: 'ztools.cn',
-        subjectCN: 'ztools.cn',
+        domain: 'example.com',
+        subjectCN: 'example.com',
         issuerName: 'DigiCert',
         validFrom: '2026-01-01T00:00:00Z',
         validTo: '2027-01-01T00:00:00Z',
@@ -160,8 +160,8 @@ describe('Batch G Plugins (37 ~ 41) Integration & Exception Suite', () => {
 
     const expiringSoonCert = evaluateSslCertInfo(
       {
-        domain: 'soon.ztools.cn',
-        subjectCN: 'soon.ztools.cn',
+        domain: 'soon.example.com',
+        subjectCN: 'soon.example.com',
         issuerName: 'Let\'s Encrypt',
         validFrom: '2026-08-01T00:00:00Z',
         validTo: '2026-11-02T00:00:00Z',
@@ -174,8 +174,8 @@ describe('Batch G Plugins (37 ~ 41) Integration & Exception Suite', () => {
 
     const expiredCert = evaluateSslCertInfo(
       {
-        domain: 'old.ztools.cn',
-        subjectCN: 'old.ztools.cn',
+        domain: 'old.example.com',
+        subjectCN: 'old.example.com',
         issuerName: 'Let\'s Encrypt',
         validFrom: '2025-01-01T00:00:00Z',
         validTo: '2026-10-01T00:00:00Z',
@@ -184,14 +184,14 @@ describe('Batch G Plugins (37 ~ 41) Integration & Exception Suite', () => {
     )
     assert.equal(expiredCert.isExpired, true)
 
-    const records = await resolveDomainDoh('ztools.cn', ['A', 'TXT'], {
+    const records = await resolveDomainDoh('example.com', ['A', 'TXT'], {
       fetchImpl: async (url) => {
         const u = String(url)
         if (u.includes('type=A')) {
           return new Response(
             JSON.stringify({
               Status: 0,
-              Answer: [{ name: 'ztools.cn.', type: 1, TTL: 300, data: '198.51.100.12' }],
+              Answer: [{ name: 'example.com.', type: 1, TTL: 300, data: '198.51.100.12' }],
             }),
             { status: 200 },
           )
@@ -199,7 +199,7 @@ describe('Batch G Plugins (37 ~ 41) Integration & Exception Suite', () => {
         return new Response(
           JSON.stringify({
             Status: 0,
-            Answer: [{ name: 'ztools.cn.', type: 16, TTL: 600, data: '"v=spf1 include:spf.ztools.cn ~all"' }],
+            Answer: [{ name: 'example.com.', type: 16, TTL: 600, data: '"v=spf1 include:spf.example.com ~all"' }],
           }),
           { status: 200 },
         )
@@ -207,14 +207,14 @@ describe('Batch G Plugins (37 ~ 41) Integration & Exception Suite', () => {
     })
     assert.equal(records.length, 2)
     assert.equal(records[0].data, '198.51.100.12')
-    assert.equal(records[1].data, 'v=spf1 include:spf.ztools.cn ~all')
+    assert.equal(records[1].data, 'v=spf1 include:spf.example.com ~all')
 
     // Exception assertions
     assert.throws(() => normalizeDomainInput(''), /EMPTY_DOMAIN_INPUT/)
     assert.throws(() => normalizeDomainInput('not a domain'), /INVALID_DOMAIN_NAME/)
     await assert.rejects(
       () =>
-        resolveDomainDoh('nonexistent.ztools.invalid', ['A'], {
+        resolveDomainDoh('nonexistent.example.invalid', ['A'], {
           fetchImpl: async () =>
             new Response(JSON.stringify({ Status: 3 }), { status: 200 }),
         }),

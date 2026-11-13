@@ -118,7 +118,8 @@ struct FlatTrieNode {
 
 class FlatTrieIndex {
 public:
-  FlatTrieIndex() : pool_(std::make_unique<IndexerThreadPool>()) {
+  explicit FlatTrieIndex(bool create_pool = true)
+    : pool_(create_pool ? std::make_unique<IndexerThreadPool>() : nullptr) {
     Clear();
   }
 
@@ -127,6 +128,12 @@ public:
     nodes_.clear();
     nodes_.emplace_back(); // Root node at index 0
     acronym_buckets_.clear();
+  }
+
+  void SwapData(FlatTrieIndex& other) noexcept {
+    entries_.swap(other.entries_);
+    nodes_.swap(other.nodes_);
+    acronym_buckets_.swap(other.acronym_buckets_);
   }
 
   void Build(std::vector<FileEntry>&& entries) {
@@ -192,12 +199,11 @@ public:
     }
 
     // Phase 2: Prefix lookup in Flat Trie
-    if (candidate_set.size() < limit) {
+    {
       std::vector<uint32_t> trie_ids;
-      FindPrefixTrie(query_lower, trie_ids, limit);
+      FindPrefixTrie(query_lower, trie_ids, 512);
       for (uint32_t id : trie_ids) {
         candidate_set.insert(id);
-        if (candidate_set.size() >= limit * 2) break;
       }
     }
 
@@ -265,9 +271,10 @@ public:
         score += 100;
       }
 
-      // Shorter names rank higher
+      // Shorter names and shallower paths rank higher
       size_t name_penalty = (e.name.size() < 100) ? e.name.size() : 100;
-      score -= static_cast<int>(name_penalty);
+      size_t path_penalty = (e.path.size() < 240) ? (e.path.size() / 8) : 30;
+      score -= static_cast<int>(name_penalty + path_penalty);
 
       ranked.push_back({ &e, score });
     }
@@ -325,8 +332,11 @@ private:
         curr = new_node_id;
       }
 
-      if (nodes_[curr].file_ids.size() < 128) {
+      if (nodes_[curr].file_ids.size() < 512) {
         nodes_[curr].file_ids.push_back(file_id);
+      } else if (entries_[file_id].name_lower.size() == depth) {
+        // 若槽位已满但当前文件恰好是该前缀的完整精确匹配词，替换末尾候选以确保精确匹配词永不丢失
+        nodes_[curr].file_ids.back() = file_id;
       }
     }
   }

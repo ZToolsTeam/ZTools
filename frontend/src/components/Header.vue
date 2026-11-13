@@ -1,25 +1,30 @@
 <script setup>
 import { ref, computed, nextTick, onMounted, onUnmounted, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
+import { getActivePinia } from 'pinia'
 
 import SearchBar from './SearchBar.vue'
 import BrandMark from './BrandMark.vue'
 import HeaderGeekModeTrigger from './HeaderGeekModeTrigger.vue'
 
 import { isNative, sys } from '@/api/apiserver'
-import { useUserStore, headerExtraComponents } from '@edition'
+import { useUserStore } from '@edition'
+import { useNavStore } from '@/stores/nav'
+import { useUIStore } from '@/stores/ui'
 import { ROUTES, routeUtils } from '@/router/routes'
 
 const router = useRouter()
 const route = useRoute()
 const userStore = useUserStore()
+const getNavStore = () => (getActivePinia() ? useNavStore() : null)
+const getUIStore = () => (getActivePinia() ? useUIStore() : null)
 
 const isMacPlatform = ref(
   typeof navigator !== 'undefined' &&
     (navigator.userAgent.includes('Mac') || navigator.platform?.includes('Mac'))
 )
 
-const keyword = ref('')
+const keyword = ref(getNavStore()?.headerSearchKeyword || '')
 const searchBarRef = ref(null)
 const homeButtonRef = ref(null)
 const searchPlaceholder = ref('搜索插件、命令与文件')
@@ -47,6 +52,7 @@ const showDiagnostics = computed(() => {
 // 搜索处理：按 Enter 或选「在插件市场搜索」时跳到插件市场
 const onSearch = (q) => {
   keyword.value = q
+  getNavStore()?.setHeaderSearchKeyword(q)
   router.push(routeUtils.toListWithSearch(q))
 }
 
@@ -57,7 +63,8 @@ const clearListFilterTimer = () => {
   if (listFilterTimer) clearTimeout(listFilterTimer)
   listFilterTimer = null
 }
-watch(keyword, () => {
+watch(keyword, (val) => {
+  getNavStore()?.setHeaderSearchKeyword(val)
   clearListFilterTimer()
   if (route.name !== ROUTES.LIST.name) return
   listFilterTimer = setTimeout(() => {
@@ -88,6 +95,7 @@ const focusSearchInput = async (force, request) => {
   if (!force) {
     // 激活窗口只恢复默认焦点；保留用户在表单、弹窗和键盘导航中的位置。
     if (route.name !== ROUTES.HOME.name) return
+    if (getUIStore()?.isGridFocused) return
     const active = document.activeElement
     if (active === homeButtonRef.value && preserveHomeFocus) return
     if (active !== document.body && active !== document.documentElement && active !== homeButtonRef.value) return
@@ -245,18 +253,11 @@ onUnmounted(() => {
         <HeaderGeekModeTrigger />
       </div>
 
-      <!-- 右侧操作区 -->
+      <!-- 右侧占位区（用户头像和昵称已移至左侧边栏反馈建议上方） -->
       <div
         class="flex items-center"
         style="gap: 8px; -webkit-app-region: no-drag"
-      >
-        <!-- 版本附加组件（官方版的用户头像与登录入口，开源版没有） -->
-        <component
-          :is="extraComponent"
-          v-for="(extraComponent, index) in headerExtraComponents"
-          :key="index"
-        />
-      </div>
+      ></div>
     </div>
   </header>
 </template>

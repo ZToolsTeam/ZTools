@@ -45,6 +45,7 @@ function isImageIcon(icon) {
         {{ item.description || item.subtitle }}
       </span>
     </div>
+    <span v-if="item.pinned" class="launcher-row-pin" title="已固定到悬浮条首屏">已固定</span>
     <span v-if="item.badge" class="launcher-row-tag">{{ item.badge }}</span>
   </div>
 </template>
@@ -119,6 +120,15 @@ function isImageIcon(icon) {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+.launcher-row-pin {
+  flex-shrink: 0;
+  padding: 1px 6px;
+  border-radius: 5px;
+  background: var(--rc-surface-hover);
+  font-size: 11px;
+  color: var(--rc-text-secondary);
 }
 
 .launcher-row-tag {
