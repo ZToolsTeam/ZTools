@@ -105,7 +105,7 @@ export interface PluginInstallServiceOptions {
   referenceRuntimeReady?: () => boolean
   macNativeCatalogLookup?: MacNativeCatalogLookup
   state?: PluginStateService
-  analytics?: (event: 'plugin_install' | 'plugin_update' | 'plugin_uninstall', pluginId: string, data?: unknown) => void
+  analytics?: (event: 'plugin_install' | 'plugin_updatecomplete' | 'plugin_uninstall', pluginId: string, data?: unknown) => void
 }
 
 export interface PluginDirectoryProvider {
@@ -556,7 +556,7 @@ export class PluginInstallService implements PluginDirectoryProvider {
             pluginId: params.pluginId, operationId, success: true, isUpdate, version
           })
           try {
-            this.#analytics?.(isUpdate ? 'plugin_update' : 'plugin_install', params.pluginId, { version, operationId })
+            this.#analytics?.(isUpdate ? 'plugin_updatecomplete' : 'plugin_install', params.pluginId, { version, operationId })
           } catch (error) {
             console.warn('插件安装统计记录失败:', error)
           }

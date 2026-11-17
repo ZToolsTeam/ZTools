@@ -14,6 +14,7 @@ import {
   computeFileSha256,
   formatBytes,
   isProtectedSystemPath,
+  resolveDefaultAppDataRoot,
   resolveHostSystemCommands,
   runCommand,
   type HostPluginContext,
@@ -593,8 +594,11 @@ export class StorageHostPluginHandler {
   }
 
   async #ensureDefaultWorkspaceDb(SQL: SqlJsStatic, caller?: CallerIdentity): Promise<string> {
+    // 优先使用注入的受控业务数据目录；未注入时按平台回退至用户应用数据目录，严禁落入 os.tmpdir()
+    const configuredRoot = this.#ctx.dataRoot?.trim()
+    const workspaceDataRoot = configuredRoot ? configuredRoot : resolveDefaultAppDataRoot()
     const defaultDbPath = await this.#ctx.authorizeOutputPath(
-      path.join(os.tmpdir(), 'ztools_workspace.sqlite'),
+      path.join(workspaceDataRoot, 'ztools_workspace.sqlite'),
       caller
     )
     if (!fsSync.existsSync(defaultDbPath) || fsSync.statSync(defaultDbPath).size === 0) {

@@ -87,7 +87,7 @@ export interface BuildTrayMenuContext {
 export function buildTrayMenuTemplate(
   context: BuildTrayMenuContext
 ): MenuItemConstructorOptions[] {
-  const settingsAccelerator = context.platform === 'darwin' ? 'Command+,' : 'Ctrl+,'
+  const settingsAccelerator = context.platform === 'darwin' ? 'Command+I' : 'Ctrl+I'
   const items: MenuItemConstructorOptions[] = [
     {
       id: 'open-launcher',

@@ -22,8 +22,9 @@ function testUpdateSource(fetchImpl: typeof fetch): UpdateSource {
 }
 
 
-test('update service preserves the legacy response shape and verifies downloads', async () => {
+test('update service preserves the legacy response shape and verifies downloads', async (t) => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'ztools-update-service-'))
+  t.after(() => fs.rm(root, { recursive: true, force: true, maxRetries: 3, retryDelay: 50 }))
   const runtimePaths = runtimePathsForBusinessDataRoot(path.join(root, 'Data'))
   const body = Buffer.from('verified installer payload')
   const checksum = createHash('sha256').update(body).digest('hex')
@@ -106,8 +107,9 @@ test('update service preserves the legacy response shape and verifies downloads'
   await fs.rm(root, { recursive: true, force: true })
 })
 
-test('web package installation requires the independent resource service', async () => {
+test('web package installation requires the independent resource service', async (t) => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'ztools-update-web-'))
+  t.after(() => fs.rm(root, { recursive: true, force: true, maxRetries: 3, retryDelay: 50 }))
   const service = new UpdateService({
     platform: 'win32',
     runtimePaths: runtimePathsForBusinessDataRoot(path.join(root, 'Data')),
@@ -128,8 +130,9 @@ test('web package installation requires the independent resource service', async
   await fs.rm(root, { recursive: true, force: true })
 })
 
-test('App package formats leave install-scope resolution to the native updater', async () => {
+test('App package formats leave install-scope resolution to the native updater', async (t) => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'ztools-update-updater-'))
+  t.after(() => fs.rm(root, { recursive: true, force: true, maxRetries: 3, retryDelay: 50 }))
   const runtimePaths = runtimePathsForBusinessDataRoot(path.join(root, 'Data'))
   await fs.mkdir(runtimePaths.installRoot, { recursive: true })
   await fs.writeFile(path.join(runtimePaths.installRoot, 'ZToolsUpdater.exe'), 'updater')
@@ -180,8 +183,9 @@ test('App package formats leave install-scope resolution to the native updater',
   await fs.rm(root, { recursive: true, force: true })
 })
 
-test('UAC cancellation and updater launch failures remain visible and retryable', async () => {
+test('UAC cancellation and updater launch failures remain visible and retryable', async (t) => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'ztools-update-updater-errors-'))
+  t.after(() => fs.rm(root, { recursive: true, force: true, maxRetries: 3, retryDelay: 50 }))
   const runtimePaths = runtimePathsForBusinessDataRoot(path.join(root, 'Data'))
   await fs.mkdir(runtimePaths.installRoot, { recursive: true })
   await fs.writeFile(path.join(runtimePaths.installRoot, 'ZToolsUpdater.exe'), 'updater')
@@ -236,8 +240,9 @@ test('UAC cancellation and updater launch failures remain visible and retryable'
   await fs.rm(root, { recursive: true, force: true })
 })
 
-test('Windows app update falls back to direct .exe installer when ZToolsUpdater.exe is missing or blocked by policy', async () => {
+test('Windows app update falls back to direct .exe installer when ZToolsUpdater.exe is missing or blocked by policy', async (t) => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'ztools-update-direct-fallback-'))
+  t.after(() => fs.rm(root, { recursive: true, force: true, maxRetries: 3, retryDelay: 50 }))
   const runtimePaths = runtimePathsForBusinessDataRoot(path.join(root, 'Data'))
   await fs.mkdir(runtimePaths.installRoot, { recursive: true })
   const payload = Buffer.from('verified setup exe')
@@ -338,8 +343,9 @@ test('Windows app update falls back to direct .exe installer when ZToolsUpdater.
   await fs.rm(root, { recursive: true, force: true })
 })
 
-test('update service compares all four numeric version components and rejects malformed versions', async () => {
+test('update service compares all four numeric version components and rejects malformed versions', async (t) => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'ztools-update-version-'))
+  t.after(() => fs.rm(root, { recursive: true, force: true, maxRetries: 3, retryDelay: 50 }))
   const runtimePaths = runtimePathsForBusinessDataRoot(path.join(root, 'Data'))
   const service = new UpdateService({
     platform: 'win32',

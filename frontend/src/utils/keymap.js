@@ -10,9 +10,13 @@
  * - Esc / Escape: 逐级返回
  * - Ctrl+M / Cmd+M: 双模态切换 (Launcher <-> Dashboard)
  * - Ctrl+F / Cmd+F: 聚焦搜索
+ * - Ctrl+I / Cmd+I: 打开设置
  */
 
 import { onActivated, onDeactivated, onUnmounted, getCurrentInstance } from 'vue'
+
+/** 打开设置的默认快捷键单一信源（macOS 自动按平台展示为 ⌘ I 并归一化匹配） */
+export const OPEN_SETTINGS_SHORTCUT = 'Ctrl+I'
 
 export const KEYMAP_SCOPES = Object.freeze({
   ACTION_PANEL: 'action_panel',
@@ -52,17 +56,25 @@ export function normalizeEventKeyCombo(event) {
   if (hasAlt) parts.push('Alt')
   if (hasShift) parts.push('Shift')
 
+  const imeLetter = extractExplicitModifiedLetterFromCode(event)
   let key = event.key || ''
   if (key === 'Escape' || key === 'Esc') {
     key = 'Escape'
   } else if (key === ' ' || event.code === 'Space') {
     key = 'Space'
+  } else if (
+    key === '，' ||
+    (!hasShift && event.code === 'Comma' && (!key || key === 'Process' || key === 'Unidentified'))
+  ) {
+    key = ','
+  } else if (imeLetter) {
+    key = imeLetter
   } else if (key.length === 1) {
     key = key.toUpperCase()
   }
 
-  // 如果仅有修饰键本身按下，不产生组合键
-  if (['Control', 'Meta', 'Alt', 'Shift'].includes(key)) {
+  // 如果仅有修饰键本身按下或键名为空，不产生组合键
+  if (!key || ['Control', 'Meta', 'Alt', 'Shift'].includes(key)) {
     return ''
   }
 
@@ -71,11 +83,42 @@ export function normalizeEventKeyCombo(event) {
 }
 
 /**
+ * 判断是否为非组字状态下显式触发的 Ctrl/Cmd + 逗号组合键
+ * Windows 中文输入法在未组字时按下 Ctrl+, 可能上报 keyCode=229 / key='Process' 或全角 '，'，
+ * 此类明确携带 Ctrl/Meta 的物理逗号按键不属于候选词确认，应放行进入快捷键分发。
+ */
+function isExplicitModifiedCommaKey(event) {
+  if (!event || typeof event !== 'object') return false
+  if (event.isComposing || event.target?.composing === true) return false
+  if (!(event.ctrlKey || event.metaKey) || event.shiftKey) return false
+  return event.code === 'Comma' || event.key === ',' || event.key === '，'
+}
+
+/**
+ * 从非组字状态下显式携带 Ctrl/Cmd 且由输入法包装的物理字母按键事件中还原大写字母（如 KeyI -> 'I'）
+ * Windows 中文输入法在输入框聚焦但未组字时按下 Ctrl+I 等组合键，可能上报 keyCode=229 与 key='Process'/'Unidentified'。
+ */
+function extractExplicitModifiedLetterFromCode(event) {
+  if (!event || typeof event !== 'object') return ''
+  if (event.isComposing || event.target?.composing === true) return ''
+  if (!(event.ctrlKey || event.metaKey)) return ''
+  if (event.key && event.key !== 'Process' && event.key !== 'Unidentified') return ''
+  if (typeof event.code !== 'string') return ''
+  const match = /^Key([A-Z])$/.exec(event.code)
+  return match ? match[1] : ''
+}
+
+/**
  * 输入法正在组字（中文拼音候选框打开时按 Enter/空格/方向键是给输入法用的），这类按键一律不当快捷键
  */
 export function isComposingEvent(event) {
-  // 229 覆盖确认阶段的兼容事件，composing 复用 Vue v-model 的组合输入状态
-  return Boolean(event && (event.isComposing || event.keyCode === 229 || event.target?.composing === true))
+  if (!event || typeof event !== 'object') return false
+  if (event.isComposing || event.target?.composing === true) return true
+  // 229 覆盖确认阶段的兼容事件，但放行非组字态下显式携带 Ctrl/Cmd 的逗号或物理字母快捷键
+  if (event.keyCode === 229) {
+    return !isExplicitModifiedCommaKey(event) && !extractExplicitModifiedLetterFromCode(event)
+  }
+  return false
 }
 
 /**
@@ -96,6 +139,63 @@ export function isInputElement(target) {
     tagName === 'TEXTAREA' ||
     Boolean(target.isContentEditable)
   )
+}
+
+const INPUT_PROTECTED_KEYS = new Set([
+  'ArrowLeft',
+  'ArrowRight',
+  'Home',
+  'End',
+  'PageUp',
+  'PageDown',
+  'Delete',
+  'Backspace',
+  ' '
+])
+
+/**
+ * 判断输入框内的按键是否属于原生光标移动/选区/文本删除键
+ * 在 PAGE / GLOBAL 作用域中默认让出此类按键，避免输入框改字时触发底层卡片移动或误删插件
+ */
+export function isInputProtectedKey(event) {
+  if (!event || typeof event !== 'object') return false
+  if (event.ctrlKey || event.metaKey || event.altKey) return false
+  if (INPUT_PROTECTED_KEYS.has(event.key) || event.code === 'Space') return true
+  return typeof event.key === 'string' && event.key.length === 1
+}
+
+const INTERACTIVE_ROLES = new Set([
+  'button',
+  'radio',
+  'checkbox',
+  'menuitem',
+  'menuitemcheckbox',
+  'menuitemradio',
+  'tab',
+  'switch',
+  'link'
+])
+
+/**
+ * 判断事件目标是否为当前正获得焦点的独立交互子控件（按钮、复选框、单选胶囊、菜单项等）
+ * @param {EventTarget | null} target
+ * @param {Element | null} [containerRoot] 容器根节点自身（若焦点就在容器壳层上则不算子控件）
+ */
+export function isInteractiveControlTarget(target, containerRoot = null) {
+  if (!target || typeof target !== 'object' || target === containerRoot) return false
+  if (isInputElement(target)) return false
+  const tagName = target.tagName ? String(target.tagName).toUpperCase() : ''
+  if (tagName === 'BUTTON' || tagName === 'SELECT' || tagName === 'SUMMARY') return true
+  if (tagName === 'A' && typeof target.getAttribute === 'function' && target.getAttribute('href') !== null) {
+    return true
+  }
+  const role = typeof target.getAttribute === 'function' ? target.getAttribute('role') : ''
+  if (role && INTERACTIVE_ROLES.has(role.toLowerCase())) return true
+  if (typeof target.closest === 'function') {
+    const ancestorBtn = target.closest('button, a[href], [role="radio"], [role="checkbox"], [role="menuitem"], [role="switch"], [role="tab"]')
+    if (ancestorBtn && ancestorBtn !== containerRoot) return true
+  }
+  return false
 }
 
 /**
@@ -144,13 +244,21 @@ export function dispatchKeyEvent(event) {
 
   const combo = normalizeEventKeyCombo(event)
   const inInput = isInputElement(event.target)
+  const protectInputEdit =
+    inInput && isInputProtectedKey(event)
 
   for (const scope of SCOPE_ORDER) {
     const handlers = registry.get(scope) || []
+    // 输入框内的光标移动、选区与删除键绝不穿透到 PAGE / GLOBAL 页面级网格快捷键
+    if (protectInputEdit && (scope === KEYMAP_SCOPES.PAGE || scope === KEYMAP_SCOPES.GLOBAL)) {
+      continue
+    }
+    let blockedByModal = false
     // 逆序遍历，后注册的优先（LIFO）
     for (let i = handlers.length - 1; i >= 0; i--) {
       const handlerRecord = handlers[i]
       if (!handlerRecord || !handlerRecord.enabled) continue
+      if (handlerRecord.modal) blockedByModal = true
 
       try {
         let handled = false
@@ -182,6 +290,10 @@ export function dispatchKeyEvent(event) {
         console.error(`[Keymap] Error executing handler in scope "${scope}":`, err)
         // 防御性异常隔离，不阻断宿主继续运行
       }
+    }
+    // 若当前作用域存在激活的模态弹层（如 ActionPanelModal / 卡片右键菜单），阻断向底层作用域穿透
+    if (blockedByModal) {
+      return false
     }
   }
 
@@ -236,7 +348,8 @@ export function registerKeyHandler(scope, handler, options = {}) {
   const initialEnabled = options.enabled !== false
   const record = {
     handler,
-    enabled: initialEnabled
+    enabled: initialEnabled,
+    modal: Boolean(options.modal)
   }
   list.push(record)
 
@@ -253,9 +366,9 @@ export function registerKeyHandler(scope, handler, options = {}) {
     if (unregistered) return
     record.enabled = false
   }
-  unregister.activate = () => {
+  unregister.activate = (restoreInitialOnly = false) => {
     if (unregistered) return
-    record.enabled = initialEnabled
+    record.enabled = restoreInitialOnly ? initialEnabled : true
     const idx = list.indexOf(record)
     if (idx !== -1 && idx !== list.length - 1) {
       list.splice(idx, 1)
@@ -273,7 +386,7 @@ export function useKeymap(scope, handler, options = {}) {
   const unregister = registerKeyHandler(scope, handler, options)
   if (getCurrentInstance()) {
     onActivated(() => {
-      unregister.activate()
+      unregister.activate(true)
     })
     onDeactivated(() => {
       unregister.deactivate()

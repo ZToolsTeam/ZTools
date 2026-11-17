@@ -146,9 +146,12 @@ export const BUILTIN_COMMAND_ITEMS = Object.freeze([
     badge: '系统',
     actionLabel: '打开设置',
     faIcon: 'fa-sliders',
-    action: () => {
-      switchWindowMode(WINDOW_MODES.DASHBOARD).catch((err) => console.warn('[useCommandSearch] 切换窗口模式失败:', err))
-      openSettings()
+    action: async () => {
+      const res = await openSettings()
+      if (typeof window === 'undefined' || !window.__ztoolsLauncher?.expandToDashboard) {
+        switchWindowMode(WINDOW_MODES.DASHBOARD).catch((err) => console.warn('[useCommandSearch] 切换窗口模式失败:', err))
+      }
+      return res
     }
   },
   {

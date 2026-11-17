@@ -30,10 +30,19 @@ import { buildLaunchHotkeyMap } from '@/utils/launchHotkeyTargets'
 import { getPluginFeatureHotkeyItemByTrigger } from '@/utils/pluginFeatureHotkeys'
 import { Button } from 'ant-design-vue'
 import { LayoutGridIcon, RocketIcon, StarIcon } from '@lucide/vue'
-import { routeUtils } from '@/router/routes'
+import { routeUtils, ROUTES } from '@/router/routes'
 import { isClientProvidedPlugin } from '@/utils/officialPlugins'
+import { isBundledPlugin } from '@/utils/bundledPlugins'
 import { getHotkeyHostPlatform } from '@/utils/hotkeyRecorder'
-import { useKeymap, KEYMAP_SCOPES, dispatchKeyEvent, isModalOpen } from '@/utils/keymap'
+import { useVisualGridNav } from '@/composables/useVisualGridNav'
+import {
+  useKeymap,
+  registerKeyHandler,
+  KEYMAP_SCOPES,
+  dispatchKeyEvent,
+  isModalOpen,
+  isInteractiveControlTarget
+} from '@/utils/keymap'
 
 // Stores
 const pluginsStore = usePluginsStore()
@@ -121,6 +130,9 @@ const showAllPlugins = ref(Boolean(homeLayoutCache.showAllPlugins)) // 控制"�
 const activeTab = ref(homeLayoutCache.activeTab || 'plugins') // 'plugins' | 'favorites' - 标签切换
 const pinnedList = ref([...homeLayoutCache.pinnedList]) // 响应式固定列表
 const focusedCardIndex = ref(Number(homeLayoutCache.focusedCardIndex) || 0) // 键盘流当前聚焦的卡片索引
+const myPageRootRef = ref(null)
+const isPageActive = ref(true)
+const menuFocusedActionIndex = ref(0)
 
 // Constants
 const MAX_PINNED_COUNT = 8
@@ -258,10 +270,18 @@ function placeholderTileCount(tab) {
   return Math.min(total, gridColumns.value * DEFAULT_ROWS)
 }
 
-// 切换标签时重置展开状态
+// 切换标签时重置展开状态并钳制焦点索引
 function switchTab(tab) {
   activeTab.value = tab
   showAllPlugins.value = false
+  clampFocusedCardIndex()
+}
+
+function toggleShowAllPlugins() {
+  showAllPlugins.value = !showAllPlugins.value
+  if (!showAllPlugins.value) {
+    clampFocusedCardIndex()
+  }
 }
 
 // Computed - 收藏的插件（从 store 独立获取的完整数据）
@@ -328,6 +348,41 @@ const recommendedPlugins = computed(() => {
     .filter((p) => !pluginsStore.installedSet.has(getPluginId(p)))
     .slice(0, 8)
 })
+
+const activeTilePlugins = computed(() => {
+  if (isNewUser.value) return []
+  if (activeTab.value === 'favorites' && favoritesPending.value) return []
+  return displayedPlugins.value
+})
+
+const activeRecentPlugins = computed(() => {
+  if (isNewUser.value) return []
+  return recentPlugins.value
+})
+
+// 统一三区块可导航条目列表：磁贴网格 -> 最近使用 -> 热门推荐
+const navigableItems = computed(() => {
+  const list = []
+  const cols = Math.max(1, Number(gridColumns.value) || 4)
+  for (const plugin of activeTilePlugins.value) {
+    list.push({ plugin, section: 'tiles', cols })
+  }
+  for (const plugin of activeRecentPlugins.value) {
+    list.push({ plugin, section: 'recents', cols: 1 })
+  }
+  for (const plugin of recommendedPlugins.value) {
+    list.push({ plugin, section: 'recommended', cols: 2 })
+  }
+  return list
+})
+
+function recentNavIndex(rIdx) {
+  return activeTilePlugins.value.length + rIdx
+}
+
+function recommendedNavIndex(recIdx) {
+  return activeTilePlugins.value.length + activeRecentPlugins.value.length + recIdx
+}
 
 const pinnedCount = computed(() => {
   return (installedPlugins.value || []).filter((p) => isPinned(getPluginId(p)))
@@ -635,7 +690,11 @@ async function handleOpenPlugin(pluginId) {
     return
   }
   try {
-    await pluginsStore.openPlugin(id)
+    const res = await pluginsStore.openPlugin(id)
+    if (res?.action === 'navigate_to_detail') {
+      toastWarning(res.error || '插件未安装，请重新安装')
+      router.push(routeUtils.toPluginDetails(res.pluginId || id))
+    }
   } catch (e) {
     toastError('启动失败: ' + (e.message || e))
   }
@@ -706,12 +765,25 @@ async function handleToggleFavorite(pluginId) {
   }
 }
 
-// 已安装且非随客户端内置的插件才允许卸载（收藏页中尚未安装的插件不显示卸载）
+// 已安装且非宿主系统内置页的插件允许卸载（随客户端内置的 9 款基础插件引导至设置页假卸载；收藏页中尚未安装的插件不显示卸载）
 function canUninstallPlugin(pluginId) {
-  return Boolean(pluginId) && installedSet.value.has(pluginId) && !isClientProvidedPlugin(pluginId)
+  return (
+    Boolean(pluginId) &&
+    installedSet.value.has(pluginId) &&
+    (isBundledPlugin(pluginId) || !isClientProvidedPlugin(pluginId))
+  )
 }
 
-function handleUninstallPlugin(pluginId) {
+function navigateToBundledManage(pluginId) {
+  if (showMenu.value) hideMenu()
+  info('请在设置中卸载或还原内置插件')
+  router.push({
+    ...ROUTES.ADVANCED_SETTINGS,
+    query: { manageBundled: pluginId }
+  })
+}
+
+function handleUninstallPlugin(pluginId, options = {}) {
   if (!pluginId || !installedSet.value.has(pluginId)) {
     if (showMenu.value) hideMenu()
     return
@@ -720,6 +792,22 @@ function handleUninstallPlugin(pluginId) {
     // 键盘 Delete 触发时菜单并没有打开，不能顺手清掉当前选中的插件
     if (showMenu.value) hideMenu()
     toastError('内置插件随客户端提供，不能卸载')
+    return
+  }
+  if (isBundledPlugin(pluginId)) {
+    if (options.source === 'menu') {
+      navigateToBundledManage(pluginId)
+      return
+    }
+    confirmDialog({
+      title: '前往设置管理内置插件',
+      content: '内置插件随客户端提供，可在设置中卸载隐藏，并支持随时还原。是否前往设置？',
+      okText: '前往设置',
+      cancelText: '取消',
+      onOk() {
+        navigateToBundledManage(pluginId)
+      }
+    })
     return
   }
   confirmDialog({
@@ -734,6 +822,7 @@ function handleUninstallPlugin(pluginId) {
         if (!result?.success) {
           throw new Error(result?.error || result?.message || '未知错误')
         }
+        clampFocusedCardIndex()
         toastSuccess('插件已卸载')
       } catch (e) {
         toastError('卸载失败: ' + (e?.message || e))
@@ -793,6 +882,7 @@ function handlePluginUninstalled(event) {
     saveRecentOrder(nextOrder)
 
     pluginsStore.fetchInstalledPlugins().then(() => {
+      clampFocusedCardIndex()
       // 卸载后推送插件列表、排序、固定到云端
       if (userStore.isLoggedIn) {
         pluginsStore.pushToCloud({
@@ -871,72 +961,341 @@ function hideDragTip() {
   }
 }
 
+const gridNav = useVisualGridNav({
+  focusedIndex: focusedCardIndex,
+  containerRef: myPageRootRef,
+  focusedSelector: '.is-card-focused, .is-recent-focused',
+  getTotalCount: () => navigableItems.value.length,
+  getFallbackColumns: () => Math.max(1, Number(gridColumns.value) || 4),
+  getGroup: (idx) => navigableItems.value[idx]?.section || '',
+  getColumns: (idx) => navigableItems.value[idx]?.cols || 2,
+  onFocusGrid: () => uiStore.focusGrid(),
+  onReachTop: () => {
+    if (typeof window !== 'undefined' && typeof window.__ztoolsFocusHomeSearch === 'function') {
+      window.__ztoolsFocusHomeSearch()
+      uiStore.focusSearch()
+      return true
+    }
+    return false
+  }
+})
+
+function clampFocusedCardIndex() {
+  const totalLen = navigableItems.value.length
+  if (totalLen <= 0) {
+    focusedCardIndex.value = 0
+  } else if (focusedCardIndex.value >= totalLen) {
+    focusedCardIndex.value = totalLen - 1
+  }
+  gridNav.resetAnchor()
+}
+
+function handleNavFocus(idx) {
+  gridNav.setFocusedIndex(idx)
+  uiStore.focusGrid()
+}
+
+watch(
+  () => installedPlugins.value.length,
+  (newLen, oldLen) => {
+    if (oldLen > 0 && newLen < oldLen) {
+      clampFocusedCardIndex()
+    }
+  }
+)
+
 function openCardActionMenu(plugin) {
   if (!plugin) return
   selectedPlugin.value = plugin
-  // 动作面板贴着当前聚焦的磁贴弹出
-  const rect = document.querySelector('.is-card-focused')?.getBoundingClientRect?.()
+  const container = myPageRootRef.value || (typeof document !== 'undefined' ? document : null)
+  const navEl =
+    container?.querySelector?.(`[data-nav-index="${focusedCardIndex.value}"]`) ||
+    (typeof document !== 'undefined' ? document.querySelector('.is-card-focused, .is-recent-focused') : null)
+  const rect = navEl?.getBoundingClientRect?.()
+  const viewportW = (typeof window !== 'undefined' && window.innerWidth) || 1024
+  const viewportH = (typeof window !== 'undefined' && window.innerHeight) || 768
+  const hasRect = Boolean(rect && (rect.width > 0 || rect.height > 0 || rect.left !== 0 || rect.top !== 0))
   menuPosition.value = {
-    x: Math.min(window.innerWidth - 200, rect ? rect.left + 12 : 160),
-    y: Math.min(window.innerHeight - 200, rect ? rect.bottom + 6 : 240)
+    x: Math.max(8, Math.min(viewportW - 200, hasRect ? Math.round(rect.left + 12) : 160)),
+    y: Math.max(8, Math.min(viewportH - 220, hasRect ? Math.round(rect.bottom + 6) : 240))
   }
   showMenu.value = true
 }
 
-function scrollFocusedCardIntoView() {
-  nextTick(() => {
-    const el = document.querySelector('.is-card-focused')
-    el?.scrollIntoView?.({ block: 'nearest', behavior: 'smooth' })
+// 右键快捷菜单动作列表（保持与原 DOM 结构与行为完全一致，同时驱动键盘上下选择与回车执行）
+const contextMenuItems = computed(() => {
+  const plugin = selectedPlugin.value
+  if (!plugin) return []
+  const pid = getPluginId(plugin)
+  if (!pid) return []
+
+  const items = []
+  if (pluginsStore.isRevoked(pid)) {
+    items.push({
+      key: 'revoked',
+      label:
+        pluginsStore.getRevokedKind(pid) === 'platform'
+          ? '不支持当前系统（禁止启动）'
+          : '已下架（禁止启动）',
+      disabled: true,
+      title: pluginsStore.getRevokedReason(pid),
+      style: 'opacity: 0.5; cursor: not-allowed; color: var(--rc-error);'
+    })
+  } else if (installedSet.value.has(pid)) {
+    items.push({
+      key: 'open',
+      label: '打开',
+      disabled: false,
+      action: () => {
+        handleOpenPlugin(pid)
+        hideMenu()
+      }
+    })
+  } else if (downloadingSet.value.has(pid)) {
+    items.push({
+      key: 'downloading',
+      label: '安装中...',
+      disabled: true,
+      style: 'opacity: 0.6; cursor: not-allowed;'
+    })
+  } else {
+    items.push({
+      key: 'install',
+      label: '安装',
+      disabled: false,
+      action: () => {
+        handleDownload(pid)
+        hideMenu()
+      }
+    })
+  }
+
+  items.push({
+    key: 'details',
+    label: '查看详情',
+    disabled: false,
+    action: () => {
+      goDetails(pid)
+      hideMenu()
+    }
   })
+
+  items.push({
+    key: 'favorite',
+    label: pluginsStore.isFavorite(pid) ? '取消收藏' : '收藏',
+    disabled: false,
+    action: () => {
+      handleToggleFavorite(pid)
+      hideMenu()
+    }
+  })
+
+  if (installedSet.value.has(pid)) {
+    items.push({
+      key: 'pin',
+      label: isPinned(pid) ? '取消固定' : '固定到最前',
+      disabled: false,
+      action: () => {
+        togglePin(pid)
+        hideMenu()
+      }
+    })
+  }
+
+  if (canUninstallPlugin(pid)) {
+    items.push({
+      key: 'uninstall',
+      label: '卸载',
+      danger: true,
+      dividerBefore: true,
+      disabled: false,
+      action: () => {
+        handleUninstallPlugin(pid, { source: 'menu' })
+      }
+    })
+  }
+
+  return items
+})
+
+function findFirstEnabledMenuIndex(items) {
+  const idx = items.findIndex((it) => !it.disabled)
+  return idx >= 0 ? idx : 0
+}
+
+function findLastEnabledMenuIndex(items) {
+  for (let i = items.length - 1; i >= 0; i--) {
+    if (!items[i].disabled) return i
+  }
+  return 0
+}
+
+function moveMenuFocus(delta) {
+  const items = contextMenuItems.value
+  const enabledIndices = []
+  for (let i = 0; i < items.length; i++) {
+    if (!items[i].disabled) enabledIndices.push(i)
+  }
+  if (enabledIndices.length === 0) return
+  const curPos = enabledIndices.indexOf(menuFocusedActionIndex.value)
+  if (curPos === -1) {
+    menuFocusedActionIndex.value = delta >= 0 ? enabledIndices[0] : enabledIndices[enabledIndices.length - 1]
+    return
+  }
+  const nextPos = (curPos + delta + enabledIndices.length) % enabledIndices.length
+  menuFocusedActionIndex.value = enabledIndices[nextPos]
+}
+
+// 右键菜单打开时挂载模态键盘作用域（初始停用，随 showMenu && selectedPlugin 动态启停）
+const contextMenuKeymap = registerKeyHandler(
+  KEYMAP_SCOPES.ACTION_PANEL,
+  {
+    'ArrowDown': () => {
+      moveMenuFocus(1)
+      return true
+    },
+    'ArrowUp': () => {
+      moveMenuFocus(-1)
+      return true
+    },
+    'Home': () => {
+      menuFocusedActionIndex.value = findFirstEnabledMenuIndex(contextMenuItems.value)
+      return true
+    },
+    'End': () => {
+      menuFocusedActionIndex.value = findLastEnabledMenuIndex(contextMenuItems.value)
+      return true
+    },
+    'Enter': () => {
+      const item = contextMenuItems.value[menuFocusedActionIndex.value]
+      if (item && !item.disabled && typeof item.action === 'function') {
+        item.action()
+      }
+      return true
+    },
+    'Escape': () => {
+      hideMenu()
+      return true
+    },
+    'Ctrl+K': () => {
+      hideMenu()
+      return true
+    },
+    'Delete': () => {
+      if (selectedPlugin.value) {
+        handleUninstallPlugin(getPluginId(selectedPlugin.value))
+        return true
+      }
+      return false
+    }
+  },
+  { modal: true }
+)
+contextMenuKeymap.deactivate()
+
+watch(
+  () => Boolean(showMenu.value && selectedPlugin.value),
+  (isOpen) => {
+    uiStore.setGlobalActionPanelVisible(isOpen)
+    if (isOpen) {
+      menuFocusedActionIndex.value = findFirstEnabledMenuIndex(contextMenuItems.value)
+      contextMenuKeymap.activate()
+    } else {
+      contextMenuKeymap.deactivate()
+    }
+  }
+)
+
+watch(selectedPlugin, () => {
+  if (showMenu.value && selectedPlugin.value) {
+    menuFocusedActionIndex.value = findFirstEnabledMenuIndex(contextMenuItems.value)
+  }
+})
+
+watch(
+  () => uiStore.actionPanelTriggerSeq,
+  () => {
+    if (!isPageActive.value) return
+    if (showMenu.value) {
+      hideMenu()
+      return
+    }
+    const entry = navigableItems.value[focusedCardIndex.value]
+    if (entry?.plugin) {
+      openCardActionMenu(entry.plugin)
+    }
+  }
+)
+
+function isStandaloneControlOutsideNavItem(target) {
+  return isInteractiveControlTarget(target, myPageRootRef.value) && !target?.closest?.('[data-nav-index]')
+}
+
+function isSubActionControlInsideNavItem(target) {
+  if (!isInteractiveControlTarget(target, myPageRootRef.value)) return false
+  const navItem = target?.closest?.('[data-nav-index]')
+  if (!navItem) return true
+  if (target === navItem) return false
+  if (target?.classList?.contains?.('plugin-tile')) return false
+  return true
+}
+
+function handlePageNavKey(e, key) {
+  if (showMenu.value) return false
+  if (isStandaloneControlOutsideNavItem(e?.target)) return false
+  return gridNav.navigate(key)
+}
+
+function executeFocusedNavEntry(entry) {
+  if (!entry || !entry.plugin) return false
+  const pid = getPluginId(entry.plugin)
+  if (entry.section === 'tiles') {
+    onTileOpen(entry.plugin)
+    return true
+  }
+  if (entry.section === 'recents') {
+    handleOpenPlugin(pid)
+    return true
+  }
+  if (entry.section === 'recommended') {
+    if (installedSet.value.has(pid)) {
+      openApp(pid)
+    } else {
+      goDetails(pid)
+    }
+    return true
+  }
+  return false
 }
 
 // 统一注册页面级键盘流 (PAGE 作用域)
 useKeymap(KEYMAP_SCOPES.PAGE, {
-  'ArrowRight': () => {
-    if (displayedPlugins.value.length === 0) return false
-    focusedCardIndex.value = Math.min(focusedCardIndex.value + 1, displayedPlugins.value.length - 1)
-    uiStore.focusGrid()
-    scrollFocusedCardIntoView()
-    return true
-  },
-  'ArrowLeft': () => {
-    if (displayedPlugins.value.length === 0) return false
-    focusedCardIndex.value = Math.max(focusedCardIndex.value - 1, 0)
-    uiStore.focusGrid()
-    scrollFocusedCardIntoView()
-    return true
-  },
-  'ArrowDown': () => {
-    if (displayedPlugins.value.length === 0) return false
-    focusedCardIndex.value = Math.min(focusedCardIndex.value + gridColumns.value, displayedPlugins.value.length - 1)
-    uiStore.focusGrid()
-    scrollFocusedCardIntoView()
-    return true
-  },
-  'ArrowUp': () => {
-    if (displayedPlugins.value.length === 0) return false
-    focusedCardIndex.value = Math.max(focusedCardIndex.value - gridColumns.value, 0)
-    uiStore.focusGrid()
-    scrollFocusedCardIntoView()
-    return true
-  },
-  'Enter': () => {
+  'ArrowRight': (e) => handlePageNavKey(e, 'ArrowRight'),
+  'ArrowLeft': (e) => handlePageNavKey(e, 'ArrowLeft'),
+  'ArrowDown': (e) => handlePageNavKey(e, 'ArrowDown'),
+  'ArrowUp': (e) => handlePageNavKey(e, 'ArrowUp'),
+  'Home': (e) => handlePageNavKey(e, 'Home'),
+  'End': (e) => handlePageNavKey(e, 'End'),
+  'PageUp': (e) => handlePageNavKey(e, 'PageUp'),
+  'PageDown': (e) => handlePageNavKey(e, 'PageDown'),
+  'Enter': (e) => {
     if (showMenu.value && selectedPlugin.value) {
       handleOpenPlugin(getPluginId(selectedPlugin.value))
       hideMenu()
       return true
     }
-    const cur = displayedPlugins.value[focusedCardIndex.value]
-    if (cur) {
-      onTileOpen(cur)
-      return true
-    }
-    return false
+    if (isSubActionControlInsideNavItem(e?.target)) return false
+    const entry = navigableItems.value[focusedCardIndex.value]
+    return executeFocusedNavEntry(entry)
   },
   'Ctrl+K': () => {
-    const cur = displayedPlugins.value[focusedCardIndex.value]
-    if (cur) {
-      openCardActionMenu(cur)
+    if (showMenu.value) {
+      hideMenu()
+      return true
+    }
+    const entry = navigableItems.value[focusedCardIndex.value]
+    if (entry?.plugin) {
+      openCardActionMenu(entry.plugin)
       return true
     }
     return false
@@ -948,8 +1307,9 @@ useKeymap(KEYMAP_SCOPES.PAGE, {
     }
     return false
   },
-  'Delete': () => {
-    const p = selectedPlugin.value || displayedPlugins.value[focusedCardIndex.value]
+  'Delete': (e) => {
+    if (isStandaloneControlOutsideNavItem(e?.target)) return false
+    const p = selectedPlugin.value || navigableItems.value[focusedCardIndex.value]?.plugin
     if (p) {
       handleUninstallPlugin(getPluginId(p))
       return true
@@ -963,6 +1323,7 @@ function handleKeyDown(event) {
   // 对话框（如卸载确认）打开时，回车 / Delete 只作用于对话框，不再打开或卸载列表里的插件
   if (isModalOpen()) return
   if (dispatchKeyEvent(event)) return
+  if (showMenu.value) return
 
   if (!selectedPlugin.value) return
 
@@ -1037,11 +1398,14 @@ function unbindMyPageWindowListeners() {
 }
 
 onActivated(() => {
+  isPageActive.value = true
   bindMyPageWindowListeners()
 })
 
 onDeactivated(() => {
+  isPageActive.value = false
   hideMenu()
+  contextMenuKeymap.deactivate()
   unbindMyPageWindowListeners()
 })
 
@@ -1097,6 +1461,12 @@ onMounted(async () => {
 })
 
 onUnmounted(() => {
+  isPageActive.value = false
+  if (showMenu.value) {
+    hideMenu()
+    uiStore.setGlobalActionPanelVisible(false)
+  }
+  contextMenuKeymap()
   if (gridObserver) {
     gridObserver.disconnect()
     gridObserver = null
@@ -1119,7 +1489,7 @@ onUnmounted(() => {
 </script>
 
 <template>
-  <div class="my-page">
+  <div ref="myPageRootRef" class="my-page" @mousemove="gridNav.handlePointerMove">
     <!-- 加载状态 -->
     <div v-if="loading" class="loading-container">
       <RcLoading />
@@ -1166,7 +1536,7 @@ onUnmounted(() => {
             type="link"
             size="small"
             style="font-size: 12px; color: var(--rc-text-muted);"
-            @click="showAllPlugins = !showAllPlugins"
+            @click="toggleShowAllPlugins"
           >
             {{ showAllPlugins ? '收起' : `查看全部` }}
           </Button>
@@ -1188,9 +1558,12 @@ onUnmounted(() => {
                 v-for="(plugin, index) in displayedPlugins"
                 :key="getPluginId(plugin)"
                 class="draggable-card"
+                :data-nav-index="index"
+                data-nav-group="tiles"
+                :data-nav-cols="gridColumns"
                 :class="{
                   'is-draggable': activeTab === 'plugins',
-                  'is-card-focused': focusedCardIndex === index,
+                  'is-card-focused': !uiStore.isSearchInputActive && focusedCardIndex === index,
                   'is-drag-over':
                     activeTab === 'plugins' &&
                     dragOverIndex === index &&
@@ -1202,7 +1575,8 @@ onUnmounted(() => {
                     getPluginId(draggingPlugin) === getPluginId(plugin)
                 }"
                 :draggable="activeTab === 'plugins'"
-                @click="focusedCardIndex = index; uiStore.focusGrid()"
+                @click="handleNavFocus(index)"
+                @focusin="handleNavFocus(index)"
                 @dragstart="handleDragStart(plugin, index)"
                 @dragover.prevent="handleDragOver(index)"
                 @dragenter.prevent="handleDragOver(index)"
@@ -1211,7 +1585,7 @@ onUnmounted(() => {
               >
                 <PluginTile
                   :plugin="plugin"
-                  :focused="focusedCardIndex === index"
+                  :focused="!uiStore.isSearchInputActive && focusedCardIndex === index"
                   :pinned="isPinned(getPluginId(plugin))"
                   :revoked="pluginsStore.isRevoked(getPluginId(plugin))"
                   :revokedText="pluginsStore.getRevokedKind(getPluginId(plugin)) === 'platform' ? '不支持当前系统' : '已下架'"
@@ -1255,11 +1629,16 @@ onUnmounted(() => {
         </div>
         <div class="recent-list">
           <button
-            v-for="plugin in recentPlugins"
+            v-for="(plugin, rIdx) in recentPlugins"
             :key="getPluginId(plugin)"
             type="button"
             class="recent-row"
-            @click="handleOpenPlugin(getPluginId(plugin))"
+            :class="{ 'is-recent-focused': !uiStore.isSearchInputActive && focusedCardIndex === recentNavIndex(rIdx) }"
+            :data-nav-index="recentNavIndex(rIdx)"
+            data-nav-group="recents"
+            :data-nav-cols="1"
+            @focusin="handleNavFocus(recentNavIndex(rIdx))"
+            @click="handleNavFocus(recentNavIndex(rIdx)); handleOpenPlugin(getPluginId(plugin))"
             @contextmenu.prevent="showPluginMenu(plugin, $event)"
           >
             <RcSquircle
@@ -1283,22 +1662,32 @@ onUnmounted(() => {
       <section v-if="recommendedPlugins.length > 0" class="plugin-section">
         <h2 class="section-title">热门推荐</h2>
         <div class="plugin-grid-3d">
-          <PluginCard3D
-            v-for="plugin in recommendedPlugins"
+          <div
+            v-for="(plugin, recIdx) in recommendedPlugins"
             :key="getPluginId(plugin)"
-            :plugin="plugin"
-            :showFavorite="true"
-            :isFavorite="pluginsStore.isFavorite(getPluginId(plugin))"
-            :isInstalled="installedSet.has(getPluginId(plugin))"
-            :downloading="downloadingSet.has(getPluginId(plugin))"
-            :installFailed="installFailedSet.has(getPluginId(plugin))"
-            :updateInfo="updateMap[getPluginId(plugin)]"
-            @toggle-favorite="handleToggleFavorite"
-            @open="goDetails"
-            @open-app="openApp"
-            @download="handleDownload"
-            @plugin-updated="onPluginUpdated"
-          />
+            class="recommended-card-wrap"
+            :class="{ 'is-card-focused': !uiStore.isSearchInputActive && focusedCardIndex === recommendedNavIndex(recIdx) }"
+            :data-nav-index="recommendedNavIndex(recIdx)"
+            data-nav-group="recommended"
+            :data-nav-cols="2"
+            @click="handleNavFocus(recommendedNavIndex(recIdx))"
+            @focusin="handleNavFocus(recommendedNavIndex(recIdx))"
+          >
+            <PluginCard3D
+              :plugin="plugin"
+              :showFavorite="true"
+              :isFavorite="pluginsStore.isFavorite(getPluginId(plugin))"
+              :isInstalled="installedSet.has(getPluginId(plugin))"
+              :downloading="downloadingSet.has(getPluginId(plugin))"
+              :installFailed="installFailedSet.has(getPluginId(plugin))"
+              :updateInfo="updateMap[getPluginId(plugin)]"
+              @toggle-favorite="handleToggleFavorite"
+              @open="goDetails"
+              @open-app="openApp"
+              @download="handleDownload"
+              @plugin-updated="onPluginUpdated"
+            />
+          </div>
         </div>
       </section>
 
@@ -1316,68 +1705,27 @@ onUnmounted(() => {
       <div
         v-if="showMenu && selectedPlugin"
         class="context-menu"
+        role="menu"
         :style="{ top: menuPosition.y + 'px', left: menuPosition.x + 'px' }"
+        @click.stop
       >
-        <div
-          v-if="pluginsStore.isRevoked(getPluginId(selectedPlugin))"
-          class="menu-item disabled"
-          style="opacity: 0.5; cursor: not-allowed; color: var(--rc-error);"
-          :title="pluginsStore.getRevokedReason(getPluginId(selectedPlugin))"
-        >
-          {{ pluginsStore.getRevokedKind(getPluginId(selectedPlugin)) === 'platform' ? '不支持当前系统（禁止启动）' : '已下架（禁止启动）' }}
-        </div>
-        <div
-          v-else-if="installedSet.has(getPluginId(selectedPlugin))"
-          class="menu-item"
-          @click="handleOpenPlugin(getPluginId(selectedPlugin))"
-        >
-          打开
-        </div>
-        <div
-          v-else-if="downloadingSet.has(getPluginId(selectedPlugin))"
-          class="menu-item disabled"
-          style="opacity: 0.6; cursor: not-allowed;"
-        >
-          安装中...
-        </div>
-        <div
-          v-else
-          class="menu-item"
-          @click="handleDownload(getPluginId(selectedPlugin)); hideMenu()"
-        >
-          安装
-        </div>
-        <div class="menu-item" @click="goDetails(getPluginId(selectedPlugin)); hideMenu()">
-          查看详情
-        </div>
-        <div
-          class="menu-item"
-          @click="handleToggleFavorite(getPluginId(selectedPlugin))"
-        >
-          {{
-            pluginsStore.isFavorite(getPluginId(selectedPlugin))
-              ? '取消收藏'
-              : '收藏'
-          }}
-        </div>
-        <div
-          v-if="installedSet.has(getPluginId(selectedPlugin))"
-          class="menu-item"
-          @click="togglePin(getPluginId(selectedPlugin))"
-        >
-          {{
-            isPinned(getPluginId(selectedPlugin))
-              ? '取消固定'
-              : '固定到最前'
-          }}
-        </div>
-        <template v-if="canUninstallPlugin(getPluginId(selectedPlugin))">
-          <div class="menu-divider"></div>
+        <template v-for="(item, idx) in contextMenuItems" :key="item.key">
+          <div v-if="item.dividerBefore" class="menu-divider"></div>
           <div
-            class="menu-item danger"
-            @click="handleUninstallPlugin(getPluginId(selectedPlugin))"
+            class="menu-item"
+            :class="{
+              disabled: item.disabled,
+              danger: item.danger,
+              'is-selected': !item.disabled && menuFocusedActionIndex === idx
+            }"
+            :style="item.style"
+            :title="item.title"
+            role="menuitem"
+            :aria-disabled="item.disabled ? 'true' : undefined"
+            @mouseenter="!item.disabled && (menuFocusedActionIndex = idx)"
+            @click="!item.disabled && item.action?.()"
           >
-            卸载
+            {{ item.label }}
           </div>
         </template>
       </div>
@@ -1583,12 +1931,16 @@ onUnmounted(() => {
   transition: opacity 0.15s ease;
 }
 
-/* 「打开 ↵」只跟随键盘焦点出现；鼠标悬停时回车打开的是网格里聚焦的卡片，这里不能同时提示 */
-.recent-row:focus-visible .recent-open {
+/* 「打开 Enter」跟随键盘聚焦行展示，避免与顶栏搜索框或悬停态同时双亮 */
+.recent-row.is-recent-focused .recent-open {
   opacity: 1;
 }
 
 .recent-row:focus-visible {
+  outline: none;
+}
+
+.recent-row.is-recent-focused {
   outline: none;
   background: var(--rc-surface-active);
 }
@@ -1675,15 +2027,21 @@ onUnmounted(() => {
   font-size: 13px;
 }
 
-.menu-item:hover {
+.menu-item:hover,
+.menu-item.is-selected {
   background-color: var(--rc-surface-hover);
+}
+
+.menu-item.is-selected {
+  background-color: var(--rc-surface-active);
 }
 
 .menu-item.danger {
   color: var(--rc-error);
 }
 
-.menu-item.danger:hover {
+.menu-item.danger:hover,
+.menu-item.danger.is-selected {
   background-color: var(--rc-error-subtle);
 }
 
@@ -1713,7 +2071,9 @@ onUnmounted(() => {
   border-radius: var(--rc-radius-lg, 12px);
 }
 
+.plugin-grid-3d .is-card-focused,
 .is-card-focused:not(.draggable-card) {
+  border-radius: var(--rc-radius-lg, 12px);
   box-shadow: var(--rc-focus-ring);
 }
 

@@ -15,6 +15,12 @@
 
 import test from 'node:test'
 import assert from 'node:assert/strict'
+import { createTempDirTracker } from './helpers/temp-dir.mjs'
+
+const tmpTracker = createTempDirTracker()
+test.after(() => {
+  tmpTracker.cleanupAll()
+})
 
 import * as DeclarativeUI from '../packages/declarative-ui/dist/index.js'
 // 顶层 terminateProcess 是 SDK 的宿主接口（按 pid 调用）；kill-process 示例自带的带关键进程保护的同名函数从示例路径引用
@@ -873,11 +879,15 @@ test('Gate-2: Electron 主进程 macOS 原生服务层（file-indexer, navigatio
   assert.equal(winClick.success, false)
   assert.match(winClick.error, /unsupported/)
 
-  // 3. ScriptCommandsService: scanScripts & commands Map
-  const os = await import('node:os')
-  const scriptSvc = new ScriptCommandsService({ dataRoot: os.tmpdir() })
-  await scriptSvc.scanScripts()
-  assert.ok(scriptSvc.commands instanceof Map)
+  // 3. ScriptCommandsService: scanScripts & commands Map（使用独立临时目录，避免在系统临时根目录下遗留 scripts 目录）
+  const scriptDataRoot = tmpTracker.mkdtemp('ztools-macos-scripts-')
+  try {
+    const scriptSvc = new ScriptCommandsService({ dataRoot: scriptDataRoot })
+    await scriptSvc.scanScripts()
+    assert.ok(scriptSvc.commands instanceof Map)
+  } finally {
+    tmpTracker.remove(scriptDataRoot)
+  }
 
   // 4. DictionaryService: speakWord rejects empty input
   const dictSvc = new DictionaryService()

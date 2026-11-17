@@ -30,6 +30,7 @@ const isFocused = ref(false)
 const hintDismissed = ref(false)
 const isDropdownOpen = ref(false)
 const activeIndex = ref(0)
+let blurCloseTimer = null
 
 const {
   query: searchQuery,
@@ -99,13 +100,29 @@ watch(
   }
 )
 
+const clearBlurCloseTimer = () => {
+  if (blurCloseTimer !== null) {
+    clearTimeout(blurCloseTimer)
+    blurCloseTimer = null
+  }
+}
+
+const blurInput = () => {
+  inputRef.value?.blur?.()
+  inputRef.value?.input?.blur?.()
+  isFocused.value = false
+  uiStore.setSearchInputActive(false)
+}
+
 const handleEnter = () => {
   isDropdownOpen.value = false
   emit('search', localValue.value)
 }
 
 const onFocus = () => {
+  clearBlurCloseTimer()
   isFocused.value = true
+  uiStore.setSearchInputActive(true)
   uiStore.focusSearch()
   if (localValue.value && localValue.value.trim()) {
     isDropdownOpen.value = true
@@ -114,11 +131,19 @@ const onFocus = () => {
 
 const onBlur = () => {
   isFocused.value = false
+  uiStore.setSearchInputActive(false)
   // 延时关闭以允许点击候选条目
-  setTimeout(() => {
+  clearBlurCloseTimer()
+  blurCloseTimer = setTimeout(() => {
+    blurCloseTimer = null
     isDropdownOpen.value = false
   }, 220)
 }
+
+onUnmounted(() => {
+  clearBlurCloseTimer()
+  uiStore.setSearchInputActive(false)
+})
 
 const tryGeekLauncher = () => {
   hintDismissed.value = true
@@ -194,8 +219,16 @@ useKeymap(KEYMAP_SCOPES.GLOBAL, {
 
 useKeymap(KEYMAP_SCOPES.SEARCH, {
   'ArrowDown': () => {
-    if (!isFocused.value || !isDropdownOpen.value || candidateCommands.value.length === 0) return false
-    activeIndex.value = (activeIndex.value + 1) % candidateCommands.value.length
+    if (!isFocused.value) return false
+    if (isDropdownOpen.value && candidateCommands.value.length > 0) {
+      activeIndex.value = (activeIndex.value + 1) % candidateCommands.value.length
+      return true
+    }
+    // 下拉未展开时按 ↓ 将唯一焦点光环顺畅移交给下方卡片网格
+    hintDismissed.value = true
+    isDropdownOpen.value = false
+    blurInput()
+    uiStore.focusGrid()
     return true
   },
   'ArrowUp': () => {
@@ -203,21 +236,43 @@ useKeymap(KEYMAP_SCOPES.SEARCH, {
     activeIndex.value = (activeIndex.value - 1 + candidateCommands.value.length) % candidateCommands.value.length
     return true
   },
+  'Home': () => {
+    if (!isFocused.value || !isDropdownOpen.value || candidateCommands.value.length === 0) return false
+    activeIndex.value = 0
+    return true
+  },
+  'End': () => {
+    if (!isFocused.value || !isDropdownOpen.value || candidateCommands.value.length === 0) return false
+    activeIndex.value = candidateCommands.value.length - 1
+    return true
+  },
   'Enter': () => {
-    if (isFocused.value && isDropdownOpen.value && candidateCommands.value[activeIndex.value]) {
+    if (!isFocused.value) return false
+    if (isDropdownOpen.value && candidateCommands.value.length > 0 && candidateCommands.value[activeIndex.value]) {
       executeCandidate(candidateCommands.value[activeIndex.value])
       return true
     }
-    return false
+    // 下拉未展开但搜索框聚焦时拦截 Enter 执行市场搜索，防止穿透到 PAGE 误打开底层卡片
+    handleEnter()
+    return true
   },
   'Escape': () => {
-    if (isFocused.value && isDropdownOpen.value) {
+    if (!isFocused.value) return false
+    if (isDropdownOpen.value && candidateCommands.value.length > 0) {
       isDropdownOpen.value = false
+      blurInput()
       uiStore.focusGrid()
-      inputRef.value?.blur?.()
       return true
     }
-    return false
+    if (localValue.value) {
+      localValue.value = ''
+      isDropdownOpen.value = false
+      return true
+    }
+    isDropdownOpen.value = false
+    blurInput()
+    uiStore.focusGrid()
+    return true
   }
 })
 

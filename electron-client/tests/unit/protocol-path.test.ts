@@ -14,15 +14,17 @@ import {
   pluginSessionPartition
 } from '../../src/main/windows/plugin-session-manager.js'
 
-test('resolveSafeFile accepts an existing file under root', async () => {
+test('resolveSafeFile accepts an existing file under root', async (t) => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'ztools-protocol-'))
+  t.after(() => fs.rm(root, { recursive: true, force: true, maxRetries: 3, retryDelay: 50 }))
   const target = path.join(root, 'index.html')
   await fs.writeFile(target, 'ok')
   assert.equal(await resolveSafeFile(root, '/index.html'), await fs.realpath(target))
 })
 
-test('resolveSafeFile rejects traversal and double encoding', async () => {
+test('resolveSafeFile rejects traversal and double encoding', async (t) => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'ztools-protocol-'))
+  t.after(() => fs.rm(root, { recursive: true, force: true, maxRetries: 3, retryDelay: 50 }))
   await assert.rejects(resolveSafeFile(root, '/../outside.txt'))
   await assert.rejects(resolveSafeFile(root, '/%252e%252e/outside.txt'))
   await assert.rejects(resolveSafeFile(root, '/C%3A/Windows/win.ini'))

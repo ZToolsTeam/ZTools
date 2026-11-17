@@ -193,7 +193,10 @@ function onMoreClick(event) {
   opacity: 1;
 }
 
-.plugin-tile:focus-visible,
+.plugin-tile:focus-visible {
+  outline: none;
+}
+
 .plugin-tile.is-focused {
   outline: none;
   border-color: transparent;

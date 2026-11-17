@@ -133,6 +133,21 @@ export function ensureSubprojectDependencies({
     log
   })
 
+  // 确保前端未纳入 Git 跟踪的内置插件生成配置就绪（供根级测试或外部脚本直接 import）
+  const syncBundledScript = path.join(rootDir, 'frontend', 'scripts', 'sync-bundled-plugins.mjs')
+  const generatedBundledConfig = path.join(rootDir, 'frontend', 'src', 'config', 'bundledPlugins.generated.js')
+  if (fs.existsSync(syncBundledScript) && !fs.existsSync(generatedBundledConfig)) {
+    const syncRes = runner(process.execPath, [syncBundledScript, '--ensure'], {
+      cwd: path.join(rootDir, 'frontend'),
+      env,
+      stdio: 'inherit'
+    })
+    if (syncRes?.error) throw syncRes.error
+    if ((syncRes?.status ?? 1) !== 0) {
+      throw new Error(`生成内置插件索引配置失败（退出码 ${syncRes?.status ?? 1}）`)
+    }
+  }
+
   return { installed }
 }
 

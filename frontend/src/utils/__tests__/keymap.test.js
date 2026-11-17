@@ -1,11 +1,15 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import {
   KEYMAP_SCOPES,
+  OPEN_SETTINGS_SHORTCUT,
   registerKeyHandler,
   dispatchKeyEvent,
   normalizeEventKeyCombo,
+  isComposingEvent,
   _resetKeymapForTesting,
   isInputElement,
+  isInputProtectedKey,
+  isInteractiveControlTarget,
   isModalOpen
 } from '../keymap.js'
 
@@ -262,6 +266,261 @@ describe('keymap 统一快捷键分发器测试套件', () => {
       expect(onKey).toHaveBeenCalledTimes(1)
       dispatchKeyEvent(new KeyboardEvent('keydown', { key: 'a' }))
       expect(onKey).toHaveBeenCalledTimes(2)
+    })
+
+    it('[中文输入法兼容] 全角逗号与非组字 IME 229/Process 物理 Comma 键均命中 Ctrl+,，组字中与 Shift/国际键盘不误判', () => {
+      const openSettingsHandler = vi.fn(() => true)
+      registerKeyHandler(KEYMAP_SCOPES.GLOBAL, { 'Ctrl+,': openSettingsHandler })
+
+      // 1. 中文全角逗号 Ctrl+， / Cmd+，
+      const fullWidthCtrl = new KeyboardEvent('keydown', { key: '，', code: 'Comma', ctrlKey: true, cancelable: true })
+      expect(dispatchKeyEvent(fullWidthCtrl)).toBe(true)
+      expect(fullWidthCtrl.defaultPrevented).toBe(true)
+      expect(openSettingsHandler).toHaveBeenCalledTimes(1)
+
+      const fullWidthMeta = new KeyboardEvent('keydown', { key: '，', metaKey: true, cancelable: true })
+      expect(dispatchKeyEvent(fullWidthMeta)).toBe(true)
+      expect(openSettingsHandler).toHaveBeenCalledTimes(2)
+
+      // 2. Windows 中文输入法未组字态上报 keyCode=229 + key='Process' + code='Comma'
+      const imeWrapped = new KeyboardEvent('keydown', {
+        key: 'Process',
+        code: 'Comma',
+        ctrlKey: true,
+        isComposing: false,
+        cancelable: true
+      })
+      Object.defineProperty(imeWrapped, 'keyCode', { value: 229 })
+      expect(dispatchKeyEvent(imeWrapped)).toBe(true)
+      expect(imeWrapped.defaultPrevented).toBe(true)
+      expect(openSettingsHandler).toHaveBeenCalledTimes(3)
+
+      // 3. [异常/边界] 正在拼音组字（isComposing: true 或 target.composing: true）时绝不误触发且不打断输入法
+      const activeComposing = new KeyboardEvent('keydown', {
+        key: 'Process',
+        code: 'Comma',
+        ctrlKey: true,
+        isComposing: true,
+        cancelable: true
+      })
+      Object.defineProperty(activeComposing, 'keyCode', { value: 229 })
+      expect(dispatchKeyEvent(activeComposing)).toBe(false)
+      expect(activeComposing.defaultPrevented).toBe(false)
+
+      const targetComposingEvt = {
+        key: '，',
+        code: 'Comma',
+        ctrlKey: true,
+        target: { tagName: 'INPUT', composing: true },
+        preventDefault: vi.fn(),
+        stopPropagation: vi.fn()
+      }
+      expect(dispatchKeyEvent(targetComposingEvt)).toBe(false)
+      expect(targetComposingEvt.preventDefault).not.toHaveBeenCalled()
+
+      // 4. [边界] Shift 修饰（Ctrl+Shift+,）与国际键盘（法文 AZERTY code=Comma 输出 ';'）不误判为 Ctrl+,
+      expect(normalizeEventKeyCombo({ key: '<', code: 'Comma', ctrlKey: true, shiftKey: true })).toBe('Ctrl+Shift+<')
+      expect(normalizeEventKeyCombo({ key: ';', code: 'Comma', ctrlKey: true })).toBe('Ctrl+;')
+      expect(normalizeEventKeyCombo(null)).toBe('')
+      expect(normalizeEventKeyCombo(undefined)).toBe('')
+      expect(openSettingsHandler).toHaveBeenCalledTimes(3)
+    })
+
+    it('[打开设置单一信源与中文输入法字母键兼容] OPEN_SETTINGS_SHORTCUT 为 Ctrl+I，非组字 IME 229/KeyI 命中 Ctrl+I，组字中与 Ctrl+Shift+I 绝不误触', () => {
+      expect(OPEN_SETTINGS_SHORTCUT).toBe('Ctrl+I')
+
+      const openSettingsHandler = vi.fn(() => true)
+      registerKeyHandler(KEYMAP_SCOPES.GLOBAL, { [OPEN_SETTINGS_SHORTCUT]: openSettingsHandler })
+
+      // 1. 常规 Ctrl+i / Cmd+I
+      const normalCtrl = new KeyboardEvent('keydown', { key: 'i', code: 'KeyI', ctrlKey: true, cancelable: true })
+      expect(dispatchKeyEvent(normalCtrl)).toBe(true)
+      expect(normalCtrl.defaultPrevented).toBe(true)
+      expect(openSettingsHandler).toHaveBeenCalledTimes(1)
+
+      const normalMeta = new KeyboardEvent('keydown', { key: 'I', code: 'KeyI', metaKey: true, cancelable: true })
+      expect(dispatchKeyEvent(normalMeta)).toBe(true)
+      expect(openSettingsHandler).toHaveBeenCalledTimes(2)
+
+      // 2. Windows 中文输入法激活但未组字时上报 keyCode=229 + key='Process'/'Unidentified'/'' + code='KeyI'
+      for (const placeholderKey of ['Process', 'Unidentified', '']) {
+        const imeLetterEvt = new KeyboardEvent('keydown', {
+          key: placeholderKey,
+          code: 'KeyI',
+          ctrlKey: true,
+          isComposing: false,
+          cancelable: true
+        })
+        Object.defineProperty(imeLetterEvt, 'keyCode', { value: 229 })
+        expect(isComposingEvent(imeLetterEvt)).toBe(false)
+        expect(normalizeEventKeyCombo(imeLetterEvt)).toBe('Ctrl+I')
+        expect(dispatchKeyEvent(imeLetterEvt)).toBe(true)
+        expect(imeLetterEvt.defaultPrevented).toBe(true)
+      }
+      expect(openSettingsHandler).toHaveBeenCalledTimes(5)
+
+      // 3. [异常/边界] 正在拼音组字（isComposing: true 或 target.composing: true）或无修饰键 229 时绝不误触
+      const activeComposing = new KeyboardEvent('keydown', {
+        key: 'Process',
+        code: 'KeyI',
+        ctrlKey: true,
+        isComposing: true,
+        cancelable: true
+      })
+      Object.defineProperty(activeComposing, 'keyCode', { value: 229 })
+      expect(isComposingEvent(activeComposing)).toBe(true)
+      expect(normalizeEventKeyCombo(activeComposing)).toBe('')
+      expect(dispatchKeyEvent(activeComposing)).toBe(false)
+      expect(activeComposing.defaultPrevented).toBe(false)
+
+      const targetComposingEvt = {
+        keyCode: 229,
+        key: 'Process',
+        code: 'KeyI',
+        ctrlKey: true,
+        target: { tagName: 'INPUT', composing: true },
+        preventDefault: vi.fn(),
+        stopPropagation: vi.fn()
+      }
+      expect(isComposingEvent(targetComposingEvt)).toBe(true)
+      expect(dispatchKeyEvent(targetComposingEvt)).toBe(false)
+      expect(targetComposingEvt.preventDefault).not.toHaveBeenCalled()
+
+      const bareImeKey = new KeyboardEvent('keydown', {
+        key: 'Process',
+        code: 'KeyI',
+        isComposing: false,
+        cancelable: true
+      })
+      Object.defineProperty(bareImeKey, 'keyCode', { value: 229 })
+      expect(isComposingEvent(bareImeKey)).toBe(true)
+      expect(dispatchKeyEvent(bareImeKey)).toBe(false)
+
+      // 4. [边界] Ctrl+Shift+I（常规与 IME 229）均归一化为 Ctrl+Shift+I，绝不误触 Ctrl+I；非 IME 占位键保留原布局字符
+      const ctrlShiftI = new KeyboardEvent('keydown', {
+        key: 'I',
+        code: 'KeyI',
+        ctrlKey: true,
+        shiftKey: true,
+        cancelable: true
+      })
+      expect(normalizeEventKeyCombo(ctrlShiftI)).toBe('Ctrl+Shift+I')
+      expect(dispatchKeyEvent(ctrlShiftI)).toBe(false)
+
+      const imeCtrlShiftI = new KeyboardEvent('keydown', {
+        key: 'Process',
+        code: 'KeyI',
+        ctrlKey: true,
+        shiftKey: true,
+        isComposing: false,
+        cancelable: true
+      })
+      Object.defineProperty(imeCtrlShiftI, 'keyCode', { value: 229 })
+      expect(normalizeEventKeyCombo(imeCtrlShiftI)).toBe('Ctrl+Shift+I')
+      expect(dispatchKeyEvent(imeCtrlShiftI)).toBe(false)
+
+      expect(normalizeEventKeyCombo({ key: 'c', code: 'KeyI', ctrlKey: true })).toBe('Ctrl+C')
+      expect(openSettingsHandler).toHaveBeenCalledTimes(5)
+    })
+  })
+
+  describe('输入框光标导航保护、模态弹层阻断与交互子控件识别', () => {
+    it('输入框聚焦时 ← / → / Delete / Backspace / Home / End 绝不穿透至 PAGE/GLOBAL 劫持光标或误删插件', () => {
+      const pageLeft = vi.fn(() => true)
+      const pageDelete = vi.fn(() => true)
+      const searchDown = vi.fn(() => true)
+      const globalCtrlI = vi.fn(() => true)
+
+      registerKeyHandler(KEYMAP_SCOPES.SEARCH, { ArrowDown: searchDown })
+      registerKeyHandler(KEYMAP_SCOPES.PAGE, {
+        ArrowLeft: pageLeft,
+        ArrowRight: pageLeft,
+        Delete: pageDelete,
+        Home: pageLeft,
+        End: pageLeft
+      })
+      registerKeyHandler(KEYMAP_SCOPES.GLOBAL, { 'Ctrl+I': globalCtrlI })
+
+      const input = document.createElement('input')
+      document.body.appendChild(input)
+      try {
+        for (const key of ['ArrowLeft', 'ArrowRight', 'Delete', 'Backspace', 'Home', 'End', 'a']) {
+          const ev = new KeyboardEvent('keydown', { key, bubbles: true, cancelable: true })
+          Object.defineProperty(ev, 'target', { value: input })
+          expect(isInputProtectedKey(ev)).toBe(true)
+          expect(dispatchKeyEvent(ev)).toBe(false)
+          expect(ev.defaultPrevented).toBe(false)
+        }
+        expect(pageLeft).not.toHaveBeenCalled()
+        expect(pageDelete).not.toHaveBeenCalled()
+
+        // SEARCH 作用域的 ArrowDown 与带修饰键的 Ctrl+I 仍照常生效
+        const downEv = new KeyboardEvent('keydown', { key: 'ArrowDown', bubbles: true, cancelable: true })
+        Object.defineProperty(downEv, 'target', { value: input })
+        expect(dispatchKeyEvent(downEv)).toBe(true)
+        expect(searchDown).toHaveBeenCalledTimes(1)
+
+        const ctrlIEv = new KeyboardEvent('keydown', { key: 'i', ctrlKey: true, bubbles: true, cancelable: true })
+        Object.defineProperty(ctrlIEv, 'target', { value: input })
+        expect(dispatchKeyEvent(ctrlIEv)).toBe(true)
+        expect(globalCtrlI).toHaveBeenCalledTimes(1)
+      } finally {
+        input.remove()
+      }
+    })
+
+    it('ACTION_PANEL 开启 modal: true 时，未命中的按键既不 preventDefault 也不穿透到下层作用域', () => {
+      const pageDown = vi.fn(() => true)
+      const globalOpenSettings = vi.fn(() => true)
+      registerKeyHandler(KEYMAP_SCOPES.PAGE, { ArrowDown: pageDown })
+      registerKeyHandler(KEYMAP_SCOPES.GLOBAL, { 'Ctrl+I': globalOpenSettings })
+
+      const unregisterModal = registerKeyHandler(
+        KEYMAP_SCOPES.ACTION_PANEL,
+        {
+          ArrowDown: () => true
+        },
+        { modal: true }
+      )
+
+      // 命中的 ArrowDown 由模态层消费
+      const downEv = new KeyboardEvent('keydown', { key: 'ArrowDown', cancelable: true })
+      expect(dispatchKeyEvent(downEv)).toBe(true)
+      expect(pageDown).not.toHaveBeenCalled()
+
+      // 未命中的 Ctrl+I 与单字符输入被 modal 阻断向 PAGE/GLOBAL 穿透，同时不 preventDefault 保证面板搜索框能打字
+      const ctrlIEv = new KeyboardEvent('keydown', { key: 'i', ctrlKey: true, cancelable: true })
+      expect(dispatchKeyEvent(ctrlIEv)).toBe(false)
+      expect(ctrlIEv.defaultPrevented).toBe(false)
+      expect(globalOpenSettings).not.toHaveBeenCalled()
+
+      const charEv = new KeyboardEvent('keydown', { key: 'x', cancelable: true })
+      expect(dispatchKeyEvent(charEv)).toBe(false)
+      expect(charEv.defaultPrevented).toBe(false)
+
+      // 关闭模态层后恢复下层响应
+      unregisterModal.deactivate()
+      expect(dispatchKeyEvent(new KeyboardEvent('keydown', { key: 'i', ctrlKey: true, cancelable: true }))).toBe(true)
+      expect(globalOpenSettings).toHaveBeenCalledTimes(1)
+    })
+
+    it('isInteractiveControlTarget 准确识别按钮/复选框/单选胶囊并排除根容器与输入框', () => {
+      const root = document.createElement('div')
+      root.setAttribute('role', 'button')
+      const childBtn = document.createElement('button')
+      const spanInBtn = document.createElement('span')
+      childBtn.appendChild(spanInBtn)
+      const checkboxDiv = document.createElement('div')
+      checkboxDiv.setAttribute('role', 'checkbox')
+      const input = document.createElement('input')
+      root.append(childBtn, checkboxDiv, input)
+
+      expect(isInteractiveControlTarget(null, root)).toBe(false)
+      expect(isInteractiveControlTarget(root, root)).toBe(false)
+      expect(isInteractiveControlTarget(input, root)).toBe(false)
+      expect(isInteractiveControlTarget(childBtn, root)).toBe(true)
+      expect(isInteractiveControlTarget(spanInBtn, root)).toBe(true)
+      expect(isInteractiveControlTarget(checkboxDiv, root)).toBe(true)
     })
   })
 })

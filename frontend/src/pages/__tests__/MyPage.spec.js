@@ -35,6 +35,11 @@ function createTestRouter() {
         path: '/detail/:id',
         name: 'details',
         component: { template: '<div />' }
+      },
+      {
+        path: '/advanced-settings',
+        name: 'advanced-settings',
+        component: { template: '<div />' }
       }
     ]
   })
@@ -573,27 +578,42 @@ describe('MyPage Component', () => {
       expect(toastSpies.toastSuccess).not.toHaveBeenCalled()
     })
 
-    it('内置插件：Delete 不弹卸载确认框，右键菜单里也没有卸载项', async () => {
+    it('内置插件：右键菜单提供卸载并直接跳转设置页；按键盘 Delete 弹出防误触确认框，取消不跳转、确认后跳转设置页', async () => {
       const bundled = { pluginId: 'calculator', name: '计算器' }
       await mountPage({ installedPlugins: [...basePlugins, bundled] })
       Modal.confirm.mockClear()
 
+      let capturedModalOpts = null
+      modalConfirmSpy.mockImplementationOnce((opts) => {
+        capturedModalOpts = opts
+      })
       wrapper.vm.selectedPlugin = bundled
       wrapper.vm.handleKeyDown({ key: 'Delete', ctrlKey: false, preventDefault: vi.fn() })
       await flushPromises()
-      expect(Modal.confirm).not.toHaveBeenCalled()
+      expect(Modal.confirm).toHaveBeenCalledTimes(1)
+      expect(capturedModalOpts?.title).toBe('前往设置管理内置插件')
       expect(pluginsStore.uninstallPlugin).not.toHaveBeenCalled()
-      expect(toastSpies.toastError).toHaveBeenCalledWith('内置插件随客户端提供，不能卸载')
-      expect(wrapper.vm.selectedPlugin).toEqual(bundled)
+      expect(router.currentRoute.value.name).toBe('home')
 
+      capturedModalOpts?.onOk?.()
+      await flushPromises()
+      expect(router.currentRoute.value.name).toBe('advanced-settings')
+      expect(router.currentRoute.value.query.manageBundled).toBe('calculator')
+
+      await router.push('/')
+      Modal.confirm.mockClear()
       wrapper.vm.showPluginMenu(bundled, { preventDefault() {}, clientX: 10, clientY: 10 })
       await flushPromises()
       expect(wrapper.find('.context-menu').exists()).toBe(true)
-      expect(wrapper.find('.context-menu .menu-item.danger').exists()).toBe(false)
-
-      wrapper.vm.showPluginMenu(basePlugins[0], { preventDefault() {}, clientX: 10, clientY: 10 })
+      const dangerItem = wrapper.find('.context-menu .menu-item.danger')
+      expect(dangerItem.exists()).toBe(true)
+      expect(dangerItem.text()).toContain('卸载')
+      await dangerItem.trigger('click')
       await flushPromises()
-      expect(wrapper.find('.context-menu .menu-item.danger').text()).toContain('卸载')
+      expect(Modal.confirm).not.toHaveBeenCalled()
+      expect(pluginsStore.uninstallPlugin).not.toHaveBeenCalled()
+      expect(router.currentRoute.value.name).toBe('advanced-settings')
+      expect(router.currentRoute.value.query.manageBundled).toBe('calculator')
     })
 
     it('插件市场分发的官方插件（kill-process）装在插件目录里，可以从“我的”页面卸载', async () => {

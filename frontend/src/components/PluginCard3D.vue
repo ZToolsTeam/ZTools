@@ -1,12 +1,14 @@
 <script setup>
-import { BanIcon, DownloadIcon, RotateCwIcon, ShieldCheckIcon, StarIcon, Trash2Icon, TriangleAlertIcon } from '@lucide/vue'
+import { BanIcon, DownloadIcon, RotateCcwIcon, RotateCwIcon, ShieldCheckIcon, StarIcon, Trash2Icon, TriangleAlertIcon } from '@lucide/vue'
 import { GithubLogo, StarFilledIcon } from '@/utils/appIcons'
 import { computed, ref } from 'vue'
 import { downloadPluginUpdate } from '@/api/apiserver'
 import { usePluginsStore } from '@/stores/plugins'
 import { isCommunityPluginItem, isOfficialPluginItem } from '@/utils/storeCatalogManager'
 import { isOfficialPlugin } from '@/utils/officialPlugins'
+import { isBundledPlugin } from '@/utils/bundledPlugins'
 import { getPluginPlatforms } from '@/utils/platform'
+import { track } from '@edition'
 
 const props = defineProps({
   plugin: { type: Object, required: true },
@@ -29,6 +31,7 @@ const emit = defineEmits([
 
 const pluginsStore = usePluginsStore()
 const isDownloading = computed(() => props.downloading)
+const isBundled = computed(() => isBundledPlugin(props.plugin?.pluginId || props.plugin?.id))
 
 const isRevoked = computed(() =>
   Boolean(props.plugin.revoked || pluginsStore.isRevoked(props.plugin.pluginId))
@@ -105,8 +108,9 @@ const handleUpdate = async (e) => {
   e?.preventDefault()
   if (!hasUpdate.value || !currentUpdateInfo.value || isUpdating.value) return
   const pluginId = props.plugin.pluginId
-  // 通过 store 标记下载中，安装完成事件会自动清除
+  // 通过 store 标记下载中并上报用户发起插件更新，安装完成事件会自动清除状态
   pluginsStore.startDownload(pluginId)
+  track('plugin_update', pluginId)
   try {
     await downloadPluginUpdate(pluginId, currentUpdateInfo.value)
     // downloadPluginUpdate 只是启动了下载，更新完成由 plugin_install_complete 事件驱动
@@ -273,6 +277,16 @@ const { pluginGlyph, fallbackGlyph, displayIconUrl, iconFailed, showImgOverlay, 
             @click.stop="handleActionClick"
           >
             打开
+          </RcButton>
+          <RcButton
+            class="card-action"
+            v-else-if="isBundled"
+            size="xs"
+            variant="secondary"
+            :icon="RotateCcwIcon"
+            @click.stop="handleActionClick"
+          >
+            还原
           </RcButton>
           <RcButton
             class="card-action"

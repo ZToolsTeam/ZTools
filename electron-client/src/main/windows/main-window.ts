@@ -55,61 +55,50 @@ export function suppressWindowsSystemMenu(
   }
 }
 
+/** Windows 原生标题栏控制按钮覆盖层全透明底色：透出渲染层标题栏背景、底部分割线与全屏弹窗遮罩 */
+export const TRANSPARENT_TITLE_BAR_OVERLAY_COLOR = '#00000000'
+
 export type AccentTheme = 'ember' | 'glacier' | 'jade' | 'iris' | 'crimson' | 'mono'
 
 const WINDOW_THEME_PALETTES: Record<AccentTheme, {
   lightCanvas: string
   darkCanvas: string
-  lightHead: string
-  darkHead: string
   lightSymbol: string
   darkSymbol: string
 }> = {
   ember: {
     lightCanvas: '#f4f3f0',
     darkCanvas: '#0b0b0c',
-    lightHead: '#f7f6f3',
-    darkHead: '#0e0e10',
     lightSymbol: '#55555c',
     darkSymbol: '#a0a0a8'
   },
   glacier: {
     lightCanvas: '#f2f5f8',
     darkCanvas: '#0a0d12',
-    lightHead: '#f5f8fb',
-    darkHead: '#0d1117',
     lightSymbol: '#475569',
     darkSymbol: '#94a3b8'
   },
   jade: {
     lightCanvas: '#f1f5f3',
     darkCanvas: '#090e0c',
-    lightHead: '#f4f8f6',
-    darkHead: '#0c1310',
     lightSymbol: '#495a52',
     darkSymbol: '#9ab0a5'
   },
   iris: {
     lightCanvas: '#f4f3f8',
     darkCanvas: '#0b0a10',
-    lightHead: '#f6f5fa',
-    darkHead: '#0f0d16',
     lightSymbol: '#534d69',
     darkSymbol: '#a59fbd'
   },
   crimson: {
     lightCanvas: '#f5f3f4',
     darkCanvas: '#0c0a0b',
-    lightHead: '#f8f6f7',
-    darkHead: '#100d0f',
     lightSymbol: '#574f53',
     darkSymbol: '#aba0a5'
   },
   mono: {
     lightCanvas: '#f4f4f5',
     darkCanvas: '#09090b',
-    lightHead: '#f7f7f8',
-    darkHead: '#0c0c0e',
     lightSymbol: '#52525b',
     darkSymbol: '#a1a1aa'
   }
@@ -140,29 +129,54 @@ export function getTitleBarOverlayOptions(
   accent: AccentTheme = 'ember'
 ): Electron.TitleBarOverlayOptions {
   const palette = WINDOW_THEME_PALETTES[normalizeAccentTheme(accent)]
+  const resolvedHeight =
+    typeof height === 'number' && Number.isFinite(height) && height > 0
+      ? Math.round(height)
+      : MAIN_TITLE_BAR_HEIGHT
   return {
-    // 与 theme.css 的 --rc-head 一致，Windows 窗口控制按钮与标题栏融为一体
-    color: isDark ? palette.darkHead : palette.lightHead,
+    // 使用全透明底色透出 WebContents 标题栏、1px 分割线与弹窗半透明遮罩，避免右上角出现突兀色块
+    color: TRANSPARENT_TITLE_BAR_OVERLAY_COLOR,
     symbolColor: isDark ? palette.darkSymbol : palette.lightSymbol,
-    height
+    height: resolvedHeight
+  }
+}
+
+export interface ThemeControllableWindow {
+  isDestroyed(): boolean
+  setTitleBarOverlay?(options: Electron.TitleBarOverlayOptions): void
+  setBackgroundColor(backgroundColor: string): void
+}
+
+export function updateWindowTheme(
+  window: ThemeControllableWindow,
+  isDark: boolean,
+  accent: AccentTheme = 'ember',
+  titleBarHeight: number = MAIN_TITLE_BAR_HEIGHT,
+  platform: NodeJS.Platform = process.platform
+): void {
+  if (!window || window.isDestroyed()) return
+  const normalized = normalizeAccentTheme(accent)
+  if (platform === 'win32' && typeof window.setTitleBarOverlay === 'function') {
+    try {
+      window.setTitleBarOverlay(getTitleBarOverlayOptions(isDark, titleBarHeight, normalized))
+    } catch (error) {
+      console.warn('更新窗口标题栏覆盖层主题失败:', error)
+    }
+  }
+  try {
+    window.setBackgroundColor(getWindowBackgroundColor(isDark, normalized))
+  } catch (error) {
+    console.warn('更新窗口背景色失败:', error)
   }
 }
 
 export function updateMainWindowTheme(
-  window: BrowserWindow,
+  window: ThemeControllableWindow,
   isDark: boolean,
-  accent: AccentTheme = 'ember'
+  accent: AccentTheme = 'ember',
+  platform: NodeJS.Platform = process.platform
 ): void {
-  if (window.isDestroyed()) return
-  const normalized = normalizeAccentTheme(accent)
-  if (process.platform === 'win32' && typeof window.setTitleBarOverlay === 'function') {
-    try {
-      window.setTitleBarOverlay(getTitleBarOverlayOptions(isDark, MAIN_TITLE_BAR_HEIGHT, normalized))
-    } catch {
-      // 容错处理
-    }
-  }
-  window.setBackgroundColor(getWindowBackgroundColor(isDark, normalized))
+  updateWindowTheme(window, isDark, accent, MAIN_TITLE_BAR_HEIGHT, platform)
 }
 
 export interface MainWindowOptions {

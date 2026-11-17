@@ -47,3 +47,5 @@ design-system/
 .nyc_output/
 public/sdk/ztools-api.js
 public/version.json
+public/bundled-plugins/index.json
+src/config/bundledPlugins.generated.js

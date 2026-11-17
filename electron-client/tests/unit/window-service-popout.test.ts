@@ -6,6 +6,7 @@ import type { CallerIdentity } from '../../src/contracts/capabilities.js'
 import { errorCodes } from '../../src/contracts/errors.js'
 import type { FileSystemService } from '../../src/main/services/file-system-service.js'
 import { extractPopoutKey, requireLocalUrl, WindowService } from '../../src/main/services/window-service.js'
+import { POPOUT_TITLE_BAR_HEIGHT, TRANSPARENT_TITLE_BAR_OVERLAY_COLOR } from '../../src/main/windows/main-window.js'
 import { WindowRegistry } from '../../src/main/windows/window-registry.js'
 
 class FakePopoutWindow extends EventEmitter {
@@ -15,7 +16,10 @@ class FakePopoutWindow extends EventEmitter {
   #focused = false
   #bounds = { x: 120, y: 80, width: 1140, height: 760 }
   loadedUrls: string[] = []
+  overlays: Electron.TitleBarOverlayOptions[] = []
+  backgrounds: string[] = []
   shouldFailLoad = false
+  shouldThrowOverlay = false
   readonly webContents: WebContents
 
   constructor(readonly id: number) {
@@ -85,6 +89,17 @@ class FakePopoutWindow extends EventEmitter {
       throw new Error('Load failed')
     }
     this.loadedUrls.push(url)
+  }
+
+  setTitleBarOverlay(options: Electron.TitleBarOverlayOptions): void {
+    if (this.shouldThrowOverlay) {
+      throw new Error('OVERLAY_UPDATE_FAILED')
+    }
+    this.overlays.push(options)
+  }
+
+  setBackgroundColor(color: string): void {
+    this.backgrounds.push(color)
   }
 
   destroy(): void {
@@ -230,6 +245,64 @@ test('WindowService.open rejects non-main callers, external URLs, and cleans up 
   )
 
   // 6. Cascading destruction on stop()
+  service.stop()
+  for (const win of createdWindows) {
+    assert.equal(win.isDestroyed(), true)
+  }
+})
+
+test('WindowService.updateTheme synchronizes popout transparent titleBarOverlay across rapid switches, destroyed windows, and native errors', async () => {
+  const registry = new WindowRegistry()
+  const createdWindows: FakePopoutWindow[] = []
+  const constructorOptionsList: Electron.BrowserWindowConstructorOptions[] = []
+  let nextId = 300
+
+  const service = new WindowService(
+    {} as FileSystemService,
+    registry,
+    registry,
+    (opts) => {
+      constructorOptionsList.push(opts)
+      const win = new FakePopoutWindow(nextId++)
+      createdWindows.push(win)
+      return win as unknown as BrowserWindow
+    }
+  )
+
+  // 预设冰川蓝浅色主题后打开两个独立窗口
+  service.updateTheme({ isDark: false, accent: 'glacier' }, 'win32')
+  await service.open({ url: 'index.html#/popout/json-formatter' }, mainCaller)
+  await service.open({ url: 'index.html#/popout/disk-analyzer' }, mainCaller)
+  assert.equal(createdWindows.length, 2)
+  assert.equal(constructorOptionsList[0]!.backgroundColor, '#f2f5f8')
+  if (process.platform === 'win32') {
+    assert.deepEqual(constructorOptionsList[0]!.titleBarOverlay, {
+      color: TRANSPARENT_TITLE_BAR_OVERLAY_COLOR,
+      symbolColor: '#475569',
+      height: POPOUT_TITLE_BAR_HEIGHT
+    })
+  }
+
+  // 故障注入：第一个窗口底层 overlay 抛错，第二个窗口正常；同时额外打开第三个窗口并中途销毁
+  await service.open({ url: 'index.html#/popout/kill-process' }, mainCaller)
+  createdWindows[0]!.shouldThrowOverlay = true
+  createdWindows[2]!.destroy()
+
+  // 连续高频切换 20 次亮暗模式与畸形主题输入，验证状态幂等且异常窗口不阻断正常窗口更新
+  for (let i = 0; i < 20; i++) {
+    service.updateTheme({ isDark: i % 2 === 0, accent: i === 19 ? '__invalid__' : 'glacier' }, 'win32')
+  }
+
+  // 第 20 次 (i=19): isDark = false, accent 畸形回退为 'ember'
+  assert.equal(createdWindows[0]!.backgrounds.at(-1), '#f4f3f0')
+  assert.deepEqual(createdWindows[1]!.overlays.at(-1), {
+    color: '#00000000',
+    symbolColor: '#55555c',
+    height: POPOUT_TITLE_BAR_HEIGHT
+  })
+  assert.equal(createdWindows[1]!.backgrounds.at(-1), '#f4f3f0')
+  assert.equal(createdWindows[2]!.overlays.length, 0)
+
   service.stop()
   for (const win of createdWindows) {
     assert.equal(win.isDestroyed(), true)

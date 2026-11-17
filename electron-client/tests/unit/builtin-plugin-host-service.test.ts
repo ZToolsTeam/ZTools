@@ -11,7 +11,7 @@ import {
   isSupportedPlugin,
   normalizePluginName
 } from '../../src/main/services/builtin-plugin-host-service.js'
-import { buildMultiPagePdfFromStreams, fileUrlToLocalPath, isFullyQualifiedPath, PowerShellError, type HostPluginContext } from '../../src/main/services/host-plugins/shared-utils.js'
+import { buildMultiPagePdfFromStreams, fileUrlToLocalPath, isFullyQualifiedPath, PowerShellError, resolveDefaultAppDataRoot, type HostPluginContext } from '../../src/main/services/host-plugins/shared-utils.js'
 import { MediaOcrHostPluginHandler, type MediaOcrHostDeps } from '../../src/main/services/host-plugins/media-ocr-host.js'
 
 /** 插件不能再传 __simulate* 参数伪造“没有 ffmpeg / 抓屏失败”；改由构造参数注入替身，生产代码不保留测试开关 */
@@ -224,8 +224,8 @@ test('FileComparePlugin computes real SHA-256, line diffs, and compareBatch pair
 })
 
 test('SqlitePlugin creates, queries, and persists real SQLite tables via sql.js', async () => {
-  const host = new BuiltinPluginHostService()
   const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'ztools-sqlite-test-'))
+  const host = new BuiltinPluginHostService({ dataRoot: tempDir })
   const dbPath = path.join(tempDir, 'test.sqlite')
   await fs.writeFile(dbPath, Buffer.alloc(0))
 
@@ -900,8 +900,8 @@ test('SystemRegistryHost plugins enforce strict method contracts, real WMI therm
 })
 
 test('StorageHost plugins support DataRecovery, SystemBackup no-empty-ZIP guard, Sqlite VACUUM/inspectWorkspace, and Cleaner summary', async () => {
-  const host = new BuiltinPluginHostService()
   const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'ztools-storage-contract-'))
+  const host = new BuiltinPluginHostService({ dataRoot: tempDir })
   const cachedFile = path.join(tempDir, 'deleted_doc.txt')
   const restoredTargetFile = path.join(tempDir, 'restored_exact.txt')
   await fs.writeFile(cachedFile, 'Recoverable document content', 'utf8')
@@ -979,6 +979,7 @@ test('StorageHost plugins support DataRecovery, SystemBackup no-empty-ZIP guard,
     )
 
     // 3. SqlitePlugin inspectWorkspace without dbPath + VACUUM via execute
+    const tmpWorkspaceDb = path.join(os.tmpdir(), 'ztools_workspace.sqlite')
     const wsRes = (await host.handlePluginCall('SqlitePlugin', 'inspectWorkspace', {
       scanAppData: true
     })) as {
@@ -988,7 +989,9 @@ test('StorageHost plugins support DataRecovery, SystemBackup no-empty-ZIP guard,
       rows: unknown[]
     }
     assert.equal(wsRes.ok, true)
-    assert.ok(wsRes.dbPath)
+    assert.equal(wsRes.dbPath, path.join(tempDir, 'ztools_workspace.sqlite'))
+    assert.equal(path.dirname(wsRes.dbPath), tempDir)
+    assert.equal(fsSync.existsSync(tmpWorkspaceDb), false, '不得在 os.tmpdir() 根目录创建 ztools_workspace.sqlite')
     assert.ok(Array.isArray(wsRes.tables))
     assert.ok(Array.isArray(wsRes.rows))
 
@@ -1023,7 +1026,66 @@ test('StorageHost plugins support DataRecovery, SystemBackup no-empty-ZIP guard,
     assert.equal(selClean.deletedCount, 1)
     assert.ok(selClean.freedBytes > 0)
   } finally {
-    await fs.rm(tempDir, { recursive: true, force: true })
+    await host.stop()
+    await fs.rm(tempDir, { recursive: true, force: true, maxRetries: 3, retryDelay: 50 })
+  }
+})
+
+test('SqlitePlugin 默认工作区数据库：未注入 dataRoot 时回退用户应用数据目录且拒绝非法相对 dataRoot', async () => {
+  // 1. 跨平台回退路径校验：落入应用数据目录 ZTools/Data，绝不落入 os.tmpdir()
+  assert.equal(
+    resolveDefaultAppDataRoot('win32', { LOCALAPPDATA: 'C:\\Users\\Alice\\AppData\\Local' }, 'C:\\Users\\Alice'),
+    'C:\\Users\\Alice\\AppData\\Local\\ZTools\\Data'
+  )
+  assert.equal(
+    resolveDefaultAppDataRoot('win32', {}, 'C:\\Users\\Alice'),
+    'C:\\Users\\Alice\\AppData\\Local\\ZTools\\Data'
+  )
+  assert.equal(
+    resolveDefaultAppDataRoot('darwin', {}, '/Users/alice'),
+    '/Users/alice/Library/Application Support/ZTools/Data'
+  )
+  assert.equal(
+    resolveDefaultAppDataRoot('linux', { XDG_CONFIG_HOME: '/home/alice/.custom-cfg' }, '/home/alice'),
+    '/home/alice/.custom-cfg/ZTools/Data'
+  )
+  assert.equal(
+    resolveDefaultAppDataRoot('linux', {}, '/home/alice'),
+    '/home/alice/.config/ZTools/Data'
+  )
+
+  // 2. 未注入 dataRoot 时，通过 pathAuthority 拦截确认请求落盘目标为用户应用数据目录而非 os.tmpdir()
+  const caller = { type: 'plugin' as const, pluginId: 'sqlite-plugin', pluginInstanceId: 'inst-1', webContentsId: 99 }
+  const requestedPaths: string[] = []
+  const fallbackHost = new BuiltinPluginHostService({
+    pathAuthority: {
+      async resolveAuthorizedPath(rawPath) {
+        requestedPaths.push(rawPath)
+        throw new Error('INTERCEPTED_DEFAULT_WORKSPACE_WRITE')
+      }
+    }
+  })
+  try {
+    await assert.rejects(
+      fallbackHost.handlePluginCall('SqlitePlugin', 'inspectWorkspace', { scanAppData: true }, undefined, caller),
+      /INTERCEPTED_DEFAULT_WORKSPACE_WRITE/
+    )
+    assert.equal(requestedPaths.length, 1)
+    assert.equal(requestedPaths[0], path.join(resolveDefaultAppDataRoot(), 'ztools_workspace.sqlite'))
+    assert.notEqual(path.dirname(requestedPaths[0]!), path.resolve(os.tmpdir()))
+  } finally {
+    await fallbackHost.stop()
+  }
+
+  // 3. 异常边界：注入相对路径 dataRoot 时，authorizeOutputPath 必须拒绝创建文件
+  const invalidHost = new BuiltinPluginHostService({ dataRoot: 'relative-untrusted-data' })
+  try {
+    await assert.rejects(
+      invalidHost.handlePluginCall('SqlitePlugin', 'inspectWorkspace', { scanAppData: true }),
+      /输出路径必须是绝对路径/
+    )
+  } finally {
+    await invalidHost.stop()
   }
 })
 

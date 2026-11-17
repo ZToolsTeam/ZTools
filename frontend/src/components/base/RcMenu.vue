@@ -1,6 +1,7 @@
 <script setup>
 import { Dropdown } from 'ant-design-vue'
-import { ref } from 'vue'
+import { nextTick, onUnmounted, ref, watch } from 'vue'
+import { registerKeyHandler, KEYMAP_SCOPES } from '@/utils/keymap'
 import ShortcutKeys from './ShortcutKeys.vue'
 
 /**
@@ -15,19 +16,119 @@ const props = defineProps({
 })
 const emit = defineEmits(['select'])
 const open = ref(false)
+const menuRef = ref(null)
 
 const choose = (item) => {
   if (item.disabled) return
   open.value = false
   emit('select', item.key)
 }
+
+const getEnabledMenuItems = (container = menuRef.value) => {
+  if (!container) return []
+  return Array.from(container.querySelectorAll('.rc-menu-item:not(:disabled)'))
+}
+
+// 统一处理菜单内上下方向键、Home/End 循环聚焦与 Escape 关闭
+const navigateMenuByKey = (key, target, container = menuRef.value) => {
+  if (key === 'Escape' || key === 'Esc') {
+    open.value = false
+    return true
+  }
+
+  const items = getEnabledMenuItems(container)
+  if (!items.length) return false
+
+  const targetEl = target instanceof Element ? target : null
+  const activeEl =
+    typeof document !== 'undefined' &&
+    document.activeElement instanceof Element &&
+    container?.contains?.(document.activeElement)
+      ? document.activeElement
+      : null
+  const currentItem =
+    targetEl?.closest?.('.rc-menu-item:not(:disabled)') ||
+    activeEl?.closest?.('.rc-menu-item:not(:disabled)')
+  const currentIndex = currentItem ? items.indexOf(currentItem) : -1
+
+  let nextIndex = -1
+  switch (key) {
+    case 'ArrowDown':
+      nextIndex = currentIndex >= 0 ? (currentIndex + 1) % items.length : 0
+      break
+    case 'ArrowUp':
+      nextIndex = currentIndex >= 0 ? (currentIndex - 1 + items.length) % items.length : items.length - 1
+      break
+    case 'Home':
+      nextIndex = 0
+      break
+    case 'End':
+      nextIndex = items.length - 1
+      break
+    default:
+      return false
+  }
+
+  items[nextIndex]?.focus?.()
+  return true
+}
+
+const onMenuKeydown = (event) => {
+  if (event.ctrlKey || event.metaKey || event.altKey) return
+  const handled = navigateMenuByKey(event.key, event.target, event.currentTarget || menuRef.value)
+  if (handled) {
+    event.preventDefault()
+    event.stopPropagation()
+  }
+}
+
+// 展开期间提升至 ACTION_PANEL 模态作用域，防止 Escape 穿透触发底层页面返回
+const unregisterKeymap = registerKeyHandler(
+  KEYMAP_SCOPES.ACTION_PANEL,
+  (event) => {
+    if (event.ctrlKey || event.metaKey || event.altKey) return false
+    return navigateMenuByKey(event.key, event.target, menuRef.value)
+  },
+  { modal: true }
+)
+
+watch(
+  open,
+  async (isOpen) => {
+    if (!isOpen) {
+      unregisterKeymap.deactivate()
+      return
+    }
+    unregisterKeymap.activate()
+    await nextTick()
+    if (!open.value) return
+    let items = getEnabledMenuItems()
+    if (!items.length && typeof requestAnimationFrame === 'function') {
+      await new Promise((resolve) => requestAnimationFrame(resolve))
+      if (!open.value) return
+      items = getEnabledMenuItems()
+    }
+    items[0]?.focus?.()
+  },
+  { immediate: true, flush: 'sync' }
+)
+
+onUnmounted(() => {
+  unregisterKeymap()
+})
 </script>
 
 <template>
   <Dropdown v-model:open="open" :trigger="['click']" :placement="placement">
     <slot :open="open" />
     <template #overlay>
-      <div class="rc-menu" role="menu" :style="{ minWidth: `${props.minWidth}px` }">
+      <div
+        ref="menuRef"
+        class="rc-menu"
+        role="menu"
+        :style="{ minWidth: `${props.minWidth}px` }"
+        @keydown="onMenuKeydown"
+      >
         <template v-for="(item, index) in items" :key="item.key || `sep-${index}`">
           <div v-if="item.type === 'separator'" class="rc-menu-separator" role="separator"></div>
           <button
@@ -94,7 +195,8 @@ const choose = (item) => {
   color: var(--rc-error);
 }
 
-:global(.rc-menu-item.is-danger:hover:not(:disabled)) {
+:global(.rc-menu-item.is-danger:hover:not(:disabled)),
+:global(.rc-menu-item.is-danger:focus-visible:not(:disabled)) {
   background: var(--rc-error-subtle);
 }
 

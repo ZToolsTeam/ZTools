@@ -1,6 +1,6 @@
 {
   "name": "ztools",
-  "version": "1.1.8.11",
+  "version": "1.1.8.12",
   "private": true,
   "description": "ZTools - 纯粹开源、免费极客、轻量宿主、极致性能的现代化双端效率中枢平台",
   "type": "module",
@@ -9,7 +9,7 @@
     "dev": "node scripts/dev-bootstrap.mjs",
     "start": "node scripts/dev-bootstrap.mjs",
     "start:rebuild": "node scripts/dev-bootstrap.mjs --force-build",
-    "pretest": "node packages/declarative-ui/scripts/ensure-dist.mjs && npm --prefix packages/ai-mcp run build && npm --prefix packages/sync-crypto run build && node electron-client/node_modules/typescript/bin/tsc -p electron-client/tsconfig.json && node electron-client/scripts/build-sandbox-preload.mjs",
+    "pretest": "node packages/declarative-ui/scripts/ensure-dist.mjs && node frontend/scripts/sync-bundled-plugins.mjs --ensure && npm --prefix packages/ai-mcp run build && npm --prefix packages/sync-crypto run build && node electron-client/node_modules/typescript/bin/tsc -p electron-client/tsconfig.json && node electron-client/scripts/build-sandbox-preload.mjs",
     "test": "node --test tests/e2e-cross-module-resilience.test.mjs",
     "test:quick": "npm --prefix electron-client run test:quick",
     "scan-plugins": "node scripts/scan-plugin-security.mjs",

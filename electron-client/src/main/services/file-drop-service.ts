@@ -134,6 +134,8 @@ export class FileDropService {
     meta?: PublishMetadata
   ): Promise<{ success: true; accepted: number; rejected: number }> {
     const accepted: string[] = []
+    // 已确认是文件夹的路径（accepted 的子集），随事件下发，渲染层据此判断而不是按名称后缀猜测
+    const directories: string[] = []
     const errors: Array<{ index: number; code: string; message: string }> = []
     const seen = new Set<string>()
     let totalBytes = 0
@@ -171,6 +173,7 @@ export class FileDropService {
         this.requireCaller(webContentsId, caller)
         seen.add(real)
         if (stats.isFile()) totalBytes += stats.size
+        else directories.push(real)
         accepted.push(real)
       } catch (error) {
         const publicError = toPublicError(fileFailure(error))
@@ -178,7 +181,7 @@ export class FileDropService {
       }
     }
     this.requireCaller(webContentsId, caller)
-    return this.publish(caller, accepted, errors, errors.length, meta)
+    return this.publish(caller, accepted, errors, errors.length, meta, directories)
   }
 
   private async pruneOldPasteImages(clipboardDir: string): Promise<void> {
@@ -214,7 +217,8 @@ export class FileDropService {
     accepted: string[],
     errors: Array<{ index: number; code: string; message: string }>,
     rejectedCount: number,
-    meta?: PublishMetadata
+    meta?: PublishMetadata,
+    directories: string[] = []
   ): { success: true; accepted: number; rejected: number } {
     this.registry.send(caller.webContentsId, IPC_EVENT_CHANNEL, {
       msgType: 'event_envelope',
@@ -225,6 +229,7 @@ export class FileDropService {
           target: caller.pluginId ? { pluginId: caller.pluginId } : { window: 'main' },
           payload: {
             files: accepted,
+            ...(directories.length > 0 ? { directories } : {}),
             errors,
             ...(meta?.source ? { source: meta.source } : {}),
             ...(meta?.targetFieldId ? { targetFieldId: meta.targetFieldId } : {})

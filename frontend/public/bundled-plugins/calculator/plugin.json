@@ -1,8 +1,8 @@
 {
   "id": "calculator",
   "name": "计算器",
-  "version": "2.1.7",
-  "description": "输入算式即时计算，内置科学函数、单位换算、每日汇率、人民币大写金额转换与日期推算",
+  "version": "2.2.0",
+  "description": "输入算式即时计算，内置科学函数、单位换算、多币种实时汇率（含黄金/比特币）、人民币大写金额转换与日期推算",
   "author": "ZTools Team",
   "entry": "dist/index.js",
   "icon": "icon.svg",
@@ -33,6 +33,18 @@
     "换算",
     "单位",
     "汇率",
+    "exchange rate",
+    "currency",
+    "货币",
+    "美元",
+    "欧元",
+    "日元",
+    "黄金",
+    "gold",
+    "XAU",
+    "比特币",
+    "bitcoin",
+    "BTC",
     "大写金额"
   ],
   "features": [
@@ -50,13 +62,18 @@
     },
     {
       "code": "calc-currency",
-      "explain": "每日多币种汇率换算",
+      "explain": "实时汇率查询与多币种换算（含黄金、比特币）",
       "mode": "view",
       "cmds": [
         "汇率换算",
+        "汇率计算",
         "汇率",
+        "exchange rate",
+        "currency",
         "美元人民币",
-        "外币换算"
+        "外币换算",
+        "黄金价格",
+        "比特币价格"
       ]
     },
     {

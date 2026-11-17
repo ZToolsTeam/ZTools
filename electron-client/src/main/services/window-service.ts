@@ -21,12 +21,15 @@ import { createElectronReferenceDialogProvider } from '../platform/electron-refe
 import type { WindowRegistry } from '../windows/window-registry.js'
 import { clampBoundsToWorkArea } from '../windows/display-bounds.js'
 import {
+  type AccentTheme,
   getTitleBarOverlayOptions,
   getTrafficLightPosition,
   getWindowBackgroundColor,
   isWindows11OrLater,
+  normalizeAccentTheme,
   POPOUT_TITLE_BAR_HEIGHT,
-  secureWebPreferences
+  secureWebPreferences,
+  updateWindowTheme
 } from '../windows/main-window.js'
 
 const localWebOrigin = 'ztools://web'
@@ -327,6 +330,8 @@ export class WindowService {
   readonly #createWindow: (options: Electron.BrowserWindowConstructorOptions) => BrowserWindow
   readonly #popoutWindows = new Map<string, BrowserWindow>()
   readonly #popoutBounds = new Map<string, Electron.Rectangle>()
+  #isDark: boolean = nativeTheme?.shouldUseDarkColors ?? false
+  #accent: AccentTheme = 'ember'
   /** 按新窗口 webContentsId 登记的交接状态 */
   readonly #popoutHandoffs = new Map<number, PendingPopoutHandoff>()
   /** 每个 popoutKey 的打开序号：加载失败时据此判断是否已被更新的弹出请求取代 */
@@ -416,7 +421,9 @@ export class WindowService {
       workArea
     )
 
-    const isDark = nativeTheme?.shouldUseDarkColors ?? true
+    const isDark = nativeTheme?.shouldUseDarkColors ?? this.#isDark
+    this.#isDark = isDark
+    const accent = this.#accent
     const isWin = process.platform === 'win32'
     const isMac = process.platform === 'darwin'
     const hasMica = isWindows11OrLater()
@@ -429,11 +436,11 @@ export class WindowService {
       minWidth: Math.min(820, workArea.width),
       minHeight: Math.min(540, workArea.height),
       show: false,
-      backgroundColor: getWindowBackgroundColor(isDark),
+      backgroundColor: getWindowBackgroundColor(isDark, accent),
       autoHideMenuBar: true,
       titleBarStyle: isMac ? 'hiddenInset' : 'hidden',
       ...(isMac ? { trafficLightPosition: getTrafficLightPosition(POPOUT_TITLE_BAR_HEIGHT) } : {}),
-      ...(isWin ? { titleBarOverlay: getTitleBarOverlayOptions(isDark, POPOUT_TITLE_BAR_HEIGHT) } : {}),
+      ...(isWin ? { titleBarOverlay: getTitleBarOverlayOptions(isDark, POPOUT_TITLE_BAR_HEIGHT, accent) } : {}),
       ...(hasMica ? { backgroundMaterial: 'mica' } : {}),
       ...(isMac ? { vibrancy: 'sidebar' } : {}),
       webPreferences: secureWebPreferences()
@@ -875,6 +882,31 @@ export class WindowService {
     }
     if (action === 'stop' || action === 'cancel') {
       this.hideRecordBar()
+    }
+  }
+
+  /**
+   * 同步更新所有已打开独立弹出窗口（popout）的标题栏覆盖层符号色与窗口底色，
+   * 并缓存最新主题供后续新弹出的独立窗口继承。
+   */
+  updateTheme(
+    theme: { isDark?: boolean; accent?: unknown },
+    platform: NodeJS.Platform = process.platform
+  ): void {
+    if (typeof theme?.isDark === 'boolean') {
+      this.#isDark = theme.isDark
+    } else if (typeof nativeTheme?.shouldUseDarkColors === 'boolean') {
+      this.#isDark = nativeTheme.shouldUseDarkColors
+    }
+    if (theme && 'accent' in theme && theme.accent !== undefined) {
+      this.#accent = normalizeAccentTheme(theme.accent)
+    }
+    for (const [key, popout] of this.#popoutWindows.entries()) {
+      if (popout.isDestroyed()) {
+        this.#popoutWindows.delete(key)
+        continue
+      }
+      updateWindowTheme(popout, this.#isDark, this.#accent, POPOUT_TITLE_BAR_HEIGHT, platform)
     }
   }
 

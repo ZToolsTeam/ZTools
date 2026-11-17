@@ -64,8 +64,28 @@ export interface HostPluginContext {
   readonly clipboard: HostClipboardPort | null
   readonly processService: ProcessService | null
   readonly windowControl: HostWindowControlPort | null
+  readonly dataRoot?: string | undefined
   authorizeExistingPath(rawPath: string, caller?: CallerIdentity, access?: 'read' | 'write'): Promise<string>
   authorizeOutputPath(rawPath: string, caller?: CallerIdentity): Promise<string>
+}
+
+/**
+ * 解析未显式注入 dataRoot 时的默认应用数据根目录（落入用户应用数据目录 ZTools/Data，绝不回退至 os.tmpdir()）。
+ */
+export function resolveDefaultAppDataRoot(
+  platform: NodeJS.Platform = process.platform,
+  env: NodeJS.ProcessEnv = process.env,
+  homeDir: string = os.homedir()
+): string {
+  if (platform === 'win32') {
+    const localAppData = env.LOCALAPPDATA?.trim() || path.win32.join(homeDir, 'AppData', 'Local')
+    return path.win32.join(localAppData, 'ZTools', 'Data')
+  }
+  if (platform === 'darwin') {
+    return path.posix.join(homeDir, 'Library', 'Application Support', 'ZTools', 'Data')
+  }
+  const configHome = env.XDG_CONFIG_HOME?.trim() || path.posix.join(homeDir, '.config')
+  return path.posix.join(configHome, 'ZTools', 'Data')
 }
 
 export const PROTECTED_PROCESS_NAMES = new Set([

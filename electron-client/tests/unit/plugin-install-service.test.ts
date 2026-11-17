@@ -1494,6 +1494,44 @@ test('telemetry failure cannot turn a committed install into a failed terminal',
   assert.equal(terminal[0]?.payload.operationId, accepted.operationId)
 })
 
+test('plugin install, update, and uninstall emit plugin_install, plugin_updatecomplete, and plugin_uninstall', async (context) => {
+  const root = runtimeRoot('terminal-analytics-events')
+  const events: PublishedEvent[] = []
+  const tracked: Array<{ event: string; pluginId: string; data: unknown }> = []
+  const archiveV1 = pluginZip('1.0.0')
+  const archiveV2 = pluginZip('2.0.0')
+  let currentArchive = archiveV1
+
+  const service = new PluginInstallService(root, createPublisher(events), {
+    runtimeTarget: windowsIa32Electron,
+    fetchImpl: (async () => response(currentArchive)) as typeof fetch,
+    analytics: (event, pluginId, data) => {
+      tracked.push({ event, pluginId, data })
+    }
+  })
+  context.after(async () => { await service.stop() })
+
+  const installAccepted = await service.startInstall(installParams(archiveV1, '1.0.0'), false)
+  await service.waitForIdle()
+  assert.equal(tracked.length, 1)
+  assert.equal(tracked[0]?.event, 'plugin_install')
+  assert.equal(tracked[0]?.pluginId, 'plugin.test')
+  assert.deepEqual(tracked[0]?.data, { version: '1.0.0', operationId: installAccepted.operationId })
+
+  currentArchive = archiveV2
+  const updateAccepted = await service.startInstall(installParams(archiveV2, '2.0.0'), true)
+  await service.waitForIdle()
+  assert.equal(tracked.length, 2)
+  assert.equal(tracked[1]?.event, 'plugin_updatecomplete')
+  assert.equal(tracked[1]?.pluginId, 'plugin.test')
+  assert.deepEqual(tracked[1]?.data, { version: '2.0.0', operationId: updateAccepted.operationId })
+
+  await service.uninstall({ pluginId: 'plugin.test' })
+  assert.equal(tracked.length, 3)
+  assert.equal(tracked[2]?.event, 'plugin_uninstall')
+  assert.equal(tracked[2]?.pluginId, 'plugin.test')
+})
+
 test('a terminal listener can acquire a directory lease that old operation cleanup cannot release', async (context) => {
   const root = runtimeRoot('terminal-reader'), archive = pluginZip('1.0.0')
   let releaseRead!: () => void

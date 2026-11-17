@@ -10,7 +10,7 @@ import { useNavStore, isWorkbenchRouteName } from '@/stores/nav'
 import { useUIStore } from '@/stores/ui'
 import { useCategoriesStore } from '@/stores/categories'
 import { usePluginsStore } from '@/stores/plugins'
-import { useKeymap, KEYMAP_SCOPES } from '@/utils/keymap'
+import { useKeymap, KEYMAP_SCOPES, OPEN_SETTINGS_SHORTCUT } from '@/utils/keymap'
 import { switchWindowMode, WINDOW_MODES } from '@/utils/windowMode'
 import { layoutExtraComponents } from '@edition'
 import { ROUTES } from '@/router/routes'
@@ -115,8 +115,9 @@ const goBackFromDetails = () => {
   else handleBackToHome()
 }
 
-// 底栏左侧「打开 ↵」只在能用回车打开插件的页面显示（主页、插件市场），其它页面按回车没有效果
+// 底栏左侧「打开 ↵」与右侧「动作 Ctrl+K」只在支持插件卡片交互的主页和插件市场显示
 const showOpenHint = computed(() => route.name === 'my' || route.name === 'list')
+const showActionPanelBtn = computed(() => route.name === 'my' || route.name === 'list')
 const isDetails = computed(() => route.name === 'details')
 
 // 全局基础快捷键调度 (GLOBAL 作用域)
@@ -137,7 +138,7 @@ useKeymap(KEYMAP_SCOPES.GLOBAL, {
     uiStore.toggleSidebar()
     return true
   },
-  'Ctrl+,': () => {
+  [OPEN_SETTINGS_SHORTCUT]: () => {
     nav.setPage('advanced-settings')
     if (route.name !== 'advanced-settings') router.push(ROUTES.ADVANCED_SETTINGS)
     return true
@@ -209,7 +210,7 @@ useKeymap(KEYMAP_SCOPES.GLOBAL, {
       </div>
 
       <div class="flex items-center gap-1">
-        <button type="button" class="action-btn" @click="openGlobalActions">
+        <button v-if="showActionPanelBtn" type="button" class="action-btn" @click="openGlobalActions">
           动作
           <ShortcutKeys combo="Ctrl+K" />
         </button>

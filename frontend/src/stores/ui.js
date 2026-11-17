@@ -18,6 +18,10 @@ export const useUIStore = defineStore('ui', {
     declarativePrimaryAction: null,
     // 主界面动作面板可见性
     globalActionPanelVisible: false,
+    // 底栏「动作 Ctrl+K」按钮触发递增信号，供当前激活页面打开聚焦项动作菜单
+    actionPanelTriggerSeq: 0,
+    // 顶栏搜索输入框是否正处于真实 DOM 聚焦态（用于消除搜索框与网格双焦点光环并存）
+    searchInputActive: false,
     // 侧边栏收起状态：默认 false（展开显示图标和文字），收起时只显示图标
     sidebarCollapsed: (() => {
       try {
@@ -34,6 +38,7 @@ export const useUIStore = defineStore('ui', {
     isSearchFocused: (state) => state.focusState === FOCUS_STATES.SEARCH,
     isGridFocused: (state) => state.focusState === FOCUS_STATES.GRID,
     isDeclarativeFocused: (state) => state.focusState === FOCUS_STATES.DECLARATIVE,
+    isSearchInputActive: (state) => Boolean(state.searchInputActive),
     isSidebarCollapsed: (state) => Boolean(state.sidebarCollapsed)
   },
   actions: {
@@ -44,10 +49,14 @@ export const useUIStore = defineStore('ui', {
       }
       this.focusState = newState
     },
+    setSearchInputActive(active) {
+      this.searchInputActive = Boolean(active)
+    },
     focusSearch() {
       this.setFocusState(FOCUS_STATES.SEARCH)
     },
     focusGrid() {
+      this.searchInputActive = false
       this.setFocusState(FOCUS_STATES.GRID)
     },
     focusDeclarative() {
@@ -74,6 +83,7 @@ export const useUIStore = defineStore('ui', {
     },
     toggleGlobalActionPanel() {
       this.globalActionPanelVisible = !this.globalActionPanelVisible
+      this.actionPanelTriggerSeq += 1
     },
     openCloseConfirm(origin) {
       this.closeConfirmOrigin = origin || 'closeButton'

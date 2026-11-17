@@ -443,6 +443,19 @@ export function isIpcCapabilityBoundary(error: unknown): boolean {
   return error instanceof ZToolsError && error.code === errorCodes.notSupported
 }
 
+/**
+ * 数据库可选键未命中：db_get / db_get_secure 读取尚未写入的键时返回 DATABASE_KEY_NOT_FOUND，
+ * SDK 与宿主存储层均按 null 处理；保留线协议错误码以兼容调用方，但不作为宿主故障打印堆栈或警告。
+ */
+export function isMissingDatabaseKeyError(
+  request: Pick<ZToolsRequest, 'method'> | undefined,
+  error: unknown
+): boolean {
+  return error instanceof ZToolsError &&
+    error.code === errorCodes.databaseKeyNotFound &&
+    (request?.method === 'db_get' || request?.method === 'db_get_secure')
+}
+
 export function getIpcFailureLogIdentifierFields(
   request: ZToolsRequest | undefined
 ): { readonly dllId?: string; readonly functionName?: string } {
@@ -730,11 +743,19 @@ export class IpcRouter {
   openPlugin(params: PluginOpenParams): Promise<unknown> {
     this.#services.frecency?.recordUsage(params.pluginId)
     return this.#pluginWindows.open(params).then((result) => {
-      const opened = result as { success?: boolean; pluginId?: string; instanceId?: string; windowInstanceStatus?: string }
+      const opened = result as {
+        success?: boolean
+        pluginId?: string
+        instanceId?: string
+        windowInstanceStatus?: string
+        status?: string
+      }
       if (opened.success === true && opened.pluginId) {
         this.#services.analytics.reportPluginOpened(opened.pluginId, {
+          source: 'ipc',
+          plugin_type: 'window',
           instanceId: opened.instanceId,
-          status: opened.windowInstanceStatus
+          status: opened.windowInstanceStatus ?? opened.status
         })
       }
       return result
@@ -746,12 +767,14 @@ export class IpcRouter {
   }
 
   publishDarkModeChange(enabled: boolean, force = false): void {
+    this.#windows.updateTheme({ isDark: enabled })
     if (!force && this.#lastDarkMode === enabled) return
     this.#lastDarkMode = enabled
     this.#events.publishHost('system.DarkModeChange', { isDark: enabled, mode: nativeTheme.themeSource })
   }
 
   publishAccentColorChange(accent: 'ember' | 'glacier' | 'jade' | 'iris' | 'crimson' | 'mono'): void {
+    this.#windows.updateTheme({ accent })
     this.#events.publishHost('system.AccentColorChange', { accent })
   }
 
@@ -777,6 +800,15 @@ export class IpcRouter {
     const router = await constructWithRouterRollback((scope) =>
       new IpcRouter(registry, services, options, mainApp, scope)
     )
+    try {
+      const persistedAccent = await services.config.get('user_settings.json', 'ui.accent', 'ember')
+      router.#windows.updateTheme({
+        isDark: nativeTheme?.shouldUseDarkColors ?? false,
+        accent: persistedAccent
+      })
+    } catch (error) {
+      console.warn('初始化独立窗口主题配置失败', error)
+    }
     if (mainApp.isPackaged && (process.platform === 'win32' || options.loginItems)) {
       try {
         const loginItems = options.loginItems
@@ -935,6 +967,7 @@ export class IpcRouter {
       : undefined
     this.#builtinPluginHost = constructionScope.own(
       new BuiltinPluginHostService({
+        dataRoot: services.dataRoot,
         processService: processes,
         shellService: shell,
         mediaOcr: {
@@ -3393,10 +3426,11 @@ export class IpcRouter {
       )
       return { messageId: request.messageId, success: true, data }
     } catch (error) {
-      // 平台能力边界（如开发环境不允许替换应用）是明确声明的 NOT_SUPPORTED，不是宿主故障：
-      // 不打印堆栈与 warn，只记一条 info；返回给调用方的错误与诊断记录保持不变
+      // 平台能力边界（NOT_SUPPORTED）与数据库可选键未命中（db_get / db_get_secure 的 DATABASE_KEY_NOT_FOUND）
+      // 均属预期协议返回而非宿主故障：不打印堆栈与 warn；返回给调用方的错误与诊断记录保持不变
       const capabilityBoundary = isIpcCapabilityBoundary(error)
-      if (!capabilityBoundary) {
+      const missingDatabaseKey = isMissingDatabaseKeyError(request, error)
+      if (!capabilityBoundary && !missingDatabaseKey) {
         console.error('[IPC ROUTER ERROR DETAILS]', request?.method, error)
       }
       const publicError = toPublicError(error)
@@ -3417,10 +3451,6 @@ export class IpcRouter {
         })
       }
       const failureLogIdentifierFields = getIpcFailureLogIdentifierFields(request)
-      // Missing optional settings/cache entries are handled as null by the SDK.
-      // Preserve the wire error for compatibility without logging a host failure.
-      const missingDatabaseKey = publicError.code === errorCodes.databaseKeyNotFound &&
-        (request?.method === 'db_get' || request?.method === 'db_get_secure')
       if (capabilityBoundary) {
         console.info('IPC capability not supported on this platform', {
           method: request?.method ?? 'invalid',

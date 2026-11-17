@@ -19,7 +19,11 @@ export function macosViewMenuItems(isPackaged: boolean): MenuItemConstructorOpti
   ]
 }
 
-export function installMacosApplicationMenu(options: MacosApplicationMenuOptions = {}): void {
+/**
+ * 应用主菜单（macOS 顶栏首列应用菜单）子项构造器。
+ * 抽离为纯函数以便单元测试在无 Electron 运行时环境下校验结构与快捷键。
+ */
+export function macosAppSubmenuItems(options: MacosApplicationMenuOptions = {}): MenuItemConstructorOptions[] {
   const appSubmenu: MenuItemConstructorOptions[] = [
     { role: 'about' }
   ]
@@ -29,7 +33,7 @@ export function installMacosApplicationMenu(options: MacosApplicationMenuOptions
       { type: 'separator' },
       {
         label: '偏好设置...',
-        accelerator: 'Command+,',
+        accelerator: 'Command+I',
         click: () => options.onOpenPreferences?.()
       }
     )
@@ -46,10 +50,14 @@ export function installMacosApplicationMenu(options: MacosApplicationMenuOptions
     { role: 'quit' }
   )
 
+  return appSubmenu
+}
+
+export function installMacosApplicationMenu(options: MacosApplicationMenuOptions = {}): void {
   const menu = Menu.buildFromTemplate([
     {
       label: app.name || 'ZTools',
-      submenu: appSubmenu
+      submenu: macosAppSubmenuItems(options)
     },
     { role: 'editMenu' },
     {

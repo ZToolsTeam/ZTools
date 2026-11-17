@@ -46,7 +46,7 @@ const pluginId = computed(() =>
   String(routePluginId.value || plugin.value?.pluginId || '')
 )
 const error = ref('')
-const { toastSuccess, toastError, toastWarning } = useToast()
+const { toastSuccess, toastError, toastWarning, toastInfo } = useToast()
 const { checkPluginCompat } = useVersionCompat()
 
 // 留言数（由官方版的「评价与留言」卡片加载后回报；开源版没有留言）
@@ -78,17 +78,27 @@ const libTotal = ref(0)           // 依赖库总数
 // 当前插件绑定的快捷键文本
 const hotkeyText = ref('')
 
-// 使用 Store 中的安装状态（随客户端提供的插件始终视为已安装，避免异步同步前按钮从“安装”跳变到“打开”；
-// 插件市场分发的官方插件以实际安装状态为准）
-const isInstalled = computed(() =>
-  pluginsStore.installedSet.has(pluginId.value) ||
-  isClientProvidedPlugin(pluginId.value)
-)
+// 使用 Store 中的安装状态（未隐藏的随客户端内置插件始终视为已安装，避免异步同步前按钮从“安装”跳变到“打开”；
+// 已被假卸载隐藏的内置插件视为未安装以展示“还原”；插件市场分发的官方插件以实际安装状态为准）
+const isBundled = computed(() => isBundledPlugin(pluginId.value))
+const isInstalled = computed(() => {
+  if (isBundled.value && pluginsStore.isBundledHidden(pluginId.value)) {
+    return false
+  }
+  return (
+    pluginsStore.installedSet.has(pluginId.value) ||
+    isClientProvidedPlugin(pluginId.value)
+  )
+})
 
-// 随客户端提供的插件没有安装目录，不能卸载，也生成不了桌面快捷方式（主进程会报插件不存在），这里不给入口
-const canUninstall = computed(() => !isClientProvidedPlugin(pluginId.value))
-// 桌面快捷方式只有 Windows 支持
-const canCreateShortcut = computed(() => isWindows() && canUninstall.value)
+// 已安装的普通插件与随客户端内置插件具备“卸载”能力（内置插件引导跳转至设置页假卸载）；客户端宿主系统页不可卸载
+const canUninstall = computed(
+  () => isBundled.value || !isClientProvidedPlugin(pluginId.value)
+)
+// 桌面快捷方式只有 Windows 支持，且暂不对随客户端内置插件开放
+const canCreateShortcut = computed(
+  () => isWindows() && !isClientProvidedPlugin(pluginId.value)
+)
 
 // 详情页会缓存“有更新/快捷键”等仅对已安装插件有效的本地状态；
 // 当前插件被卸载后需要立即清空，避免页面残留“有更新”标记。
@@ -203,6 +213,7 @@ const load = async () => {
         console.warn('[Details] 同步本地已安装插件列表失败:', fetchErr)
       })
     }
+    track('detail_view', pid)
     return
   }
 
@@ -467,8 +478,9 @@ const updatePlugin = async () => {
       }
 
       try {
-        // 标记为下载中
+        // 标记为下载中并上报用户发起插件更新
         pluginsStore.startDownload(pid)
+        track('plugin_update', pid)
 
         // 使用更新流程（走 plugin_update IPC，Delphi 会先停止旧插件→备份→原子替换）
         await downloadPluginUpdate(pid, updateInfo.value)
@@ -488,6 +500,14 @@ const updatePlugin = async () => {
 const uninstall = async () => {
   if (!canUninstall.value) {
     toastError('内置插件随客户端提供，不能卸载')
+    return
+  }
+  if (isBundled.value) {
+    toastInfo?.('请在设置中卸载或还原内置插件')
+    router.push({
+      ...ROUTES.ADVANCED_SETTINGS,
+      query: { manageBundled: pluginId.value }
+    })
     return
   }
   confirmDialog({
@@ -689,6 +709,7 @@ onBeforeUnmount(() => {
       <PluginDetailHeader
         :plugin="plugin"
         :isInstalled="isInstalled"
+        :isBundled="isBundled"
         :canUninstall="canUninstall"
         :canCreateShortcut="canCreateShortcut"
         :hasUpdate="hasUpdate"

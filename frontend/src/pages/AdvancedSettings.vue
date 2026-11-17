@@ -13,6 +13,7 @@ import { useRouter, useRoute } from 'vue-router'
 import { useToast } from '@/composables/useToast'
 import { track } from '@edition'
 import AppearanceSettings from '@/components/settings/AppearanceSettings.vue'
+import BundledPluginsSettings, { queueBundledPluginFocus } from '@/components/settings/BundledPluginsSettings.vue'
 import { ROUTES } from '@/router/routes'
 import { useAppPreferencesApi } from '@/composables/useAppPreferencesApi'
 import { DEFAULT_GLOBAL_WAKE_HOTKEY, syncGlobalWakeHotkey } from '@/utils/globalWakeHotkey'
@@ -40,6 +41,7 @@ import {
   notifyHotkeyRecorderActive
 } from '@/utils/hotkeyRecorder'
 import { buildLaunchHotkeyMap } from '@/utils/launchHotkeyTargets'
+import { OPEN_SETTINGS_SHORTCUT } from '@/utils/keymap'
 
 const { success, error } = useToast()
 const {
@@ -78,6 +80,7 @@ const refreshAutostartStatus = async () => {
 // 启动快捷键弹窗引用
 const pluginHotkeyModalRef = ref(null)
 const pluginFeatureHotkeyModalRef = ref(null)
+const bundledPluginsSettingsRef = ref(null)
 // 启动快捷键已配置数量（缓存值，避免必须打开弹窗才能显示）
 const pluginHotkeyCount = ref(0)
 const pluginFeatureHotkeyCount = ref(0)
@@ -161,7 +164,7 @@ const builtinShortcuts = [
   { label: '聚焦搜索', combo: 'Ctrl+F' },
   { label: '动作面板', combo: 'Ctrl+K' },
   { label: '切换到悬浮条', combo: 'Ctrl+M' },
-  { label: '打开设置', combo: 'Ctrl+,' },
+  { label: '打开设置', combo: OPEN_SETTINGS_SHORTCUT },
   { label: '返回主页', combo: 'Escape' }
 ]
 const onWakePreferenceChange = (val) => {
@@ -355,6 +358,30 @@ function onPluginFeatureHotkeyCountUpdate(count) {
   pluginFeatureHotkeyCount.value = count
 }
 
+const consumeManageBundledQuery = async () => {
+  const targetId = typeof route.query.manageBundled === 'string' ? route.query.manageBundled.trim() : ''
+  if (!targetId) return
+  queueBundledPluginFocus(targetId)
+  await router.replace({
+    query: {
+      ...route.query,
+      manageBundled: undefined
+    }
+  })
+  await nextTick()
+  if (bundledPluginsSettingsRef.value?.focusPlugin) {
+    queueBundledPluginFocus('')
+    await bundledPluginsSettingsRef.value.focusPlugin(targetId)
+  }
+}
+
+watch(
+  () => route.query.manageBundled,
+  (val) => {
+    if (val) consumeManageBundledQuery()
+  }
+)
+
 onMounted(async () => {
   const capabilities = await getHotkeyHostCapabilities()
   hotkeyPlatform.value = capabilities.platform
@@ -386,6 +413,7 @@ onMounted(async () => {
       }
     })
   }
+  consumeManageBundledQuery()
   // 监听关闭确认弹窗修改配置后的通知
   window.addEventListener('ztools-settings-changed', onSettingsChanged)
 })
@@ -625,6 +653,9 @@ onBeforeUnmount(() => {
             </div>
           </div>
         </div>
+
+        <!-- 内置插件管理卡片 -->
+        <BundledPluginsSettings ref="bundledPluginsSettingsRef" class="wide-card" />
 
         <!-- 隐私与权限卡片 -->
         <ScreenPermissionPanel class="wide-card" />

@@ -620,10 +620,10 @@ test('ZTools M1.5 Group 2 High-Frequency Core Builtin Services Test Suite', asyn
   // ===========================================================================
   // 6. Screenshots Service (M1.5-14)
   // ===========================================================================
-  await t.test('6. ScreenshotsService: Discovery, History & Paste to Active App', async () => {
+  await t.test('6. ScreenshotsService: Discovery, History & Paste to Active App', async (st) => {
     // 创建沙箱临时截图目录
-    const tempDir = path.join(os.tmpdir(), `ztools-test-screenshots-${Date.now()}`)
-    fs.mkdirSync(tempDir, { recursive: true })
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ztools-test-screenshots-'))
+    st.after(() => fs.rmSync(tempDir, { recursive: true, force: true, maxRetries: 3, retryDelay: 50 }))
 
     const file1 = path.join(tempDir, 'screenshot-2026-10-10.png')
     const file2 = path.join(tempDir, 'screenshot-2026-10-11.png')

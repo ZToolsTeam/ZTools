@@ -33,12 +33,13 @@
           </div>
 
           <div
+            :ref="el => setItemRef(idx, el)"
             class="action-panel-item"
             :class="{ 'is-selected': selectedIndex === idx, 'is-destructive': isDestructiveAction(action) }"
             role="option"
             :aria-selected="selectedIndex === idx"
             @click="executeAction(action)"
-            @mousemove="selectAt(idx)"
+            @mousemove="onItemMouseMove($event, idx)"
           >
             <span class="action-panel-marker" aria-hidden="true"></span>
             <template v-if="hasIcons">
@@ -65,10 +66,16 @@
 </template>
 
 <script setup>
-import { ref, computed, watch, nextTick } from "vue";
+import { ref, computed, watch, nextTick, onUnmounted } from "vue";
 import ShortcutKeys from '@/components/base/ShortcutKeys.vue'
 import DeclarativeIcon from "./DeclarativeIcon.vue";
 import { actionKeyHint, isDestructiveAction } from "../uiText.js";
+import {
+  registerKeyHandler,
+  KEYMAP_SCOPES,
+  isComposingEvent,
+  normalizeEventKeyCombo
+} from "@/utils/keymap.js";
 
 const props = defineProps({
   visible: {
@@ -131,26 +138,39 @@ function actionKey(action) {
   return [action.type || "", action.props?.title ?? "", action._sectionTitle ?? "", action._fromSubmenu ? "1" : ""].join("\u0000");
 }
 
-function selectAt(idx) {
-  const list = filteredActions.value;
-  const next = list.length > 0 ? Math.min(Math.max(idx, 0), list.length - 1) : 0;
-  selectedIndex.value = next;
-  selectedKey.value = actionKey(list[next]);
-}
-const searchInputRef = ref(null);
-
-watch(
-  () => props.visible,
-  (val) => {
-    if (val) {
-      query.value = "";
-      selectAt(0);
-      nextTick(() => {
-        searchInputRef.value?.focus();
-      });
-    }
+const itemRefs = new Map();
+function setItemRef(idx, el) {
+  if (el) {
+    itemRefs.set(idx, el);
+  } else {
+    itemRefs.delete(idx);
   }
-);
+}
+
+// 防止列表滚动重绘触发同屏幕坐标的合成 mousemove 事件抢走键盘选中高亮
+let lastPointerPos = { x: null, y: null };
+let lockedPointerPos = null;
+
+function lockPointerAtCurrentPos() {
+  if (lastPointerPos.x !== null && lastPointerPos.y !== null) {
+    lockedPointerPos = { x: lastPointerPos.x, y: lastPointerPos.y };
+  }
+}
+
+function onItemMouseMove(event, idx) {
+  const sx = typeof event?.screenX === "number" ? event.screenX : 0;
+  const sy = typeof event?.screenY === "number" ? event.screenY : 0;
+  if (
+    lockedPointerPos !== null &&
+    sx === lockedPointerPos.x &&
+    sy === lockedPointerPos.y
+  ) {
+    return;
+  }
+  lastPointerPos = { x: sx, y: sy };
+  lockedPointerPos = null;
+  selectAt(idx);
+}
 
 const filteredActions = computed(() => {
   if (!query.value.trim()) return props.actions;
@@ -166,6 +186,136 @@ const filteredActions = computed(() => {
 // 只有动作带图标时才留图标列；没有图标的动作用空位对齐，不再用对勾冒充图标
 const hasIcons = computed(() => filteredActions.value.some((action) => Boolean(action.props?.icon)));
 
+function selectAt(idx) {
+  const list = filteredActions.value;
+  const next = list.length > 0 ? Math.min(Math.max(idx, 0), list.length - 1) : 0;
+  selectedIndex.value = next;
+  selectedKey.value = actionKey(list[next]);
+  if (list.length > 0) {
+    nextTick(() => {
+      itemRefs.get(next)?.scrollIntoView?.({ block: "nearest" });
+    });
+  }
+}
+const searchInputRef = ref(null);
+
+// 记录已处理的事件对象，防止窗口捕获阶段 keymap 与面板根节点 @keydown 重复执行两次
+const handledEvents = new WeakSet();
+
+function processPanelKeyEvent(e, precomputedCombo) {
+  if (!props.visible || !e) return false;
+  // 输入法组字时 Enter / 方向键 / Esc 是给候选框用的（例如用中文搜索动作），不当面板按键
+  if (isComposingEvent(e)) return false;
+  if (handledEvents.has(e)) return true;
+
+  const combo = precomputedCombo ?? normalizeEventKeyCombo(e);
+  if (combo === "Ctrl+K") {
+    handledEvents.add(e);
+    emit("close");
+    return true;
+  }
+
+  const list = filteredActions.value;
+  const len = list.length;
+
+  if (e.key === "ArrowDown") {
+    handledEvents.add(e);
+    if (len > 0) {
+      lockPointerAtCurrentPos();
+      selectAt((selectedIndex.value + 1) % len);
+    }
+    return true;
+  }
+  if (e.key === "ArrowUp") {
+    handledEvents.add(e);
+    if (len > 0) {
+      lockPointerAtCurrentPos();
+      selectAt((selectedIndex.value - 1 + len) % len);
+    }
+    return true;
+  }
+  if (e.key === "Home" && !e.shiftKey && !e.ctrlKey && !e.metaKey && !e.altKey) {
+    handledEvents.add(e);
+    if (len > 0) {
+      lockPointerAtCurrentPos();
+      selectAt(0);
+    }
+    return true;
+  }
+  if (e.key === "End" && !e.shiftKey && !e.ctrlKey && !e.metaKey && !e.altKey) {
+    handledEvents.add(e);
+    if (len > 0) {
+      lockPointerAtCurrentPos();
+      selectAt(len - 1);
+    }
+    return true;
+  }
+  if (e.key === "PageDown") {
+    handledEvents.add(e);
+    if (len > 0) {
+      lockPointerAtCurrentPos();
+      selectAt(Math.min(selectedIndex.value + 6, len - 1));
+    }
+    return true;
+  }
+  if (e.key === "PageUp") {
+    handledEvents.add(e);
+    if (len > 0) {
+      lockPointerAtCurrentPos();
+      selectAt(Math.max(selectedIndex.value - 6, 0));
+    }
+    return true;
+  }
+  if (e.key === "Enter") {
+    handledEvents.add(e);
+    // ⌘Enter / Ctrl+Enter 在底栏是「次动作」，面板里不能把它当 Enter 执行高亮项（可能是破坏性动作）
+    if (e.metaKey || e.ctrlKey) return true;
+    const action = list[selectedIndex.value];
+    if (action) {
+      executeAction(action);
+    }
+    return true;
+  }
+  if (e.key === "Escape" || e.key === "Esc") {
+    handledEvents.add(e);
+    emit("close");
+    return true;
+  }
+  return false;
+}
+
+// 注册 ACTION_PANEL 模态作用域处理器，并紧接在 immediate watch 中按 visible 同步控制激活/停用
+const unregisterKeymap = registerKeyHandler(
+  KEYMAP_SCOPES.ACTION_PANEL,
+  (e, meta) => processPanelKeyEvent(e, meta?.combo),
+  { modal: true }
+);
+
+watch(
+  () => props.visible,
+  (val) => {
+    if (val) {
+      lastPointerPos = { x: null, y: null };
+      lockedPointerPos = null;
+      unregisterKeymap.activate();
+      query.value = "";
+      selectAt(0);
+      nextTick(() => {
+        searchInputRef.value?.focus();
+      });
+    } else {
+      unregisterKeymap.deactivate();
+      itemRefs.clear();
+    }
+  },
+  { immediate: true }
+);
+
+onUnmounted(() => {
+  unregisterKeymap();
+  itemRefs.clear();
+});
+
 // 只在面板打开（见上方 visible 监听）或搜索词变化时回到第 1 项；动作数组换引用但选中项仍在时保持选中，
 // 选中项消失（被删除 / 标题变化）时停在原位置并夹到有效范围
 watch([filteredActions, query], ([list, q], [, prevQ]) => {
@@ -180,29 +330,8 @@ watch([filteredActions, query], ([list, q], [, prevQ]) => {
 });
 
 function handleKeyDown(e) {
-  // 输入法组字时 Enter / 方向键 / Esc 是给候选框用的（例如用中文搜索动作），不当面板按键
-  if (e.isComposing || e.keyCode === 229) return;
-  if (e.key === "ArrowDown") {
+  if (processPanelKeyEvent(e)) {
     e.preventDefault();
-    if (filteredActions.value.length > 0) {
-      selectAt((selectedIndex.value + 1) % filteredActions.value.length);
-    }
-  } else if (e.key === "ArrowUp") {
-    e.preventDefault();
-    if (filteredActions.value.length > 0) {
-      selectAt((selectedIndex.value - 1 + filteredActions.value.length) % filteredActions.value.length);
-    }
-  } else if (e.key === "Enter") {
-    e.preventDefault();
-    // ⌘Enter / Ctrl+Enter 在底栏是「次动作」，面板里不能把它当 Enter 执行高亮项（可能是破坏性动作）
-    if (e.metaKey || e.ctrlKey) return;
-    const action = filteredActions.value[selectedIndex.value];
-    if (action) {
-      executeAction(action);
-    }
-  } else if (e.key === "Escape") {
-    e.preventDefault();
-    emit("close");
   }
 }
 

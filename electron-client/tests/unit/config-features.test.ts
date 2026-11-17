@@ -7,13 +7,14 @@ import { errorCodes, ZToolsError } from '../../src/contracts/errors.js'
 import { ConfigService, DEFAULT_FEATURE_FLAGS, type FeatureFlagKey } from '../../src/main/services/config-service.js'
 import { JsonFileStore } from '../../src/main/services/json-file-store.js'
 
-function testRoot(name: string): string {
-  return path.join(os.tmpdir(), `ztools-test-config-features-${name}-${Date.now()}-${Math.random().toString(36).slice(2)}`)
+async function createTestRoot(t: test.TestContext, name: string): Promise<string> {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), `ztools-test-config-features-${name}-`))
+  t.after(() => fs.rm(root, { recursive: true, force: true, maxRetries: 3, retryDelay: 50 }))
+  return root
 }
 
-test('ConfigService.getFeatures() returns all 7 flags with default false when file is empty or missing', async () => {
-  const root = testRoot('missing')
-  await fs.mkdir(root, { recursive: true })
+test('ConfigService.getFeatures() returns all 7 flags with default false when file is empty or missing', async (t) => {
+  const root = await createTestRoot(t, 'missing')
   const store = new JsonFileStore(root, ConfigService.allowedStoreFiles)
   const config = new ConfigService(store)
 
@@ -34,9 +35,8 @@ test('ConfigService.getFeatures() returns all 7 flags with default false when fi
   }
 })
 
-test('ConfigService gracefully falls back to default feature flags when user_settings.json is corrupted', async () => {
-  const root = testRoot('corrupt')
-  await fs.mkdir(root, { recursive: true })
+test('ConfigService gracefully falls back to default feature flags when user_settings.json is corrupted', async (t) => {
+  const root = await createTestRoot(t, 'corrupt')
   const settingsFile = path.join(root, 'user_settings.json')
   await fs.writeFile(settingsFile, '{corrupted-json-content', 'utf8')
 
@@ -60,9 +60,8 @@ test('ConfigService gracefully falls back to default feature flags when user_set
   )
 })
 
-test('ConfigService gracefully handles missing or malformed feature fields', async () => {
-  const root = testRoot('malformed-fields')
-  await fs.mkdir(root, { recursive: true })
+test('ConfigService gracefully handles missing or malformed feature fields', async (t) => {
+  const root = await createTestRoot(t, 'malformed-fields')
   const settingsFile = path.join(root, 'user_settings.json')
   await fs.writeFile(
     settingsFile,
@@ -91,9 +90,8 @@ test('ConfigService gracefully handles missing or malformed feature fields', asy
   assert.equal(features.extensionTools, false) // missing fallback
 })
 
-test('ConfigService supports setFeature and persists updates to user_settings.json', async () => {
-  const root = testRoot('set-feature')
-  await fs.mkdir(root, { recursive: true })
+test('ConfigService supports setFeature and persists updates to user_settings.json', async (t) => {
+  const root = await createTestRoot(t, 'set-feature')
   const store = new JsonFileStore(root, ConfigService.allowedStoreFiles)
   const config = new ConfigService(store)
 
@@ -109,14 +107,13 @@ test('ConfigService supports setFeature and persists updates to user_settings.js
 
   // Reject unknown feature flag keys
   await assert.rejects(
-    config.setFeature('nonExistentFeature' as any, true),
+    config.setFeature('nonExistentFeature' as unknown as FeatureFlagKey, true),
     (err) => err instanceof ZToolsError && err.code === errorCodes.invalidRequest
   )
 })
 
-test('ConfigService.setFeatures batch updates multiple flags', async () => {
-  const root = testRoot('batch-set')
-  await fs.mkdir(root, { recursive: true })
+test('ConfigService.setFeatures batch updates multiple flags', async (t) => {
+  const root = await createTestRoot(t, 'batch-set')
   const store = new JsonFileStore(root, ConfigService.allowedStoreFiles)
   const config = new ConfigService(store)
 

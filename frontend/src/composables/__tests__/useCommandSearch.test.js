@@ -503,4 +503,24 @@ describe('useCommandSearch 统一搜索内核与 Frecency 排序测试套件', (
       delete window.__ztoolsLauncher
     }
   })
+
+  it('12. [内置系统设置指令] 悬浮条窗口执行「系统设置」一次性委托主窗口直达 /advanced-settings', async () => {
+    const expandToDashboard = vi.fn().mockResolvedValue({ success: true })
+    window.__ztoolsWindowMode = 'launcher'
+    window.__ztoolsLauncher = { expandToDashboard }
+    try {
+      const { filteredItems, search } = useCommandSearch({ enableFileSearch: false })
+      search('系统设置')
+      const settingsCmd = filteredItems.value.find((item) => item.key === 'system-settings')
+      expect(settingsCmd).toBeDefined()
+
+      const res = await settingsCmd.action()
+      expect(expandToDashboard).toHaveBeenCalledTimes(1)
+      expect(expandToDashboard).toHaveBeenCalledWith('/advanced-settings')
+      expect(res).toEqual(expect.objectContaining({ success: true, type: 'route' }))
+    } finally {
+      delete window.__ztoolsWindowMode
+      delete window.__ztoolsLauncher
+    }
+  })
 })

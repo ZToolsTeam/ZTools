@@ -11,6 +11,8 @@ describe('internalPlugins 门面', () => {
   beforeEach(() => {
     delete window.ztools
     delete window.__ztoolsToast
+    delete window.__ztoolsLauncher
+    delete window.__ztoolsWindowMode
     vi.restoreAllMocks()
   })
 
@@ -137,6 +139,46 @@ describe('internalPlugins 门面', () => {
     expect(res.fallback).toBe(true)
     expect(res.type).toBe('prompt')
     expect(mockToast).toHaveBeenCalledWith('info', expect.stringContaining('系统设置'))
+  })
+
+  it('在悬浮条窗口或独立分离插件窗调用 openSettings 时，委托主窗口 expandToDashboard 打开设置页', async () => {
+    const expandToDashboard = vi.fn().mockResolvedValue({ success: true })
+    window.__ztoolsLauncher = { expandToDashboard }
+    window.__ztoolsWindowMode = 'launcher'
+
+    const resLauncher = await openSettings()
+    expect(expandToDashboard).toHaveBeenCalledWith('/advanced-settings')
+    expect(resLauncher).toEqual(
+      expect.objectContaining({ success: true, fallback: true, type: 'route' })
+    )
+
+    expandToDashboard.mockClear()
+    window.__ztoolsWindowMode = 'popout'
+    const resPopout = await openSettings({ routeOptions: { query: { tab: 'hotkey' } } })
+    expect(expandToDashboard).toHaveBeenCalledWith('/advanced-settings?tab=hotkey')
+    expect(resPopout.success).toBe(true)
+  })
+
+  it('[破坏性] 辅助窗口下 expandToDashboard 返回失败或抛异常时不伪造成功，安全落入兜底提示', async () => {
+    const mockToast = vi.fn()
+    window.__ztoolsToast = mockToast
+    window.__ztoolsWindowMode = 'launcher'
+
+    const expandToDashboard = vi
+      .fn()
+      .mockResolvedValueOnce({ success: false, error: 'IPC 拒绝' })
+      .mockRejectedValueOnce(new Error('IPC 通道已关闭'))
+    window.__ztoolsLauncher = { expandToDashboard }
+
+    const resFail = await openSettings()
+    expect(resFail.success).toBe(false)
+    expect(resFail.type).toBe('prompt')
+    expect(mockToast).toHaveBeenCalledTimes(1)
+
+    const resThrow = await openSettings()
+    expect(resThrow.success).toBe(false)
+    expect(resThrow.type).toBe('prompt')
+    expect(mockToast).toHaveBeenCalledTimes(2)
   })
 })
 

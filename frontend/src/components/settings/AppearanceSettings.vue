@@ -1,5 +1,5 @@
 <script setup>
-import { ref } from 'vue'
+import { computed, nextTick, ref } from 'vue'
 import { storeToRefs } from 'pinia'
 import { useToast } from '@/composables/useToast'
 import { useThemeStore } from '@/stores/theme'
@@ -11,6 +11,8 @@ const { isDark, mode: themeMode, accent: accentTheme } = storeToRefs(themeStore)
 const { error } = useToast()
 const themeSaving = ref(false)
 const accentSaving = ref(false)
+const themeSwitcherRef = ref(null)
+const accentSwitcherRef = ref(null)
 
 const THEME_LABELS = {
   system: '跟随系统',
@@ -24,6 +26,17 @@ const themeOptions = THEME_MODES.map((value) => ({
 }))
 
 const accentOptions = ACCENT_OPTIONS
+
+// WAI-ARIA radiogroup 游走焦点下标
+const activeThemeIndex = computed(() => {
+  const idx = themeOptions.findIndex((opt) => opt.value === themeMode.value)
+  return idx >= 0 ? idx : 0
+})
+
+const activeAccentIndex = computed(() => {
+  const idx = accentOptions.findIndex((opt) => opt.value === accentTheme.value)
+  return idx >= 0 ? idx : 0
+})
 
 // 预览卡：浅色、深色固定；“跟随系统”选中时显示当前实际颜色，
 // 未选中时显示半浅半深（客户端固定了深浅色时拿不到系统本身的深浅色）
@@ -55,6 +68,79 @@ const pickAccent = async (value) => {
     accentSaving.value = false
   }
 }
+
+// 统一处理单选组方向键循环导航与按钮焦点跟随（保存禁用期间忽略）
+const handleRadioGroupKeydown = async (event, { containerRef, options, activeIndex, saving, onPick }) => {
+  if (saving || !options.length || event.ctrlKey || event.metaKey || event.altKey) return
+
+  const container = containerRef.value
+  const buttons = container ? Array.from(container.querySelectorAll('button[role="radio"]')) : []
+  const targetBtn = event.target?.closest?.('button[role="radio"]')
+  const currentIndex = targetBtn ? buttons.indexOf(targetBtn) : -1
+  const idx = currentIndex >= 0 ? currentIndex : activeIndex
+
+  let nextIndex = -1
+  switch (event.key) {
+    case 'ArrowRight':
+    case 'ArrowDown':
+      nextIndex = (idx + 1) % options.length
+      break
+    case 'ArrowLeft':
+    case 'ArrowUp':
+      nextIndex = (idx - 1 + options.length) % options.length
+      break
+    case 'Home':
+      nextIndex = 0
+      break
+    case 'End':
+      nextIndex = options.length - 1
+      break
+    default:
+      return
+  }
+
+  event.preventDefault()
+  event.stopPropagation()
+  buttons[nextIndex]?.focus?.()
+
+  const nextOpt = options[nextIndex]
+  if (nextOpt) {
+    await onPick(nextOpt.value)
+    // 保存期间按钮短暂进入 disabled 会导致浏览器重置焦点，保存完成后恢复当前聚焦按钮
+    await nextTick()
+    const currentContainer = containerRef.value
+    if (
+      currentContainer &&
+      typeof document !== 'undefined' &&
+      (!document.activeElement ||
+        document.activeElement === document.body ||
+        currentContainer.contains(document.activeElement))
+    ) {
+      const updatedButtons = currentContainer.querySelectorAll('button[role="radio"]')
+      updatedButtons[nextIndex]?.focus?.()
+    }
+  }
+}
+
+const onThemeKeydown = (event) => {
+  void handleRadioGroupKeydown(event, {
+    containerRef: themeSwitcherRef,
+    options: themeOptions,
+    activeIndex: activeThemeIndex.value,
+    saving: themeSaving.value,
+    onPick: pickTheme
+  })
+}
+
+const onAccentKeydown = (event) => {
+  void handleRadioGroupKeydown(event, {
+    containerRef: accentSwitcherRef,
+    options: accentOptions,
+    activeIndex: activeAccentIndex.value,
+    saving: accentSaving.value,
+    onPick: pickAccent
+  })
+}
 </script>
 
 <template>
@@ -65,15 +151,22 @@ const pickAccent = async (value) => {
 
     <div class="settings-list">
       <div class="theme-switcher-section">
-        <div class="theme-switcher" role="radiogroup" aria-label="界面主题">
+        <div
+          ref="themeSwitcherRef"
+          class="theme-switcher"
+          role="radiogroup"
+          aria-label="界面主题"
+          @keydown="onThemeKeydown"
+        >
           <button
-            v-for="option in themeOptions"
+            v-for="(option, index) in themeOptions"
             :key="option.value"
             type="button"
             role="radio"
             class="theme-btn"
             :class="{ active: themeMode === option.value }"
             :aria-checked="themeMode === option.value"
+            :tabindex="index === activeThemeIndex ? 0 : -1"
             :disabled="themeSaving"
             @click="pickTheme(option.value)"
           >
@@ -102,15 +195,22 @@ const pickAccent = async (value) => {
             <span class="setting-desc">用于标志、选中标记、主按钮与搜索框聚焦光晕</span>
           </div>
         </div>
-        <div class="accent-switcher" role="radiogroup" aria-label="主题色">
+        <div
+          ref="accentSwitcherRef"
+          class="accent-switcher"
+          role="radiogroup"
+          aria-label="主题色"
+          @keydown="onAccentKeydown"
+        >
           <button
-            v-for="item in accentOptions"
+            v-for="(item, index) in accentOptions"
             :key="item.value"
             type="button"
             role="radio"
             class="accent-btn"
             :class="{ active: accentTheme === item.value }"
             :aria-checked="accentTheme === item.value"
+            :tabindex="index === activeAccentIndex ? 0 : -1"
             :disabled="accentSaving"
             :data-testid="`accent-option-${item.value}`"
             @click="pickAccent(item.value)"

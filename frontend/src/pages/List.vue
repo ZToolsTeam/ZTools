@@ -1,11 +1,12 @@
 <script setup>
 import { ChevronLeftIcon, ChevronRightIcon, ChevronsLeftIcon, ChevronsRightIcon, ExternalLinkIcon, SearchIcon } from '@lucide/vue'
 import { GithubLogo } from '@/utils/appIcons'
-import { ref, computed, onMounted, onBeforeUnmount, watch } from 'vue'
+import { ref, computed, onActivated, onDeactivated, onMounted, onBeforeUnmount, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 
 import PluginCard3D from '@/components/PluginCard3D.vue'
 import SkeletonCard from '@/components/SkeletonCard.vue'
+import ActionPanelModal from '@/declarative/components/ActionPanelModal.vue'
 import { RcBannerLink, RcButton, RcEmpty, RcSegmented } from '@/components/base'
 
 import { useNavStore } from '@/stores/nav'
@@ -16,9 +17,10 @@ import { useToast } from '@/composables/useToast'
 import { usePluginInstall } from '@/composables/usePluginInstall'
 import { useVersionCompat } from '@/composables/useVersionCompat'
 import { useUIStore } from '@/stores/ui'
+import { useVisualGridNav } from '@/composables/useVisualGridNav'
 import { routeUtils, ROUTES } from '@/router/routes'
 import { isPluginSupportedOnCurrentPlatform } from '@/utils/platform'
-import { useKeymap, KEYMAP_SCOPES } from '@/utils/keymap'
+import { useKeymap, KEYMAP_SCOPES, isInteractiveControlTarget } from '@/utils/keymap'
 
 const nav = useNavStore()
 const uiStore = useUIStore()
@@ -99,6 +101,7 @@ async function refreshSourceCounts({ requestCategory, requestKeyword, isFav }) {
 
 const switchSourceType = async (type) => {
   page.value = 1
+  resetListFocus()
   await pluginsStore.setSourceFilter(type)
   await load()
 }
@@ -310,6 +313,7 @@ watch(
     searchKeyword.value = nextKeyword
 
     page.value = 1
+    resetListFocus()
     if (v !== previousCategory) {
       // 埋点：市场分类筛选
       track('market_filter', '', { category: v || 'all' })
@@ -343,6 +347,7 @@ const goCategory = (categoryName) => {
 
 const handlePaginationChange = async (nextPage) => {
   page.value = Math.max(1, Number(nextPage) || 1)
+  resetListFocus()
   await load()
 }
 
@@ -396,7 +401,10 @@ const openDevGuide = () => {
   }
 }
 
+const listContainerRef = ref(null)
 const focusedCardIndex = ref(0)
+const actionPanelVisible = ref(false)
+const isPageActive = ref(true)
 
 // 分类概览模式下键盘焦点按页面上实际展示的顺序（各分类前 8 个）移动
 const isPreviewVisible = computed(() => isCategoryOverview.value && previewGroups.value.length > 0)
@@ -420,43 +428,180 @@ function previewFlatIndex(groupIndex, index) {
   return offset + index
 }
 
-function scrollFocusedCardIntoView() {
-  if (typeof document !== 'undefined') {
-    const el = document.querySelector('.is-list-card-focused')
-    el?.scrollIntoView?.({ block: 'nearest', behavior: 'smooth' })
+function getListNavGroup(idx) {
+  if (!isPreviewVisible.value) return 'flat'
+  let cursor = 0
+  for (const g of previewGroups.value) {
+    const len = Array.isArray(g?.plugins) ? g.plugins.length : 0
+    if (idx < cursor + len) return g.name || ''
+    cursor += len
   }
+  return ''
+}
+
+const gridNav = useVisualGridNav({
+  focusedIndex: focusedCardIndex,
+  containerRef: listContainerRef,
+  focusedSelector: '.is-list-card-focused',
+  getTotalCount: () => currentDisplayList.value.length,
+  fallbackColumns: 2,
+  getGroup: getListNavGroup,
+  onFocusGrid: () => uiStore.focusGrid(),
+  onReachTop: () => {
+    if (typeof window !== 'undefined' && typeof window.__ztoolsFocusHomeSearch === 'function') {
+      window.__ztoolsFocusHomeSearch()
+      uiStore.focusSearch()
+      return true
+    }
+    return false
+  }
+})
+
+function resetListFocus() {
+  focusedCardIndex.value = 0
+  gridNav.resetAnchor()
+  actionPanelVisible.value = false
+}
+
+function handleCardFocus(idx) {
+  gridNav.setFocusedIndex(idx)
+  uiStore.focusGrid()
+}
+
+// 列表因筛选或取消收藏而变短时钳制焦点索引（不拦截测试手动赋越界值）
+watch(
+  () => currentDisplayList.value.length,
+  (newLen, oldLen) => {
+    if (oldLen > 0 && newLen > 0 && newLen < oldLen && focusedCardIndex.value >= newLen) {
+      focusedCardIndex.value = newLen - 1
+    }
+  }
+)
+
+const focusedPlugin = computed(() => currentDisplayList.value[focusedCardIndex.value] || null)
+
+const activePluginActions = computed(() => {
+  const p = focusedPlugin.value
+  if (!p) return []
+  const pid = getPluginId(p)
+  if (!pid) return []
+
+  const isRevoked = Boolean(p.revoked || pluginsStore.isRevoked(pid))
+  const isInstalled = installedSet.value.has(pid)
+  const isFav = pluginsStore.isFavorite(pid)
+  const actions = []
+
+  if (!isRevoked) {
+    if (isInstalled) {
+      actions.push({
+        type: 'Action',
+        props: {
+          title: '打开插件',
+          icon: 'arrow-right-circle',
+          onAction: () => openApp(pid)
+        }
+      })
+    } else {
+      actions.push({
+        type: 'Action',
+        props: {
+          title: '安装插件',
+          icon: 'download',
+          onAction: () => handleDownload(pid)
+        }
+      })
+    }
+  }
+
+  actions.push({
+    type: 'Action',
+    props: {
+      title: '查看插件详情',
+      icon: 'eye',
+      onAction: () => goDetails(pid)
+    }
+  })
+
+  actions.push({
+    type: 'Action',
+    props: {
+      title: isFav ? '取消收藏' : '加入收藏',
+      icon: isFav ? 'star-disabled' : 'star',
+      onAction: () => toggleFavorite(pid)
+    }
+  })
+
+  if (isRevoked && isInstalled) {
+    actions.push({
+      type: 'Action',
+      props: {
+        title: '卸载插件',
+        icon: 'trash',
+        style: 'destructive',
+        onAction: async () => {
+          try {
+            const res = await pluginsStore.uninstallPlugin(pid)
+            if (res?.success === false) {
+              toastError('卸载失败: ' + (res.error || res.message || '未知错误'))
+            } else {
+              toastSuccess('插件已卸载')
+            }
+          } catch (err) {
+            toastError('卸载失败: ' + (err?.message || err))
+          }
+        }
+      }
+    })
+  }
+
+  return actions
+})
+
+watch(actionPanelVisible, (visible) => {
+  uiStore.setGlobalActionPanelVisible(visible)
+})
+
+watch(
+  () => uiStore.actionPanelTriggerSeq,
+  () => {
+    if (!isPageActive.value) return
+    if (actionPanelVisible.value) {
+      actionPanelVisible.value = false
+    } else if (focusedPlugin.value) {
+      actionPanelVisible.value = true
+    }
+  }
+)
+
+function isStandaloneControlTarget(target) {
+  return isInteractiveControlTarget(target, listContainerRef.value) && !target?.closest?.('[data-nav-index]')
+}
+
+function isStandaloneOrInnerActionControl(target) {
+  if (!isInteractiveControlTarget(target, listContainerRef.value)) return false
+  const cardRoot = target?.closest?.('[data-nav-index]')
+  if (!cardRoot) return true
+  return target !== cardRoot
+}
+
+function handleGridDirectionKey(e, key) {
+  if (actionPanelVisible.value) return false
+  if (isStandaloneControlTarget(e?.target)) return false
+  return gridNav.navigate(key)
 }
 
 useKeymap(KEYMAP_SCOPES.PAGE, {
-  'ArrowRight': () => {
-    if (currentDisplayList.value.length === 0) return false
-    focusedCardIndex.value = Math.min(focusedCardIndex.value + 1, currentDisplayList.value.length - 1)
-    uiStore.focusGrid()
-    scrollFocusedCardIntoView()
-    return true
-  },
-  'ArrowLeft': () => {
-    if (currentDisplayList.value.length === 0) return false
-    focusedCardIndex.value = Math.max(focusedCardIndex.value - 1, 0)
-    uiStore.focusGrid()
-    scrollFocusedCardIntoView()
-    return true
-  },
-  'ArrowDown': () => {
-    if (currentDisplayList.value.length === 0) return false
-    focusedCardIndex.value = Math.min(focusedCardIndex.value + 3, currentDisplayList.value.length - 1)
-    uiStore.focusGrid()
-    scrollFocusedCardIntoView()
-    return true
-  },
-  'ArrowUp': () => {
-    if (currentDisplayList.value.length === 0) return false
-    focusedCardIndex.value = Math.max(focusedCardIndex.value - 3, 0)
-    uiStore.focusGrid()
-    scrollFocusedCardIntoView()
-    return true
-  },
-  'Enter': () => {
+  'ArrowRight': (e) => handleGridDirectionKey(e, 'ArrowRight'),
+  'ArrowLeft': (e) => handleGridDirectionKey(e, 'ArrowLeft'),
+  'ArrowDown': (e) => handleGridDirectionKey(e, 'ArrowDown'),
+  'ArrowUp': (e) => handleGridDirectionKey(e, 'ArrowUp'),
+  'Home': (e) => handleGridDirectionKey(e, 'Home'),
+  'End': (e) => handleGridDirectionKey(e, 'End'),
+  'PageUp': (e) => handleGridDirectionKey(e, 'PageUp'),
+  'PageDown': (e) => handleGridDirectionKey(e, 'PageDown'),
+  'Enter': (e) => {
+    if (actionPanelVisible.value) return false
+    if (isStandaloneOrInnerActionControl(e?.target)) return false
     const p = currentDisplayList.value[focusedCardIndex.value]
     if (p) {
       const pid = getPluginId(p)
@@ -470,9 +615,19 @@ useKeymap(KEYMAP_SCOPES.PAGE, {
     return false
   },
   'Ctrl+K': () => {
-    const p = currentDisplayList.value[focusedCardIndex.value]
-    if (p) {
-      toggleFavorite(getPluginId(p))
+    if (actionPanelVisible.value) {
+      actionPanelVisible.value = false
+      return true
+    }
+    if (focusedPlugin.value) {
+      actionPanelVisible.value = true
+      return true
+    }
+    return false
+  },
+  'Escape': () => {
+    if (actionPanelVisible.value) {
+      actionPanelVisible.value = false
       return true
     }
     return false
@@ -564,7 +719,23 @@ onMounted(() => {
   }
 })
 
+onActivated(() => {
+  isPageActive.value = true
+})
+
+onDeactivated(() => {
+  isPageActive.value = false
+  if (actionPanelVisible.value) {
+    actionPanelVisible.value = false
+  }
+})
+
 onBeforeUnmount(() => {
+  isPageActive.value = false
+  if (actionPanelVisible.value) {
+    actionPanelVisible.value = false
+    uiStore.setGlobalActionPanelVisible(false)
+  }
   // 取消事件订阅
   try {
     if (window.ztools && window.ztools.events) {
@@ -580,6 +751,8 @@ onBeforeUnmount(() => {
 
 <template>
   <div
+    ref="listContainerRef"
+    @mousemove="gridNav.handlePointerMove"
     style="
       display: flex;
       flex-direction: column;
@@ -664,8 +837,12 @@ onBeforeUnmount(() => {
             v-for="(p, index) in group.plugins"
             :key="getPluginId(p)"
             class="transition-all rounded-xl"
-            :class="{ 'is-list-card-focused': focusedCardIndex === previewFlatIndex(groupIndex, index) }"
+            :class="{ 'is-list-card-focused': !uiStore.isSearchInputActive && focusedCardIndex === previewFlatIndex(groupIndex, index) }"
+            :data-nav-index="previewFlatIndex(groupIndex, index)"
+            :data-nav-group="group.name"
             v-bind="cardProps(p)"
+            @click="handleCardFocus(previewFlatIndex(groupIndex, index))"
+            @focusin="handleCardFocus(previewFlatIndex(groupIndex, index))"
             @toggle-favorite="toggleFavorite"
             @open="goDetails"
             @open-app="openApp"
@@ -704,8 +881,11 @@ onBeforeUnmount(() => {
         v-for="(p, index) in items"
         :key="getPluginId(p)"
         class="transition-all rounded-xl"
-        :class="{ 'is-list-card-focused': focusedCardIndex === index }"
-        @click="focusedCardIndex = index; uiStore.focusGrid()"
+        :class="{ 'is-list-card-focused': !uiStore.isSearchInputActive && focusedCardIndex === index }"
+        :data-nav-index="index"
+        data-nav-group="flat"
+        @click="handleCardFocus(index)"
+        @focusin="handleCardFocus(index)"
       >
         <PluginCard3D
           v-bind="cardProps(p)"
@@ -758,6 +938,16 @@ onBeforeUnmount(() => {
       description="插件源码全部开源，投稿即提交 PR，5 分钟就能写一个自己的插件"
       link-text="访问插件仓库"
       @click="openExtensionsRepo"
+    />
+
+    <!-- 当前聚焦插件快捷动作面板 -->
+    <ActionPanelModal
+      :visible="actionPanelVisible"
+      :actions="activePluginActions"
+      :target-title="focusedPlugin?.name || ''"
+      placement="corner"
+      @close="actionPanelVisible = false"
+      @trigger="(act) => act?.props?.onAction?.()"
     />
   </div>
 </template>

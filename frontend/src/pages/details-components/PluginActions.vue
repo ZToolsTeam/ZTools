@@ -1,11 +1,15 @@
 <script setup>
-import { ArrowUpIcon, BanIcon, CirclePlayIcon, DownloadIcon, EllipsisIcon, ExternalLinkIcon, KeyboardIcon, MessageSquareIcon, RotateCwIcon, StarIcon, Trash2Icon } from '@lucide/vue'
+import { ArrowUpIcon, BanIcon, CirclePlayIcon, DownloadIcon, EllipsisIcon, ExternalLinkIcon, KeyboardIcon, MessageSquareIcon, RotateCcwIcon, RotateCwIcon, StarIcon, Trash2Icon } from '@lucide/vue'
 import { computed } from 'vue'
 import { SpinnerIcon, StarFilledIcon } from '@/utils/appIcons'
 import { RcButton, RcMenu } from '@/components/base'
 const props = defineProps({
   isInstalled: Boolean,
-  // 内置插件随客户端提供，不能卸载
+  isBundled: {
+    type: Boolean,
+    default: false
+  },
+  // 是否显示卸载菜单项（普通已装插件直接卸载，内置插件引导至设置页假卸载）
   canUninstall: {
     type: Boolean,
     default: true
@@ -123,6 +127,18 @@ const onMoreSelect = (key) => {
     <a-tooltip v-else-if="!isInstalled && installFailed && !downloading" :title="installError || '安装失败，点击重试'">
       <RcButton variant="danger" size="md" :icon="RotateCwIcon" @click="$emit('download')">重试</RcButton>
     </a-tooltip>
+
+    <!-- 已假卸载的内置插件：一键还原 -->
+    <RcButton
+      v-else-if="!isInstalled && isBundled"
+      variant="primary"
+      size="md"
+      :icon="RotateCcwIcon"
+      :loading="downloading"
+      @click="$emit('download')"
+    >
+      还原
+    </RcButton>
 
     <!-- 未安装：一键静默安装 -->
     <RcButton

@@ -123,11 +123,11 @@ describe('AdvancedSettings 设置页（单栏分组版式）', () => {
     wrapper.unmount()
   })
 
-  it('分组顺序为 外观 → 通用 → 快捷键 → 常用快捷键，开发者工具卡片已删除，且不再渲染装饰图标', async () => {
+  it('分组顺序为 外观 → 通用 → 快捷键 → 常用快捷键 → 内置插件，开发者工具卡片已删除，且不再渲染装饰图标', async () => {
     const wrapper = mountPage()
     await flushPromises()
     expect(wrapper.find('.page-title').text()).toBe('设置')
-    expect(wrapper.findAll('.card-title').map((t) => t.text())).toEqual(['外观', '通用', '快捷键', '常用快捷键'])
+    expect(wrapper.findAll('.card-title').map((t) => t.text())).toEqual(['外观', '通用', '快捷键', '常用快捷键', '内置插件'])
     expect(wrapper.find('.setting-icon').exists()).toBe(false)
     expect(wrapper.find('.card-icon').exists()).toBe(false)
     wrapper.unmount()
@@ -204,6 +204,8 @@ describe('AdvancedSettings 设置页（单栏分组版式）', () => {
       '聚焦搜索', '动作面板', '切换到悬浮条', '打开设置', '返回主页'
     ])
     rows.forEach((row) => expect(row.findAll('kbd').length).toBeGreaterThan(0))
+    const openSettingsRow = rows.find((r) => r.find('.setting-label').text() === '打开设置')
+    expect(openSettingsRow?.findAll('kbd').map((k) => k.text())).toEqual(['Ctrl', 'I'])
     wrapper.unmount()
   })
 

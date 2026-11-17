@@ -196,7 +196,7 @@
 </template>
 
 <script setup>
-import { ref, computed, watch, nextTick, onUnmounted } from "vue";
+import { ref, computed, watch, nextTick, onMounted, onUnmounted } from "vue";
 import ShortcutKeys from '@/components/base/ShortcutKeys.vue'
 import { RcButton } from '@/components/base'
 
@@ -209,8 +209,17 @@ import ActionPanelModal from "./components/ActionPanelModal.vue";
 import ToastOverlay from "./components/ToastOverlay.vue";
 import { getHostMethods } from "./hostMethods.js";
 import { cleanUiText, formatActionShortcut, isDestructiveAction } from "./uiText.js";
+import { filterIncomingFiles } from "./fileInputFilter.js";
 import { useDeclarativeStack, assertClipboardText, hasOpenConfirm } from "./composables/useDeclarativeStack.js";
-import { useKeymap, registerKeyHandler, KEYMAP_SCOPES, dispatchKeyEvent, isComposingEvent } from "@/utils/keymap.js";
+import {
+  useKeymap,
+  registerKeyHandler,
+  KEYMAP_SCOPES,
+  dispatchKeyEvent,
+  isComposingEvent,
+  isInputElement,
+  isInteractiveControlTarget
+} from "@/utils/keymap.js";
 import { isMacOS } from "@/utils/platform.js";
 import { useUIStore } from "@/stores/ui.js";
 
@@ -392,25 +401,6 @@ watch(
   { immediate: true }
 );
 
-function normalizeAllowedExtension(ext) {
-  const trimmed = String(ext || "").trim().toLowerCase();
-  if (!trimmed) return "";
-  return trimmed.startsWith(".") ? trimmed : `.${trimmed}`;
-}
-
-function matchesExtensionFilter(filePath, allowedExtensions, allowDirectories) {
-  if (!Array.isArray(allowedExtensions) || allowedExtensions.length === 0) return true;
-  const normalizedList = allowedExtensions.map(normalizeAllowedExtension).filter(Boolean);
-  if (normalizedList.length === 0) return true;
-  const base = String(filePath || "").split(/[\\/]/).pop() || "";
-  const dotIdx = base.lastIndexOf(".");
-  if (dotIdx <= 0) {
-    return Boolean(allowDirectories);
-  }
-  const lowerBase = base.toLowerCase();
-  return normalizedList.some((ext) => lowerBase.endsWith(ext));
-}
-
 function handleHostFilesDropped(envelopeOrPayload) {
   const record = envelopeOrPayload && typeof envelopeOrPayload === "object" ? envelopeOrPayload : {};
   const payload = record.payload && typeof record.payload === "object" ? record.payload : record;
@@ -424,16 +414,10 @@ function handleHostFilesDropped(envelopeOrPayload) {
 
   const cfg = topFileInputConfig.value;
   const hostErrors = Array.isArray(payload.errors) ? payload.errors : [];
-  let extRejected = 0;
-  const acceptedFiles = [];
-
-  for (const filePath of rawFiles) {
-    if (matchesExtensionFilter(filePath, cfg?.extensions, cfg?.allowDirectories)) {
-      acceptedFiles.push(filePath);
-    } else {
-      extRejected += 1;
-    }
-  }
+  // 文件夹以主进程确认的 directories 为准，名称带点的文件夹不会被当成后缀不匹配
+  const filtered = filterIncomingFiles(rawFiles, payload.directories, cfg);
+  const extRejected = filtered.rejected;
+  const acceptedFiles = filtered.files;
 
   const totalRejected = hostErrors.length + extRejected;
   if (acceptedFiles.length === 0) {
@@ -464,6 +448,7 @@ function handleHostFilesDropped(envelopeOrPayload) {
   try {
     topFileInputHandler.value({
       files: acceptedFiles,
+      ...(filtered.directories.length > 0 ? { directories: filtered.directories } : {}),
       source: payload.source === "paste" ? "paste" : "drop",
       ...(typeof payload.targetFieldId === "string" && payload.targetFieldId ? { targetFieldId: payload.targetFieldId } : {}),
       rejectedCount: totalRejected
@@ -798,7 +783,7 @@ function openActionPanel(target) {
   actionPanelVisible.value = true;
 }
 
-/** 把焦点还给当前视图：列表聚焦搜索框，表单聚焦首个输入框，详情聚焦根节点 */
+/** 把焦点还给当前视图：列表聚焦搜索框，表单聚焦首个输入框，详情聚焦正文滚动容器 */
 function restoreViewFocus() {
   if (actionPanelVisible.value) return;
   if (typeof document === "undefined") return;
@@ -814,6 +799,8 @@ function restoreViewFocus() {
     listRendererRef.value.focusSearch();
   } else if (type === "Form" && formRendererRef.value?.focusFirstField?.()) {
     // 已聚焦首个输入框
+  } else if (type === "Detail" && detailRendererRef.value?.getScrollElement?.()) {
+    detailRendererRef.value.focusScroll?.();
   } else if (typeof root.focus === "function") {
     root.focus({ preventScroll: true });
   }
@@ -822,6 +809,10 @@ function restoreViewFocus() {
 function scheduleFocusRestore() {
   nextTick(() => restoreViewFocus());
 }
+
+onMounted(() => {
+  scheduleFocusRestore();
+});
 
 watch(actionPanelVisible, (visible, wasVisible) => {
   if (!visible) actionPanelTarget.value = null;
@@ -1021,7 +1012,8 @@ function normalizeShortcutKeyName(k) {
  * 插件动作快捷键匹配。cmd / ctrl 声明在 macOS 上只对应 ⌘（metaKey），⌃ 不再误触；
  * Windows 上只对应 Ctrl（ctrlKey）。
  */
-function matchActionShortcut(e, shortcut) {
+function matchActionShortcut(e, rawShortcut) {
+  const shortcut = typeof rawShortcut === "string" ? { modifiers: [], key: rawShortcut } : rawShortcut;
   if (!shortcut || typeof shortcut.key !== "string" || !shortcut.key.trim()) return false;
   const mods = Array.isArray(shortcut.modifiers)
     ? shortcut.modifiers.map((m) => String(m).toLowerCase())
@@ -1090,7 +1082,13 @@ function isEventForThisView(e) {
 /** 免开面板直接触发动作快捷键；在窗口级 keymap 中匹配，焦点落在 body 上也能命中 */
 function handleActionShortcut(e) {
   if (actionPanelVisible.value) return false;
-  if (!(e.ctrlKey || e.metaKey || e.altKey)) return false;
+  if (!(e.ctrlKey || e.metaKey || e.altKey)) {
+    const allowPlainDelete =
+      (e.key === "Delete" || e.key === "Backspace") &&
+      (!isInputElement(e.target) || !e.target.value) &&
+      !isInteractiveControlTarget(e.target, rootRef.value);
+    if (!allowPlainDelete) return false;
+  }
   if (!isEventForThisView(e)) return false;
   if (isNativeEditCombo(e)) return false;
   const matched = activeActions.value.find((act) => matchActionShortcut(e, act.props?.shortcut));
@@ -1106,6 +1104,18 @@ onUnmounted(() => unregisterActionShortcuts());
 function currentListHasCheckableTarget() {
   const item = resolvedSelectedItem.value;
   return item && item.props?.checkable && typeof (item.props.onCheckChange || item.props.onToggleCheck) === "function" ? item : null;
+}
+
+function isFocusInListDetailScroll(e) {
+  return Boolean(
+    currentDescriptor.value?.type === "List" &&
+    currentDescriptor.value?.props?.isShowingDetail &&
+    e?.target?.closest?.("[data-decl-detail-scroll]")
+  );
+}
+
+function isFocusInWorkbenchField(e) {
+  return Boolean(e?.target?.closest?.("[data-decl-field-id]"));
 }
 
 // 统一分发器注册声明式舞台按键
@@ -1149,30 +1159,68 @@ useKeymap(KEYMAP_SCOPES.DECLARATIVE, {
     handleBack();
     return true;
   },
-  'ArrowDown': (e, { inInput }) => {
-    if (actionPanelVisible.value) return false;
+  'ArrowDown': (e) => {
+    if (actionPanelVisible.value || !isEventForThisView(e)) return false;
     if (currentDescriptor.value?.type === "List") {
+      if (isFocusInListDetailScroll(e) || isFocusInWorkbenchField(e)) return false;
       listRendererRef.value?.focusNextItem();
       return true;
     }
     return false;
   },
-  'ArrowUp': (e, { inInput }) => {
-    if (actionPanelVisible.value) return false;
+  'ArrowUp': (e) => {
+    if (actionPanelVisible.value || !isEventForThisView(e)) return false;
     if (currentDescriptor.value?.type === "List") {
+      if (isFocusInListDetailScroll(e) || isFocusInWorkbenchField(e)) return false;
       listRendererRef.value?.focusPrevItem();
       return true;
     }
     return false;
   },
-  // 布局二：焦点不在输入框时 ← / → 切换左栏导航与右栏明细（搜索框里由 ListRenderer 按光标位置处理）
+  // 布局二：焦点不在输入框时 ← / → 切换左栏导航与右栏明细；列表右侧详情预览获焦时 ← 回到搜索框
   'ArrowLeft': (e, { inInput }) => {
-    if (actionPanelVisible.value || inInput || currentDescriptor.value?.type !== "List") return false;
+    if (actionPanelVisible.value || !isEventForThisView(e)) return false;
+    if (currentDescriptor.value?.type !== "List") return false;
+    if (isFocusInListDetailScroll(e)) {
+      listRendererRef.value?.focusSearch?.();
+      return true;
+    }
+    if (inInput || isInteractiveControlTarget(e.target, rootRef.value)) return false;
     return listRendererRef.value?.setActivePane?.("nav") === true;
   },
   'ArrowRight': (e, { inInput }) => {
-    if (actionPanelVisible.value || inInput || currentDescriptor.value?.type !== "List") return false;
+    if (actionPanelVisible.value || !isEventForThisView(e)) return false;
+    if (inInput || currentDescriptor.value?.type !== "List") return false;
+    if (isInteractiveControlTarget(e.target, rootRef.value)) return false;
     return listRendererRef.value?.setActivePane?.("sub") === true;
+  },
+  'PageDown': (e) => {
+    if (actionPanelVisible.value || !isEventForThisView(e)) return false;
+    if (currentDescriptor.value?.type !== "List") return false;
+    if (isFocusInListDetailScroll(e) || isFocusInWorkbenchField(e)) return false;
+    listRendererRef.value?.focusPageItems?.(8);
+    return true;
+  },
+  'PageUp': (e) => {
+    if (actionPanelVisible.value || !isEventForThisView(e)) return false;
+    if (currentDescriptor.value?.type !== "List") return false;
+    if (isFocusInListDetailScroll(e) || isFocusInWorkbenchField(e)) return false;
+    listRendererRef.value?.focusPageItems?.(-8);
+    return true;
+  },
+  'Home': (e, { inInput }) => {
+    if (actionPanelVisible.value || inInput || !isEventForThisView(e)) return false;
+    if (currentDescriptor.value?.type !== "List") return false;
+    if (isFocusInListDetailScroll(e) || isFocusInWorkbenchField(e)) return false;
+    listRendererRef.value?.focusFirstItem?.();
+    return true;
+  },
+  'End': (e, { inInput }) => {
+    if (actionPanelVisible.value || inInput || !isEventForThisView(e)) return false;
+    if (currentDescriptor.value?.type !== "List") return false;
+    if (isFocusInListDetailScroll(e) || isFocusInWorkbenchField(e)) return false;
+    listRendererRef.value?.focusLastItem?.();
+    return true;
   },
   // 焦点不在输入框（例如刚点过列表行）时直接打字：把焦点交回搜索框，字符照常输入进去
   onKeyDown: (e, { inInput }) => {
@@ -1185,9 +1233,12 @@ useKeymap(KEYMAP_SCOPES.DECLARATIVE, {
     listRendererRef.value?.focusSearch?.();
     return false;
   },
-  'Enter': (e, { inInput }) => {
-    if (actionPanelVisible.value) return false;
+  'Enter': (e) => {
+    if (actionPanelVisible.value || !isEventForThisView(e)) return false;
     if (e.target && e.target.tagName === "TEXTAREA") {
+      return false;
+    }
+    if (isInteractiveControlTarget(e.target, rootRef.value)) {
       return false;
     }
     if (primaryAction.value) {
@@ -1197,7 +1248,10 @@ useKeymap(KEYMAP_SCOPES.DECLARATIVE, {
     return false;
   },
   'Space': (e, { inInput }) => {
-    if (actionPanelVisible.value) return false;
+    if (actionPanelVisible.value || !isEventForThisView(e)) return false;
+    if (isInteractiveControlTarget(e.target, rootRef.value)) {
+      return false;
+    }
     const declaredSpace = activeActions.value.find((act) => {
       const sc = act.props?.shortcut;
       return sc === "space" || (sc && normalizeShortcutKeyName(sc.key) === "space" && !(sc.modifiers || []).length);

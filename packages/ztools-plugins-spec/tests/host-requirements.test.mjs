@@ -1,4 +1,4 @@
-import { describe, it } from 'node:test'
+import { after, describe, it } from 'node:test'
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import os from 'node:os'
@@ -6,8 +6,29 @@ import path from 'node:path'
 import { compareAppVersion, resolvePluginMinAppVersion, HOST_API_REQUIREMENTS } from '../src/host-requirements.js'
 import { validateCatalogPluginItem, validatePluginManifest } from '../src/validator.js'
 
+const tmpDirs = new Set()
+
+function removeTempDir(dir) {
+  if (!dir) return
+  tmpDirs.delete(dir)
+  try {
+    fs.rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 })
+  } catch {
+    // 单个临时目录删除异常不中断其余清理
+  }
+}
+
+function cleanupAllTempDirs() {
+  for (const dir of [...tmpDirs]) {
+    removeTempDir(dir)
+  }
+}
+
+process.once('exit', cleanupAllTempDirs)
+
 function makePlugin(files) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ztools-host-req-'))
+  tmpDirs.add(dir)
   for (const [rel, content] of Object.entries(files)) {
     fs.mkdirSync(path.dirname(path.join(dir, rel)), { recursive: true })
     fs.writeFileSync(path.join(dir, rel), content)
@@ -16,6 +37,9 @@ function makePlugin(files) {
 }
 
 describe('最低客户端版本（minAppVersion）', () => {
+  after(() => {
+    cleanupAllTempDirs()
+  })
   it('compareAppVersion 按 4 段数字比较，缺的段按 0', () => {
     assert.equal(compareAppVersion('1.1.8.3', '1.1.8.2'), 1)
     assert.equal(compareAppVersion('1.1.8', '1.1.8.0'), 0)
@@ -61,13 +85,13 @@ describe('最低客户端版本（minAppVersion）', () => {
     ]
     for (const method of methods) {
       const dir = makePlugin({ 'dist/host-service.js': `callHostTransport('${method}', {})` })
-      t.after(() => fs.rmSync(dir, { recursive: true, force: true }))
+      t.after(() => removeTempDir(dir))
       assert.equal(resolvePluginMinAppVersion(dir).minAppVersion, '1.1.8.5', method)
       assert.equal(resolvePluginMinAppVersion(dir, { minAppVersion: '1.1.8.4' }).minAppVersion, '1.1.8.5', method, '手写 1.1.8.4 的旧清单不能把要求降下来')
       assert.equal(resolvePluginMinAppVersion(dir, { minAppVersion: '1.2.0' }).minAppVersion, '1.2.0', method)
     }
     const dir = makePlugin({ 'dist/index.js': "'get_keyboard_lock_status'; 'not_downloads_manager'; 'office_documents_x'; 'my_tls_inspector'" })
-    t.after(() => fs.rmSync(dir, { recursive: true, force: true }))
+    t.after(() => removeTempDir(dir))
     assert.equal(resolvePluginMinAppVersion(dir).minAppVersion, undefined)
   })
 

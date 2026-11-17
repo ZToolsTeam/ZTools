@@ -42,6 +42,25 @@ export function isPluginApiAvailable() {
 }
 
 /**
+ * 判断当前渲染上下文是否处于不承载工作台主路由的辅助窗口（极客悬浮条或独立分离插件窗）
+ * @returns {boolean}
+ */
+function isDetachedAuxiliaryWindow() {
+  if (typeof window === 'undefined') return false
+  const mode = window.__ztoolsWindowMode
+  const search = window.location?.search || ''
+  const hash = window.location?.hash || ''
+  const isLauncher =
+    mode === 'launcher' || search.includes('mode=launcher') || hash.includes('launcher')
+  const isPopout =
+    mode === 'popout' ||
+    search.includes('popout=1') ||
+    hash.startsWith('#/popout/') ||
+    hash.includes('/popout/')
+  return isLauncher || isPopout
+}
+
+/**
  * 校验启动载荷类型与序列化合法性（不超过 64KB）
  * @param {unknown} payload
  * @returns {Record<string, unknown> | undefined}
@@ -103,23 +122,45 @@ export async function openInternalPlugin(pluginId, payload, options = {}) {
 
   // 2. 优雅降级：在纯 Web/开发调试环境或原生唤起失败时，降级到本地路由组件
   if (def?.fallbackRoute && targetRouter) {
-    try {
-      const targetRoute = {
-        ...def.fallbackRoute,
-        query: {
-          ...(def.fallbackRoute.query || {}),
-          ...(options.routeOptions?.query || {})
-        },
-        params: {
-          ...(def.fallbackRoute.params || {}),
-          ...(options.routeOptions?.params || {})
-        }
+    const targetRoute = {
+      ...def.fallbackRoute,
+      query: {
+        ...(def.fallbackRoute.query || {}),
+        ...(options.routeOptions?.query || {})
+      },
+      params: {
+        ...(def.fallbackRoute.params || {}),
+        ...(options.routeOptions?.params || {})
       }
+    }
 
-      await targetRouter.push(targetRoute)
-      return { success: true, fallback: true, type: 'route', target: targetRoute }
-    } catch (routeErr) {
-      console.error(`[internalPlugins] 降级路由导航失败 (${pluginId}):`, routeErr)
+    // 极客悬浮条与独立分离插件窗不承载工作台路由，需委托主窗口展开并跳转目标路由
+    if (
+      !options.router &&
+      isDetachedAuxiliaryWindow() &&
+      typeof window !== 'undefined' &&
+      typeof window.__ztoolsLauncher?.expandToDashboard === 'function'
+    ) {
+      try {
+        const resolvedPath =
+          typeof targetRouter.resolve === 'function'
+            ? targetRouter.resolve(targetRoute).fullPath
+            : '/advanced-settings'
+        const expandRes = await window.__ztoolsLauncher.expandToDashboard(resolvedPath)
+        if (expandRes === undefined || expandRes === true || (expandRes && expandRes.success !== false)) {
+          return { success: true, fallback: true, type: 'route', target: targetRoute }
+        }
+        console.warn(`[internalPlugins] 委托主窗口导航返回失败 (${pluginId}):`, expandRes)
+      } catch (expandErr) {
+        console.error(`[internalPlugins] 委托主窗口导航异常 (${pluginId}):`, expandErr)
+      }
+    } else {
+      try {
+        await targetRouter.push(targetRoute)
+        return { success: true, fallback: true, type: 'route', target: targetRoute }
+      } catch (routeErr) {
+        console.error(`[internalPlugins] 降级路由导航失败 (${pluginId}):`, routeErr)
+      }
     }
   }
 

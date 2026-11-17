@@ -22,6 +22,8 @@ export interface BuiltinPluginHostServiceOptions {
   windowControl?: HostWindowControlPort | null | undefined
   pathAuthority?: HostPathAuthorityPort | null | undefined
   platform?: NodeJS.Platform | undefined
+  /** 业务数据根目录（用于默认工作区数据库等受控持久化路径） */
+  dataRoot?: string | undefined
   /** 文字识别插件用到的系统能力（macOS 本地识别、框选屏幕、读剪贴板图片） */
   mediaOcr?: Partial<MediaOcrHostDeps> | undefined
 }
@@ -187,6 +189,7 @@ export class BuiltinPluginHostService {
       clipboard: options.clipboard ?? null,
       processService: options.processService ?? null,
       windowControl: options.windowControl ?? null,
+      dataRoot: options.dataRoot,
       authorizeExistingPath: (rawPath, caller, access) =>
         this.#authorizeExistingPath(rawPath, caller, access),
       authorizeOutputPath: (rawPath, caller) => this.#authorizeOutputPath(rawPath, caller)

@@ -265,7 +265,7 @@ test('configures the locked Universal target and skips a second lipo of classic-
 
 test('双端 ASAR 配置保留原生模块、ExifTool 与 onnxruntime 运行时实体文件', async (t) => {
   const temporaryRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'ztools-asar-native-'))
-  t.after(() => fs.rmSync(temporaryRoot, { recursive: true, force: true }))
+  t.after(() => fs.rmSync(temporaryRoot, { recursive: true, force: true, maxRetries: 3, retryDelay: 50 }))
   const sourceRoot = path.join(temporaryRoot, 'source')
   const nativeFile = 'node_modules/classic-level/prebuilds/darwin-x64+arm64/classic-level.node'
   const exiftoolFile = 'node_modules/exiftool-vendored.pl/bin/exiftool'
@@ -430,20 +430,23 @@ test('passes universal options to the injected packager after reserving a fresh 
 test('staging refuses either required native helper missing from the Mach-O audit before writing its target marker', async () => {
   for (const missing of ['ZToolsMacNetwork', 'ZToolsMacClipboard', 'ZToolsPathAccessBroker', 'ZToolsMacVision', 'ZToolsMacAudio', 'ZToolsMacInputLock', 'ZToolsMacDns', 'ZToolsMacHosts', 'ZToolsMacHotkeys', 'ZToolsMacStartup', 'ZToolsMacDisplay']) {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ztools-macos-required-helper-'))
-    seedIcon(root)
-    const packagePath = path.join(root, 'artifacts', sourcePackage.version, 'darwin-universal', 'ZTools-darwin-universal')
-    const app = path.join(packagePath, 'ZTools.app'), resources = path.join(app, 'Contents', 'Resources')
-    await assert.rejects(stageMacUniversal({ appBundleId: 'org.example.ztools', shortVersion: '1.1.7', buildVersion: '1171',
-      platform: 'darwin', sourceRoot: root, sourcePackage, minimumOs: '13.0', buildNative: fixtureNative,
-      buildPathAccessNative: fixturePathAccess, buildVisionNative: fixtureVision, buildAudioNative: fixtureAudio, buildInputLockNative: fixtureInputLock, buildDnsNative: fixtureDns, buildHostsNative: fixtureHosts, buildStartupNative: fixtureStartup, buildDisplayNative: fixtureDisplay, buildHotkeysNative: fixtureHotkeys, buildNetworkNative: fixtureNetwork, build: async () => {}, stdout: () => {},
-      packageApp: async () => {
-        const addon = path.join(resources, 'app.asar.unpacked', 'node_modules', 'classic-level', 'prebuilds', 'darwin-x64+arm64', 'classic-level.node')
-        fs.mkdirSync(path.dirname(addon), { recursive: true }); fs.writeFileSync(addon, 'fixture addon'); packIcon(root, app); return [packagePath]
-      }, verifyBundle: () => ({ machoFiles: [...(missing === 'ZToolsMacNetwork' ? [] : [NETWORK_HELPER_EXECUTABLE]), 'Contents/MacOS/ZTools', ...['ZToolsMacClipboard', 'ZToolsPathAccessBroker', 'ZToolsMacVision', 'ZToolsMacAudio', 'ZToolsMacInputLock', 'ZToolsMacDns', 'ZToolsMacHosts', 'ZToolsMacHotkeys', 'ZToolsMacStartup', 'ZToolsMacDisplay']
-        .filter(name => name !== missing).map(name => `Contents/Resources/native/${name}`)] })
-    }), /REQUIRED_MAC_HELPER_MACHO_MISSING/)
-    assert.equal(fs.existsSync(path.join(resources, 'ztools-runtime-target.json')), false)
-    // Retain the failed, owned synthetic staging for diagnosis.
+    try {
+      seedIcon(root)
+      const packagePath = path.join(root, 'artifacts', sourcePackage.version, 'darwin-universal', 'ZTools-darwin-universal')
+      const app = path.join(packagePath, 'ZTools.app'), resources = path.join(app, 'Contents', 'Resources')
+      await assert.rejects(stageMacUniversal({ appBundleId: 'org.example.ztools', shortVersion: '1.1.7', buildVersion: '1171',
+        platform: 'darwin', sourceRoot: root, sourcePackage, minimumOs: '13.0', buildNative: fixtureNative,
+        buildPathAccessNative: fixturePathAccess, buildVisionNative: fixtureVision, buildAudioNative: fixtureAudio, buildInputLockNative: fixtureInputLock, buildDnsNative: fixtureDns, buildHostsNative: fixtureHosts, buildStartupNative: fixtureStartup, buildDisplayNative: fixtureDisplay, buildHotkeysNative: fixtureHotkeys, buildNetworkNative: fixtureNetwork, build: async () => {}, stdout: () => {},
+        packageApp: async () => {
+          const addon = path.join(resources, 'app.asar.unpacked', 'node_modules', 'classic-level', 'prebuilds', 'darwin-x64+arm64', 'classic-level.node')
+          fs.mkdirSync(path.dirname(addon), { recursive: true }); fs.writeFileSync(addon, 'fixture addon'); packIcon(root, app); return [packagePath]
+        }, verifyBundle: () => ({ machoFiles: [...(missing === 'ZToolsMacNetwork' ? [] : [NETWORK_HELPER_EXECUTABLE]), 'Contents/MacOS/ZTools', ...['ZToolsMacClipboard', 'ZToolsPathAccessBroker', 'ZToolsMacVision', 'ZToolsMacAudio', 'ZToolsMacInputLock', 'ZToolsMacDns', 'ZToolsMacHosts', 'ZToolsMacHotkeys', 'ZToolsMacStartup', 'ZToolsMacDisplay']
+          .filter(name => name !== missing).map(name => `Contents/Resources/native/${name}`)] })
+      }), /REQUIRED_MAC_HELPER_MACHO_MISSING/)
+      assert.equal(fs.existsSync(path.join(resources, 'ztools-runtime-target.json')), false)
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true, maxRetries: 3, retryDelay: 50 })
+    }
   }
 })
 

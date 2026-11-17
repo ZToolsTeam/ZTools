@@ -139,6 +139,7 @@ import { useHostWindowApi } from '@/composables/useHostWindowApi'
 import { getBundledPluginEntry, resolveBundledReplacement, resolveBundledReplacementFeature } from '@/utils/bundledPlugins'
 import { useDeclarativePluginSession } from '@/declarative/composables/useDeclarativePluginSession'
 import { isHandoffId, requestPopoutWindow, takePopoutHandoff } from '@/declarative/popoutHandoff'
+import { track } from '@edition'
 
 // 宿主窗口控制（弹出窗口调整尺寸、置顶），经 composable 访问，页面不直接依赖 api 层
 const nativeWin = useHostWindowApi()
@@ -339,6 +340,32 @@ watch(
     pendingHandoffNotice.value = result.status === 'failed' || result.status === 'timeout'
       ? '未能恢复弹出前的内容'
       : result.notice || ''
+  },
+  { immediate: true }
+)
+
+// 声明式插件在工作台或独立窗口真实就绪可渲染时上报 plugin_open（从已打开视图经 popoutHandoff 移交恢复时不重复上报）
+let lastTrackedOpenKey = ''
+
+watch(
+  [plugin, handoffPending, effectiveIsPopout, targetFeatureCode, routeHandoffId],
+  ([currentPlugin, isPending, isPopout, featureCode, handoffId]) => {
+    if (!currentPlugin || !currentPlugin.command || isPending) {
+      if (!currentPlugin) {
+        lastTrackedOpenKey = ''
+      }
+      return
+    }
+    const resolvedId = currentPlugin.pluginId || targetPluginId.value
+    if (!resolvedId) return
+    const source = isPopout ? 'popout' : 'workbench'
+    const openKey = `${source}:${resolvedId}:${featureCode || ''}`
+    if (openKey === lastTrackedOpenKey) return
+    lastTrackedOpenKey = openKey
+    if (isPopout && isHandoffId(handoffId)) {
+      return
+    }
+    track('plugin_open', resolvedId, { source, plugin_type: 'declarative' })
   },
   { immediate: true }
 )

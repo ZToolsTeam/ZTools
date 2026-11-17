@@ -10,8 +10,9 @@ test('unsafe/unknown command options reject before App execution', () => {
   assert.deepEqual(parseConfigRestartArgs(['--help']), { help: true })
 })
 
-test('persisted bytes must contain the exact written value, including BOM JSON compatibility', () => {
+test('persisted bytes must contain the exact written value, including BOM JSON compatibility', (t) => {
   const output = fs.mkdtempSync(path.join(os.tmpdir(), 'ZTools-config-restart-contract-'))
+  t.after(() => fs.rmSync(output, { recursive: true, force: true, maxRetries: 3, retryDelay: 50 }))
   const file = path.join(output, 'user_settings.json')
   fs.writeFileSync(file, '\uFEFF' + JSON.stringify({ mergeCheckpointProbe: { value: 'expected-值' } }))
   const evidence = readConfigRestartEvidence(file, 'expected-值')
@@ -22,8 +23,9 @@ test('persisted bytes must contain the exact written value, including BOM JSON c
   assert.throws(() => readConfigRestartEvidence(file, 'expected-值'), { message: 'PERSISTED_CONFIG_MISMATCH' })
 })
 
-test('existing output is never reused or overwritten and fails before an App is launched', { skip: process.platform !== 'win32' }, async () => {
+test('existing output is never reused or overwritten and fails before an App is launched', { skip: process.platform !== 'win32' }, async (t) => {
   const output = fs.mkdtempSync(path.join(os.tmpdir(), 'ZTools-config-restart-existing-'))
+  t.after(() => fs.rmSync(output, { recursive: true, force: true, maxRetries: 3, retryDelay: 50 }))
   const sentinel = path.join(output, 'sentinel.txt')
   fs.writeFileSync(sentinel, 'preserve-existing-evidence')
   await assert.rejects(runConfigRestart({ output }), { code: 'EEXIST' })

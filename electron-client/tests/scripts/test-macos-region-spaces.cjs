@@ -29,6 +29,11 @@ function finish(error) {
   if (error) console.error(error)
   spaceHost?.kill('SIGTERM')
   for (const window of BrowserWindow.getAllWindows()) window.destroy()
+  try {
+    fs.rmSync(dataRoot, { recursive: true, force: true, maxRetries: 3, retryDelay: 50 })
+  } catch (cleanupError) {
+    console.warn(cleanupError)
+  }
   app.exit(error ? 1 : 0)
 }
 

@@ -145,7 +145,7 @@ test('TrayController builds Raycast-aligned menu items and dispatches actions ac
 
   const settingsItem = tray.findItem('open-settings')
   assert.equal(settingsItem.label, '偏好设置...')
-  assert.equal(settingsItem.accelerator, 'Command+,')
+  assert.equal(settingsItem.accelerator, 'Command+I')
 
   // 旧“启用超级面板”菜单项已移除
   assert.equal(tray.latestMenu.some((item) => item.id === 'toggle-super-panel'), false)
@@ -190,7 +190,7 @@ test('TrayController falls back to showMainWindow when optional callbacks are om
 
   await controller.start()
   const tray = trays[0]!
-  assert.equal(tray.findItem('open-settings').accelerator, 'Ctrl+,')
+  assert.equal(tray.findItem('open-settings').accelerator, 'Ctrl+I')
   assert.equal(tray.latestMenu.some((item) => item.id === 'relaunch'), false)
 
   // Omitted optional callbacks safely fall back to showMainWindow and do not throw out of click handlers

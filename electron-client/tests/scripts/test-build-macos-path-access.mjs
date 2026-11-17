@@ -11,9 +11,9 @@ test('path broker Mac build refuses Windows and missing deployment policy before
   assert.equal(main(['--help']), 0)
 })
 
-test('Mac path broker builds maintained core and broker for both slices with strict compilation and minimum OS checks', () => {
+test('Mac path broker builds maintained core and broker for both slices with strict compilation and minimum OS checks', (t) => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ztools-path-build-')), calls = [], audits = []
-  // Retain owned fixture output for diagnostics; no cleanup of caller-provided paths.
+  t.after(() => fs.rmSync(root, { recursive: true, force: true, maxRetries: 3, retryDelay: 50 }))
   const outputRoot = path.join(root, 'build')
   const result = buildMacPathAccess({ platform: 'darwin', outputRoot, minimumOs: '13.0',
     exec(tool, argv, options) {
@@ -30,15 +30,16 @@ test('Mac path broker builds maintained core and broker for both slices with str
     assert.equal(options.timeout, 120000); assert.ok(argv.includes('-Werror')); assert.ok(argv.includes('-mmacosx-version-min=13.0'))
     assert.ok(argv.some(arg => arg.endsWith('ZToolsPathAccess/path_access.cpp') || arg.endsWith('ZToolsPathAccess\\path_access.cpp')))
     assert.ok(argv.some(arg => arg.endsWith('ZToolsPathAccess/broker.cpp') || arg.endsWith('ZToolsPathAccess\\broker.cpp')))
-    assert.ok(argv.some(arg => arg.endsWith('ZToolsPathAccess/trash_mac.mm')))
+    assert.ok(argv.some(arg => arg.endsWith('ZToolsPathAccess/trash_mac.mm') || arg.endsWith('ZToolsPathAccess\\trash_mac.mm')))
     assert.ok(argv.includes('Foundation')); assert.ok(argv.includes('-fobjc-arc'))
   }
   assert.deepEqual(audits.map(item => item[1]), ['arm64', 'x86_64'])
   assert.throws(() => buildMacPathAccess({ platform: 'darwin', outputRoot, minimumOs: '13.0' }), /EEXIST/)
 })
 
-test('Mac path broker fails closed on thin binaries and an excessive actual deployment version', () => {
+test('Mac path broker fails closed on thin binaries and an excessive actual deployment version', (t) => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ztools-path-build-reject-'))
+  t.after(() => fs.rmSync(root, { recursive: true, force: true, maxRetries: 3, retryDelay: 50 }))
   for (const mode of ['thin', 'os']) {
     assert.throws(() => buildMacPathAccess({ platform: 'darwin', outputRoot: path.join(root, mode), minimumOs: '13.0',
       exec: (_tool, argv) => argv.includes('-archs') ? mode === 'thin' ? 'arm64' : 'arm64 x86_64' : '',

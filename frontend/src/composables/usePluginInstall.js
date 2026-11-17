@@ -1,6 +1,7 @@
 import { usePluginsStore } from '@/stores/plugins'
 import { useToast } from '@/composables/useToast'
 import { isPluginVersionIncompatibleError, getPluginVersionIncompatibleMessage } from '@/api/apiserver'
+import { isBundledPlugin } from '@/utils/bundledPlugins'
 import { onAuthRequired } from '@edition'
 
 /** 统一安装入口反馈，只有核验成功才显示完成。登录等入口前置条件由调用方提供。 */
@@ -11,6 +12,17 @@ export function usePluginInstall() {
     if (!pluginId) return
     if (store.isRevoked(pluginId)) {
       toastError('无法安装：' + (store.getRevokedReason(pluginId) || '该插件已被官方下架禁用'))
+      return
+    }
+    // 已被用户假卸载（隐藏）的内置插件：无需登录或远程下载，直接本地一键还原
+    if (isBundledPlugin(pluginId) && store.isBundledHidden(pluginId)) {
+      if (store.isTogglingBundled(pluginId)) return
+      try {
+        const res = await store.restoreBundledPlugin(pluginId)
+        if (res?.success) toastSuccess('已还原内置插件')
+      } catch (error) {
+        toastError('还原失败: ' + (error?.message || error))
+      }
       return
     }
     if (store.isInstalling(pluginId)) {

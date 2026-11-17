@@ -11,8 +11,9 @@ import { CdpClient, runMainPrebootIsolationGate, validatePrebootPathReadback, va
 
 const clientRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..')
 
-function fixture() {
+function fixture(t) {
   const outputRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'preboot-gate-'))
+  t.after(() => fs.rmSync(outputRoot, { recursive: true, force: true, maxRetries: 3, retryDelay: 50 }))
   const appRoot = path.join(outputRoot, 'app')
   const profileRoot = path.join(outputRoot, randomUUID())
   fs.mkdirSync(appRoot)
@@ -77,8 +78,8 @@ function setupClient(config, { identity = {}, pause = {}, pauses, identities = {
   return { calls, client, fetchImpl, connect, disposed: () => disposed, identityEvaluations: () => identityEvaluations }
 }
 
-test('preboot gate proves Main first line and process identity before setting paths, re-reads them, then resumes once', async () => {
-  const { config } = fixture()
+test('preboot gate proves Main first line and process identity before setting paths, re-reads them, then resumes once', async (t) => {
+  const { config } = fixture(t)
   const fake = setupClient(config)
   const result = await runMainPrebootIsolationGate(config, { platform: 'win32', fetchImpl: fake.fetchImpl, connect: fake.connect })
   assert.equal(result.status, 'PASS')
@@ -96,8 +97,8 @@ test('preboot gate proves Main first line and process identity before setting pa
   assert.equal(fake.disposed(), false)
 })
 
-test('approved Electron launcher is isolated at its first line before bootstrap is allowed to run', async () => {
-  const { config } = fixture()
+test('approved Electron launcher is isolated at its first line before bootstrap is allowed to run', async (t) => {
+  const { config } = fixture(t)
   const launcherPath = path.join(config.appRoot, 'resources', 'default_app.asar', 'main.js')
   config.launcherPath = launcherPath
   config.appName = 'ztools-electron-client'
@@ -122,8 +123,8 @@ test('approved Electron launcher is isolated at its first line before bootstrap 
   assert.ok(pathReadbackIndex < breakpointIndex && breakpointIndex < firstResumeIndex)
 })
 
-test('unapproved launcher identity fails before path mutation or resume', async () => {
-  const { config } = fixture()
+test('unapproved launcher identity fails before path mutation or resume', async (t) => {
+  const { config } = fixture(t)
   config.launcherPath = path.join(config.appRoot, 'resources', 'default_app.asar', 'main.js')
   const launcherPause = { reason: 'Break on start', callFrames: [{ callFrameId: 'loader-frame',
     url: pathToFileURL(config.launcherPath).href, location: { scriptId: 'loader-script', lineNumber: 0 } }] }
@@ -137,8 +138,8 @@ test('unapproved launcher identity fails before path mutation or resume', async 
   assert.equal(fake.calls.includes('Debugger.resume'), false)
 })
 
-test('a wrong Main PID stops before path mutation and never resumes the process', async () => {
-  const { config } = fixture()
+test('a wrong Main PID stops before path mutation and never resumes the process', async (t) => {
+  const { config } = fixture(t)
   const fake = setupClient(config, { identity: { pid: config.childPid + 1 } })
   await assert.rejects(runMainPrebootIsolationGate(config, { platform: 'win32', fetchImpl: fake.fetchImpl, connect: fake.connect }),
     error => error.message === 'MAIN_PID_MISMATCH' && error.prebootIsolationPaused === true)
@@ -147,8 +148,8 @@ test('a wrong Main PID stops before path mutation and never resumes the process'
   assert.equal(fake.disposed(), false)
 })
 
-test('a non-entry or non-first-line pause is fail-closed before Main evaluation', async () => {
-  const { config } = fixture()
+test('a non-entry or non-first-line pause is fail-closed before Main evaluation', async (t) => {
+  const { config } = fixture(t)
   const wrongUrl = setupClient(config, { pause: { callFrames: [{ callFrameId: 'frame-2',
     url: pathToFileURL(path.join(config.appRoot, 'wrong.js')).href, location: { lineNumber: 0 } }] } })
   await assert.rejects(runMainPrebootIsolationGate(config, { platform: 'win32', fetchImpl: wrongUrl.fetchImpl, connect: wrongUrl.connect }),
@@ -173,22 +174,22 @@ test('a non-entry or non-first-line pause is fail-closed before Main evaluation'
   assert.equal(unsafePrefix.calls.includes('Debugger.resume'), false)
 })
 
-test('path set and path readback mismatches both fail before resume', async () => {
-  const first = fixture()
+test('path set and path readback mismatches both fail before resume', async (t) => {
+  const first = fixture(t)
   const wrongSet = setupClient(first.config, { configuredPaths: { appDataPath: path.join(first.outputRoot, 'elsewhere') } })
   await assert.rejects(runMainPrebootIsolationGate(first.config, { platform: 'win32', fetchImpl: wrongSet.fetchImpl, connect: wrongSet.connect }),
     /ISOLATED_PATH_CONFIGURATION_FAILED/)
   assert.equal(wrongSet.calls.includes('Debugger.resume'), false)
 
-  const second = fixture()
+  const second = fixture(t)
   const wrongReadback = setupClient(second.config, { verifiedPaths: { sessionDataRealPath: second.outputRoot } })
   await assert.rejects(runMainPrebootIsolationGate(second.config, { platform: 'win32', fetchImpl: wrongReadback.fetchImpl, connect: wrongReadback.connect }),
     /ISOLATED_PATH_READBACK_FAILED/)
   assert.equal(wrongReadback.calls.includes('Debugger.resume'), false)
 })
 
-test('profile must be a real UUID-owned directory below the fresh output root', () => {
-  const { outputRoot, profile, config } = fixture()
+test('profile must be a real UUID-owned directory below the fresh output root', (t) => {
+  const { outputRoot, profile } = fixture(t)
   assert.equal(validatePrebootProfile(profile, outputRoot, { platform: 'win32' }).status, 'PASS')
   assert.equal(validatePrebootProfile({ ...profile, root: path.dirname(outputRoot) }, outputRoot, { platform: 'win32' }).code,
     'PROFILE_OUTSIDE_RUN_ROOT')
@@ -228,8 +229,8 @@ test('Darwin profile layout and consumed Main path realpath readback match produ
     { platform: 'darwin', requireRealPaths: true }).code, 'ISOLATED_PATH_READBACK_FAILED')
 })
 
-test('inspector target must be owned loopback endpoint with exactly one Node Main target', async () => {
-  const { config } = fixture()
+test('inspector target must be owned loopback endpoint with exactly one Node Main target', async (t) => {
+  const { config } = fixture(t)
   const fake = setupClient(config)
   const badEndpoint = async () => ({ ok: true, json: async () => [{ type: 'node', id: 'other',
     webSocketDebuggerUrl: `ws://example.test:${config.inspectPort}/other` }] })

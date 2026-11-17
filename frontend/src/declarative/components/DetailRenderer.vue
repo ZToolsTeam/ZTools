@@ -6,7 +6,9 @@
   -->
   <div
     v-if="isListDetail"
-    class="flex flex-col h-full min-h-0 overflow-y-auto declarative-scrollbar select-text w-full"
+    ref="scrollContainerRef"
+    tabindex="-1"
+    class="flex flex-col h-full min-h-0 overflow-y-auto declarative-scrollbar select-text w-full focus:outline-none"
     data-decl-detail-scroll
   >
     <div class="p-6 flex-shrink-0" data-decl-detail-body>
@@ -29,7 +31,12 @@
 
   <!-- 模式 B：独立 Detail 页面（左 Markdown 宽视口，右固定侧边栏）。动作统一由宿主底栏与 ⌘K 动作面板承担，页内不再重复一排按钮 -->
   <div v-else class="flex h-full overflow-hidden select-text w-full min-h-0">
-    <div class="flex-1 overflow-y-auto declarative-scrollbar p-6 min-w-0">
+    <div
+      ref="scrollContainerRef"
+      tabindex="-1"
+      class="flex-1 overflow-y-auto declarative-scrollbar p-6 min-w-0 focus:outline-none"
+      data-decl-detail-scroll
+    >
       <div v-if="descriptor.props?.isLoading" class="decl-detail-loading">
         <SpinnerIcon class="w-4 h-4" aria-hidden="true" />
         <span>加载中…</span>
@@ -49,7 +56,7 @@
 
 <script setup>
 import { SpinnerIcon } from '@/utils/appIcons'
-import { computed } from "vue";
+import { ref, computed } from "vue";
 import DetailMetadata from "./DetailMetadata.vue";
 import MarkdownContent from "./MarkdownContent.vue";
 
@@ -71,11 +78,17 @@ const props = defineProps({
 
 defineEmits(["trigger-action", "open-action-panel"]);
 
+const scrollContainerRef = ref(null);
+
 const metadataItems = computed(() => {
   const children = props.descriptor.props?.metadata?.children;
   return Array.isArray(children) ? children : [];
 });
 
+defineExpose({
+  focusScroll: () => scrollContainerRef.value?.focus?.({ preventScroll: true }),
+  getScrollElement: () => scrollContainerRef.value
+});
 </script>
 
 <style scoped>

@@ -19,6 +19,7 @@ import { feedbackEntry, headerExtraComponents, useFeedbackIndicator } from '@edi
 import { BrandGlyph } from '@/components/base'
 import ShortcutKeys from '@/components/base/ShortcutKeys.vue'
 import { CATEGORY_GLYPHS } from '@/utils/brandIcons'
+import { OPEN_SETTINGS_SHORTCUT } from '@/utils/keymap'
 
 const route = useRoute()
 const router = useRouter()
@@ -31,7 +32,7 @@ const { hasUnread: hasUnreadFeedback } = useFeedbackIndicator()
 
 const isCollapsed = computed(() => uiStore.isSidebarCollapsed)
 const toggleSidebar = () => uiStore.toggleSidebar()
-const settingsKey = 'Ctrl+,'
+const settingsKey = OPEN_SETTINGS_SHORTCUT
 
 // 响应式路由与即时操作融合的高亮判断：点击瞬间即时高亮反馈，彻底消除假死与卡顿感
 const isMyActive = computed(() => {
@@ -140,6 +141,64 @@ const goAbout = () => {
   nav.setPage('about')
   router.push(ROUTES.ABOUT)
 }
+
+// 侧边栏键盘导航：上下方向键与 Home/End 在可见导航项间循环聚焦，右方向键切入主内容网格
+const handleSidebarKeydown = (event) => {
+  const navEl = event.currentTarget
+  if (!navEl || event.ctrlKey || event.metaKey || event.altKey) return
+
+  const targetEl = event.target instanceof Element ? event.target : null
+  const activeEl =
+    typeof document !== 'undefined' &&
+    document.activeElement instanceof Element &&
+    navEl.contains(document.activeElement)
+      ? document.activeElement
+      : null
+  const currentItem =
+    targetEl?.closest?.('.sidebar-item[tabindex="0"]') ||
+    activeEl?.closest?.('.sidebar-item[tabindex="0"]')
+  if (!currentItem || !navEl.contains(currentItem)) return
+
+  if (event.key === 'ArrowRight') {
+    event.preventDefault()
+    event.stopPropagation()
+    if (typeof document !== 'undefined' && typeof document.activeElement?.blur === 'function') {
+      document.activeElement.blur()
+    }
+    uiStore.focusGrid()
+    return
+  }
+
+  const items = Array.from(navEl.querySelectorAll('.sidebar-item[tabindex="0"]')).filter((el) => {
+    if (el.hasAttribute('disabled') || el.getAttribute('aria-disabled') === 'true') return false
+    if (typeof getComputedStyle === 'function') {
+      const style = getComputedStyle(el)
+      if (style.display === 'none' || style.visibility === 'hidden') return false
+    }
+    return true
+  })
+  if (!items.length) return
+
+  const currentIndex = items.indexOf(currentItem)
+  if (currentIndex === -1) return
+
+  let nextIndex = -1
+  if (event.key === 'ArrowDown') {
+    nextIndex = (currentIndex + 1) % items.length
+  } else if (event.key === 'ArrowUp') {
+    nextIndex = (currentIndex - 1 + items.length) % items.length
+  } else if (event.key === 'Home') {
+    nextIndex = 0
+  } else if (event.key === 'End') {
+    nextIndex = items.length - 1
+  }
+
+  if (nextIndex !== -1) {
+    event.preventDefault()
+    event.stopPropagation()
+    items[nextIndex]?.focus?.()
+  }
+}
 </script>
 
 <template>
@@ -147,7 +206,7 @@ const goAbout = () => {
     class="sidebar-root h-full select-none flex-shrink-0"
     :class="{ 'is-collapsed': isCollapsed }"
   >
-    <nav class="sidebar-content h-full flex flex-col">
+    <nav class="sidebar-content h-full flex flex-col" @keydown="handleSidebarKeydown">
       <!-- 上半区：主页、插件市场及其下属分类 -->
       <div
         class="sidebar-nav-scroll flex-1 min-h-0 overflow-y-auto custom-scrollbar flex flex-col"
@@ -155,9 +214,14 @@ const goAbout = () => {
       >
         <div
           class="sidebar-item"
+          role="button"
+          tabindex="0"
+          :aria-current="isMyActive ? 'page' : undefined"
           :class="{ active: isMyActive }"
           :title="isCollapsed ? '主页' : undefined"
           @click="goMyPage"
+          @keydown.enter.prevent="goMyPage"
+          @keydown.space.prevent="goMyPage"
         >
           <BrandGlyph kind="home" :size="16" />
           <span v-if="!isCollapsed" class="sidebar-label truncate">主页</span>
@@ -165,9 +229,14 @@ const goAbout = () => {
 
         <div
           class="sidebar-item"
+          role="button"
+          tabindex="0"
+          :aria-current="isMarketActive ? 'page' : undefined"
           :class="{ active: isMarketActive }"
           :title="isCollapsed ? '插件市场' : undefined"
           @click="goMarket"
+          @keydown.enter.prevent="goMarket"
+          @keydown.space.prevent="goMarket"
         >
           <BrandGlyph kind="store" :size="16" />
           <span v-if="!isCollapsed" class="sidebar-label truncate">插件市场</span>
@@ -181,6 +250,7 @@ const goAbout = () => {
               v-for="i in 4"
               :key="'skeleton-' + i"
               class="sidebar-item sidebar-category-item"
+              aria-hidden="true"
               style="opacity: 0.4"
             >
               <div class="w-4 h-4 rounded bg-[var(--rc-text-muted)] opacity-30 flex-shrink-0"></div>
@@ -194,8 +264,13 @@ const goAbout = () => {
           <template v-else-if="categoriesStore.error">
             <div
               class="sidebar-item sidebar-category-item"
+              role="button"
+              tabindex="0"
+              :aria-current="undefined"
               :title="isCollapsed ? '重试分类' : undefined"
               @click="retryCategories"
+              @keydown.enter.prevent="retryCategories"
+              @keydown.space.prevent="retryCategories"
             >
               <RotateCwIcon class="w-4 h-4" />
               <span v-if="!isCollapsed" class="sidebar-label truncate">重试分类</span>
@@ -206,9 +281,14 @@ const goAbout = () => {
               v-for="c in categoryItems"
               :key="c.name"
               class="sidebar-item sidebar-category-item"
+              role="button"
+              tabindex="0"
+              :aria-current="isCategoryActive(c.name) ? 'page' : undefined"
               :class="{ active: isCategoryActive(c.name) }"
               :title="isCollapsed ? c.name : undefined"
               @click="selectCategory(c.name)"
+              @keydown.enter.prevent="selectCategory(c.name)"
+              @keydown.space.prevent="selectCategory(c.name)"
             >
               <BrandGlyph :kind="CATEGORY_GLYPHS[c.name] || 'folder'" :size="16" />
               <span v-if="!isCollapsed" class="sidebar-label truncate">{{ c.name }}</span>
@@ -237,9 +317,14 @@ const goAbout = () => {
         <div
           v-if="feedbackEntry.visible"
           class="sidebar-item is-quiet"
+          role="button"
+          tabindex="0"
+          :aria-current="isFeedbackActive ? 'page' : undefined"
           :class="{ active: isFeedbackActive }"
           :title="isCollapsed ? feedbackEntry.title : undefined"
           @click="openFeedback"
+          @keydown.enter.prevent="openFeedback"
+          @keydown.space.prevent="openFeedback"
         >
           <MessageSquareIcon class="w-4 h-4" />
           <span v-if="!isCollapsed" class="sidebar-label flex items-center gap-1.5 flex-1 min-w-0">
@@ -257,9 +342,14 @@ const goAbout = () => {
 
         <div
           class="sidebar-item"
+          role="button"
+          tabindex="0"
+          :aria-current="isSettingsActive ? 'page' : undefined"
           :class="{ active: isSettingsActive }"
           :title="isCollapsed ? '设置' : undefined"
           @click="goAdvancedSettings"
+          @keydown.enter.prevent="goAdvancedSettings"
+          @keydown.space.prevent="goAdvancedSettings"
         >
           <SettingsIcon class="w-4 h-4" />
           <template v-if="!isCollapsed">
@@ -270,9 +360,14 @@ const goAbout = () => {
 
         <div
           class="sidebar-item is-quiet"
+          role="button"
+          tabindex="0"
+          :aria-current="isAboutActive ? 'page' : undefined"
           :class="{ active: isAboutActive }"
           :title="isCollapsed ? '关于' : undefined"
           @click="goAbout"
+          @keydown.enter.prevent="goAbout"
+          @keydown.space.prevent="goAbout"
         >
           <InfoIcon class="w-4 h-4" />
           <span v-if="!isCollapsed" class="sidebar-label truncate">关于</span>
@@ -328,6 +423,11 @@ const goAbout = () => {
 .sidebar-item {
   position: relative;
   height: 32px;
+}
+
+.sidebar-item:focus-visible {
+  outline: none;
+  box-shadow: inset 0 0 0 1.5px var(--rc-accent);
 }
 
 .sidebar-root.is-collapsed .sidebar-item,

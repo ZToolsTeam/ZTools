@@ -48,6 +48,7 @@
             class="launcher-input"
             autocomplete="off"
             spellcheck="false"
+            @mousedown="resetPinnedFocus"
           />
           <button
             v-if="query"
@@ -90,11 +91,14 @@
             <span class="launcher-pinned-title">固定常用 ({{ pinnedItems.length }})</span>
             <span class="launcher-pinned-hint">Alt+1~9 直达 · Ctrl+P 固定/取消</span>
           </div>
-          <div class="launcher-pinned-grid">
+          <div ref="pinnedGridRef" class="launcher-pinned-grid" tabindex="-1">
             <div
-              v-for="(pinItem, pinIdx) in pinnedItems.slice(0, TOP_PINNED_GRID_LIMIT)"
+              v-for="(pinItem, pinIdx) in displayedPinnedItems"
               :key="pinItem.key || pinItem.id || pinIdx"
               class="launcher-pinned-tile"
+              :class="{ 'is-focused': pinnedFocusIndex === pinIdx }"
+              :data-nav-index="pinIdx"
+              data-nav-group="pinned"
               role="button"
               tabindex="-1"
               :title="`${pinItem.name || pinItem.title} (Alt+${pinIdx + 1})`"
@@ -102,6 +106,7 @@
             >
               <button
                 type="button"
+                tabindex="-1"
                 class="launcher-pinned-unpin"
                 title="取消固定"
                 aria-label="取消固定"
@@ -132,10 +137,10 @@
               :key="item.key || item.pluginId || index"
               :ref="el => registerItemEl(index, el)"
               :item="item"
-              :active="activeIndex === index"
+              :active="pinnedFocusIndex < 0 && activeIndex === index"
               :parts="highlightParts(item)"
-              @mouseenter="activeIndex = index"
-              @click="executeItem(item)"
+              @mouseenter="pinnedFocusIndex = -1; activeIndex = index"
+              @click="pinnedFocusIndex = -1; executeItem(item)"
             />
           </template>
 
@@ -167,9 +172,9 @@
               v-if="canPinActiveItem"
               type="button"
               class="launcher-foot-hint"
-              @click="handleTogglePin(visibleItems[activeIndex])"
+              @click="handleTogglePin(currentFocusedItem)"
             >
-              {{ visibleItems[activeIndex]?.pinned ? '取消固定' : '固定' }} <ShortcutKeys combo="Ctrl+P" />
+              {{ currentFocusedItem?.pinned ? '取消固定' : '固定' }} <ShortcutKeys combo="Ctrl+P" />
             </button>
             <button type="button" class="launcher-foot-hint" @click="toggleActionPanel">
               动作 <ShortcutKeys combo="Ctrl+K" />
@@ -206,7 +211,7 @@ import {
   executeDeclarativeNoViewCommand
 } from '@/utils/declarativePluginLoader'
 import { useDeclarativePluginSession } from '@/declarative/composables/useDeclarativePluginSession'
-import { routeUtils } from '@/router/routes'
+import { ROUTES, routeUtils } from '@/router/routes'
 import {
   useCommandSearch,
   isDeclarativePluginItem,
@@ -214,7 +219,14 @@ import {
   copyInlineAnswerToClipboard,
   TOP_PINNED_GRID_LIMIT
 } from '@/composables/useCommandSearch'
-import { useKeymap, KEYMAP_SCOPES, dispatchKeyEvent } from '@/utils/keymap'
+import {
+  useKeymap,
+  KEYMAP_SCOPES,
+  OPEN_SETTINGS_SHORTCUT,
+  dispatchKeyEvent,
+  isComposingEvent
+} from '@/utils/keymap'
+import { collectVisualRowsFromDOM, computeVisualNavStep } from '@/composables/useVisualGridNav'
 import ActionPanelModal from '@/declarative/components/ActionPanelModal.vue'
 import DeclarativeView from '@/declarative/DeclarativeView.vue'
 import { requestPopoutWindow } from '@/declarative/popoutHandoff'
@@ -224,6 +236,7 @@ import { resolveItemGlyph, resolveKeywordGlyph } from '@/utils/brandIcons'
 import SearchResultRow from '@/components/SearchResultRow.vue'
 import { shortcutLabel, isMacOS, isPluginSupportedOnCurrentPlatform } from '@/utils/platform'
 import { win as nativeWin } from '@/api/apiserver'
+import { track } from '@edition'
 
 const router = useRouter()
 const pluginsStore = usePluginsStore()
@@ -233,9 +246,12 @@ const nativeCorners = new URLSearchParams(window.location.search).get('nativeCor
 const workbenchHint = shortcutLabel('Ctrl+M')
 
 const inputRef = ref(null)
+const pinnedGridRef = ref(null)
 const listContainerRef = ref(null)
 const declarativeViewRef = ref(null)
 const activeIndex = ref(0)
+const pinnedFocusIndex = ref(-1)
+const pinnedAnchorX = ref(null)
 const actionPanelVisible = ref(false)
 const activeDeclarativePlugin = ref(null)
 // 悬浮条里原位渲染的已安装声明式插件持有会话归属
@@ -277,7 +293,10 @@ function canPinItem(item) {
   return item.type === 'plugin' || item.type === 'local-app'
 }
 
-const canPinActiveItem = computed(() => canPinItem(visibleItems.value[activeIndex.value]))
+const displayedPinnedItems = computed(() => {
+  if (query.value.trim()) return []
+  return (pinnedItems.value || []).slice(0, TOP_PINNED_GRID_LIMIT)
+})
 
 async function handleTogglePin(item) {
   if (!canPinItem(item)) return
@@ -306,6 +325,15 @@ async function handleAddLocalApp() {
 // 结果再多也只渲染前 50 条：键盘上下选择、Enter 与动作面板都只在这 50 条里进行
 const MAX_VISIBLE_ITEMS = 50
 const visibleItems = computed(() => filteredItems.value.slice(0, MAX_VISIBLE_ITEMS))
+
+const currentFocusedItem = computed(() => {
+  if (pinnedFocusIndex.value >= 0 && displayedPinnedItems.value[pinnedFocusIndex.value]) {
+    return displayedPinnedItems.value[pinnedFocusIndex.value]
+  }
+  return visibleItems.value[activeIndex.value] || null
+})
+
+const canPinActiveItem = computed(() => canPinItem(currentFocusedItem.value))
 
 function registerItemEl(index, el) {
   const node = el?.$el ?? el
@@ -337,7 +365,7 @@ function isDeclarativeTarget(pluginId, item = null) {
   if (item && item.isDeclarative === true) return true
   const pid = String(pluginId || '').trim()
   if (!pid) return false
-  if (isBundledPlugin(pid) || getOfficialPlugin(pid)) return true
+  if ((isBundledPlugin(pid) && !pluginsStore.isBundledHidden(pid)) || getOfficialPlugin(pid)) return true
   const installed = findInstalledPluginMeta(pid)
   return isDeclarativePluginItem(installed)
 }
@@ -353,7 +381,7 @@ const runLauncherAction = (action) => {
 }
 
 const activeItemActions = computed(() => {
-  const item = visibleItems.value[activeIndex.value]
+  const item = currentFocusedItem.value
   if (!item) return []
 
   if (item.type === 'inline-calculator' || item.type === 'inline-color') {
@@ -616,11 +644,52 @@ function scrollToActiveItem() {
   })
 }
 
+function resetPinnedFocus() {
+  pinnedFocusIndex.value = -1
+  pinnedAnchorX.value = null
+}
+
+function focusPinnedGrid() {
+  inputRef.value?.blur?.()
+  pinnedGridRef.value?.focus?.({ preventScroll: true })
+}
+
+function focusSearchInputFromPinned() {
+  resetPinnedFocus()
+  inputRef.value?.focus?.()
+}
+
+function getPinnedVisualRows() {
+  const count = displayedPinnedItems.value.length
+  if (count <= 0) return []
+  return collectVisualRowsFromDOM(pinnedGridRef.value, {
+    totalCount: count,
+    fallbackColumns: TOP_PINNED_GRID_LIMIT || 9,
+    getGroup: () => 'pinned'
+  })
+}
+
 watch(query, (newVal) => {
+  if (newVal.trim()) {
+    resetPinnedFocus()
+  }
   activeIndex.value = 0
   scrollToActiveItem()
   search(newVal)
 })
+
+// 固定项减少或清空时钳制宫格焦点索引
+watch(
+  () => displayedPinnedItems.value.length,
+  (len) => {
+    if (pinnedFocusIndex.value < 0) return
+    if (len <= 0) {
+      focusSearchInputFromPinned()
+    } else if (pinnedFocusIndex.value >= len) {
+      pinnedFocusIndex.value = len - 1
+    }
+  }
+)
 
 // 输入没变时列表也会变短（文件结果到达替换掉保留的旧结果）：选中项不能落到列表外
 watch(() => visibleItems.value.length, (length) => {
@@ -628,6 +697,7 @@ watch(() => visibleItems.value.length, (length) => {
 })
 
 function clearQuery() {
+  resetPinnedFocus()
   clearSearch()
   activeIndex.value = 0
 }
@@ -637,33 +707,228 @@ function exitDeclarative() {
   loadingDeclarative.value = false
   declarativeLoadError.value = ''
   activeDeclarativePlugin.value = null
+  resetPinnedFocus()
   nextTick(() => {
     inputRef.value?.focus()
   })
 }
 
+function isLauncherNavBlocked() {
+  return Boolean(
+    actionPanelVisible.value ||
+    activeDeclarativePlugin.value ||
+    loadingDeclarative.value ||
+    declarativeLoadError.value
+  )
+}
+
+function handleLauncherArrowDown() {
+  if (isLauncherNavBlocked()) return false
+  if (pinnedFocusIndex.value >= 0) {
+    const rows = getPinnedVisualRows()
+    if (rows.length === 0) {
+      focusSearchInputFromPinned()
+      return false
+    }
+    const step = computeVisualNavStep(rows, pinnedFocusIndex.value, 'ArrowDown', {
+      preferredCenterX: pinnedAnchorX.value
+    })
+    if (step.reachBottom) {
+      resetPinnedFocus()
+      activeIndex.value = 0
+      scrollToActiveItem()
+      inputRef.value?.focus?.()
+      return true
+    }
+    if (step.nextIndex >= 0) {
+      pinnedFocusIndex.value = step.nextIndex
+    }
+    if (step.nextAnchorX !== null) {
+      pinnedAnchorX.value = step.nextAnchorX
+    }
+    return true
+  }
+
+  if (visibleItems.value.length > 0) {
+    activeIndex.value = (activeIndex.value + 1) % visibleItems.value.length
+    scrollToActiveItem()
+    return true
+  }
+  return false
+}
+
+function handleLauncherArrowUp() {
+  if (isLauncherNavBlocked()) return false
+  if (pinnedFocusIndex.value >= 0) {
+    const rows = getPinnedVisualRows()
+    if (rows.length === 0) {
+      focusSearchInputFromPinned()
+      return true
+    }
+    const step = computeVisualNavStep(rows, pinnedFocusIndex.value, 'ArrowUp', {
+      preferredCenterX: pinnedAnchorX.value
+    })
+    if (step.reachTop) {
+      focusSearchInputFromPinned()
+      return true
+    }
+    if (step.nextIndex >= 0) {
+      pinnedFocusIndex.value = step.nextIndex
+    }
+    if (step.nextAnchorX !== null) {
+      pinnedAnchorX.value = step.nextAnchorX
+    }
+    return true
+  }
+
+  // 空搜索词且存在首屏固定宫格时，从列表第 0 行按 ↑ 进入正上方固定宫格最后一行第 1 项
+  if (
+    !query.value.trim() &&
+    displayedPinnedItems.value.length > 0 &&
+    (visibleItems.value.length === 0 || activeIndex.value === 0)
+  ) {
+    const rows = getPinnedVisualRows()
+    if (rows.length > 0) {
+      const lastRow = rows[rows.length - 1]
+      const targetCell = lastRow[0]
+      pinnedFocusIndex.value = targetCell.index
+      pinnedAnchorX.value = targetCell.centerX
+      focusPinnedGrid()
+      return true
+    }
+  }
+
+  if (visibleItems.value.length > 0) {
+    activeIndex.value = (activeIndex.value - 1 + visibleItems.value.length) % visibleItems.value.length
+    scrollToActiveItem()
+    return true
+  }
+  return false
+}
+
+function handleLauncherHorizontalKey(key) {
+  if (isLauncherNavBlocked()) return false
+  if (pinnedFocusIndex.value < 0) return false
+  const rows = getPinnedVisualRows()
+  if (rows.length === 0) return false
+  const step = computeVisualNavStep(rows, pinnedFocusIndex.value, key, {
+    preferredCenterX: pinnedAnchorX.value
+  })
+  if (step.nextIndex >= 0) {
+    pinnedFocusIndex.value = step.nextIndex
+  }
+  if (step.nextAnchorX !== null) {
+    pinnedAnchorX.value = step.nextAnchorX
+  }
+  return true
+}
+
+function handleLauncherHomeEnd(key) {
+  if (isLauncherNavBlocked()) return false
+  if (pinnedFocusIndex.value >= 0) {
+    const rows = getPinnedVisualRows()
+    if (rows.length === 0) return false
+    const step = computeVisualNavStep(rows, pinnedFocusIndex.value, key, {
+      preferredCenterX: pinnedAnchorX.value
+    })
+    if (step.nextIndex >= 0) {
+      pinnedFocusIndex.value = step.nextIndex
+    }
+    if (step.nextAnchorX !== null) {
+      pinnedAnchorX.value = step.nextAnchorX
+    }
+    return true
+  }
+
+  if (visibleItems.value.length > 0) {
+    activeIndex.value = key === 'Home' ? 0 : visibleItems.value.length - 1
+    scrollToActiveItem()
+    return true
+  }
+  return false
+}
+
+function handleLauncherPageStep(delta) {
+  if (isLauncherNavBlocked()) return false
+  if (pinnedFocusIndex.value >= 0) {
+    if (delta > 0 && visibleItems.value.length > 0) {
+      resetPinnedFocus()
+      activeIndex.value = 0
+      scrollToActiveItem()
+      inputRef.value?.focus?.()
+      return true
+    }
+    if (delta < 0) {
+      pinnedFocusIndex.value = 0
+      return true
+    }
+    return false
+  }
+
+  if (visibleItems.value.length > 0) {
+    activeIndex.value = Math.min(visibleItems.value.length - 1, Math.max(0, activeIndex.value + delta))
+    scrollToActiveItem()
+    return true
+  }
+  return false
+}
+
+// 跨窗口级直达热键（非模态挂载于顶层作用域，保证动作面板打开期间按 Ctrl+I / Ctrl+M 仍能立即收起面板并跳转主窗口）
+useKeymap(KEYMAP_SCOPES.ACTION_PANEL, {
+  'Ctrl+M': () => {
+    expandToDashboard()
+    return true
+  },
+  [OPEN_SETTINGS_SHORTCUT]: () => {
+    expandToDashboard(ROUTES.ADVANCED_SETTINGS)
+    return true
+  }
+})
+
 // 统一注册极客工具条按键 (PAGE 作用域)
 useKeymap(KEYMAP_SCOPES.PAGE, {
   'ArrowDown': () => {
-    if (activeDeclarativePlugin.value || loadingDeclarative.value || declarativeLoadError.value) return false
-    if (visibleItems.value.length > 0) {
-      activeIndex.value = (activeIndex.value + 1) % visibleItems.value.length
-      scrollToActiveItem()
-      return true
-    }
-    return false
+    if (actionPanelVisible.value) return false
+    return handleLauncherArrowDown()
   },
   'ArrowUp': () => {
-    if (activeDeclarativePlugin.value || loadingDeclarative.value || declarativeLoadError.value) return false
-    if (visibleItems.value.length > 0) {
-      activeIndex.value = (activeIndex.value - 1 + visibleItems.value.length) % visibleItems.value.length
-      scrollToActiveItem()
-      return true
-    }
-    return false
+    if (actionPanelVisible.value) return false
+    return handleLauncherArrowUp()
+  },
+  'ArrowLeft': () => {
+    if (actionPanelVisible.value) return false
+    return handleLauncherHorizontalKey('ArrowLeft')
+  },
+  'ArrowRight': () => {
+    if (actionPanelVisible.value) return false
+    return handleLauncherHorizontalKey('ArrowRight')
+  },
+  'Home': () => {
+    if (actionPanelVisible.value) return false
+    return handleLauncherHomeEnd('Home')
+  },
+  'End': () => {
+    if (actionPanelVisible.value) return false
+    return handleLauncherHomeEnd('End')
+  },
+  'PageUp': () => {
+    if (actionPanelVisible.value) return false
+    return handleLauncherPageStep(-8)
+  },
+  'PageDown': () => {
+    if (actionPanelVisible.value) return false
+    return handleLauncherPageStep(8)
   },
   'Enter': () => {
+    if (actionPanelVisible.value) return false
     if (activeDeclarativePlugin.value || loadingDeclarative.value || declarativeLoadError.value) return false
+    if (pinnedFocusIndex.value >= 0) {
+      const pinTarget = displayedPinnedItems.value[pinnedFocusIndex.value]
+      if (pinTarget) {
+        executeItem(pinTarget)
+        return true
+      }
+    }
     if (visibleItems.value.length > 0) {
       executeItem(visibleItems.value[activeIndex.value])
       return true
@@ -674,8 +939,9 @@ useKeymap(KEYMAP_SCOPES.PAGE, {
     return false
   },
   'Ctrl+Enter': () => {
+    if (actionPanelVisible.value) return false
     if (activeDeclarativePlugin.value || loadingDeclarative.value || declarativeLoadError.value) return false
-    const cur = visibleItems.value[activeIndex.value]
+    const cur = currentFocusedItem.value
     if (cur && cur.type === 'file') {
       showInFolder(cur.path)
       return true
@@ -691,8 +957,9 @@ useKeymap(KEYMAP_SCOPES.PAGE, {
     return true
   },
   'Ctrl+P': () => {
+    if (actionPanelVisible.value) return false
     if (activeDeclarativePlugin.value || loadingDeclarative.value || declarativeLoadError.value) return false
-    const cur = visibleItems.value[activeIndex.value]
+    const cur = currentFocusedItem.value
     if (canPinItem(cur)) {
       handleTogglePin(cur)
       return true
@@ -708,10 +975,6 @@ useKeymap(KEYMAP_SCOPES.PAGE, {
   'Alt+7': () => triggerPinnedByIndex(6),
   'Alt+8': () => triggerPinnedByIndex(7),
   'Alt+9': () => triggerPinnedByIndex(8),
-  'Ctrl+M': () => {
-    expandToDashboard()
-    return true
-  },
   'Ctrl+Shift+O': () => {
     if (activeDeclarativePlugin.value) {
       popoutDeclarativePlugin(
@@ -721,7 +984,7 @@ useKeymap(KEYMAP_SCOPES.PAGE, {
       )
       return true
     }
-    const cur = visibleItems.value[activeIndex.value]
+    const cur = currentFocusedItem.value
     if (cur && cur.pluginId && isDeclarativeTarget(cur.pluginId, cur) && cur.mode !== 'no-view') {
       popoutDeclarativePlugin(cur.pluginId, cur.featureCode || '')
       return true
@@ -741,6 +1004,7 @@ useKeymap(KEYMAP_SCOPES.PAGE, {
       clearQuery()
       return true
     } else {
+      resetPinnedFocus()
       hideLauncher()
       return true
     }
@@ -748,7 +1012,32 @@ useKeymap(KEYMAP_SCOPES.PAGE, {
 })
 
 function handleKeyDown(e) {
-  dispatchKeyEvent(e)
+  if (isComposingEvent(e)) return
+  // 焦点位于固定宫格时敲击可打印字符或退格键，自动将焦点交还顶部搜索框以无缝继续输入
+  if (
+    pinnedFocusIndex.value >= 0 &&
+    !isLauncherNavBlocked() &&
+    !e.ctrlKey &&
+    !e.metaKey &&
+    !e.altKey &&
+    ((typeof e.key === 'string' && e.key.length === 1) || e.key === 'Backspace')
+  ) {
+    focusSearchInputFromPinned()
+  }
+
+  if (dispatchKeyEvent(e)) return
+
+  // 补充处理单行搜索框无需占用的列表翻页键，以及空搜索框或宫格激活期间的受保护方向/首尾键
+  if (isLauncherNavBlocked() || e.ctrlKey || e.metaKey || e.altKey || e.shiftKey) return
+  if (e.key === 'PageUp') {
+    if (handleLauncherPageStep(-8)) e.preventDefault()
+  } else if (e.key === 'PageDown') {
+    if (handleLauncherPageStep(8)) e.preventDefault()
+  } else if (pinnedFocusIndex.value >= 0 && (e.key === 'ArrowLeft' || e.key === 'ArrowRight')) {
+    if (handleLauncherHorizontalKey(e.key)) e.preventDefault()
+  } else if ((pinnedFocusIndex.value >= 0 || !query.value) && (e.key === 'Home' || e.key === 'End')) {
+    if (handleLauncherHomeEnd(e.key)) e.preventDefault()
+  }
 }
 
 let fileActionPending = false
@@ -911,6 +1200,7 @@ async function launchPlugin(pluginId, options = {}) {
     loadingDeclarative.value = false
     declarativeLoadError.value = ''
     activeDeclarativePlugin.value = featureCode ? { ...official, featureCode } : official
+    track('plugin_open', official.pluginId || pid, { source: 'launcher', plugin_type: 'declarative' })
     clearQuery()
     pluginsStore.markRecent?.(pid)?.catch?.(() => {})
     return { success: true }
@@ -927,6 +1217,7 @@ async function launchPlugin(pluginId, options = {}) {
       const loaded = await loadInstalledDeclarativePlugin(pid, { featureCode })
       if (token !== declarativeLoadToken) return { success: false, cancelled: true }
       activeDeclarativePlugin.value = loaded
+      track('plugin_open', loaded.pluginId || pid, { source: 'launcher', plugin_type: 'declarative' })
       clearQuery()
       pluginsStore.markRecent?.(pid)?.catch?.(() => {})
       return { success: true }
@@ -992,14 +1283,14 @@ async function popoutDeclarativePlugin(pluginId, featureCode = '', snapshotQuery
       ? { feature: String(featureCode) }
       : {}
 
-  // 正在悬浮条里运行的插件：一并交接 usePopoutState（必须在 hideLauncher 卸载插件之前读取）
-  const collected = snapshotQuery ? declarativeViewRef.value?.getPopoutState?.() || null : null
-  if (collected) {
+  // 正在悬浮条里运行的插件：一并交接 usePopoutState（必须在 hideLauncher 卸载插件之前读取），并携带 handoff 避免独立窗口重复上报 plugin_open
+  if (snapshotQuery) {
+    const collected = declarativeViewRef.value?.getPopoutState?.() || null
     hideLauncher()
     const result = await requestPopoutWindow({ pluginId: pid, query: qObj, collected })
     if (result.outcome === 'opened') return
-    // 建窗失败：回退到工作台打开（工作台是另一个窗口，交接状态带不过去）
-    expandToDashboard(routeUtils.toPopout(pid, qObj))
+    // 建窗失败：回退到工作台打开
+    expandToDashboard(routeUtils.toPopout(pid, result.query || qObj))
     return
   }
 
@@ -1025,6 +1316,7 @@ async function popoutDeclarativePlugin(pluginId, featureCode = '', snapshotQuery
 // 悬浮条与工作台是两个窗口：目标页面要交给主窗口去跳转，不能在悬浮条自己的路由里 push
 function expandToDashboard(target) {
   declarativeLoadToken++
+  actionPanelVisible.value = false
   loadingDeclarative.value = false
   declarativeLoadError.value = ''
   const currentDeclarative = activeDeclarativePlugin.value
@@ -1056,6 +1348,7 @@ function hideLauncher() {
 
 function handleWindowFocus() {
   actionPanelVisible.value = false
+  resetPinnedFocus()
   void refreshPanelData()
   if (!activeDeclarativePlugin.value && !loadingDeclarative.value && !declarativeLoadError.value) {
     inputRef.value?.focus()
@@ -1229,6 +1522,7 @@ watch(
   display: flex;
   flex-wrap: wrap;
   gap: 6px;
+  outline: none;
 }
 
 .launcher-pinned-tile {
@@ -1245,12 +1539,19 @@ watch(
   border: 1px solid var(--rc-border);
   background: var(--rc-surface-hover);
   cursor: pointer;
-  transition: background-color 0.12s ease, border-color 0.12s ease;
+  transition: background-color 0.12s ease, border-color 0.12s ease, box-shadow 0.12s ease;
 }
 
 .launcher-pinned-tile:hover {
   border-color: var(--rc-border-highlight);
   background: var(--rc-surface-active);
+}
+
+.launcher-pinned-tile.is-focused {
+  outline: none;
+  border-color: var(--rc-accent);
+  background: var(--rc-surface-active);
+  box-shadow: var(--rc-focus-ring);
 }
 
 .launcher-pinned-unpin {

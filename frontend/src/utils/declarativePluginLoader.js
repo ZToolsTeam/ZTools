@@ -12,6 +12,7 @@
 
 import * as DeclarativeUI from '@ztools/declarative-ui'
 import { createCacheScope } from '@ztools/declarative-ui/host'
+import { track } from '@edition'
 import { isBundledPlugin, readBundledPluginFile, getBundledPluginIconUrl } from './bundledPlugins.js'
 import { createScopedLocalStorage } from './pluginStorage.js'
 import { createScopedHostBridge, createScopedWindow, getPluginSessionHolder } from '../declarative/pluginSession.js'
@@ -849,6 +850,11 @@ export async function executeDeclarativeNoViewCommand(pluginId, options = {}) {
   const loaded = await loadInstalledDeclarativePlugin(pluginId, options)
   // 本窗口可能还没打开过插件页面：补上宿主剪贴板 Bridge，避免 Clipboard.copy 退回内存后假装成功
   ensureHostBridge()
+  // 极速命令真实由用户触发执行时上报 plugin_open（后台预热 loadInstalledDeclarativePlugin 不走此处）
+  track('plugin_open', loaded.pluginId, {
+    source: options?.source || 'no_view',
+    plugin_type: 'declarative'
+  })
   // 执行期间持有会话：命令里调用需要归属的能力（加密存储、结束进程）时带令牌
   const releaseSession = loaded.session ? await loaded.session.acquire() : null
   try {

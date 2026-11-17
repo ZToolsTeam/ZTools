@@ -1,12 +1,14 @@
 <script setup>
-import { ref, computed, onMounted, onUnmounted } from 'vue'
+import { ref, computed, watch, onMounted, onUnmounted } from 'vue'
 import { ClipboardPasteIcon, CopyIcon, RotateCwIcon, ScissorsIcon, WrenchIcon } from '@lucide/vue'
 import { isHostDevBuild, toggleHostDevTools } from '@/utils/hostDevTools'
+import { registerKeyHandler, KEYMAP_SCOPES } from '@/utils/keymap'
 
 const visible = ref(false)
 const x = ref(0)
 const y = ref(0)
 const selectedText = ref('')
+const focusedIndex = ref(0)
 // 「开发者工具」只在开发版显示
 const showDevTools = ref(false)
 
@@ -65,16 +67,29 @@ const menuItems = computed(() => {
   return items
 })
 
+const isNavigableItem = (item) => Boolean(item && item.type !== 'separator' && !item.disabled)
+
+const getNavigableIndices = () => {
+  const indices = []
+  menuItems.value.forEach((item, index) => {
+    if (isNavigableItem(item)) indices.push(index)
+  })
+  return indices
+}
+
 // 显示菜单
 const show = (event) => {
-  event.preventDefault()
-  event.stopPropagation()
+  event?.preventDefault?.()
+  event?.stopPropagation?.()
 
   // 获取选中的文本
-  selectedText.value = window.getSelection().toString()
+  selectedText.value = window.getSelection?.()?.toString?.() || ''
 
-  x.value = event.clientX
-  y.value = event.clientY
+  x.value = event?.clientX ?? 0
+  y.value = event?.clientY ?? 0
+
+  const validIndices = getNavigableIndices()
+  focusedIndex.value = validIndices.length > 0 ? validIndices[0] : -1
   visible.value = true
 
   // 调整位置防止超出屏幕
@@ -131,8 +146,65 @@ const handleClick = async (action) => {
   }
 }
 
+const moveFocus = (step) => {
+  const validIndices = getNavigableIndices()
+  if (!validIndices.length) return false
+  const currentPos = validIndices.indexOf(focusedIndex.value)
+  if (currentPos === -1) {
+    focusedIndex.value = step >= 0 ? validIndices[0] : validIndices[validIndices.length - 1]
+  } else {
+    const nextPos = (currentPos + step + validIndices.length) % validIndices.length
+    focusedIndex.value = validIndices[nextPos]
+  }
+  return true
+}
+
+const executeFocused = () => {
+  const item = menuItems.value[focusedIndex.value]
+  if (!isNavigableItem(item)) return false
+  void handleClick(item.action)
+  return true
+}
+
+// 注册模态级右键菜单键盘导航（初始停用，随 visible 同步启停，组件卸载时成对销毁）
+const unregisterKeymap = registerKeyHandler(
+  KEYMAP_SCOPES.ACTION_PANEL,
+  {
+    ArrowDown: () => moveFocus(1),
+    ArrowUp: () => moveFocus(-1),
+    Home: () => {
+      const validIndices = getNavigableIndices()
+      if (!validIndices.length) return false
+      focusedIndex.value = validIndices[0]
+      return true
+    },
+    End: () => {
+      const validIndices = getNavigableIndices()
+      if (!validIndices.length) return false
+      focusedIndex.value = validIndices[validIndices.length - 1]
+      return true
+    },
+    Enter: executeFocused,
+    Space: executeFocused,
+    Escape: () => {
+      hide()
+      return true
+    }
+  },
+  { modal: true }
+)
+
+watch(
+  visible,
+  (isOpen) => {
+    if (isOpen) unregisterKeymap.activate()
+    else unregisterKeymap.deactivate()
+  },
+  { immediate: true, flush: 'sync' }
+)
+
 // 点击外部关闭菜单
-const handleClickOutside = (event) => {
+const handleClickOutside = () => {
   if (visible.value) {
     hide()
   }
@@ -153,10 +225,13 @@ onMounted(() => {
 })
 
 onUnmounted(() => {
+  unregisterKeymap()
   document.removeEventListener('contextmenu', handleContextMenu)
   document.removeEventListener('click', handleClickOutside)
   window.removeEventListener('blur', hide)
 })
+
+defineExpose({ show, hide, visible, focusedIndex })
 </script>
 
 <template>
@@ -165,16 +240,19 @@ onUnmounted(() => {
       <div
         v-if="visible"
         class="context-menu"
+        role="menu"
         :style="{ left: `${x}px`, top: `${y}px` }"
         @click.stop
         @contextmenu.prevent
       >
         <template v-for="(item, index) in menuItems" :key="index">
-          <div v-if="item.type === 'separator'" class="menu-separator"></div>
+          <div v-if="item.type === 'separator'" class="menu-separator" role="separator"></div>
           <div
             v-else
             class="menu-item"
-            :class="{ disabled: item.disabled }"
+            role="menuitem"
+            :class="{ disabled: item.disabled, 'is-focused': focusedIndex === index }"
+            @mouseenter="!item.disabled && (focusedIndex = index)"
             @click="!item.disabled && handleClick(item.action)"
           >
             <component :is="item.icon" class="menu-icon" />
@@ -212,7 +290,8 @@ onUnmounted(() => {
   color: var(--rc-text-primary);
 }
 
-.menu-item:hover:not(.disabled) {
+.menu-item:hover:not(.disabled),
+.menu-item.is-focused:not(.disabled) {
   background-color: var(--rc-surface-active);
 }
 
@@ -225,7 +304,8 @@ onUnmounted(() => {
   color: var(--rc-error);
 }
 
-.menu-item.danger:hover:not(.disabled) {
+.menu-item.danger:hover:not(.disabled),
+.menu-item.danger.is-focused:not(.disabled) {
   background-color: var(--rc-error-subtle);
 }
 

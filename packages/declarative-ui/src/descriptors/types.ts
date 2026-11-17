@@ -295,6 +295,8 @@ export interface FileInputConfig {
 
 export interface FileInputPayload {
   files: string[];
+  /** files 中由客户端确认是文件夹的路径（仅在接收文件夹且确有文件夹时提供） */
+  directories?: string[];
   source: "drop" | "paste" | "launch";
   targetFieldId?: string;
   rejectedCount?: number;

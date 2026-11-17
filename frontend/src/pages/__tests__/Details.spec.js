@@ -11,7 +11,8 @@ import { usePluginsStore } from '@/stores/plugins'
 const toastSpies = vi.hoisted(() => ({
   toastSuccess: vi.fn(),
   toastError: vi.fn(),
-  toastWarning: vi.fn()
+  toastWarning: vi.fn(),
+  toastInfo: vi.fn()
 }))
 
 const apiMocks = vi.hoisted(() => ({
@@ -498,17 +499,33 @@ describe('Details Page', () => {
       expect((await mountDetailsFor('plugin-1', 'darwin')).text()).toBe('true|true|false')
     })
 
-    it('随客户端内置的插件：不能卸载、不能生成快捷方式；误触发卸载时不弹确认框也不调宿主', async () => {
+    it('随客户端内置的插件：可点击卸载引导至设置页假卸载、暂不开放桌面快捷方式；点击卸载时不弹原生删除框也不调宿主', async () => {
       const confirm = vi.spyOn(Modal, 'confirm')
       const entry = await mountDetailsFor('calculator', 'win32')
-      expect(entry.text()).toBe('true|false|false')
+      expect(entry.text()).toBe('true|true|false')
 
       await entry.trigger('click')
       await flushPromises()
       expect(confirm).not.toHaveBeenCalled()
       expect(apiMocks.uninstallPluginNative).not.toHaveBeenCalled()
-      expect(toastSpies.toastError).toHaveBeenCalledWith('内置插件随客户端提供，不能卸载')
+      expect(toastSpies.toastInfo).toHaveBeenCalledWith('请在设置中卸载或还原内置插件')
+      expect(router.currentRoute.value.name).toBe('advanced-settings')
+      expect(router.currentRoute.value.query.manageBundled).toBe('calculator')
       confirm.mockRestore()
+    })
+
+    it('已被假卸载的随客户端内置插件：详情页标记为未安装，点击安装入口直接本地一键还原且无需请求下载签名', async () => {
+      await pluginsStore.hideBundledPlugin('calculator')
+      const entry = await mountDetailsFor('calculator', 'win32')
+      expect(entry.text()).toBe('false|true|false')
+
+      await wrapper.vm.downloadPlugin()
+      await flushPromises()
+      expect(apiMocks.getDownloadSign).not.toHaveBeenCalled()
+      expect(apiMocks.installPluginNative).not.toHaveBeenCalled()
+      expect(pluginsStore.isBundledHidden('calculator')).toBe(false)
+      expect(entry.text()).toBe('true|true|false')
+      expect(toastSpies.toastSuccess).toHaveBeenCalledWith('已还原内置插件')
     })
 
     it('插件市场分发的官方插件：以实际安装状态为准，装了就能卸载', async () => {

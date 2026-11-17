@@ -35,7 +35,7 @@ vi.mock('@/composables/useCommandSearch', async importOriginal => ({
 }))
 const openPlugin = vi.fn().mockResolvedValue({ success: true })
 vi.mock('@/stores/plugins', () => ({
-  usePluginsStore: () => ({ init: vi.fn().mockResolvedValue(), openPlugin })
+  usePluginsStore: () => ({ init: vi.fn().mockResolvedValue(), openPlugin, isBundledHidden: () => false })
 }))
 const switchWindowMode = vi.fn()
 vi.mock('@/utils/windowMode', () => ({
@@ -58,7 +58,8 @@ async function mountLauncher() {
       { path: '/', component: Empty },
       { path: '/launcher', component: Empty },
       { path: '/details/:id', component: Empty },
-      { path: '/list', name: 'list', component: Empty }
+      { path: '/list', name: 'list', component: Empty },
+      { path: '/advanced-settings', name: 'advanced-settings', component: Empty }
     ]
   })
   router.push('/launcher')
@@ -668,6 +669,84 @@ describe('LauncherBar 首屏固定磁贴、Ctrl+P、Alt+1~9 与本地软件/系�
       expect(openPath).not.toHaveBeenCalled()
       expect(wrapper.text()).toContain('程序列表读取失败或该程序已卸载')
     } finally {
+      wrapper.unmount()
+    }
+  })
+
+  it('悬浮条按下 Ctrl+I（含英文大小写 i/I、Cmd+I 与 IME 229/KeyI）唤醒主窗口跳转设置页并收起动作面板，组字中不触发', async () => {
+    const expandToDashboard = vi.fn().mockResolvedValue({ success: true })
+    window.__ztoolsLauncher = { expandToDashboard, hide: vi.fn().mockResolvedValue() }
+    const { wrapper, router } = await mountLauncher()
+    try {
+      await openPanel(wrapper)
+      expect(wrapper.findComponent(ActionPanelModal).exists()).toBe(true)
+
+      await wrapper.trigger('keydown', { key: 'i', ctrlKey: true })
+      await flushPromises()
+      expect(expandToDashboard).toHaveBeenCalledWith('/advanced-settings')
+      expect(router.currentRoute.value.path).toBe('/launcher')
+      expect(wrapper.findComponent(ActionPanelModal).exists()).toBe(false)
+
+      expandToDashboard.mockClear()
+      await wrapper.trigger('keydown', { key: 'I', ctrlKey: true })
+      await flushPromises()
+      expect(expandToDashboard).toHaveBeenCalledWith('/advanced-settings')
+
+      expandToDashboard.mockClear()
+      await wrapper.trigger('keydown', { key: 'i', metaKey: true })
+      await flushPromises()
+      expect(expandToDashboard).toHaveBeenCalledWith('/advanced-settings')
+
+      expandToDashboard.mockClear()
+      const imeEvt = new KeyboardEvent('keydown', {
+        key: 'Process',
+        code: 'KeyI',
+        ctrlKey: true,
+        isComposing: false,
+        bubbles: true,
+        cancelable: true
+      })
+      Object.defineProperty(imeEvt, 'keyCode', { value: 229 })
+      window.dispatchEvent(imeEvt)
+      await flushPromises()
+      expect(expandToDashboard).toHaveBeenCalledWith('/advanced-settings')
+
+      // 正在组字时不触发跳转
+      expandToDashboard.mockClear()
+      const composingEvt = new KeyboardEvent('keydown', {
+        key: 'Process',
+        code: 'KeyI',
+        ctrlKey: true,
+        isComposing: true,
+        bubbles: true,
+        cancelable: true
+      })
+      Object.defineProperty(composingEvt, 'keyCode', { value: 229 })
+      window.dispatchEvent(composingEvt)
+      await flushPromises()
+      expect(expandToDashboard).not.toHaveBeenCalled()
+    } finally {
+      wrapper.unmount()
+    }
+  })
+
+  it('无原生悬浮条桥接（单窗口降级）及 IPC 抛错时按 Ctrl+I 安全处理不崩溃', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const { wrapper, router } = await mountLauncher()
+    try {
+      await wrapper.trigger('keydown', { key: 'i', ctrlKey: true })
+      await flushPromises()
+      expect(switchWindowMode).toHaveBeenCalledWith('dashboard')
+      expect(router.currentRoute.value.path).toBe('/advanced-settings')
+
+      window.__ztoolsLauncher = {
+        expandToDashboard: vi.fn().mockRejectedValueOnce(new Error('主窗口未响应'))
+      }
+      await wrapper.trigger('keydown', { key: 'i', ctrlKey: true })
+      await flushPromises()
+      expect(warn).toHaveBeenCalled()
+    } finally {
+      warn.mockRestore()
       wrapper.unmount()
     }
   })

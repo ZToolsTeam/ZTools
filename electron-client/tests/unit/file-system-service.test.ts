@@ -683,6 +683,42 @@ test('native drop supports main caller windows for declarative plugins and grant
   } finally { await dispose(context) }
 })
 
+test('native drop reports confirmed directories separately, including folder names that contain dots', async () => {
+  const context = await createContext()
+  try {
+    const file = path.join(context.root, 'photo.png')
+    const dottedDir = path.join(context.root, '2026.11_报销票据')
+    await fs.writeFile(file, 'png')
+    await fs.mkdir(dottedDir)
+    await fs.writeFile(path.join(dottedDir, 'inner.pdf'), 'pdf')
+    const mainCaller: CallerIdentity = { type: 'main', webContentsId: 12 }
+    const sent: Array<{ id: number; payload: unknown }> = []
+    const drop = new FileDropService(
+      { get: id => (id === 12 ? mainCaller : undefined), send: (id, _channel, payload) => { sent.push({ id, payload }); return true } },
+      context.service
+    )
+    type DropEnvelope = { msgData: { envelope: { payload: { files: string[]; directories?: string[] } } } }
+
+    const mixed = await drop.accept(12, { paths: [file, dottedDir], allowDirectories: true })
+    assert.deepEqual(mixed, { success: true, accepted: 2, rejected: 0 })
+    const mixedPayload = (sent[0]!.payload as DropEnvelope).msgData.envelope.payload
+    assert.deepEqual(mixedPayload.files, [await fs.realpath(file), await fs.realpath(dottedDir)])
+    assert.deepEqual(mixedPayload.directories, [await fs.realpath(dottedDir)])
+    // 文件夹授权是递归的：插件可以继续枚举其中的文件
+    const listing = await context.service.getDirectoryContents({ path: dottedDir }, mainCaller)
+    assert.deepEqual(listing.files.map(f => f.name), ['inner.pdf'])
+
+    // 只有文件时不下发 directories 字段，保持旧载荷结构不变
+    await drop.accept(12, [file])
+    assert.equal('directories' in (sent[1]!.payload as DropEnvelope).msgData.envelope.payload, false)
+
+    // 未允许文件夹时，文件夹被拒绝且不会出现在 directories 中
+    const refused = await drop.accept(12, { paths: [dottedDir] })
+    assert.deepEqual(refused, { success: true, accepted: 0, rejected: 1 })
+    assert.equal('directories' in (sent[2]!.payload as DropEnvelope).msgData.envelope.payload, false)
+  } finally { await dispose(context) }
+})
+
 test('native paste grants files, directories and clipboard images with targetFieldId and ignores plain text', async () => {
   const context = await createContext()
   try {
@@ -707,9 +743,10 @@ test('native paste grants files, directories and clipboard images with targetFie
     const fileAndDirResult = await drop.acceptPaste(1, { allowDirectories: true, targetFieldId: 'sourceDir' })
     assert.deepEqual(fileAndDirResult, { success: true, accepted: 2, rejected: 0 })
     assert.equal(sent.length, 1)
-    const firstEnv = (sent[0]!.payload as { msgData: { envelope: { payload: { files: string[]; source?: string; targetFieldId?: string } } } }).msgData.envelope
+    const firstEnv = (sent[0]!.payload as { msgData: { envelope: { payload: { files: string[]; directories?: string[]; source?: string; targetFieldId?: string } } } }).msgData.envelope
     assert.equal(firstEnv.payload.source, 'paste')
     assert.equal(firstEnv.payload.targetFieldId, 'sourceDir')
+    assert.deepEqual(firstEnv.payload.directories, [await fs.realpath(pastedDir)])
     assert.equal((await context.service.readFile({ path: pastedFile, encoding: 'utf8' }, mainCaller)).content, 'pasted-content')
     const dirListing = await context.service.getDirectoryContents({ path: pastedDir }, mainCaller)
     assert.equal(dirListing.files.some(f => f.name === 'child.txt'), true)

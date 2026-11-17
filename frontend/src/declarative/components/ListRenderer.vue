@@ -12,6 +12,8 @@
         :aria-label="descriptor.props?.searchBarPlaceholder || '搜索'"
         class="flex-1 min-w-[140px] bg-transparent text-sm text-[var(--rc-text-primary)] placeholder:text-[var(--rc-text-faint)] outline-none"
         @input="handleSearchInput"
+        @mousedown="markSearchEditMode"
+        @click="markSearchEditMode"
         @keydown.down="handleSearchVertical($event, 1)"
         @keydown.up="handleSearchVertical($event, -1)"
         @keydown.left="handleSearchArrow($event, 'nav')"
@@ -21,20 +23,27 @@
       <!-- 内嵌紧凑型分段控制器 (SegmentedControl，仅在无右侧下拉框且非工作台双栏模式时展示，防顶栏重复) -->
       <div
         v-if="!searchBarAccessory && !workbenchPanelData && segmentedControlData?.options && segmentedControlData.options.length > 0"
+        role="radiogroup"
+        :aria-label="cleanUiText(segmentedControlData.ariaLabel || segmentedControlData.title || '视图切换')"
         class="flex items-center gap-1 bg-[var(--rc-surface-hover)] p-0.5 rounded-lg border border-[var(--rc-border)] flex-shrink-0"
       >
         <button
-          v-for="opt in segmentedControlData.options"
+          v-for="(opt, optIdx) in segmentedControlData.options"
           :key="opt.value"
+          :ref="el => registerSegmentBtnEl(optIdx, el)"
           type="button"
+          role="radio"
+          :aria-checked="isSegmentOptionSelected(opt, optIdx) ? 'true' : 'false'"
+          :tabindex="isSegmentOptionSelected(opt, optIdx) ? 0 : -1"
           class="px-2 py-0.5 rounded-md text-[11px] font-medium transition-all duration-150 flex items-center gap-1 flex-shrink-0"
           :class="[
             segmentedControlData.value === opt.value
               ? 'bg-[var(--rc-surface-active)] text-[var(--rc-text-primary)] border border-[var(--rc-border-highlight)] shadow-sm'
               : 'text-[var(--rc-text-muted)] hover:text-[var(--rc-text-primary)] border border-transparent'
           ]"
-          :aria-pressed="segmentedControlData.value === opt.value ? 'true' : 'false'"
           @click="handleSegmentedChange(opt.value)"
+          @keydown.left.stop.prevent="stepSegmentedOption(optIdx, -1)"
+          @keydown.right.stop.prevent="stepSegmentedOption(optIdx, 1)"
         >
           <DeclarativeIcon v-if="opt.icon" :icon="opt.icon" :size="11" />
           <span>{{ cleanUiText(opt.label) }}</span>
@@ -520,9 +529,15 @@ function markKeyboardNav() {
   inputMode.value = "keyboard";
 }
 
+function markSearchEditMode() {
+  inputMode.value = "pointer";
+}
+
 function registerItemEl(item, el) {
   if (el) {
     itemElements.set(item, el);
+  } else {
+    itemElements.delete(item);
   }
 }
 
@@ -640,7 +655,7 @@ function handleSearchVertical(e, step) {
   else focusPrevItem();
 }
 
-/** 搜索框里按 ← / →：光标已在最左（或最右）时切换左右栏，否则照常移动光标 */
+/** 搜索框里按 ← / →：处于列表键盘浏览态或光标已在最左（或最右）边缘时切换左右栏，否则照常移动光标 */
 function handleSearchArrow(e, pane) {
   if (!hasNavPane.value || e.shiftKey || e.altKey || e.metaKey || e.ctrlKey || e.isComposing || e.keyCode === 229) return;
   const el = e.target;
@@ -648,7 +663,7 @@ function handleSearchArrow(e, pane) {
   const start = el?.selectionStart ?? 0;
   const end = el?.selectionEnd ?? 0;
   const atEdge = pane === "nav" ? start === 0 && end === 0 : start === len && end === len;
-  if (!atEdge) return;
+  if (inputMode.value !== "keyboard" && !atEdge) return;
   if (setActivePane(pane)) e.preventDefault();
 }
 
@@ -755,8 +770,38 @@ const segmentedControlData = computed(() => {
   return sc.props || sc;
 });
 
+const segmentBtnElements = new Map();
+function registerSegmentBtnEl(idx, el) {
+  if (el) {
+    segmentBtnElements.set(idx, el);
+  } else {
+    segmentBtnElements.delete(idx);
+  }
+}
+
+function isSegmentOptionSelected(opt, idx) {
+  const opts = segmentedControlData.value?.options || [];
+  const currVal = segmentedControlData.value?.value;
+  if (currVal === opt.value) return true;
+  const hasMatch = opts.some((item) => item.value === currVal);
+  return !hasMatch && idx === 0;
+}
+
 function handleSegmentedChange(value) {
   segmentedControlData.value?.onChange?.(value);
+}
+
+function stepSegmentedOption(currIdx, delta) {
+  const opts = segmentedControlData.value?.options || [];
+  if (opts.length === 0) return;
+  const nextIdx = (currIdx + delta + opts.length) % opts.length;
+  const nextOpt = opts[nextIdx];
+  if (!nextOpt) return;
+  handleSegmentedChange(nextOpt.value);
+  segmentBtnElements.get(nextIdx)?.focus?.();
+  nextTick(() => {
+    segmentBtnElements.get(nextIdx)?.focus?.();
+  });
 }
 
 // 二级筛选与向导工具栏数据（严格按插件显式声明的全局状态摘要与全局动作渲染，不自动克隆单条动作）
@@ -804,6 +849,7 @@ function isCodeLikeValue(value) {
 }
 
 function handleSearchInput(e) {
+  inputMode.value = "pointer";
   const val = e.target.value;
   localSearchText.value = val;
   if (props.descriptor.props?.onSearchTextChange) {
@@ -894,8 +940,11 @@ function selectItem(item, invokeOnSelect = false, { silent = false } = {}) {
   const prevKey = getItemKey(selectedItem.value);
   const nextKey = getItemKey(item);
   selectedItem.value = item;
-  // 用户点击 / 左栏导航：进入手动选择状态，不再被搜索后的重置覆盖
-  if (invokeOnSelect) pendingResetToFirst = false;
+  // 用户点击 / 左栏导航：进入手动选择状态，不再被搜索后的重置覆盖；双栏导航下同步激活左栏焦点
+  if (invokeOnSelect) {
+    pendingResetToFirst = false;
+    if (hasNavPane.value) activePane.value = "nav";
+  }
   if (invokeOnSelect && typeof item?.props?.onSelect === "function") {
     try {
       item.props.onSelect();
@@ -942,9 +991,11 @@ function focusNextItem() {
     moveNavSelection(1);
     return;
   }
-  pendingResetToFirst = false;
-  if (subListData.value && subListItems.value.length > 0) {
+  // 布局三或布局二焦点在右栏时，仅在右栏非空时移动，禁止穿透暗改左栏
+  if (workbenchPanelData.value || subListData.value) {
     const items = subListItems.value;
+    if (items.length === 0) return;
+    pendingResetToFirst = false;
     const currIdx = items.indexOf(selectedSubItem.value);
     const nextIdx = (currIdx + 1) % items.length;
     selectSubItem(items[nextIdx]);
@@ -953,6 +1004,7 @@ function focusNextItem() {
   }
   const items = flatItems.value;
   if (items.length === 0) return;
+  pendingResetToFirst = false;
   const currIdx = items.indexOf(selectedItem.value);
   const nextIdx = (currIdx + 1) % items.length;
   selectItem(items[nextIdx]);
@@ -965,20 +1017,111 @@ function focusPrevItem() {
     moveNavSelection(-1);
     return;
   }
-  pendingResetToFirst = false;
-  if (subListData.value && subListItems.value.length > 0) {
+  // 布局三或布局二焦点在右栏时，仅在右栏非空时移动，禁止穿透暗改左栏
+  if (workbenchPanelData.value || subListData.value) {
     const items = subListItems.value;
+    if (items.length === 0) return;
+    pendingResetToFirst = false;
     const currIdx = items.indexOf(selectedSubItem.value);
-    const prevIdx = (currIdx - 1 + items.length) % items.length;
+    const prevIdx = currIdx === -1 ? items.length - 1 : (currIdx - 1 + items.length) % items.length;
     selectSubItem(items[prevIdx]);
     scrollToSelectedSub();
     return;
   }
   const items = flatItems.value;
   if (items.length === 0) return;
+  pendingResetToFirst = false;
   const currIdx = items.indexOf(selectedItem.value);
-  const prevIdx = (currIdx - 1 + items.length) % items.length;
+  const prevIdx = currIdx === -1 ? items.length - 1 : (currIdx - 1 + items.length) % items.length;
   selectItem(items[prevIdx]);
+  scrollToSelected();
+}
+
+function focusFirstItem() {
+  markKeyboardNav();
+  if (isNavPaneActive.value) {
+    const items = flatItems.value;
+    if (items.length === 0) return;
+    selectItem(items[0], true);
+    scrollToSelected();
+    return;
+  }
+  if (workbenchPanelData.value || subListData.value) {
+    const items = subListItems.value;
+    if (items.length === 0) return;
+    pendingResetToFirst = false;
+    selectSubItem(items[0]);
+    scrollToSelectedSub();
+    return;
+  }
+  const items = flatItems.value;
+  if (items.length === 0) return;
+  pendingResetToFirst = false;
+  selectItem(items[0]);
+  scrollToSelected();
+}
+
+function focusLastItem() {
+  markKeyboardNav();
+  if (isNavPaneActive.value) {
+    const items = flatItems.value;
+    if (items.length === 0) return;
+    selectItem(items[items.length - 1], true);
+    scrollToSelected();
+    return;
+  }
+  if (workbenchPanelData.value || subListData.value) {
+    const items = subListItems.value;
+    if (items.length === 0) return;
+    pendingResetToFirst = false;
+    selectSubItem(items[items.length - 1]);
+    scrollToSelectedSub();
+    return;
+  }
+  const items = flatItems.value;
+  if (items.length === 0) return;
+  pendingResetToFirst = false;
+  selectItem(items[items.length - 1]);
+  scrollToSelected();
+}
+
+function clampPageTargetIndex(currIdx, delta, length) {
+  if (currIdx === -1) {
+    return delta >= 0 ? Math.min(delta - 1, length - 1) : 0;
+  }
+  return Math.min(Math.max(currIdx + delta, 0), length - 1);
+}
+
+/** 按指定行数翻页移动选中项（默认跨 8 行钳制，不循环回绕） */
+function focusPageItems(deltaRows = 8) {
+  const step = Number.isFinite(deltaRows) ? Math.trunc(deltaRows) : 8;
+  if (step === 0) return;
+  markKeyboardNav();
+  if (isNavPaneActive.value) {
+    const items = flatItems.value;
+    if (items.length === 0) return;
+    const currIdx = items.indexOf(selectedItem.value);
+    const nextIdx = clampPageTargetIndex(currIdx, step, items.length);
+    selectItem(items[nextIdx], true);
+    scrollToSelected();
+    return;
+  }
+  if (workbenchPanelData.value || subListData.value) {
+    const items = subListItems.value;
+    if (items.length === 0) return;
+    pendingResetToFirst = false;
+    const currIdx = items.indexOf(selectedSubItem.value);
+    const nextIdx = clampPageTargetIndex(currIdx, step, items.length);
+    selectSubItem(items[nextIdx]);
+    scrollToSelectedSub();
+    return;
+  }
+  const items = flatItems.value;
+  if (items.length === 0) return;
+  pendingResetToFirst = false;
+  const currIdx = items.indexOf(selectedItem.value);
+  const nextIdx = clampPageTargetIndex(currIdx, step, items.length);
+  selectItem(items[nextIdx]);
   scrollToSelected();
 }
 
@@ -987,7 +1130,7 @@ function moveNavSelection(step) {
   const items = flatItems.value;
   if (items.length === 0) return;
   const currIdx = items.indexOf(selectedItem.value);
-  const nextIdx = currIdx === -1 ? 0 : (currIdx + step + items.length) % items.length;
+  const nextIdx = currIdx === -1 ? (step < 0 ? items.length - 1 : 0) : (currIdx + step + items.length) % items.length;
   selectItem(items[nextIdx], true);
   scrollToSelected();
 }
@@ -997,7 +1140,7 @@ function scrollToSelected() {
     if (!selectedItem.value) return;
     const el = itemElements.get(selectedItem.value);
     if (el && typeof el.scrollIntoView === "function") {
-      el.scrollIntoView({ block: "nearest", behavior: "smooth" });
+      el.scrollIntoView({ block: "nearest" });
     }
   });
 }
@@ -1174,6 +1317,9 @@ onMounted(() => {
 defineExpose({
   focusNextItem,
   focusPrevItem,
+  focusFirstItem,
+  focusLastItem,
+  focusPageItems,
   getSelectedItem: () => (subListData.value && !isNavPaneActive.value ? selectedSubItem.value || selectedItem.value : selectedItem.value),
   getActivePane: () => (isNavPaneActive.value ? "nav" : "sub"),
   setActivePane,

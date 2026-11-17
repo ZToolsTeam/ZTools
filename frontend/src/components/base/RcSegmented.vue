@@ -1,4 +1,6 @@
 <script setup>
+import { computed, ref } from 'vue'
+
 /**
  * 分段切换，所有页面的标签切换都用它。两种版式：
  * - chips（默认）：无外框的一排标签（主页已安装 / 收藏、插件市场分类与来源、反馈类型），选中项带余烬橙方块标记；
@@ -18,29 +20,79 @@ const props = defineProps({
 })
 
 const emit = defineEmits(['update:modelValue', 'change'])
+const groupRef = ref(null)
+
+// WAI-ARIA radiogroup 游走焦点下标：激活项可 Tab 进入，无匹配时回退至首项
+const focusableIndex = computed(() => {
+  const idx = props.options.findIndex((opt) => opt.value === props.modelValue)
+  return idx >= 0 ? idx : 0
+})
 
 const selectOption = (opt) => {
   if (opt.value === props.modelValue) return
   emit('update:modelValue', opt.value)
   emit('change', opt.value)
 }
+
+const onGroupKeydown = (event) => {
+  const len = props.options.length
+  if (!len || event.ctrlKey || event.metaKey || event.altKey) return
+
+  const buttons = groupRef.value
+    ? Array.from(groupRef.value.querySelectorAll('button[role="radio"]'))
+    : []
+  const targetBtn = event.target?.closest?.('button[role="radio"]')
+  const currentIndex = targetBtn ? buttons.indexOf(targetBtn) : -1
+  const idx = currentIndex >= 0 ? currentIndex : focusableIndex.value
+
+  let nextIndex = -1
+  switch (event.key) {
+    case 'ArrowRight':
+    case 'ArrowDown':
+      nextIndex = (idx + 1) % len
+      break
+    case 'ArrowLeft':
+    case 'ArrowUp':
+      nextIndex = (idx - 1 + len) % len
+      break
+    case 'Home':
+      nextIndex = 0
+      break
+    case 'End':
+      nextIndex = len - 1
+      break
+    default:
+      return
+  }
+
+  event.preventDefault()
+  event.stopPropagation()
+  const nextOpt = props.options[nextIndex]
+  if (nextOpt) {
+    selectOption(nextOpt)
+  }
+  buttons[nextIndex]?.focus?.()
+}
 </script>
 
 <template>
   <div
+    ref="groupRef"
     class="seg-group"
     :class="`is-${variant}`"
     role="radiogroup"
     :aria-label="ariaLabel || undefined"
+    @keydown="onGroupKeydown"
   >
     <button
-      v-for="opt in options"
+      v-for="(opt, index) in options"
       :key="String(opt.value)"
       type="button"
       role="radio"
       class="seg-btn"
       :class="{ active: modelValue === opt.value }"
       :aria-checked="modelValue === opt.value"
+      :tabindex="index === focusableIndex ? 0 : -1"
       @click="selectOption(opt)"
     >
       <span class="seg-marker" aria-hidden="true"></span>

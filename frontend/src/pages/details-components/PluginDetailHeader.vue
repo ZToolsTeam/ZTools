@@ -8,6 +8,10 @@ const props = defineProps({
     required: true
   },
   isInstalled: Boolean,
+  isBundled: {
+    type: Boolean,
+    default: false
+  },
   canUninstall: {
     type: Boolean,
     default: true
@@ -154,6 +158,7 @@ const rating = computed(() => {
       <!-- 操作按钮 -->
       <PluginActions
         :isInstalled="isInstalled"
+        :isBundled="isBundled"
         :canUninstall="canUninstall"
         :canCreateShortcut="canCreateShortcut"
         :hasUpdate="hasUpdate"

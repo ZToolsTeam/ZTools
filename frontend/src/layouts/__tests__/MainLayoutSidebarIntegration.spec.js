@@ -194,7 +194,7 @@ describe('方案 A 架构：MainLayout 与通透侧边栏端到端集成测试',
     expect(wrapper.find('.test-declarative-page').exists()).toBe(true)
   })
 
-  it('[快捷键] ⌘, / Ctrl+, 打开设置；已在设置页时重复按不会重复入栈', async () => {
+  it('[快捷键] ⌘I / Ctrl+I 打开设置并同步侧边栏键帽；已在设置页不重复入栈，组字中与 Ctrl+Shift+I 不误触', async () => {
     const wrapper = mount(MainLayout, {
       global: {
         plugins: [pinia, router],
@@ -204,25 +204,50 @@ describe('方案 A 架构：MainLayout 与通透侧边栏端到端集成测试',
     await flushPromises()
     const nav = useNavStore()
 
+    // 侧边栏「设置」项键帽显示 Ctrl I
+    const settingsItem = wrapper
+      .findAll('aside.sidebar-root .sidebar-item')
+      .find((item) => item.find('.sidebar-label').exists() && item.find('.sidebar-label').text() === '设置')
+    expect(settingsItem).toBeTruthy()
+    expect(settingsItem.findAll('kbd').map((k) => k.text())).toEqual(['Ctrl', 'I'])
+
     // macOS：metaKey 归一化为 Ctrl
-    const handled = dispatchKeyEvent(new KeyboardEvent('keydown', { key: ',', metaKey: true }))
+    const handled = dispatchKeyEvent(new KeyboardEvent('keydown', { key: 'i', metaKey: true }))
     await flushPromises()
     expect(handled).toBe(true)
     expect(router.currentRoute.value.name).toBe('advanced-settings')
     expect(nav.currentPage).toBe('advanced-settings')
 
+    // 已在设置页时重复按 Ctrl+I 不会重复 push
     const pushSpy = vi.spyOn(router, 'push')
-    dispatchKeyEvent(new KeyboardEvent('keydown', { key: ',', ctrlKey: true }))
+    dispatchKeyEvent(new KeyboardEvent('keydown', { key: 'i', ctrlKey: true }))
     await flushPromises()
     expect(router.currentRoute.value.name).toBe('advanced-settings')
     expect(pushSpy).not.toHaveBeenCalled()
     pushSpy.mockRestore()
 
-    // 不带修饰键的逗号不触发
+    // 不带修饰键的 i 与开发者工具快捷键 Ctrl+Shift+I 均不触发打开设置
     await router.push('/')
-    expect(dispatchKeyEvent(new KeyboardEvent('keydown', { key: ',' }))).toBe(false)
+    expect(dispatchKeyEvent(new KeyboardEvent('keydown', { key: 'i' }))).toBe(false)
+    expect(dispatchKeyEvent(new KeyboardEvent('keydown', { key: 'I', ctrlKey: true, shiftKey: true }))).toBe(false)
     await flushPromises()
     expect(router.currentRoute.value.name).toBe('my')
+
+    // Windows 中文输入法非组字态 (keyCode 229 + key Process + code KeyI) 同样打开设置
+    const imeKeyI = new KeyboardEvent('keydown', { key: 'Process', code: 'KeyI', ctrlKey: true, isComposing: false })
+    Object.defineProperty(imeKeyI, 'keyCode', { value: 229 })
+    expect(dispatchKeyEvent(imeKeyI)).toBe(true)
+    await flushPromises()
+    expect(router.currentRoute.value.name).toBe('advanced-settings')
+
+    // 正在拼音组字时不误触发跳转
+    await router.push('/')
+    const composingKeyI = new KeyboardEvent('keydown', { key: 'Process', code: 'KeyI', ctrlKey: true, isComposing: true })
+    Object.defineProperty(composingKeyI, 'keyCode', { value: 229 })
+    expect(dispatchKeyEvent(composingKeyI)).toBe(false)
+    await flushPromises()
+    expect(router.currentRoute.value.name).toBe('my')
+
     wrapper.unmount()
   })
 

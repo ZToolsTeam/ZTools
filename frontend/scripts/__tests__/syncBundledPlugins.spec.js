@@ -77,24 +77,27 @@ describe('sync-bundled-plugins.mjs', () => {
     expect(sync(ws.frontend, '--check').status).toBe(0)
   })
 
-  it('元数据丢失或来源更新时 --check 只读报错，--ensure 恢复真实名称和分类', () => {
+  it('生成文件缺失或源仓库商店元数据更新时：--check 不依赖未跟踪的生成文件且保持只读，--ensure 自动重建', () => {
     const ws = makeWorkspace()
     write(ws.plugins, 'calendar/plugin.json', JSON.stringify({ id: 'calendar', author: { name: 'ZTools Team' } }))
     expect(sync(ws.frontend).status).toBe(0)
     const generated = generatedConfig(ws.frontend)
     expect(generated.storePlugins).toEqual([{ id: 'calendar', name: 'calendar', description: '', category: [] }])
-    delete generated.storePlugins
-    const file = path.join(ws.frontend, 'src/config/bundledPlugins.generated.js')
-    fs.writeFileSync(file, `export default ${JSON.stringify(generated)}\n`)
-    const missing = fs.readFileSync(file, 'utf8')
-    const result = sync(ws.frontend, '--check')
-    expect(result.status).toBe(1)
-    expect(result.stderr).toContain('不一致：src/config/bundledPlugins.generated.js')
-    expect(fs.readFileSync(file, 'utf8')).toBe(missing)
+    const generatedFile = path.join(ws.frontend, 'src/config/bundledPlugins.generated.js')
+    const indexFile = path.join(ws.frontend, 'public/bundled-plugins/index.json')
+    fs.rmSync(generatedFile)
+    fs.rmSync(indexFile)
+    // 干净检出时尚未生成这两个被 .gitignore 忽略的文件：--check 照常通过且只读（不落地生成文件）
+    const checkClean = sync(ws.frontend, '--check')
+    expect(checkClean.status, checkClean.stderr).toBe(0)
+    expect(fs.existsSync(generatedFile)).toBe(false)
+    expect(fs.existsSync(indexFile)).toBe(false)
+    // 修改商店插件展示文案（未增删插件）：--check 不因 storePlugins 文案变化报错，--ensure 自动生成最新元数据
     write(ws.plugins, 'calendar/plugin.json', JSON.stringify({ id: 'calendar', author: 'ZTools Team', name: '日历', category: ['办公效率'] }))
+    expect(sync(ws.frontend, '--check').status).toBe(0)
     expect(sync(ws.frontend, '--ensure').status).toBe(0)
     expect(generatedConfig(ws.frontend).storePlugins).toEqual([{ id: 'calendar', name: '日历', description: '', category: ['办公效率'] }])
-    expect(sync(ws.frontend, '--check').status).toBe(0)
+    expect(fs.existsSync(indexFile)).toBe(true)
   })
 
   it('同步后 --check 通过；--check 只读', () => {
@@ -272,5 +275,54 @@ describe('sync-bundled-plugins.mjs', () => {
     const bad = sync(ws.frontend)
     expect(bad.status).not.toBe(0)
     expect(bad.stderr).toContain('不是有效的 PNG')
+  })
+
+  it('不含 ../plugins 的开源客户端仓库：--check 只读校验本地副本，--ensure 从本地副本生成两个索引文件；缺失入口时报错', () => {
+    const ws = makeWorkspace()
+    write(ws.plugins, 'calendar/plugin.json', JSON.stringify({ id: 'calendar', author: 'ZTools Team', name: '日历' }))
+    write(ws.plugins, 'draft-one/plugin.json', JSON.stringify({ id: 'draft-one', author: 'ZTools Team', draft: true }))
+    expect(sync(ws.frontend).status).toBe(0)
+
+    // 模拟公开仓库检出：删除 ../plugins 及两个被 .gitignore 忽略的生成文件
+    fs.rmSync(ws.plugins, { recursive: true, force: true })
+    const generatedFile = path.join(ws.frontend, 'src/config/bundledPlugins.generated.js')
+    const indexFile = path.join(ws.frontend, 'public/bundled-plugins/index.json')
+    fs.rmSync(generatedFile)
+    fs.rmSync(indexFile)
+
+    const checkRes = sync(ws.frontend, '--check')
+    expect(checkRes.status, checkRes.stderr).toBe(0)
+    expect(fs.existsSync(generatedFile)).toBe(false)
+    expect(fs.existsSync(indexFile)).toBe(false)
+
+    const ensureRes = sync(ws.frontend, '--ensure')
+    expect(ensureRes.status, ensureRes.stderr).toBe(0)
+    expect(fs.existsSync(indexFile)).toBe(true)
+    const generated = generatedConfig(ws.frontend)
+    expect(generated.ids).toEqual(['demo'])
+    expect(generated.storeOfficialIds).toEqual(['calendar'])
+    expect(generated.unreleasedOfficialIds).toEqual(['draft-one'])
+    expect(generated.storePlugins).toEqual([])
+    expect(generated.plugins.map((p) => p.id)).toEqual(['demo'])
+
+    // 破坏性校验：本地副本缺失入口脚本时 --ensure 与 --check 均拒绝通过
+    fs.rmSync(path.join(ws.out, 'dist/index.js'))
+    expect(sync(ws.frontend, '--check').status).toBe(1)
+    expect(sync(ws.frontend, '--ensure').status).toBe(1)
+  })
+
+  it('CRLF 与 LF 换行符跨平台一致性：Windows CRLF 检出不会改变统计出的插件字节数 size', () => {
+    const ws = makeWorkspace()
+    expect(sync(ws.frontend).status).toBe(0)
+    const lfSize = generatedConfig(ws.frontend).plugins[0].size
+
+    for (const rel of ['plugin.json', 'icon.svg', 'dist/index.js', 'dist/chunk-a.js']) {
+      const p = path.join(ws.plugins, 'demo', rel)
+      const lfText = fs.readFileSync(p, 'utf8').replace(/\r\n/g, '\n')
+      fs.writeFileSync(p, lfText.replace(/\n/g, '\r\n'), 'utf8')
+    }
+    expect(sync(ws.frontend, '--ensure').status).toBe(0)
+    const crlfSize = generatedConfig(ws.frontend).plugins[0].size
+    expect(crlfSize).toBe(lfSize)
   })
 })

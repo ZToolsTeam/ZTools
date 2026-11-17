@@ -15,7 +15,13 @@ import { onAppStart, setTrackingWebVersion } from '@edition'
 import { DEPRECATED_PLUGIN_FEATURE_HOTKEY_ITEMS } from '@/utils/pluginFeatureHotkeys'
 import { openSettings } from '@/utils/internalPlugins'
 import { toggleHostDevTools } from '@/utils/hostDevTools'
-import { isHotkeyRecorderInput } from '@/utils/keymap'
+import {
+  OPEN_SETTINGS_SHORTCUT,
+  isHotkeyRecorderInput,
+  isComposingEvent,
+  isModalOpen,
+  normalizeEventKeyCombo
+} from '@/utils/keymap'
 import { dispatchSyntheticRecorderHotkey } from '@/utils/hotkeyRecorder'
 import {
   windowModeState,
@@ -34,6 +40,16 @@ const isLauncherWindow = computed(() => {
 })
 
 // 悬浮条窗口是透明无边框窗口：根节点必须透明，否则圆角面板外会露出方形底色
+const isPopoutWindow = computed(() => {
+  if (typeof window === 'undefined') return false
+  return (
+    window.__ztoolsWindowMode === 'popout' ||
+    window.location.search.includes('popout=1') ||
+    window.location.hash.startsWith('#/popout/') ||
+    window.location.hash.includes('/popout/')
+  )
+})
+
 if (isLauncherWindow.value && typeof document !== 'undefined') {
   document.documentElement.classList.add('is-launcher-window')
 }
@@ -119,9 +135,9 @@ const cleanupDeprecatedFeatureHotkeys = async () => {
   }
 }
 
-/** 全局快捷键监听：开发者工具 (F12, Ctrl+Shift+I，仅开发版) 与设置 (Ctrl+,) */
+/** 全局快捷键监听：开发者工具 (F12, Ctrl+Shift+I，仅开发版) 与设置 (Ctrl+I) */
 const handleGlobalKeydown = (event) => {
-  if (isHotkeyRecorderInput(event?.target)) return
+  if (isHotkeyRecorderInput(event?.target) || isComposingEvent(event)) return
 
   const isDevToolsKey =
     event.key === 'F12' ||
@@ -135,10 +151,10 @@ const handleGlobalKeydown = (event) => {
     return
   }
 
-  const isSettingsKey = (event.ctrlKey || event.metaKey) && event.key === ','
-  if (isSettingsKey) {
+  const combo = normalizeEventKeyCombo(event)
+  if (combo === OPEN_SETTINGS_SHORTCUT && !isModalOpen()) {
     event.preventDefault()
-    openSettings()
+    void openSettings()
     return
   }
 
@@ -211,7 +227,9 @@ onMounted(async () => {
   }
 
   // 版本相关的启动动作（官方版静默上报今日上线，已登录时同步已安装的插件 ID；开源版什么都不做）
-  onAppStart({ getInstalledPluginIds: () => pluginsStore.getCatalogInstalledPluginIds() })
+  if (!isLauncherWindow.value && !isPopoutWindow.value) {
+    onAppStart({ getInstalledPluginIds: () => pluginsStore.getCatalogInstalledPluginIds() })
+  }
 
   // 启动时检查版本（同步 IPC，Delphi 端异步推送已移除）
   // 需要前端主动处理返回结果并展示通知
