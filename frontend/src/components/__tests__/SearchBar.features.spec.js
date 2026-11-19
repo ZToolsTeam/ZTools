@@ -5,9 +5,19 @@ import { createPinia, setActivePinia } from 'pinia'
 
 const candidates = ref([])
 const filteredCandidates = ref(null)
-const mocks = vi.hoisted(() => ({ load: vi.fn(), noView: vi.fn(), error: vi.fn(), success: vi.fn(), keys: {} }))
-vi.mock('@/composables/useCommandSearch', () => ({
-  useCommandSearch: () => ({ query: ref(''), matchedPlugins: candidates, filteredItems: filteredCandidates, search: vi.fn(), clearSearch: vi.fn(), recordUsage: vi.fn(), highlightParts: item => [{ text: item?.name || '', hit: false }] })
+const mocks = vi.hoisted(() => ({ load: vi.fn(), noView: vi.fn(), error: vi.fn(), success: vi.fn(), setItemPinned: vi.fn(), keys: {} }))
+vi.mock('@/composables/useCommandSearch', async (importOriginal) => ({
+  ...(await importOriginal()),
+  useCommandSearch: () => ({
+    query: ref(''),
+    matchedPlugins: candidates,
+    filteredItems: filteredCandidates,
+    search: vi.fn(),
+    clearSearch: vi.fn(),
+    recordUsage: vi.fn(),
+    setItemPinned: (...args) => mocks.setItemPinned(...args),
+    highlightParts: item => [{ text: item?.name || '', hit: false }]
+  })
 }))
 vi.mock('@/utils/keymap', async (importOriginal) => {
   const actual = await importOriginal()
@@ -62,6 +72,7 @@ describe('工作台搜索子命令到宿主加载链路', () => {
     mocks.load.mockReset().mockResolvedValue({})
     mocks.noView.mockReset()
     mocks.error.mockReset(); mocks.success.mockReset()
+    mocks.setItemPinned.mockReset().mockResolvedValue({ success: true, pinned: true })
     store = usePluginsStore()
     store.installedPlugins = [{ pluginId: 'regex-cron', entry: 'dist/index.js', isDeclarative: true }]
     store.markRecent = vi.fn().mockResolvedValue()
@@ -247,5 +258,56 @@ describe('工作台搜索子命令到宿主加载链路', () => {
     expect(wrapper.find('.is-active').text()).toContain('在插件市场搜索「没有这个插件」')
     expect(mocks.keys.search.Enter()).toBe(true)
     expect(wrapper.emitted('search')).toEqual([['没有这个插件']])
+  })
+
+  it('下拉展开时按 Ctrl+P 固定或取消固定当前可固定条目并弹 Toast；下拉未展开时不拦截', async () => {
+    const fileItem = { key: 'file:/test/notes.txt', type: 'file', name: 'notes.txt', path: '/test/notes.txt', pinned: false }
+    await prepare(fileItem, true)
+
+    // 首次固定
+    expect(mocks.keys.search['Ctrl+P']()).toBe(true)
+    await flushPromises()
+    expect(mocks.setItemPinned).toHaveBeenCalledWith(fileItem, true)
+    expect(mocks.success).toHaveBeenCalledWith('已固定「notes.txt」到悬浮条首屏')
+
+    // 取消固定 + 失败反馈
+    mocks.setItemPinned.mockResolvedValueOnce({ success: false, error: '保存固定状态失败' })
+    fileItem.pinned = true
+    expect(mocks.keys.search['Ctrl+P']()).toBe(true)
+    await flushPromises()
+    expect(mocks.setItemPinned).toHaveBeenCalledWith(fileItem, false)
+    expect(mocks.error).toHaveBeenCalledWith('保存固定状态失败')
+
+    // 下拉关闭时不拦截
+    mocks.setItemPinned.mockClear()
+    expect(mocks.keys.search.Escape()).toBe(true)
+    await flushPromises()
+    expect(mocks.keys.search['Ctrl+P']()).toBe(false)
+    expect(mocks.setItemPinned).not.toHaveBeenCalled()
+  })
+
+  it('当前选中项为 inline-* / ephemeral / market-search 时，Ctrl+P 不触发固定', async () => {
+    // 1. market-search
+    candidates.value = []
+    filteredCandidates.value = []
+    wrapper = mount(SearchBar, { global: { plugins: [router], stubs: {
+      RcSquircle: true, ShortcutKeys: true,
+      'a-input': { props: ['value'], emits: ['update:value', 'focus'], template: '<input :value="value" @input="$emit(\'update:value\', $event.target.value)" @focus="$emit(\'focus\')" />' }
+    } } })
+    await wrapper.find('input').trigger('focus')
+    await wrapper.find('input').setValue('不存在的词')
+    expect(mocks.keys.search['Ctrl+P']()).toBe(false)
+    expect(mocks.setItemPinned).not.toHaveBeenCalled()
+
+    // 2. inline-calculator / inline-color / ephemeral
+    for (const bad of [
+      { key: 'inline-calc:math:1+1', type: 'inline-calculator', ephemeral: true, name: '1+1 = 2' },
+      { key: 'inline-calc:color:#fff', type: 'inline-color', ephemeral: true, name: '#fff' }
+    ]) {
+      filteredCandidates.value = [bad]
+      await wrapper.find('input').setValue('1+1')
+      expect(mocks.keys.search['Ctrl+P']()).toBe(false)
+    }
+    expect(mocks.setItemPinned).not.toHaveBeenCalled()
   })
 })

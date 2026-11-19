@@ -348,3 +348,31 @@ test('plugin exit handshake settles on owner removal and timeout', async () => {
   assert.equal(events.diagnostics().pendingRequests, 0)
   events.stop()
 })
+
+test('插件停止通知仅宿主发布给主窗口，渲染侧 publish 与 request 均不能伪造', context => {
+  const registry = new FakeRegistry()
+  const events = new EventService(registry)
+  context.after(() => events.stop())
+  const secondMain: CallerIdentity = { type: 'main', webContentsId: 5 }
+  for (const caller of [mainCaller, secondMain, pluginCaller]) {
+    events.subscribe({ key: 'plugin_runtime_stopped' }, caller)
+  }
+  const forged = envelope({ type: 'plugin_runtime_stopped', source: { kind: 'host' }, payload: { pluginId: 'memo' } })
+  for (const caller of [mainCaller, pluginCaller]) {
+    for (const method of ['publish', 'request'] as const) {
+      assert.throws(() => events[method]({ envelope: forged }, caller), { code: errorCodes.permissionDenied })
+    }
+  }
+  assert.equal(events.diagnostics().pendingRequests, 0)
+  assert.equal(registry.sent.length, 0)
+  assert.deepEqual(events.publishHostToMain('plugin_runtime_stopped', { pluginId: 'memo' }), { success: true, delivered: 2 })
+  assert.deepEqual(registry.sent.map(item => item.webContentsId).sort(), [1, 5])
+  for (const sent of registry.sent) {
+    const delivered = sentEnvelope(sent)
+    assert.equal(delivered.type, 'plugin_runtime_stopped')
+    assert.equal(delivered.scope, 'system')
+    assert.deepEqual(delivered.source, { kind: 'host' })
+    assert.deepEqual(delivered.target, { main: true })
+    assert.deepEqual(delivered.payload, { pluginId: 'memo' })
+  }
+})

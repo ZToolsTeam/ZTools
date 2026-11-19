@@ -15,7 +15,7 @@ class TriggerAPI {
    * @param {boolean} config.enabled - 是否启用
    * @param {Object} config.config - 触发器配置内容，如 { key: 'Ctrl+Alt+T' }
    * @param {Object} config.action - 触发动作配置
-   * @param {string} config.action.mode - 执行模式: 'builtin', 'dll', 'script', 'window'；内置的 launch_local_app 仅接受悬浮条固定的本地软件 ID
+   * @param {string} config.action.mode - 执行模式: 'builtin', 'dll', 'script', 'window'
    * @param {string} config.action.target - 执行目标 (函数名/DLL名/脚本/窗口ID)
    * @param {Object} config.action.params - 执行参数
    * @returns {Promise<Object>} { success: boolean, triggerId: string }
@@ -71,11 +71,16 @@ class TriggerAPI {
   /**
    * 检测快捷键冲突
    * @param {string} key - 快捷键字符串，如 'Ctrl+Shift+A'
-   * @param {string} pluginId - 当前插件ID（排除自身）
+   * @param {string} [pluginId] - 当前插件ID
+   * @param {string} [excludeTriggerId] - 可选，编辑已有快捷键时排除自身触发器ID
    * @returns {Promise<Object>} { hasConflict: boolean, conflicts: Array<{pluginId, pluginName, triggerId, key}> }
    */
-  async checkConflict(key, pluginId = '') {
-    return await this.transport.call('trigger_check_conflict', { key, pluginId })
+  async checkConflict(key, pluginId = '', excludeTriggerId = undefined) {
+    const payload = { key, pluginId }
+    if (typeof excludeTriggerId === 'string' && excludeTriggerId.trim()) {
+      payload.excludeTriggerId = excludeTriggerId.trim()
+    }
+    return await this.transport.call('trigger_check_conflict', payload)
   }
 
 }

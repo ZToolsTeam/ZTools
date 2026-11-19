@@ -52,21 +52,22 @@ function createRealHostStub(handlers = {}) {
   return stub
 }
 
-test('P12 multi-download: 真实宿主传输层下载、磁盘空间探测、目录 {files} 兼容与异常边界验证', async () => {
+test('P12 multi-download: 冷启动不扫默认目录/剪贴板、显式文件夹导入、下载及异常边界验证', async () => {
   const host = createRealHostStub({
-    system_get_path: () => 'C:\\Users\\RealUser\\Downloads',
-    system_search_files: () => ({
+    window_show_select_folder_dialog: () => ({
+      canceled: false,
+      folderPath: 'C:\\Users\\RealUser\\Downloads'
+    }),
+    filesystem_get_directory_contents: () => ({
+      success: true,
       files: [
         {
           name: 'ubuntu-24.04.iso',
-          path: 'C:\\Users\\RealUser\\Downloads\\ubuntu-24.04.iso',
-          is_dir: false,
           size: 4096000,
-          mtime: 1710000000
+          isDirectory: false,
+          lastModified: '2026-11-16T00:00:00.000Z'
         }
-      ],
-      total_matches: 1,
-      total_bytes: 4096000
+      ]
     }),
     system_get_disk_usage: () => ({
       total: 500 * 1024 ** 3,
@@ -82,15 +83,21 @@ test('P12 multi-download: 真实宿主传输层下载、磁盘空间探测、目
   })
 
   const snap = await multiDownload.fetchMultiDownloadSnapshot(host)
-  assert.equal(snap.downloadDir, 'C:\\Users\\RealUser\\Downloads')
   assert.equal(snap.driveFreeBytes, 123 * 1024 ** 3)
-  assert.equal(snap.files.length, 1)
-  assert.equal(snap.files[0].name, 'ubuntu-24.04.iso')
+  assert.equal(snap.files.length, 0, '冷启动不得自动扫描 Downloads 目录')
+  assert.equal(host.calls.some(c => c.channel === 'system_get_path'), false)
+  assert.equal(host.calls.some(c => c.channel === 'system_search_files'), false)
+  assert.equal(host.calls.some(c => c.channel === 'clipboard_read_text'), false)
+
+  const imported = await multiDownload.importMultiDownloadFolder(host)
+  assert.equal(imported.downloadDir, 'C:\\Users\\RealUser\\Downloads')
+  assert.equal(imported.files.length, 1)
+  assert.equal(imported.files[0].name, 'ubuntu-24.04.iso')
 
   // 真实 HTTP 下载成功链路
   const dlOk = await multiDownload.startMultiThreadDownloadTask(
     'https://releases.ubuntu.com/24.04/ubuntu-24.04.iso',
-    snap.downloadDir,
+    imported.downloadDir,
     multiDownload.THREAD_SPLIT_PRESETS[0],
     host
   )
@@ -100,7 +107,7 @@ test('P12 multi-download: 真实宿主传输层下载、磁盘空间探测、目
   // 真实回收站清理与释放体积计算
   const trashRes = await multiDownload.deleteDownloadedFiles(
     ['C:\\Users\\RealUser\\Downloads\\ubuntu-24.04.iso'],
-    snap.files,
+    imported.files,
     host
   )
   assert.equal(trashRes.deletedCount, 1)
@@ -109,7 +116,7 @@ test('P12 multi-download: 真实宿主传输层下载、磁盘空间探测、目
   // 异常边界：非法 URL 与下载失败严禁伪装成功
   const badUrlRes = await multiDownload.startMultiThreadDownloadTask(
     'invalid-protocol://bad',
-    snap.downloadDir,
+    imported.downloadDir,
     multiDownload.THREAD_SPLIT_PRESETS[0],
     host
   )
@@ -130,22 +137,23 @@ test('P12 multi-download: 真实宿主传输层下载、磁盘空间探测、目
   assert.match(dlFail.error || dlFail.message, /502|失败/)
 })
 
-test('P13 video-downloader: 真实磁盘空间、直链下载、无 yt-dlp 时如实复制命令及异常边界验证', async () => {
+test('P13 video-downloader: 冷启动零自动扫描、显式文件夹导入、直链下载及异常边界验证', async () => {
   let clipboardContent = ''
   const host = createRealHostStub({
-    system_get_path: () => 'C:\\Users\\RealUser\\Videos',
-    system_search_files: () => ({
+    window_show_select_folder_dialog: () => ({
+      canceled: false,
+      folderPath: 'C:\\Users\\RealUser\\Videos'
+    }),
+    filesystem_get_directory_contents: () => ({
+      success: true,
       files: [
         {
           name: 'demo.mp4',
-          path: 'C:\\Users\\RealUser\\Videos\\demo.mp4',
-          is_dir: false,
           size: 8192000,
-          mtime: 1710000000
+          isDirectory: false,
+          lastModified: '2026-11-16T00:00:00.000Z'
         }
-      ],
-      total_matches: 1,
-      total_bytes: 8192000
+      ]
     }),
     system_get_disk_usage: () => ({
       total: 500 * 1024 ** 3,
@@ -162,13 +170,19 @@ test('P13 video-downloader: 真实磁盘空间、直链下载、无 yt-dlp 时�
 
   const snap = await videoDownloader.fetchVideoDownloaderSnapshot(host)
   assert.equal(snap.driveFreeBytes, 88 * 1024 ** 3)
-  assert.ok(snap.videos.length >= 1)
-  assert.equal(snap.videos[0].name, 'demo.mp4')
+  assert.equal(snap.videos.length, 0, '冷启动不得自动扫描 Videos 目录')
+  assert.equal(host.calls.some(c => c.channel === 'system_get_path'), false)
+  assert.equal(host.calls.some(c => c.channel === 'system_search_files'), false)
+  assert.equal(host.calls.some(c => c.channel === 'clipboard_read_text'), false)
+
+  const imported = await videoDownloader.importVideoDownloaderFolder(host)
+  assert.equal(imported.videos.length, 1)
+  assert.equal(imported.videos[0].name, 'demo.mp4')
 
   // 无 yt-dlp 插件时如实告知复制命令到剪贴板，不谎称已启动后台下载
   const res = await videoDownloader.parseAndDownloadStreamVideo(
     'https://www.bilibili.com/video/BV1xx411c7mD',
-    snap.saveDir,
+    imported.saveDir,
     videoDownloader.VIDEO_QUALITY_PRESETS[0],
     host
   )
@@ -193,7 +207,7 @@ test('P13 video-downloader: 真实磁盘空间、直链下载、无 yt-dlp 时�
   // 真实删除视频统计 freedBytes
   const delRes = await videoDownloader.trashLocalVideoFiles(
     ['C:\\Users\\RealUser\\Videos\\demo.mp4'],
-    snap.videos,
+    imported.videos,
     host
   )
   assert.equal(delRes.deletedCount, 1)
@@ -280,32 +294,30 @@ test('P15 data-recovery: 真实宿主下彻底移除 5 个虚构恢复文件并�
   assert.equal(restoreFail.restoredCount, 0)
 })
 
-test('P16 shredder: 真实宿主下移除虚构机密文件并在粉碎失败时返回真实错误', async () => {
+test('P16 shredder: 显式文件夹导入（绝不扫 %TEMP% 或放假数据）及粉碎失败真实报错验证', async () => {
   const host = createRealHostStub({
-    system_get_path: () => 'C:\\Users\\RealUser\\AppData\\Local\\Temp',
-    system_search_files: (payload) => {
-      if (String(payload.query).includes('Temp')) {
-        return {
-          files: [
-            {
-              name: 'real_trace.log',
-              path: 'C:\\Users\\RealUser\\AppData\\Local\\Temp\\real_trace.log',
-              is_dir: false,
-              size: 2048,
-              mtime: Math.floor(Date.now() / 1000)
-            }
-          ],
-          total_matches: 1,
-          total_bytes: 2048
+    window_show_select_folder_dialog: () => ({
+      canceled: false,
+      folderPath: 'D:\\TempToShred'
+    }),
+    filesystem_get_directory_contents: () => ({
+      success: true,
+      files: [
+        {
+          name: 'real_trace.log',
+          size: 2048,
+          isDirectory: false,
+          lastModified: '2026-11-16T00:00:00.000Z'
         }
-      }
-      return { files: [], total_matches: 0, total_bytes: 0 }
-    }
+      ]
+    })
   })
 
   const snap = await shredder.fetchShredCandidates(host)
   assert.equal(snap.candidates.some(f => f.name === 'decrypted_token_session_dump.tmp'), false)
   assert.equal(snap.candidates.some(f => f.name === 'real_trace.log'), true)
+  assert.equal(host.calls.some(c => c.channel === 'system_get_path'), false)
+  assert.equal(host.calls.some(c => c.channel === 'system_search_files'), false)
 
   // 异常边界：系统核心目录拦截与底层擦除失败时返回 ok: false
   const sysRes = await shredder.executeSecureShred(
@@ -369,15 +381,28 @@ test('P17 system-backup: 真实探测备份文件与归档创建/还原失败拦
   assert.equal(restoreFail.ok, false)
 })
 
-test('P18 sqlite-plugin: 真实宿主下连接与执行 SQL 校验及危险 SQL 拦截验证', async () => {
+test('P18 sqlite-plugin: 无默认扫描空工作区、显式文件夹导入数据库与危险 SQL 拦截验证', async () => {
   const host = createRealHostStub({
-    system_get_path: () => 'C:\\Users\\RealUser\\AppData\\Roaming',
-    system_search_files: () => ({ files: [], total_matches: 0, total_bytes: 0 })
+    window_show_select_folder_dialog: () => ({
+      canceled: false,
+      folderPath: 'D:\\RealDbs'
+    }),
+    filesystem_get_directory_contents: () => ({
+      success: true,
+      files: [{ name: 'notes.sqlite', size: 8192, isDirectory: false }]
+    })
   })
 
-  // 未挂载 sqlite 原生服务时在真实宿主下返回空表结构而非假表
+  // 未指定数据库时默认返回空工作区，且不扫描 AppData
   const ws = await sqlitePlugin.fetchSqliteWorkspace(undefined, host)
   assert.equal(ws.tables.length, 0)
+  assert.equal(host.calls.some(c => c.channel === 'system_get_path'), false)
+  assert.equal(host.calls.some(c => c.channel === 'system_search_files'), false)
+
+  // 显式选择文件夹导入 SQLite 数据库
+  const importedDbs = await sqlitePlugin.importSqliteDatabasesFromFolder(host)
+  assert.equal(importedDbs.length, 1)
+  assert.equal(importedDbs[0].name, 'notes.sqlite')
 
   // 危险 SQL 拦截
   const dropRes = await sqlitePlugin.executeSqliteQuery('C:\\test.db', 'DROP TABLE kv_storage;', host)

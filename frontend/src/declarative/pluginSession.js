@@ -48,6 +48,14 @@ export function createPluginSessionHolder(pluginId, options = {}) {
   let settleWaiters = []
   let lastError = null
   let generation = 0
+  let invalidated = false
+  const invalidationListeners = new Set()
+
+  function requireActive() {
+    if (invalidated) {
+      throw Object.assign(new Error('插件已更新或停止，请重新打开'), { code: 'PLUGIN_SESSION_EXPIRED' })
+    }
+  }
 
   function settled() {
     if (inflight > 0) return
@@ -132,7 +140,7 @@ export function createPluginSessionHolder(pluginId, options = {}) {
   function release() {
     if (refs === 0) return
     refs -= 1
-    if (refs > 0) return
+    if (refs > 0 || invalidated) return
     if (closeTimer) clearTimeout(closeTimer)
     closeTimer = setTimeout(() => { void closeNow() }, graceMs)
   }
@@ -141,6 +149,7 @@ export function createPluginSessionHolder(pluginId, options = {}) {
     pluginId,
     /** 引用计数 +1；返回幂等的 release。会话打开失败也会 resolve（不阻塞渲染） */
     async acquire() {
+      requireActive()
       refs += 1
       if (closeTimer) {
         clearTimeout(closeTimer)
@@ -148,11 +157,47 @@ export function createPluginSessionHolder(pluginId, options = {}) {
       }
       if (!token && !opening) opening = open()
       if (opening) await opening
+      if (invalidated) {
+        refs = Math.max(0, refs - 1)
+        requireActive()
+      }
       let released = false
       return () => {
         if (released) return
         released = true
         release()
+      }
+    },
+    get invalidated() { return invalidated },
+    onInvalidated(listener) {
+      if (invalidated) {
+        listener()
+        return () => undefined
+      }
+      invalidationListeners.add(listener)
+      return () => invalidationListeners.delete(listener)
+    },
+    invalidate() {
+      if (invalidated) return
+      invalidated = true
+      generation += 1
+      if (closeTimer) clearTimeout(closeTimer)
+      closeTimer = null
+      const closing = sessionId
+      token = null
+      sessionId = null
+      opening = null
+      for (const listener of [...invalidationListeners]) {
+        try {
+          listener()
+        } catch (error) {
+          logWarn('[plugin-session] 退出旧插件视图失败:', error)
+        }
+      }
+      invalidationListeners.clear()
+      if (closing) {
+        void call('declarative_session_close', { sessionId: closing })
+          .catch(error => logWarn('[plugin-session] 关闭失效会话失败:', error))
       }
     },
     get token() {
@@ -198,6 +243,14 @@ export function getPluginSessionHolder(pluginId) {
   return holder
 }
 
+/** 旧代码不能在更新、禁用或卸载后重新申请权限；下一次加载使用全新 holder。 */
+export function invalidatePluginSession(pluginId) {
+  const key = String(pluginId || '').trim().toLowerCase()
+  const holder = holders.get(key)
+  holders.delete(key)
+  holder?.invalidate()
+}
+
 /** 测试用：清空 holder 缓存 */
 export function resetPluginSessionHoldersForTest() {
   holders.clear()
@@ -229,6 +282,12 @@ export function createScopedHostBridge(holder, realBridge) {
     const original = realMethods[name]
     if (typeof original !== 'function') continue
     methods[name] = async (request) => {
+      const requireActive = () => {
+        if (holder.invalidated) {
+          throw Object.assign(new Error('插件已更新或停止，请重新打开'), { code: 'PLUGIN_SESSION_EXPIRED' })
+        }
+      }
+      requireActive()
       const source = isRecord(request) ? request : {}
       const hasEnvelope = 'messageId' in source || 'params' in source
       const envelope = {
@@ -238,12 +297,16 @@ export function createScopedHostBridge(holder, realBridge) {
       }
       const pending = holder.pending
       if (pending) await pending
+      requireActive()
       const token = holder.token
       if (!token && name === 'system_power_session') {
         throw Object.assign(new Error('插件会话尚未就绪，请重新打开插件后重试'), { code: 'PLUGIN_SESSION_REQUIRED' })
       }
-      if (!token) return original(envelope)
-      return holder.track(() => original({ ...envelope, pluginSession: token }))
+      const result = !token
+        ? await original(envelope)
+        : await holder.track(() => original({ ...envelope, pluginSession: token }))
+      requireActive()
+      return result
     }
   }
   let warned = false
@@ -277,6 +340,7 @@ export function createScopedWindow(realWindow, scopedBridge) {
   const handler = {
     get(_target, key) {
       if (key === '__ztoolsElectron') return scopedBridge
+      if (key === '__ztoolsLauncher') return undefined
       if (key === 'window' || key === 'self' || key === 'globalThis') return proxy
       const value = Reflect.get(realWindow, key)
       if (key === 'ztools' && value?.sys && typeof value.sys.managePowerSession === 'function') {
@@ -308,21 +372,23 @@ export function createScopedWindow(realWindow, scopedBridge) {
       return value
     },
     set(_target, key, value) {
-      if (key === '__ztoolsElectron') return false
+      if (key === '__ztoolsElectron' || key === '__ztoolsLauncher') return false
       return Reflect.set(realWindow, key, value)
     },
     has(_target, key) {
+      if (key === '__ztoolsLauncher') return false
       return key === '__ztoolsElectron' || Reflect.has(realWindow, key)
     },
     deleteProperty(_target, key) {
-      if (key === '__ztoolsElectron') return false
+      if (key === '__ztoolsElectron' || key === '__ztoolsLauncher') return false
       return Reflect.deleteProperty(realWindow, key)
     },
     ownKeys() {
-      const keys = Reflect.ownKeys(realWindow)
+      const keys = Reflect.ownKeys(realWindow).filter((key) => key !== '__ztoolsLauncher')
       return keys.includes('__ztoolsElectron') ? keys : [...keys, '__ztoolsElectron']
     },
     getOwnPropertyDescriptor(_target, key) {
+      if (key === '__ztoolsLauncher') return undefined
       if (key === '__ztoolsElectron') {
         return { value: scopedBridge, writable: false, enumerable: true, configurable: true }
       }
@@ -334,7 +400,7 @@ export function createScopedWindow(realWindow, scopedBridge) {
       return { ...descriptor, configurable: true }
     },
     defineProperty(_target, key, descriptor) {
-      if (key === '__ztoolsElectron') return false
+      if (key === '__ztoolsElectron' || key === '__ztoolsLauncher') return false
       const ok = Reflect.defineProperty(realWindow, key, descriptor)
       // 不可配置属性必须同时存在于 target 上，否则违反 Proxy 不变式
       if (ok && descriptor.configurable === false) Reflect.defineProperty(target, key, descriptor)

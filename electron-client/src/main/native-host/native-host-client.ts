@@ -163,6 +163,8 @@ export interface NativeMouseTriggerConfig {
   button: NativeMouseButton
   action: NativeMouseAction
   longPressMs: number
+  /** 全屏免打扰开关（缺省视为 true） */
+  fullscreenDnd?: boolean
 }
 
 export type NativeInputEvent =
@@ -800,15 +802,20 @@ export class NativeHostClient implements NativeDllClientPort, NativeInputInjecti
       backward: 4
     }
     const actionValues: Record<NativeMouseAction, number> = { press: 1, long: 2 }
-    const payload = Buffer.alloc(5)
+    // 停用发送 5 字节兼容帧；启用时发送 6 字节，第 6 字节携带 fullscreenDnd 标记位
+    const payload = config === null ? Buffer.alloc(5) : Buffer.alloc(6)
     if (config !== null) {
       if (!Number.isInteger(config.longPressMs) || config.longPressMs < 200 || config.longPressMs > 500) {
         throw new ZToolsError(errorCodes.invalidRequest, '鼠标长按阈值无效')
+      }
+      if (config.fullscreenDnd !== undefined && typeof config.fullscreenDnd !== 'boolean') {
+        throw new ZToolsError(errorCodes.invalidRequest, '鼠标触发全屏免打扰配置无效')
       }
       payload[0] = 1
       payload[1] = buttonValues[config.button]
       payload[2] = actionValues[config.action]
       payload.writeUInt16LE(config.longPressMs, 3)
+      payload[5] = config.fullscreenDnd === false ? 0 : 1
     }
     const response = await this.request('mouse_hook_configure', payload)
     let value: unknown
@@ -822,19 +829,29 @@ export class NativeHostClient implements NativeDllClientPort, NativeInputInjecti
     }
   }
 
-  async configureKeyboardDoubleTap(modifiers: readonly NativeKeyboardModifier[]): Promise<void> {
+  async configureKeyboardDoubleTap(
+    modifiers: readonly NativeKeyboardModifier[],
+    fullscreenDnd = true
+  ): Promise<void> {
     const values: Record<NativeKeyboardModifier, number> = { ctrl: 1, alt: 2, shift: 4 }
     if (modifiers.length > 3 || new Set(modifiers).size !== modifiers.length) {
       throw new ZToolsError(errorCodes.invalidRequest, '键盘双击修饰键配置无效')
     }
-    const payload = Buffer.alloc(1)
+    if (typeof fullscreenDnd !== 'boolean') {
+      throw new ZToolsError(errorCodes.invalidRequest, '键盘双击全屏免打扰配置无效')
+    }
+    let mask = 0
     for (const modifier of modifiers) {
       const value = values[modifier]
       if (value === undefined) {
         throw new ZToolsError(errorCodes.invalidRequest, '键盘双击修饰键无效')
       }
-      payload[0] = (payload[0] ?? 0) | value
+      mask |= value
     }
+    // 停用发送 1 字节兼容帧；启用时发送 2 字节，第 2 字节携带 fullscreenDnd 标记位
+    const payload = modifiers.length === 0
+      ? Buffer.from([0])
+      : Buffer.from([mask, fullscreenDnd ? 1 : 0])
     const response = await this.request('keyboard_hook_configure', payload)
     let value: unknown
     try {

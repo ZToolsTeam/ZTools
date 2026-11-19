@@ -1,11 +1,9 @@
 import assert from 'node:assert/strict'
 import { randomUUID } from 'node:crypto'
-import fs from 'node:fs/promises'
 import net, { type Socket } from 'node:net'
-import os from 'node:os'
-import path from 'node:path'
 import test from 'node:test'
 import { ServiceClient } from '../../src/main/service/service-client.js'
+import { errorCodes, ZToolsError } from '../../src/contracts/errors.js'
 
 function ownPipeName(): string {
   return String.raw`\\.\pipe\ztools-f03-${randomUUID()}`
@@ -21,9 +19,7 @@ async function listen(server: net.Server, pipeName: string): Promise<void> {
 test('an aborted lifecycle signal during secret read prevents a late owned-pipe connection', {
   skip: process.platform !== 'win32'
 }, async () => {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'ztools-f03-service-abort-'))
   const pipeName = ownPipeName()
-  const secretPath = path.join(root, 'service.key')
   let connections = 0
   const server = net.createServer((socket) => {
     connections++
@@ -38,7 +34,7 @@ test('an aborted lifecycle signal during secret read prevents a late owned-pipe 
   const pendingSecret = new Promise<Buffer>((resolve) => { releaseSecret = resolve })
   try {
     await listen(server, pipeName)
-    client = new ServiceClient(secretPath, {
+    client = new ServiceClient({
       pipeName,
       readSecret: () => {
         secretReadStarted()
@@ -59,14 +55,15 @@ test('an aborted lifecycle signal during secret read prevents a late owned-pipe 
     client?.stop()
     for (const socket of accepted) socket.destroy()
     if (server.listening) await new Promise<void>((resolve) => server.close(() => resolve()))
-    await fs.rm(root, { recursive: true, force: true })
   }
 })
 
-test('a failed old secret read cannot change a newer ServiceClient start', {
+for (const lateError of [new Error('late generic failure'),
+  new ZToolsError(errorCodes.serviceAuthentication, 'late authentication failure'),
+  new ZToolsError(errorCodes.serviceProtocol, 'late protocol failure')]) {
+test(`a failed old secret read cannot change a newer ServiceClient start: ${lateError.message}`, {
   skip: process.platform !== 'win32'
 }, async () => {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'ztools-f03-service-generation-'))
   const pipeName = ownPipeName()
   let connections = 0
   const accepted: Socket[] = []
@@ -81,7 +78,7 @@ test('a failed old secret read cannot change a newer ServiceClient start', {
   let secretReadNumber = 0
   try {
     await listen(server, pipeName)
-    client = new ServiceClient(path.join(root, 'unused.key'), {
+    client = new ServiceClient({
       pipeName,
       readSecret: () => {
         secretReadNumber++
@@ -105,7 +102,7 @@ test('a failed old secret read cannot change a newer ServiceClient start', {
       })
     })
     await connected
-    releaseFirstSecret(new Error('old secret read failed late'))
+    releaseFirstSecret(lateError)
     assert.equal(await firstStart, false)
     assert.equal(client.diagnostics.state, 'authenticating')
     assert.equal(connections, 1)
@@ -117,14 +114,13 @@ test('a failed old secret read cannot change a newer ServiceClient start', {
     client?.stop()
     for (const socket of accepted) socket.destroy()
     if (server.listening) await new Promise<void>((resolve) => server.close(() => resolve()))
-    await fs.rm(root, { recursive: true, force: true })
   }
 })
+}
 
 test('a successful old secret read cannot replace a newer ServiceClient connection', {
   skip: process.platform !== 'win32'
 }, async () => {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'ztools-f03-service-success-'))
   const pipeName = ownPipeName()
   const accepted: Socket[] = []
   const server = net.createServer((socket) => accepted.push(socket))
@@ -135,7 +131,7 @@ test('a successful old secret read cannot replace a newer ServiceClient connecti
   let secretReadNumber = 0
   try {
     await listen(server, pipeName)
-    client = new ServiceClient(path.join(root, 'unused.key'), {
+    client = new ServiceClient({
       pipeName,
       readSecret: () => {
         secretReadNumber++
@@ -171,6 +167,85 @@ test('a successful old secret read cannot replace a newer ServiceClient connecti
     client?.stop()
     for (const socket of accepted) socket.destroy()
     if (server.listening) await new Promise<void>((resolve) => server.close(() => resolve()))
-    await fs.rm(root, { recursive: true, force: true })
   }
 })
+
+test('stop() or AbortSignal during socket connecting settles start() immediately without timeout', {
+  skip: process.platform !== 'win32'
+}, async () => {
+  const pipeName = ownPipeName()
+  let client: ServiceClient | undefined
+  const startedAt = Date.now()
+  try {
+    client = new ServiceClient({
+      pipeName,
+      secret: Buffer.alloc(32, 0x5a)
+    })
+    const controller = new AbortController()
+    const startPromise = client.start(5000, controller.signal)
+    // 让 createConnection 先进入 connecting 状态，再立即中止停机
+    await new Promise((resolve) => setTimeout(resolve, 10))
+    controller.abort()
+    client.stop()
+
+    assert.equal(await startPromise, false)
+    assert.ok(Date.now() - startedAt < 500, '并行停机时连接等待应立即退出，不能拖到 5000ms 超时')
+    assert.equal(client.diagnostics.state, 'closed')
+  } finally {
+    client?.stop()
+  }
+})
+
+for (const code of [errorCodes.serviceAuthentication, errorCodes.serviceProtocol]) {
+  test(`current ServiceClient generation propagates the original ${code} and remains restartable`, async () => {
+    const failure = new ZToolsError(code, 'typed startup failure')
+    let attempts = 0
+    const client = new ServiceClient({
+      pipeName: ownPipeName(),
+      readSecret: async () => {
+        if (++attempts === 1) throw failure
+        return Buffer.alloc(32, 0x5a)
+      }
+    })
+    try {
+      await assert.rejects(client.start(1000), (error: unknown) => error === failure)
+      assert.equal(client.diagnostics.state, 'unavailable')
+      assert.equal(client.diagnostics.lastError, code)
+      assert.equal(client.diagnostics.lastErrorMessage, failure.message)
+      assert.equal(await client.start(1000), false, 'a missing optional pipe still reports unavailable')
+      assert.equal(client.diagnostics.lastError, errorCodes.serviceUnavailable)
+    } finally {
+      client.stop()
+    }
+  })
+
+  for (const cancellation of ['stop', 'abort'] as const) {
+    test(`${cancellation} suppresses late ${code} from the cancelled generation`, async () => {
+      const failure = new ZToolsError(code, 'late cancelled failure')
+      let releaseFailure!: (error: Error) => void
+      let enterRead!: () => void
+      const entered = new Promise<void>((resolve) => { enterRead = resolve })
+      const controller = new AbortController()
+      const client = new ServiceClient({
+        pipeName: ownPipeName(),
+        readSecret: () => {
+          enterRead()
+          return new Promise<Buffer>((_resolve, reject) => { releaseFailure = reject })
+        }
+      })
+      try {
+        const starting = client.start(1000, controller.signal)
+        await entered
+        if (cancellation === 'stop') client.stop()
+        else controller.abort()
+        releaseFailure(failure)
+        assert.equal(await starting, false)
+        assert.equal(client.diagnostics.state, 'closed')
+        assert.equal(client.diagnostics.lastError, '')
+        assert.equal(client.diagnostics.lastErrorMessage, '')
+      } finally {
+        client.stop()
+      }
+    })
+  }
+}

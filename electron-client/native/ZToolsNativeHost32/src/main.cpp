@@ -8,12 +8,15 @@
 #include <Windows.h>
 
 #include <array>
+#include <condition_variable>
 #include <cstdint>
+#include <deque>
 #include <iostream>
 #include <mutex>
 #include <span>
 #include <stdexcept>
 #include <string>
+#include <thread>
 #include <utility>
 #include <vector>
 
@@ -125,6 +128,87 @@ class FrameWriter {
   std::mutex mutex_;
 };
 
+// 异步事件发送器：用有界队列与独立工作线程解耦低级钩子回调与同步管道 I/O，防止触发 LowLevelHooksTimeout
+class AsyncEventSender final {
+ public:
+  static constexpr std::size_t kDefaultMaxQueuedEvents = 256;
+
+  explicit AsyncEventSender(
+    FrameWriter& writer,
+    std::size_t max_queue_size = kDefaultMaxQueuedEvents)
+      : writer_(writer), max_queue_size_(max_queue_size) {
+    worker_ = std::thread([this]() { Run(); });
+  }
+
+  ~AsyncEventSender() {
+    StopAndDrain();
+  }
+
+  AsyncEventSender(const AsyncEventSender&) = delete;
+  AsyncEventSender& operator=(const AsyncEventSender&) = delete;
+
+  // 非阻塞入队事件帧；队列已满、正在停止或管道已断开时直接丢弃并返回 false
+  bool Enqueue(Frame frame) noexcept {
+    try {
+      std::lock_guard lock(mutex_);
+      if (stopping_ || pipe_broken_ || queue_.size() >= max_queue_size_) {
+        return false;
+      }
+      queue_.push_back(std::move(frame));
+      cv_.notify_one();
+      return true;
+    } catch (...) {
+      return false;
+    }
+  }
+
+  // 优雅停止发送线程：确保排空已入队事件后再 join
+  void StopAndDrain() noexcept {
+    {
+      std::lock_guard lock(mutex_);
+      stopping_ = true;
+    }
+    cv_.notify_all();
+    std::lock_guard join_lock(join_mutex_);
+    if (worker_.joinable()) {
+      worker_.join();
+    }
+  }
+
+ private:
+  void Run() {
+    for (;;) {
+      Frame frame;
+      {
+        std::unique_lock lock(mutex_);
+        cv_.wait(lock, [this]() { return stopping_ || !queue_.empty(); });
+        if (queue_.empty()) {
+          if (stopping_) break;
+          continue;
+        }
+        frame = std::move(queue_.front());
+        queue_.pop_front();
+        if (pipe_broken_) continue;
+      }
+      if (!writer_.Send(frame)) {
+        std::lock_guard lock(mutex_);
+        pipe_broken_ = true;
+        queue_.clear();
+      }
+    }
+  }
+
+  FrameWriter& writer_;
+  std::size_t max_queue_size_;
+  std::mutex mutex_;
+  std::mutex join_mutex_;
+  std::condition_variable cv_;
+  std::deque<Frame> queue_;
+  bool stopping_ = false;
+  bool pipe_broken_ = false;
+  std::thread worker_;
+};
+
 bool ParseTaskCallPayload(
   const std::vector<std::uint8_t>& payload,
   std::string& task_id,
@@ -231,6 +315,7 @@ bool Authenticate(
 
 bool HandleReadyFrame(
   FrameWriter& writer,
+  AsyncEventSender& event_sender,
   const Frame& request,
   std::string_view session_id,
   HostState& state,
@@ -277,13 +362,15 @@ bool HandleReadyFrame(
     state = HostState::Stopping;
     mouse_hook.Stop();
     keyboard_hook.Stop();
+    event_sender.StopAndDrain();
     DllHostShutdownResult result = dll_host.Shutdown(deadline_ms);
     shutdown_timed_out = result.timed_out;
     response.payload = std::move(result.payload);
     return writer.Send(response);
   }
   if (request.method == "mouse_hook_configure") {
-    if (!request.plugin_id.empty() || !request.dll_id.empty() || request.payload.size() != 5) {
+    if (!request.plugin_id.empty() || !request.dll_id.empty() ||
+        (request.payload.size() != 5 && request.payload.size() != 6)) {
       writer.Send(ErrorFrame(request, "INVALID_REQUEST", "mouse hook request is invalid"));
       return true;
     }
@@ -307,14 +394,22 @@ bool HandleReadyFrame(
     const MouseAction action = static_cast<MouseAction>(request.payload[2]);
     const std::uint16_t threshold = static_cast<std::uint16_t>(request.payload[3]) |
       (static_cast<std::uint16_t>(request.payload[4]) << 8U);
-    if ((button < MouseButton::Middle || button > MouseButton::Backward) ||
-        (action != MouseAction::Press && action != MouseAction::LongPress) ||
-        threshold < 200 || threshold > 500) {
-      writer.Send(ErrorFrame(request, "INVALID_REQUEST", "mouse hook configuration is invalid"));
+    // 5 字节旧协议默认开启全屏免打扰，6 字节时取第 6 字节 bit 0
+    const bool fullscreen_dnd = request.payload.size() == 5
+      ? true
+      : (request.payload[5] & 0x01U) != 0;
+    const MouseHookConfig config{button, action, threshold, fullscreen_dnd};
+    if (!IsValidMouseHookConfig(config)) {
+      writer.Send(ErrorFrame(
+        request,
+        "INVALID_REQUEST",
+        (button == MouseButton::Right && action == MouseAction::Press)
+          ? "right mouse button does not support press action"
+          : "mouse hook configuration is invalid"));
       return true;
     }
     std::string mouse_error;
-    if (!mouse_hook.Configure({button, action, threshold}, mouse_error)) {
+    if (!mouse_hook.Configure(config, mouse_error)) {
       writer.Send(ErrorFrame(request, "MOUSE_HOOK_UNAVAILABLE", mouse_error));
       return true;
     }
@@ -322,7 +417,8 @@ bool HandleReadyFrame(
     return writer.Send(response);
   }
   if (request.method == "keyboard_hook_configure") {
-    if (!request.plugin_id.empty() || !request.dll_id.empty() || request.payload.size() != 1) {
+    if (!request.plugin_id.empty() || !request.dll_id.empty() ||
+        (request.payload.size() != 1 && request.payload.size() != 2)) {
       writer.Send(ErrorFrame(request, "INVALID_REQUEST", "keyboard hook request is invalid"));
       return true;
     }
@@ -336,8 +432,12 @@ bool HandleReadyFrame(
       response.payload = Bytes("{\"success\":true,\"enabled\":false}");
       return writer.Send(response);
     }
+    // 1 字节旧协议默认开启全屏免打扰，2 字节时取第 2 字节 bit 0
+    const bool fullscreen_dnd = request.payload.size() == 1
+      ? true
+      : (request.payload[1] & 0x01U) != 0;
     std::string keyboard_error;
-    if (!keyboard_hook.Configure(modifier_mask, keyboard_error)) {
+    if (!keyboard_hook.Configure(modifier_mask, fullscreen_dnd, keyboard_error)) {
       writer.Send(ErrorFrame(request, "KEYBOARD_HOOK_UNAVAILABLE", keyboard_error));
       return true;
     }
@@ -635,6 +735,7 @@ int wmain() {
     return 10;
   }
   FrameWriter writer(output);
+  AsyncEventSender event_sender(writer);
 
   std::array<std::uint8_t, kSecretBytes> secret{};
   if (!ReadBootstrapSecret(secret)) {
@@ -685,7 +786,8 @@ int wmain() {
       static_cast<std::uint8_t>(config.long_press_ms & 0xffU),
       static_cast<std::uint8_t>((config.long_press_ms >> 8U) & 0xffU),
     };
-    writer.Send(frame);
+    // 钩子事件仅做非阻塞异步入队，避免写管道阻塞消息循环
+    event_sender.Enqueue(std::move(frame));
   });
   KeyboardHook keyboard_hook([&](KeyboardModifier modifier) {
     Frame frame;
@@ -694,8 +796,22 @@ int wmain() {
     frame.request_id = "keyboard_double_tap";
     frame.method = "keyboard_double_tap";
     frame.payload = {static_cast<std::uint8_t>(modifier)};
-    writer.Send(frame);
+    // 钩子事件仅做非阻塞异步入队，避免写管道阻塞消息循环
+    event_sender.Enqueue(std::move(frame));
   });
+  // 双向绑定跨组件活动打断通知，并由 RAII 守卫确保线程先于回调对象安全退出
+  mouse_hook.SetActivityCallback([&]() { keyboard_hook.NotifyExternalActivity(); });
+  keyboard_hook.SetActivityCallback([&]() { mouse_hook.NotifyExternalActivity(); });
+  struct HookLifecycleGuard {
+    MouseHook& mouse_hook_ref;
+    KeyboardHook& keyboard_hook_ref;
+    AsyncEventSender& event_sender_ref;
+    ~HookLifecycleGuard() {
+      mouse_hook_ref.Stop();
+      keyboard_hook_ref.Stop();
+      event_sender_ref.StopAndDrain();
+    }
+  } hook_lifecycle_guard{mouse_hook, keyboard_hook, event_sender};
 
   int exit_code = 0;
   bool shutdown_timed_out = false;
@@ -710,9 +826,8 @@ int wmain() {
       break;
     }
     if (!HandleReadyFrame(
-          writer, request, session_id, state, manifest, dll_host, mouse_hook,
-          keyboard_hook,
-          shutdown_timed_out)) {
+          writer, event_sender, request, session_id, state, manifest, dll_host,
+          mouse_hook, keyboard_hook, shutdown_timed_out)) {
       exit_code = 15;
       break;
     }
@@ -722,6 +837,7 @@ int wmain() {
     state = HostState::Stopping;
     mouse_hook.Stop();
     keyboard_hook.Stop();
+    event_sender.StopAndDrain();
     const DllHostShutdownResult orphan_shutdown =
       dll_host.Shutdown(kDefaultOrphanShutdownDeadlineMs);
     shutdown_timed_out = orphan_shutdown.timed_out;

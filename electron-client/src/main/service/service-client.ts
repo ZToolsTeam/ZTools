@@ -1,11 +1,10 @@
 import type { PrivilegedDllClientPort } from '../native-host/dll-client-port.js'
 import { Buffer } from 'node:buffer'
 import { randomBytes, timingSafeEqual } from 'node:crypto'
-import fs from 'node:fs/promises'
-import { createConnection, type Socket } from 'node:net'
-import path from 'node:path'
+import { createConnection } from 'node:net'
 import { errorCodes, ZToolsError, type ZToolsErrorCode } from '../../contracts/errors.js'
 import { MAX_TIMEOUT_MS } from '../../contracts/ipc.js'
+import { ServiceBridgeTransport, type ServiceTransport } from './service-transport.js'
 import {
   decodeServiceDllCall,
   decodeServiceDllTaskCode,
@@ -293,7 +292,18 @@ class SocketFrameReader {
   #waiter: FrameWaiter | null = null
   #closedError: Error | null = null
 
-  constructor(socket: Socket, onClose: (error: Error) => void, onEvent: (frame: ServiceFrame) => void) {
+  constructor(socket: ServiceTransport, onClose: (error: Error) => void, onEvent: (frame: ServiceFrame) => void) {
+    const finishStream = (transportError: Error): Error => {
+      if (this.#closedError) return this.#closedError
+      try {
+        this.#decoder.finish()
+        return transportError
+      } catch (error) {
+        return error instanceof Error
+          ? error
+          : new ZToolsError(errorCodes.serviceProtocol, 'Service frame decode failed')
+      }
+    }
     socket.on('data', (chunk) => {
       try {
         for (const frame of this.#decoder.push(chunk)) {
@@ -308,7 +318,7 @@ class SocketFrameReader {
             waiter.resolve(frame)
           } else {
             if (this.#queue.length >= MAX_QUEUED_FRAMES) {
-              throw new Error('Service sent too many unsolicited frames')
+              throw new ZToolsError(errorCodes.serviceProtocol, 'Service sent too many unsolicited frames')
             }
             this.#queue.push(frame)
           }
@@ -319,11 +329,12 @@ class SocketFrameReader {
       }
     })
     socket.on('error', (error) => {
-      this.close(error)
-      onClose(error)
+      const failure = finishStream(error)
+      this.close(failure)
+      onClose(failure)
     })
     socket.on('close', () => {
-      const error = new Error('Service connection closed')
+      const error = finishStream(new Error('Service connection closed'))
       this.close(error)
       onClose(error)
     })
@@ -356,18 +367,19 @@ class SocketFrameReader {
 
 export interface ServiceClientOptions {
   pipeName?: string
-  dataRoot?: string
-  // Optional protocol-test override; production needs no installation key.
+  bridgeExecutable?: string
+  // 测试宿主可显式提供已由其验证的传输；生产由原生桥持有并核验实际通信管道。
+  createTransport?: (pipeName: string) => ServiceTransport
+  // 仅用于协议与生命周期单元测试；生产环境通过 Windows 管道身份校验，无需安装密钥。
   secret?: Buffer
   readSecret?: () => Promise<Buffer>
 }
 
 export class ServiceClient implements PrivilegedDllClientPort {
-  readonly #installedSecretPath: string | undefined
   #state: ServiceClientState = 'idle'
   #startGeneration = 0
   #startInFlight = false
-  #socket: Socket | null = null
+  #socket: ServiceTransport | null = null
   #reader: SocketFrameReader | null = null
   #sessionKey: Buffer | null = null
   #nextRequestId = 1n
@@ -386,19 +398,7 @@ export class ServiceClient implements PrivilegedDllClientPort {
     timer: NodeJS.Timeout
   }> = []
 
-  private readonly options: ServiceClientOptions
-
-  constructor(secretPathOrOptions: string | ServiceClientOptions = {}, options: ServiceClientOptions = {}) {
-    if (typeof secretPathOrOptions === 'string') {
-      this.options = options
-      this.#installedSecretPath = secretPathOrOptions
-    } else {
-      this.options = secretPathOrOptions
-      this.#installedSecretPath = secretPathOrOptions.dataRoot
-        ? path.join(secretPathOrOptions.dataRoot, 'Service', 'auth-v1.key')
-        : undefined
-    }
-  }
+  constructor(private readonly options: ServiceClientOptions = {}) {}
 
   get diagnostics(): {
     state: ServiceClientState
@@ -444,16 +444,19 @@ export class ServiceClient implements PrivilegedDllClientPort {
         ? Buffer.from(this.options.secret)
         : this.options.readSecret
           ? await this.options.readSecret()
-          : this.#installedSecretPath
-            ? await this.#readInstalledSecret()
-            : null
+          : null
       if (!this.#isCurrentStart(generation, signal)) return false
-      const socket = createConnection(this.options.pipeName ?? SERVICE_PIPE_NAME)
+      const pipeName = this.options.pipeName ?? SERVICE_PIPE_NAME
+      const socket = this.options.createTransport
+        ? this.options.createTransport(pipeName)
+        : this.options.bridgeExecutable
+          ? new ServiceBridgeTransport(this.options.bridgeExecutable, pipeName, timeoutMs)
+          : createConnection(pipeName)
       this.#socket = socket
       this.#reader = new SocketFrameReader(socket, (error) => {
         if (this.#socket !== socket ||
             this.#state === 'stopping' || this.#state === 'closed') return
-        this.#lastError = errorCodes.serviceUnavailable
+        this.#lastError = error instanceof ZToolsError ? error.code : errorCodes.serviceUnavailable
         this.#lastErrorMessage = error.message
         this.#state = 'unavailable'
         this.#sessionKey?.fill(0)
@@ -461,8 +464,11 @@ export class ServiceClient implements PrivilegedDllClientPort {
         this.#taskEventsEnabled = false
         this.#notifyTaskChange(['*'])
       }, (frame) => this.#handleTaskChange(frame))
-      await this.#waitForConnect(socket, timeoutMs)
+      await this.#waitForConnect(socket, timeoutMs, signal)
       if (!this.#isCurrentStart(generation, signal)) return false
+      if (!secret && !this.options.bridgeExecutable && !this.options.createTransport) {
+        throw new ZToolsError(errorCodes.serviceAuthentication, 'ZToolsService 缺少可信服务端身份验证')
+      }
       this.#state = 'authenticating'
       await this.#authenticate(secret, timeoutMs)
       if (!this.#isCurrentStart(generation, signal)) return false
@@ -474,6 +480,11 @@ export class ServiceClient implements PrivilegedDllClientPort {
         this.#lastErrorMessage = error instanceof Error ? error.message : 'ZToolsService 启动失败'
         this.#state = 'unavailable'
         this.#closeSocket()
+        if (error instanceof ZToolsError &&
+            (error.code === errorCodes.serviceAuthentication || error.code === errorCodes.serviceProtocol)) {
+          this.#releaseLifecycleAbortListener()
+          throw error
+        }
       }
       return false
     } finally {
@@ -757,70 +768,61 @@ export class ServiceClient implements PrivilegedDllClientPort {
     if (signal && listener) signal.removeEventListener('abort', listener)
   }
 
-  async #readInstalledSecret(): Promise<Buffer> {
-    const secretPath = this.#installedSecretPath
-    if (!secretPath || !path.isAbsolute(secretPath)) {
-      throw new ZToolsError(errorCodes.serviceUnavailable, 'ZToolsService 安装密钥路径不可用')
+  #waitForConnect(socket: ServiceTransport, timeoutMs: number, signal?: AbortSignal): Promise<void> {
+    if (signal?.aborted || this.#isStoppingOrClosed() || socket.destroyed) {
+      return Promise.reject(new ZToolsError(errorCodes.serviceUnavailable, 'ZToolsService 连接已取消'))
     }
-    let linkStats
-    try {
-      linkStats = await fs.lstat(secretPath)
-    } catch (error) {
-      const code = (error as NodeJS.ErrnoException).code
-      throw new ZToolsError(
-        errorCodes.serviceUnavailable,
-        code === 'ENOENT' ? 'ZToolsService 安装密钥不存在' : 'ZToolsService 安装密钥不可读'
-      )
-    }
-    if (!linkStats.isFile() || linkStats.isSymbolicLink() || linkStats.size !== SERVICE_SECRET_BYTES) {
-      throw new ZToolsError(errorCodes.serviceAuthentication, 'ZToolsService 安装密钥无效')
-    }
-    const file = await fs.open(secretPath, 'r')
-    try {
-      const stats = await file.stat()
-      if (!stats.isFile() || stats.size !== SERVICE_SECRET_BYTES) {
-        throw new ZToolsError(errorCodes.serviceAuthentication, 'ZToolsService 安装密钥已变化')
-      }
-      const secret = Buffer.alloc(SERVICE_SECRET_BYTES)
-      const { bytesRead } = await file.read(secret, 0, secret.length, 0)
-      if (bytesRead !== secret.length || secret.every((byte) => byte === 0)) {
-        secret.fill(0)
-        throw new ZToolsError(errorCodes.serviceAuthentication, 'ZToolsService 安装密钥无效')
-      }
-      return secret
-    } finally {
-      await file.close()
-    }
-  }
-
-  #waitForConnect(socket: Socket, timeoutMs: number): Promise<void> {
     if (!socket.connecting) return Promise.resolve()
     return new Promise<void>((resolve, reject) => {
-      const timer = setTimeout(() => {
+      let settled = false
+      const settleReject = (error: ZToolsError): void => {
+        if (settled) return
+        settled = true
         cleanup()
+        reject(error)
+      }
+      const timer = setTimeout(() => {
         socket.destroy()
-        reject(new ZToolsError(errorCodes.requestTimeout, 'ZToolsService 连接超时'))
+        settleReject(new ZToolsError(errorCodes.requestTimeout, 'ZToolsService 连接超时'))
       }, timeoutMs)
       const onConnect = (): void => {
+        if (settled) return
+        settled = true
         cleanup()
         resolve()
       }
       const onError = (error: NodeJS.ErrnoException): void => {
-        cleanup()
+        if (error instanceof ZToolsError &&
+            (error.code === errorCodes.serviceAuthentication || error.code === errorCodes.serviceProtocol)) {
+          settleReject(error)
+          return
+        }
         const suffix = error.code ? ` (${error.code})` : ''
-        reject(new ZToolsError(errorCodes.serviceUnavailable, `ZToolsService 无法连接${suffix}`))
+        settleReject(new ZToolsError(errorCodes.serviceUnavailable, `ZToolsService 无法连接${suffix}`))
+      }
+      const onClose = (): void => {
+        settleReject(new ZToolsError(errorCodes.serviceUnavailable, 'ZToolsService 连接已关闭'))
+      }
+      const onAbort = (): void => {
+        socket.destroy()
+        settleReject(new ZToolsError(errorCodes.serviceUnavailable, 'ZToolsService 连接已取消'))
       }
       const cleanup = (): void => {
         clearTimeout(timer)
         socket.off('connect', onConnect)
         socket.off('error', onError)
+        socket.off('close', onClose)
+        signal?.removeEventListener('abort', onAbort)
       }
       socket.once('connect', onConnect)
       socket.once('error', onError)
+      socket.once('close', onClose)
+      signal?.addEventListener('abort', onAbort, { once: true })
     })
   }
 
   async #authenticate(secret: Buffer | null, timeoutMs: number): Promise<void> {
+    const clientProcessId = this.#socket?.clientProcessId ?? process.pid
     if ((secret && (secret.length !== SERVICE_SECRET_BYTES || secret.every((byte) => byte === 0))) ||
         !this.#reader) {
       throw new ZToolsError(errorCodes.serviceAuthentication, 'ZToolsService 握手参数无效')
@@ -846,14 +848,14 @@ export class ServiceClient implements PrivilegedDllClientPort {
       // 无安装密钥模式依赖 Windows 管道身份校验，随机数仅用于会话帧校验。
       const handshakeKey = secret ?? serverNonce
       const suppliedProof = serverHello.payload.subarray(SERVICE_NONCE_BYTES)
-      const expectedProof = makeServiceServerProof(handshakeKey, process.pid, clientNonce, serverNonce)
+      const expectedProof = makeServiceServerProof(handshakeKey, clientProcessId, clientNonce, serverNonce)
       const serverAuthenticated = timingSafeEqual(suppliedProof, expectedProof)
       expectedProof.fill(0)
       if (!serverAuthenticated) {
         throw new ZToolsError(errorCodes.serviceAuthentication, 'ZToolsService 服务端认证失败')
       }
-      sessionKey = deriveServiceSessionKey(handshakeKey, process.pid, clientNonce, serverNonce)
-      const clientProof = makeServiceClientProof(handshakeKey, process.pid, clientNonce, serverNonce)
+      sessionKey = deriveServiceSessionKey(handshakeKey, clientProcessId, clientNonce, serverNonce)
+      const clientProof = makeServiceClientProof(handshakeKey, clientProcessId, clientNonce, serverNonce)
       const authId = this.#takeRequestId()
       await this.#write(encodeServiceFrame({
         type: ServiceFrameType.ClientAuth,

@@ -19,7 +19,7 @@
       </svg>
       <span class="launcher-trigger-text">悬浮条</span>
       <!-- 这里显示的是「切到悬浮条」本身的快捷键；全局唤醒键在悬停说明里介绍 -->
-      <ShortcutKeys combo="Ctrl+M" />
+      <ShortcutKeys :combo="TOGGLE_MODE_SHORTCUT" />
     </button>
 
     <!-- 悬停引导浮层 -->
@@ -61,7 +61,7 @@
             </div>
             <div class="guide-key-row">
               <dt>回到工作台</dt>
-              <dd><ShortcutKeys combo="Ctrl+M" /></dd>
+              <dd><ShortcutKeys :combo="TOGGLE_MODE_SHORTCUT" /></dd>
             </div>
           </dl>
 
@@ -80,11 +80,12 @@ import { RcButton } from '@/components/base'
 import BrandMark from './BrandMark.vue'
 import { switchWindowMode, WINDOW_MODES } from '@/utils/windowMode'
 import { shortcutLabel } from '@/utils/platform'
+import { TOGGLE_MODE_SHORTCUT } from '@/utils/shellShortcuts'
 import { currentGlobalWakeHotkey, refreshCurrentGlobalWakeHotkey } from '@/utils/globalWakeHotkey'
 
 // 显示用户实际设置的唤醒键，而不是写死的默认值
 const wakeHotkey = currentGlobalWakeHotkey
-const switchLabel = shortcutLabel('Ctrl+M')
+const switchLabel = shortcutLabel(TOGGLE_MODE_SHORTCUT)
 onMounted(() => { refreshCurrentGlobalWakeHotkey() })
 
 const triggerBtnRef = ref(null)

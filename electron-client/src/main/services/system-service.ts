@@ -152,6 +152,8 @@ export interface SystemAdapter {
   getBatteryStatus?: () => Promise<SystemBatteryStatus>
   startPreventSleep(mode?: 'display' | 'system'): number
   stopPreventSleep(id: number): void
+  /** 原生输入通道是否可用（用于上报双击修饰键与鼠标触发器能力） */
+  nativeInputAvailable?: boolean | (() => boolean)
 }
 
 interface CpuTimes {
@@ -470,7 +472,8 @@ export class SystemService {
     private readonly runtimePlatform: NodeJS.Platform = process.platform,
     private readonly power: SystemPowerAdapter = createSystemPowerAdapter(undefined, runtimePlatform),
     private readonly browser: SystemBrowserUrlAdapter = createSystemBrowserUrlAdapter(undefined, runtimePlatform),
-    private readonly audio: AudioController = new MacAudioController(macAudioHelperPath(!adapter.isDev, process.resourcesPath ?? ''), runtimePlatform)
+    private readonly audio: AudioController = new MacAudioController(macAudioHelperPath(!adapter.isDev, process.resourcesPath ?? ''), runtimePlatform),
+    private readonly nativeInputAvailableOverride?: boolean
   ) {
     this.#powerSessions = new PowerSessionService(adapter)
     this.#removeListener = registry.onRemoved((webContentsId) => {
@@ -522,6 +525,7 @@ export class SystemService {
     const windowsVersion = isWindows
       ? release.split('.').slice(0, 3).map((part) => Number.parseInt(part, 10) || 0)
       : undefined
+    const nativeInputAvailable = this.#isNativeInputAvailable()
     return {
       success: true,
       platform: platformName(this.runtimePlatform),
@@ -546,8 +550,18 @@ export class SystemService {
       darkMode: this.adapter.isDarkMode(),
       binPath: this.adapter.paths.app,
       cachePath: await this.files.getScopedCachePath(caller),
-      debug: this.adapter.isDev
+      debug: this.adapter.isDev,
+      supportsDoubleModifierHotkeys: Boolean(this.runtimePlatform === 'win32' && nativeInputAvailable),
+      supportsMouseTriggers: Boolean(this.runtimePlatform === 'win32' && nativeInputAvailable)
     }
+  }
+
+  #isNativeInputAvailable(): boolean {
+    if (typeof this.nativeInputAvailableOverride === 'boolean') {
+      return this.nativeInputAvailableOverride
+    }
+    const source = this.adapter.nativeInputAvailable
+    return typeof source === 'function' ? Boolean(source()) : Boolean(source)
   }
 
   private readMacosProductVersion(): string | undefined {

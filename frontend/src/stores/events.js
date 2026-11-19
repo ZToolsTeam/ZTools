@@ -14,6 +14,9 @@ export const useEventsStore = defineStore('events', {
 
       if (window.ztools && window.ztools.events) {
         try {
+          window.ztools.events.subscribe('plugin_runtime_stopped')
+            .catch(err => console.warn('[EventsStore] 订阅 plugin_runtime_stopped 失败:', err))
+          window.ztools.events.on('plugin_runtime_stopped', this.handlePluginRuntimeStopped)
           // 订阅全局事件（非阻塞，不需要 await）
           window.ztools.events
             .subscribe('plugin_install_complete')
@@ -68,6 +71,7 @@ export const useEventsStore = defineStore('events', {
       if (!this.initialized) return
       this.initialized = false
       if (window.ztools && window.ztools.events) {
+        window.ztools.events.off('plugin_runtime_stopped', this.handlePluginRuntimeStopped)
         window.ztools.events.off(
           'plugin_install_complete',
           this.handleInstallComplete
@@ -93,6 +97,11 @@ export const useEventsStore = defineStore('events', {
           this.handlePluginNotInstalled
         )
       }
+    },
+
+    handlePluginRuntimeStopped(envelope) {
+      if (envelope?.source?.kind !== 'host') return
+      usePluginsStore().onPluginRuntimeStopped(envelope.payload)
     },
 
     handleInstallComplete(envelope) {

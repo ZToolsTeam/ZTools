@@ -10,7 +10,8 @@ import { useNavStore, isWorkbenchRouteName } from '@/stores/nav'
 import { useUIStore } from '@/stores/ui'
 import { useCategoriesStore } from '@/stores/categories'
 import { usePluginsStore } from '@/stores/plugins'
-import { useKeymap, KEYMAP_SCOPES, OPEN_SETTINGS_SHORTCUT } from '@/utils/keymap'
+import { useKeymap, KEYMAP_SCOPES } from '@/utils/keymap'
+import { OPEN_SETTINGS_SHORTCUT, SHELL_SHORTCUTS, TOGGLE_MODE_SHORTCUT } from '@/utils/shellShortcuts'
 import { switchWindowMode, WINDOW_MODES } from '@/utils/windowMode'
 import { layoutExtraComponents } from '@edition'
 import { ROUTES } from '@/router/routes'
@@ -36,8 +37,9 @@ function onMainScroll(event) {
   }
 }
 
-// 插件市场页只换搜索词时复用同一个页面（页面自己监听搜索词重新加载），其它情况按完整地址重建
+// 插件市场页只换搜索词、设置页只换查询参数时均复用同一页面实例，避免清理一次性深链参数时被 keep-alive 切回旧状态
 const routeViewKey = computed(() => {
+  if (route.name === ROUTES.ADVANCED_SETTINGS.name) return ROUTES.ADVANCED_SETTINGS.name
   if (route.name !== ROUTES.LIST.name) return route.fullPath
   const { q: _q, ...rest } = route.query
   return router.resolve({ name: ROUTES.LIST.name, params: route.params, query: rest }).fullPath
@@ -122,19 +124,15 @@ const isDetails = computed(() => route.name === 'details')
 
 // 全局基础快捷键调度 (GLOBAL 作用域)
 useKeymap(KEYMAP_SCOPES.GLOBAL, {
-  'Ctrl+F': () => {
+  [SHELL_SHORTCUTS.FOCUS_SEARCH]: () => {
     openSearchOrActions()
     return true
   },
-  'Ctrl+K': () => {
+  [SHELL_SHORTCUTS.ACTION_PANEL]: () => {
     openGlobalActions()
     return true
   },
-  'Ctrl+B': () => {
-    uiStore.toggleSidebar()
-    return true
-  },
-  'Cmd+B': () => {
+  [SHELL_SHORTCUTS.TOGGLE_SIDEBAR]: () => {
     uiStore.toggleSidebar()
     return true
   },
@@ -143,8 +141,10 @@ useKeymap(KEYMAP_SCOPES.GLOBAL, {
     if (route.name !== 'advanced-settings') router.push(ROUTES.ADVANCED_SETTINGS)
     return true
   },
-  'Ctrl+M': () => {
-    switchWindowMode(WINDOW_MODES.LAUNCHER).catch((err) => console.warn('[MainLayout] 切换极客条模式失败:', err))
+  [TOGGLE_MODE_SHORTCUT]: () => {
+    Promise.resolve(switchWindowMode(WINDOW_MODES.LAUNCHER)).catch((err) =>
+      console.warn('[MainLayout] 切换极客条模式失败:', err)
+    )
     return true
   },
   'Escape': () => {
@@ -212,11 +212,11 @@ useKeymap(KEYMAP_SCOPES.GLOBAL, {
       <div class="flex items-center gap-1">
         <button v-if="showActionPanelBtn" type="button" class="action-btn" @click="openGlobalActions">
           动作
-          <ShortcutKeys combo="Ctrl+K" />
+          <ShortcutKeys :combo="SHELL_SHORTCUTS.ACTION_PANEL" />
         </button>
         <button type="button" class="action-btn" @click="openSearchOrActions">
           搜索
-          <ShortcutKeys combo="Ctrl+F" />
+          <ShortcutKeys :combo="SHELL_SHORTCUTS.FOCUS_SEARCH" />
         </button>
       </div>
     </footer>

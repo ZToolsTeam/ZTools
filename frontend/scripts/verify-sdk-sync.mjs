@@ -12,15 +12,6 @@ const targets = [
     directory: resolve(repositoryRoot, 'packages/api/runtime')
   }
 ]
-const isElectronBuild = process.env.ZTOOLS_BUILD_TARGET === 'electron' ||
-  process.env.ZTOOLS_SKIP_LEGACY_BIN_DEPLOY === '1'
-
-if (!isElectronBuild) {
-  targets.push({
-    label: 'bin/WebResources/sdk',
-    directory: resolve(repositoryRoot, 'bin/WebResources/sdk')
-  })
-}
 
 const errors = []
 
@@ -59,12 +50,8 @@ for (const fileName of sdkFiles) {
 if (errors.length > 0) {
   for (const error of errors) console.error(error)
   process.exitCode = 1
-} else if (isElectronBuild) {
-  console.log(
-    '[sdk-sync] Verified plugin-sdk.js against its maintained source and verified both SDK files against packages/api/runtime; skipped bin/WebResources/sdk for the Electron build.'
-  )
 } else {
   console.log(
-    '[sdk-sync] Verified plugin-sdk.js against its maintained source and verified both SDK files against packages/api/runtime and bin/WebResources/sdk.'
+    '[sdk-sync] Verified both SDK files in frontend/public/sdk against packages/api/runtime.'
   )
 }

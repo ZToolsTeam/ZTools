@@ -1,3 +1,5 @@
+import { BUILTIN_SHORTCUT_HINTS, SHELL_SHORTCUTS } from '@/utils/shellShortcuts'
+
 export const HOTKEY_RULE_DESCRIPTION =
   '支持 Ctrl / Shift / Alt + A-Z、Space、反引号（`）、波浪号（~）或 F1-F24。'
 
@@ -5,8 +7,23 @@ export const HOTKEY_WAIT_TEXT = '按下快捷键'
 export const HOTKEY_UNSUPPORTED_TEXT =
   '仅支持 Ctrl、Shift、Alt 与 A-Z / Space / ` / ~ / F1-F24 组合'
 
+const DOUBLE_MODIFIER_CANONICAL = Object.freeze({
+  doublectrl: 'DoubleCtrl',
+  doublecontrol: 'DoubleCtrl',
+  doublealt: 'DoubleAlt',
+  doubleshift: 'DoubleShift'
+})
+
 export const isDoubleModifierHotkey = (value) =>
-  typeof value === 'string' && /^double(?:ctrl|control|alt|shift)$/i.test(value.replace(/[+\s]/g, ''))
+  typeof value === 'string' &&
+  Object.hasOwn(DOUBLE_MODIFIER_CANONICAL, value.replace(/[+\s]/g, '').toLowerCase())
+
+/** 将双击修饰键字符串归一化为 DoubleCtrl / DoubleAlt / DoubleShift */
+export function normalizeDoubleModifierHotkey(value) {
+  if (typeof value !== 'string') return ''
+  const compact = value.replace(/[+\s]/g, '').toLowerCase()
+  return Object.hasOwn(DOUBLE_MODIFIER_CANONICAL, compact) ? DOUBLE_MODIFIER_CANONICAL[compact] : ''
+}
 
 export async function getHotkeyHostPlatform() {
   if (typeof window === 'undefined' || typeof window.ztools?.sys?.getInfo !== 'function') {
@@ -23,20 +40,48 @@ export async function getHotkeyHostPlatform() {
 }
 
 export async function getHotkeyHostCapabilities() {
-  const platform = await getHotkeyHostPlatform()
+  const ztools = typeof window === 'undefined' ? undefined : window.ztools
+  let platform = 'unknown'
   let hostEnvironment = 'unknown'
+  let info = null
+  let explicitNonElectron = false
+
   try {
-    const ztools = typeof window === 'undefined' ? undefined : window.ztools
-    if (typeof ztools?.isElectron === 'function' && ztools.isElectron()) {
-      hostEnvironment = 'electron'
+    if (typeof ztools?.isElectron === 'function') {
+      if (ztools.isElectron()) {
+        hostEnvironment = 'electron'
+      } else {
+        explicitNonElectron = true
+      }
     }
   } catch (err) {
     console.warn('[hotkeyRecorder] 检测宿主环境失败:', err)
   }
+
+  if (typeof ztools?.sys?.getInfo === 'function') {
+    try {
+      info = await ztools.sys.getInfo()
+      platform =
+        info?.platform === 'windows' || info?.platform === 'macos'
+          ? info.platform
+          : 'unknown'
+    } catch {
+      platform = 'unknown'
+    }
+  }
+
+  // 仅在 Windows 且非明确非 Electron 宿主显式声明能力时开启拓展触发器（macOS 或缺失字段保持 false）
+  const isCapableWindowsHost = platform === 'windows' && !explicitNonElectron
+  const supportsDoubleModifierHotkeys =
+    isCapableWindowsHost && info?.supportsDoubleModifierHotkeys === true
+  const supportsMouseTriggers =
+    isCapableWindowsHost && info?.supportsMouseTriggers === true
+
   return {
     platform,
     hostEnvironment,
-    supportsDoubleModifierHotkeys: false
+    supportsDoubleModifierHotkeys,
+    supportsMouseTriggers
   }
 }
 
@@ -57,7 +102,8 @@ export function formatHotkeyForPlatform(
   platform = 'unknown',
   supportsDoubleModifierHotkeys = false
 ) {
-  const value = typeof hotkey === 'string' ? hotkey : ''
+  const value = typeof hotkey === 'string' ? hotkey.trim() : ''
+  if (!value) return ''
   const compactValue = value.replace(/[+\s]/g, '')
   const doubleModifier = /^double(ctrl|control|alt|shift)$/i.exec(compactValue)
   if (doubleModifier) {
@@ -72,19 +118,148 @@ export function formatHotkeyForPlatform(
         : modifier[0].toUpperCase() + modifier.slice(1)
     return `双击 ${label}`
   }
-  if (platform !== 'windows' && platform !== 'macos') {
-    return value ? `${value}（平台未识别）` : ''
-  }
   if (platform !== 'macos') return value
   const symbols = {
     ctrl: '⌘',
     commandorcontrol: '⌘',
+    cmdorctrl: '⌘',
+    cmd: '⌘',
+    command: '⌘',
     alt: '⌥',
     option: '⌥',
     shift: '⇧',
     control: '⌃'
   }
   return value.split('+').map((token) => symbols[token.trim().toLowerCase()] || token.trim()).join('+')
+}
+
+const MODIFIER_COMPARE_ORDER = ['ctrl', 'control', 'alt', 'shift', 'meta']
+
+function canonicalizeHotkeyForCompare(hotkey, platform = 'windows') {
+  if (typeof hotkey !== 'string' || !hotkey.trim()) return ''
+  const doubleModifier = normalizeDoubleModifierHotkey(hotkey)
+  if (doubleModifier) return doubleModifier.toLowerCase()
+
+  const tokens = hotkey.split('+').map((t) => t.trim()).filter(Boolean)
+  if (tokens.length === 0) return ''
+  const rawMain = tokens[tokens.length - 1].toLowerCase()
+  const mainKey =
+    rawMain === 'esc'
+      ? 'escape'
+      : rawMain === 'return'
+        ? 'enter'
+        : rawMain === ' ' || rawMain === 'spacebar'
+          ? 'space'
+          : rawMain
+
+  const mods = new Set()
+  for (const token of tokens.slice(0, -1)) {
+    const lower = token.toLowerCase()
+    if (lower === 'ctrl' || lower === 'commandorcontrol' || lower === 'cmdorctrl') {
+      mods.add('ctrl')
+    } else if (lower === 'cmd' || lower === 'command') {
+      mods.add(platform === 'macos' ? 'ctrl' : 'meta')
+    } else if (lower === 'control') {
+      mods.add(platform === 'macos' ? 'control' : 'ctrl')
+    } else if (lower === 'alt' || lower === 'option') {
+      mods.add('alt')
+    } else if (lower === 'shift') {
+      mods.add('shift')
+    } else if (lower === 'meta' || lower === 'super' || lower === 'win') {
+      mods.add(platform === 'macos' ? 'ctrl' : 'meta')
+    } else {
+      mods.add(lower)
+    }
+  }
+
+  const orderedMods = MODIFIER_COMPARE_ORDER.filter((m) => mods.has(m))
+  return [...orderedMods, mainKey].join('+')
+}
+
+// 系统核心保留快捷键黑名单（与宿主 contracts/hotkey-rules.ts 保持一致）
+const WINDOWS_BLACKLISTED_HOTKEYS = new Set([
+  'ctrl+c',
+  'ctrl+v',
+  'ctrl+x',
+  'ctrl+z',
+  'ctrl+y',
+  'ctrl+a',
+  'ctrl+s',
+  'alt+f4',
+  'alt+tab',
+  'ctrl+shift+escape'
+])
+
+const MACOS_BLACKLISTED_HOTKEYS = new Set([
+  'ctrl+c',
+  'ctrl+v',
+  'ctrl+x',
+  'ctrl+z',
+  'ctrl+a',
+  'ctrl+q',
+  'ctrl+w',
+  'ctrl+tab',
+  'ctrl+space',
+  'ctrl+shift+3',
+  'ctrl+shift+4',
+  'ctrl+shift+5'
+])
+
+/**
+ * 检查组合键是否命中操作系统关键黑名单；命中时返回明确中文原因，否则返回空字符串
+ */
+export function getSystemHotkeyBlacklistReason(hotkey, platform = 'windows') {
+  const canonical = canonicalizeHotkeyForCompare(hotkey, platform)
+  if (!canonical) return ''
+  if (platform === 'macos') {
+    if (MACOS_BLACKLISTED_HOTKEYS.has(canonical)) {
+      const display = formatHotkeyForPlatform(hotkey, 'macos')
+      return `快捷键 ${display} 为 macOS 系统关键组合键，禁止注册为全局热键`
+    }
+    return ''
+  }
+  if (WINDOWS_BLACKLISTED_HOTKEYS.has(canonical)) {
+    return `快捷键 ${String(hotkey).trim()} 为 Windows 系统关键组合键，禁止注册为全局热键`
+  }
+  return ''
+}
+
+const SHELL_SHORTCUT_LABELS = (() => {
+  const map = new Map()
+  for (const hint of BUILTIN_SHORTCUT_HINTS) {
+    const key = canonicalizeHotkeyForCompare(hint.combo, 'windows')
+    if (key) map.set(key, hint.label)
+  }
+  const pinKey = canonicalizeHotkeyForCompare(SHELL_SHORTCUTS.PIN_ITEM, 'windows')
+  if (pinKey && !map.has(pinKey)) {
+    map.set(pinKey, '固定 / 取消固定插件')
+  }
+  return map
+})()
+
+/**
+ * 检测快捷键是否与 ZTools 壳层内置快捷键（SHELL_SHORTCUTS）重名，返回温和提示文案（空字符串表示无重叠）
+ */
+export function getShellReserveWarning(hotkey) {
+  if (typeof hotkey !== 'string' || !hotkey.trim()) return ''
+  const canonical = canonicalizeHotkeyForCompare(hotkey, 'windows')
+  if (!canonical) return ''
+  const label = SHELL_SHORTCUT_LABELS.get(canonical)
+  if (!label) return ''
+  return `该快捷键与 ZTools 内置快捷键（${label}）重名，启用后在窗口内可能会遮蔽内置操作`
+}
+
+/**
+ * 判断快捷键字符串是否可安全传给 <ShortcutKeys>（禁止传入含中文说明文字的错误字符串）
+ */
+export function isSafeShortcutKeysCombo(hotkey, platform = 'unknown', supportsDoubleModifierHotkeys = false) {
+  if (typeof hotkey !== 'string' || !hotkey.trim()) return false
+  // 排除包含全角括号或非双击前缀的中文提示字符串（如「平台未识别」「当前宿主不支持」）
+  if (/[\u4e00-\u9fff（）]/.test(hotkey)) return false
+  if (isDoubleModifierHotkey(hotkey)) {
+    return platform === 'windows' && Boolean(supportsDoubleModifierHotkeys)
+  }
+  return true
 }
 
 export function getHotkeyWaitText(platform = 'unknown', allowDoubleTap = false) {
@@ -103,10 +278,7 @@ export function getHotkeyRuleDescription(platform = 'unknown', allowDoubleTap = 
     return '支持 ⌘ / ⌃ / ⌥ / ⇧ + A-Z、Space、反引号（`）、波浪号（~）或 F1-F24；不支持双击修饰键、方向键或数字。'
   }
   return allowDoubleTap
-    ? HOTKEY_RULE_DESCRIPTION.replace(
-        '；不支持',
-        '；另支持双击 Ctrl / Alt / Shift；不支持'
-      )
+    ? '支持 Ctrl / Shift / Alt + A-Z、Space、反引号（`）、波浪号（~）、F1-F24，或双击 Ctrl / Alt / Shift。'
     : `${HOTKEY_RULE_DESCRIPTION} 当前宿主不支持双击修饰键。`
 }
 
@@ -204,6 +376,32 @@ export const parseSupportedHotkeyEvent = (event, options = {}) => {
       text: getHotkeyUnsupportedText(platform)
     }
   }
+  if (!event || typeof event !== 'object') {
+    resetHotkeyRecorderState()
+    return {
+      status: 'invalid',
+      text: getHotkeyUnsupportedText(platform, allowDoubleTap)
+    }
+  }
+
+  // 支持宿主转发的双按修饰键合成事件（如 DoubleCtrl / DoubleAlt / DoubleShift）
+  const syntheticDouble =
+    normalizeDoubleModifierHotkey(event.key) || normalizeDoubleModifierHotkey(event.code)
+  if (syntheticDouble) {
+    resetHotkeyRecorderState()
+    if (!allowDoubleTap) {
+      return {
+        status: 'invalid',
+        text: getHotkeyUnsupportedText(platform, allowDoubleTap)
+      }
+    }
+    return {
+      status: 'valid',
+      hotkey: syntheticDouble,
+      text: formatHotkeyForPlatform(syntheticDouble, platform, allowDoubleTap)
+    }
+  }
+
   const modifiers = collectModifiers(event, platform)
 
   if (event.metaKey && !isMacOS) {
@@ -251,7 +449,7 @@ export const parseSupportedHotkeyEvent = (event, options = {}) => {
         return {
           status: 'valid',
           hotkey,
-        text: formatHotkeyForPlatform(hotkey, platform, allowDoubleTap)
+          text: formatHotkeyForPlatform(hotkey, platform, allowDoubleTap)
         }
       }
 
@@ -271,6 +469,32 @@ export const parseSupportedHotkeyEvent = (event, options = {}) => {
   }
 
   const mainKey = getMainKey(event, platform)
+  if (modifiers.length > 0) {
+    const candidateSpecialKey =
+      event.key === 'Tab' || event.code === 'Tab'
+        ? 'Tab'
+        : event.key === 'Escape' || event.key === 'Esc' || event.code === 'Escape'
+          ? 'Escape'
+          : /^[0-9]$/.test(String(event.key || ''))
+            ? String(event.key)
+            : isSupportedMainKey(mainKey)
+              ? normalizeMainKey(mainKey)
+              : ''
+    if (candidateSpecialKey) {
+      const blacklistReason = getSystemHotkeyBlacklistReason(
+        [...modifiers, candidateSpecialKey].join('+'),
+        platform
+      )
+      if (blacklistReason) {
+        resetHotkeyRecorderState()
+        return {
+          status: 'invalid',
+          text: blacklistReason
+        }
+      }
+    }
+  }
+
   if (!isSupportedMainKey(mainKey) || (modifiers.length === 0 && !isSupportedFunctionKey(mainKey))) {
     resetHotkeyRecorderState()
     return {
@@ -289,16 +513,22 @@ export const parseSupportedHotkeyEvent = (event, options = {}) => {
 }
 
 /**
- * 快捷键录入框里的一次按键：Esc 取消录入，单独按 ⌫ / Delete 清除已有快捷键，其余交给 parseSupportedHotkeyEvent。
+ * 快捷键录入框里的一次按键：单独 Esc 取消录入，单独按 ⌫ / Delete 清除已有快捷键，其余交给 parseSupportedHotkeyEvent。
  * 返回 { action: 'cancel' | 'clear' | 'pending' | 'invalid' | 'valid', hotkey?, text, isKeys }
  * isKeys 为 true 时 text 是已按下的组合键（界面用键帽显示），否则 text 是提示语（用文字显示）。
  */
 export function interpretRecorderKeydown(event, options = {}) {
   const bare = !event?.ctrlKey && !event?.metaKey && !event?.altKey && !event?.shiftKey
-  if (event?.key === 'Escape') return { action: 'cancel', text: '', isKeys: false }
+  if (bare && event?.key === 'Escape') return { action: 'cancel', text: '', isKeys: false }
   if (bare && (event?.key === 'Backspace' || event?.key === 'Delete')) return { action: 'clear', text: '', isKeys: false }
   const result = parseSupportedHotkeyEvent(event, options)
-  const isKeys = result.status === 'valid' || (result.status === 'pending' && String(result.text).endsWith('...'))
+  if (result.status === 'valid') {
+    return { action: 'valid', hotkey: result.hotkey, text: result.hotkey, isKeys: true }
+  }
+  const isKeys =
+    result.status === 'pending' &&
+    String(result.text).endsWith('...') &&
+    !/[\u4e00-\u9fff（）]/.test(String(result.text))
   return { action: result.status, hotkey: result.hotkey, text: result.text, isKeys }
 }
 
@@ -362,7 +592,12 @@ export function dispatchSyntheticRecorderHotkey(payload = {}) {
     return false
   }
   const key = typeof payload.key === 'string' && payload.key ? payload.key : ' '
-  const code = typeof payload.code === 'string' && payload.code ? payload.code : 'Space'
+  const code =
+    typeof payload.code === 'string' && payload.code
+      ? payload.code
+      : key === ' '
+        ? 'Space'
+        : key
   const event = new KeyboardEvent('keydown', {
     key,
     code,

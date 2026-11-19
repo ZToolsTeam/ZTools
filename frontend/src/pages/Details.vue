@@ -564,11 +564,14 @@ const createShortcut = async () => {
   }
 }
 
-// 导航到高级设置页面并自动打开插件快捷键弹窗
+// 导航到高级设置页面并自动打开插件快捷键弹窗并定位当前插件
 const setHotkey = () => {
   router.push({
     ...ROUTES.ADVANCED_SETTINGS,
-    query: { openPluginHotkey: 'true' }
+    query: {
+      openPluginHotkey: 'true',
+      ...(pluginId.value ? { pluginId: pluginId.value } : {})
+    }
   })
 }
 

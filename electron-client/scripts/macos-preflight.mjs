@@ -43,6 +43,11 @@ export function parseMacTestArguments(argv) {
   return values
 }
 
+export function isValidMacRuntimeAppName(value) {
+  return typeof value === 'string' && value.length > 0 && value.length <= 128 &&
+    value.trim() === value && !/[\u0000-\u001f\u007f-\u009f]/.test(value)
+}
+
 export function inspectMacApp(options, { platform = process.platform, fsApi = fs, exec = execFileSync, readAppPackage = appRoot => JSON.parse(extractFile(path.join(appRoot, 'Contents', 'Resources', 'app.asar'), 'package.json').toString('utf8')) } = {}) {
   // Refuse before touching any app, fixture or macOS tool on the wrong host.
   if (platform !== 'darwin') return { status: 'NOT_RUN', code: 'DARWIN_REQUIRED' }
@@ -87,6 +92,10 @@ export function inspectMacApp(options, { platform = process.platform, fsApi = fs
     catch { return { status: 'FAIL', code: 'INVALID_BUNDLE_VERSION' } }
     const versions = JSON.parse(fsApi.readFileSync(path.join(appRoot, 'Contents', 'Resources', 'ztools-bundle-versions.json'), 'utf8'))
     const appPackage = readAppPackage(appRoot)
+    const runtimeAppName = appPackage && typeof appPackage === 'object' && !Array.isArray(appPackage)
+      ? Object.hasOwn(appPackage, 'productName') ? appPackage.productName : appPackage.name
+      : undefined
+    if (!isValidMacRuntimeAppName(runtimeAppName)) return { status: 'FAIL', code: 'INVALID_APP_NAME_METADATA' }
     if (versions.schemaVersion !== 1 || typeof appPackage.version !== 'string' || !/^[0-9A-Za-z.-]{1,128}$/.test(appPackage.version) ||
         versions.appVersion !== appPackage.version || versions.shortVersion !== info.CFBundleShortVersionString ||
         versions.buildVersion !== info.CFBundleVersion) return { status: 'FAIL', code: 'APP_VERSION_METADATA_MISMATCH' }
@@ -100,7 +109,7 @@ export function inspectMacApp(options, { platform = process.platform, fsApi = fs
     if (options.fixtures && !fsApi.statSync(options.fixtures).isDirectory()) return { status: 'NOT_RUN', code: 'FIXTURES_MISSING' }
     return {
       status: 'PASS', scope: 'phase2-readonly-preflight', appRoot, executable: executableReal,
-      bundleId: info.CFBundleIdentifier, appVersion: appPackage.version,
+      bundleId: info.CFBundleIdentifier, appVersion: appPackage.version, runtimeAppName,
       bundleShortVersion: info.CFBundleShortVersionString, bundleBuildVersion: info.CFBundleVersion,
       minimumOs: info.LSMinimumSystemVersion, osVersion: systemVersion, slices: [...slices],
       expectedProcessArch: options['expect-process-arch'],

@@ -102,7 +102,6 @@ type PreloadMethod =
   | 'system_get_network_stats'
   | 'system_get_battery_status'
   | 'system_reload_hotkeys'
-  | 'system_get_panel_local_apps'
   | 'system_search_files'
   | 'dllplugin_list'
   | 'dllplugin_call'
@@ -731,7 +730,6 @@ const bridge = Object.freeze({
       system_get_network_stats: (request: unknown) => invokeMethod('system_get_network_stats', request),
       system_get_battery_status: (request: unknown) => invokeMethod('system_get_battery_status', request),
       system_reload_hotkeys: (request: unknown) => invokeMethod('system_reload_hotkeys', request),
-      system_get_panel_local_apps: (request: unknown) => invokeMethod('system_get_panel_local_apps', request),
       system_search_files: (request: unknown) => invokeMethod('system_search_files', request),
       dllplugin_list: (request: unknown) => invokeMethod('dllplugin_list', request),
       dllplugin_call: (request: unknown) => invokeMethod('dllplugin_call', request),
@@ -896,28 +894,33 @@ const bridge = Object.freeze({
 
 contextBridge.exposeInMainWorld('__ztoolsElectron', bridge)
 
-contextBridge.exposeInMainWorld('__ztoolsLauncher', Object.freeze({
-  show: () => ipcRenderer.invoke('ztools:launcher_call', 'show'),
-  hide: () => ipcRenderer.invoke('ztools:launcher_call', 'hide'),
-  toggle: () => ipcRenderer.invoke('ztools:launcher_call', 'toggle'),
-  expandToDashboard: (route?: string) => typeof route === 'string'
-    ? ipcRenderer.invoke('ztools:launcher_call', 'expand_to_dashboard', { route })
-    : ipcRenderer.invoke('ztools:launcher_call', 'expand_to_dashboard'),
-  searchFiles: async (query: string, limit = 20, options?: { scope?: unknown }) => {
-    const scope = options?.scope
-    const params = typeof scope === 'string' ? { query, limit, scope } : { query, limit }
-    const res = await invoke('system_search_files', params) as { success?: boolean; data?: unknown }
-    return res?.data ?? res
-  },
-  openPath: (targetPath: string) => invoke('shell_open_path', { fullPath: targetPath }),
-  showItemInFolder: (targetPath: string) => invoke('shell_show_item_in_folder', { fullPath: targetPath }),
-  getPanelData: () => ipcRenderer.invoke('ztools:launcher_call', 'get_panel_data'),
-  togglePin: (id: string, itemType: string) =>
-    ipcRenderer.invoke('ztools:launcher_call', 'toggle_pin', { id, itemType }),
-  addLocalApp: () => ipcRenderer.invoke('ztools:launcher_call', 'add_local_app'),
-  openPanelItem: (id: string, itemType: string, query?: string) =>
-    ipcRenderer.invoke('ztools:launcher_call', 'open_panel_item', { id, itemType, query })
-}))
+if (isMainFrame && window.location?.protocol === 'ztools:' && window.location?.hostname === 'web') {
+  contextBridge.exposeInMainWorld('__ztoolsLauncher', Object.freeze({
+    show: () => ipcRenderer.invoke('ztools:launcher_call', 'show'),
+    hide: () => ipcRenderer.invoke('ztools:launcher_call', 'hide'),
+    toggle: () => ipcRenderer.invoke('ztools:launcher_call', 'toggle'),
+    expandToDashboard: (route?: string) => typeof route === 'string'
+      ? ipcRenderer.invoke('ztools:launcher_call', 'expand_to_dashboard', { route })
+      : ipcRenderer.invoke('ztools:launcher_call', 'expand_to_dashboard'),
+    searchFiles: async (query: string, limit = 20, options?: { scope?: unknown }) => {
+      const scope = options?.scope
+      const params = typeof scope === 'string' ? { query, limit, scope } : { query, limit }
+      const res = await invoke('system_search_files', params) as { success?: boolean; data?: unknown }
+      return res?.data ?? res
+    },
+    openPath: (targetPath: string) => invoke('shell_open_path', { fullPath: targetPath }),
+    showItemInFolder: (targetPath: string) => invoke('shell_show_item_in_folder', { fullPath: targetPath }),
+    getPanelData: () => ipcRenderer.invoke('ztools:launcher_call', 'get_panel_data'),
+    togglePin: (id: string, itemType: string) =>
+      ipcRenderer.invoke('ztools:launcher_call', 'toggle_pin', { id, itemType }),
+    setPin: (entry: unknown, pinned: boolean) =>
+      ipcRenderer.invoke('ztools:launcher_call', 'set_pin', { entry, pinned }),
+    reorderPins: (order: readonly string[]) =>
+      ipcRenderer.invoke('ztools:launcher_call', 'reorder_pins', { order }),
+    openPanelItem: (id: string, itemType: string, query?: string, action?: 'open' | 'reveal') =>
+      ipcRenderer.invoke('ztools:launcher_call', 'open_panel_item', { id, itemType, query, action })
+  }))
+}
 
 const isLauncherWindow = process.argv.includes('--ztools-window-mode=launcher')
 contextBridge.exposeInMainWorld('__ztoolsWindowMode', isLauncherWindow ? 'launcher' : 'dashboard')

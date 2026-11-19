@@ -5,6 +5,7 @@ import { spawn } from 'node:child_process'
 import fs from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
+import { createConnection } from 'node:net'
 import { fileURLToPath } from 'node:url'
 import { errorCodes, ZToolsError } from '../../out/contracts/errors.js'
 import { ServiceClient } from '../../out/main/service/service-client.js'
@@ -72,7 +73,7 @@ function waitForExit(server) {
 async function runMissingPluginRootIntegration() {
   const pipeName = `\\\\.\\pipe\\ZToolsPrivilegedService.v1.integration.${process.pid}.${Date.now()}.untrusted`
   const server = spawnIntegrationServer(pipeName)
-  const client = new ServiceClient({ pipeName })
+  const client = new ServiceClient({ pipeName, createTransport: createConnection })
   let testError
   try {
     await waitForReady(server)
@@ -196,7 +197,7 @@ async function runTrustedTaskIntegration() {
   const fixture = await makeTrustedFixture()
   const pipeName = `\\\\.\\pipe\\ZToolsPrivilegedService.v1.integration.${process.pid}.${Date.now()}.trusted`
   const server = spawnIntegrationServer(pipeName, [fixture.dataRoot, fixture.manifestSha256])
-  const client = new ServiceClient({ pipeName })
+  const client = new ServiceClient({ pipeName, createTransport: createConnection })
   let testError
   try {
     await waitForReady(server)

@@ -33,20 +33,22 @@ describe('ActionPanelModal 动作面板', () => {
     wrapper.unmount()
   })
 
-  it('[边界] 畸形快捷键（缺 key、未知修饰键、重复修饰键）不崩溃，只展示可识别部分', () => {
+  it('[边界] 畸形快捷键（缺 key、未知修饰键、重复修饰键）不崩溃，只展示可识别部分；宿主保留热键不展示', () => {
     const wrapper = mountPanel({
       actions: [
         action('首项'),
         action('次项'),
         action('缺 key', { shortcut: { modifiers: ['cmd'] } }),
-        action('未知修饰', { shortcut: { modifiers: ['hyper', 'cmd', 'meta'], key: 'k' } }),
-        action('非数组', { shortcut: { modifiers: 'cmd', key: 'x' } })
+        action('未知修饰', { shortcut: { modifiers: ['hyper', 'cmd', 'meta'], key: 'd' } }),
+        action('非数组', { shortcut: { modifiers: 'cmd', key: 'x' } }),
+        action('冲突保留键', { shortcut: { modifiers: ['ctrl', 'shift'], key: 'p' } })
       ]
     })
     const items = wrapper.findAll('.action-panel-item')
     expect(items[2].findAll('kbd')).toHaveLength(0)
     expect(items[3].findAll('kbd')).toHaveLength(2)
     expect(items[4].findAll('kbd')).toHaveLength(1)
+    expect(items[5].findAll('kbd')).toHaveLength(0)
     wrapper.unmount()
   })
 
@@ -276,5 +278,100 @@ describe('ActionPanelModal 动作面板', () => {
     expect(items[0].classes()).not.toContain('is-destructive')
     expect(items[1].classes()).toContain('is-destructive')
     wrapper.unmount()
+  })
+
+  describe('面板内直接触发动作快捷键与焦点/输入保护', () => {
+    it('按列表内动作的 shortcut 立即触发 trigger 并关闭面板；过滤掉的动作快捷键不触发', async () => {
+      const copyPath = action('复制绝对路径', { shortcut: { modifiers: ['ctrl', 'shift'], key: 'c' } })
+      const reveal = action('在资源管理器中定位', { shortcut: { modifiers: ['ctrl'], key: 'enter' } })
+      const copyName = action('复制文件名', { shortcut: { modifiers: ['ctrl'], key: 'c' } })
+      const wrapper = mountPanel({
+        actions: [action('打开'), reveal, copyPath, copyName]
+      })
+      const panel = wrapper.find('.action-panel')
+
+      // 显式绑定 Ctrl+Shift+C 直接命中并关闭
+      await panel.trigger('keydown', { key: 'c', ctrlKey: true, shiftKey: true })
+      expect(wrapper.emitted('trigger')[0][0]).toStrictEqual(copyPath)
+      expect(wrapper.emitted('close')).toHaveLength(1)
+
+      // 显式绑定 Ctrl+Enter 直接命中
+      await panel.trigger('keydown', { key: 'Enter', ctrlKey: true })
+      expect(wrapper.emitted('trigger')[1][0]).toStrictEqual(reveal)
+
+      // 搜索过滤只留「复制文件名」，不可见的「复制绝对路径」快捷键不再触发
+      await wrapper.find('input').setValue('文件名')
+      await panel.trigger('keydown', { key: 'c', ctrlKey: true, shiftKey: true })
+      expect(wrapper.emitted('trigger')).toHaveLength(2)
+
+      // 空选区下直接按可见的 Ctrl+C 命中「复制文件名」
+      await panel.trigger('keydown', { key: 'c', ctrlKey: true })
+      expect(wrapper.emitted('trigger')[2][0]).toStrictEqual(copyName)
+      wrapper.unmount()
+    })
+
+    it('搜索框内有文字时放行 Home/End 移动光标且 Delete/Ctrl+A/Ctrl+V 不误触发动作；框空时 Delete 可触发', async () => {
+      const del = action('删除条目', { shortcut: { key: 'delete' } })
+      const selectAll = action('全选条目', { shortcut: { modifiers: ['ctrl'], key: 'a' } })
+      const copyPath = action('复制条目路径', { shortcut: { modifiers: ['ctrl', 'shift'], key: 'c' } })
+      const wrapper = mountPanel({
+        actions: [action('打开'), del, selectAll, copyPath]
+      })
+      const inputEl = wrapper.find('input').element
+      const panel = wrapper.find('.action-panel')
+
+      // 框非空：Home / End / Delete / Ctrl+A 留给搜索框文本编辑，不移动列表选中项也不触发动作
+      await panel.trigger('keydown', { key: 'ArrowDown' })
+      expect(wrapper.find('.action-panel-item.is-selected .action-panel-title').text()).toBe('删除条目')
+
+      await wrapper.find('input').setValue('条目')
+      const homeEv = new KeyboardEvent('keydown', { key: 'Home', bubbles: true, cancelable: true })
+      inputEl.dispatchEvent(homeEv)
+      expect(homeEv.defaultPrevented).toBe(false)
+      expect(wrapper.find('.action-panel-item.is-selected .action-panel-title').text()).toBe('删除条目')
+
+      const delEv = new KeyboardEvent('keydown', { key: 'Delete', bubbles: true, cancelable: true })
+      inputEl.dispatchEvent(delEv)
+      const ctrlAEv = new KeyboardEvent('keydown', { key: 'a', ctrlKey: true, bubbles: true, cancelable: true })
+      inputEl.dispatchEvent(ctrlAEv)
+      expect(wrapper.emitted('trigger')).toBeUndefined()
+
+      // 但框非空时按当前可见动作「复制条目路径」的 Ctrl+Shift+C 仍可直接触发
+      const shortcutEv = new KeyboardEvent('keydown', { key: 'c', ctrlKey: true, shiftKey: true, bubbles: true, cancelable: true })
+      inputEl.dispatchEvent(shortcutEv)
+      expect(wrapper.emitted('trigger')[0][0]).toStrictEqual(copyPath)
+
+      // 框空时无修饰 Delete 可直接触发绑定动作，Home 恢复跳转到列表首项
+      await wrapper.find('input').setValue('')
+      const emptyHome = new KeyboardEvent('keydown', { key: 'Home', bubbles: true, cancelable: true })
+      inputEl.dispatchEvent(emptyHome)
+      expect(emptyHome.defaultPrevented).toBe(true)
+      expect(wrapper.find('.action-panel-item.is-selected .action-panel-title').text()).toBe('打开')
+
+      const emptyDel = new KeyboardEvent('keydown', { key: 'Delete', bubbles: true, cancelable: true })
+      inputEl.dispatchEvent(emptyDel)
+      expect(wrapper.emitted('trigger')[1][0]).toStrictEqual(del)
+      wrapper.unmount()
+    })
+
+    it('面板声明 aria-modal="true" 并拦截 Tab / Shift+Tab 形成模态焦点环', async () => {
+      const wrapper = mountPanel({ actions: [action('打开'), action('复制')] })
+      const panel = wrapper.find('.action-panel')
+      expect(panel.attributes('aria-modal')).toBe('true')
+      const inputEl = wrapper.find('input').element
+      await nextTick()
+      expect(document.activeElement).toBe(inputEl)
+
+      const tabEv = new KeyboardEvent('keydown', { key: 'Tab', bubbles: true, cancelable: true })
+      panel.element.dispatchEvent(tabEv)
+      expect(tabEv.defaultPrevented).toBe(true)
+      expect(panel.element.contains(document.activeElement)).toBe(true)
+
+      const shiftTabEv = new KeyboardEvent('keydown', { key: 'Tab', shiftKey: true, bubbles: true, cancelable: true })
+      panel.element.dispatchEvent(shiftTabEv)
+      expect(shiftTabEv.defaultPrevented).toBe(true)
+      expect(panel.element.contains(document.activeElement)).toBe(true)
+      wrapper.unmount()
+    })
   })
 })

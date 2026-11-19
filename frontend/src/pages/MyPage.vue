@@ -35,11 +35,13 @@ import { isClientProvidedPlugin } from '@/utils/officialPlugins'
 import { isBundledPlugin } from '@/utils/bundledPlugins'
 import { getHotkeyHostPlatform } from '@/utils/hotkeyRecorder'
 import { useVisualGridNav } from '@/composables/useVisualGridNav'
+import { SHELL_SHORTCUTS } from '@/utils/shellShortcuts'
 import {
   useKeymap,
   registerKeyHandler,
   KEYMAP_SCOPES,
   dispatchKeyEvent,
+  isComposingEvent,
   isModalOpen,
   isInteractiveControlTarget
 } from '@/utils/keymap'
@@ -141,31 +143,72 @@ const RECENT_LIMIT = 5 // 「最近使用」最多显示条数
 
 // 网格实际列数：auto-fill 会随窗口宽度变化，键盘上下移动与默认显示数量都以真实列数为准。
 // 观察的是两个标签共用的内容区（始终存在），从其中任一磁贴网格读列数：两个标签宽度相同，列数也相同
+const gridBodyRef = ref(null)
 const gridColumns = ref(homeLayoutCache.gridColumns)
 let gridObserver = null
+let observedGridEl = null
+let lastObservedWidth = null
+let gridMeasureRafId = null
+let hasMounted = false
+
+function cancelPendingGridMeasure() {
+  if (gridMeasureRafId !== null && typeof cancelAnimationFrame === 'function') {
+    cancelAnimationFrame(gridMeasureRafId)
+  }
+  gridMeasureRafId = null
+}
+
 function measureGridColumns(container) {
   const el = container?.querySelector?.('.plugin-tile-grid')
   if (!el) return
   const template = getComputedStyle(el).gridTemplateColumns || ''
   const count = template.split(' ').filter((part) => part && part !== 'none').length
-  if (count > 0) {
+  if (count > 0 && count !== gridColumns.value) {
     gridColumns.value = count
     homeLayoutCache.gridColumns = count
   }
 }
-function bindGridEl(el) {
-  if (gridObserver) {
-    gridObserver.disconnect()
-    gridObserver = null
-  }
-  if (!el || typeof ResizeObserver === 'undefined') {
-    measureGridColumns(el)
+
+function scheduleMeasureGridColumns() {
+  cancelPendingGridMeasure()
+  if (typeof requestAnimationFrame !== 'function') {
+    measureGridColumns(gridBodyRef.value)
     return
   }
-  gridObserver = new ResizeObserver(() => measureGridColumns(el))
-  gridObserver.observe(el)
-  measureGridColumns(el)
+  gridMeasureRafId = requestAnimationFrame(() => {
+    gridMeasureRafId = null
+    if (isUnmounted) return
+    measureGridColumns(gridBodyRef.value)
+  })
 }
+
+function syncObservedGridElement(el) {
+  if (observedGridEl === el) return
+  if (observedGridEl && gridObserver) {
+    if (typeof gridObserver.unobserve === 'function') {
+      gridObserver.unobserve(observedGridEl)
+    } else {
+      gridObserver.disconnect()
+    }
+  }
+  observedGridEl = el || null
+  lastObservedWidth = null
+  cancelPendingGridMeasure()
+  if (!el) return
+  measureGridColumns(el)
+  if (gridObserver) {
+    gridObserver.observe(el)
+  }
+}
+
+watch(
+  gridBodyRef,
+  (el) => {
+    if (!hasMounted || isUnmounted) return
+    syncObservedGridElement(el)
+  },
+  { flush: 'post' }
+)
 const DEBOUNCE_DELAY = 300
 
 // Debounce timer
@@ -957,7 +1000,9 @@ function hideDragTip() {
   if (window.ztools?.config) {
     window.ztools.config
       .set('my-page.drag-tip-shown', 'true', false, 'my_page_settings.json')
-      .catch(() => {})
+      .catch((err) => {
+        console.warn('保存拖拽提示状态失败:', err)
+      })
   }
 }
 
@@ -1177,16 +1222,9 @@ const contextMenuKeymap = registerKeyHandler(
       hideMenu()
       return true
     },
-    'Ctrl+K': () => {
+    [SHELL_SHORTCUTS.ACTION_PANEL]: () => {
       hideMenu()
       return true
-    },
-    'Delete': () => {
-      if (selectedPlugin.value) {
-        handleUninstallPlugin(getPluginId(selectedPlugin.value))
-        return true
-      }
-      return false
     }
   },
   { modal: true }
@@ -1288,7 +1326,7 @@ useKeymap(KEYMAP_SCOPES.PAGE, {
     const entry = navigableItems.value[focusedCardIndex.value]
     return executeFocusedNavEntry(entry)
   },
-  'Ctrl+K': () => {
+  [SHELL_SHORTCUTS.ACTION_PANEL]: () => {
     if (showMenu.value) {
       hideMenu()
       return true
@@ -1300,18 +1338,19 @@ useKeymap(KEYMAP_SCOPES.PAGE, {
     }
     return false
   },
+  [SHELL_SHORTCUTS.PIN_ITEM]: () => {
+    // 仅对当前聚焦卡片且已安装的插件执行固定/取消固定
+    if (showMenu.value) return false
+    const entry = navigableItems.value[focusedCardIndex.value]
+    if (!entry?.plugin) return false
+    const pid = getPluginId(entry.plugin)
+    if (!pid || !installedSet.value.has(pid)) return false
+    togglePin(pid)
+    return true
+  },
   'Escape': () => {
     if (showMenu.value) {
       hideMenu()
-      return true
-    }
-    return false
-  },
-  'Delete': (e) => {
-    if (isStandaloneControlOutsideNavItem(e?.target)) return false
-    const p = selectedPlugin.value || navigableItems.value[focusedCardIndex.value]?.plugin
-    if (p) {
-      handleUninstallPlugin(getPluginId(p))
       return true
     }
     return false
@@ -1320,31 +1359,8 @@ useKeymap(KEYMAP_SCOPES.PAGE, {
 
 // Keyboard shortcuts (兼容测试直调与全局事件分发)
 function handleKeyDown(event) {
-  // 对话框（如卸载确认）打开时，回车 / Delete 只作用于对话框，不再打开或卸载列表里的插件
-  if (isModalOpen()) return
-  if (dispatchKeyEvent(event)) return
-  if (showMenu.value) return
-
-  if (!selectedPlugin.value) return
-
-  const searchModifier =
-    hostPlatform.value === 'macos'
-      ? event.metaKey && !event.ctrlKey
-      : hostPlatform.value === 'windows' && event.ctrlKey && !event.metaKey
-  if (searchModifier && event.key && event.key.toLowerCase() === 'p') {
-    event.preventDefault()
-    togglePin(getPluginId(selectedPlugin.value))
-  }
-
-  if (event.key === 'Enter') {
-    event.preventDefault()
-    handleOpenPlugin(getPluginId(selectedPlugin.value))
-  }
-
-  if (event.key === 'Delete') {
-    event.preventDefault()
-    handleUninstallPlugin(getPluginId(selectedPlugin.value))
-  }
+  if (!event || isComposingEvent(event) || isModalOpen()) return
+  dispatchKeyEvent(event)
 }
 
 async function loadRemoteState() {
@@ -1371,8 +1387,8 @@ async function loadDragTipState() {
     if (tipShown === 'true' || tipShown === true) {
       showDragTip.value = false
     }
-  } catch {
-    // 忽略
+  } catch (err) {
+    console.warn('读取拖拽提示状态失败:', err)
   }
 }
 
@@ -1413,7 +1429,23 @@ onDeactivated(() => {
 onMounted(async () => {
   loadLaunchHotkeys()
   isUnmounted = false
+  hasMounted = true
   loading.value = !homeLayoutCache.ready // 已加载过则保留上次画面，后台静默刷新
+
+  if (typeof ResizeObserver !== 'undefined') {
+    gridObserver = new ResizeObserver((entries) => {
+      if (isUnmounted) return
+      const entry = entries?.[0]
+      const rawWidth = entry?.contentRect?.width ?? gridBodyRef.value?.clientWidth
+      const width = typeof rawWidth === 'number' && Number.isFinite(rawWidth) ? rawWidth : 0
+      if (lastObservedWidth !== null && Math.abs(width - lastObservedWidth) < 0.5) {
+        return
+      }
+      lastObservedWidth = width
+      scheduleMeasureGridColumns()
+    })
+  }
+  syncObservedGridElement(gridBodyRef.value)
 
   bindMyPageWindowListeners()
 
@@ -1462,16 +1494,26 @@ onMounted(async () => {
 
 onUnmounted(() => {
   isPageActive.value = false
-  if (showMenu.value) {
-    hideMenu()
-    uiStore.setGlobalActionPanelVisible(false)
-  }
-  contextMenuKeymap()
+  hasMounted = false
+  isUnmounted = true
+  // 先释放 ResizeObserver 与挂起的 rAF，避免后续清理抛出异常导致观察器泄漏
+  cancelPendingGridMeasure()
   if (gridObserver) {
     gridObserver.disconnect()
     gridObserver = null
   }
-  isUnmounted = true
+  observedGridEl = null
+  lastObservedWidth = null
+
+  if (showMenu.value) {
+    hideMenu()
+    uiStore.setGlobalActionPanelVisible(false)
+  }
+  try {
+    contextMenuKeymap?.()
+  } catch (err) {
+    console.warn('注销上下文菜单按键映射失败:', err)
+  }
 
   if (reorderDebounceTimer) {
     clearTimeout(reorderDebounceTimer)
@@ -1543,7 +1585,7 @@ onUnmounted(() => {
         </div>
 
         <!-- 两个标签叠放：当前标签显示真实内容，另一个只放不可见、不可操作的同尺寸占位 -->
-        <div :ref="bindGridEl" class="my-plugins-body">
+        <div ref="gridBodyRef" class="my-plugins-body">
           <div
             v-for="tab in MY_PLUGIN_TABS"
             :key="tab"

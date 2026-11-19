@@ -34,8 +34,7 @@ describe('PluginHotkeyModal', () => {
         checkConflict: vi.fn().mockResolvedValue({ hasConflict: false, conflicts: [] })
       },
       sys: {
-        getInfo: vi.fn().mockResolvedValue({ platform: 'windows' }),
-        getPanelLocalApps: vi.fn().mockResolvedValue([])
+        getInfo: vi.fn().mockResolvedValue({ platform: 'windows' })
       }
     }
   })
@@ -149,5 +148,124 @@ describe('PluginHotkeyModal', () => {
     expect(window.ztools.trigger.register).toHaveBeenCalledOnce()
     expect(window.ztools.trigger.unregister).not.toHaveBeenCalled()
     expect(wrapper.find('.hotkey-keys').text()).toBe('CtrlA')
+  })
+
+  it('编辑已有快捷键时传递 excludeTriggerId 给 checkConflict，且按 Esc 取消录入后归还焦点不滞留隐藏输入框', async () => {
+    window.ztools.trigger.list.mockResolvedValue([
+      createLaunchTrigger('existing-trigger-id', 'Ctrl+A')
+    ])
+
+    const wrapper = mount(PluginHotkeyModal, {
+      attachTo: document.body,
+      global: {
+        plugins: [pinia],
+        stubs: {
+          AModal: {
+            props: ['open'],
+            template: '<div v-if="open"><slot /></div>'
+          },
+          AInput: true,
+          AInputSearch: true
+        }
+      }
+    })
+
+    await wrapper.vm.show()
+    await flushPromises()
+    const recorder = wrapper.find('.hotkey-recorder')
+    const hiddenInput = wrapper.find('.hotkey-hidden-input')
+
+    await recorder.trigger('click')
+    await flushPromises()
+    expect(document.activeElement).toBe(hiddenInput.element)
+
+    // 在录制框内按 Esc 取消录制：隐藏输入框必须失去焦点且将焦点归还给外层容器，以免吞掉后续关闭弹窗的 Esc
+    await hiddenInput.trigger('keydown', { key: 'Escape' })
+    await flushPromises()
+    expect(recorder.classes()).not.toContain('recording')
+    expect(document.activeElement).toBe(recorder.element)
+
+    // 再次录入 Ctrl+B：向 checkConflict 携带 existing-trigger-id 避免自我冲突
+    await recorder.trigger('click')
+    await flushPromises()
+    await hiddenInput.trigger('keydown', { key: 'B', ctrlKey: true })
+    await flushPromises()
+
+    expect(window.ztools.trigger.checkConflict).toHaveBeenCalledWith(
+      'Ctrl+B',
+      'demo',
+      'existing-trigger-id'
+    )
+    wrapper.unmount()
+  })
+
+  it('传入 pluginId 打开时自动填充搜索并高亮匹配目标行', async () => {
+    usePluginsStore().installedPlugins = [
+      { pluginId: 'demo', name: 'Demo A' },
+      { pluginId: 'target-plugin', name: '目标插件' }
+    ]
+    window.ztools.trigger.list.mockResolvedValue([])
+
+    const wrapper = mount(PluginHotkeyModal, {
+      global: {
+        plugins: [pinia],
+        stubs: {
+          AModal: {
+            props: ['open'],
+            template: '<div v-if="open"><slot /></div>'
+          },
+          AInput: true,
+          AInputSearch: true
+        }
+      }
+    })
+
+    await wrapper.vm.show({ pluginId: 'target-plugin' })
+    await flushPromises()
+
+    const rows = wrapper.findAll('.plugin-hotkey-item')
+    expect(rows).toHaveLength(1)
+    expect(rows[0].attributes('data-target-id')).toBe('target-plugin')
+    expect(rows[0].classes()).toContain('is-highlighted')
+  })
+
+  it('打开弹窗时不再调用 getPanelLocalApps，安全忽略残留 launch_local_app 触发器并正确渲染无插件空状态', async () => {
+    const getPanelLocalAppsSpy = vi.fn()
+    window.ztools.sys.getPanelLocalApps = getPanelLocalAppsSpy
+    usePluginsStore().installedPlugins = []
+    window.ztools.trigger.list.mockResolvedValue([
+      {
+        id: 'legacy-local-trigger',
+        pluginId: 'localapp:old',
+        type: 'hotkey',
+        config: { key: 'Ctrl+Alt+L' },
+        action: { mode: 'builtin', target: 'launch_local_app', params: { appId: 'localapp:old' } }
+      }
+    ])
+
+    const wrapper = mount(PluginHotkeyModal, {
+      global: {
+        plugins: [pinia],
+        stubs: {
+          AModal: {
+            props: ['open'],
+            template: '<div v-if="open"><slot /></div>'
+          },
+          AInput: {
+            props: ['placeholder', 'value'],
+            template: '<input :placeholder="placeholder" :value="value" />'
+          }
+        }
+      }
+    })
+
+    await wrapper.vm.show()
+    await flushPromises()
+
+    expect(getPanelLocalAppsSpy).not.toHaveBeenCalled()
+    expect(wrapper.vm.configuredCount).toBe(0)
+    expect(wrapper.find('input').attributes('placeholder')).toBe('搜索插件...')
+    expect(wrapper.find('.empty-tip').text()).toBe('暂无可配置的插件')
+    expect(wrapper.findAll('.plugin-hotkey-item')).toHaveLength(0)
   })
 })

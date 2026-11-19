@@ -14,7 +14,7 @@ describe('launchHotkeyTargets', () => {
     })).toEqual({ id: 'ocr', kind: 'plugin', ownerId: 'ocr' })
   })
 
-  it('识别本地软件启动快捷键', () => {
+  it('遇到历史残留的 launch_local_app 触发器时安全忽略并返回 null', () => {
     expect(getLaunchHotkeyTarget({
       pluginId: 'localapp:1234',
       type: 'hotkey',
@@ -23,14 +23,18 @@ describe('launchHotkeyTargets', () => {
         target: 'launch_local_app',
         params: { appId: 'localapp:1234' }
       }
-    })).toEqual({
-      id: 'localapp:1234',
-      kind: 'localApp',
-      ownerId: 'localapp:1234'
-    })
+    })).toBeNull()
+
+    expect(getLaunchHotkeyTarget({
+      pluginId: 'localapp:5678',
+      type: 'hotkey',
+      actionMode: 'builtin',
+      actionTarget: 'launch_local_app',
+      actionParams: { appId: 'localapp:5678' }
+    })).toBeNull()
   })
 
-  it('构建映射时排除插件内功能快捷键', () => {
+  it('构建映射时排除插件内功能快捷键并自动忽略残留本地软件触发器', () => {
     const map = buildLaunchHotkeyMap([
       {
         id: 'plugin-hotkey',
@@ -38,6 +42,13 @@ describe('launchHotkeyTargets', () => {
         type: 'hotkey',
         config: { key: 'Ctrl+D' },
         action: { mode: 'window', target: 'demo', params: {} }
+      },
+      {
+        id: 'legacy-local-app-hotkey',
+        pluginId: 'localapp:legacy',
+        type: 'hotkey',
+        config: { key: 'Ctrl+L' },
+        action: { mode: 'builtin', target: 'launch_local_app', params: { appId: 'localapp:legacy' } }
       },
       {
         id: 'feature-hotkey',
@@ -86,18 +97,25 @@ describe('launchHotkeyTargets', () => {
     })
   })
 
-  it('为本地软件生成受控的 builtin 动作', () => {
+  it('仅为插件目标构建窗口启动注册载荷，非插件或空目标抛错拦截', () => {
     expect(buildLaunchHotkeyRegistration(
-      { id: 'localapp:abcd', kind: 'localApp' },
-      'Ctrl+Alt+A'
+      { id: 'ocr', kind: 'plugin' },
+      'Ctrl+Alt+O'
     )).toEqual({
-      pluginId: 'localapp:abcd',
+      pluginId: 'ocr',
       type: 'hotkey',
       enabled: true,
-      config: { key: 'Ctrl+Alt+A' },
-      actionMode: 'builtin',
-      actionTarget: 'launch_local_app',
-      actionParams: { appId: 'localapp:abcd' }
+      config: { key: 'Ctrl+Alt+O' },
+      actionMode: 'window',
+      actionTarget: 'ocr',
+      actionParams: {}
     })
+
+    expect(() => buildLaunchHotkeyRegistration(
+      { id: 'localapp:abcd', kind: 'localApp' },
+      'Ctrl+Alt+A'
+    )).toThrow('仅支持为插件注册启动快捷键')
+    expect(() => buildLaunchHotkeyRegistration({ id: '', kind: 'plugin' }, 'Ctrl+Alt+A')).toThrow()
+    expect(() => buildLaunchHotkeyRegistration(null, 'Ctrl+Alt+A')).toThrow()
   })
 })

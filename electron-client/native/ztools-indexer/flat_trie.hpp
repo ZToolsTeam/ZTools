@@ -74,7 +74,7 @@ public:
     if (count == 0) count = 1;
     size_t chunk = (total_items + count - 1) / count;
 
-    std::atomic<size_t> remaining(0);
+    size_t remaining = 0;
     std::mutex done_mutex;
     std::condition_variable done_cv;
 
@@ -83,11 +83,16 @@ public:
       size_t e = (s + chunk < total_items) ? (s + chunk) : total_items;
       if (s >= total_items) break;
 
-      remaining++;
+      {
+        std::lock_guard<std::mutex> lock(done_mutex);
+        ++remaining;
+      }
       {
         std::lock_guard<std::mutex> lock(mutex_);
-        tasks_.push([s, e, &fn, &remaining, &done_cv]() {
+        tasks_.push([s, e, &fn, &remaining, &done_mutex, &done_cv]() {
           fn(s, e);
+          // 完成计数与等待谓词共用锁，避免最后一次通知落在检查与睡眠之间。
+          std::lock_guard<std::mutex> done_lock(done_mutex);
           if (--remaining == 0) {
             done_cv.notify_all();
           }
@@ -97,7 +102,7 @@ public:
     }
 
     std::unique_lock<std::mutex> lock(done_mutex);
-    done_cv.wait(lock, [&remaining]() { return remaining.load() == 0; });
+    done_cv.wait(lock, [&remaining]() { return remaining == 0; });
   }
 
 private:

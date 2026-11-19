@@ -4,6 +4,8 @@ import {
   ipcMain,
   nativeTheme
 } from 'electron'
+import type { CallerIdentity } from '../../contracts/capabilities.js'
+import { isHostCaller } from '../ipc/plugin-principal.js'
 import {
   getWindowBackgroundColor,
   isWindows11OrLater,
@@ -18,6 +20,7 @@ import { prewarmMacosApplicationCache } from '../platform/macos/file-indexer.js'
 
 export const LAUNCHER_CALL_CHANNEL = 'ztools:launcher_call' as const
 const LAUNCHER_SIZE = { width: 750, height: 480 }
+const UNAUTHORIZED_LAUNCHER_ERROR = '无权调用悬浮条宿主接口'
 
 export interface LauncherShowOptions {
   trigger?: 'keyboard_hotkey' | 'mouse_hotkey'
@@ -27,13 +30,31 @@ export interface LauncherShowOptions {
 export interface LauncherPanelBridge {
   getData(): Promise<unknown>
   togglePin(id: string, itemType: string): Promise<{ success: boolean; pinned?: boolean }>
-  addLocalApps(parentWindow: BrowserWindow | null): Promise<{ success: boolean; added: number }>
-  openItem(id: string, itemType: string, query?: string): Promise<{ success: boolean }>
+  setPin?(entry: unknown, pinned: unknown, caller?: CallerIdentity): Promise<{
+    success: boolean
+    pinned?: boolean
+    pinKey?: string
+    pinnedEntries?: unknown[]
+    error?: string
+  }>
+  reorderPins?(order: unknown): Promise<{
+    success: boolean
+    stale?: boolean
+    error?: string
+    pinnedEntries?: unknown[]
+  }>
+  openItem(
+    id: string,
+    itemType: string,
+    query?: string,
+    action?: unknown
+  ): Promise<{ success: boolean; error?: string }>
 }
 
 export interface LauncherControllerOptions {
   icon: Electron.NativeImage
   registry: WindowRegistry
+  isAuthorizedCaller?: (info: { senderId: number; isMainFrame: boolean }) => boolean
   showMainWindow(): void
   hideMainWindow(): void
   /** 记录最近一次主动打开的窗口形态 */
@@ -44,6 +65,19 @@ export interface LauncherControllerOptions {
   sidecars?: {
     trimProcessMemory(pid?: number): Promise<{ success: boolean; pid: number; trimmed: boolean }>
   }
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
+}
+
+interface LauncherInvokeEventLike {
+  sender?: {
+    id?: unknown
+    mainFrame?: unknown
+    isDestroyed?: () => boolean
+  }
+  senderFrame?: unknown
 }
 
 export interface LauncherInputController {
@@ -121,37 +155,93 @@ export class LauncherController {
   #frameSyncManager: FrameSyncManager | null = null
   #registered = false
   #screenListenerAttached = false
-  #ignoreBlur = false
 
   constructor(private readonly options: LauncherControllerOptions) {}
 
+  get webContentsId(): number | undefined {
+    return this.#window && !this.#window.isDestroyed() ? this.#window.webContents.id : undefined
+  }
+
+  #authorizeCaller(event: unknown): CallerIdentity | null {
+    const invokeEvent = isRecord(event) ? (event as LauncherInvokeEventLike) : undefined
+    const sender = invokeEvent?.sender
+    if (!sender || typeof sender.id !== 'number') return null
+    if (typeof sender.isDestroyed === 'function' && sender.isDestroyed()) return null
+    const hasFrameInfo = invokeEvent?.senderFrame !== undefined || sender.mainFrame !== undefined
+    const isMainFrame = hasFrameInfo
+      ? Boolean(invokeEvent?.senderFrame && sender.mainFrame && invokeEvent.senderFrame === sender.mainFrame)
+      : true
+    if (!isMainFrame) return null
+
+    const caller = this.options.registry.get(sender.id)
+    if (!caller || !isHostCaller(caller)) return null
+    if (this.options.isAuthorizedCaller && !this.options.isAuthorizedCaller({ senderId: sender.id, isMainFrame })) {
+      return null
+    }
+    return caller
+  }
+
+  async #dispatchPanelBridgeAction(
+    bridge: LauncherPanelBridge,
+    action: unknown,
+    payload: unknown,
+    caller: CallerIdentity
+  ): Promise<{ handled: true; result: unknown } | { handled: false }> {
+    const body = isRecord(payload) ? payload : {}
+    if (action === 'get_panel_data') {
+      return { handled: true, result: await bridge.getData() }
+    }
+    if (action === 'set_pin') {
+      if (!bridge.setPin) {
+        return { handled: true, result: { success: false, error: '当前宿主不支持固定操作' } }
+      }
+      return { handled: true, result: await bridge.setPin(body.entry, body.pinned, caller) }
+    }
+    if (action === 'reorder_pins') {
+      if (!bridge.reorderPins) {
+        return { handled: true, result: { success: false, error: '当前宿主不支持排序操作' } }
+      }
+      return { handled: true, result: await bridge.reorderPins(body.order) }
+    }
+    if (action === 'toggle_pin') {
+      return {
+        handled: true,
+        result: await bridge.togglePin(
+          typeof body.id === 'string' ? body.id : '',
+          typeof body.itemType === 'string' ? body.itemType : ''
+        )
+      }
+    }
+    if (action === 'open_panel_item') {
+      const res = await bridge.openItem(
+        typeof body.id === 'string' ? body.id : '',
+        typeof body.itemType === 'string' ? body.itemType : '',
+        typeof body.query === 'string' ? body.query : undefined,
+        body.action
+      )
+      if (res && res.success !== false) {
+        this.hide()
+      }
+      return { handled: true, result: res }
+    }
+    return { handled: false }
+  }
+
   register(): void {
     if (this.#registered) return
-    ipcMain.handle(LAUNCHER_CALL_CHANNEL, async (_event, action: unknown, payload?: unknown) => {
+    ipcMain.handle(LAUNCHER_CALL_CHANNEL, async (event, action: unknown, payload?: unknown) => {
+      const caller = this.#authorizeCaller(event)
+      if (!caller) {
+        return { success: false, error: UNAUTHORIZED_LAUNCHER_ERROR }
+      }
+      if (isRecord(payload) && ('attributedPlugin' in payload || 'stalePluginSession' in payload)) {
+        return { success: false, error: UNAUTHORIZED_LAUNCHER_ERROR }
+      }
       const bridge = this.options.panelBridge
       if (bridge) {
         try {
-          if (action === 'get_panel_data') {
-            return await bridge.getData()
-          }
-          if (action === 'toggle_pin') {
-            const p = (typeof payload === 'object' && payload !== null ? payload : {}) as { id?: string; itemType?: string }
-            return await bridge.togglePin(String(p.id ?? ''), String(p.itemType ?? ''))
-          }
-          if (action === 'add_local_app') {
-            this.#ignoreBlur = true
-            try {
-              return await bridge.addLocalApps(this.#window)
-            } finally {
-              this.#ignoreBlur = false
-            }
-          }
-          if (action === 'open_panel_item') {
-            const p = (typeof payload === 'object' && payload !== null ? payload : {}) as { id?: string; itemType?: string; query?: string }
-            const res = await bridge.openItem(String(p.id ?? ''), String(p.itemType ?? ''), typeof p.query === 'string' ? p.query : undefined)
-            this.hide()
-            return res
-          }
+          const dispatched = await this.#dispatchPanelBridgeAction(bridge, action, payload, caller)
+          if (dispatched.handled) return dispatched.result
         } catch (error) {
           return {
             success: false,
@@ -283,7 +373,7 @@ export class LauncherController {
     })
 
     window.on('blur', () => {
-      if (!this.#ignoreBlur && !window.isDestroyed() && !isShowingNativeDialog(window)) {
+      if (!window.isDestroyed() && !isShowingNativeDialog(window)) {
         this.hide()
       }
     })

@@ -181,20 +181,48 @@ describe("输入框原生编辑组合键与 macOS 修饰键", () => {
     expect(noSelection.defaultPrevented).toBe(true);
   });
 
-  it("输入框有内容时 ⌘⇧Z（重做）不被插件动作劫持；空输入框时照常触发", async () => {
+  it("聚焦文本输入框时，无论是否为空，⌘V / ⌘Z / ⌘Y / ⌘⇧Z（粘贴/撤销/重做）均优先保留给原生编辑，不被插件动作劫持", async () => {
     const log = [];
-    const wrapper = mountView(listWithShortcuts(log));
+    const wrapper = mountView(() =>
+      List({}, [
+        List.Item({
+          id: "a",
+          title: "条目 A",
+          actions: ActionPanel({}, [
+            Action({ title: "主动作", onAction: () => log.push("primary") }),
+            Action({ title: "插件粘贴", shortcut: { modifiers: ["cmd"], key: "v" }, onAction: () => log.push("cmd+v") }),
+            Action({ title: "插件撤销", shortcut: { modifiers: ["cmd"], key: "z" }, onAction: () => log.push("cmd+z") }),
+            Action({ title: "插件重做Y", shortcut: { modifiers: ["cmd"], key: "y" }, onAction: () => log.push("cmd+y") }),
+            Action({ title: "插件重做SZ", shortcut: { modifiers: ["cmd", "shift"], key: "z" }, onAction: () => log.push("cmd+shift+z") })
+          ])
+        })
+      ])
+    );
     await flush();
     const input = searchInput(wrapper);
     input.focus();
+
+    // 有内容时不劫持
     input.value = "abc";
-    press(input, "z", { metaKey: true, shiftKey: true });
+    const nonEmptySz = press(input, "z", { metaKey: true, shiftKey: true });
+    const nonEmptyV = press(input, "v", { metaKey: true });
     await flush();
     expect(log).toEqual([]);
+    expect(nonEmptySz.defaultPrevented).toBe(false);
+    expect(nonEmptyV.defaultPrevented).toBe(false);
+
+    // 空输入框时同样保护，防止空框下误触插件的 Ctrl/⌘+V/Z/Y/Shift+Z
     input.value = "";
-    press(input, "z", { metaKey: true, shiftKey: true });
+    const emptyV = press(input, "v", { metaKey: true });
+    const emptyZ = press(input, "z", { metaKey: true });
+    const emptyY = press(input, "y", { metaKey: true });
+    const emptySz = press(input, "z", { metaKey: true, shiftKey: true });
     await flush();
-    expect(log).toEqual(["cmd+shift+z"]);
+    expect(log).toEqual([]);
+    expect(emptyV.defaultPrevented).toBe(false);
+    expect(emptyZ.defaultPrevented).toBe(false);
+    expect(emptyY.defaultPrevented).toBe(false);
+    expect(emptySz.defaultPrevented).toBe(false);
   });
 
   it("输入框有内容时 ⌘⌫ 留给输入框删除文字，不触发删除动作；空输入框时照常触发", async () => {
@@ -687,5 +715,117 @@ describe("⌘K 动作面板合并列表级动作", () => {
     const titles = wrapper.vm.$.setupState.activeActions.map((act) => act.props.title);
     expect(titles.filter((title) => title === "新建便签")).toHaveLength(1);
     expect(titles).toContain("重新读取");
+  });
+});
+
+describe("「所见即所按」快捷键解析、保留键屏蔽、重复去重与 Windows IME 229 兼容", () => {
+  it("动态增减首项时显式 Ctrl+Enter 优先于第 2 顺位默认规则，底栏只展示一致绑定不误操作", async () => {
+    const log = [];
+    const wrapper = mountView(() =>
+      List({}, [
+        List.Item({
+          id: "lan-no-url",
+          title: "文件 A（未开共享）",
+          actions: ActionPanel({}, [
+            Action({ title: "恢复共享", shortcut: { modifiers: ["ctrl"], key: "return" }, onAction: () => log.push("toggle") }),
+            Action({ title: "移出列表", onAction: () => log.push("remove") })
+          ])
+        })
+      ])
+    );
+    await flush();
+    // 首项已显式占用 Ctrl+Enter 时，第 2 项不会再错误占据次动作按钮；按 Ctrl+Enter 执行的是首项而不是误移出
+    expect(wrapper.find("[data-decl-primary]").text()).toContain("恢复共享");
+    expect(wrapper.find("[data-decl-secondary]").exists()).toBe(false);
+    press(searchInput(wrapper), "Enter", { metaKey: true });
+    await flush();
+    expect(log).toEqual(["toggle"]);
+  });
+
+  it("插件误声明宿主保留快捷键（Ctrl+Shift+P / Ctrl+U / Ctrl+,）时不渲染假徽标且不触发插件动作", async () => {
+    const log = [];
+    const wrapper = mountView(() =>
+      List({}, [
+        List.Item({
+          id: "res",
+          title: "条目",
+          actions: ActionPanel({}, [
+            Action({ title: "主动作", onAction: () => log.push("primary") }),
+            Action({ title: "危险预览", shortcut: { modifiers: ["ctrl", "shift"], key: "p" }, onAction: () => log.push("plugin-csp") }),
+            Action({ title: "切换模式", shortcut: { modifiers: ["ctrl"], key: "u" }, onAction: () => log.push("plugin-cu") })
+          ])
+        })
+      ])
+    );
+    await flush();
+    // 第 2 项声明了被屏蔽的保留快捷键，不应在底栏次动作里展示 Ctrl+Shift+P 假徽标
+    const secondaryBtn = wrapper.find("[data-decl-secondary]");
+    if (secondaryBtn.exists()) {
+      expect(secondaryBtn.text()).not.toContain("P");
+    }
+    press(searchInput(wrapper), "p", { metaKey: true, shiftKey: true });
+    press(searchInput(wrapper), "u", { metaKey: true });
+    await flush();
+    expect(log).toEqual([]);
+  });
+
+  it("同面板多动作重复声明相同快捷键时，仅首位动作生效并展示徽标", async () => {
+    const log = [];
+    const wrapper = mountView(() =>
+      List({}, [
+        List.Item({
+          id: "dup",
+          title: "重复快捷键",
+          actions: ActionPanel({}, [
+            Action({ title: "主动作", onAction: () => log.push("primary") }),
+            Action({ title: "在浏览器打开", shortcut: { modifiers: ["ctrl"], key: "o" }, onAction: () => log.push("open-1") }),
+            Action({ title: "在目录中显示", shortcut: { modifiers: ["ctrl"], key: "o" }, onAction: () => log.push("open-2") })
+          ])
+        })
+      ])
+    );
+    await flush();
+    press(searchInput(wrapper), "o", { metaKey: true });
+    await flush();
+    expect(log).toEqual(["open-1"]);
+
+    // 打开动作面板核对仅首个绑定 Ctrl+O 的条目保留键帽
+    press(searchInput(wrapper), "k", { metaKey: true });
+    await flush();
+    const panelItems = wrapper.findAll(".action-panel-item");
+    const open1Item = panelItems.find((n) => n.text().includes("在浏览器打开"));
+    const open2Item = panelItems.find((n) => n.text().includes("在目录中显示"));
+    expect(open1Item.findAll("kbd")).toHaveLength(2);
+    expect(open2Item.findAll("kbd")).toHaveLength(0);
+  });
+
+  it("Windows 中文输入法未组字状态 (key='Process', keyCode=229) 下可通过 code 命中插件 Ctrl+字母快捷键，组字时不触发", async () => {
+    globalThis.__ZTOOLS_PLATFORM_OVERRIDE__ = "win32";
+    const log = [];
+    const wrapper = mountView(() =>
+      List({}, [
+        List.Item({
+          id: "ime",
+          title: "条目",
+          actions: ActionPanel({}, [
+            Action({ title: "主动作", onAction: () => log.push("primary") }),
+            Action({ title: "复制条目", shortcut: { modifiers: ["ctrl"], key: "d" }, onAction: () => log.push("ctrl+d") })
+          ])
+        })
+      ])
+    );
+    await flush();
+    const input = searchInput(wrapper);
+    input.focus();
+
+    const imeIdle = press(input, "Process", { code: "KeyD", ctrlKey: true, keyCode: 229, isComposing: false });
+    await flush();
+    expect(imeIdle.defaultPrevented).toBe(true);
+    expect(log).toEqual(["ctrl+d"]);
+
+    const imeComposing = press(input, "Process", { code: "KeyD", ctrlKey: true, keyCode: 229, isComposing: true });
+    await flush();
+    expect(imeComposing.defaultPrevented).toBe(false);
+    expect(log).toEqual(["ctrl+d"]);
   });
 });

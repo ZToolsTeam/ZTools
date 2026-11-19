@@ -260,8 +260,6 @@ async function main() {
         getOsPermission: () => 'unknown'
       },
       toggleMainWindow() {},
-      getPanelLocalApps: async () => [],
-      launchLocalApp: async () => {},
       closeConfirmationResolved() {}
     })
     const roots = await router.fileService.prepareMainProtocolRoots()

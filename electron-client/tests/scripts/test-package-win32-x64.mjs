@@ -10,7 +10,11 @@ import {
   getWindowsArtifactRoot,
   getWindowsInstallerFileName,
   getWindowsPortableZipFileName,
+  resolveWindowsNativeSidecarSources,
+  stageWindowsNativeSidecars,
+  verifyWindowsNativeSidecars,
   verifyWindowsPathAccessBrokerDependency,
+  WINDOWS_NATIVE_SIDECARS,
   WINDOWS_TARGET
 } from '../../scripts/windows-package-contract.mjs'
 import {
@@ -66,12 +70,18 @@ test('exposes x64 Windows packaging commands and removes the former ia32 distrib
 
   assert.equal(
     packageJson.scripts['package:app:win32:x64'],
-    'npm run build:native-host32 && npm run build:ztools-service && npm run build:native:win:path-access-broker && npm run build && node scripts/package.mjs'
+    'npm run build:native-host32 && npm run build:ztools-service && npm run build:native:sidecars && npm run build:native:win:path-access-broker && npm run build && node scripts/package.mjs'
   )
   assert.equal(packageJson.scripts['build:native:win:path-access-broker'], 'node scripts/build-sidecars.mjs --path-access-broker')
   const packageScript = fs.readFileSync(new URL('../../scripts/package.mjs', import.meta.url), 'utf8')
   assert.match(packageScript, /ZToolsPathAccessBroker 产物不存在/)
+  assert.match(packageScript, /stageWindowsNativeSidecars/)
   assert.doesNotMatch(packageScript, /文件引用运行时将报告 unavailable/)
+  assert.deepEqual(WINDOWS_NATIVE_SIDECARS, [
+    'ztools-indexer.exe',
+    'ztools-uiaccess.exe',
+    'ztools-uiaccess-standard.exe'
+  ])
   assert.equal(
     packageJson.scripts['package:win32:x64'],
     'npm run package:app:win32:x64 && node scripts/package-installer.mjs'
@@ -287,6 +297,46 @@ test('packages only the fixed fresh-builder x64 broker and leaves missing broker
     fs.mkdirSync(secondDestination, { recursive: true })
     writePe(source, PE_MACHINE_X86)
     assert.throws(() => stageWindowsPathAccessBroker({ clientRoot: temporaryRoot, resourcesNativeDirectory: secondDestination }), /必须为 x64 PE/)
+  } finally {
+    fs.rmSync(temporaryRoot, { recursive: true, force: true })
+  }
+})
+
+test('stages and verifies all Windows native sidecars (indexer & uiaccess) and rejects missing or wrong-arch binaries', () => {
+  const temporaryRoot = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'ztools-win-sidecars-package-')))
+  const sourceBinDir = path.join(temporaryRoot, 'out', 'native', 'win32-x64', 'bin')
+  const applicationRoot = path.join(temporaryRoot, 'package', 'ZTools-win32-x64')
+  const resourcesNative = path.join(applicationRoot, 'resources', 'native')
+  fs.mkdirSync(sourceBinDir, { recursive: true })
+  fs.mkdirSync(resourcesNative, { recursive: true })
+  try {
+    // 1. 缺少侧车时直接拒绝
+    assert.throws(() => resolveWindowsNativeSidecarSources(temporaryRoot), /build:native:sidecars/)
+
+    // 2. 全部就绪后正常暂存并验证唯一位置与 x64 架构
+    for (const sidecarName of WINDOWS_NATIVE_SIDECARS) {
+      writePe(path.join(sourceBinDir, sidecarName), PE_MACHINE_X64)
+    }
+    const staged = stageWindowsNativeSidecars({ clientRoot: temporaryRoot, resourcesNativeDirectory: resourcesNative })
+    assert.equal(staged.length, WINDOWS_NATIVE_SIDECARS.length)
+    const sidecarFilesByName = new Map(
+      WINDOWS_NATIVE_SIDECARS.map((name) => [name, [path.join(resourcesNative, name)]])
+    )
+    const verified = verifyWindowsNativeSidecars({ applicationRoot, sidecarFilesByName })
+    assert.equal(verified.length, WINDOWS_NATIVE_SIDECARS.length)
+
+    // 3. 数量缺失或位置错误均拒绝
+    const missingMap = new Map(sidecarFilesByName)
+    missingMap.set('ztools-indexer.exe', [])
+    assert.throws(() => verifyWindowsNativeSidecars({ applicationRoot, sidecarFilesByName: missingMap }), /位置或数量无效/)
+
+    const wrongPathMap = new Map(sidecarFilesByName)
+    wrongPathMap.set('ztools-indexer.exe', [path.join(applicationRoot, 'ztools-indexer.exe')])
+    assert.throws(() => verifyWindowsNativeSidecars({ applicationRoot, sidecarFilesByName: wrongPathMap }), /位置或数量无效/)
+
+    // 4. 错配 x86 PE 拒绝
+    writePe(path.join(resourcesNative, 'ztools-indexer.exe'), PE_MACHINE_X86)
+    assert.throws(() => verifyWindowsNativeSidecars({ applicationRoot, sidecarFilesByName }), /必须为 x64 PE/)
   } finally {
     fs.rmSync(temporaryRoot, { recursive: true, force: true })
   }

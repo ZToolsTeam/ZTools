@@ -145,7 +145,7 @@ test('TrayController builds Raycast-aligned menu items and dispatches actions ac
 
   const settingsItem = tray.findItem('open-settings')
   assert.equal(settingsItem.label, '偏好设置...')
-  assert.equal(settingsItem.accelerator, 'Command+I')
+  assert.equal(settingsItem.accelerator, 'Command+,')
 
   // 旧“启用超级面板”菜单项已移除
   assert.equal(tray.latestMenu.some((item) => item.id === 'toggle-super-panel'), false)
@@ -190,7 +190,7 @@ test('TrayController falls back to showMainWindow when optional callbacks are om
 
   await controller.start()
   const tray = trays[0]!
-  assert.equal(tray.findItem('open-settings').accelerator, 'Ctrl+I')
+  assert.equal(tray.findItem('open-settings').accelerator, 'Ctrl+,')
   assert.equal(tray.latestMenu.some((item) => item.id === 'relaunch'), false)
 
   // Omitted optional callbacks safely fall back to showMainWindow and do not throw out of click handlers
@@ -275,4 +275,24 @@ test('托盘菜单的唤醒快捷键与全局快捷键注册一致：设置里�
     onRequestExit: noop
   })
   assert.equal(items.find((item) => item.id === 'open-launcher')?.accelerator, 'CommandOrControl+Shift+Z')
+})
+
+test('双击修饰键（DoubleCtrl / DoubleAlt）作为全局唤醒时不设置无效原生 accelerator', async () => {
+  const { trays, deps } = createTrayHarness()
+  const controller = new TrayController({
+    icon: createFakeIcon(false),
+    wakeAccelerator: 'DoubleCtrl',
+    platform: 'win32',
+    showMainWindow: () => undefined,
+    requestExit: () => undefined,
+    deps
+  })
+  await controller.start()
+  const tray = trays[0]!
+  assert.equal(tray.findItem('open-launcher').accelerator, undefined)
+  assert.equal(tray.findItem('open-settings').accelerator, 'Ctrl+,')
+
+  controller.updateState({ wakeAccelerator: 'DoubleAlt' })
+  assert.equal(tray.findItem('open-launcher').accelerator, undefined)
+  controller.stop()
 })

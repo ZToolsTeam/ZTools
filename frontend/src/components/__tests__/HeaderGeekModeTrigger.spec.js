@@ -5,6 +5,7 @@ import HeaderGeekModeTrigger from '../HeaderGeekModeTrigger.vue'
 import * as windowMode from '@/utils/windowMode'
 import ShortcutKeys from '@/components/base/ShortcutKeys.vue'
 import { currentGlobalWakeHotkey } from '@/utils/globalWakeHotkey'
+import { TOGGLE_MODE_SHORTCUT } from '@/utils/shellShortcuts'
 
 const apiMock = vi.hoisted(() => ({ getHotkey: vi.fn().mockResolvedValue('') }))
 vi.mock('@/api/apiserver', () => apiMock)
@@ -139,7 +140,8 @@ describe('HeaderGeekModeTrigger 交互与全异常覆盖测试套件', () => {
     await vi.waitFor(() => expect(currentGlobalWakeHotkey.value).toBe('Ctrl+Shift+Z'))
     await wrapper.vm.$nextTick()
     // 按钮上显示的是「切到悬浮条」本身的快捷键，不是全局唤醒键
-    expect(wrapper.find('.launcher-trigger').findAllComponents(ShortcutKeys).map((c) => c.props('combo'))).toEqual(['Ctrl+M'])
+    expect(wrapper.find('.launcher-trigger').findAllComponents(ShortcutKeys).map((c) => c.props('combo'))).toEqual([TOGGLE_MODE_SHORTCUT])
+    expect(TOGGLE_MODE_SHORTCUT).toBe('Ctrl+U')
     // 全局唤醒键在悬停说明里，用用户实际设置的值
     await wrapper.trigger('mouseenter')
     vi.advanceTimersByTime(150)
@@ -155,7 +157,7 @@ describe('HeaderGeekModeTrigger 交互与全异常覆盖测试套件', () => {
     await vi.waitFor(() => expect(apiMock.getHotkey).toHaveBeenCalled())
     currentGlobalWakeHotkey.value = ''
     await wrapper.vm.$nextTick()
-    expect(wrapper.find('.launcher-trigger').findAllComponents(ShortcutKeys).map((c) => c.props('combo'))).toEqual(['Ctrl+M'])
+    expect(wrapper.find('.launcher-trigger').findAllComponents(ShortcutKeys).map((c) => c.props('combo'))).toEqual([TOGGLE_MODE_SHORTCUT])
     await wrapper.trigger('mouseenter')
     vi.advanceTimersByTime(150)
     await wrapper.vm.$nextTick()

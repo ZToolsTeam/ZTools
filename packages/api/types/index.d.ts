@@ -260,7 +260,6 @@ export interface SystemAPI {
   getCurrentVersion(): Promise<unknown>
   privilegedExecute(type: string, payload: AnyRecord, timeout?: number): Promise<unknown>
   reloadHotkeys(): Promise<unknown>
-  getPanelLocalApps(): Promise<unknown>
 }
 
 export type RuntimeCapabilityId =

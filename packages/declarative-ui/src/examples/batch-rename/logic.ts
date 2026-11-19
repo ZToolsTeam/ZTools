@@ -1,18 +1,20 @@
 /**
  * 批量文件重命名工作台业务逻辑与真实文件系统契约层 (BatchRename 2.0 Logic)
  * Windows 下可通过 dllplugin_call 调用原生插件 batch-rename
- * 完整支持 10 大替换/追加/序号规则、4 种智能排序、重命名同名冲突检测、真实原子改名与一键撤销回滚 (Undo)
+ * 完整支持 10 大替换/追加/序号规则、同名冲突检测、真实原子改名与一键撤销回滚 (Undo)
  */
 
 import {
   callHostTransport,
   formatBytes,
-  getRealSystemPath,
   invokeDllPluginCapability,
-  isRealElectronHost,
-  readRealDirectory,
   showRealItemInFolder
 } from '../shared/native-ipc.js'
+import {
+  type ExampleImportRules,
+  type ExampleImportedFile,
+  pickExampleFolderFiles
+} from '../shared/file-import.js'
 
 export { formatBytes } from '../shared/native-ipc.js'
 
@@ -80,6 +82,13 @@ export const DLL_PLUGIN_NAME = 'BatchRenamePlugin'
 export const FORBIDDEN_TARGET_PATTERN =
   /(?:^|[\\/])(?:Windows|System32|SysWOW64|Program Files|Program Files \(x86\)|\.\.)(?:$|[\\/])/i
 export const FORBIDDEN_REASON = '严禁对 Windows 系统核心目录执行批量重命名或包含路径穿越字符'
+
+/** 批量重命名只取所选文件夹的一级子文件 */
+export const BATCH_RENAME_IMPORT_RULES: ExampleImportRules = {
+  maxDepth: 1,
+  maxFiles: 500,
+  forbiddenPath: FORBIDDEN_TARGET_PATTERN
+}
 
 export const RENAME_RULE_PRESETS: Array<{ id: RenameRuleType; label: string; desc: string }> = [
   { id: 'number', label: '阿拉伯序号 (_01, _02)', desc: '按补零数字序列自动追加后缀 (PRD 2.3.4)' },
@@ -319,16 +328,6 @@ export function batchApplyRename(files: string[], rule: RenameRule): RenameResul
   })
 }
 
-export function getSampleFiles(): string[] {
-  return [
-    'IMG_2026_01.JPG',
-    'IMG_2026_02.JPG',
-    'IMG_2026_03.JPG',
-    'document_draft_v1.docx',
-    'my-awesome-video-clip.mp4'
-  ]
-}
-
 export interface RealFileEntry {
   name: string
   fullPath: string
@@ -338,42 +337,40 @@ export interface RealFileEntry {
   lastModifiedMs: number
 }
 
+export function toRealFileEntry(file: ExampleImportedFile): RealFileEntry {
+  return {
+    name: file.name,
+    fullPath: file.path,
+    parentDir: file.parentDir,
+    extension: file.extension,
+    sizeBytes: file.sizeBytes ?? 0,
+    lastModifiedMs: file.lastModifiedMs ?? 0
+  }
+}
+
 /**
- * 从本机真实目录 (downloads / desktop / documents / pictures / videos) 加载待重命名文件列表
+ * 通过用户显式选择文件夹（window_show_select_folder_dialog + filesystem_get_directory_contents）加载一级待重命名文件
  */
 export async function fetchRealBatchRenameFiles(
-  sourceScope: 'downloads' | 'desktop' | 'documents' | 'pictures' | 'videos' = 'downloads',
-  hostOverride?: any
-): Promise<{ directory: string; files: RealFileEntry[] }> {
-  const dirPath = await getRealSystemPath(sourceScope, hostOverride)
-  if (!dirPath) {
-    return { directory: '', files: [] }
+  hostOverride?: unknown
+): Promise<{ directory: string; files: RealFileEntry[]; canceled?: boolean; error?: string }> {
+  const res = await pickExampleFolderFiles(
+    BATCH_RENAME_IMPORT_RULES,
+    { title: '选择包含待重命名文件的文件夹（仅读取一级文件）' },
+    hostOverride
+  )
+  return {
+    directory: res.folderPath || '',
+    files: res.files.map(toRealFileEntry),
+    ...(res.canceled ? { canceled: true } : {}),
+    ...(res.error ? { error: res.error } : {})
   }
-
-  const entries = await readRealDirectory(dirPath, hostOverride)
-  const files: RealFileEntry[] = []
-  for (const entry of entries) {
-    if (entry.isDirectory) continue
-    if (!entry.name || entry.name.toLowerCase() === 'desktop.ini') continue
-    const dot = entry.name.lastIndexOf('.')
-    const ext = dot > 0 ? entry.name.slice(dot).toLowerCase() : '.file'
-    files.push({
-      name: entry.name,
-      fullPath: entry.path || `${dirPath}\\${entry.name}`,
-      parentDir: dirPath,
-      extension: ext,
-      sizeBytes: entry.sizeBytes || 0,
-      lastModifiedMs: entry.lastModifiedMs || 0
-    })
-  }
-
-  return { directory: dirPath, files: files.slice(0, 60) }
 }
 
 export async function executeRealFileRename(
   sourcePath: string,
   newFileName: string,
-  hostOverride?: any
+  hostOverride?: unknown
 ): Promise<{ ok: boolean; destinationPath?: string; error?: string }> {
   if (!sourcePath || !newFileName) {
     return { ok: false, error: '源路径或新文件名不能为空' }
@@ -399,7 +396,7 @@ export async function executeRealFileRename(
  */
 export async function undoBatchRenameHistory(
   history: RenameUndoEntry[],
-  hostOverride?: any
+  hostOverride?: unknown
 ): Promise<{ ok: boolean; restoredCount: number }> {
   let restoredCount = 0
   for (const item of history) {
@@ -413,7 +410,7 @@ export async function undoBatchRenameHistory(
   return { ok: restoredCount > 0, restoredCount }
 }
 
-export async function openRenameFileLocation(fullPath: string, hostOverride?: any): Promise<boolean> {
+export async function openRenameFileLocation(fullPath: string, hostOverride?: unknown): Promise<boolean> {
   if (!fullPath) return false
   return showRealItemInFolder(fullPath, hostOverride)
 }

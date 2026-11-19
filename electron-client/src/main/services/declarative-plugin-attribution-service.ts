@@ -125,6 +125,8 @@ export class DeclarativePluginAttributionService {
   readonly #byWindow = new Map<number, Set<string>>()
   /** 每个窗口的导航代数：读清单途中窗口刷新 / 销毁，结果作废，不登记 */
   readonly #generation = new Map<number, number>()
+  /** 撤销同时作废仍在读取清单的会话申请，避免旧权限迟到签发。 */
+  readonly #pluginGeneration = new Map<string, number>()
   readonly #windowListeners = new Map<number, () => void>()
   readonly #lastInvalidTokenWarn = new Map<number, number>()
   readonly #removeRegistryListener: () => void
@@ -163,6 +165,7 @@ export class DeclarativePluginAttributionService {
     if (!watched) throw new ZToolsError(errorCodes.callerDestroyed, '申请会话的窗口已关闭')
     this.#watchWindow(webContentsId, watched)
     const generation = this.#generation.get(webContentsId) ?? 0
+    const pluginGeneration = this.#pluginGeneration.get(requested) ?? 0
 
     let source: 'installed' | 'bundled' = 'bundled'
     let manifest = await this.manifests.readBundled(requested)
@@ -184,6 +187,9 @@ export class DeclarativePluginAttributionService {
 
     // 读清单是异步的：期间窗口刷新 / 销毁 / 服务停止则结果作废
     this.#requireRunning()
+    if ((this.#pluginGeneration.get(requested) ?? 0) !== pluginGeneration) {
+      throw new ZToolsError(errorCodes.cancelled, '插件会话申请已被撤销')
+    }
     const contents = this.registry.getWebContents(webContentsId)
     const current = this.registry.get(webContentsId)
     if (!contents || !current || current.type !== 'main' ||
@@ -284,6 +290,7 @@ export class DeclarativePluginAttributionService {
   /** 下架 / 禁用 / 卸载 / 更新：所有窗口里该插件的会话立即失效 */
   revokePlugin(pluginId: string): number {
     const key = String(pluginId || '').trim().toLowerCase()
+    this.#pluginGeneration.set(key, (this.#pluginGeneration.get(key) ?? 0) + 1)
     let removed = 0
     for (const session of [...this.#bySession.values()]) {
       if (session.pluginId.toLowerCase() !== key) continue
@@ -311,6 +318,7 @@ export class DeclarativePluginAttributionService {
     this.#bySession.clear()
     this.#byWindow.clear()
     this.#generation.clear()
+    this.#pluginGeneration.clear()
     this.#lastInvalidTokenWarn.clear()
   }
 

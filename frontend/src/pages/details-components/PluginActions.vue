@@ -65,7 +65,7 @@ const emit = defineEmits([
 
 // 「更多」菜单：快捷键（已绑定时右侧显示当前组合键）、桌面快捷方式（仅 Windows）、卸载（内置插件不能卸载）
 const moreItems = computed(() => {
-  const items = [{ key: 'hotkey', label: props.hotkeyText ? '修改快捷键' : '设置快捷键', icon: KeyboardIcon, hint: props.hotkeyText }]
+  const items = [{ key: 'hotkey', label: props.hotkeyText ? '修改快捷键' : '设置快捷键', icon: KeyboardIcon, kbd: props.hotkeyText }]
   if (props.canCreateShortcut) {
     items.push({
       key: 'shortcut',

@@ -1,5 +1,6 @@
 import { Buffer } from 'node:buffer'
 import { createHmac, timingSafeEqual } from 'node:crypto'
+import { errorCodes, ZToolsError } from '../../contracts/errors.js'
 import { SERVICE_PROTOCOL_VERSION } from '../../contracts/protocol-versions.js'
 
 export const SERVICE_PIPE_NAME = '\\\\.\\pipe\\ZToolsPrivilegedService.v1'
@@ -67,7 +68,7 @@ function hmac(secret: Buffer, parts: readonly Buffer[]): Buffer {
 
 function validateSecret(secret: Buffer): void {
   if (secret.length !== SERVICE_SECRET_BYTES || secret.every((byte) => byte === 0)) {
-    throw new Error('Service secret is invalid')
+    throw new ZToolsError(errorCodes.serviceAuthentication, 'Service secret is invalid')
   }
 }
 
@@ -81,7 +82,7 @@ function handshakeValue(
   validateSecret(secret)
   if (!Number.isSafeInteger(clientProcessId) || clientProcessId <= 0 || clientProcessId > 0xffffffff ||
       clientNonce.length !== SERVICE_NONCE_BYTES || serverNonce.length !== SERVICE_NONCE_BYTES) {
-    throw new Error('Service handshake input is invalid')
+    throw new ZToolsError(errorCodes.serviceProtocol, 'Service handshake input is invalid')
   }
   return hmac(secret, [
     domain,
@@ -143,7 +144,7 @@ export function sealServiceFrame(
   frame: ServiceFrame
 ): ServiceFrame {
   if (frame.flags !== 0 || frame.payload.length > SERVICE_MAX_PAYLOAD_BYTES - SERVICE_PROOF_BYTES) {
-    throw new Error('Service frame cannot be authenticated')
+    throw new ZToolsError(errorCodes.serviceProtocol, 'Service frame cannot be authenticated')
   }
   const payload = Buffer.from(frame.payload)
   return {
@@ -159,7 +160,7 @@ export function openServiceFrame(
   frame: ServiceFrame
 ): ServiceFrame {
   if (frame.flags !== SERVICE_AUTHENTICATED_FLAG || frame.payload.length < SERVICE_PROOF_BYTES) {
-    throw new Error('Service frame is not authenticated')
+    throw new ZToolsError(errorCodes.serviceAuthentication, 'Service frame is not authenticated')
   }
   const contentLength = frame.payload.length - SERVICE_PROOF_BYTES
   const payload = frame.payload.subarray(0, contentLength)
@@ -167,7 +168,7 @@ export function openServiceFrame(
   const expected = frameProof(sessionKey, direction, frame, payload)
   const valid = timingSafeEqual(supplied, expected)
   expected.fill(0)
-  if (!valid) throw new Error('Service frame authentication failed')
+  if (!valid) throw new ZToolsError(errorCodes.serviceAuthentication, 'Service frame authentication failed')
   return { ...frame, payload: Buffer.from(payload) }
 }
 
@@ -176,7 +177,7 @@ export function encodeServiceFrame(frame: ServiceFrame): Buffer {
       (frame.flags !== 0 && frame.flags !== SERVICE_AUTHENTICATED_FLAG) ||
       frame.requestId < 0n || frame.requestId > 0xffffffffffffffffn ||
       frame.payload.length > SERVICE_MAX_PAYLOAD_BYTES) {
-    throw new Error('Service frame is invalid')
+    throw new ZToolsError(errorCodes.serviceProtocol, 'Service frame is invalid')
   }
   const body = Buffer.allocUnsafe(SERVICE_FRAME_HEADER_BYTES + frame.payload.length)
   body.writeUInt32LE(SERVICE_MAGIC, 0)
@@ -195,7 +196,7 @@ function decodeServiceFrameBody(body: Buffer): ServiceFrame {
   if (body.length < SERVICE_FRAME_HEADER_BYTES || body.length > SERVICE_MAX_FRAME_BYTES ||
       body.readUInt32LE(0) !== SERVICE_MAGIC ||
       body.readUInt16LE(4) !== SERVICE_PROTOCOL_VERSION) {
-    throw new Error('Service frame header is invalid')
+    throw new ZToolsError(errorCodes.serviceProtocol, 'Service frame header is invalid')
   }
   const type = body.readUInt16LE(6)
   const flags = body.readUInt32LE(8)
@@ -204,7 +205,7 @@ function decodeServiceFrameBody(body: Buffer): ServiceFrame {
       (flags !== 0 && flags !== SERVICE_AUTHENTICATED_FLAG) ||
       payloadLength > SERVICE_MAX_PAYLOAD_BYTES ||
       body.length !== SERVICE_FRAME_HEADER_BYTES + payloadLength) {
-    throw new Error('Service frame metadata is invalid')
+    throw new ZToolsError(errorCodes.serviceProtocol, 'Service frame metadata is invalid')
   }
   return {
     type,
@@ -224,7 +225,7 @@ export class ServiceFrameDecoder {
     while (this.#buffer.length >= 4) {
       const bodyLength = this.#buffer.readUInt32LE(0)
       if (bodyLength < SERVICE_FRAME_HEADER_BYTES || bodyLength > SERVICE_MAX_FRAME_BYTES) {
-        throw new Error('Service frame length is invalid')
+        throw new ZToolsError(errorCodes.serviceProtocol, 'Service frame length is invalid')
       }
       if (this.#buffer.length < 4 + bodyLength) break
       frames.push(decodeServiceFrameBody(this.#buffer.subarray(4, 4 + bodyLength)))
@@ -234,6 +235,8 @@ export class ServiceFrameDecoder {
   }
 
   finish(): void {
-    if (this.#buffer.length !== 0) throw new Error('Service stream ended with a partial frame')
+    if (this.#buffer.length !== 0) {
+      throw new ZToolsError(errorCodes.serviceProtocol, 'Service stream ended with a partial frame')
+    }
   }
 }

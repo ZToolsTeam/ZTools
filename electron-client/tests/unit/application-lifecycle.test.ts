@@ -12,6 +12,8 @@ import {
 import { createMacosNativeRuntime } from '../../src/main/platform/macos/native-runtime.js'
 import { createPlatformNativeRuntime } from '../../src/main/platform/native-runtime.js'
 import { createWindowsNativeRuntime } from '../../src/main/platform/windows/native-runtime.js'
+import { errorCodes, ZToolsError } from '../../src/contracts/errors.js'
+import { NativeHostClient } from '../../src/main/native-host/native-host-client.js'
 
 function deferred<T = void>(): { promise: Promise<T>; resolve(value?: T): void } {
   let resolve!: (value: T) => void
@@ -211,6 +213,7 @@ test('Windows keeps pure JavaScript startup available when optional native clien
     assert.equal(mainWindowReady, true)
     assert.equal(runtime.nativeHost?.state, 'idle')
     assert.equal(runtime.serviceClient?.diagnostics.state, 'unavailable')
+    assert.notEqual(runtime.serviceClient?.diagnostics.lastErrorMessage, 'ZToolsService 安装密钥不存在')
     assert.equal(lifecycle.phase, 'running')
   } finally {
     await lifecycle.stop(async () => {
@@ -275,3 +278,79 @@ test('cleanup timeout still starts remaining synchronous cleanup actions', async
   )
   assert.deepEqual(calls, ['hung', 'late'])
 })
+
+for (const code of [errorCodes.serviceAuthentication, errorCodes.serviceProtocol]) {
+  for (const cancelled of [false, true]) {
+    test(`Windows runtime ${cancelled ? 'cancels' : 'propagates'} ${code} and cleans parallel native startup`, async (context) => {
+      const root = await fs.mkdtemp(path.join(os.tmpdir(), 'ztools-service-startup-'))
+      const runtime = createWindowsNativeRuntime({
+        isPackaged: false,
+        resourcesPath: path.join(root, 'resources'),
+        appPath: root,
+        pluginRoot: path.join(root, 'plugins'),
+        dataRoot: path.join(root, 'data')
+      })
+      assert(runtime.nativeHost instanceof NativeHostClient && runtime.serviceClient)
+      const lifecycle = new ApplicationLifecycle(1000, 1000)
+      const failure = new ZToolsError(code, 'injected native runtime authentication failure')
+      const serviceEntered = deferred()
+      const nativeSettled = deferred()
+      let rejectService!: (error: Error) => void
+      let nativeActive = false
+      let mainWindowCreated = false
+      let cleanupCalls = 0
+      context.mock.method(runtime.nativeHost, 'start', async (_timeout?: number, signal?: AbortSignal) => {
+        assert(signal)
+        nativeActive = true
+        await new Promise<void>((resolve) => {
+          if (signal.aborted) resolve()
+          else signal.addEventListener('abort', () => resolve(), { once: true })
+        })
+        nativeActive = false
+        nativeSettled.resolve()
+      })
+      context.mock.method(runtime.serviceClient, 'start', () => {
+        serviceEntered.resolve()
+        return new Promise<boolean>((_resolve, reject) => { rejectService = reject })
+      })
+      const nativeStop = context.mock.method(runtime.nativeHost, 'stop')
+      const cleanup = async () => {
+        cleanupCalls++
+        await runCleanupActions([
+          () => runtime.serviceClient?.stop(),
+          async () => { await runtime.nativeHost?.stop() }
+        ], 1000)
+      }
+      try {
+        const starting = lifecycle.start(async (signal) => {
+          await runtime.start(signal)
+          if (lifecycle.canContinueStartup()) mainWindowCreated = true
+        })
+        assert(starting)
+        await serviceEntered.promise
+        if (cancelled) {
+          const stopping = lifecycle.stop(cleanup)
+          rejectService(failure)
+          await Promise.all([starting, stopping])
+          assert.equal(lifecycle.phase, 'stopped')
+        } else {
+          const rejected = assert.rejects(starting, (error: unknown) => error === failure)
+          rejectService(failure)
+          await rejected
+          assert.equal(lifecycle.phase, 'failed')
+          await lifecycle.stop(cleanup)
+        }
+        await nativeSettled.promise
+        assert.equal(mainWindowCreated, false)
+        assert.equal(nativeActive, false)
+        assert.equal(runtime.serviceClient.diagnostics.state, 'closed')
+        assert.equal(nativeStop.mock.callCount(), 1)
+        assert.equal(cleanupCalls, 1)
+      } finally {
+        await lifecycle.stop(cleanup)
+        context.mock.restoreAll()
+        await fs.rm(root, { recursive: true, force: true })
+      }
+    })
+  }
+}

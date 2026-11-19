@@ -98,6 +98,36 @@ async function readElectronChunks(transport, method, baseParams, chunkSize, onPr
   return mergeByteChunks(chunks, totalSize)
 }
 
+/**
+ * 通过旧版 CEF 同步 V8 分块接口按批读取字节流并合并
+ */
+async function readLegacyArrayBufferChunks(path, fileSize, chunkSize, onProgress) {
+  const chunks = []
+  let offset = 0
+
+  while (offset < fileSize) {
+    const currentChunkSize = Math.min(chunkSize, fileSize - offset)
+    const chunkBuffer = window._readFileArrayBufferChunk(
+      path,
+      offset,
+      currentChunkSize
+    )
+    const chunk = new Uint8Array(chunkBuffer)
+    chunks.push(chunk)
+    offset += currentChunkSize
+
+    if (onProgress) {
+      onProgress(offset, fileSize)
+    }
+
+    // 让出控制权，避免阻塞主线程
+    await new Promise((resolve) => setTimeout(resolve, 0))
+  }
+
+  const totalLength = chunks.reduce((sum, item) => sum + item.byteLength, 0)
+  return mergeByteChunks(chunks, totalLength)
+}
+
 async function writeElectronChunks(
   transport,
   methods,
@@ -229,39 +259,12 @@ class FileSystemAPI {
         return decoded
       }
 
-      // 大文件分块读取
-      const chunks = []
-      let offset = 0
-      const defaultChunkSize = 2 * 1024 * 1024 // 2MB per chunk
-
-      while (offset < fileSize) {
-        const currentChunkSize = Math.min(defaultChunkSize, fileSize - offset)
-        const chunkBuffer = window._readFileArrayBufferChunk(
-          path,
-          offset,
-          currentChunkSize
-        )
-        const chunk = new Uint8Array(chunkBuffer)
-        chunks.push(chunk)
-        offset += currentChunkSize
-
-        // 报告进度
-        if (onProgress) {
-          onProgress(offset, fileSize)
-        }
-
-        // 让出控制权，避免阻塞主线程
-        await new Promise((resolve) => setTimeout(resolve, 0))
-      }
-
-      // 合并所有块
-      const totalLength = chunks.reduce((sum, chunk) => sum + chunk.length, 0)
-      const merged = new Uint8Array(totalLength)
-      let position = 0
-      for (const chunk of chunks) {
-        merged.set(chunk, position)
-        position += chunk.length
-      }
+      const merged = await readLegacyArrayBufferChunks(
+        path,
+        fileSize,
+        2 * 1024 * 1024,
+        onProgress
+      )
 
       // 解码为 UTF-8 文本
       const decoded = new TextDecoder('utf-8', { fatal: true }).decode(
@@ -313,41 +316,12 @@ class FileSystemAPI {
         return new Uint8Array(arrayBuffer)
       }
 
-      // 大文件分块读取
-      const chunks = []
-      let offset = 0
-      const defaultChunkSize = 5 * 1024 * 1024 // 2MB per chunk
-
-      while (offset < fileSize) {
-        const currentChunkSize = Math.min(defaultChunkSize, fileSize - offset)
-        const chunkBuffer = window._readFileArrayBufferChunk(
-          path,
-          offset,
-          currentChunkSize
-        )
-        const chunk = new Uint8Array(chunkBuffer)
-        chunks.push(chunk)
-        offset += currentChunkSize
-
-        // 报告进度
-        if (onProgress) {
-          onProgress(offset, fileSize)
-        }
-
-        // 让出控制权，避免阻塞主线程
-        await new Promise((resolve) => setTimeout(resolve, 0))
-      }
-
-      // 合并所有块
-      const totalLength = chunks.reduce((sum, chunk) => sum + chunk.length, 0)
-      const merged = new Uint8Array(totalLength)
-      let position = 0
-      for (const chunk of chunks) {
-        merged.set(chunk, position)
-        position += chunk.length
-      }
-
-      return merged
+      return await readLegacyArrayBufferChunks(
+        path,
+        fileSize,
+        5 * 1024 * 1024,
+        onProgress
+      )
     } catch (error) {
       throw fileOperationError('Read file as binary failed', error)
     }
@@ -468,7 +442,7 @@ class FileSystemAPI {
 
   /**
    * 获取当前插件的 Cache 基础目录
-   * 形如: bin\Cache\<pluginId>
+   * 形如: <cacheRoot>\<pluginId>
    * @returns {Promise<string>}
    * @private
    */
@@ -513,7 +487,7 @@ class FileSystemAPI {
 
   /**
    * 写入当前插件的 Cache 文件
-   * 最终路径: bin\Cache\<pluginId>\relativePath
+   * 最终路径: <cacheRoot>\<pluginId>\relativePath
    * @param {string} relativePath - 相对于插件 Cache 根目录的路径
    * @param {string|ArrayBuffer|Uint8Array} content - 文件内容
    * @param {object} options - 透传给 writeFile 的参数

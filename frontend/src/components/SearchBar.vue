@@ -4,7 +4,7 @@ import { ref, watch, onMounted, onUnmounted, computed, nextTick } from 'vue'
 import ShortcutKeys from '@/components/base/ShortcutKeys.vue'
 import { useUIStore } from '@/stores/ui'
 import { usePluginsStore } from '@/stores/plugins'
-import { useCommandSearch } from '@/composables/useCommandSearch'
+import { useCommandSearch, canPinItem } from '@/composables/useCommandSearch'
 import { useToast } from '@/composables/useToast'
 import { useKeymap, KEYMAP_SCOPES } from '@/utils/keymap'
 import { switchWindowMode, WINDOW_MODES } from '@/utils/windowMode'
@@ -32,6 +32,7 @@ const isDropdownOpen = ref(false)
 const activeIndex = ref(0)
 let blurCloseTimer = null
 
+const commandSearch = useCommandSearch({ enableFileSearch: true })
 const {
   query: searchQuery,
   matchedPlugins,
@@ -41,7 +42,9 @@ const {
   recordUsage,
   prepareItemForLaunch,
   highlightParts
-} = useCommandSearch({ enableFileSearch: true })
+} = commandSearch
+const setItemPinned = commandSearch.setItemPinned
+  || ((item, pinned) => (Boolean(pinned) !== Boolean(item?.pinned) ? commandSearch.toggleItemPin?.(item) : Promise.resolve({ success: true, pinned: Boolean(pinned) })))
 
 // 候选命令列表：最多前 8 条（插件命令、本地应用与文件），最后一条固定是「在插件市场搜索」
 const candidateCommands = computed(() => {
@@ -161,6 +164,22 @@ const focusInput = () => {
   uiStore.focusSearch()
 }
 
+async function handleToggleCandidatePin(item) {
+  if (!canPinItem(item)) return
+  const nextPinned = !item.pinned
+  const res = await setItemPinned(item, nextPinned)
+  if (res?.success) {
+    const name = item.name || item.title || '该条目'
+    toastSuccess?.(
+      res.pinned
+        ? `已固定「${name}」到悬浮条首屏`
+        : `已取消固定「${name}」`
+    )
+  } else if (res?.error) {
+    toastError?.(res.error)
+  }
+}
+
 async function executeCandidate(item) {
   if (!item) return
   if (item.type === 'market-search') {
@@ -244,6 +263,13 @@ useKeymap(KEYMAP_SCOPES.SEARCH, {
   'End': () => {
     if (!isFocused.value || !isDropdownOpen.value || candidateCommands.value.length === 0) return false
     activeIndex.value = candidateCommands.value.length - 1
+    return true
+  },
+  'Ctrl+P': () => {
+    if (!isFocused.value || !isDropdownOpen.value || candidateCommands.value.length === 0) return false
+    const item = candidateCommands.value[activeIndex.value]
+    if (!canPinItem(item)) return false
+    void handleToggleCandidatePin(item)
     return true
   },
   'Enter': () => {

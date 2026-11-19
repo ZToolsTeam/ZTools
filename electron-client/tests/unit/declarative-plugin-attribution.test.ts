@@ -101,7 +101,10 @@ interface Harness {
   dispose(): Promise<void>
 }
 
-async function createHarness(options: { maxSessionsPerWindow?: number } = {}): Promise<Harness> {
+async function createHarness(options: {
+  maxSessionsPerWindow?: number
+  beforeManifestReturns?: (pluginId: string) => Promise<void>
+} = {}): Promise<Harness> {
   const dataRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'ztools-attribution-'))
   const webRoot = path.join(dataRoot, 'web')
   await fs.mkdir(path.join(webRoot, 'bundled-plugins'), { recursive: true })
@@ -124,9 +127,17 @@ async function createHarness(options: { maxSessionsPerWindow?: number } = {}): P
   const plugins = new PluginInstallService(dataRoot, { publish() {} } as never, { state })
   const registry = new WindowRegistry()
   const logs = silentLog()
+  const readBundled = createBundledManifestReader(webRoot)
   const attribution = new DeclarativePluginAttributionService(registry, {
-    readBundled: createBundledManifestReader(webRoot),
-    readInstalled: pluginId => plugins.withPluginManifest(pluginId, async manifest => manifest),
+    readBundled: async pluginId => {
+      const manifest = await readBundled(pluginId)
+      if (manifest !== undefined) await options.beforeManifestReturns?.(pluginId)
+      return manifest
+    },
+    readInstalled: pluginId => plugins.withPluginManifest(pluginId, async manifest => {
+      await options.beforeManifestReturns?.(pluginId)
+      return manifest
+    }),
     isRevoked: pluginId => plugins.isRevoked(pluginId)
   }, { log: logs.log, ...(options.maxSessionsPerWindow ? { maxSessionsPerWindow: options.maxSessionsPerWindow } : {}) })
   const database = new DatabaseService(path.join(dataRoot, 'LevelDB'), new TestCredentialProtection())
@@ -323,6 +334,38 @@ test('读清单途中窗口刷新或销毁：结果作废，不登记半个会�
     await assert.rejects(h.attribution.open(h.mainCaller, { pluginId: 'google-auth' }), codeOf(errorCodes.appStopping))
   } finally {
     await h.dispose()
+  }
+})
+
+test('清单读取期间撤销会话：内置与已安装插件均不迟到签发，其他插件及后续新申请正常', async () => {
+  for (const [pluginId, source] of [['google-auth', 'installed'], ['json-format', 'bundled']] as const) {
+    let entered!: () => void
+    let release!: () => void
+    let blocked = true
+    const reading = new Promise<void>(resolve => { entered = resolve })
+    const barrier = new Promise<void>(resolve => { release = resolve })
+    const h = await createHarness({ beforeManifestReturns: async id => {
+      if (id !== pluginId || !blocked) return
+      entered()
+      await barrier
+    } })
+    try {
+      const opening = h.attribution.open(h.mainCaller, { pluginId })
+      const rejected = assert.rejects(opening, codeOf(errorCodes.cancelled))
+      await reading
+      assert.equal(h.attribution.revokePlugin(pluginId.toUpperCase()), 0, '没有已登记会话也必须撤销在途申请')
+      const other = await h.attribution.open(h.mainCaller, { pluginId: 'kill-process' })
+      blocked = false
+      release()
+      await rejected
+      assert.equal(h.attribution.snapshot().length, 1)
+      assert.equal(h.attribution.resolve(1, other.data.token)?.pluginId, 'kill-process')
+      const fresh = await h.attribution.open(h.mainCaller, { pluginId })
+      assert.equal(h.attribution.resolve(1, fresh.data.token)?.source, source)
+    } finally {
+      release()
+      await h.dispose()
+    }
   }
 })
 

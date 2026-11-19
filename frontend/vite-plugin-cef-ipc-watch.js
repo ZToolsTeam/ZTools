@@ -1,6 +1,6 @@
 // Vite 插件: 监听 cef-ipc 源文件变化并自动重新构建
 import { spawn } from 'child_process'
-import { watch, existsSync, copyFileSync, mkdirSync } from 'fs'
+import { watch, existsSync } from 'fs'
 import { resolve } from 'path'
 
 export default function cefIpcWatch() {
@@ -47,40 +47,6 @@ export default function cefIpcWatch() {
           isBuilding = false
           if (code === 0) {
             console.log('✅ cef-ipc 重新构建完成\n')
-
-            // 复制 SDK 文件到多个目录
-            const sdkFiles = ['ztools-api.js', 'plugin-sdk.js']
-
-            sdkFiles.forEach((filename) => {
-              const sourceFile = resolve(__dirname, `public/sdk/${filename}`)
-
-              if (existsSync(sourceFile)) {
-                const copyTargets = [
-                  // bin/WebResources/sdk 目录
-                  {
-                    path: resolve(
-                      __dirname,
-                      `../bin/WebResources/sdk/${filename}`
-                    ),
-                    desc: 'bin/WebResources/sdk'
-                  }
-                ]
-
-                copyTargets.forEach((target) => {
-                  try {
-                    mkdirSync(resolve(target.path, '..'), { recursive: true })
-                    copyFileSync(sourceFile, target.path)
-                    console.log(`✅ 已同步 ${filename} 到 ${target.desc}`)
-                  } catch (err) {
-                    console.warn(
-                      `⚠️ 复制 ${filename} 到 ${target.desc} 失败:`,
-                      err.message
-                    )
-                  }
-                })
-              }
-            })
-            console.log('')
 
             // 触发 Vite HMR 重新加载
             if (server.ws) {

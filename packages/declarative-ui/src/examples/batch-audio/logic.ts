@@ -1,16 +1,23 @@
 /**
  * 批量音频转换、响度标准化与音效工坊业务逻辑层 (BatchAudio 2.0 Logic)
  * 提供 12 大核心音频批处理能力，Windows 下通过 dllplugin_call 调用原生插件 batch-audio
- * 真实扫描本机 Music / Downloads / Desktop 目录下的音频与媒体文件，对接 BatchAudioPlugin 与 FFmpeg 声学滤镜链
  */
 
 import {
   formatBytes,
-  getRealSystemPath,
-  invokeDllPluginCapability,
-  scanRealDirectoryTree,
   showRealItemInFolder
 } from '../shared/native-ipc.js'
+import {
+  cloneCapabilityItems,
+  filterCapabilityList,
+  invokeValidatedDllCapability,
+  validateCapabilityArgs
+} from '../shared/capability-helpers.js'
+import {
+  type ExampleImportRules,
+  type ExampleImportedFile,
+  pickExampleFolderFiles
+} from '../shared/file-import.js'
 
 export { formatBytes } from '../shared/native-ipc.js'
 
@@ -45,6 +52,17 @@ export interface RealAudioFileItem {
 export const DLL_PLUGIN_NAME = 'BatchAudioPlugin'
 export const FORBIDDEN_TARGET_PATTERN = new RegExp('\\\\Windows\\\\System32|\\.\\.\\\\|\\.\\./', 'i')
 export const FORBIDDEN_REASON = '音频批处理输出路径不可指向系统受保护目录或包含路径穿越'
+
+export const BATCH_AUDIO_EXTENSIONS = ['.mp3', '.flac', '.wav', '.aac', '.m4a', '.ogg', '.wma', '.opus', '.aiff'] as const
+export const BATCH_AUDIO_SUPPORTED_TEXT = '.mp3 / .flac / .wav / .aac / .m4a / .ogg / .wma / .opus / .aiff'
+
+export const BATCH_AUDIO_IMPORT_RULES: ExampleImportRules = {
+  extensions: BATCH_AUDIO_EXTENSIONS,
+  maxDepth: 5,
+  maxFiles: 500,
+  excludeFile: name => /_(?:ztools|out)\.[a-z0-9]+$/i.test(name),
+  forbiddenPath: FORBIDDEN_TARGET_PATTERN
+}
 
 /**
  * 12 大核心音频处理模式
@@ -161,142 +179,68 @@ export const AUDIO_WORKSHOP_MODES: CapabilityActionItem[] = [
 ]
 
 export function getCapabilityItems(): CapabilityActionItem[] {
-  return AUDIO_WORKSHOP_MODES.map(item => ({
-    ...item,
-    params: { ...item.params }
-  }))
+  return cloneCapabilityItems(AUDIO_WORKSHOP_MODES)
 }
 
 export function filterCapabilityItems(items: CapabilityActionItem[], query: string): CapabilityActionItem[] {
-  if (!Array.isArray(items)) return []
-  const q = typeof query === 'string' ? query.trim().toLowerCase() : ''
-  if (!q) return items
-  return items.filter(item => {
-    if (!item || typeof item.title !== 'string') return false
-    return (
-      item.title.toLowerCase().includes(q) ||
-      item.subtitle.toLowerCase().includes(q) ||
-      item.tag.toLowerCase().includes(q) ||
-      item.method.toLowerCase().includes(q)
-    )
-  })
+  return filterCapabilityList(items, query)
 }
 
 export function validateInvocationPayload(method: string, params: unknown): { valid: boolean; error?: string } {
-  if (typeof method !== 'string' || method.trim().length === 0) {
-    return { valid: false, error: 'INVALID_METHOD: 调用方法名不能为空' }
-  }
-  if (method.length > 128 || !/^[A-Za-z0-9_]+$/.test(method.trim())) {
-    return { valid: false, error: 'INVALID_METHOD_FORMAT: 方法名包含非法字符或超长' }
-  }
-  if (params === null || params === undefined || typeof params !== 'object' || Array.isArray(params)) {
-    return { valid: false, error: 'INVALID_PARAMS: 参数必须为非空对象' }
-  }
-
-  const record = params as Record<string, unknown>
-  for (const [key, val] of Object.entries(record)) {
-    if (typeof val === 'string') {
-      if (val.length > 4096) {
-        return { valid: false, error: `PARAM_TOO_LONG: 参数 ${key} 超过最大长度限制` }
-      }
-      if (FORBIDDEN_TARGET_PATTERN.test(val)) {
-        return { valid: false, error: `SECURITY_INTERCEPTED: ${FORBIDDEN_REASON}` }
-      }
-    } else if (typeof val === 'number') {
-      if (!Number.isFinite(val) || val < -1000 || val > 100_000_000) {
-        return { valid: false, error: `PARAM_OUT_OF_RANGE: 数值参数 ${key} 越界或非有限数` }
-      }
-    }
-  }
-
-  return { valid: true }
+  return validateCapabilityArgs(method, params, FORBIDDEN_TARGET_PATTERN, FORBIDDEN_REASON)
 }
 
 export async function invokeNativeCapability(
   method: string,
   params: Record<string, unknown>,
-  hostBridge?: any
+  hostBridge?: unknown
 ): Promise<NativeInvocationResult> {
-  const check = validateInvocationPayload(method, params)
-  if (!check.valid) {
-    throw new Error(check.error || '参数校验失败')
-  }
-  const res = await invokeDllPluginCapability(DLL_PLUGIN_NAME, method, params, hostBridge)
-  return {
-    ok: res.ok,
-    pluginName: DLL_PLUGIN_NAME,
-    method: method.trim(),
-    data: res.data ?? undefined,
-    error: res.error,
-    fromFallback: res.fromFallback
-  }
+  return invokeValidatedDllCapability(DLL_PLUGIN_NAME, method, params, FORBIDDEN_TARGET_PATTERN, FORBIDDEN_REASON, hostBridge)
 }
-
-const AUDIO_EXT_REGEX = /\.(?:mp3|flac|wav|aac|m4a|ogg|wma|opus|aiff)$/i
 
 export type AudioWorkspaceSnapshot = RealAudioFileItem[] & {
   scannedDirs: string[]
   files: RealAudioFileItem[]
   items: RealAudioFileItem[]
   presets: CapabilityActionItem[]
+  error?: string
+}
+
+export function toRealAudioFileItem(file: ExampleImportedFile, index = 0): RealAudioFileItem {
+  return {
+    id: `aud-${index}-${file.path}`,
+    name: file.name,
+    path: file.path,
+    parentDir: file.parentDir,
+    extension: file.extension || '.mp3',
+    sizeBytes: file.sizeBytes ?? 0
+  }
 }
 
 /**
- * 扫描本机 Music / Downloads / Desktop 目录下的真实音频文件
- * 严禁回退扫描非音频文件充当音频，严禁在真实宿主下拼接 INITIAL_SAMPLE_AUDIOS
+ * 通过用户显式选择文件夹（window_show_select_folder_dialog + filesystem_get_directory_contents）导入音频工作区
  */
-export async function fetchRealAudioWorkspace(hostOverride?: any): Promise<AudioWorkspaceSnapshot> {
-  const [musicDir, downloadsDir, desktopDir] = await Promise.all([
-    getRealSystemPath('music', hostOverride),
-    getRealSystemPath('downloads', hostOverride),
-    getRealSystemPath('desktop', hostOverride)
-  ])
-
-  const scannedDirs = [musicDir, downloadsDir, desktopDir].filter(Boolean)
-  const files: RealAudioFileItem[] = []
-  const seenPaths = new Set<string>()
-
-  for (const dir of scannedDirs) {
-    const audioScan = await scanRealDirectoryTree(dir, {
-      maxDepth: 2,
-      maxFiles: 250,
-      collectTopN: 40,
-      filterExt: AUDIO_EXT_REGEX,
-      hostOverride
-    })
-    for (const f of audioScan.files) {
-      if (f.sizeBytes <= 0) continue
-      if (!AUDIO_EXT_REGEX.test(f.name)) continue
-      const normPath = f.path.toLowerCase()
-      if (seenPaths.has(normPath)) continue
-      seenPaths.add(normPath)
-      const dot = f.name.lastIndexOf('.')
-      const ext = dot > 0 ? f.name.slice(dot).toLowerCase() : '.mp3'
-      files.push({
-        id: `aud-${files.length}-${f.path}`,
-        name: f.name,
-        path: f.path,
-        parentDir: dir,
-        extension: ext,
-        sizeBytes: f.sizeBytes
-      })
-    }
-  }
-
-  files.sort((a, b) => b.sizeBytes - a.sizeBytes)
+export async function fetchRealAudioWorkspace(hostOverride?: unknown): Promise<AudioWorkspaceSnapshot> {
   const presets = getCapabilityItems()
-
+  const res = await pickExampleFolderFiles(
+    BATCH_AUDIO_IMPORT_RULES,
+    { title: '选择包含音频文件的文件夹' },
+    hostOverride
+  )
+  const files = res.files.map((f, idx) => toRealAudioFileItem(f, idx)).sort((a, b) => b.sizeBytes - a.sizeBytes)
+  const scannedDirs = res.folderPath ? [res.folderPath] : []
   return Object.assign([...files], {
     scannedDirs,
     files,
     items: files,
-    presets
+    presets,
+    ...(res.error ? { error: res.error } : {})
   })
 }
 
 export const scanLocalAudioQueue = fetchRealAudioWorkspace
 
-export async function openAudioFileLocation(fullPath: string, hostOverride?: any): Promise<boolean> {
+export async function openAudioFileLocation(fullPath: string, hostOverride?: unknown): Promise<boolean> {
   if (!fullPath) return false
   return showRealItemInFolder(fullPath, hostOverride)
 }

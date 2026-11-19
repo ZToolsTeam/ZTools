@@ -128,6 +128,14 @@ test.describe('35 款本地原生插件全集 —— 三大标准布局范式与
       { id: '25-batch-rename', fn: BatchRenameCommand }
     ]
 
+    const emptyInitLayout2 = new Set([
+      '20-shredder',
+      '22-multi-download',
+      '23-video-downloader',
+      '24-sqlite-plugin',
+      '25-batch-rename'
+    ])
+
     for (const spec of layout2Specs) {
       const root = renderDeclarativeRoot(spec.fn)
       const rendered = root.getLatest()
@@ -137,7 +145,12 @@ test.describe('35 款本地原生插件全集 —— 三大标准布局范式与
       assert.equal(rendered.type, 'List', `${spec.id} 根节点应为 List`)
       assert.ok(subList, `${spec.id} 必须包含右栏 subList 描述符`)
       assert.ok(Array.isArray(subList.items), `${spec.id} subList.items 必须为数组`)
-      assert.ok(subList.items.length > 0, `${spec.id} subList.items 首屏应有明细数据`)
+      if (emptyInitLayout2.has(spec.id)) {
+        assert.equal(subList.items.length, 0, `${spec.id} 挂载后初始队列必须为空`)
+        assert.ok(Array.isArray(fb?.actions) && fb.actions.length <= 2, `${spec.id} 顶栏按钮最多 2 个`)
+      } else {
+        assert.ok(subList.items.length > 0, `${spec.id} subList.items 首屏应有明细数据`)
+      }
       assert.ok(
         fb?.summaryText && fb.summaryText.length > 0,
         `${spec.id} 必须包含单行 filterBar.summaryText`
@@ -164,6 +177,15 @@ test.describe('35 款本地原生插件全集 —— 三大标准布局范式与
       // 文本对比（file-compare）已由客户端内置插件提供，这里不再保留重复实现
     ]
 
+    const emptyInitLayout3 = new Set([
+      '26-batch-video',
+      '27-batch-audio',
+      '28-pdf',
+      '29-ai-image',
+      '30-ai-video',
+      '31-ocr'
+    ])
+
     for (const spec of layout3Specs) {
       const root = renderDeclarativeRoot(spec.fn)
       const rendered = root.getLatest()
@@ -179,10 +201,13 @@ test.describe('35 款本地原生插件全集 —— 三大标准布局范式与
       )
       assert.ok(wb.previewCard, `${spec.id} workbenchPanel 应包含 previewCard 预估摘要卡`)
       assert.ok(subList, `${spec.id} 必须包含右栏 subList 任务队列描述符`)
-      assert.ok(
-        Array.isArray(subList.items) && subList.items.length > 0,
-        `${spec.id} subList.items 应包含待处理任务项`
-      )
+      assert.ok(Array.isArray(subList.items), `${spec.id} subList.items 必须为数组`)
+      if (emptyInitLayout3.has(spec.id)) {
+        assert.equal(subList.items.length, 0, `${spec.id} 挂载后初始队列必须为空`)
+        assert.ok(Array.isArray(fb?.actions) && fb.actions.length <= 2, `${spec.id} 顶栏按钮最多 2 个`)
+      } else {
+        assert.ok(subList.items.length > 0, `${spec.id} subList.items 应包含待处理任务项`)
+      }
       assert.equal(
         COLORFUL_EMOJI_RE.test(fb?.summaryText || ''),
         false,
@@ -204,13 +229,23 @@ test.describe('35 款本地原生插件全集 —— 三大标准布局范式与
     const unknownBatch = await batchExecuteNetworkRepairs(['non-existent-repair-id'])
     assert.equal(unknownBatch.repairedCount, 0)
 
+    const makeFolderHost = (folderPath, entries) => ({
+      transport: {
+        async call(method) {
+          if (method === 'window_show_select_folder_dialog') return { canceled: false, folderPath }
+          if (method === 'filesystem_get_directory_contents') return { success: true, files: entries }
+          return {}
+        }
+      }
+    })
+
     // 4.2 ContextMenu & WechatMulti & LanShare
     const ctxSnap = await fetchContextMenuEntries()
     assert.ok(ctxSnap.entries.length > 0)
     const wxSnap = await fetchWechatInstances()
     assert.ok(wxSnap.items.length > 0)
     const lanSnap = await fetchLanShareSnapshot()
-    assert.ok(lanSnap.items.length > 0)
+    assert.equal(lanSnap.items.length, 0, '冷启动未选文件且无服务运行时 lan-share 应为空队列')
     const svgUri = generateQrCodeSvgDataUri('http://192.168.1.100:18580/share/test')
     assert.ok(svgUri.startsWith('data:image/svg+xml;utf8,'))
 
@@ -225,9 +260,11 @@ test.describe('35 款本地原生插件全集 —— 三大标准布局范式与
     const emptyMove = await executeDirectoryMove([], 'D:\\ZToolsMoved')
     assert.equal(emptyMove.ok, false, '空列表搬迁应返回失败提示')
 
-    // 4.4 Shredder: 拦截系统核心文件粉碎
-    const shredSnap = await fetchShredCandidates()
-    assert.ok(shredSnap.candidates.length > 0)
+    // 4.4 Shredder: 显式导入与系统核心文件粉碎拦截
+    const shredSnap = await fetchShredCandidates(
+      makeFolderHost('D:\\ShredBox', [{ name: 'old.tmp', size: 2048, isDirectory: false }])
+    )
+    assert.equal(shredSnap.candidates.length, 1)
     const protectedShred = await executeSecureShred(
       [{ id: 'ntos', name: 'ntoskrnl.exe', path: 'C:\\Windows\\System32\\ntoskrnl.exe', sizeBytes: 1024, isSystemLocked: true }],
       'dod_3pass'
@@ -246,23 +283,29 @@ test.describe('35 款本地原生插件全集 —— 三大标准布局范式与
     assert.equal(emptyBackup.ok, false)
 
     const sqliteWs = await fetchSqliteWorkspace()
-    assert.ok(sqliteWs.tables.length > 0)
+    assert.equal(sqliteWs.tables.length, 0, '未打开指定数据库时默认为空工作区')
     const unsafeSql = await executeSqliteQuery('main.db', 'DROP DATABASE main;')
     assert.equal(unsafeSql.ok, false, '破坏性 DROP DATABASE SQL 必须被安全沙箱拦截')
 
-    // 4.6 AI Image / AI Video / OCR / Record / File Compare 空队列与正常队列边界
-    const aiImgWs = await fetchAiImageWorkspace()
-    assert.ok(aiImgWs.files.length > 0)
+    // 4.6 AI Image / AI Video / OCR / Record / File Compare 显式文件夹导入与空队列边界
+    const aiImgWs = await fetchAiImageWorkspace(
+      makeFolderHost('D:\\Imgs', [{ name: 'sample.png', size: 120000, isDirectory: false }])
+    )
+    assert.equal(aiImgWs.files.length, 1)
     const emptyAiImg = await runAiImageBatch([], 'realesrgan_x4', '2x', 'png')
     assert.equal(emptyAiImg.processedCount, 0)
 
-    const aiVidWs = await fetchAiVideoWorkspace()
-    assert.ok(aiVidWs.files.length > 0)
+    const aiVidWs = await fetchAiVideoWorkspace(
+      makeFolderHost('D:\\Clips', [{ name: 'clip.mp4', size: 8000000, isDirectory: false }])
+    )
+    assert.equal(aiVidWs.files.length, 1)
     const emptyAiVid = await runAiVideoBatch([], 'rife_v46', '60fps', '4k_2160p')
     assert.equal(emptyAiVid.processedCount, 0)
 
-    const ocrWs = await fetchOcrWorkspace()
-    assert.ok(ocrWs.items.length > 0)
+    const ocrWs = await fetchOcrWorkspace(
+      makeFolderHost('D:\\Docs', [{ name: 'page.png', size: 48000, isDirectory: false }])
+    )
+    assert.equal(ocrWs.items.length, 1)
     const emptyOcr = await executeBatchOcr([], { languageModelId: 'zh_en_mix', layoutStrategy: 'natural_paragraph', postAction: 'copy_clipboard', filterStampNoise: true })
     assert.equal(emptyOcr.recognizedCount, 0)
     assert.equal(emptyOcr.ok, false)

@@ -5,6 +5,8 @@ import {
   formatHotkeyForPlatform,
   getHotkeyHostCapabilities,
   getHotkeyRuleDescription,
+  getShellReserveWarning,
+  isSafeShortcutKeysCombo,
   parseSupportedHotkeyEvent,
   resetHotkeyRecorderState
 } from '../hotkeyRecorder'
@@ -300,7 +302,7 @@ describe('parseSupportedHotkeyEvent', () => {
 })
 
 describe('getHotkeyHostCapabilities', () => {
-  it('identifies the Electron host and disables legacy double modifier shortcuts', async () => {
+  it('identifies the Electron host capabilities and preserves Windows/macOS platform limits', async () => {
     const previousZtools = window.ztools
     try {
       window.ztools = {
@@ -310,18 +312,109 @@ describe('getHotkeyHostCapabilities', () => {
       await expect(getHotkeyHostCapabilities()).resolves.toMatchObject({
         platform: 'windows',
         hostEnvironment: 'unknown',
-        supportsDoubleModifierHotkeys: false
+        supportsDoubleModifierHotkeys: false,
+        supportsMouseTriggers: false
       })
 
       window.ztools.isElectron = () => true
       await expect(getHotkeyHostCapabilities()).resolves.toMatchObject({
         platform: 'windows',
         hostEnvironment: 'electron',
-        supportsDoubleModifierHotkeys: false
+        supportsDoubleModifierHotkeys: false,
+        supportsMouseTriggers: false
+      })
+
+      window.ztools.sys.getInfo.mockResolvedValue({
+        platform: 'windows',
+        supportsDoubleModifierHotkeys: true,
+        supportsMouseTriggers: true
+      })
+      await expect(getHotkeyHostCapabilities()).resolves.toMatchObject({
+        platform: 'windows',
+        hostEnvironment: 'electron',
+        supportsDoubleModifierHotkeys: true,
+        supportsMouseTriggers: true
+      })
+
+      // macOS 即使能力字段存在也不开启 Windows 专属双击修饰键与鼠标钩子能力
+      window.ztools.sys.getInfo.mockResolvedValue({
+        platform: 'macos',
+        supportsDoubleModifierHotkeys: true,
+        supportsMouseTriggers: true
+      })
+      await expect(getHotkeyHostCapabilities()).resolves.toMatchObject({
+        platform: 'macos',
+        hostEnvironment: 'electron',
+        supportsDoubleModifierHotkeys: false,
+        supportsMouseTriggers: false
       })
     } finally {
       window.ztools = previousZtools
     }
+  })
+
+  it('supports synthetic DoubleCtrl/DoubleAlt/DoubleShift events, system blacklists, shell warnings and safe key cap checks', () => {
+    resetHotkeyRecorderState()
+
+    // 合成双击修饰键事件在允许双按的宿主直接识别为 valid
+    for (const key of ['DoubleCtrl', 'DoubleAlt', 'DoubleShift']) {
+      const parsed = parseSupportedHotkeyEvent(
+        createEvent({ key }),
+        { platform: 'windows', allowDoubleTap: true }
+      )
+      expect(parsed.status).toBe('valid')
+      expect(parsed.hotkey).toBe(key)
+    }
+
+    // 未开启双按支持或 macOS 下拒绝合成双击修饰键
+    expect(
+      parseSupportedHotkeyEvent(
+        createEvent({ key: 'DoubleCtrl' }),
+        { platform: 'macos', allowDoubleTap: false }
+      ).status
+    ).toBe('invalid')
+
+    // Windows 关键系统热键黑名单拦截
+    for (const [key, extra] of [
+      ['c', { ctrlKey: true }],
+      ['v', { ctrlKey: true }],
+      ['F4', { altKey: true }],
+      ['Tab', { altKey: true }],
+      ['Escape', { ctrlKey: true, shiftKey: true }]
+    ]) {
+      const blocked = parseSupportedHotkeyEvent(
+        createEvent({ key, ...extra }),
+        { platform: 'windows' }
+      )
+      expect(blocked.status).toBe('invalid')
+      expect(blocked.text).toContain('系统')
+    }
+
+    // macOS 关键系统热键黑名单拦截
+    for (const [key, extra] of [
+      ['c', { metaKey: true }],
+      ['q', { metaKey: true }],
+      [' ', { code: 'Space', metaKey: true }],
+      ['Tab', { metaKey: true }]
+    ]) {
+      const blocked = parseSupportedHotkeyEvent(
+        createEvent({ key, ...extra }),
+        { platform: 'macos' }
+      )
+      expect(blocked.status).toBe('invalid')
+      expect(blocked.text).toContain('系统')
+    }
+
+    // 壳层保留快捷键温和提醒
+    expect(getShellReserveWarning('Ctrl+,')).toContain('打开设置')
+    expect(getShellReserveWarning('Ctrl+U')).toContain('工作台与悬浮条切换')
+    expect(getShellReserveWarning('Ctrl+Alt+Z')).toBe('')
+
+    // 禁止把中文提示文案传入 <ShortcutKeys>
+    expect(isSafeShortcutKeysCombo('Alt+Space')).toBe(true)
+    expect(isSafeShortcutKeysCombo('该组合与系统快捷键冲突')).toBe(false)
+    expect(isSafeShortcutKeysCombo('DoubleCtrl', 'windows', true)).toBe(true)
+    expect(isSafeShortcutKeysCombo('DoubleCtrl', 'macos', false)).toBe(false)
   })
 })
 

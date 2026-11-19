@@ -1,6 +1,7 @@
 #include "ztools_service/pipe_security.hpp"
 
 #include "ztools_service/service_runtime.hpp"
+#include "ztools_service/service_process_security.hpp"
 
 #include <Aclapi.h>
 #include <Sddl.h>
@@ -270,6 +271,10 @@ std::unique_ptr<PipeSecurity> PipeSecurity::Create(
           security->user_sid_.data(),
           security->service_sid_.data(),
           error)) {
+    return nullptr;
+  }
+  if (mode == PipeIdentityMode::service &&
+      !GrantServiceProcessQueryAccess(GetCurrentProcess(), security->user_sid_.data(), error)) {
     return nullptr;
   }
   security->attributes_.nLength = sizeof(SECURITY_ATTRIBUTES);

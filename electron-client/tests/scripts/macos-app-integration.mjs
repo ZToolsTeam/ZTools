@@ -10,7 +10,7 @@ import { execFileSync, spawn } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
 import { parseArgs } from 'node:util'
 import { fileURLToPath } from 'node:url'
-import { parseMacTestArguments, inspectMacApp, compareOsVersions } from '../../scripts/macos-preflight.mjs'
+import { parseMacTestArguments, inspectMacApp, compareOsVersions, isValidMacRuntimeAppName } from '../../scripts/macos-preflight.mjs'
 import { CdpClient, runMainPrebootIsolationGate } from './lib/normal-app-preboot-isolation.mjs'
 
 export const MAC_AUTOMATIC_CASES = Object.freeze(['M01', 'M03'])
@@ -623,6 +623,19 @@ export function validateMacIsolatedMainSnapshot(snapshot, { childPid, preflight,
     sessionDataPath: snapshot.sessionDataPath }
 }
 
+export function selectMacMainPageTarget(targets) {
+  const matches = targets.filter(target => {
+    if (target?.type !== 'page' || typeof target.url !== 'string' || /[\u0000-\u001f\u007f]/.test(target.url)) return false
+    try {
+      const url = new URL(target.url)
+      return url.protocol === 'ztools:' && url.host === 'web' && !url.username && !url.password &&
+        url.pathname === '/index.html' && url.search === ''
+    } catch { return false }
+  })
+  if (matches.length > 1) throw new Error('AMBIGUOUS_NORMAL_APP_TARGET')
+  return matches[0]
+}
+
 async function waitForMainZtoolsPage(port, fetchImpl, child, hasExited = () => child.exitCode !== null || child.signalCode !== null) {
   const deadline = Date.now() + 30_000
   let target, browserUrl
@@ -632,10 +645,9 @@ async function waitForMainZtoolsPage(port, fetchImpl, child, hasExited = () => c
       const targetsResponse = await fetchImpl(`http://127.0.0.1:${port}/json/list`, { signal: AbortSignal.timeout(1000) })
       const targets = await targetsResponse.json()
       if (targetsResponse.ok && Array.isArray(targets) && targets.length <= 1024) {
-        const matches = targets.filter(item => item?.type === 'page' && /^ztools:\/\/web\//.test(item.url ?? ''))
-        if (matches.length > 1) throw new Error('AMBIGUOUS_NORMAL_APP_TARGET')
-        if (matches.length === 1) {
-          target = matches[0]
+        const main = selectMacMainPageTarget(targets)
+        if (main) {
+          target = main
           const versionResponse = await fetchImpl(`http://127.0.0.1:${port}/json/version`, { signal: AbortSignal.timeout(1000) })
           const version = await versionResponse.json()
           if (versionResponse.ok && typeof version?.webSocketDebuggerUrl === 'string') browserUrl = version.webSocketDebuggerUrl
@@ -661,6 +673,7 @@ export async function startMacNormalDatabaseChainSession(options, {
   let minimumOsMatches = false
   try { minimumOsMatches = compareOsVersions(appPreflight.minimumOs, options['minimum-os']) === 0 } catch { /* Invalid preflight metadata fails closed. */ }
   if (appPreflight.bundleId !== options['bundle-id'] || !minimumOsMatches ||
+      !isValidMacRuntimeAppName(appPreflight.runtimeAppName) ||
       appPreflight.expectedProcessArch !== options['expect-process-arch'] ||
       !Array.isArray(appPreflight.slices) || !appPreflight.slices.includes('arm64') || !appPreflight.slices.includes('x86_64') ||
       typeof appPreflight.appRoot !== 'string' || !path.posix.isAbsolute(appPreflight.appRoot) ||
@@ -694,12 +707,12 @@ export async function startMacNormalDatabaseChainSession(options, {
     const entryPath = path.join(expectedAppPath, 'out', 'main', 'bootstrap.js')
     const isolation = await isolationGate({ childPid: child.pid, inspectPort, executablePath: appPreflight.executable,
       appRoot: appPreflight.appRoot, appArchivePath: expectedAppPath, entryPath,
-      bundleId: appPreflight.bundleId, appName: 'ZTools', appVersion: appPreflight.appVersion, electronVersion: '43.4.1',
+      bundleId: appPreflight.bundleId, appName: appPreflight.runtimeAppName, appVersion: appPreflight.appVersion, electronVersion: '43.4.1',
       processArch: options['expect-process-arch'], isPackaged: true, outputRoot: options.output,
       profile: options.profile, timeoutMs: 20_000 }, { platform, fetchImpl, connect })
     session.isolation = isolation
     session.inspector = isolation.client
-    const main = await session.inspector.evaluate(macMainPathSnapshotExpression())
+    const main = await session.inspector.evaluate(macMainPathSnapshotExpression(), { awaitPromise: false })
     const mainValidation = validateMacIsolatedMainSnapshot(main, { childPid: child.pid, preflight: appPreflight,
       options, profile: options.profile })
     if (mainValidation.status !== 'PASS') throw new Error(mainValidation.code)
@@ -733,7 +746,7 @@ export async function stopMacNormalDatabaseChainSession(session, { requestQuit =
     let quitRequestError = null
     const hasExited = () => session.exited?.() === true || session.child?.exitCode !== null || session.child?.signalCode !== null
     if (requestQuit && session.isolation?.resumed === true && session.inspector && !hasExited()) {
-      try { quitRequested = await session.inspector.evaluate(macAppQuitExpression(), { timeoutMs: 3000 }) === true }
+      try { quitRequested = await session.inspector.evaluate(macAppQuitExpression(), { awaitPromise: false, timeoutMs: 3000 }) === true }
       catch (error) { quitRequestError = /^[A-Z0-9_]+$/.test(error?.message ?? '') ? error.message : 'APP_QUIT_REQUEST_FAILED' }
     }
     const cleanup = await cleanupOwnedMacApp({ child: session.child, hasExited,

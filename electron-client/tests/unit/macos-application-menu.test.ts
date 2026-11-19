@@ -20,7 +20,7 @@ test('开发版保留重新载入与开发者工具', () => {
   assert.ok(development.includes('togglefullscreen'))
 })
 
-test('macosAppSubmenuItems 在传入 onOpenPreferences 时包含 Command+I 偏好设置项并触发回调', () => {
+test('macosAppSubmenuItems 在传入 onOpenPreferences 时包含 Command+, 偏好设置项并触发回调', () => {
   let openPreferencesCount = 0
   const items = macosAppSubmenuItems({
     onOpenPreferences: () => {
@@ -30,7 +30,7 @@ test('macosAppSubmenuItems 在传入 onOpenPreferences 时包含 Command+I 偏�
 
   const prefItem = items.find(item => item.label === '偏好设置...')
   assert.ok(prefItem, '应包含“偏好设置...”菜单项')
-  assert.equal(prefItem.accelerator, 'Command+I')
+  assert.equal(prefItem.accelerator, 'Command+,')
   assert.equal(typeof prefItem.click, 'function')
 
   prefItem.click?.({} as never, undefined, {} as never)

@@ -8,12 +8,15 @@
  */
 import { onBeforeUnmount, watch } from 'vue'
 
-export function useDeclarativePluginSession(pluginRef) {
+export function useDeclarativePluginSession(pluginRef, options = {}) {
   let currentHolder = null
   let releaseCurrent = null
   let generation = 0
+  let removeInvalidationListener = null
 
   function releaseHeld() {
+    removeInvalidationListener?.()
+    removeInvalidationListener = null
     const release = releaseCurrent
     releaseCurrent = null
     currentHolder = null
@@ -27,6 +30,16 @@ export function useDeclarativePluginSession(pluginRef) {
     releaseHeld()
     if (!holder || typeof holder.acquire !== 'function') return
     currentHolder = holder
+    const remove = holder.onInvalidated?.(() => {
+      releaseHeld()
+      options.onInvalidated?.()
+    })
+    // 订阅时 holder 可能已经失效，回调会同步释放当前挂载点。
+    if (currentHolder !== holder) {
+      remove?.()
+      return
+    }
+    removeInvalidationListener = remove || null
     const myGeneration = generation
     let releasedEarly = false
     // 先占位：acquire 完成前就换插件时，等它完成后立即释放

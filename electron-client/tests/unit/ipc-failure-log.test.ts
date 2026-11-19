@@ -74,7 +74,6 @@ async function runMissingKeyIntegrationFixture(): Promise<void> {
   } as unknown as CoreServices
   const options = {
     toggleMainWindow() {},
-    async getPanelLocalApps() { return [] },
     closeConfirmationResolved() {},
     screenClipboardAdapters: {},
     pluginResources: {

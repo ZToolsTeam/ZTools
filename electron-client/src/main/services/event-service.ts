@@ -422,6 +422,7 @@ export class EventService {
 
   #assertRendererMayPublish(type: string): void {
     if (type === RUNTIME_PERMISSION_CHANGED_EVENT || type === 'plugin_out' || type === 'plugin_enter' ||
+        type === 'plugin_runtime_stopped' || type === 'super_panel_changed' ||
         ACCOUNT_EVENT_TYPES.has(type)) {
       throw new ZToolsError(errorCodes.permissionDenied, '该事件仅允许宿主发布')
     }

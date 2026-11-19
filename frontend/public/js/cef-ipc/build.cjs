@@ -13,10 +13,6 @@ const config = {
   outputFile: 'ztools-api.js',
   minify: false // 是否压缩(需要安装 terser)
 }
-// --skip-legacy-bin 与环境变量等价，供 npm 脚本跨平台使用（Windows cmd 不支持 VAR=1 前缀写法）
-const skipLegacyBinDeploy = process.env.ZTOOLS_BUILD_TARGET === 'electron' ||
-  process.env.ZTOOLS_SKIP_LEGACY_BIN_DEPLOY === '1' ||
-  process.argv.includes('--skip-legacy-bin')
 
 // 按依赖顺序定义文件列表
 const files = [
@@ -187,7 +183,7 @@ function build() {
   copyToOutputDirectories(outputPath)
 }
 
-// 复制到插件 SDK 和兼容运行目录；Electron 装配跳过 legacy bin 副本。
+// 复制到插件 SDK 运行时目录
 function copyToOutputDirectories(sourcePath) {
   console.log('\n📋 开始复制文件到输出目录...')
 
@@ -197,19 +193,11 @@ function copyToOutputDirectories(sourcePath) {
 
   // 目标目录列表
   const targetDirs = [
-    ...(!skipLegacyBinDeploy ? [{
-      dir: path.join(projectRoot, 'bin/WebResources/sdk'),
-      label: 'bin/WebResources/sdk'
-    }] : []),
     {
       dir: path.join(projectRoot, 'packages/api/runtime'),
       label: 'packages/api/runtime'
     }
   ]
-
-  if (skipLegacyBinDeploy) {
-    console.log('⏭️ Electron 装配跳过 bin/WebResources/sdk（legacy Windows运行目录）')
-  }
 
   for (const { dir, label } of targetDirs) {
     // 确保目标目录存在

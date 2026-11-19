@@ -1,4 +1,5 @@
 import {
+  callHostTransport,
   invokePluginService,
   openRealPath,
   readRealClipboardText,
@@ -6,6 +7,7 @@ import {
   trashRealItem,
   writeRealClipboardText
 } from '../shared/native-ipc.js'
+import { pickExampleFiles, pickExampleFolderFiles } from '../shared/file-import.js'
 import type {
   FileUnlockExecutionResult,
   FileUnlockInspectionResult,
@@ -181,9 +183,37 @@ export async function detectClipboardCandidatePath(hostOverride?: unknown): Prom
     const clip = await readRealClipboardText(hostOverride)
     const validation = validateTargetPath(clip)
     return validation.valid ? validation.normalizedPath : ''
-  } catch {
+  } catch (err) {
+    console.warn('[file-unlock] 读取剪贴板路径失败:', err)
     return ''
   }
+}
+
+export async function pickUnlockTargetPath(
+  directory: boolean,
+  hostOverride?: unknown
+): Promise<{ canceled: boolean; path?: string; error?: string }> {
+  if (directory) {
+    const res = await callHostTransport<Record<string, unknown>>(
+      'window_show_select_folder_dialog',
+      { title: '选择被占用的文件夹' },
+      hostOverride
+    )
+    if (!res.ok) return { canceled: false, error: res.error || '无法打开选择文件夹对话框' }
+    if (res.data?.canceled === true) return { canceled: true }
+    const folderPath = typeof res.data?.folderPath === 'string' ? res.data.folderPath.trim() : ''
+    return folderPath ? { canceled: false, path: folderPath } : { canceled: false, error: '未选择有效文件夹' }
+  }
+  const picked = await pickExampleFiles(
+    { skipEmptyFiles: false },
+    { title: '选择被占用的文件', multiple: false },
+    hostOverride
+  )
+  if (picked.canceled) return { canceled: true }
+  if (picked.error || !picked.files[0]?.path) {
+    return { canceled: false, error: picked.error || '未选择有效文件' }
+  }
+  return { canceled: false, path: picked.files[0].path }
 }
 
 export async function listRemovableDrives(hostOverride?: unknown): Promise<RemovableDriveItem[]> {
@@ -510,3 +540,5 @@ export async function copyProcessInfoToClipboard(
 ): Promise<boolean> {
   return writeRealClipboardText(text, hostOverride)
 }
+
+export { pickExampleFolderFiles }

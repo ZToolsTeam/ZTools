@@ -535,6 +535,31 @@ describe('Details Page', () => {
       pluginsStore.installedSet = new Set(['kill-process'])
       expect((await mountDetailsFor('kill-process', 'win32')).text()).toBe('true|true|true')
     })
+
+    it('点击设置快捷键时携带 openPluginHotkey=true 与当前 pluginId 跳转设置页', async () => {
+      await router.push('/details/plugin-1')
+      const pushSpy = vi.spyOn(router, 'push')
+      wrapper = mount(Details, {
+        global: {
+          plugins: [router],
+          stubs: { PluginDetailHeader: true, PluginScreenshots: true, PluginDescription: true }
+        }
+      })
+      await flushPromises()
+
+      wrapper.vm.setHotkey()
+      await flushPromises()
+
+      expect(pushSpy).toHaveBeenCalledWith(
+        expect.objectContaining({
+          name: 'advanced-settings',
+          query: {
+            openPluginHotkey: 'true',
+            pluginId: 'plugin-1'
+          }
+        })
+      )
+    })
   })
 })
 

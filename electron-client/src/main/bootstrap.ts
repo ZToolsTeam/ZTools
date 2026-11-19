@@ -5,10 +5,12 @@ import {
   clipboard as electronClipboard,
   desktopCapturer,
   dialog,
+  Menu,
   nativeImage,
   nativeTheme,
   powerMonitor,
   screen,
+  shell as electronShell,
   systemPreferences
 } from 'electron'
 import type { Event as ElectronEvent } from 'electron'
@@ -18,7 +20,7 @@ import path from 'node:path'
 import { IpcRouter } from './ipc/router.js'
 import { IPC_EVENT_CHANNEL } from '../contracts/ipc.js'
 import { installZToolsProtocol, registerZToolsScheme } from './protocol/ztools-protocol.js'
-import { formatRuntimeDiagnostics, getRuntimeDiagnostics } from './services/runtime-diagnostics.js'
+import { getRuntimeDiagnostics } from './services/runtime-diagnostics.js'
 import {
   initializeRuntimeLogging,
   writeRuntimeLog,
@@ -40,6 +42,7 @@ import { loadApplicationIcon, loadTrayIcon } from './windows/application-icon.js
 import {
   decideCloseAction,
   readClosePreferences,
+  shouldQuitOnAllWindowsClosed,
   type CloseRequestOrigin
 } from './windows/close-behavior.js'
 import { TrayController } from './windows/tray-controller.js'
@@ -123,6 +126,21 @@ function sanitizeUrlForLog(value: string): string {
   }
 }
 
+function resolveLogWindowRole(value: string): string | undefined {
+  if (!value) return undefined
+  try {
+    const url = new URL(value)
+    const mode = url.searchParams.get('mode')
+    if (mode === 'launcher' || url.hash.includes('launcher')) return 'launcher'
+    if (url.searchParams.get('popout') === '1' || url.hash.includes('/popout/')) return 'popout'
+    if (url.protocol === 'ztools:' && url.host === 'web') return 'dashboard'
+    if (url.protocol === 'ztools:' && url.host === 'plugin') return 'plugin'
+  } catch {
+    return undefined
+  }
+  return undefined
+}
+
 app.on('web-contents-created', (_event, contents) => {
   const scope = `renderer:${contents.getType()}:${contents.id}`
   writeRuntimeLog('INFO', scope, 'WebContents created')
@@ -136,7 +154,12 @@ app.on('web-contents-created', (_event, contents) => {
     )
   })
   contents.on('did-finish-load', () => {
-    writeRuntimeLog('INFO', scope, 'Page load finished', { url: sanitizeUrlForLog(contents.getURL()) })
+    const rawUrl = contents.getURL()
+    const windowRole = resolveLogWindowRole(rawUrl)
+    writeRuntimeLog('INFO', scope, 'Page load finished', {
+      url: sanitizeUrlForLog(rawUrl),
+      ...(windowRole ? { windowRole } : {})
+    })
   })
   contents.on('did-fail-load', (_loadEvent, errorCode, errorDescription, validatedURL, isMainFrame) => {
     writeRuntimeLog('ERROR', scope, 'Page load failed', {
@@ -325,6 +348,9 @@ const refreshFocusedPermissions = (_event: ElectronEvent, window: BrowserWindow)
 const refreshResumedPermissions = (): void => {
   void router?.refreshPermissionSubscribers().catch((error: unknown) => {
     console.error('唤醒后权限状态刷新失败', error)
+  })
+  void router?.verifyTriggersOnResume().catch((error: unknown) => {
+    console.error('唤醒后热键重验失败', error)
   })
 }
 let permissionRefreshListenersInstalled = false
@@ -535,13 +561,25 @@ async function readTrayState(): Promise<{ wakeAccelerator: string; showTrayIcon:
   if (!services) {
     return { wakeAccelerator: 'Alt+Space', showTrayIcon: true }
   }
-  const [rawWakeHotkey, rawShowTrayIcon] = await Promise.all([
-    services.config.get('user_settings.json', 'hotkey.global', 'Alt+Space').catch(() => 'Alt+Space'),
-    services.config.get('user_settings.json', 'system.showTrayIcon', 'true').catch(() => 'true')
-  ])
+  const wakeFromTrigger = router?.getGlobalWakeHotkey()
+  let wakeAccelerator = ''
+  if (wakeFromTrigger?.exists) {
+    // 优先使用 TriggerService 托管的 global_wake_hotkey 作为唯一真实信源（禁用则托盘不展示快捷键）
+    wakeAccelerator = wakeFromTrigger.enabled ? wakeFromTrigger.key.trim() : ''
+  } else {
+    const rawWakeHotkey = await services.config
+      .get('user_settings.json', 'hotkey.global', '__UNSET__')
+      .catch(() => '__UNSET__')
+    wakeAccelerator = rawWakeHotkey === '__UNSET__'
+      ? 'Alt+Space'
+      : String(rawWakeHotkey ?? '').trim()
+  }
+  const rawShowTrayIcon = await services.config
+    .get('user_settings.json', 'system.showTrayIcon', 'true')
+    .catch(() => 'true')
   return {
-    // 未设置时读到默认值；存的是空串表示用户已关闭全局唤醒，托盘菜单不显示快捷键
-    wakeAccelerator: String(rawWakeHotkey ?? '').trim(),
+    // 存的是空串表示用户已关闭全局唤醒，托盘菜单不显示快捷键
+    wakeAccelerator,
     // 默认显示；只有明确存为 false / 0 才隐藏
     showTrayIcon: !['false', '0'].includes(String(rawShowTrayIcon).trim().toLowerCase())
   }
@@ -610,6 +648,7 @@ function createMainWindowInstance(): BrowserWindow {
     showOnReady: launchIntentReady, darkMode: nativeTheme.shouldUseDarkColors, accent: currentAccent,
     ...(initialMainWindowSize ? { initialSize: initialMainWindowSize } : {}),
     persistNormalBounds: bounds => { void services?.config.setMainWindowSize(bounds.width, bounds.height).catch(error => console.warn('保存主窗口尺寸失败', error)) },
+    isRecorderCaptureActive: () => router?.isRecorderCaptureActive() ?? false,
     onToggleLauncher: () => {
       if (launcher) {
         launcher.show()
@@ -623,6 +662,11 @@ function createMainWindowInstance(): BrowserWindow {
   window.once('ready-to-show', () => {
     if (!window.isDestroyed()) {
       updateMainWindowTheme(window, nativeTheme.shouldUseDarkColors, currentAccent)
+    }
+  })
+  window.webContents.on('did-finish-load', () => {
+    if (!window.isDestroyed()) {
+      router?.flushStartupHotkeyConflicts()
     }
   })
   window.on('close', (event) => {
@@ -887,7 +931,13 @@ if (!app.requestSingleInstanceLock()) {
   app.quit()
 } else {
   app.on('window-all-closed', () => {
-    if (lifecyclePolicy.quitWhenAllWindowsClose) app.quit()
+    if (!shouldQuitOnAllWindowsClosed({
+      quitWhenAllWindowsClose: lifecyclePolicy.quitWhenAllWindowsClose,
+      cancellationRequested: applicationLifecycle.cancellationRequested,
+      quitAllowed,
+      quitInProgress: quitRequestPromise !== null
+    })) return
+    app.quit()
   })
   if (lifecyclePolicy.reopenMainWindowOnActivate) {
     app.on('activate', () => showMainWindow())
@@ -928,6 +978,9 @@ if (!app.requestSingleInstanceLock()) {
     if (!applicationLifecycle.canContinueStartup()) return
     if (process.platform === 'darwin') {
       installMacosApplicationMenu({ onOpenPreferences: () => openMainWindowAt('/advanced-settings') })
+    } else {
+      // 非 macOS 平台清空默认应用菜单，封堵 Alt 调出或子窗口菜单泄漏
+      Menu.setApplicationMenu(null)
     }
     const screenClipboardAdapters = createPlatformScreenClipboardAdapters(process.platform, {
       windows: () => createWindowsScreenClipboardAdapters({ screen, desktopCapturer, nativeImage }),
@@ -963,15 +1016,18 @@ if (!app.requestSingleInstanceLock()) {
         runningUnderTranslation: app.runningUnderARM64Translation === true
       })
     })
+    const currentWebRoot = activeWebRoot()
     console.info('Electron runtime paths', {
       dataRoot,
       pluginRoot,
-      webRoot,
+      activeWebRoot: currentWebRoot,
+      bundledWebRoot: webRoot,
       platform: process.platform,
-      webRootExists: fs.existsSync(webRoot),
+      activeWebRootExists: fs.existsSync(currentWebRoot),
+      bundledWebRootExists: fs.existsSync(webRoot),
       pluginRootExists: fs.existsSync(pluginRoot)
     })
-    const webVersion = await readWebVersion(activeWebRoot())
+    const webVersion = await readWebVersion(currentWebRoot)
     if (!applicationLifecycle.canContinueStartup()) return
     if (process.platform === 'darwin') {
       macAppUpdater = new MacAppUpdater({
@@ -987,7 +1043,7 @@ if (!app.requestSingleInstanceLock()) {
         }
       })
     }
-    services = createCoreServices(
+    const createdServices = await runLifecyclePhase('core-services.create', () => createCoreServices(
       runtimePaths,
       app.getVersion(),
       webVersion,
@@ -997,37 +1053,44 @@ if (!app.requestSingleInstanceLock()) {
       resources,
       undefined,
       macAppUpdater
-    )
-    services.focus.setNotificationHandler(showDesktopNotification)
-    await nativeRuntime.start(signal)
+    ))
+    services = createdServices
+    createdServices.focus.setNotificationHandler(showDesktopNotification)
+    await runLifecyclePhase('native-runtime.start', () => nativeRuntime.start(signal))
     if (!applicationLifecycle.canContinueStartup()) return
 
     // 启动原生高性能侧车引擎 (ztools-indexer & ztools-uiaccess) 并后台静默预热
-    const activeServices = services
-    if (activeServices) {
-      void activeServices.sidecars.startAll().then(async () => {
-        const status = activeServices.sidecars.getStatus()
-        console.info('[SidecarManager] Sidecars started:', status)
-        if (process.platform === 'win32' || process.platform === 'darwin') {
-          const targetScope = process.platform === 'win32' ? '*' : os.homedir()
-          const indexRes = await activeServices.sidecars.indexPath(targetScope, 'auto').catch((err) => {
-            console.warn('[SidecarManager] Initial index warmup failed:', err)
-            return null
-          })
-          if (indexRes) {
-            console.info(`[SidecarManager] Indexed ${indexRes.total_indexed} files from ${targetScope === '*' ? 'all fixed drives' : targetScope} in ${indexRes.elapsed_ms}ms (${indexRes.scanner_used})`)
-          }
+    void createdServices.sidecars.startAll(signal).then(async () => {
+      if (signal.aborted || !applicationLifecycle.canContinueStartup()) return
+      const status = createdServices.sidecars.getStatus()
+      console.info('[SidecarManager] Sidecars started:', JSON.stringify(status))
+      if (status.uiaccess.usingFallback) {
+        console.info('[SidecarManager] UIAccess 已降级运行于标准模式（无法跨提权窗口操作）', {
+          activeBinary: status.uiaccess.activeBinary,
+          reason: status.uiaccess.fallbackReason
+        })
+      }
+      if (process.platform === 'win32' || process.platform === 'darwin') {
+        const targetScope = process.platform === 'win32' ? '*' : os.homedir()
+        const indexRes = await createdServices.sidecars.indexPath(targetScope, 'auto').catch((err) => {
+          console.warn('[SidecarManager] Initial index warmup failed:', err)
+          return null
+        })
+        if (signal.aborted || !applicationLifecycle.canContinueStartup()) return
+        if (indexRes) {
+          console.info(`[SidecarManager] Indexed ${indexRes.total_indexed} files from ${targetScope === '*' ? 'all fixed drives' : targetScope} in ${indexRes.elapsed_ms}ms (${indexRes.scanner_used})`)
         }
-      }).catch((err) => {
-        console.warn('[Bootstrap] SidecarManager startAll error:', err)
-      })
-    }
+      }
+    }).catch((err) => {
+      if (signal.aborted) return
+      console.warn('[Bootstrap] SidecarManager startAll error:', err)
+    })
     let persistedTheme = ''
     let persistedAccent: unknown = 'ember'
     try {
-      persistedTheme = await services.config.get('user_settings.json', 'ui.theme', '')
-      persistedAccent = await services.config.get('user_settings.json', 'ui.accent', 'ember')
-      await services.config.get('user_settings.json', 'ui.wake_preference', 'dashboard').catch(() => 'dashboard')
+      persistedTheme = await createdServices.config.get('user_settings.json', 'ui.theme', '')
+      persistedAccent = await createdServices.config.get('user_settings.json', 'ui.accent', 'ember')
+      await createdServices.config.get('user_settings.json', 'ui.wake_preference', 'dashboard').catch(() => 'dashboard')
     } catch (error) {
       console.warn('读取主题设置失败，将跟随系统:', error)
     }
@@ -1043,10 +1106,10 @@ if (!app.requestSingleInstanceLock()) {
     }
     nativeTheme.on('updated', onNativeThemeUpdated)
     removeNativeThemeListener = () => nativeTheme.removeListener('updated', onNativeThemeUpdated)
-    const pluginState = new PluginStateService(services.dataRoot)
+    const pluginState = new PluginStateService(createdServices.dataRoot)
     superPanel = new SuperPanelController({
-      dataRoot: services.dataRoot,
-      config: services.config,
+      dataRoot: createdServices.dataRoot,
+      config: createdServices.config,
       pluginState,
       getInstalledPlugins: async () => {
         if (!router) throw new Error('IPC Router 尚未初始化')
@@ -1056,12 +1119,30 @@ if (!app.requestSingleInstanceLock()) {
         if (!router) throw new Error('IPC Router 尚未初始化')
         return router.openPlugin({ pluginId })
       },
-      systemTools: new SystemToolsService()
+      systemTools: new SystemToolsService(),
+      resolveAuthorizedReadPath: async (rawPath, caller) => {
+        if (!router) throw new Error('IPC Router 尚未初始化')
+        if (!caller) throw new Error('调用方身份不可用')
+        return router.fileService.resolveAuthorizedPath(rawPath, caller, 'read', false)
+      },
+      revealPath: (fullPath) => {
+        electronShell.showItemInFolder(fullPath)
+      },
+      onChanged: () => {
+        router?.publishSuperPanelChanged()
+      }
     })
-    router = await IpcRouter.create(registry, services, {
+    const initialWakeRaw = await createdServices.config
+      .get('user_settings.json', 'hotkey.global', '__UNSET__')
+      .catch(() => '__UNSET__')
+    const initialWakeHotkey = initialWakeRaw === '__UNSET__'
+      ? 'Alt+Space'
+      : String(initialWakeRaw ?? '').trim()
+    router = await runLifecyclePhase('ipc-router.create', () => IpcRouter.create(registry, createdServices, {
       pluginResources: { webRoot: () => activeWebRoot(), pluginRoot },
       pluginState, onDarkModeChanged: applyDarkMode, onAccentChanged: applyAccentTheme,
       onTrayStatePossiblyChanged: syncTrayState,
+      initialWakeHotkey,
       reloadMainWindow: async () => {
         if (!mainWindow || mainWindow.isDestroyed()) throw new Error('主窗口不可用')
         await mainWindow.loadURL('ztools://web/index.html')
@@ -1075,15 +1156,6 @@ if (!app.requestSingleInstanceLock()) {
         if (!payload) return false
         return dispatchRecorderKeyToWebContents(mainWindow.webContents, payload)
       },
-      getPanelLocalApps: () => superPanel?.getPanelLocalApps() ?? Promise.resolve([]),
-      ...(process.platform === 'win32' ? {
-        launchLocalApp: (appId: string) => {
-          if (applicationLifecycle.cancellationRequested || !superPanel) {
-            return Promise.reject(new Error('应用正在退出'))
-          }
-          return superPanel.launchLocalApp(appId)
-        }
-      } : {}),
       closeConfirmationResolved: () => { closeConfirmationPending = false },
       screenClipboardAdapters,
       systemPlatformAdapter,
@@ -1092,11 +1164,12 @@ if (!app.requestSingleInstanceLock()) {
       ...(process.platform === 'darwin' && app.isPackaged ? {
         loginItems: createMacosLoginItemAdapter({ platform: process.platform, isPackaged: app.isPackaged, app })
       } : {})
-    })
+    }))
     if (!applicationLifecycle.canContinueStartup()) return
     const protocolRoots = await router.fileService.prepareMainProtocolRoots()
     if (!applicationLifecycle.canContinueStartup()) return
-    const referenceRuntime = await createAndAttachElectronReferenceRuntime({
+    const activeRouter = router
+    const referenceRuntime = await runLifecyclePhase('reference-runtime.attach', () => createAndAttachElectronReferenceRuntime({
       platform: process.platform,
       isPackaged: app.isPackaged,
       appPath: app.getAppPath(),
@@ -1104,16 +1177,20 @@ if (!app.requestSingleInstanceLock()) {
       dataRoot,
       signal,
       ...(process.platform === 'darwin' ? { regionPreloadPath: path.resolve(__dirname, '../preload/main.js') } : {}),
-      router,
+      router: activeRouter,
       registry,
       screenClipboard: screenClipboardAdapters,
       clipboard: electronClipboard,
       images: nativeImage
-    })
+    }))
     if (referenceRuntime.available) {
+      const platformExpectedDisabled = process.platform !== 'darwin'
+        ? referenceRuntime.unavailableOptionalProviders.filter((id) => id === 'local-vision-ocr')
+        : []
       console.info('Reference runtime available', {
         helperArch: referenceRuntime.helperArch,
-        unavailableOptionalProviders: referenceRuntime.unavailableOptionalProviders
+        unavailableOptionalProviders: referenceRuntime.unavailableOptionalProviders,
+        ...(platformExpectedDisabled.length > 0 ? { expectedDisabledByPlatform: platformExpectedDisabled } : {})
       })
     } else {
       console.info('Reference runtime unavailable', { reason: referenceRuntime.reason })
@@ -1129,47 +1206,67 @@ if (!app.requestSingleInstanceLock()) {
     permissionRefreshListenersInstalled = true
     app.on('browser-window-focus', refreshFocusedPermissions)
     powerMonitor.on('resume', refreshResumedPermissions)
-    const installedPlugins = await router.listInstalledPlugins()
+    const installedPlugins = await runLifecyclePhase('plugins.inventory', () => activeRouter.listInstalledPlugins())
     if (!applicationLifecycle.canContinueStartup()) return
-    console.info('Installed plugin inventory', installedPlugins.data.map((plugin) => ({
+    console.info('Installed plugin inventory', JSON.stringify(installedPlugins.data.map((plugin) => ({
       pluginId: plugin.pluginId,
       entry: plugin.entry,
       dllloader: plugin.dllloader,
       enabled: plugin.enabled
-    })))
-    console.info(`${formatRuntimeDiagnostics(getRuntimeDiagnostics())}\nnativeHostState=${nativeRuntime.nativeHost?.state ?? 'unsupported'}\nnativeHostPid=${String(nativeRuntime.nativeHost?.diagnostics.pid ?? '')}\nserviceState=${nativeRuntime.serviceClient?.diagnostics.state ?? 'unsupported'}`)
-    mainApplicationIcon = await loadApplicationIcon()
-    initialMainWindowSize = await services.config.getMainWindowSize().catch(() => undefined)
-    if (!applicationLifecycle.canContinueStartup()) return
-    createMainWindowInstance()
-    if (!applicationLifecycle.canContinueStartup()) return
-    launcher = new LauncherController({
-      icon: mainApplicationIcon,
-      registry,
-      showMainWindow,
-      navigateMainWindow,
-      onShow: () => {
-        lastActiveSurface = 'launcher'
-      },
-      hideMainWindow: () => {
-        if (mainWindow && !mainWindow.isDestroyed()) {
-          mainWindow.hide()
-        }
-      },
-      panelBridge: {
-        getData: () => superPanel ? superPanel.getData() : Promise.resolve({ success: false }),
-        togglePin: (id, itemType) => superPanel ? superPanel.togglePin(id, itemType) : Promise.resolve({ success: false }),
-        addLocalApps: (parentWindow) => superPanel ? superPanel.addLocalAppsForWindow(parentWindow) : Promise.resolve({ success: false, added: 0 }),
-        openItem: (id, itemType, query) => superPanel ? superPanel.openPanelItem(id, itemType, query) : Promise.resolve({ success: false })
-      },
-      sidecars: services.sidecars
+    }))))
+    console.info('Runtime diagnostics', JSON.stringify({
+      ...getRuntimeDiagnostics(),
+      nativeHostState: nativeRuntime.nativeHost?.state ?? 'unsupported',
+      nativeHostPid: nativeRuntime.nativeHost?.diagnostics.pid ?? null,
+      serviceState: nativeRuntime.serviceClient?.diagnostics.state ?? 'unsupported'
+    }))
+    await runLifecyclePhase('windows-and-tray.initialize', async () => {
+      mainApplicationIcon = await loadApplicationIcon()
+      initialMainWindowSize = await createdServices.config.getMainWindowSize().catch(() => undefined)
+      if (!applicationLifecycle.canContinueStartup()) return
+      createMainWindowInstance()
+      if (!applicationLifecycle.canContinueStartup()) return
+      launcher = new LauncherController({
+        icon: mainApplicationIcon,
+        registry,
+        isAuthorizedCaller: ({ senderId }) => {
+          const mainId = mainWindow && !mainWindow.isDestroyed() ? mainWindow.webContents.id : undefined
+          const launcherId = launcher?.webContentsId
+          return (mainId !== undefined && senderId === mainId) ||
+            (launcherId !== undefined && senderId === launcherId)
+        },
+        showMainWindow,
+        navigateMainWindow,
+        onShow: () => {
+          lastActiveSurface = 'launcher'
+        },
+        hideMainWindow: () => {
+          if (mainWindow && !mainWindow.isDestroyed()) {
+            mainWindow.hide()
+          }
+        },
+        panelBridge: {
+          getData: () => superPanel ? superPanel.getData() : Promise.resolve({ success: false }),
+          togglePin: (id, itemType) => superPanel ? superPanel.togglePin(id, itemType) : Promise.resolve({ success: false }),
+          setPin: (entry, pinned, caller) => superPanel
+            ? superPanel.setPin(entry, pinned, caller)
+            : Promise.resolve({ success: false, error: '悬浮条服务不可用' }),
+          reorderPins: (order) => superPanel
+            ? superPanel.reorderPins(order)
+            : Promise.resolve({ success: false, error: '悬浮条服务不可用' }),
+          openItem: (id, itemType, query, action) => superPanel
+            ? superPanel.openPanelItem(id, itemType, query, action)
+            : Promise.resolve({ success: false })
+        },
+        sidecars: createdServices.sidecars
+      })
+      launcher.register()
+      if (healthCheckExitCode === undefined) {
+        launcher.prewarm()
+      }
+      // Windows 通知区域与 macOS 菜单栏都显示托盘图标，可在设置中关闭
+      await applyTrayState(await readTrayState())
     })
-    launcher.register()
-    if (healthCheckExitCode === undefined) {
-      launcher.prewarm()
-    }
-    // Windows 通知区域与 macOS 菜单栏都显示托盘图标，可在设置中关闭
-    await applyTrayState(await readTrayState())
     if (!applicationLifecycle.canContinueStartup()) return
     reportApplicationStartupAnalytics()
     launchIntentReady = true
@@ -1211,9 +1308,9 @@ if (!app.requestSingleInstanceLock()) {
       })
       app.exit(1)
     })
-  }).catch((error: unknown) => {
+  }).catch(async (error: unknown) => {
     console.error('Electron readiness failed', error)
-    void stopApplication().catch((stopError: unknown) => {
+    await stopApplication().catch((stopError: unknown) => {
       console.error('Electron cleanup failed', stopError)
       lifecycleLog('ERROR', 'Electron cleanup after bootstrap failure failed', undefined, stopError)
     })

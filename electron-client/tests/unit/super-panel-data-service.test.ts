@@ -1,75 +1,27 @@
 import assert from 'node:assert/strict'
-import { createHash } from 'node:crypto'
 import fs from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 import test from 'node:test'
 import { SuperPanelDataService } from '../../src/main/super-panel/data-service.js'
-import type { MacApplicationBundle } from '../../src/main/platform/macos/local-application.js'
 
-// 这些用例依赖 Windows 路径语义（C:\\ / E:\\）或 Windows 宿主能力（DLL、进程启动、更新安装链、本地 .exe 软件），
-// 在其他平台上功能代码按设计会拒绝执行，因此只在 Windows 宿主运行；Windows CI 上照常覆盖。
-const windowsOnly = { skip: process.platform === 'win32' ? false : '依赖 Windows 路径或宿主能力，仅在 Windows 上运行' }
-
-
-function expectedWindowsLocalAppId(executable: string): string {
-  const source = `${executable.trim().replaceAll('/', '\\').toLowerCase()}|`
-  let hash = 0x811c9dc5
-  for (let index = 0; index < source.length; index += 1) {
-    hash ^= source.charCodeAt(index)
-    hash = Math.imul(hash, 0x01000193) >>> 0
-  }
-  return `localapp:${hash.toString(16).toUpperCase().padStart(8, '0')}`
-}
-
-function createMacService(
-  root: string,
-  inspectMacApplicationBundle: (selectedPath: string, signal?: AbortSignal) => Promise<MacApplicationBundle>,
-  opened: string[],
-  openPathResult = ''
-): SuperPanelDataService {
-  let configuration = JSON.stringify({ pinnedLocalApps: [] })
-  return new SuperPanelDataService(
-    root,
-    {
-      get: async () => configuration,
-      set: async (_fileName, _pathValue, value) => { configuration = value }
-    },
-    async () => ({ success: true, data: [] }),
-    async (fullPath) => {
-      opened.push(fullPath)
-      return openPathResult
-    },
-    { platform: 'darwin', inspectMacApplicationBundle }
-  )
-}
-
-function deferred<T>(): {
-  promise: Promise<T>
-  resolve(value: T): void
-} {
-  let resolve!: (value: T) => void
-  const promise = new Promise<T>((complete) => { resolve = complete })
-  return { promise, resolve }
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null && !Array.isArray(value)
-}
-
-async function readLocalApps(root: string): Promise<{ apps: unknown[] }> {
-  const source = await fs.readFile(path.join(root, 'local_apps.json'), 'utf8')
-  return JSON.parse(source.replace(/^\uFEFF/, '')) as { apps: unknown[] }
-}
-
-test('persists Delphi-compatible panel pins and local app usage', windowsOnly, async (context) => {
+test('persists plugin pins via togglePin and ignores residual local_apps.json on disk', async (context) => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'ztools-super-panel-'))
   context.after(() => fs.rm(root, { recursive: true, force: true }))
-  let configuration = JSON.stringify({
-    defaultTab: 'all',
-    pinnedLocalApps: []
-  })
-  const opened: string[] = []
+  // 即使磁盘残留历史 local_apps.json，getData 也不再读取或混入 items
+  await fs.writeFile(path.join(root, 'local_apps.json'), JSON.stringify({
+    apps: [{
+      id: 'localapp:1234ABCD',
+      name: 'Legacy Local App',
+      exePath: process.execPath,
+      arguments: '',
+      panelEnabled: true,
+      useCount: 5,
+      lastUsedAt: '2026-01-01T00:00:00.000Z'
+    }]
+  }), 'utf8')
+
+  let configuration = JSON.stringify({ defaultTab: 'all' })
   const service = new SuperPanelDataService(
     root,
     {
@@ -86,230 +38,23 @@ test('persists Delphi-compatible panel pins and local app usage', windowsOnly, a
         enabled: true
       }]
     }),
-    async (fullPath) => {
-      opened.push(fullPath)
-      return ''
-    }
+    async () => ''
   )
 
-  assert.equal(await service.addLocalApps([process.execPath]), 1)
-  const [localApp] = await service.getPanelLocalApps()
-  assert.ok(localApp)
-  assert.equal(localApp.id, expectedWindowsLocalAppId(await fs.realpath(process.execPath)))
-
   assert.equal(await service.togglePin('plugin.test', 'plugin'), true)
-  assert.equal(await service.togglePin(localApp.id, 'local'), true)
   const data = await service.getData()
-  // 旧超级面板的 shortcuts / defaultTab 已移除，getData 只返回 success 与 items
-  assert.deepEqual(Object.keys(data).sort(), ['items', 'success'])
-  assert.equal(data.items.find((item) => item.id === 'plugin.test')?.pinned, true)
-  assert.equal(data.items.find((item) => item.id === localApp.id)?.pinned, true)
-
-  await service.launchLocalApp(localApp.id)
-  assert.deepEqual(opened, [await fs.realpath(process.execPath)])
-  const localDocument = JSON.parse(await fs.readFile(path.join(root, 'local_apps.json'), 'utf8').then(
-    (source) => source.replace(/^\uFEFF/, '')
-  )) as { apps: Array<{ useCount: number; lastUsedAt: string }> }
-  assert.equal(localDocument.apps[0]?.useCount, 1)
-  assert.notEqual(localDocument.apps[0]?.lastUsedAt, '')
+  assert.deepEqual(Object.keys(data).sort(), ['items', 'pinnedEntries', 'success'])
+  assert.equal(data.items.length, 1)
+  assert.equal(data.items[0]?.id, 'plugin.test')
+  assert.equal(data.items[0]?.type, 'plugin')
+  assert.equal(data.items[0]?.pinned, true)
+  assert.deepEqual(
+    data.pinnedEntries.map((item) => item.entry),
+    [{ kind: 'plugin', pluginId: 'plugin.test' }]
+  )
 })
 
-test('stores case-sensitive Mac app bundle records and launches only after identity revalidation', async (context) => {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'ztools-super-panel-mac-app-'))
-  context.after(() => fs.rm(root, { recursive: true, force: true }))
-  const unknownEntry = { preserved: true, type: 'future-local-app' }
-  const legacyWindowsEntry = {
-    id: 'localapp:1234ABCD',
-    name: 'Legacy Windows App',
-    exePath: 'C:\\Apps\\Legacy.exe',
-    arguments: '',
-    panelEnabled: true
-  }
-  await fs.writeFile(path.join(root, 'local_apps.json'), JSON.stringify({
-    apps: [null, unknownEntry, legacyWindowsEntry]
-  }), 'utf8')
-  const inspected: string[] = []
-  const opened: string[] = []
-  const inspector = async (selectedPath: string): Promise<MacApplicationBundle> => {
-    inspected.push(selectedPath)
-    return {
-      appPath: selectedPath,
-      bundleIdentifier: 'com.example.CaseApp',
-      executableName: 'CaseApp'
-    }
-  }
-  const service = createMacService(root, inspector, opened)
-  const upperPath = '/Applications/CaseApp.app'
-  const lowerPath = '/Applications/caseapp.app'
-
-  assert.equal(await service.addLocalApps([upperPath, lowerPath]), 2)
-  const apps = await service.getData()
-  const upperItem = apps.items.find((item) => item.name === 'CaseApp')
-  const lowerItem = apps.items.find((item) => item.name === 'caseapp')
-  assert.ok(upperItem)
-  assert.ok(lowerItem)
-  assert.match(upperItem.id, /^localapp:mac:[A-F0-9]{64}$/)
-  assert.match(lowerItem.id, /^localapp:mac:[A-F0-9]{64}$/)
-  assert.notEqual(upperItem.id, lowerItem.id)
-  assert.equal(upperItem.description, upperPath)
-  assert.deepEqual(await service.getPanelLocalApps(), [])
-  assert.equal(await service.togglePin(upperItem.id, 'local'), true)
-  assert.equal((await service.getData()).items.find((item) => item.id === upperItem.id)?.pinned, true)
-
-  await service.launchLocalApp(upperItem.id)
-  assert.deepEqual(inspected, [upperPath, lowerPath, upperPath])
-  assert.deepEqual(opened, [upperPath])
-
-  const stored = await readLocalApps(root)
-  assert.equal(stored.apps[0], null)
-  assert.deepEqual(stored.apps[1], unknownEntry)
-  assert.deepEqual(stored.apps[2], legacyWindowsEntry)
-  const storedUpperValue = stored.apps.find((item) => isRecord(item) && item.appPath === upperPath)
-  if (!isRecord(storedUpperValue)) throw new Error('Mac app bundle record was not persisted')
-  const storedUpper = storedUpperValue
-  assert.equal(storedUpper.type, 'mac-app-bundle')
-  assert.equal(storedUpper.bundleIdentifier, 'com.example.CaseApp')
-  assert.equal('exePath' in storedUpper, false)
-  assert.equal('arguments' in storedUpper, false)
-  assert.equal(storedUpper.useCount, 1)
-  assert.equal(storedUpper.lastUsedAt === '', false)
-})
-
-test('does not launch or count a Mac app when its stored bundle identity has changed', async (context) => {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'ztools-super-panel-mac-identity-'))
-  context.after(() => fs.rm(root, { recursive: true, force: true }))
-  const opened: string[] = []
-  let inspections = 0
-  const inspector = async (selectedPath: string): Promise<MacApplicationBundle> => {
-    inspections += 1
-    return {
-      appPath: selectedPath,
-      bundleIdentifier: inspections === 1 ? 'com.example.Before' : 'com.example.After',
-      executableName: 'App'
-    }
-  }
-  const service = createMacService(root, inspector, opened)
-  const appPath = '/Applications/Changed.app'
-  assert.equal(await service.addLocalApps([appPath]), 1)
-  const app = (await service.getData()).items.find((item) => item.name === 'Changed')
-  assert.ok(app)
-
-  await assert.rejects(service.launchLocalApp(app.id), /身份已变化/)
-  assert.deepEqual(opened, [])
-  const storedApp = (await readLocalApps(root)).apps[0] as Record<string, unknown> | undefined
-  assert.equal(storedApp?.useCount, 0)
-})
-
-test('stopping during a delayed Mac app selection prevents persistence', async (context) => {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'ztools-super-panel-mac-stop-add-'))
-  context.after(() => fs.rm(root, { recursive: true, force: true }))
-  const inspectionStarted = deferred<void>()
-  const inspectionResult = deferred<MacApplicationBundle>()
-  const service = createMacService(root, (_selectedPath, signal) => {
-    assert.ok(signal)
-    inspectionStarted.resolve()
-    return inspectionResult.promise
-  }, [])
-  const addOperation = service.addLocalApps(['/Applications/Delayed.app'])
-
-  await inspectionStarted.promise
-  service.stop()
-  inspectionResult.resolve({
-    appPath: '/Applications/Delayed.app',
-    bundleIdentifier: 'com.example.Delayed',
-    executableName: 'Delayed'
-  })
-
-  await assert.rejects(addOperation, /数据服务已停止/)
-  await assert.rejects(fs.access(path.join(root, 'local_apps.json')))
-})
-
-test('stopping during Mac bundle revalidation prevents opening and usage updates', async (context) => {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'ztools-super-panel-mac-stop-launch-'))
-  context.after(() => fs.rm(root, { recursive: true, force: true }))
-  const inspectionStarted = deferred<void>()
-  const launchInspection = deferred<MacApplicationBundle>()
-  let inspectionCount = 0
-  const opened: string[] = []
-  const appPath = '/Applications/DelayedLaunch.app'
-  const service = createMacService(root, (selectedPath) => {
-    inspectionCount += 1
-    if (inspectionCount === 1) {
-      return Promise.resolve({
-        appPath: selectedPath,
-        bundleIdentifier: 'com.example.DelayedLaunch',
-        executableName: 'DelayedLaunch'
-      })
-    }
-    inspectionStarted.resolve()
-    return launchInspection.promise
-  }, opened)
-
-  assert.equal(await service.addLocalApps([appPath]), 1)
-  const app = (await service.getData()).items.find((item) => item.name === 'DelayedLaunch')
-  assert.ok(app)
-  const launchOperation = service.launchLocalApp(app.id)
-  await inspectionStarted.promise
-  service.stop()
-  launchInspection.resolve({
-    appPath,
-    bundleIdentifier: 'com.example.DelayedLaunch',
-    executableName: 'DelayedLaunch'
-  })
-
-  await assert.rejects(launchOperation, /数据服务已停止/)
-  assert.deepEqual(opened, [])
-  const storedApp = (await readLocalApps(root)).apps.find((item) => isRecord(item) && item.appPath === appPath)
-  assert.equal((storedApp as Record<string, unknown> | undefined)?.useCount, 0)
-  assert.equal((storedApp as Record<string, unknown> | undefined)?.lastUsedAt, '')
-})
-
-test('refuses a Mac ID collision when its canonical path points at another bundle', async (context) => {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'ztools-super-panel-mac-collision-'))
-  context.after(() => fs.rm(root, { recursive: true, force: true }))
-  const appPath = '/Applications/Selected.app'
-  const id = `localapp:mac:${createHash('sha256').update(`mac-app-bundle\0${appPath}`, 'utf8').digest('hex').toUpperCase()}`
-  const existing = {
-    id,
-    type: 'mac-app-bundle',
-    appPath: '/Applications/Different.app',
-    bundleIdentifier: 'com.example.Different',
-    name: 'Different',
-    panelEnabled: true
-  }
-  await fs.writeFile(path.join(root, 'local_apps.json'), JSON.stringify({ apps: [existing] }), 'utf8')
-  const service = createMacService(root, async (selectedPath) => ({
-    appPath: selectedPath,
-    bundleIdentifier: 'com.example.Selected',
-    executableName: 'Selected'
-  }), [])
-
-  await assert.rejects(service.addLocalApps([appPath]), /ID 冲突/)
-  assert.deepEqual((await readLocalApps(root)).apps, [existing])
-})
-
-test('does not count a Mac app when LaunchServices reports an open error', async (context) => {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'ztools-super-panel-mac-open-error-'))
-  context.after(() => fs.rm(root, { recursive: true, force: true }))
-  const opened: string[] = []
-  const appPath = '/Applications/Unavailable.app'
-  const service = createMacService(root, async (selectedPath) => ({
-    appPath: selectedPath,
-    bundleIdentifier: 'com.example.Unavailable',
-    executableName: 'Unavailable'
-  }), opened, 'LaunchServices open failed')
-
-  assert.equal(await service.addLocalApps([appPath]), 1)
-  const app = (await service.getData()).items.find((item) => item.name === 'Unavailable')
-  assert.ok(app)
-  await assert.rejects(service.launchLocalApp(app.id), /LaunchServices open failed/)
-  assert.deepEqual(opened, [appPath])
-  const storedApp = (await readLocalApps(root)).apps.find((item) => isRecord(item) && item.appPath === appPath)
-  assert.equal((storedApp as Record<string, unknown> | undefined)?.useCount, 0)
-
-})
-
-test('orders plugin recents by last-used time and local apps by legacy usage order', windowsOnly, async (context) => {
+test('orders plugin recents by last-used time', async (context) => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'ztools-super-panel-order-'))
   context.after(() => fs.rm(root, { recursive: true, force: true }))
   await fs.writeFile(path.join(root, 'plugin_state.json'), JSON.stringify({
@@ -333,45 +78,13 @@ test('orders plugin recents by last-used time and local apps by legacy usage ord
       use_count: 999
     }
   }), 'utf8')
-  await fs.writeFile(path.join(root, 'local_apps.json'), JSON.stringify({
-    apps: [
-      {
-        id: 'localapp:AAAABBBB',
-        name: 'Older',
-        exePath: process.execPath,
-        arguments: '',
-        panelEnabled: true,
-        useCount: 10,
-        lastUsedAt: '2024-01-01 00:00:00'
-      },
-      {
-        id: 'localapp:CCCCDDDD',
-        name: 'Newer',
-        exePath: process.execPath,
-        arguments: '',
-        panelEnabled: true,
-        useCount: 10,
-        lastUsedAt: '2024-02-01 00:00:00'
-      },
-      {
-        id: 'localapp:EEEEFFFF',
-        name: 'Unused',
-        exePath: process.execPath,
-        arguments: '',
-        panelEnabled: true,
-        useCount: 0,
-        lastUsedAt: '2024-03-01 00:00:00'
-      }
-    ]
-  }), 'utf8')
 
   const service = new SuperPanelDataService(
     root,
     {
       get: async () => JSON.stringify({
         defaultTab: 'all',
-        maxRecentCount: 5,
-        pinnedLocalApps: []
+        maxRecentCount: 5
       }),
       set: async () => undefined
     },
@@ -394,10 +107,6 @@ test('orders plugin recents by last-used time and local apps by legacy usage ord
   )
   assert.equal(data.items.find((item) => item.id === 'plugin.timestamp')?.recent, true)
   assert.equal(data.items.find((item) => item.id === 'plugin.count')?.recent, false)
-  assert.deepEqual(
-    data.items.filter((item) => item.type === 'local').map((item) => item.id),
-    ['localapp:CCCCDDDD', 'localapp:AAAABBBB', 'localapp:EEEEFFFF']
-  )
 })
 
 test('最近使用插件固定最多 10 条，忽略旧配置中的 maxRecentCount', async (context) => {
@@ -412,7 +121,7 @@ test('最近使用插件固定最多 10 条，忽略旧配置中的 maxRecentCou
   const service = new SuperPanelDataService(
     root,
     {
-      get: async () => JSON.stringify({ maxRecentCount: 3, pinnedLocalApps: [] }),
+      get: async () => JSON.stringify({ maxRecentCount: 3 }),
       set: async () => undefined
     },
     async () => ({ success: true, data: ids.map((id) => ({ id, name: id, enabled: true })) }),
@@ -423,120 +132,17 @@ test('最近使用插件固定最多 10 条，忽略旧配置中的 maxRecentCou
   assert.deepEqual(plugins.map((item) => item.id), [...ids].reverse().slice(0, 10))
 })
 
-test('launches legacy local app arguments without shell expansion', windowsOnly, async (context) => {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'ztools-super-panel-args-'))
-  context.after(() => fs.rm(root, { recursive: true, force: true }))
-  const workingDir = path.dirname(process.execPath)
-  await fs.writeFile(path.join(root, 'local_apps.json'), JSON.stringify({
-    apps: [{
-      id: 'localapp:ABCDEF12',
-      name: 'Argument app',
-      exePath: process.execPath,
-      arguments: '--profile "portable data" --flag=one',
-      workingDir,
-      panelEnabled: true,
-      useCount: 0,
-      lastUsedAt: ''
-    }]
-  }), 'utf8')
-  const launches: Array<{ fullPath: string; args: readonly string[]; workingDir: string }> = []
-  const service = new SuperPanelDataService(
-    root,
-    {
-      get: async () => JSON.stringify({ defaultTab: 'all', pinnedLocalApps: [] }),
-      set: async () => undefined
-    },
-    async () => ({ success: true, data: [] }),
-    async () => {
-      throw new Error('openPath should not handle local app arguments')
-    },
-    undefined,
-    async (fullPath, args, launchWorkingDir) => {
-      launches.push({ fullPath, args, workingDir: launchWorkingDir })
-      return ''
-    }
-  )
-
-  await service.launchLocalApp('localapp:ABCDEF12')
-  assert.deepEqual(launches, [{
-    fullPath: await fs.realpath(process.execPath),
-    args: ['--profile', 'portable data', '--flag=one'],
-    workingDir: await fs.realpath(workingDir)
-  }])
-  const localDocument = JSON.parse(await fs.readFile(path.join(root, 'local_apps.json'), 'utf8').then(
-    (source) => source.replace(/^\uFEFF/, '')
-  )) as { apps: Array<{ useCount: number; lastUsedAt: string }> }
-  assert.equal(localDocument.apps[0]?.useCount, 1)
-  assert.notEqual(localDocument.apps[0]?.lastUsedAt, '')
-
-  await fs.writeFile(path.join(root, 'local_apps.json'), JSON.stringify({
-    apps: [{
-      id: 'localapp:ABCDEF12',
-      name: 'Argument app',
-      exePath: process.execPath,
-      arguments: '--bad\u0000value',
-      workingDir,
-      panelEnabled: true,
-      useCount: 1,
-      lastUsedAt: localDocument.apps[0]?.lastUsedAt ?? ''
-    }]
-  }), 'utf8')
-  await assert.rejects(
-    service.launchLocalApp('localapp:ABCDEF12'),
-    /本地软件参数无效/
-  )
-  assert.equal(launches.length, 1)
-})
-
-test('uses a native data URL for local app icons without exposing file paths', windowsOnly, async (context) => {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'ztools-super-panel-icon-'))
-  context.after(() => fs.rm(root, { recursive: true, force: true }))
-  await fs.writeFile(path.join(root, 'local_apps.json'), JSON.stringify({
-    apps: [{
-      id: 'localapp:1234ABCD',
-      name: 'Icon app',
-      exePath: process.execPath,
-      iconPath: process.execPath,
-      arguments: '',
-      panelEnabled: true,
-      useCount: 0,
-      lastUsedAt: ''
-    }]
-  }), 'utf8')
-  const iconPaths: string[] = []
-  const service = new SuperPanelDataService(
-    root,
-    {
-      get: async () => JSON.stringify({ defaultTab: 'all', pinnedLocalApps: [] }),
-      set: async () => undefined
-    },
-    async () => ({ success: true, data: [] }),
-    async () => '',
-    undefined,
-    undefined,
-    async (fullPath) => {
-      iconPaths.push(fullPath)
-      return 'data:image/png;base64,AA=='
-    }
-  )
-
-  const data = await service.getData()
-  assert.equal(data.items.find((item) => item.id === 'localapp:1234ABCD')?.iconUrl, 'data:image/png;base64,AA==')
-  assert.deepEqual(iconPaths, [await fs.realpath(process.execPath)])
-})
-
 test('adds validated legacy system tools with searchable category aliases', async (context) => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'ztools-super-panel-system-tools-'))
   context.after(() => fs.rm(root, { recursive: true, force: true }))
   const service = new SuperPanelDataService(
     root,
     {
-      get: async () => JSON.stringify({ defaultTab: 'system_tools', pinnedLocalApps: [] }),
+      get: async () => JSON.stringify({ defaultTab: 'system_tools' }),
       set: async () => undefined
     },
     async () => ({ success: true, data: [] }),
     async () => '',
-    undefined,
     undefined,
     undefined,
     {
@@ -589,4 +195,338 @@ test('adds validated legacy system tools with searchable category aliases', asyn
   assert.equal(data.items[0]?.iconUrl, 'data:image/png;base64,AA==')
   assert.deepEqual(data.items[0]?.keywords, ['系统工具', '常用 核心', '我的电脑 计算机'])
   assert.deepEqual(data.items[1]?.keywords, ['系统工具', '设置 系统设置', '电脑设置 Windows设置 设置中心'])
+})
+
+test('v1 迁移幂等性：合并 plugin_state.pinned 与合法已有条目，安全忽略残留 pinnedLocalApps / local-app 且并发仅写一次', async (context) => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'ztools-super-panel-migrate-'))
+  context.after(() => fs.rm(root, { recursive: true, force: true }))
+  await fs.writeFile(path.join(root, 'plugin_state.json'), JSON.stringify({
+    'plugin.alpha': { enabled: true, pinned: true },
+    'plugin.beta': { enabled: true, pinned: false }
+  }), 'utf8')
+
+  let configuration = JSON.stringify({
+    pinnedLocalApps: ['localapp:11223344'],
+    pinnedEntries: [
+      { kind: 'builtin', commandKey: 'system:lock' },
+      { kind: 'local-app', appId: 'localapp:11223344' }
+    ]
+  })
+  const setCalls: Array<{ fileName: string; key: string; syncEnabled: boolean; value: string }> = []
+  const service = new SuperPanelDataService(
+    root,
+    {
+      get: async () => configuration,
+      set: async (fileName, key, value, syncEnabled) => {
+        setCalls.push({ fileName, key, value, syncEnabled })
+        configuration = value
+      }
+    },
+    async () => ({
+      success: true,
+      data: [
+        { id: 'plugin.alpha', name: 'Alpha', enabled: true },
+        { id: 'plugin.beta', name: 'Beta', enabled: true }
+      ]
+    }),
+    async () => ''
+  )
+
+  const [first, second] = await Promise.all([service.getData(), service.getData()])
+  assert.equal(setCalls.length, 1, '并发读取未迁移配置时，在锁内二次检查后应仅执行一次写回')
+  assert.equal(setCalls[0]?.fileName, 'user_settings.json')
+  assert.equal(setCalls[0]?.key, 'super_panel')
+  assert.equal(setCalls[0]?.syncEnabled, false)
+
+  const persisted = JSON.parse(configuration) as {
+    pinnedSchemaVersion: number
+    pinnedLocalApps?: unknown
+    pinnedEntries: unknown[]
+  }
+  assert.equal(persisted.pinnedSchemaVersion, 2)
+  assert.equal('pinnedLocalApps' in persisted, false)
+  assert.deepEqual(persisted.pinnedEntries, [
+    { kind: 'plugin', pluginId: 'plugin.alpha' },
+    { kind: 'builtin', commandKey: 'system:lock' }
+  ])
+  assert.deepEqual(first.pinnedEntries, second.pinnedEntries)
+
+  // 再次调用 getData 不再触发写回
+  await service.getData()
+  assert.equal(setCalls.length, 1)
+})
+
+test('pinnedSchemaVersion === 2 时忽略残留 kind: local-app 与 pinnedLocalApps，并保留其余全部 5 类合法固定项', async (context) => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'ztools-super-panel-v2-ignore-legacy-'))
+  context.after(() => fs.rm(root, { recursive: true, force: true }))
+  const sampleFile = path.join(root, 'GreenApp.exe')
+  await fs.writeFile(sampleFile, 'exe-bytes', 'utf8')
+  const realSampleFile = await fs.realpath(sampleFile)
+
+  await fs.writeFile(path.join(root, 'plugin_state.json'), JSON.stringify({
+    'plugin.legacy': { enabled: true, pinned: true },
+    'plugin.active': { enabled: true, pinned: false }
+  }), 'utf8')
+
+  let writes = 0
+  const configuration = JSON.stringify({
+    pinnedSchemaVersion: 2,
+    pinnedLocalApps: ['localapp:CAFEBABE'],
+    pinnedEntries: [
+      { kind: 'plugin', pluginId: 'plugin.active' },
+      { kind: 'local-app', appId: 'localapp:CAFEBABE' },
+      { kind: 'plugin-feature', pluginId: 'plugin.active', featureCode: 'run' },
+      { kind: 'builtin', commandKey: 'system:lock' },
+      { kind: 'system-tool', toolId: 'this_pc' },
+      { kind: 'file', path: realSampleFile, name: 'GreenApp.exe', isDir: false, isApplication: true }
+    ]
+  })
+  const service = new SuperPanelDataService(
+    root,
+    {
+      get: async () => configuration,
+      set: async () => { writes += 1 }
+    },
+    async () => ({
+      success: true,
+      data: [
+        { id: 'plugin.legacy', name: 'Legacy', enabled: true },
+        { id: 'plugin.active', name: 'Active', enabled: true }
+      ]
+    }),
+    async () => ''
+  )
+
+  const data = await service.getData()
+  assert.equal(writes, 0)
+  assert.equal(data.items.find((item) => item.id === 'plugin.legacy')?.pinned, false)
+  assert.equal(data.items.find((item) => item.id === 'plugin.active')?.pinned, true)
+  assert.deepEqual(
+    data.pinnedEntries.map((item) => item.entry.kind),
+    ['plugin', 'plugin-feature', 'builtin', 'system-tool', 'file']
+  )
+})
+
+test('setPin 支持 5 类固定末尾追加、幂等、plugin_state.pinned 同步、非法 local-app 拒绝与 50 次并发写入一致', async (context) => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'ztools-super-panel-setpin-'))
+  context.after(() => fs.rm(root, { recursive: true, force: true }))
+  const sampleFile = path.join(root, 'doc.txt')
+  await fs.writeFile(sampleFile, 'hello', 'utf8')
+
+  let configuration = JSON.stringify({ pinnedSchemaVersion: 2, pinnedEntries: [] })
+  let changeEvents = 0
+  const service = new SuperPanelDataService(
+    root,
+    {
+      get: async () => configuration,
+      set: async (_fileName, _key, value) => { configuration = value }
+    },
+    async () => ({ success: true, data: [{ id: 'plug.one', name: 'Plug One', enabled: true }] }),
+    async () => '',
+    {
+      resolveAuthorizedReadPath: async (rawPath) => fs.realpath(rawPath),
+      onChanged: () => { changeEvents += 1 }
+    }
+  )
+
+  // 已下线的 local-app 与 togglePin(..., 'local') 明确抛错拒绝
+  await assert.rejects(
+    service.setPin({ kind: 'local-app', appId: 'localapp:AABBCCDD' }, true),
+    /固定项格式无效/
+  )
+  await assert.rejects(
+    service.togglePin('localapp:AABBCCDD', 'local'),
+    /不支持的项目类型/
+  )
+
+  const entries = [
+    { kind: 'plugin', pluginId: 'plug.one' },
+    { kind: 'plugin-feature', pluginId: 'plug.one', featureCode: 'feat-a' },
+    { kind: 'builtin', commandKey: 'system:lock' },
+    { kind: 'system-tool', toolId: 'this_pc' },
+    { kind: 'file', path: sampleFile, name: 'doc.txt', isDir: false, isApplication: false }
+  ] as const
+
+  for (const entry of entries) {
+    const res = await service.setPin(entry, true)
+    assert.equal(res.pinned, true)
+  }
+  assert.equal(changeEvents, 5)
+
+  // 重复固定首项应幂等且不改变其位置（不移动到末尾）
+  const idempotent = await service.setPin(entries[0], true)
+  assert.equal(idempotent.pinnedEntries.length, 5)
+  assert.equal(idempotent.pinnedEntries[0]?.pinKey, 'plugin:plug.one')
+  assert.equal(changeEvents, 5)
+
+  // 降级兼容字段同步检查：plugin_state.pinned
+  const pluginStateDoc = JSON.parse(
+    (await fs.readFile(path.join(root, 'plugin_state.json'), 'utf8')).replace(/^\uFEFF/, '')
+  ) as Record<string, { pinned?: boolean }>
+  assert.equal(pluginStateDoc['plug.one']?.pinned, true)
+
+  // 取消固定 plugin 同步清理旧字段防降级复活
+  await service.setPin(entries[0], false)
+  const pluginStateAfter = JSON.parse(
+    (await fs.readFile(path.join(root, 'plugin_state.json'), 'utf8')).replace(/^\uFEFF/, '')
+  ) as Record<string, { pinned?: boolean }>
+  assert.equal(pluginStateAfter['plug.one']?.pinned, false)
+
+  // 50 次并发 setPin 全部落在同一串行锁下，不丢失任何一次更新
+  const concurrentInputs = Array.from({ length: 50 }, (_, index) => ({
+    kind: 'builtin' as const,
+    commandKey: `concurrent.cmd.${index}`
+  }))
+  await Promise.all(concurrentInputs.map((item) => service.setPin(item, true)))
+  const afterConcurrent = await service.getData()
+  for (const item of concurrentInputs) {
+    assert.ok(
+      afterConcurrent.pinnedEntries.some((resolved) => resolved.pinKey === `builtin:${item.commandKey}`),
+      `缺失并发写入的条目: ${item.commandKey}`
+    )
+  }
+})
+
+test('reorderPins 合法重排与并发变化 stale 集合不一致拒绝', async (context) => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'ztools-super-panel-reorder-'))
+  context.after(() => fs.rm(root, { recursive: true, force: true }))
+  let configuration = JSON.stringify({
+    pinnedSchemaVersion: 2,
+    pinnedEntries: [
+      { kind: 'builtin', commandKey: 'cmd.a' },
+      { kind: 'builtin', commandKey: 'cmd.b' },
+      { kind: 'system-tool', toolId: 'this_pc' }
+    ]
+  })
+  let changeEvents = 0
+  let writes = 0
+  const service = new SuperPanelDataService(
+    root,
+    {
+      get: async () => configuration,
+      set: async (_fileName, _key, value) => {
+        writes += 1
+        configuration = value
+      }
+    },
+    async () => ({ success: true, data: [] }),
+    async () => '',
+    { onChanged: () => { changeEvents += 1 } }
+  )
+
+  const reordered = await service.reorderPins(['system-tool:this_pc', 'builtin:cmd.b', 'builtin:cmd.a'])
+  assert.equal(reordered.success, true)
+  assert.deepEqual(
+    reordered.pinnedEntries.map((item) => item.pinKey),
+    ['system-tool:this_pc', 'builtin:cmd.b', 'builtin:cmd.a']
+  )
+  assert.equal(writes, 1)
+  assert.equal(changeEvents, 1)
+
+  // 集合不一致（少项或存在未知 key）返回 stale: true 且不写盘
+  const staleMissing = await service.reorderPins(['system-tool:this_pc', 'builtin:cmd.b'])
+  assert.equal(staleMissing.success, false)
+  if (!staleMissing.success) {
+    assert.equal(staleMissing.stale, true)
+    assert.match(staleMissing.error, /已变化/)
+  }
+  const staleExtra = await service.reorderPins(['system-tool:this_pc', 'builtin:cmd.b', 'builtin:cmd.c'])
+  assert.equal(staleExtra.success, false)
+  assert.equal(writes, 1)
+
+  // 重复或非数组入参直接抛错
+  await assert.rejects(service.reorderPins(['builtin:cmd.a', 'builtin:cmd.a']), /重复/)
+  await assert.rejects(service.reorderPins('invalid'), /无效/)
+})
+
+test('file 类型存在性并发检查、绿色 .exe 应用图标 mtime 缓存与 openPinnedFile 处理', async (context) => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'ztools-super-panel-files-'))
+  context.after(() => fs.rm(root, { recursive: true, force: true }))
+  const appExe = path.join(root, 'MyApp.exe')
+  const plainFile = path.join(root, 'notes.txt')
+  const folder = path.join(root, 'workspace')
+  const deletedFile = path.join(root, 'gone.txt')
+  await fs.writeFile(appExe, 'exe-bytes', 'utf8')
+  await fs.writeFile(plainFile, 'note', 'utf8')
+  await fs.mkdir(folder)
+  await fs.writeFile(deletedFile, 'gone', 'utf8')
+
+  const realAppExe = await fs.realpath(appExe)
+  const realPlainFile = await fs.realpath(plainFile)
+  const realFolder = await fs.realpath(folder)
+  const realDeletedFile = await fs.realpath(deletedFile)
+
+  let configuration = JSON.stringify({
+    pinnedSchemaVersion: 2,
+    pinnedEntries: [
+      { kind: 'file', path: realAppExe, name: 'MyApp.exe', isDir: false, isApplication: true },
+      { kind: 'file', path: realPlainFile, name: 'notes.txt', isDir: false, isApplication: false },
+      { kind: 'file', path: realFolder, name: 'workspace', isDir: true, isApplication: false },
+      { kind: 'file', path: realDeletedFile, name: 'gone.txt', isDir: false, isApplication: true }
+    ]
+  })
+  await fs.rm(realDeletedFile)
+
+  const iconCalls: string[] = []
+  const opened: string[] = []
+  const revealed: string[] = []
+  let iconSerial = 0
+  const service = new SuperPanelDataService(
+    root,
+    {
+      get: async () => configuration,
+      set: async (_f, _k, value) => { configuration = value }
+    },
+    async () => ({ success: true, data: [] }),
+    async (target) => { opened.push(target); return '' },
+    {
+      revealPath: (target) => { revealed.push(target) }
+    },
+    async (fullPath) => {
+      iconCalls.push(fullPath)
+      iconSerial += 1
+      return `data:image/png;base64,${Buffer.from(String(iconSerial)).toString('base64')}`
+    }
+  )
+
+  const first = await service.getData()
+  assert.equal(first.pinnedEntries.length, 4)
+  assert.equal(first.pinnedEntries[0]?.available, true)
+  assert.match(first.pinnedEntries[0]?.iconUrl ?? '', /^data:image\/png;base64,/)
+  assert.equal(first.pinnedEntries[1]?.available, true)
+  assert.equal(first.pinnedEntries[1]?.iconUrl, undefined, '非应用文件不读取图标')
+  assert.equal(first.pinnedEntries[2]?.available, true)
+  assert.equal(first.pinnedEntries[3]?.available, false)
+  assert.equal(first.pinnedEntries[3]?.iconUrl, undefined, '不可用应用不读取图标')
+  assert.deepEqual(iconCalls, [realAppExe])
+
+  // 第二次读取命中缓存
+  const second = await service.getData()
+  assert.equal(second.pinnedEntries[0]?.iconUrl, first.pinnedEntries[0]?.iconUrl)
+  assert.deepEqual(iconCalls, [realAppExe])
+
+  // 修改文件 mtime 后缓存失效并重新读取图标
+  const nextMtime = new Date(Date.now() + 10_000)
+  await fs.utimes(realAppExe, nextMtime, nextMtime)
+  const third = await service.getData()
+  assert.equal(iconCalls.length, 2)
+  assert.notEqual(third.pinnedEntries[0]?.iconUrl, first.pinnedEntries[0]?.iconUrl)
+
+  // openPinnedFile：正常打开绿色 .exe、普通文件及定位文件/目录
+  const appPinKey = first.pinnedEntries[0]!.pinKey
+  const plainPinKey = first.pinnedEntries[1]!.pinKey
+  const folderPinKey = first.pinnedEntries[2]!.pinKey
+  const deletedPinKey = first.pinnedEntries[3]!.pinKey
+
+  await service.openPinnedFile(appPinKey, 'open')
+  await service.openPinnedFile(plainPinKey, 'open')
+  await service.openPinnedFile(plainPinKey, 'reveal')
+  await service.openPinnedFile(folderPinKey, 'reveal')
+  assert.deepEqual(opened, [realAppExe, realPlainFile, realFolder])
+  assert.deepEqual(revealed, [realPlainFile])
+
+  // 失效文件拒绝打开；未在白名单内的路径同样拒绝
+  await assert.rejects(service.openPinnedFile(deletedPinKey, 'open'), /不存在或已失效/)
+  await assert.rejects(service.openPinnedFile(`file:${path.join(root, 'unpinned.txt')}`, 'open'), /不存在或已失效/)
+  await assert.rejects(service.openPinnedFile(appPinKey, 'unknown' as 'open'), /动作无效/)
 })

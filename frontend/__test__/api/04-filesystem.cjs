@@ -14,13 +14,13 @@ module.exports = async (runner) => {
       }
     },
     {
-      name: 'fs.fileExists 检测已知文件',
+      name: 'fs.directoryExists 检测当前目录存在',
       fn: async (cdp, assert) => {
-        // 当前目录是 bin/Data，ZTools exe 在 bin/ 下
+        // 校验当前工作目录真实存在，不依赖 legacy bin/ 目录结构
         const exists = await cdp.evaluate(
-          '(async function(){ var dir = await ztools.fs.getCurrentDirectory(); var exePath = dir.replace(/\\\\Data$/i, "") + "\\\\ZTools_Debug.exe"; var r = await ztools.fs.fileExists(exePath); if (!r) { exePath = dir.replace(/\\\\Data$/i, "") + "\\\\ZTools.exe"; r = await ztools.fs.fileExists(exePath); } return r; })()'
+          '(async function(){ var dir = await ztools.fs.getCurrentDirectory(); return await ztools.fs.directoryExists(dir); })()'
         )
-        assert.ok(exists === true, 'ZTools exe 应存在于 bin 目录')
+        assert.ok(exists === true, '当前目录应真实存在')
       }
     },
     {

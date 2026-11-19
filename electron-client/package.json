@@ -1,6 +1,6 @@
 {
   "name": "ztools-electron-client",
-  "version": "1.1.8.12",
+  "version": "1.1.9.0",
   "private": true,
   "license": "GPL-3.0-only",
   "description": "ZTools Electron Windows x64 client",
@@ -58,7 +58,7 @@
     "test:reference:zip": "node tests/scripts/test-reference-zip.mjs",
     "test:mac:contracts": "node tests/scripts/run-test-workflow.mjs mac-contracts",
     "start": "npm run build:native-host32 && npm run build && electron .",
-    "package:app:win32:x64": "npm run build:native-host32 && npm run build:ztools-service && npm run build:native:win:path-access-broker && npm run build && node scripts/package.mjs",
+    "package:app:win32:x64": "npm run build:native-host32 && npm run build:ztools-service && npm run build:native:sidecars && npm run build:native:win:path-access-broker && npm run build && node scripts/package.mjs",
     "package:app:darwin:universal": "node scripts/package-macos-universal.mjs",
     "package:dmg:darwin": "node scripts/package-macos-dmg.mjs",
     "test:portable-contract": "tsc -p tsconfig.test.json && node tests/scripts/run-tests.mjs portable-contract",

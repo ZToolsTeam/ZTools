@@ -1,10 +1,12 @@
 import assert from 'node:assert/strict'
 import { Buffer } from 'node:buffer'
-import { randomBytes } from 'node:crypto'
-import { createServer, type Server, type Socket } from 'node:net'
+import { randomBytes, randomUUID } from 'node:crypto'
+import { spawn, spawnSync, type ChildProcessWithoutNullStreams } from 'node:child_process'
+import { createConnection, createServer, type Server, type Socket } from 'node:net'
 import test from 'node:test'
 import { errorCodes, ZToolsError } from '../../src/contracts/errors.js'
 import { ServiceClient } from '../../src/main/service/service-client.js'
+import { ServiceBridgeTransport } from '../../src/main/service/service-transport.js'
 import {
   decodeServiceContextMenuCheckAdmin,
   decodeServiceContextMenuRestartExplorer,
@@ -58,7 +60,7 @@ function policyStatusPayload(flags = 2, allowedTargetCount = 1): Buffer {
 }
 
 function pipeName(name: string): string {
-  return `\\\\.\\pipe\\ztools-service-${process.pid}-${Date.now()}-${name}`
+  return `\\\\.\\pipe\\ztools-service-${process.pid}-${randomUUID()}-${name}`
 }
 
 function listen(server: Server, pipe: string): Promise<void> {
@@ -80,7 +82,9 @@ function write(socket: Socket, frame: ServiceFrame): void {
 }
 
 function createAuthenticatedServer(secret?: Buffer, scheduleResponse?: (send: () => void) => void,
-  subscribe?: (emit: (ids: string[], sequence: bigint, corrupt?: boolean) => void) => void): Server {
+  subscribe?: (emit: (ids: string[], sequence: bigint, corrupt?: boolean) => void) => void,
+  interceptHandshake?: (socket: Socket, frame: ServiceFrame, sessionKey?: Buffer) => boolean,
+  clientProcessId: () => number = () => process.pid): Server {
   return createServer((socket) => {
     const decoder = new ServiceFrameDecoder()
     let state: 'hello' | 'auth' | 'ready' = 'hello'
@@ -96,13 +100,14 @@ function createAuthenticatedServer(secret?: Buffer, scheduleResponse?: (send: ()
             assert.equal(incoming.payload.length, SERVICE_NONCE_BYTES)
             clientNonce = Buffer.from(incoming.payload)
             serverNonce = randomBytes(SERVICE_NONCE_BYTES)
-            const proof = makeServiceServerProof(secret ?? serverNonce, process.pid, clientNonce, serverNonce)
-            write(socket, {
+            const proof = makeServiceServerProof(secret ?? serverNonce, clientProcessId(), clientNonce, serverNonce)
+            const hello = {
               type: ServiceFrameType.ServerHello,
               flags: 0,
               requestId: incoming.requestId,
               payload: Buffer.concat([serverNonce, proof])
-            })
+            }
+            if (!interceptHandshake?.(socket, hello)) write(socket, hello)
             proof.fill(0)
             state = 'auth'
             continue
@@ -110,17 +115,18 @@ function createAuthenticatedServer(secret?: Buffer, scheduleResponse?: (send: ()
           if (state === 'auth') {
             assert(clientNonce && serverNonce)
             assert.equal(incoming.type, ServiceFrameType.ClientAuth)
-            const expected = makeServiceClientProof(secret ?? serverNonce, process.pid, clientNonce, serverNonce)
+            const expected = makeServiceClientProof(secret ?? serverNonce, clientProcessId(), clientNonce, serverNonce)
             assert.equal(incoming.payload.length, SERVICE_PROOF_BYTES)
             assert.equal(incoming.payload.equals(expected), true)
             expected.fill(0)
-            sessionKey = deriveServiceSessionKey(secret ?? serverNonce, process.pid, clientNonce, serverNonce)
-            write(socket, sealServiceFrame(sessionKey, 'service-to-client', {
+            sessionKey = deriveServiceSessionKey(secret ?? serverNonce, clientProcessId(), clientNonce, serverNonce)
+            const acknowledged = sealServiceFrame(sessionKey, 'service-to-client', {
               type: ServiceFrameType.Response,
               flags: 0,
               requestId: incoming.requestId,
               payload: Buffer.from('AUTHENTICATED', 'ascii')
-            }))
+            })
+            if (!interceptHandshake?.(socket, acknowledged, sessionKey)) write(socket, acknowledged)
             state = 'ready'
             continue
           }
@@ -381,11 +387,11 @@ test('ServiceClient reads fail-closed policy and keeps privileged commands close
   assert.equal(client.diagnostics.state, 'closed')
 })
 
-test('ServiceClient connects and exchanges commands without an installation secret', async () => {
+test('ServiceClient accepts an explicitly verified transport without an installation secret', async () => {
   const pipe = pipeName('keyless')
   const server = createAuthenticatedServer()
   await listen(server, pipe)
-  const client = new ServiceClient({ pipeName: pipe })
+  const client = new ServiceClient({ pipeName: pipe, createTransport: createConnection })
   try {
     assert.equal(await client.start(), true, JSON.stringify(client.diagnostics))
     assert.equal(client.diagnostics.state, 'ready')
@@ -399,11 +405,85 @@ test('ServiceClient connects and exchanges commands without an installation secr
   }
 })
 
+test('ServiceClient authenticates using the PID of the process that owns the transport', { timeout: 5000 }, async () => {
+  const pipe = pipeName('bridge-client-pid')
+  const secret = Buffer.alloc(32, 0x5a)
+  let child: ChildProcessWithoutNullStreams | undefined
+  let childClosed: Promise<void> = Promise.resolve()
+  const server = createAuthenticatedServer(secret, undefined, undefined, undefined, () => {
+    assert(child?.pid)
+    return child.pid
+  })
+  const client = new ServiceClient({
+    pipeName: pipe,
+    secret,
+    createTransport: (name) => new ServiceBridgeTransport(process.execPath, name, 1000, () => {
+      child = spawn(process.execPath, ['--input-type=module', '-e', `
+        import { createConnection } from 'node:net';
+        const socket = createConnection(process.argv[1]);
+        socket.on('connect', () => {
+          process.stderr.write(JSON.stringify({status:'ready',clientPid:process.pid})+'\\n');
+          process.stdin.pipe(socket).pipe(process.stdout);
+        });
+      `, name], { windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'] })
+      childClosed = new Promise<void>((resolve) => child?.once('close', () => resolve()))
+      return child
+    })
+  })
+  try {
+    await listen(server, pipe)
+    assert.equal(await client.start(2000), true, JSON.stringify(client.diagnostics))
+    assert.notEqual(child?.pid, process.pid)
+    assert.equal(await client.contextMenuCheckAdmin(), true)
+  } finally {
+    client.stop()
+    let timer: NodeJS.Timeout | undefined
+    try {
+      await Promise.race([childClosed, new Promise<void>((_resolve, reject) => {
+        timer = setTimeout(() => {
+          if (child?.pid && child.exitCode === null && child.signalCode === null) {
+            if (process.platform === 'win32') spawnSync('taskkill', ['/F', '/T', '/PID', String(child.pid)], { windowsHide: true, stdio: 'ignore' })
+            else child.kill('SIGKILL')
+          }
+          reject(new Error('transport owner process did not exit'))
+        }, 2500)
+      })])
+    } finally {
+      if (timer) clearTimeout(timer)
+      await closeServer(server)
+    }
+  }
+})
+
+test('ServiceClient rejects an unverified keyless server before sending handshake data', async () => {
+  const pipe = pipeName('unverified-keyless')
+  let sentBytes = 0
+  const sockets: Socket[] = []
+  const server = createServer((socket) => {
+    sockets.push(socket)
+    socket.on('data', (chunk: Buffer) => { sentBytes += chunk.length })
+  })
+  const client = new ServiceClient({ pipeName: pipe })
+  try {
+    await listen(server, pipe)
+    await assert.rejects(client.start(), (error: unknown) =>
+      error instanceof ZToolsError && error.code === errorCodes.serviceAuthentication)
+    assert.equal(client.diagnostics.state, 'unavailable')
+    assert.equal(client.diagnostics.lastError, errorCodes.serviceAuthentication)
+    assert.equal(sentBytes, 0)
+  } finally {
+    client.stop()
+    for (const socket of sockets) socket.destroy()
+    await closeServer(server)
+  }
+})
+
 test('ServiceClient reports unavailable pipes and rejects mismatched handshake proofs', async () => {
   const missing = new ServiceClient({ pipeName: pipeName('missing') })
   assert.equal(await missing.start(), false)
   assert.equal(missing.diagnostics.state, 'unavailable')
   assert.equal(missing.diagnostics.lastError, errorCodes.serviceUnavailable)
+  assert.match(missing.diagnostics.lastErrorMessage, /无法连接/)
   missing.stop()
 
   const pipe = pipeName('wrong-secret')
@@ -412,7 +492,8 @@ test('ServiceClient reports unavailable pipes and rejects mismatched handshake p
   const wrongSecret = Buffer.alloc(32, 0x5a)
   const client = new ServiceClient({ pipeName: pipe, secret: wrongSecret })
   try {
-    assert.equal(await client.start(), false)
+    await assert.rejects(client.start(), (error: unknown) =>
+      error instanceof ZToolsError && error.code === errorCodes.serviceAuthentication)
     assert.equal(client.diagnostics.state, 'unavailable')
     assert.equal(client.diagnostics.lastError, errorCodes.serviceAuthentication)
   } finally {
@@ -517,6 +598,119 @@ for (const invalid of ['replay', 'tampered'] as const) {
       assert.equal(client.taskEventsEnabled, false)
     } finally {
       client.stop()
+      await closeServer(server)
+    }
+  })
+}
+
+const handshakeFaults = [
+  'hello-length', 'hello-header', 'hello-metadata', 'hello-partial',
+  'hello-type', 'hello-flags', 'hello-request', 'hello-payload', 'hello-proof', 'hello-zero-nonce',
+  'ack-unsealed', 'ack-short-proof', 'ack-hmac', 'ack-type', 'ack-request', 'ack-content'
+] as const
+
+for (const fault of handshakeFaults) {
+  test(`ServiceClient rejects ${fault}, closes the failed socket and can restart safely`, { timeout: 5000 }, async () => {
+    const pipe = pipeName(fault)
+    const sockets: Socket[] = []
+    const closedConnections: Promise<void>[] = []
+    let faultSent = false
+    const server = createAuthenticatedServer(undefined, undefined, undefined, (socket, frame, sessionKey) => {
+      const helloFault = fault.startsWith('hello-')
+      if (faultSent || (frame.type === ServiceFrameType.ServerHello) !== helloFault) return false
+      faultSent = true
+      let changed: ServiceFrame = { ...frame, payload: Buffer.from(frame.payload) }
+      const reseal = fault === 'ack-type' || fault === 'ack-request' || fault === 'ack-content'
+      if (reseal) {
+        assert(sessionKey)
+        changed = openServiceFrame(sessionKey, 'service-to-client', changed)
+      }
+      if (fault === 'hello-type' || fault === 'ack-type') changed.type = ServiceFrameType.Request
+      if (fault === 'hello-flags') changed.flags = 1
+      if (fault === 'hello-request' || fault === 'ack-request') changed.requestId += 1n
+      if (fault === 'hello-payload') changed.payload = changed.payload.subarray(0, 1)
+      if (fault === 'hello-proof') changed.payload[changed.payload.length - 1] = (changed.payload[changed.payload.length - 1] ?? 0) ^ 1
+      if (fault === 'hello-zero-nonce') changed.payload.fill(0, 0, SERVICE_NONCE_BYTES)
+      if (fault === 'ack-unsealed') changed.flags = 0
+      if (fault === 'ack-short-proof') changed.payload = Buffer.alloc(SERVICE_PROOF_BYTES - 1)
+      if (fault === 'ack-hmac' || fault === 'ack-content') changed.payload[0] = (changed.payload[0] ?? 0) ^ 1
+      if (reseal) changed = sealServiceFrame(sessionKey!, 'service-to-client', { ...changed, flags: 0 })
+      const encoded = encodeServiceFrame(changed)
+      if (fault === 'hello-length') encoded.writeUInt32LE(1, 0)
+      if (fault === 'hello-header') encoded.writeUInt32LE(0, 4)
+      if (fault === 'hello-metadata') encoded.writeUInt32LE(2, 12)
+      if (fault === 'hello-partial') socket.end(encoded.subarray(0, encoded.length - 1))
+      else socket.write(encoded)
+      return true
+    })
+    server.on('connection', (socket) => {
+      sockets.push(socket)
+      closedConnections.push(new Promise<void>((resolve) => socket.once('close', () => resolve())))
+    })
+    const client = new ServiceClient({ pipeName: pipe, createTransport: createConnection })
+    try {
+      await listen(server, pipe)
+      const protocolFault = fault.startsWith('hello-') && fault !== 'hello-proof' && fault !== 'hello-zero-nonce'
+      const expectedCode = protocolFault ? errorCodes.serviceProtocol : errorCodes.serviceAuthentication
+      await assert.rejects(client.start(1000), (error: unknown) =>
+        error instanceof ZToolsError && error.code === expectedCode)
+      assert.equal(client.diagnostics.state, 'unavailable')
+      assert.equal(client.diagnostics.lastError, expectedCode)
+      assert.notEqual(client.diagnostics.lastErrorMessage, '')
+      assert.equal(client.taskEventsEnabled, false)
+      await assert.rejects(client.contextMenuCheckAdmin(), (error: unknown) =>
+        error instanceof ZToolsError && error.code === errorCodes.serviceUnavailable)
+      await closedConnections[0]
+      assert.equal(client.diagnostics.lastError, expectedCode, 'socket close must retain the typed failure diagnosis')
+      assert.equal(sockets[0]?.destroyed, true)
+      assert.equal(await client.start(1000), true, JSON.stringify(client.diagnostics))
+      assert.equal(await client.contextMenuCheckAdmin(), true)
+      assert.equal(sockets.length, 2)
+    } finally {
+      client.stop()
+      for (const socket of sockets) socket.destroy()
+      await closeServer(server)
+    }
+  })
+}
+
+for (const cancel of ['stop', 'abort'] as const) {
+  test(`ServiceClient ${cancel} wins over a late invalid handshake without poisoning restart`, { timeout: 5000 }, async () => {
+    const pipe = pipeName(`cancel-${cancel}`)
+    let enterHandshake!: () => void
+    const entered = new Promise<void>((resolve) => { enterHandshake = resolve })
+    let failedSocket: Socket | undefined
+    let invalidHello: Buffer | undefined
+    const server = createAuthenticatedServer(undefined, undefined, undefined, (socket, frame) => {
+      if (failedSocket || frame.type !== ServiceFrameType.ServerHello) return false
+      failedSocket = socket
+      const invalid = encodeServiceFrame(frame)
+      invalid.writeUInt32LE(0, 4)
+      invalidHello = invalid
+      enterHandshake()
+      return true
+    })
+    const sockets: Socket[] = []
+    server.on('connection', (socket) => sockets.push(socket))
+    const controller = new AbortController()
+    const client = new ServiceClient({ pipeName: pipe, createTransport: createConnection })
+    try {
+      await listen(server, pipe)
+      const starting = client.start(1000, controller.signal)
+      await entered
+      assert(failedSocket && invalidHello)
+      // 先把畸形字节排入传输，再同步取消，捕获取消与 decoder 回调的竞争。
+      failedSocket.write(invalidHello)
+      if (cancel === 'stop') client.stop()
+      else controller.abort()
+      assert.equal(await starting, false)
+      assert.equal(client.diagnostics.state, 'closed')
+      assert.equal(client.diagnostics.lastError, '')
+      assert.equal(await client.start(1000), true)
+      assert.equal(await client.contextMenuCheckAdmin(), true)
+    } finally {
+      client.stop()
+      for (const socket of sockets) socket.destroy()
       await closeServer(server)
     }
   })

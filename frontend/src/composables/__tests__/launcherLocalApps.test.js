@@ -72,13 +72,13 @@ describe('悬浮条本地程序列表：程序随按键当场出结果，文件�
     expect(state.isSearching.value).toBe(false)
   })
 
-  it('同一档里按全局分类权重排序（1B 宿主内置指令 > 2B 已安装软件 > 3A 插件）；英文名也能搜到程序；高亮区间来自排序结果', async () => {
+  it('同一档里按全局分类权重排序（2B 已安装软件 > 3A 插件 > 宿主内置指令）；英文名也能搜到程序；高亮区间来自排序结果', async () => {
     const state = create()
     await settle()
     state.search('设置')
-    // 1B 宿主指令 (system-settings) 排第 1，2B 已安装软件 (System Settings.app) 排第 2
-    expect(state.filteredItems.value[0]).toMatchObject({ key: 'system-settings', name: '系统设置' })
-    expect(state.filteredItems.value[1]).toMatchObject({ name: '系统设置', isApplication: true })
+    // 2B 已安装软件 (System Settings.app) 排第 1，宿主内置指令 (system-settings) 排第 2（最低）
+    expect(state.filteredItems.value[0]).toMatchObject({ name: '系统设置', isApplication: true })
+    expect(state.filteredItems.value[1]).toMatchObject({ key: 'system-settings', name: '系统设置' })
     expect(state.highlightParts(state.filteredItems.value[0])).toEqual([
       { text: '系统', hit: false }, { text: '设置', hit: true }
     ])

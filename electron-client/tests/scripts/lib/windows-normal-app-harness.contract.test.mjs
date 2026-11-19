@@ -1,6 +1,9 @@
 import assert from 'node:assert/strict'
+import fs from 'node:fs'
+import os from 'node:os'
+import path from 'node:path'
 import test from 'node:test'
-import { installIsolatedClipboardGuard, CdpClient, startLoopbackZipServer, waitForMainPageTarget, WindowsNormalAppHarness } from './windows-normal-app-harness.mjs'
+import { installIsolatedClipboardGuard, CdpClient, findMainRuntimeLogFiles, startLoopbackZipServer, waitForMainPageTarget, WindowsNormalAppHarness } from './windows-normal-app-harness.mjs'
 
 test('malformed report and log phase reject before profile access, ports or process launch', async () => {
   const harness = new WindowsNormalAppHarness({ appRoot: '.', executable: 'missing.exe', outputRoot: '.',
@@ -122,4 +125,31 @@ test('preboot clipboard guard never reads or writes the real clipboard', () => {
   assert.throws(() => clipboard.clear(), { message: 'ISOLATED_CLIPBOARD_WRITE_BLOCKED' })
   assert.equal(accesses, 0)
   assert.throws(() => installIsolatedClipboardGuard({ clipboard: { readFuture: real } }), { message: 'ISOLATED_CLIPBOARD_METHOD_UNSUPPORTED' })
+})
+
+test('main runtime log lookup isolates the target pid and orders latest launch logs first', (context) => {
+  assert.deepEqual(findMainRuntimeLogFiles('', 100), [])
+  assert.deepEqual(findMainRuntimeLogFiles(os.tmpdir(), 0), [])
+  assert.deepEqual(findMainRuntimeLogFiles(os.tmpdir(), -1), [])
+
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ztools-harness-logs-'))
+  context.after(() => fs.rmSync(root, { recursive: true, force: true }))
+
+  assert.deepEqual(findMainRuntimeLogFiles(path.join(root, 'missing'), 4242), [])
+
+  const older = path.join(root, 'electron-main-2026-11-17T07-55-19-123Z-pid4242.log')
+  const newer = path.join(root, 'electron-main-2026-11-17T07-55-19-123Z-pid4242-1.log')
+  const otherPid = path.join(root, 'electron-main-2026-11-17T07-55-19-123Z-pid9999.log')
+  const dailyLegacy = path.join(root, 'electron-main-2026-11-17.log')
+  const dirEntry = path.join(root, 'electron-main-2026-11-17T07-55-19-123Z-pid4242-9.log')
+
+  fs.writeFileSync(older, 'older')
+  fs.writeFileSync(newer, 'newer')
+  fs.writeFileSync(otherPid, 'other')
+  fs.writeFileSync(dailyLegacy, 'daily')
+  fs.mkdirSync(dirEntry)
+  fs.utimesSync(older, new Date('2026-11-17T07:55:19.000Z'), new Date('2026-11-17T07:55:19.000Z'))
+  fs.utimesSync(newer, new Date('2026-11-17T07:55:20.000Z'), new Date('2026-11-17T07:55:20.000Z'))
+
+  assert.deepEqual(findMainRuntimeLogFiles(root, 4242), [newer, older])
 })

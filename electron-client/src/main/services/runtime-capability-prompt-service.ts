@@ -10,6 +10,7 @@ import {
   type RuntimeCapabilityPromptRequest
 } from '../../contracts/runtime-capability-prompt.js'
 import type { WindowRegistry } from '../windows/window-registry.js'
+import { suppressWindowsSystemMenu } from '../windows/main-window.js'
 import type { RuntimeCapabilityPromptPort } from './runtime-capability-authorization-service.js'
 
 const PROMPT_TIMEOUT_MS = 110_000
@@ -79,6 +80,8 @@ export class RuntimeCapabilityPromptService implements RuntimeCapabilityPromptPo
           allowRunningInsecureContent: false
         }
       })
+      // 抑制 Windows 权限弹窗的系统默认菜单
+      suppressWindowsSystemMenu(promptWindow)
       const request: RuntimeCapabilityPromptRequest = {
         pluginName: pluginName.slice(0, 128),
         pluginId: owner.pluginId!,

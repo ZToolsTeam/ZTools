@@ -153,26 +153,49 @@ async function validateOrdinaryTree(root: string): Promise<void> {
   }
 }
 
+const COPY_CONCURRENCY = 8
+
 // Electron's ASAR filesystem supports file reads but not recursive fs.cp; copy
 // the bundled tree through ordinary reads so first-run production startup works.
 async function copyBundledTree(source: string, destination: string): Promise<void> {
   await requireOrdinaryDirectory(source, 'Web 资源根不是普通目录')
   await fs.mkdir(destination)
-  const entries = await fs.readdir(source, { withFileTypes: true })
-  for (const entry of entries) {
-    const sourcePath = path.join(source, entry.name)
-    const destinationPath = path.join(destination, entry.name)
-    if (entry.isSymbolicLink()) {
-      throw new ZToolsError(errorCodes.dataCorrupt, 'Web 资源不能包含符号链接')
-    }
-    if (entry.isDirectory()) {
-      await copyBundledTree(sourcePath, destinationPath)
-    } else if (entry.isFile()) {
-      await fs.writeFile(destinationPath, await fs.readFile(sourcePath))
-    } else {
-      throw new ZToolsError(errorCodes.dataCorrupt, 'Web 资源包含不支持的文件类型')
+  const fileTasks: Array<{ sourcePath: string; destinationPath: string }> = []
+  const pendingDirs: Array<{ sourceDir: string; destinationDir: string }> = [
+    { sourceDir: source, destinationDir: destination }
+  ]
+
+  while (pendingDirs.length > 0) {
+    const { sourceDir, destinationDir } = pendingDirs.pop()!
+    const entries = await fs.readdir(sourceDir, { withFileTypes: true })
+    for (const entry of entries) {
+      const sourcePath = path.join(sourceDir, entry.name)
+      const destinationPath = path.join(destinationDir, entry.name)
+      if (entry.isSymbolicLink()) {
+        throw new ZToolsError(errorCodes.dataCorrupt, 'Web 资源不能包含符号链接')
+      }
+      if (entry.isDirectory()) {
+        await fs.mkdir(destinationPath)
+        pendingDirs.push({ sourceDir: sourcePath, destinationDir: destinationPath })
+      } else if (entry.isFile()) {
+        fileTasks.push({ sourcePath, destinationPath })
+      } else {
+        throw new ZToolsError(errorCodes.dataCorrupt, 'Web 资源包含不支持的文件类型')
+      }
     }
   }
+
+  let cursor = 0
+  const workerCount = Math.min(COPY_CONCURRENCY, fileTasks.length)
+  await Promise.all(
+    Array.from({ length: workerCount }, async () => {
+      while (cursor < fileTasks.length) {
+        const index = cursor++
+        const task = fileTasks[index]!
+        await fs.writeFile(task.destinationPath, await fs.readFile(task.sourcePath))
+      }
+    })
+  )
 }
 
 async function readWebVersion(root: string): Promise<string> {
@@ -370,7 +393,11 @@ export class WebResourceService {
   }
 
   async #inspectBundled(): Promise<BundledInfo> {
-    const version = await validateWebRoot(this.#bundledRoot)
+    // 仅验证入口文件与版本清单并计算指纹，避免每次冷启动都对 app.asar 全树遍历触发大量 ASAR fs.Stats 调用；
+    // 真正需要复制落地时，copyBundledTree 与目标盘 validateWebRoot 会完整校验文件类型与符号链接。
+    await requireOrdinaryDirectory(this.#bundledRoot, 'Web 资源根不是普通目录')
+    await requireOrdinaryFile(path.join(this.#bundledRoot, 'index.html'), 'Web 资源缺少入口 index.html')
+    const version = await readWebVersion(this.#bundledRoot)
     return { version, fingerprint: await readBundledFingerprint(this.#bundledRoot) }
   }
 

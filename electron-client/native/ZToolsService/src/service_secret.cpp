@@ -4,9 +4,6 @@
 #include <Sddl.h>
 #include <WtsApi32.h>
 
-#include <algorithm>
-#include <array>
-#include <limits>
 #include <vector>
 
 namespace ztools::service {
@@ -121,92 +118,14 @@ bool ResolveServiceDataRoot(
     return false;
   }
   try {
-    *data_root = std::wstring(roaming_app_data) + L"\\ZTools\\Data";
+    // 生产默认业务数据目录与客户端及安装器保持一致，统一指向 DataV2
+    *data_root = std::wstring(roaming_app_data) + L"\\ZTools\\DataV2";
   } catch (...) {
     CoTaskMemFree(roaming_app_data);
     *error = ERROR_NOT_ENOUGH_MEMORY;
     return false;
   }
   CoTaskMemFree(roaming_app_data);
-  return true;
-}
-
-bool LoadInstalledServiceSecret(
-    const PipeIdentityMode identity_mode,
-    ServiceSecret* const secret,
-    std::wstring* const data_root,
-    std::wstring* const resolved_path,
-    std::wstring* const user_sid_string,
-    DWORD* const error) noexcept {
-  if (secret == nullptr || data_root == nullptr || resolved_path == nullptr ||
-      user_sid_string == nullptr || error == nullptr) {
-    return false;
-  }
-  secret->fill(0);
-  data_root->clear();
-  resolved_path->clear();
-  user_sid_string->clear();
-  *error = ERROR_SUCCESS;
-  if (!ResolveServiceDataRoot(
-          identity_mode, data_root, user_sid_string, error)) {
-    return false;
-  }
-  try {
-    *resolved_path = *data_root + L"\\Service\\auth-v1.key";
-  } catch (...) {
-    *error = ERROR_NOT_ENOUGH_MEMORY;
-    return false;
-  }
-
-  UniqueHandle file(CreateFileW(
-      resolved_path->c_str(),
-      GENERIC_READ,
-      FILE_SHARE_READ,
-      nullptr,
-      OPEN_EXISTING,
-      FILE_ATTRIBUTE_NORMAL | FILE_FLAG_OPEN_REPARSE_POINT,
-      nullptr));
-  if (file.get() == INVALID_HANDLE_VALUE) {
-    *error = GetLastError();
-    return false;
-  }
-  FILE_ATTRIBUTE_TAG_INFO attributes{};
-  if (GetFileInformationByHandleEx(
-          file.get(), FileAttributeTagInfo, &attributes, sizeof(attributes)) == FALSE) {
-    *error = GetLastError();
-    return false;
-  }
-  if ((attributes.FileAttributes &
-       (FILE_ATTRIBUTE_DIRECTORY | FILE_ATTRIBUTE_REPARSE_POINT)) != 0) {
-    *error = ERROR_REPARSE_TAG_INVALID;
-    return false;
-  }
-  LARGE_INTEGER size{};
-  if (GetFileSizeEx(file.get(), &size) == FALSE) {
-    *error = GetLastError();
-    return false;
-  }
-  if (size.QuadPart != static_cast<LONGLONG>(secret->size())) {
-    *error = ERROR_INVALID_DATA;
-    return false;
-  }
-  DWORD read = 0;
-  if (ReadFile(
-          file.get(),
-          secret->data(),
-          static_cast<DWORD>(secret->size()),
-          &read,
-          nullptr) == FALSE) {
-    *error = GetLastError();
-    SecureEraseServiceBytes(*secret);
-    return false;
-  }
-  if (read != static_cast<DWORD>(secret->size()) ||
-      !IsValidServiceSecret(*secret)) {
-    *error = ERROR_INVALID_DATA;
-    SecureEraseServiceBytes(*secret);
-    return false;
-  }
   return true;
 }
 

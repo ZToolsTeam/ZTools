@@ -421,15 +421,119 @@ describe('usePluginsStore', () => {
       expect(result.length).toBeGreaterThanOrEqual(10)
     })
 
-    it('合并已有 installedSet 避免时序问题', async () => {
+    it('最新宿主快照移除陈旧市场安装记录，同时保留未隐藏的内置插件', async () => {
       const store = usePluginsStore()
       store.installedSet = new Set(['p-existing'])
       apiMocks.getLocalPlugins.mockResolvedValue([{ pluginId: 'p-new' }])
 
       await store.fetchInstalledPlugins()
 
-      expect(store.installedSet.has('p-existing')).toBe(true)
+      expect(store.installedSet.has('p-existing')).toBe(false)
       expect(store.installedSet.has('p-new')).toBe(true)
+      expect(store.installedSet.has('memo')).toBe(true)
+    })
+
+    it('并行首读等待同一份隐藏配置，不会先展示已隐藏的内置插件', async () => {
+      const store = usePluginsStore()
+      let finishConfig
+      window.ztools.config.get.mockReturnValueOnce(new Promise(resolve => { finishConfig = resolve }))
+      const first = store.fetchInstalledPlugins()
+      const second = store.fetchInstalledPlugins()
+      expect(window.ztools.config.get).toHaveBeenCalledOnce()
+      expect(apiMocks.getLocalPlugins).not.toHaveBeenCalled()
+      finishConfig('["memo"]')
+      await Promise.all([first, second])
+      expect(apiMocks.getLocalPlugins).toHaveBeenCalledOnce()
+      expect(store.installedSet.has('memo')).toBe(false)
+      expect(store.installedPlugins.some(item => item.pluginId === 'memo')).toBe(false)
+    })
+
+    it.each(['success', 'failure'])('后发列表先返回时，早发请求的%s不能覆盖最新快照', async outcome => {
+      const store = usePluginsStore()
+      store._hiddenBundledLoaded = true
+      let finish
+      let notifyStarted
+      const started = new Promise(resolve => { notifyStarted = resolve })
+      apiMocks.getLocalPlugins.mockImplementationOnce(() => new Promise((resolve, reject) => {
+        finish = () => outcome === 'success' ? resolve([{ pluginId: 'stale-market' }]) : reject(new Error('旧请求失败'))
+        notifyStarted()
+      }))
+      const old = store.fetchInstalledPlugins()
+      await started
+      apiMocks.getLocalPlugins.mockResolvedValueOnce([{ pluginId: 'new-market' }])
+      await store.fetchInstalledPlugins()
+      finish()
+      await old
+      expect(store.installedSet.has('new-market')).toBe(true)
+      expect(store.installedSet.has('stale-market')).toBe(false)
+      expect(store.installedListLoaded).toBe(true)
+    })
+
+    it.each([
+      ['install', 'success'], ['install', 'failure'], ['uninstall', 'success'], ['uninstall', 'failure']
+    ])('快照等待期间%s，迟到的%s快照触发重新读取而不覆盖新状态', async (operation, outcome) => {
+      const store = usePluginsStore()
+      store._hiddenBundledLoaded = true
+      store.installedPlugins = [{ pluginId: 'market-probe' }]
+      store.installedSet.add('market-probe')
+      let finish
+      let notifyStarted
+      const started = new Promise(resolve => { notifyStarted = resolve })
+      apiMocks.getLocalPlugins.mockImplementationOnce(() => new Promise((resolve, reject) => {
+        finish = () => outcome === 'success'
+          ? resolve(operation === 'uninstall' ? [{ pluginId: 'market-probe' }] : [])
+          : reject(new Error('过时扫描失败'))
+        notifyStarted()
+      }))
+      apiMocks.getLocalPlugins.mockResolvedValue(operation === 'install' ? [{ pluginId: 'market-probe' }] : [])
+      const old = store.fetchInstalledPlugins()
+      await started
+      if (operation === 'install') store.onInstallComplete({ pluginId: 'market-probe', success: true }, true)
+      else store.onUninstallComplete({ pluginId: 'market-probe' })
+      expect(store.installedSet.has('market-probe')).toBe(operation === 'install')
+      finish()
+      await old
+      expect(apiMocks.getLocalPlugins).toHaveBeenCalledTimes(2)
+      expect(store.installedSet.has('market-probe')).toBe(operation === 'install')
+      expect(store.installedPlugins.some(item => item.pluginId === 'market-probe')).toBe(operation === 'install')
+    })
+
+    it.each(['hide', 'restore'])('快照等待期间%s内置插件，旧请求不能改变其可见性', async operation => {
+      const store = usePluginsStore()
+      store._hiddenBundledLoaded = true
+      if (operation === 'restore') store.hiddenBundledSet.add('memo')
+      let finish
+      apiMocks.getLocalPlugins.mockImplementationOnce(() => new Promise(resolve => { finish = resolve }))
+      apiMocks.getLocalPlugins.mockResolvedValue([])
+      const old = store.fetchInstalledPlugins()
+      await Promise.resolve()
+      if (operation === 'hide') await store.hideBundledPlugin('memo')
+      else await store.restoreBundledPlugin('memo')
+      finish([{ pluginId: 'memo', version: '0.1.0' }])
+      await old
+      expect(store.installedSet.has('memo')).toBe(operation === 'restore')
+      expect(store.installedPlugins.some(item => item.pluginId === 'memo')).toBe(operation === 'restore')
+      expect(apiMocks.getLocalPlugins).toHaveBeenCalledTimes(2)
+    })
+
+    it('禁用或下架停止运行时后，旧扫描不能恢复其启用状态', async () => {
+      const store = usePluginsStore()
+      store._hiddenBundledLoaded = true
+      let finish
+      let notifyStarted
+      const started = new Promise(resolve => { notifyStarted = resolve })
+      apiMocks.getLocalPlugins.mockImplementationOnce(() => new Promise(resolve => {
+        finish = resolve
+        notifyStarted()
+      }))
+      apiMocks.getLocalPlugins.mockResolvedValue([{ pluginId: 'market-probe', enabled: false }])
+      const pending = store.fetchInstalledPlugins()
+      await started
+      store.onPluginRuntimeStopped({ pluginId: 'market-probe' })
+      finish([{ pluginId: 'market-probe', enabled: true }])
+      await pending
+      expect(store.installedPlugins.find(item => item.pluginId === 'market-probe').enabled).toBe(false)
+      expect(apiMocks.getLocalPlugins).toHaveBeenCalledTimes(2)
     })
 
     it('[回归] 插件市场分发的真实插件（clipboard-manager / everything-file-search）不再并入旧示例实现，同名与别名记录不重复', async () => {

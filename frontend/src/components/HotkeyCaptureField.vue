@@ -1,18 +1,26 @@
 <script setup>
 import { XIcon } from '@lucide/vue'
-import { nextTick, onBeforeUnmount, ref, watch } from 'vue'
-import { notifyHotkeyRecorderActive } from '@/utils/hotkeyRecorder'
+import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
+import {
+  formatHotkeyForPlatform,
+  isDoubleModifierHotkey,
+  isSafeShortcutKeysCombo,
+  notifyHotkeyRecorderActive
+} from '@/utils/hotkeyRecorder'
 import ShortcutKeys from '@/components/base/ShortcutKeys.vue'
 
 /**
- * 快捷键录入框（启动快捷键、插件功能快捷键弹窗共用）：显示已绑定的组合键，点击进入录入，
- * 录入时聚焦隐藏输入框接收按键，右侧清除按钮。按键如何解析、保存与冲突检测由调用方处理（监听 keydown）。
+ * 快捷键录入框（启动快捷键、插件功能快捷键、全局唤醒共用）：显示已绑定的组合键，点击或键盘触发进入录入，
+ * 录入时聚焦隐藏输入框接收按键，退出录入时主动失焦并将焦点归还外层触发容器，防止二次 Esc 被黑洞吞没。
  */
 const props = defineProps({
   hotkey: { type: String, default: '' },
   recording: { type: Boolean, default: false },
   loading: { type: Boolean, default: false },
   disabled: { type: Boolean, default: false },
+  platform: { type: String, default: 'unknown' },
+  // 未传时兼容旧调用方对双击修饰键的默认显示；显式传入 false 时以纯文本提示不支持
+  supportsDoubleModifier: { type: Boolean, default: undefined },
   // 录入中的显示：isKeys 为 true 时是已按下的组合键（键帽），否则是提示语
   recordingText: { type: String, default: '' },
   recordingIsKeys: { type: Boolean, default: false },
@@ -23,6 +31,46 @@ const emit = defineEmits(['start', 'cancel', 'keydown', 'clear'])
 const recorder = ref(null)
 const input = ref(null)
 let notifiedActive = false
+
+// 仅在确认是规范组合键（绝不含中文说明文字）时传给 <ShortcutKeys>
+const canRenderHotkeyKeys = computed(() => {
+  if (!props.hotkey) return false
+  const allowDouble =
+    props.supportsDoubleModifier === undefined
+      ? true
+      : Boolean(props.supportsDoubleModifier)
+  if (isDoubleModifierHotkey(props.hotkey) && !allowDouble) {
+    return false
+  }
+  return isSafeShortcutKeysCombo(
+    props.hotkey,
+    props.platform === 'unknown' ? 'windows' : props.platform,
+    allowDouble
+  )
+})
+
+const fallbackHotkeyText = computed(() => {
+  if (!props.hotkey || canRenderHotkeyKeys.value) return ''
+  if (isDoubleModifierHotkey(props.hotkey)) {
+    return formatHotkeyForPlatform(
+      props.hotkey,
+      props.platform,
+      Boolean(props.supportsDoubleModifier)
+    )
+  }
+  return props.hotkey
+})
+
+const canRenderRecordingKeys = computed(
+  () =>
+    Boolean(props.recordingText) &&
+    props.recordingIsKeys &&
+    isSafeShortcutKeysCombo(
+      pendingKeys(props.recordingText),
+      props.platform === 'unknown' ? 'windows' : props.platform,
+      props.supportsDoubleModifier !== false
+    )
+)
 
 // 检查页面中是否存在除当前实例外的其他激活快捷键录入框，避免多输入框切换时后置释放冲掉新激活态
 const hasOtherActiveRecorder = () => {
@@ -50,12 +98,34 @@ const releaseRecorderActive = (deferCheck = true) => {
   })
 }
 
-// 进入录入时聚焦隐藏输入框，按键才会进到这里；未进入录入的初始挂载不上报无效事件
+/** 主动让隐藏输入框失焦，避免按 Esc 退出录制后焦点滞留在不可达输入框导致二次 Esc 失效 */
+const blurInput = ({ restoreFocus = false } = {}) => {
+  const inputEl = input.value
+  const wasInputFocused =
+    typeof document !== 'undefined' && Boolean(inputEl) && document.activeElement === inputEl
+  inputEl?.blur?.()
+  if (restoreFocus && wasInputFocused && !props.disabled && !props.loading) {
+    recorder.value?.focus?.()
+  }
+}
+
+const focusTrigger = () => {
+  if (!props.disabled && !props.loading) {
+    recorder.value?.focus?.()
+  }
+}
+
+// 进入录入时聚焦隐藏输入框；退出录入时主动失焦并归还焦点给触发容器
 watch(
   () => props.recording,
-  async (recording) => {
+  async (recording, prevRecording) => {
     if (!recording) {
       releaseRecorderActive(true)
+      if (prevRecording) {
+        blurInput({ restoreFocus: true })
+      } else {
+        blurInput({ restoreFocus: false })
+      }
       return
     }
     if (!notifiedActive) {
@@ -74,29 +144,27 @@ const onClick = () => {
 }
 
 const onKeydown = (event) => {
+  // 非录制态绝不截留按键事件，让 Esc 等按键正常冒泡关闭弹窗或回退
+  if (!props.recording) return
   event.preventDefault()
   event.stopPropagation()
-  if (props.recording) emit('keydown', event)
+  emit('keydown', event)
 }
 
 const onBlur = () => {
   if (!props.recording) return
   emit('cancel')
-  if (notifiedActive) {
-    notifiedActive = false
-    void nextTick(() => {
-      if (!hasOtherActiveRecorder()) {
-        notifyHotkeyRecorderActive(false)
-      }
-    })
-  }
+  releaseRecorderActive(true)
 }
 
 // 已按下的修饰键以 "...+" 结尾，键帽只显示真正按下的键，末尾补一个省略号表示还在等待主键
 onBeforeUnmount(() => {
+  blurInput({ restoreFocus: false })
   releaseRecorderActive(false)
 })
 const pendingKeys = (text) => text.replace(/\.\.\.$/, '').replace(/\+$/, '')
+
+defineExpose({ blurInput, focusTrigger })
 </script>
 
 <template>
@@ -105,8 +173,13 @@ const pendingKeys = (text) => text.replace(/\.\.\.$/, '').replace(/\+$/, '')
       ref="recorder"
       class="hotkey-recorder"
       :class="{ recording, loading, disabled }"
+      role="button"
+      :tabindex="disabled || loading || recording ? -1 : 0"
       :aria-disabled="disabled || undefined"
+      :aria-label="hotkey ? `当前快捷键 ${hotkey}，按回车重新录入` : '按回车录入快捷键'"
       @click="onClick"
+      @keydown.enter.self.prevent="onClick"
+      @keydown.space.self.prevent="onClick"
     >
       <input
         ref="input"
@@ -116,13 +189,14 @@ const pendingKeys = (text) => text.replace(/\.\.\.$/, '').replace(/\+$/, '')
         autocomplete="off"
         spellcheck="false"
         :tabindex="recording ? 0 : -1"
+        :style="{ pointerEvents: recording ? 'auto' : 'none' }"
         :aria-label="hotkey ? `当前快捷键 ${hotkey}，点击重新录入` : '点击录入快捷键'"
         @keydown="onKeydown"
         @blur="onBlur"
       />
       <template v-if="recording">
         <span v-if="loading" class="recording-text">保存中…</span>
-        <span v-else-if="recordingText && recordingIsKeys" class="recording-keys">
+        <span v-else-if="canRenderRecordingKeys" class="recording-keys">
           <ShortcutKeys :combo="pendingKeys(recordingText)" />
           <span v-if="recordingText.endsWith('...')" class="recording-more" aria-hidden="true">…</span>
         </span>
@@ -131,7 +205,8 @@ const pendingKeys = (text) => text.replace(/\.\.\.$/, '').replace(/\+$/, '')
           {{ recordingText || waitText }}
         </span>
       </template>
-      <ShortcutKeys v-else-if="hotkey" class="hotkey-keys" :combo="hotkey" />
+      <ShortcutKeys v-else-if="canRenderHotkeyKeys" class="hotkey-keys" :combo="hotkey" />
+      <span v-else-if="fallbackHotkeyText" class="unsupported-hotkey">{{ fallbackHotkeyText }}</span>
       <span v-else class="no-hotkey">{{ emptyText }}</span>
     </div>
 
@@ -173,6 +248,12 @@ const pendingKeys = (text) => text.replace(/\.\.\.$/, '').replace(/\+$/, '')
 
 .hotkey-recorder:hover {
   border-color: var(--rc-border-highlight);
+}
+
+.hotkey-recorder:focus-visible {
+  outline: none;
+  border-color: var(--rc-accent);
+  box-shadow: var(--rc-focus-ring);
 }
 
 .hotkey-recorder.recording {
@@ -230,7 +311,8 @@ const pendingKeys = (text) => text.replace(/\.\.\.$/, '').replace(/\+$/, '')
   50% { opacity: 0.3; }
 }
 
-.no-hotkey {
+.no-hotkey,
+.unsupported-hotkey {
   color: var(--rc-text-muted);
   font-size: 12px;
 }

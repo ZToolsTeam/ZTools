@@ -1,4 +1,5 @@
 import { Menu, Tray, type MenuItemConstructorOptions } from 'electron'
+import { isDoubleModifier, SHELL_SHORTCUTS } from '../../contracts/hotkey-rules.js'
 import { toElectronAccelerator } from '../platform/common/electron-global-shortcut.js'
 
 export const DEFAULT_TRAY_WAKE_ACCELERATOR = 'Alt+Space'
@@ -87,13 +88,19 @@ export interface BuildTrayMenuContext {
 export function buildTrayMenuTemplate(
   context: BuildTrayMenuContext
 ): MenuItemConstructorOptions[] {
-  const settingsAccelerator = context.platform === 'darwin' ? 'Command+I' : 'Ctrl+I'
+  const settingsAccelerator = context.platform === 'darwin'
+    ? SHELL_SHORTCUTS.OPEN_SETTINGS.replace(/^Ctrl\+/i, 'Command+')
+    : SHELL_SHORTCUTS.OPEN_SETTINGS
+  // 双击修饰键不是合法 Electron Menu Accelerator，不能传给 Menu.buildFromTemplate 以免报错
+  const wakeAccelerator = context.wakeAccelerator && !isDoubleModifier(context.wakeAccelerator)
+    ? toElectronAccelerator(context.wakeAccelerator)
+    : undefined
   const items: MenuItemConstructorOptions[] = [
     {
       id: 'open-launcher',
       label: '打开极客搜索',
       // 与全局快捷键注册同一套转换：设置里的 Ctrl 在 macOS 上实际是 ⌘，菜单按实际按键显示
-      ...(context.wakeAccelerator ? { accelerator: toElectronAccelerator(context.wakeAccelerator) } : {}),
+      ...(wakeAccelerator ? { accelerator: wakeAccelerator } : {}),
       click: () => context.onOpenLauncher()
     },
     {

@@ -13,7 +13,10 @@ import { PassThrough } from 'node:stream'
 import test from 'node:test'
 import { errorCodes, ZToolsError } from '../../src/contracts/errors.js'
 import type { NativeDllInvocationContext } from '../../src/main/native-host/dll-client-port.js'
-import { NativeHostClient } from '../../src/main/native-host/native-host-client.js'
+import {
+  NativeHostClient,
+  type NativeInputEvent
+} from '../../src/main/native-host/native-host-client.js'
 import {
   encodeNativeHostFrame,
   NativeHostFrameDecoder,
@@ -574,3 +577,109 @@ for (const mode of ['async', 'callback'] as const) {
     }
   })
 }
+
+test('configureKeyboardDoubleTap 与 configureMouseTrigger 发送 2/6 字节全屏免打扰载荷并正确解码 mouse_trigger 按钮编号', async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'ztools-native-input-proto-'))
+  const executable = path.join(root, 'ZToolsNativeHost32.exe')
+  await fs.writeFile(executable, 'test executable placeholder')
+  const captured: Array<{ method: string; payload: Buffer; sessionId: string }> = []
+  let fakeHost: FakeHostProcess | undefined
+  const client = new NativeHostClient(executable, {
+    spawnProcess: (_path, _args, options) => {
+      const host = createFakeHostProcess(options, true)
+      fakeHost = host
+      const rawStdin = host.child.stdin
+      const decoder = new NativeHostFrameDecoder()
+      rawStdin.on('data', (chunk: Buffer) => {
+        for (const frame of decoder.push(chunk)) {
+          if (frame.method === 'keyboard_hook_configure' || frame.method === 'mouse_hook_configure') {
+            captured.push({ method: frame.method, payload: Buffer.from(frame.payload), sessionId: frame.sessionId })
+            const enabled = frame.method === 'keyboard_hook_configure'
+              ? (frame.payload[0] ?? 0) !== 0
+              : (frame.payload[0] ?? 0) === 1
+            host.send({
+              protocolVersion: NATIVE_HOST_PROTOCOL_VERSION,
+              type: NativeHostFrameType.Response,
+              sessionId: frame.sessionId,
+              requestId: frame.requestId,
+              pluginId: '',
+              dllId: '',
+              method: frame.method,
+              payload: Buffer.from(JSON.stringify({ success: true, enabled }))
+            })
+          }
+        }
+      })
+      return host.child
+    }
+  })
+  const receivedEvents: NativeInputEvent[] = []
+  const disposeListener = client.onInputEvent((event) => {
+    receivedEvents.push(event)
+  })
+  try {
+    await client.start(1000)
+
+    await client.configureKeyboardDoubleTap(['ctrl', 'alt'], true)
+    await client.configureKeyboardDoubleTap(['shift'], false)
+    await client.configureKeyboardDoubleTap([], true)
+
+    await client.configureMouseTrigger({ button: 'forward', action: 'long', longPressMs: 320, fullscreenDnd: true })
+    await client.configureMouseTrigger({ button: 'backward', action: 'press', longPressMs: 250, fullscreenDnd: false })
+    await client.configureMouseTrigger(null)
+
+    assert.equal(captured.length, 6)
+    assert.deepEqual([...captured[0]!.payload], [3, 1])
+    assert.deepEqual([...captured[1]!.payload], [4, 0])
+    assert.deepEqual([...captured[2]!.payload], [0])
+
+    assert.equal(captured[3]!.payload.length, 6)
+    assert.equal(captured[3]!.payload[0], 1)
+    assert.equal(captured[3]!.payload[1], 3) // forward = 3
+    assert.equal(captured[3]!.payload[2], 2) // long = 2
+    assert.equal(captured[3]!.payload.readUInt16LE(3), 320)
+    assert.equal(captured[3]!.payload[5], 1)
+
+    assert.equal(captured[4]!.payload.length, 6)
+    assert.equal(captured[4]!.payload[1], 4) // backward = 4
+    assert.equal(captured[4]!.payload[2], 1) // press = 1
+    assert.equal(captured[4]!.payload[5], 0)
+
+    assert.equal(captured[5]!.payload.length, 5)
+    assert.deepEqual([...captured[5]!.payload], [0, 0, 0, 0, 0])
+
+    // 验证宿主推送 mouse_trigger 帧：1:middle, 2:right, 3:forward, 4:backward
+    const sessionId = captured[0]!.sessionId
+    const cases: Array<{ code: number; action: number; ms: number; button: 'middle' | 'right' | 'forward' | 'backward'; expectedAction: 'press' | 'long' }> = [
+      { code: 1, action: 1, ms: 250, button: 'middle', expectedAction: 'press' },
+      { code: 2, action: 2, ms: 300, button: 'right', expectedAction: 'long' },
+      { code: 3, action: 1, ms: 260, button: 'forward', expectedAction: 'press' },
+      { code: 4, action: 2, ms: 420, button: 'backward', expectedAction: 'long' }
+    ]
+    for (const item of cases) {
+      const evPayload = Buffer.alloc(4)
+      evPayload[0] = item.code
+      evPayload[1] = item.action
+      evPayload.writeUInt16LE(item.ms, 2)
+      fakeHost?.send({
+        protocolVersion: NATIVE_HOST_PROTOCOL_VERSION,
+        type: NativeHostFrameType.Event,
+        sessionId,
+        requestId: 'mouse_trigger',
+        pluginId: '',
+        dllId: '',
+        method: 'mouse_trigger',
+        payload: evPayload
+      })
+    }
+    await new Promise((resolve) => setTimeout(resolve, 20))
+    assert.deepEqual(receivedEvents, cases.map((item) => ({
+      type: 'mouse-trigger',
+      config: { button: item.button, action: item.expectedAction, longPressMs: item.ms }
+    })))
+  } finally {
+    disposeListener()
+    if (client.state !== 'closed') await client.stop(1000)
+    await fs.rm(root, { recursive: true, force: true })
+  }
+})

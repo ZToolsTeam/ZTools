@@ -4,146 +4,282 @@ import { RcButton, RcDialog, RcTag } from '@/components/base'
 import { TriangleAlertIcon } from '@lucide/vue'
 /**
  * 快捷键冲突提醒弹窗
- * 支持两种冲突数据：
- * 1. 系统快捷键冲突（原有）：{ type: 'keyboard'|'mouse', key: string }
- * 2. 启动快捷键冲突：{ pluginName, key, conflictType: 'duplicate'|'system_occupied', conflictWith }
+ * 统一规范化并合并展示两类冲突（互不覆盖）：
+ * 1. 系统占用冲突（含全局唤醒、鼠标快捷唤醒、插件热键被外部程序占用）
+ * 2. 插件重复冲突（插件或功能热键之间存在重复绑定）
  */
 import { ref, computed } from 'vue'
 import { useRouter } from 'vue-router'
 import { ROUTES } from '@/router/routes'
+import { isSafeShortcutKeysCombo } from '@/utils/hotkeyRecorder'
 import {
   PLUGIN_FEATURE_HOTKEY_QUERY_KEY,
+  getPluginFeatureHotkeyItemByTriggerId,
   isPluginFeatureHotkeyTriggerId
 } from '@/utils/pluginFeatureHotkeys'
 
 const router = useRouter()
 const visible = ref(false)
 const conflicts = ref([])
-// 冲突来源类型：'system' 系统快捷键冲突 | 'plugin' 插件/本地软件启动快捷键冲突
-const conflictSource = ref('system')
 
-/** 判断是否为插件快捷键冲突数据 */
-const isPluginConflict = (item) => {
-  return item && ('conflictType' in item || 'pluginName' in item)
+const isSystemTarget = (item) => {
+  const pid = String(item?.pluginId || '').trim().toLowerCase()
+  const tid = String(item?.triggerId || '').trim()
+  return pid === 'system' || tid === 'global_wake_hotkey' || tid === 'mouse_wake_hook'
 }
 
-/**
- * 显示冲突弹窗
- * @param {Array} conflictList - 冲突数据列表，自动识别数据类型
- */
-const show = (conflictList) => {
-  if (!conflictList || conflictList.length === 0) return
-  conflicts.value = conflictList
-  // 根据第一条数据判断冲突来源类型
-  conflictSource.value = isPluginConflict(conflictList[0]) ? 'plugin' : 'system'
-  visible.value = true
+const resolveRawItemTitle = (item) => {
+  const tid = String(item?.triggerId || '').trim()
+  if (tid === 'global_wake_hotkey') return '全局唤醒快捷键'
+  if (tid === 'mouse_wake_hook') return '鼠标快捷唤醒'
+  const featureItem = tid ? getPluginFeatureHotkeyItemByTriggerId(tid) : null
+  if (featureItem) return `${featureItem.pluginName} · ${featureItem.featureName}`
+  if (String(item?.pluginId || '').trim().toLowerCase() === 'system') return '系统快捷键'
+  if (item?.pluginName) return item.pluginName
+  if (item?.pluginId) return item.pluginId
+  if (item?.type === 'mouse') return '鼠标快捷唤醒'
+  if (item?.type === 'keyboard') return '全局唤醒快捷键'
+  return '未知触发器'
 }
 
-/** 关闭弹窗 */
-const close = () => {
-  visible.value = false
-}
+/** 将不同来源的冲突记录归一化为统一展示结构 */
+const normalizeConflictItem = (item) => {
+  if (!item || typeof item !== 'object') return null
 
-/** 跳转到设置页面 */
-const goSettings = () => {
-  visible.value = false
-  if (conflictSource.value === 'plugin') {
-    const hasFeatureHotkeyConflict = conflicts.value.some(
-      (item) =>
-        isPluginFeatureHotkeyTriggerId(item.triggerId) ||
-        isPluginFeatureHotkeyTriggerId(item.conflictTriggerId)
-    )
-    if (hasFeatureHotkeyConflict) {
-      router.push({
-        name: ROUTES.ADVANCED_SETTINGS.name,
-        query: { [PLUGIN_FEATURE_HOTKEY_QUERY_KEY]: 'true' }
-      })
-    } else {
-      // 启动快捷键冲突：导航到高级设置并自动打开 PluginHotkeyModal
-      router.push({
-        name: ROUTES.ADVANCED_SETTINGS.name,
-        query: { openPluginHotkey: 'true' }
-      })
+  // 兼容旧版系统冲突格式 { type: 'keyboard' | 'mouse', key }
+  if ((item.type === 'keyboard' || item.type === 'mouse') && !('conflictType' in item)) {
+    return {
+      pluginName: item.type === 'mouse' ? '鼠标快捷唤醒' : '全局唤醒快捷键',
+      pluginId: 'system',
+      key: item.key || '',
+      conflictType: 'system_occupied',
+      conflictWith: '系统或其他程序',
+      triggerId: item.type === 'mouse' ? 'mouse_wake_hook' : 'global_wake_hotkey',
+      conflictTriggerId: ''
     }
-  } else {
-    // 系统快捷键冲突：导航到高级设置页面
-    router.push({ name: ROUTES.ADVANCED_SETTINGS.name })
+  }
+
+  // 兼容 Electron 宿主直推的 { type: 'system', key, pluginId, triggerId } 格式
+  if (item.type === 'system' && !('conflictType' in item)) {
+    return {
+      pluginName: resolveRawItemTitle(item),
+      pluginId: item.pluginId || '',
+      key: item.key || '',
+      conflictType: 'system_occupied',
+      conflictWith: item.reason || '系统或其他程序',
+      triggerId: item.triggerId || '',
+      conflictTriggerId: ''
+    }
+  }
+
+  const normalizedType =
+    item.conflictType === 'duplicate' ? 'duplicate' : 'system_occupied'
+
+  return {
+    pluginName: item.pluginName || resolveRawItemTitle(item),
+    pluginId: item.pluginId || '',
+    key: item.key || '',
+    conflictType: normalizedType,
+    conflictWith: item.conflictWith || (normalizedType === 'system_occupied' ? '系统或其他程序' : '其他快捷键'),
+    triggerId: item.triggerId || '',
+    conflictTriggerId: item.conflictTriggerId || ''
   }
 }
 
-/** 弹窗标题 */
-const modalTitle = computed(() => {
-  return conflictSource.value === 'plugin' ? '启动快捷键冲突' : '快捷键冲突'
-})
+const buildConflictSignature = (item) =>
+  [
+    item.conflictType,
+    item.triggerId,
+    item.pluginId,
+    item.pluginName,
+    item.key,
+    item.conflictWith
+  ].join('|')
 
-/** 弹窗描述文本 */
-const descText = computed(() => {
-  return conflictSource.value === 'plugin'
-    ? '以下启动快捷键存在冲突，可能无法正常使用：'
-    : '以下快捷键与其他程序冲突，无法正常使用：'
-})
+/**
+ * 显示冲突弹窗；弹窗尚未关闭时新到达的冲突合并追加而非互相覆盖
+ * @param {Array} conflictList - 冲突数据列表
+ */
+const show = (conflictList) => {
+  if (!Array.isArray(conflictList) || conflictList.length === 0) return
+  const normalizedIncoming = conflictList
+    .map(normalizeConflictItem)
+    .filter(Boolean)
+  if (normalizedIncoming.length === 0) return
 
-/** 提示文本 */
-const tipText = computed(() => {
-  const hasFeatureHotkeyConflict = conflicts.value.some(
+  const baseList = visible.value ? conflicts.value : []
+  const merged = []
+  const seen = new Set()
+  for (const item of [...baseList, ...normalizedIncoming]) {
+    const sig = buildConflictSignature(item)
+    if (seen.has(sig)) continue
+    seen.add(sig)
+    merged.push(item)
+  }
+
+  conflicts.value = merged
+  visible.value = true
+}
+
+/** 关闭弹窗并清理本轮已展示列表 */
+const close = () => {
+  visible.value = false
+  conflicts.value = []
+}
+
+const systemOccupiedConflicts = computed(() =>
+  conflicts.value.filter((item) => item.conflictType === 'system_occupied')
+)
+
+const duplicateConflicts = computed(() =>
+  conflicts.value.filter((item) => item.conflictType === 'duplicate')
+)
+
+const hasSystemWakeConflict = computed(() =>
+  conflicts.value.some(isSystemTarget)
+)
+
+const hasPluginConflict = computed(() =>
+  conflicts.value.some((item) => !isSystemTarget(item))
+)
+
+const hasFeatureHotkeyConflict = computed(() =>
+  conflicts.value.some(
     (item) =>
       isPluginFeatureHotkeyTriggerId(item.triggerId) ||
       isPluginFeatureHotkeyTriggerId(item.conflictTriggerId)
   )
-  return conflictSource.value === 'plugin'
-    ? hasFeatureHotkeyConflict
-      ? '请前往设置修改冲突的插件内功能快捷键。'
-      : '请前往设置修改冲突的启动快捷键。'
-    : '请前往设置修改快捷键，或关闭占用该快捷键的程序后重启 ZTools。'
+)
+
+/** 跳转到设置页面 */
+const goSettings = () => {
+  const hasSystem = hasSystemWakeConflict.value
+  const hasFeature = hasFeatureHotkeyConflict.value
+  const hasPlugin = hasPluginConflict.value
+  close()
+
+  if (hasSystem) {
+    router.push({
+      name: ROUTES.ADVANCED_SETTINGS.name,
+      query: { tab: 'shortcuts' }
+    })
+    return
+  }
+  if (hasFeature) {
+    router.push({
+      name: ROUTES.ADVANCED_SETTINGS.name,
+      query: { [PLUGIN_FEATURE_HOTKEY_QUERY_KEY]: 'true' }
+    })
+    return
+  }
+  if (hasPlugin) {
+    router.push({
+      name: ROUTES.ADVANCED_SETTINGS.name,
+      query: { openPluginHotkey: 'true' }
+    })
+    return
+  }
+  router.push({ name: ROUTES.ADVANCED_SETTINGS.name, query: { tab: 'shortcuts' } })
+}
+
+/** 弹窗标题 */
+const modalTitle = computed(() => {
+  if (systemOccupiedConflicts.value.length > 0 && duplicateConflicts.value.length > 0) {
+    return '快捷键冲突提醒'
+  }
+  if (systemOccupiedConflicts.value.length > 0) {
+    return hasPluginConflict.value ? '快捷键被占用冲突' : '快捷键冲突'
+  }
+  return '启动快捷键冲突'
 })
 
-/** 格式化系统快捷键类型 */
-const formatType = (type) => {
-  return type === 'keyboard' ? '键盘快捷键' : '鼠标快捷键'
-}
+/** 弹窗描述文本 */
+const descText = computed(() => {
+  if (systemOccupiedConflicts.value.length > 0 && duplicateConflicts.value.length > 0) {
+    return '以下全局快捷键存在系统占用或重复绑定，部分快捷键可能无法正常生效：'
+  }
+  if (systemOccupiedConflicts.value.length > 0) {
+    return '以下快捷键已被系统或其他程序占用，无法正常使用：'
+  }
+  return '以下启动快捷键存在重复冲突，可能无法正常使用：'
+})
 
-/** 格式化插件冲突类型 */
-const formatConflictType = (conflictType) => {
-  return conflictType === 'duplicate' ? '快捷键重复' : '系统占用'
-}
+/** 提示文本 */
+const tipText = computed(() => {
+  if (hasSystemWakeConflict.value && hasPluginConflict.value) {
+    return '请前往快捷键设置调整全局唤醒或插件启动快捷键，或关闭占用该热键的外部程序。'
+  }
+  if (hasSystemWakeConflict.value) {
+    return '请前往设置修改唤醒快捷键，或关闭占用该快捷键的程序后重试。'
+  }
+  if (hasFeatureHotkeyConflict.value) {
+    return '请前往设置修改冲突的插件内功能快捷键。'
+  }
+  return '请前往设置修改冲突的启动快捷键。'
+})
 
-defineExpose({ show })
+const canRenderCombo = (key) => isSafeShortcutKeysCombo(key, 'windows', true)
+
+defineExpose({ show, close })
 </script>
 
 <template>
   <RcDialog
     v-model:open="visible"
     :title="modalTitle"
-    :width="420"
+    :width="440"
+    @cancel="close"
   >
     <div class="conflict-content">
       <div class="conflict-icon">
-        <TriangleAlertIcon  />
+        <TriangleAlertIcon aria-hidden="true" />
       </div>
       <p class="conflict-desc">{{ descText }}</p>
 
-      <!-- 插件快捷键冲突列表 -->
-      <div v-if="conflictSource === 'plugin'" class="conflict-list">
-        <div v-for="(item, index) in conflicts" :key="index" class="conflict-item plugin-conflict-item">
-          <div class="plugin-conflict-row">
-            <span class="plugin-name">{{ item.pluginName }}</span>
-            <ShortcutKeys class="conflict-key" :combo="item.key" />
+      <div class="conflict-sections">
+        <!-- 系统占用冲突区块 -->
+        <section v-if="systemOccupiedConflicts.length > 0" class="conflict-section" data-testid="system-conflicts-section">
+          <h3 v-if="duplicateConflicts.length > 0" class="conflict-section-title">系统占用冲突</h3>
+          <div class="conflict-list">
+            <div
+              v-for="(item, index) in systemOccupiedConflicts"
+              :key="`sys-${index}-${item.triggerId}-${item.key}`"
+              class="conflict-item plugin-conflict-item"
+            >
+              <div class="plugin-conflict-row">
+                <span class="plugin-name">{{ item.pluginName }}</span>
+                <ShortcutKeys v-if="canRenderCombo(item.key)" class="conflict-key" :combo="item.key" />
+                <span v-else-if="item.key" class="conflict-key-text">{{ item.key }}</span>
+              </div>
+              <div class="plugin-conflict-detail">
+                <RcTag tone="error">系统占用</RcTag>
+                <span class="conflict-with">与「{{ item.conflictWith }}」冲突</span>
+              </div>
+            </div>
           </div>
-          <div class="plugin-conflict-detail">
-            <RcTag :tone="item.conflictType === 'system_occupied' ? 'error' : 'warning'">
-              {{ formatConflictType(item.conflictType) }}
-            </RcTag>
-            <span class="conflict-with">与「{{ item.conflictWith }}」冲突</span>
-          </div>
-        </div>
-      </div>
+        </section>
 
-      <!-- 系统快捷键冲突列表（原有） -->
-      <div v-else class="conflict-list">
-        <div v-for="(item, index) in conflicts" :key="index" class="conflict-item">
-          <span class="conflict-type">{{ formatType(item.type) }}</span>
-          <ShortcutKeys class="conflict-key" :combo="item.key" />
-        </div>
+        <!-- 插件重复冲突区块 -->
+        <section v-if="duplicateConflicts.length > 0" class="conflict-section" data-testid="duplicate-conflicts-section">
+          <h3 v-if="systemOccupiedConflicts.length > 0" class="conflict-section-title">插件重复冲突</h3>
+          <div class="conflict-list">
+            <div
+              v-for="(item, index) in duplicateConflicts"
+              :key="`dup-${index}-${item.triggerId}-${item.key}`"
+              class="conflict-item plugin-conflict-item"
+            >
+              <div class="plugin-conflict-row">
+                <span class="plugin-name">{{ item.pluginName }}</span>
+                <ShortcutKeys v-if="canRenderCombo(item.key)" class="conflict-key" :combo="item.key" />
+                <span v-else-if="item.key" class="conflict-key-text">{{ item.key }}</span>
+              </div>
+              <div class="plugin-conflict-detail">
+                <RcTag tone="warning">快捷键重复</RcTag>
+                <span class="conflict-with">与「{{ item.conflictWith }}」冲突</span>
+              </div>
+            </div>
+          </div>
+        </section>
       </div>
 
       <p class="conflict-tip">{{ tipText }}</p>
@@ -161,6 +297,7 @@ defineExpose({ show })
   padding: 8px 0;
 }
 .conflict-icon {
+  display: inline-flex;
   font-size: 48px;
   color: var(--rc-warning);
   margin-bottom: 12px;
@@ -168,26 +305,44 @@ defineExpose({ show })
 .conflict-desc {
   font-size: 14px;
   color: var(--rc-text-primary);
+  margin-bottom: 14px;
+}
+.conflict-sections {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
   margin-bottom: 16px;
+  max-height: 260px;
+  overflow-y: auto;
+}
+.conflict-section {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.conflict-section-title {
+  margin: 0;
+  padding-left: 2px;
+  text-align: left;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--rc-text-secondary);
 }
 .conflict-list {
   display: flex;
   flex-direction: column;
   gap: 8px;
-  margin-bottom: 16px;
-  max-height: 240px;
-  overflow-y: auto;
 }
 .conflict-item {
   display: flex;
   align-items: center;
   justify-content: center;
   gap: 12px;
-  padding: 8px 16px;
+  padding: 8px 14px;
   background: var(--rc-canvas);
   border-radius: 8px;
 }
-/* 插件冲突项：纵向布局 */
+/* 冲突项：纵向布局 */
 .plugin-conflict-item {
   flex-direction: column;
   align-items: stretch;
@@ -217,13 +372,14 @@ defineExpose({ show })
 .conflict-with {
   color: var(--rc-text-secondary);
 }
-.conflict-type {
-  font-size: 13px;
-  color: var(--rc-text-secondary);
-}
 .conflict-key {
   display: flex;
   gap: 4px;
+  flex-shrink: 0;
+}
+.conflict-key-text {
+  font-size: 12px;
+  color: var(--rc-text-secondary);
 }
 .conflict-tip {
   font-size: 12px;

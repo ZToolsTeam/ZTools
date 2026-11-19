@@ -1,6 +1,7 @@
 import fs from 'node:fs'
+import os from 'node:os'
 import path from 'node:path'
-import { spawn } from 'node:child_process'
+import { spawn, spawnSync } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
 import assert from 'node:assert/strict'
 import readline from 'node:readline'
@@ -12,49 +13,157 @@ const rootDir = path.resolve(__dirname, '../..')
 const outBinDir = path.join(rootDir, 'out', 'native', 'win32-x64', 'bin')
 
 // Minimal JSON-RPC helper for direct process testing
-function createRpcClient(exePath, args = []) {
+function createRpcClient(exePath, args = [], defaultTimeoutMs = 30000) {
   const child = spawn(exePath, args, { stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true })
   const rl = readline.createInterface({ input: child.stdout })
 
   let reqId = 1
   const pending = new Map()
+  let stderr = ''
+  let closePromise
+  child.stderr.on('data', chunk => { if (stderr.length < 4096) stderr += chunk.toString() })
+  const rejectPending = error => {
+    for (const waiter of pending.values()) {
+      clearTimeout(waiter.timer)
+      waiter.reject(error)
+    }
+    pending.clear()
+  }
+  child.on('error', rejectPending)
+  child.stdin.on('error', rejectPending)
+  const exited = new Promise(resolve => child.once('close', (code, signal) => {
+    rejectPending(new Error(`Sidecar exited code=${code} signal=${signal}: ${stderr}`))
+    resolve({ code, signal })
+  }))
+  const terminateTree = () => {
+    if (!child.pid || child.exitCode !== null || child.signalCode !== null) return
+    if (process.platform === 'win32') {
+      const result = spawnSync('taskkill', ['/F', '/T', '/PID', String(child.pid)], { windowsHide: true, timeout: 5000 })
+      if (result.error) console.warn('Sidecar tree termination failed:', result.error.message)
+    } else {
+      child.kill('SIGKILL')
+    }
+  }
 
   rl.on('line', (line) => {
     if (!line.trim()) return
+    let msg
     try {
-      const msg = JSON.parse(line)
-      if (msg.id !== undefined && pending.has(msg.id)) {
-        const { resolve, reject } = pending.get(msg.id)
-        pending.delete(msg.id)
-        if (msg.error) {
-          reject(new Error(msg.error.message))
-        } else {
-          resolve(msg.result)
-        }
-      }
+      msg = JSON.parse(line)
     } catch (err) {
-      // Ignore non-json
+      console.warn('Ignoring non-JSON sidecar output:', String(err))
+      return
     }
+    if (!msg || typeof msg !== 'object') {
+      console.warn('Ignoring malformed sidecar response')
+      return
+    }
+    const waiter = pending.get(msg.id)
+    if (!waiter) return
+    clearTimeout(waiter.timer)
+    pending.delete(msg.id)
+    if (msg.error) waiter.reject(new Error(msg.error.message))
+    else waiter.resolve(msg.result)
   })
+
+  function call(method, params = {}, timeoutMs = defaultTimeoutMs) {
+    const id = reqId++
+    if (child.exitCode !== null || child.signalCode !== null || child.stdin.destroyed) {
+      return Promise.reject(new Error(`Sidecar is unavailable: ${stderr}`))
+    }
+    return new Promise((resolve, reject) => {
+      const timer = setTimeout(() => {
+        pending.delete(id)
+        reject(new Error(`RPC_TIMEOUT id=${id} method=${method} after=${timeoutMs}ms: ${stderr}`))
+      }, timeoutMs)
+      pending.set(id, { resolve, reject, timer })
+      child.stdin.write(JSON.stringify({ jsonrpc: '2.0', id, method, params }) + '\n', error => {
+        if (!error || !pending.has(id)) return
+        clearTimeout(timer)
+        pending.delete(id)
+        reject(error)
+      })
+    })
+  }
 
   return {
     child,
-    call(method, params = {}) {
-      const id = reqId++
-      return new Promise((resolve, reject) => {
-        pending.set(id, { resolve, reject })
-        child.stdin.write(JSON.stringify({ jsonrpc: '2.0', id, method, params }) + '\n')
-      })
-    },
+    call,
     async close() {
-      try {
-        await this.call('shutdown', {})
-      } catch {
-        // Ignore shutdown error
-      }
-      child.kill('SIGTERM')
-      rl.close()
+      if (closePromise) return closePromise
+      closePromise = (async () => {
+        if (child.exitCode === null && child.signalCode === null) {
+          try {
+            await call('shutdown', {}, 3000)
+            child.stdin.end()
+          } catch (error) {
+            console.warn('Graceful sidecar shutdown failed:', error.message)
+            terminateTree()
+          }
+        }
+        let timer
+        const timeout = new Promise(resolve => { timer = setTimeout(() => { terminateTree(); resolve(null) }, 5000) })
+        try {
+          const result = await Promise.race([exited, timeout])
+          if (!result) throw new Error('Sidecar did not exit within the shutdown deadline')
+          return result
+        } finally {
+          clearTimeout(timer)
+          rejectPending(new Error('Sidecar test client closed'))
+          child.stdin.destroy()
+          rl.close()
+        }
+      })()
+      return closePromise
     }
+  }
+}
+
+async function testIndexerSmallDatasetConcurrency(indexerExe) {
+  const fixture = fs.mkdtempSync(path.join(os.tmpdir(), 'ztools-indexer-regression-'))
+  let completedSearches = 0
+  try {
+    // 空目录、单文件、任务数小于/大于 worker 数的真实目录，绝不扫描用户目录。
+    for (const count of [0, 1, 24, os.availableParallelism() + 1]) {
+      const root = path.join(fixture, `files-${count}`)
+      fs.mkdirSync(root)
+      for (let index = 0; index < count; index++) {
+        fs.writeFileSync(path.join(root, `candidate_${index}.txt`), String(index))
+      }
+      const client = createRpcClient(indexerExe, [], 3000)
+      let completed = false
+      try {
+        assert.equal(await client.call('ping'), 'pong')
+        const indexed = await client.call('index_path', { path: root, scanner: 'directory' })
+        assert.equal(indexed.total_indexed, count)
+        const rounds = count === 24 ? 10000 : 1000
+        for (let round = 0; round < rounds; round++) {
+          const missing = round % 2 === 0
+          const result = await client.call('search_files', {
+            query: missing ? 'absent_release_probe' : 'candidate_', limit: 10
+          })
+          assert.equal(result.count, missing ? 0 : Math.min(count, 10))
+          assert.equal(result.total_matches, missing ? 0 : count)
+          for (const file of result.files) assert.equal(path.dirname(file.path), root)
+          completedSearches++
+          if (round % 100 === 0) assert.equal(await client.call('ping'), 'pong')
+        }
+        assert.equal(await client.call('ping'), 'pong')
+        completed = true
+      } finally {
+        const exit = await client.close()
+        if (completed) {
+          assert.equal(exit.code, 0, 'Indexer must finish shutdown and join its workers without force-kill')
+          assert.equal(exit.signal, null)
+        }
+      }
+      console.log(`    Real files=${count}: repeated search, ping and graceful exit passed (${completedSearches} searches total)`)
+    }
+    assert.ok(completedSearches >= 10000)
+  } finally {
+    const tempRoot = path.resolve(os.tmpdir()) + path.sep
+    assert.ok(path.resolve(fixture).startsWith(tempRoot), 'Only the owned temporary fixture may be removed')
+    fs.rmSync(fixture, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 })
   }
 }
 
@@ -87,6 +196,14 @@ async function runTests() {
         throw err
       }
     }
+  }
+
+  if (process.argv.includes('--indexer-regression-only')) {
+    const indexerExe = path.join(outBinDir, 'ztools-indexer.exe')
+    assert.ok(fs.existsSync(indexerExe), 'Build the indexer before running its isolated regression')
+    assertPeMachine(indexerExe, PE_MACHINE_X64)
+    await recordTest('File Indexer: Real Small-Dataset Completion Regression', () => testIndexerSmallDatasetConcurrency(indexerExe))()
+    return report
   }
 
   // 1. Build and verify artifacts
@@ -329,6 +446,7 @@ async function runTests() {
 
   // 4. Test File Indexer: Directory Indexing & Chinese Pinyin Fuzzy Match
   const indexerExe = path.join(outBinDir, 'ztools-indexer.exe')
+  await recordTest('File Indexer: Real Small-Dataset Completion Regression', () => testIndexerSmallDatasetConcurrency(indexerExe))()
   await recordTest('File Indexer: Directory Scan & Chinese Pinyin Fuzzy Match', async () => {
     const client = createRpcClient(indexerExe)
     try {
@@ -354,6 +472,179 @@ async function runTests() {
       assert.equal(concurrentPong, 'pong', 'Concurrent ping during indexing must return pong')
       assert.ok(pingElapsed < 500, `Concurrent ping should not be blocked by indexing (took ${pingElapsed.toFixed(2)}ms)`)
       await heavyIndexPromise
+
+      // 4.1 中文目录名、超 4 层目录 Stage 1+2 边界接续零重复/零遗漏校验
+      const tempBase = fs.mkdtempSync(path.join(os.tmpdir(), 'ztools-indexer-test-'))
+      const junctionsToCleanup = []
+      try {
+        const deepOnlyRoot = path.join(tempBase, '深层校验根目录')
+        const deepDirs = [
+          path.join(deepOnlyRoot, '一级中文目录_测试'),
+          path.join(deepOnlyRoot, '一级中文目录_测试', '二级中文目录_微信'),
+          path.join(deepOnlyRoot, '一级中文目录_测试', '二级中文目录_微信', '三级中文目录_文档'),
+          path.join(deepOnlyRoot, '一级中文目录_测试', '二级中文目录_微信', '三级中文目录_文档', '四级中文目录_计算器'),
+          path.join(deepOnlyRoot, '一级中文目录_测试', '二级中文目录_微信', '三级中文目录_文档', '四级中文目录_计算器', '五级中文目录_边界后'),
+          path.join(deepOnlyRoot, '一级中文目录_测试', '二级中文目录_微信', '三级中文目录_文档', '四级中文目录_计算器', '五级中文目录_边界后', '六级中文目录_极限深度')
+        ]
+        for (let i = 0; i < deepDirs.length; i++) {
+          fs.mkdirSync(deepDirs[i], { recursive: true })
+          fs.writeFileSync(path.join(deepDirs[i], `stage_check_lvl${i + 1}_中文样本.txt`), `level ${i + 1}`)
+        }
+        // 共 6 个目录 + 6 个文件 = 12 个条目，使用 staged: true 强制走 Stage 1 (depth 4) + Stage 2 (boundary_dirs) 合并流程
+        const stagedDeepRes = await client.call('index_path', { path: deepOnlyRoot, scanner: 'directory', staged: true })
+        assert.equal(stagedDeepRes.total_indexed, 12, `Stage 1+2 should index exact 12 entries without omission or duplication (actual: ${stagedDeepRes.total_indexed})`)
+
+        const stageLevelSearch = await client.call('search_files', { query: 'stage_check_lvl', limit: 50 })
+        assert.equal(stageLevelSearch.count, 6, 'All 6 depth levels must be returned by Stage 1+2')
+        const uniqueStagePaths = new Set(stageLevelSearch.files.map(f => f.path))
+        assert.equal(uniqueStagePaths.size, 6, 'Stage 1+2 must not produce duplicate file paths')
+
+        const cnDirSearch = await client.call('search_files', { query: '六级中文目录', limit: 20 })
+        assert.ok(cnDirSearch.files.some(f => f.is_dir && f.name === '六级中文目录_极限深度'), 'Deep Chinese directory name must be indexed and searchable')
+
+        const cnFileSearch = await client.call('search_files', { query: '中文样本', limit: 20 })
+        assert.equal(cnFileSearch.count, 6, 'All 6 deep Chinese files should be searchable')
+
+        // 4.2 Windows 精细过滤策略与 Junction 重解析点 / 循环联接防死循环验证
+        const complexRoot = path.join(tempBase, '复杂过滤与联接测试')
+        const externalTarget = path.join(tempBase, '外部联接真实目标')
+        fs.mkdirSync(complexRoot, { recursive: true })
+        fs.mkdirSync(path.join(externalTarget, '外接深层子目录'), { recursive: true })
+        fs.writeFileSync(path.join(externalTarget, 'junction_external_doc_外部联接文档.txt'), 'external')
+        fs.writeFileSync(path.join(externalTarget, '外接深层子目录', 'junction_deep_target_深层目标.txt'), 'external-deep')
+
+        // 黑名单过滤验证：node_modules 与 __pycache__
+        fs.mkdirSync(path.join(complexRoot, 'node_modules', 'pkg'), { recursive: true })
+        fs.writeFileSync(path.join(complexRoot, 'node_modules', 'pkg', 'ignored_nm_file.js'), 'ignored')
+        fs.mkdirSync(path.join(complexRoot, '__pycache__'), { recursive: true })
+        fs.writeFileSync(path.join(complexRoot, '__pycache__', 'ignored_pyc_file.pyc'), 'ignored')
+
+        // AppData / ProgramData 精细放行与拦截验证
+        const fakeAppData = path.join(complexRoot, 'UserHome', 'AppData')
+        const fakeStartMenu = path.join(fakeAppData, 'Roaming', 'Microsoft', 'Windows', 'Start Menu', 'Programs')
+        const fakeAppDataTemp = path.join(fakeAppData, 'Local', 'Temp')
+        const fakeWindowsApps = path.join(fakeAppData, 'Local', 'Microsoft', 'WindowsApps')
+        const fakeLocalPrograms = path.join(fakeAppData, 'Local', 'Programs', 'MyCodeApp')
+        fs.mkdirSync(fakeStartMenu, { recursive: true })
+        fs.mkdirSync(fakeAppDataTemp, { recursive: true })
+        fs.mkdirSync(fakeWindowsApps, { recursive: true })
+        fs.mkdirSync(fakeLocalPrograms, { recursive: true })
+        fs.writeFileSync(path.join(fakeStartMenu, '模拟微信快捷方式.lnk'), 'lnk')
+        fs.writeFileSync(path.join(fakeAppDataTemp, 'should_skip_appdata_temp_noise.tmp'), 'noise')
+        fs.writeFileSync(path.join(fakeWindowsApps, 'should_skip_windowsapps_noise.exe'), 'alias')
+        fs.writeFileSync(path.join(fakeLocalPrograms, 'my_local_program_entry.exe'), 'exe')
+
+        const fakeProgramData = path.join(complexRoot, 'ProgramData')
+        const fakePdStartMenu = path.join(fakeProgramData, 'Microsoft', 'Windows', 'Start Menu', 'Programs')
+        const fakePdCache = path.join(fakeProgramData, 'Package Cache')
+        fs.mkdirSync(fakePdStartMenu, { recursive: true })
+        fs.mkdirSync(fakePdCache, { recursive: true })
+        fs.writeFileSync(path.join(fakePdStartMenu, '全局开始菜单应用.lnk'), 'lnk')
+        fs.writeFileSync(path.join(fakePdCache, 'should_skip_pkg_cache.msi'), 'cache')
+
+        // Program Files 浅层（3 层内可扫、4 层以后截断）验证
+        const pfShallowDir = path.join(complexRoot, 'Program Files', 'VendorA', 'AppB', 'Bin')
+        const pfTooDeepDir = path.join(pfShallowDir, 'SubCache', 'TooDeep')
+        fs.mkdirSync(pfTooDeepDir, { recursive: true })
+        fs.writeFileSync(path.join(pfShallowDir, 'pf_shallow_app_entry.exe'), 'exe')
+        fs.writeFileSync(path.join(pfTooDeepDir, 'pf_too_deep_ignored.dat'), 'ignored')
+
+        if (process.platform === 'win32') {
+          // 为模拟的 AppData 和 ProgramData 设置真实的 Windows 隐藏属性（+H）
+          spawnSync('attrib', ['+H', fakeAppData], { windowsHide: true })
+          spawnSync('attrib', ['+H', fakeProgramData], { windowsHide: true })
+
+          // 1) 正常外部 Junction（使用 mklink /J 验证目录联接可被深入扫描）
+          const normalJunction = path.join(complexRoot, '中文目录联接_ExternalLink')
+          const mkRes1 = spawnSync('cmd.exe', ['/d', '/c', 'mklink', '/J', normalJunction, externalTarget], { windowsHide: true })
+          assert.equal(mkRes1.status, 0, `mklink /J failed: ${mkRes1.stderr?.toString()}`)
+          junctionsToCleanup.push(normalJunction)
+
+          // 2) 多级目录内的祖先循环 Junction 与互指环 Junction
+          const loopLevel1 = path.join(complexRoot, 'loop_a')
+          const loopLevel2 = path.join(loopLevel1, 'loop_b')
+          fs.mkdirSync(loopLevel2, { recursive: true })
+          fs.writeFileSync(path.join(loopLevel2, 'loop_inner_file.txt'), 'ok')
+
+          const loopToParent = path.join(loopLevel2, 'loop_back_to_a')
+          const mkRes2 = spawnSync('cmd.exe', ['/d', '/c', 'mklink', '/J', loopToParent, loopLevel1], { windowsHide: true })
+          assert.equal(mkRes2.status, 0, 'mklink /J loop_back_to_a failed')
+          junctionsToCleanup.push(loopToParent)
+
+          const loopToRoot = path.join(loopLevel2, 'loop_back_to_root')
+          const mkRes3 = spawnSync('cmd.exe', ['/d', '/c', 'mklink', '/J', loopToRoot, complexRoot], { windowsHide: true })
+          assert.equal(mkRes3.status, 0, 'mklink /J loop_back_to_root failed')
+          junctionsToCleanup.push(loopToRoot)
+
+          const extSelfLoop = path.join(externalTarget, 'external_self_loop')
+          const mkRes4 = spawnSync('cmd.exe', ['/d', '/c', 'mklink', '/J', extSelfLoop, externalTarget], { windowsHide: true })
+          assert.equal(mkRes4.status, 0, 'mklink /J external_self_loop failed')
+          junctionsToCleanup.push(extSelfLoop)
+
+          const ringA = path.join(complexRoot, 'ring_a')
+          const ringB = path.join(complexRoot, 'ring_b')
+          fs.mkdirSync(ringA, { recursive: true })
+          fs.mkdirSync(ringB, { recursive: true })
+          fs.writeFileSync(path.join(ringA, 'ring_a_file.txt'), 'a')
+          fs.writeFileSync(path.join(ringB, 'ring_b_file.txt'), 'b')
+          const ringAToB = path.join(ringA, 'to_b')
+          const ringBToA = path.join(ringB, 'to_a')
+          assert.equal(spawnSync('cmd.exe', ['/d', '/c', 'mklink', '/J', ringAToB, ringB], { windowsHide: true }).status, 0)
+          assert.equal(spawnSync('cmd.exe', ['/d', '/c', 'mklink', '/J', ringBToA, ringA], { windowsHide: true }).status, 0)
+          junctionsToCleanup.push(ringAToB, ringBToA)
+        }
+
+        const complexRes = await client.call('index_path', { path: complexRoot, scanner: 'directory', staged: true })
+        assert.ok(complexRes.total_indexed > 0, 'Complex directory scan should succeed without hanging on junction loops')
+        assert.ok(complexRes.elapsed_ms < 5000, `Junction loop guard must finish quickly (actual: ${complexRes.elapsed_ms}ms)`)
+
+        // 校验白名单与过滤命中情况
+        assert.equal((await client.call('search_files', { query: '模拟微信快捷方式', limit: 10 })).count, 1, 'AppData Start Menu shortcut must be indexed')
+        assert.equal((await client.call('search_files', { query: '全局开始菜单应用', limit: 10 })).count, 1, 'ProgramData Start Menu shortcut must be indexed')
+        assert.equal((await client.call('search_files', { query: 'my_local_program_entry', limit: 10 })).count, 1, 'AppData\\Local\\Programs entry must be indexed')
+        assert.equal((await client.call('search_files', { query: 'pf_shallow_app_entry', limit: 10 })).count, 1, 'Program Files shallow entry must be indexed')
+
+        assert.equal((await client.call('search_files', { query: 'pf_too_deep_ignored', limit: 10 })).count, 0, 'Program Files deep cache must be skipped')
+        assert.equal((await client.call('search_files', { query: 'should_skip_appdata_temp_noise', limit: 10 })).count, 0, 'AppData\\Local\\Temp noise must be skipped')
+        assert.equal((await client.call('search_files', { query: 'should_skip_windowsapps_noise', limit: 10 })).count, 0, 'WindowsApps alias must be skipped')
+        assert.equal((await client.call('search_files', { query: 'should_skip_pkg_cache', limit: 10 })).count, 0, 'ProgramData non-StartMenu cache must be skipped')
+        assert.equal((await client.call('search_files', { query: 'ignored_nm_file', limit: 10 })).count, 0, 'node_modules must be skipped')
+        assert.equal((await client.call('search_files', { query: 'ignored_pyc_file', limit: 10 })).count, 0, '__pycache__ must be skipped')
+
+        if (process.platform === 'win32') {
+          const extDocRes = await client.call('search_files', { query: 'junction_external_doc', limit: 10 })
+          assert.equal(extDocRes.count, 1, 'Normal Windows Junction target file must be indexed')
+          const extDeepRes = await client.call('search_files', { query: 'junction_deep_target', limit: 10 })
+          assert.equal(extDeepRes.count, 1, 'Normal Windows Junction deep subdir file must be indexed')
+          assert.ok((await client.call('search_files', { query: 'loop_inner_file', limit: 10 })).count >= 1, 'Directory containing loop junction must still index normal files')
+          assert.ok((await client.call('search_files', { query: 'ring_a_file', limit: 10 })).count >= 1, 'Mutually linked ring_a file must be indexed without infinite loop')
+          assert.ok((await client.call('search_files', { query: 'ring_b_file', limit: 10 })).count >= 1, 'Mutually linked ring_b file must be indexed without infinite loop')
+        }
+      } finally {
+        for (const jPath of junctionsToCleanup) {
+          try {
+            fs.rmdirSync(jPath)
+          } catch {
+            // Ignore cleanup failure for non-existent junction
+          }
+        }
+        try {
+          fs.rmSync(tempBase, { recursive: true, force: true })
+        } catch {
+          // Ignore temp cleanup failure
+        }
+      }
+
+      // 4.3 全新进程验证全盘并发扫描 ("*")，验证多盘并发与过滤放开后远超原 701 文件瓶颈
+      const allDrivesClient = createRpcClient(indexerExe)
+      try {
+        const allDrivesRes = await allDrivesClient.call('index_path', { path: '*', scanner: 'auto' })
+        console.log(`    Indexed ${allDrivesRes.total_indexed} files from all fixed drives in ${allDrivesRes.elapsed_ms}ms (${allDrivesRes.scanner_used})`)
+        assert.equal(allDrivesRes.scanner_used, 'all_drives_concurrent')
+        assert.ok(allDrivesRes.total_indexed > 1000, `Full drive index should exceed legacy 701 count (actual: ${allDrivesRes.total_indexed})`)
+      } finally {
+        await allDrivesClient.close()
+      }
     } finally {
       await client.close()
     }

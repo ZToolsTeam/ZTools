@@ -1,14 +1,16 @@
 <script setup>
 import HotkeyCaptureField from '@/components/HotkeyCaptureField.vue'
 import { RcDialog } from '@/components/base'
-import { computed, ref } from 'vue'
+import { computed, onBeforeUnmount, ref } from 'vue'
 import { message } from 'ant-design-vue'
+import { storeToRefs } from 'pinia'
+import { usePluginsStore } from '@/stores/plugins'
 import { getHotkey, openPlugin as apiOpenPlugin } from '@/api/apiserver'
 import {
-  formatHotkeyForPlatform,
   getHotkeyHostCapabilities,
   getHotkeyRuleDescription,
   getHotkeyWaitText,
+  getShellReserveWarning,
   interpretRecorderKeydown,
   resetHotkeyRecorderState
 } from '@/utils/hotkeyRecorder'
@@ -16,8 +18,9 @@ import {
   DEPRECATED_PLUGIN_FEATURE_HOTKEY_ITEMS,
   OCR_CAPTURE_TRIGGER_ID,
   OCR_CAPTURE_TRIGGER_SOURCE,
-  PLUGIN_FEATURE_HOTKEY_ITEMS,
+  PLUGIN_FEATURE_HOTKEY_SOURCE,
   SCREENSHOT_HOTKEY_SOURCE,
+  buildPluginFeatureHotkeyItems,
   getPluginFeatureHotkeyItemByTrigger,
   isDeprecatedPluginFeatureHotkeyItem
 } from '@/utils/pluginFeatureHotkeys'
@@ -26,6 +29,21 @@ const emit = defineEmits(['update:count'])
 
 const SCREENSHOT_SETTINGS_KEY = 'settings:preferences'
 const SCREENSHOT_LEGACY_SETTINGS_KEY = 'settings:hideWindow'
+
+const pluginsStore = usePluginsStore()
+const { installedPlugins } = storeToRefs(pluginsStore)
+const featureHotkeyItems = computed(() =>
+  buildPluginFeatureHotkeyItems(installedPlugins.value)
+)
+const fieldRefs = new Map()
+const setFieldRef = (id, el) => {
+  const key = String(id)
+  if (el) {
+    fieldRefs.set(key, el)
+  } else {
+    fieldRefs.delete(key)
+  }
+}
 
 const visible = ref(false)
 const hotkeyPlatform = ref('unknown')
@@ -52,16 +70,15 @@ const configuredCount = computed(
   () => Object.keys(featureHotkeyMap.value).length
 )
 
-const getItemHotkey = (itemId) =>
-  formatHotkeyForPlatform(
-    featureHotkeyMap.value[itemId]?.key || '',
-    hotkeyPlatform.value,
-    supportsDoubleModifierHotkeys.value
-  )
+/** 返回原始热键字符串，由 HotkeyCaptureField 按平台统一渲染键帽 */
+const getItemHotkey = (itemId) => featureHotkeyMap.value[itemId]?.key || ''
 
 const getItemStatusText = (item) => {
   if (item.pluginId === 'screenshot') {
     return '触发时直接执行截图并存入缓存'
+  }
+  if (item.dynamic) {
+    return '触发时直接打开该插件功能'
   }
 
   return '触发时直接启动并进入截图识别'
@@ -134,6 +151,22 @@ const buildScreenshotActionParams = (item) => {
 }
 
 const buildRegisterPayload = (item, hotkeyStr) => {
+  if (item.dynamic) {
+    return {
+      id: item.triggerId,
+      pluginId: item.pluginId,
+      type: 'hotkey',
+      enabled: true,
+      config: { key: hotkeyStr },
+      actionMode: 'window',
+      actionTarget: item.pluginId,
+      actionParams: {
+        source: PLUGIN_FEATURE_HOTKEY_SOURCE,
+        featureCode: item.featureCode
+      }
+    }
+  }
+
   if (item.pluginId === 'ocr') {
     return {
       id: OCR_CAPTURE_TRIGGER_ID,
@@ -172,7 +205,7 @@ const loadFeatureHotkeys = async () => {
     const nextMap = {}
 
     for (const trigger of triggers) {
-      const item = getPluginFeatureHotkeyItemByTrigger(trigger)
+      const item = getPluginFeatureHotkeyItemByTrigger(trigger, featureHotkeyItems.value)
       if (!item || isDeprecatedPluginFeatureHotkeyItem(item)) continue
 
       nextMap[item.id] = {
@@ -217,8 +250,7 @@ const show = async () => {
 }
 
 const hide = () => {
-  recordingItemId.value = ''
-  recordingText.value = ''
+  stopRecording(false)
   visible.value = false
 }
 
@@ -236,12 +268,21 @@ const startRecording = async (item) => {
   recordingIsKeys.value = false
 }
 
-const stopRecording = () => {
+/** 结束录入并在需要时主动失焦归还焦点，避免二次 Esc 被隐藏 input 拦截 */
+const stopRecording = (restoreFocus = false) => {
+  const activeId = recordingItemId.value
   resetHotkeyRecorderState()
   recordingItemId.value = ''
   recordingText.value = ''
   recordingIsKeys.value = false
+  if (activeId) {
+    fieldRefs.get(String(activeId))?.blurInput?.({ restoreFocus })
+  }
 }
+
+onBeforeUnmount(() => {
+  stopRecording(false)
+})
 
 const getGlobalWakeHotkey = async () => {
   try {
@@ -271,7 +312,7 @@ const hasSamePluginHotkeyConflict = async (item, hotkeyStr) => {
       }
       if ((trigger?.id || '') === currentTriggerId) continue
 
-      const featureItem = getPluginFeatureHotkeyItemByTrigger(trigger)
+      const featureItem = getPluginFeatureHotkeyItemByTrigger(trigger, featureHotkeyItems.value)
       if (featureItem) {
         message.warning(
           `该快捷键与「${featureItem.pluginName} - ${featureItem.featureName}」冲突`
@@ -324,11 +365,13 @@ const registerHotkey = async (item, hotkeyStr) => {
       return false
     }
 
+    const currentTriggerId =
+      featureHotkeyMap.value[item.id]?.triggerId || item.triggerId
+
     if (window.ztools?.trigger?.checkConflict) {
-      const conflictResult = await window.ztools.trigger.checkConflict(
-        hotkeyStr,
-        item.pluginId
-      )
+      const conflictResult = currentTriggerId
+        ? await window.ztools.trigger.checkConflict(hotkeyStr, item.pluginId, currentTriggerId)
+        : await window.ztools.trigger.checkConflict(hotkeyStr, item.pluginId)
       const data = conflictResult?.data || conflictResult || {}
       if (data.hasConflict && data.conflicts?.length > 0) {
         const names = data.conflicts
@@ -339,8 +382,6 @@ const registerHotkey = async (item, hotkeyStr) => {
       }
     }
 
-    const currentTriggerId =
-      featureHotkeyMap.value[item.id]?.triggerId || item.triggerId
     if (
       currentTriggerId &&
       currentTriggerId !== item.triggerId &&
@@ -369,6 +410,10 @@ const registerHotkey = async (item, hotkeyStr) => {
     }
     emit('update:count', Object.keys(featureHotkeyMap.value).length)
     message.success(`已设置「${item.pluginName} - ${item.featureName}」快捷键`)
+    const reserveWarning = getShellReserveWarning(hotkeyStr)
+    if (reserveWarning) {
+      message.warning(reserveWarning)
+    }
     return true
   } catch (error) {
     message.error('设置快捷键失败: ' + (error?.message || '未知错误'))
@@ -408,19 +453,19 @@ const handleKeydown = async (item, event) => {
     allowDoubleTap: supportsDoubleModifierHotkeys.value
   })
   if (result.action === 'cancel') {
-    stopRecording()
+    stopRecording(true)
     return
   }
   if (result.action === 'clear') {
     await clearHotkey(item)
-    stopRecording()
+    stopRecording(true)
     return
   }
   recordingText.value = result.text
   recordingIsKeys.value = result.isKeys
   if (result.action !== 'valid') return
   await registerHotkey(item, result.hotkey)
-  stopRecording()
+  stopRecording(true)
 }
 
 defineExpose({ show, hide, configuredCount })
@@ -445,7 +490,7 @@ defineExpose({ show, hide, configuredCount })
 
     <div class="feature-hotkey-list">
       <div
-        v-for="item in PLUGIN_FEATURE_HOTKEY_ITEMS"
+        v-for="item in featureHotkeyItems"
         :key="item.id"
         class="feature-hotkey-item"
       >
@@ -469,16 +514,19 @@ defineExpose({ show, hide, configuredCount })
         </div>
 
         <HotkeyCaptureField
+          :ref="(el) => setFieldRef(item.id, el)"
           class="feature-actions"
           :hotkey="getItemHotkey(item.id)"
           :recording="recordingItemId === item.id"
           :loading="loadingItemId === item.id"
+          :platform="hotkeyPlatform"
+          :supports-double-modifier="supportsDoubleModifierHotkeys"
           :recording-text="recordingText"
           :recording-is-keys="recordingIsKeys"
           :wait-text="getHotkeyWaitText(hotkeyPlatform, supportsDoubleModifierHotkeys)"
           empty-text="点击录入"
           @start="startRecording(item)"
-          @cancel="stopRecording"
+          @cancel="stopRecording(false)"
           @keydown="handleKeydown(item, $event)"
           @clear="clearHotkey(item)"
         />

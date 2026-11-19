@@ -1,20 +1,28 @@
 /**
  * 局域网免密快传与二维码投送中枢 (LanShare 2.0 Logic)
- * 真实扫描本机局域网 IPv4 地址与 Downloads / Desktop 文件，
- * 通过宿主内网 HTTP 文件服务器与标准 ISO/IEC 18004 QR Code 编码器生成真实可扫二维码
+ * 支持显式导入文件与文件夹、局域网 IPv4 地址探测与标准 ISO/IEC 18004 QR Code 编码器生成可扫二维码
  */
 
 import {
   callHostTransport,
   invokePluginService,
   isRealElectronHost,
-  getRealEnvPaths,
-  scanRealDirectoryTree,
   readRealClipboardText,
   showRealItemInFolder,
   formatBytes,
   invokeDllPluginCapability
 } from '../shared/native-ipc.js'
+import {
+  type ExampleImportRules,
+  type ExampleImportedFile
+} from '../shared/file-import.js'
+
+export const LAN_SHARE_IMPORT_RULES: ExampleImportRules = {
+  maxDepth: 5,
+  maxFiles: 500,
+  skipEmptyFiles: true,
+  forbiddenPath: /(^|[\\/])(Windows|System32|SysWOW64|Program Files|Program Files \(x86\)|Boot|Recovery)($|[\\/])/i
+}
 
 export { formatBytes }
 
@@ -406,10 +414,24 @@ export function validateInvocationPayload(method: string, params: unknown): { va
   return { valid: true }
 }
 
+interface LanShareServiceResponse {
+  ok?: boolean
+  error?: string
+  message?: string
+  lanIp?: string
+  primaryIp?: string
+  port?: number | string
+  running?: boolean
+  portalUrl?: string
+  shareUrl?: string
+  sizeBytes?: number | string
+  downloadCount?: number | string
+}
+
 export async function invokeNativeCapability(
   method: string,
   params: Record<string, unknown>,
-  hostBridge?: any
+  hostBridge?: unknown
 ): Promise<NativeInvocationResult> {
   const check = validateInvocationPayload(method, params)
   if (!check.valid) {
@@ -424,10 +446,10 @@ let currentDetectedLanPort = 18580
 export async function toggleLanShareServer(
   enable = true,
   port = 18580,
-  hostOverride?: any
+  hostOverride?: unknown
 ): Promise<{ ok: boolean; running: boolean; lanIp: string; port: number; portalUrl: string; message: string }> {
   const action = enable ? 'startShareServer' : 'stopShareServer'
-  const res = await invokePluginService<any>(DLL_PLUGIN_NAME, action, { port }, hostOverride)
+  const res = await invokePluginService<LanShareServiceResponse>(DLL_PLUGIN_NAME, action, { port }, hostOverride)
   if (res.ok && res.data && res.data.ok !== false) {
     const lanIp = String(res.data.lanIp ?? res.data.primaryIp ?? '127.0.0.1')
     const actualPort = Number(res.data.port || port)
@@ -451,7 +473,7 @@ export async function toggleLanShareServer(
       lanIp: '127.0.0.1',
       port,
       portalUrl: `http://127.0.0.1:${port}`,
-      message: res.data?.error || res.error || '无法启动或停止局域网 HTTP 共享服务'
+      message: String(res.data?.error || res.error || '无法启动或停止局域网 HTTP 共享服务')
     }
   }
   return {
@@ -466,7 +488,7 @@ export async function toggleLanShareServer(
 
 export async function addRealFileToShareQueue(
   filePath: string,
-  hostOverride?: any
+  hostOverride?: unknown
 ): Promise<{ ok: boolean; item?: LanShareItem; message: string }> {
   const trimmed = typeof filePath === 'string' ? filePath.trim() : ''
   if (!trimmed) {
@@ -476,7 +498,7 @@ export async function addRealFileToShareQueue(
     return { ok: false, message: FORBIDDEN_REASON }
   }
 
-  const res = await invokePluginService<any>(
+  const res = await invokePluginService<LanShareServiceResponse>(
     DLL_PLUGIN_NAME,
     'syncShareFiles',
     { files: [{ path: trimmed }] },
@@ -531,27 +553,120 @@ export async function addRealFileToShareQueue(
   }
 }
 
-export async function fetchLanShareSnapshot(hostOverride?: any): Promise<LanShareSnapshot> {
+export function toLanShareFileItem(
+  entry: ExampleImportedFile,
+  portalUrl = `http://${currentDetectedLanIp}:${currentDetectedLanPort}`
+): LanShareItem {
+  const encodedName = encodeURIComponent(entry.name)
+  const shareUrl = `${portalUrl}/dl/${encodedName}`
+  return {
+    id: `lan-file-${encodeURIComponent(entry.path)}`,
+    title: entry.name,
+    subtitle: entry.path,
+    category: 'files',
+    categoryLabel: '本地文件',
+    filePath: entry.path,
+    sizeBytes: Number(entry.sizeBytes ?? 0),
+    shareUrl,
+    qrCodeDataUri: generateQrCodeSvgDataUri(shareUrl),
+    isShared: true,
+    downloadCount: 0
+  }
+}
+
+export async function createClipboardShareItem(
+  hostOverride?: unknown
+): Promise<{ ok: boolean; item?: LanShareItem; message: string }> {
+  const clipText = (await readRealClipboardText(hostOverride)).trim()
+  if (!clipText) {
+    return { ok: false, message: '当前系统剪贴板为空，无可共享文本' }
+  }
+  const portalUrl = `http://${currentDetectedLanIp}:${currentDetectedLanPort}`
+  const clipUrl = `${portalUrl}/clip/latest`
+  return {
+    ok: true,
+    message: '已从剪贴板创建文本共享项',
+    item: {
+      id: 'lan-clip-share',
+      title: '当前系统剪贴板文本实时投送',
+      subtitle: clipText.replace(/\s+/g, ' ').slice(0, 72),
+      category: 'clipboard',
+      categoryLabel: '剪贴板投送',
+      filePath: '',
+      sizeBytes: clipText.length,
+      shareUrl: clipUrl,
+      qrCodeDataUri: generateQrCodeSvgDataUri(clipUrl),
+      isShared: true,
+      downloadCount: 0,
+      textPreview: clipText
+    }
+  }
+}
+
+export async function syncLanShareItemsToHost(
+  items: LanShareItem[],
+  hostOverride?: unknown
+): Promise<{ portalUrl: string; ok: boolean }> {
+  const filesPayload = items
+    .filter((i) => i.category === 'files' && i.filePath)
+    .map((i) => ({ name: i.title, path: i.filePath, size: i.sizeBytes }))
+  if (filesPayload.length === 0) {
+    return { portalUrl: `http://${currentDetectedLanIp}:${currentDetectedLanPort}`, ok: true }
+  }
+  const syncRes = await invokePluginService<Record<string, unknown>>(
+    DLL_PLUGIN_NAME,
+    'syncShareFiles',
+    { files: filesPayload },
+    hostOverride
+  )
+  if (syncRes.ok && syncRes.data) {
+    const syncedIp = syncRes.data.lanIp ?? syncRes.data.primaryIp
+    if (syncedIp) currentDetectedLanIp = String(syncedIp)
+    if (syncRes.data.port) currentDetectedLanPort = Number(syncRes.data.port)
+  }
+  return {
+    portalUrl: `http://${currentDetectedLanIp}:${currentDetectedLanPort}`,
+    ok: syncRes.ok
+  }
+}
+
+export async function fetchLanShareSnapshot(hostOverride?: unknown): Promise<LanShareSnapshot> {
   const realHost = isRealElectronHost(hostOverride) || Boolean(hostOverride)
   let lanIp = '127.0.0.1'
   let port = 18580
   let serverRunning = false
   let hostDownloadMap: Record<string, number> = {}
-  let hostSharedFiles: Array<{ id?: string; name?: string; title?: string; path?: string; filePath?: string; size?: number; sizeBytes?: number; downloadCount?: number; shareUrl?: string; isShared?: boolean }> = []
+  let hostSharedFiles: Array<{
+    id?: string
+    name?: string
+    title?: string
+    path?: string
+    filePath?: string
+    size?: number
+    sizeBytes?: number
+    downloadCount?: number
+    shareUrl?: string
+    isShared?: boolean
+  }> = []
 
   if (realHost) {
-    const statusRes = await invokePluginService<any>(DLL_PLUGIN_NAME, 'getLanShareStatus', {}, hostOverride)
+    const statusRes = await invokePluginService<Record<string, unknown>>(
+      DLL_PLUGIN_NAME,
+      'getLanShareStatus',
+      {},
+      hostOverride
+    )
     if (statusRes.ok && statusRes.data) {
       const resolvedIp = statusRes.data.lanIp ?? statusRes.data.primaryIp
       if (resolvedIp) lanIp = String(resolvedIp)
       if (statusRes.data.port) port = Number(statusRes.data.port)
       serverRunning = Boolean(statusRes.data.running)
       if (statusRes.data.downloadCounts && typeof statusRes.data.downloadCounts === 'object') {
-        hostDownloadMap = statusRes.data.downloadCounts
+        hostDownloadMap = statusRes.data.downloadCounts as Record<string, number>
       }
       const rawFiles = statusRes.data.files ?? statusRes.data.sharedFiles
       if (Array.isArray(rawFiles)) {
-        hostSharedFiles = rawFiles
+        hostSharedFiles = rawFiles as typeof hostSharedFiles
       }
     }
   }
@@ -560,10 +675,11 @@ export async function fetchLanShareSnapshot(hostOverride?: any): Promise<LanShar
   currentDetectedLanPort = port
 
   const portalUrl = `http://${lanIp}:${port}`
-  const portalDownloads = Number(hostDownloadMap['portal'] ?? 0)
+  const items: LanShareItem[] = []
 
-  const items: LanShareItem[] = [
-    {
+  // 仅当真实宿主内网服务已在运行或已有明确入列共享文件时展示门户与已共享项，冷启动默认为空 []
+  if (serverRunning || hostSharedFiles.length > 0) {
+    items.push({
       id: 'lan-portal-entry',
       title: `本机局域网快传门户 (${portalUrl})`,
       subtitle: '同一 Wi-Fi 下手机或平板浏览器扫码即可双向收发文件与文本',
@@ -574,135 +690,29 @@ export async function fetchLanShareSnapshot(hostOverride?: any): Promise<LanShar
       shareUrl: portalUrl,
       qrCodeDataUri: generateQrCodeSvgDataUri(portalUrl),
       isShared: true,
-      downloadCount: portalDownloads
-    }
-  ]
-
-  let clipText = ''
-  if (realHost) {
-    clipText = await readRealClipboardText(hostOverride)
+      downloadCount: Number(hostDownloadMap['portal'] ?? 0)
+    })
   }
-  const effectiveClip =
-    clipText.trim() || (realHost ? '' : 'git clone https://github.com/ZTools-Team/ZTools.git && npm install && npm start')
-  if (effectiveClip || !realHost) {
-    const clipUrl = `${portalUrl}/clip/latest`
+
+  hostSharedFiles.forEach((f, idx) => {
+    const fPath = String(f.path ?? f.filePath ?? '')
+    const fName = String(f.name ?? f.title ?? (fPath.split(/[\\/]/).pop() || `file-${idx + 1}`))
+    const encodedName = encodeURIComponent(fName)
+    const fileUrl = f.shareUrl || `${portalUrl}/dl/${idx + 1}/${encodedName}`
     items.push({
-      id: 'lan-clip-share',
-      title: '当前系统剪贴板文本实时投送',
-      subtitle: (effectiveClip || '当前剪贴板为空').replace(/\s+/g, ' ').slice(0, 72),
-      category: 'clipboard',
-      categoryLabel: '剪贴板投送',
-      filePath: '',
-      sizeBytes: effectiveClip.length,
-      shareUrl: clipUrl,
-      qrCodeDataUri: generateQrCodeSvgDataUri(clipUrl),
-      isShared: true,
-      downloadCount: Number(hostDownloadMap['clipboard'] ?? 0),
-      textPreview: effectiveClip
+      id: f.id || `lan-file-${idx}`,
+      title: fName,
+      subtitle: fPath,
+      category: 'files',
+      categoryLabel: '本地文件',
+      filePath: fPath,
+      sizeBytes: Number(f.size ?? f.sizeBytes ?? 0),
+      shareUrl: fileUrl,
+      qrCodeDataUri: generateQrCodeSvgDataUri(fileUrl),
+      isShared: f.isShared !== false,
+      downloadCount: Number(f.downloadCount ?? hostDownloadMap[fPath] ?? 0)
     })
-  }
-
-  let realFilesAdded = false
-  if (hostSharedFiles.length > 0) {
-    hostSharedFiles.forEach((f, idx) => {
-      const fPath = String(f.path ?? f.filePath ?? '')
-      const fName = String(f.name ?? f.title ?? (fPath.split(/[\\/]/).pop() || `file-${idx + 1}`))
-      const encodedName = encodeURIComponent(fName)
-      const fileUrl = f.shareUrl || `${portalUrl}/dl/${idx + 1}/${encodedName}`
-      items.push({
-        id: f.id || `lan-file-${idx}`,
-        title: fName,
-        subtitle: fPath,
-        category: 'files',
-        categoryLabel: '本地文件',
-        filePath: fPath,
-        sizeBytes: Number(f.size ?? f.sizeBytes ?? 0),
-        shareUrl: fileUrl,
-        qrCodeDataUri: generateQrCodeSvgDataUri(fileUrl),
-        isShared: f.isShared !== false,
-        downloadCount: Number(f.downloadCount ?? hostDownloadMap[fPath] ?? 0)
-      })
-      realFilesAdded = true
-    })
-  } else if (realHost) {
-    const env = await getRealEnvPaths(hostOverride)
-    const [dlScan, deskScan] = await Promise.all([
-      scanRealDirectoryTree(env.downloads, { maxFiles: 8, hostOverride }),
-      scanRealDirectoryTree(env.desktop, { maxFiles: 6, hostOverride })
-    ])
-    const combined = [...dlScan.files, ...deskScan.files].filter((f) => !f.isDir && f.size > 0).slice(0, 8)
-    if (combined.length > 0) {
-      const syncRes = await invokePluginService<any>(
-        DLL_PLUGIN_NAME,
-        'syncShareFiles',
-        { files: combined.map((f) => ({ name: f.name, path: f.path, size: f.size })) },
-        hostOverride
-      )
-      if (syncRes.ok && syncRes.data) {
-        const syncedIp = syncRes.data.lanIp ?? syncRes.data.primaryIp
-        if (syncedIp) {
-          lanIp = String(syncedIp)
-          currentDetectedLanIp = lanIp
-        }
-        if (syncRes.data.port) {
-          port = Number(syncRes.data.port)
-          currentDetectedLanPort = port
-        }
-      }
-    }
-    for (const [idx, f] of combined.entries()) {
-      const encodedName = encodeURIComponent(f.name)
-      const fileUrl = `http://${lanIp}:${port}/dl/${idx + 1}/${encodedName}`
-      items.push({
-        id: `lan-file-${idx}`,
-        title: f.name,
-        subtitle: f.path,
-        category: 'files',
-        categoryLabel: '本地文件',
-        filePath: f.path,
-        sizeBytes: f.size,
-        shareUrl: fileUrl,
-        qrCodeDataUri: generateQrCodeSvgDataUri(fileUrl),
-        isShared: true,
-        downloadCount: Number(hostDownloadMap[f.path] ?? 0)
-      })
-      realFilesAdded = true
-    }
-  }
-
-  // 仅在非真实 Electron 宿主且未传入 hostOverride 时，才提供离线预览样本数据
-  if (!realFilesAdded && !realHost) {
-    const sampleFiles = [
-      {
-        name: 'ZTools_Setup_1.1.7_x64.exe',
-        path: 'C:\\Users\\User\\Downloads\\ZTools_Setup_1.1.7_x64.exe',
-        size: 68420000,
-        downloads: 0
-      },
-      {
-        name: 'Architecture_Whitepaper_2026.pdf',
-        path: 'C:\\Users\\User\\Desktop\\Architecture_Whitepaper_2026.pdf',
-        size: 12840000,
-        downloads: 0
-      }
-    ]
-    sampleFiles.forEach((f, idx) => {
-      const fileUrl = `${portalUrl}/dl/${idx + 1}/${encodeURIComponent(f.name)}`
-      items.push({
-        id: `lan-file-${idx}`,
-        title: f.name,
-        subtitle: f.path,
-        category: 'files',
-        categoryLabel: '本地文件',
-        filePath: f.path,
-        sizeBytes: f.size,
-        shareUrl: fileUrl,
-        qrCodeDataUri: generateQrCodeSvgDataUri(fileUrl),
-        isShared: true,
-        downloadCount: f.downloads
-      })
-    })
-  }
+  })
 
   const sharedCount = items.filter((i) => i.isShared).length
   const totalSharedBytes = items.reduce((acc, cur) => acc + (cur.sizeBytes || 0), 0)
@@ -711,7 +721,7 @@ export async function fetchLanShareSnapshot(hostOverride?: any): Promise<LanShar
     items,
     lanIp,
     port,
-    portalUrl: `http://${lanIp}:${port}`,
+    portalUrl,
     serverRunning,
     sharedCount,
     totalSharedBytes
@@ -721,7 +731,7 @@ export async function fetchLanShareSnapshot(hostOverride?: any): Promise<LanShar
 export async function toggleFileShare(
   itemId: string,
   shared?: boolean,
-  hostOverride?: any
+  hostOverride?: unknown
 ): Promise<{ ok: boolean; isShared: boolean; shareUrl: string; message: string }> {
   if (!itemId || typeof itemId !== 'string' || !itemId.trim()) {
     return { ok: false, isShared: false, shareUrl: '', message: '共享项 ID 不能为空' }
@@ -732,7 +742,7 @@ export async function toggleFileShare(
   let shareUrl = `http://${activeIp}:${activePort}/dl/${encodeURIComponent(itemId)}`
 
   if (hostOverride || isRealElectronHost(hostOverride)) {
-    const svcRes = await invokePluginService<any>(
+    const svcRes = await invokePluginService<LanShareServiceResponse>(
       DLL_PLUGIN_NAME,
       'toggleFileShare',
       { itemId, shared: nextShared },
@@ -764,13 +774,17 @@ export async function toggleFileShare(
         message: String(svcRes.data?.error || svcRes.data?.message || '切换局域网共享状态失败')
       }
     }
-    const fallbackRes = await callHostTransport<any>('lan_share_toggle', { itemId, shared: nextShared }, hostOverride)
+    const fallbackRes = await callHostTransport<LanShareServiceResponse>(
+      'lan_share_toggle',
+      { itemId, shared: nextShared },
+      hostOverride
+    )
     if (!fallbackRes.ok || fallbackRes.data?.ok === false) {
       return {
         ok: false,
         isShared: !nextShared,
         shareUrl,
-        message: fallbackRes.error || fallbackRes.data?.error || svcRes.error || '切换局域网共享状态失败'
+        message: String(fallbackRes.error || fallbackRes.data?.error || svcRes.error || '切换局域网共享状态失败')
       }
     }
     const fbIp = fallbackRes.data?.lanIp ?? fallbackRes.data?.primaryIp
@@ -792,7 +806,7 @@ export async function toggleFileShare(
   }
 }
 
-export async function openSharedFileLocation(filePath: string, hostOverride?: any): Promise<boolean> {
+export async function openSharedFileLocation(filePath: string, hostOverride?: unknown): Promise<boolean> {
   if (!filePath) return false
   return showRealItemInFolder(filePath, hostOverride)
 }

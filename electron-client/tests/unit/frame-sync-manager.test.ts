@@ -2,12 +2,8 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 import {
   FrameSyncManager,
-  HotKeyProtector,
   type ManagedWindow,
-  type ManagedWebContents,
-  type GlobalShortcutApi,
-  type HookIsolationPort,
-  type HookIsolationEvent
+  type ManagedWebContents
 } from '../../src/main/services/frame-sync-manager.js'
 
 class FakeWebContents implements ManagedWebContents {
@@ -111,42 +107,6 @@ class FakeManagedWindow implements ManagedWindow {
         listener()
       }
     }
-  }
-}
-
-class FakeGlobalShortcutApi implements GlobalShortcutApi {
-  registered = new Map<string, () => void>()
-  failAccelerators = new Set<string>()
-
-  register(accelerator: string, callback: () => void): boolean {
-    if (this.failAccelerators.has(accelerator)) return false
-    this.registered.set(accelerator, callback)
-    return true
-  }
-
-  unregister(accelerator: string): void {
-    this.registered.delete(accelerator)
-  }
-
-  isRegistered(accelerator: string): boolean {
-    return this.registered.has(accelerator)
-  }
-}
-
-class FakeHookIsolationPort implements HookIsolationPort {
-  isIsolated = true
-  isAlive = true
-  listener: ((event: HookIsolationEvent) => void) | null = null
-
-  onLifecycleEvent(listener: (event: HookIsolationEvent) => void): () => void {
-    this.listener = listener
-    return () => {
-      this.listener = null
-    }
-  }
-
-  emit(event: HookIsolationEvent): void {
-    this.listener?.(event)
   }
 }
 
@@ -448,58 +408,6 @@ test('FrameSyncManager: synchronous blur during warm show does not poison the ne
   }
 })
 
-// =========================================================================
-// HotKeyProtector 测试
-// =========================================================================
-
-test('HotKeyProtector: registers shortcut and detects duplicate accelerator conflict', () => {
-  const shortcutApi = new FakeGlobalShortcutApi()
-  const protector = new HotKeyProtector({ shortcutApi })
-
-  const ok1 = protector.register('item1', 'CommandOrControl+Shift+K', () => {})
-  assert.equal(ok1, true)
-  assert.equal(shortcutApi.isRegistered('CommandOrControl+Shift+K'), true)
-
-  // 相同快捷键被其他 ID 注册应冲突拒绝
-  const ok2 = protector.register('item2', 'CommandOrControl+Shift+K', () => {})
-  assert.equal(ok2, false)
-  assert.equal(protector.diagnostics.conflictCount, 1)
-
-  protector.dispose()
-  assert.equal(shortcutApi.isRegistered('CommandOrControl+Shift+K'), false)
-})
-
-test('HotKeyProtector: watchdog detects silent unregistration and automatically self-heals', () => {
-  const shortcutApi = new FakeGlobalShortcutApi()
-  const protector = new HotKeyProtector({ shortcutApi })
-
-  let triggerCount = 0
-  protector.register('app_toggle', 'Alt+Space', () => {
-    triggerCount++
-  })
-  assert.equal(shortcutApi.isRegistered('Alt+Space'), true)
-
-  // 模拟 Windows 锁屏/第三方软件静默夺走快捷键
-  shortcutApi.unregister('Alt+Space')
-  assert.equal(shortcutApi.isRegistered('Alt+Space'), false)
-
-  // 执行自愈巡检
-  const result = protector.verifyAndRepair()
-  assert.equal(result.verified, 1)
-  assert.deepEqual(result.repaired, ['app_toggle'])
-  assert.equal(result.failed.length, 0)
-
-  // 快捷键已被自动重新注册
-  assert.equal(shortcutApi.isRegistered('Alt+Space'), true)
-  assert.equal(protector.diagnostics.repairedCount, 1)
-
-  // 验证重新绑定的 handler 依然有效
-  shortcutApi.registered.get('Alt+Space')?.()
-  assert.equal(triggerCount, 1)
-
-  protector.dispose()
-})
-
 test('FrameSyncManager: macOS (darwin) hidden window skips occluded rAF wait and shows immediately', async () => {
   const win = new FakeManagedWindow()
   win.webContents.rafDelayMs = 500
@@ -522,24 +430,4 @@ test('FrameSyncManager: macOS (darwin) hidden window skips occluded rAF wait and
   assert.ok(elapsed < 80, `macOS 唤醒耗时应 < 80ms，实际 ${elapsed}ms`)
 
   fsm.dispose()
-})
-
-test('HotKeyProtector: monitors isolated hook lifecycle events and triggers repair', () => {
-  const shortcutApi = new FakeGlobalShortcutApi()
-  const hookPort = new FakeHookIsolationPort()
-  const protector = new HotKeyProtector({ shortcutApi, hookPort })
-
-  protector.register('super_panel', 'Alt+D', () => {})
-
-  // 模拟底层钩子独立进程/线程崩溃事件
-  hookPort.emit({ type: 'crashed', detail: { code: 1 } })
-
-  assert.equal(protector.diagnostics.hookIsolated, true)
-  assert.equal(shortcutApi.isRegistered('Alt+D'), true)
-
-  // 模拟钩子线程重启恢复事件
-  hookPort.emit({ type: 'restarted' })
-  assert.equal(shortcutApi.isRegistered('Alt+D'), true)
-
-  protector.dispose()
 })

@@ -402,7 +402,7 @@ export function validatePluginManifest(manifest, options = {}) {
     }
   }
 
-  // 11. mode 与 alias 校验 (如存在)
+  // 11. mode、alias 与 shortcut 校验 (如存在)
   // 客户端只实现了 view 与 no-view 两种模式
   const VALID_MODES = new Set(['view', 'no-view'])
   if (manifest.mode !== undefined) {
@@ -413,6 +413,11 @@ export function validatePluginManifest(manifest, options = {}) {
   if (manifest.alias !== undefined) {
     if (typeof manifest.alias !== 'string' || manifest.alias.length > 32) {
       errors.push('alias 必须为不超过 32 个字符的字符串')
+    }
+  }
+  if (manifest.shortcut !== undefined) {
+    if (typeof manifest.shortcut !== 'string' || !manifest.shortcut.trim()) {
+      errors.push('shortcut 必须为非空字符串')
     }
   }
 
@@ -454,6 +459,9 @@ export function validatePluginManifest(manifest, options = {}) {
         }
         if (feat.alias !== undefined && (typeof feat.alias !== 'string' || feat.alias.length > 32)) {
           errors.push(`features[${idx}].alias 必须为不超过 32 个字符的字符串`)
+        }
+        if (feat.shortcut !== undefined && (typeof feat.shortcut !== 'string' || !feat.shortcut.trim())) {
+          errors.push(`features[${idx}].shortcut 必须为非空字符串`)
         }
       }
     }

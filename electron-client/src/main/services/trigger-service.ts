@@ -2,6 +2,15 @@ import { randomUUID } from 'node:crypto'
 import type { CallerIdentity } from '../../contracts/capabilities.js'
 import { errorCodes, ZToolsError } from '../../contracts/errors.js'
 import {
+  doubleModifierOf,
+  getGlobalHotkeyBlacklistReason,
+  isDoubleModifier,
+  normalizedAccelerator,
+  type NativeMouseAction,
+  type NativeMouseButton
+} from '../../contracts/hotkey-rules.js'
+export { normalizedAccelerator } from '../../contracts/hotkey-rules.js'
+import {
   isValidElectronAccelerator,
   type TriggerConflictParams,
   type TriggerListParams,
@@ -15,7 +24,8 @@ import type { PluginStateProvider } from './plugin-state-service.js'
 import type {
   NativeHostLifecycleEvent,
   NativeInputEvent,
-  NativeKeyboardModifier
+  NativeKeyboardModifier,
+  NativeMouseTriggerConfig
 } from '../native-host/native-host-client.js'
 
 const TRIGGER_FILE = 'triggers.json'
@@ -23,12 +33,30 @@ const TRIGGER_FILE = 'triggers.json'
 export interface GlobalShortcutAdapter {
   register(accelerator: string, callback: () => void): boolean
   unregister(accelerator: string): void
+  isRegistered?(accelerator: string): boolean
 }
 
 export interface KeyboardDoubleTapAdapter {
-  configureKeyboardDoubleTap(modifiers: readonly NativeKeyboardModifier[]): Promise<void>
+  configureKeyboardDoubleTap(
+    modifiers: readonly NativeKeyboardModifier[],
+    fullscreenDnd?: boolean
+  ): Promise<void>
+  configureMouseTrigger?(config: NativeMouseTriggerConfig | null): Promise<void>
   onInputEvent(listener: (event: NativeInputEvent) => void): () => void
   onLifecycleEvent(listener: (event: NativeHostLifecycleEvent) => void): () => void
+}
+
+export interface MouseTriggerAdapter {
+  configureMouseTrigger(config: NativeMouseTriggerConfig | null): Promise<void>
+  onInputEvent(listener: (event: NativeInputEvent) => void): () => void
+  onLifecycleEvent(listener: (event: NativeHostLifecycleEvent) => void): () => void
+}
+
+export interface HotkeyConflictItem {
+  type: 'system'
+  key: string
+  pluginId: string
+  triggerId: string
 }
 
 export interface TriggerDocumentStore {
@@ -39,14 +67,18 @@ export interface TriggerDocumentStore {
 export interface TriggerServiceOptions {
   dataRoot: string
   shortcuts: GlobalShortcutAdapter
-  events: Pick<EventService, 'publishHost'>
+  events: Pick<EventService, 'publishHost'> & Partial<Pick<EventService, 'onSubscriptionChanged'>>
   toggleMainWindow(): void
   openPlugin(params: PluginOpenParams): Promise<unknown>
-  launchLocalApp?(appId: string): Promise<void>
   forwardHotkeyToRecorder?(accelerator: string): Promise<boolean> | boolean
   store?: TriggerDocumentStore
   state?: PluginStateProvider
   keyboard?: KeyboardDoubleTapAdapter
+  mouse?: MouseTriggerAdapter
+  /** 冷启动时若 triggers.json 尚未建立任何记录，则用该值自动初始化全局唤醒触发器 */
+  initialWakeHotkey?: string
+  /** 运行平台（测试中可覆盖为 darwin/win32 验证跨平台规则） */
+  platform?: NodeJS.Platform
 }
 
 interface StoredTrigger {
@@ -137,7 +169,7 @@ function fromRegisterParams(params: TriggerRegisterParams): StoredTrigger {
   const sourceAction = params.action ?? {
     mode: params.actionMode as StoredTrigger['action']['mode'],
     target: params.actionTarget as string,
-    params: params.actionParams as JsonObject
+    params: params.actionParams ?? {}
   }
   return {
     id: params.id ?? randomUUID().toLowerCase(),
@@ -147,7 +179,7 @@ function fromRegisterParams(params: TriggerRegisterParams): StoredTrigger {
     action: {
       mode: sourceAction.mode,
       target: sourceAction.target,
-      params: cloneObject(sourceAction.params)
+      params: sourceAction.params ? cloneObject(sourceAction.params) : {}
     },
     enabled: params.enabled,
     priority: params.priority ?? 0,
@@ -189,36 +221,40 @@ function acceleratorOf(trigger: StoredTrigger): string | undefined {
     : undefined
 }
 
-const MODIFIER_ALIASES: Record<string, string> = {
-  ctrl: 'ctrl', control: 'ctrl',
-  alt: 'alt', option: 'alt',
-  shift: 'shift',
-  cmd: 'meta', command: 'meta', meta: 'meta', super: 'meta', win: 'meta'
-}
-const MODIFIER_ORDER = ['ctrl', 'alt', 'shift', 'meta']
+const VALID_MOUSE_BUTTONS = new Set<NativeMouseButton>(['middle', 'right', 'forward', 'backward'])
+const VALID_MOUSE_ACTIONS = new Set<NativeMouseAction>(['press', 'long'])
 
-/**
- * 快捷键比较用的规范形式：忽略大小写与空白、统一修饰键别名（Option = Alt 等）并按固定顺序排列，
- * 这样 `Shift+Alt+Space` 与 `alt + shift + space` 会被识别为同一个组合键。
- */
-export function normalizedAccelerator(key: string): string {
-  const parts = key.replace(/\s+/g, '').toLowerCase().split('+').filter(Boolean)
-  if (parts.length === 0) return ''
-  const mainKey = parts[parts.length - 1] as string
-  const modifiers = new Set<string>()
-  for (const part of parts.slice(0, -1)) {
-    if (part === 'commandorcontrol' || part === 'cmdorctrl') {
-      modifiers.add(process.platform === 'darwin' ? 'meta' : 'ctrl')
-    } else {
-      modifiers.add(MODIFIER_ALIASES[part] ?? part)
-    }
+function parseMouseHookConfig(config: JsonObject): NativeMouseTriggerConfig | undefined {
+  if (config.kind !== 'mouse') return undefined
+  const button = config.button
+  const action = config.action
+  const longPressMs = config.longPressMs
+  const fullscreenDnd = config.fullscreenDnd
+  if (
+    typeof button !== 'string' ||
+    !VALID_MOUSE_BUTTONS.has(button as NativeMouseButton) ||
+    typeof action !== 'string' ||
+    !VALID_MOUSE_ACTIONS.has(action as NativeMouseAction) ||
+    !Number.isInteger(longPressMs) ||
+    (longPressMs as number) < 200 ||
+    (longPressMs as number) > 500 ||
+    (fullscreenDnd !== undefined && typeof fullscreenDnd !== 'boolean')
+  ) {
+    return undefined
   }
-  const ordered = [...modifiers].sort((a, b) => {
-    const ia = MODIFIER_ORDER.indexOf(a)
-    const ib = MODIFIER_ORDER.indexOf(b)
-    return (ia === -1 ? 99 : ia) - (ib === -1 ? 99 : ib) || a.localeCompare(b)
-  })
-  return [...ordered, mainKey].join('+')
+  if (button === 'right' && action === 'press') return undefined
+  return {
+    button: button as NativeMouseButton,
+    action: action as NativeMouseAction,
+    longPressMs: longPressMs as number,
+    fullscreenDnd: fullscreenDnd !== false
+  }
+}
+
+const DOUBLE_MODIFIER_ACCELERATORS: Record<NativeKeyboardModifier, string> = {
+  ctrl: 'DoubleCtrl',
+  alt: 'DoubleAlt',
+  shift: 'DoubleShift'
 }
 
 /** 冲突提示里展示占用者：系统内置触发器用功能名，其余显示插件 ID */
@@ -229,51 +265,23 @@ const SYSTEM_TRIGGER_NAMES: Record<string, string> = {
 /** 旧超级面板键盘热键的触发器 ID：超级面板已移除，加载时清理遗留记录 */
 const RETIRED_SUPER_PANEL_TRIGGER_ID = 'super_panel_keyboard_hotkey'
 
+/** 判定已下线功能的遗留触发器记录（旧超级面板热键、旧本地软件热键），启动读取时跳过并清理 */
+function isRetiredTrigger(trigger: StoredTrigger): boolean {
+  return (
+    trigger.id === RETIRED_SUPER_PANEL_TRIGGER_ID ||
+    trigger.action.target === 'launch_local_app' ||
+    /^localapp:/i.test(trigger.pluginId)
+  )
+}
+
 function triggerOwnerName(trigger: StoredTrigger): string {
   if (Object.hasOwn(SYSTEM_TRIGGER_NAMES, trigger.id)) return SYSTEM_TRIGGER_NAMES[trigger.id] as string
   return trigger.pluginId.toLowerCase() === 'system' ? '系统快捷键' : `插件 ${trigger.pluginId}`
 }
 
-function localAppIdOf(trigger: StoredTrigger): string | undefined {
-  if (trigger.action.mode !== 'builtin' || trigger.action.target !== 'launch_local_app') return undefined
-  const params = trigger.action.params
-  const appId = params.appId
-  if (
-    Object.keys(params).length !== 1 ||
-    typeof appId !== 'string' ||
-    !/^localapp:[A-F0-9]{8}$/i.test(appId) ||
-    trigger.pluginId.toLowerCase() !== appId.toLowerCase()
-  ) return undefined
-  return appId
-}
-
-function doubleModifierOf(key: string): NativeKeyboardModifier | undefined {
-  switch (key.replace(/[+\s]/g, '').toLowerCase()) {
-    case 'doublectrl':
-    case 'doublecontrol':
-      return 'ctrl'
-    case 'doublealt':
-      return 'alt'
-    case 'doubleshift':
-      return 'shift'
-    default:
-      return undefined
-  }
-}
-
-function isDoubleModifier(key: string): boolean {
-  return doubleModifierOf(key) !== undefined
-}
-
-function isLocalAppId(value: unknown): value is string {
-  return typeof value === 'string' && /^localapp:[A-F0-9]{8}$/i.test(value)
-}
-
-function hasRuntimeAction(trigger: StoredTrigger, canLaunchLocalApp: boolean): boolean {
+function hasRuntimeAction(trigger: StoredTrigger): boolean {
   if (trigger.action.mode === 'window') return isIdentifier(trigger.action.target)
-  if (trigger.action.mode !== 'builtin') return false
-  if (trigger.action.target === 'toggle_main_window') return true
-  return canLaunchLocalApp && trigger.action.target === 'launch_local_app' && localAppIdOf(trigger) !== undefined
+  return trigger.action.mode === 'builtin' && trigger.action.target === 'toggle_main_window'
 }
 
 /**
@@ -283,27 +291,33 @@ function hasRuntimeAction(trigger: StoredTrigger, canLaunchLocalApp: boolean): b
  * - Windows 下 Alt+Space 默认触发 WM_SYSCHAR -> SC_KEYMENU 弹出左上角系统窗口菜单并导致录制框失焦退出，
  *   通过 RegisterHotKey 临时注册后直接转为 WM_HOTKEY 投递给录制框，不再触发系统菜单。
  */
-const RECORDER_SPACE_ACCELERATORS: readonly string[] = [
-  'Ctrl+Space',
-  'Alt+Space',
-  'Shift+Space',
-  'Ctrl+Alt+Space',
-  'Ctrl+Shift+Space',
-  'Alt+Shift+Space',
-  'Ctrl+Alt+Shift+Space',
-  ...(process.platform === 'darwin'
-    ? [
-        'Control+Space',
-        'Control+Alt+Space',
-        'Control+Shift+Space',
-        'Control+Alt+Shift+Space'
-      ]
-    : [])
-]
+function recorderSpaceAccelerators(platform: NodeJS.Platform): readonly string[] {
+  return [
+    'Ctrl+Space',
+    'Alt+Space',
+    'Shift+Space',
+    'Ctrl+Alt+Space',
+    'Ctrl+Shift+Space',
+    'Alt+Shift+Space',
+    'Ctrl+Alt+Shift+Space',
+    ...(platform === 'darwin'
+      ? [
+          'Control+Space',
+          'Control+Alt+Space',
+          'Control+Shift+Space',
+          'Control+Alt+Shift+Space'
+        ]
+      : [])
+  ]
+}
 
 export class TriggerService {
+  readonly #platform: NodeJS.Platform
+  readonly #keyboardAdapter: KeyboardDoubleTapAdapter | undefined
+  readonly #mouseAdapter: MouseTriggerAdapter | undefined
   readonly #recorderCaptured = new Set<string>()
   #recorderCaptureActive = false
+  #lastRecorderReleaseAt = 0
   readonly #store: TriggerDocumentStore
   readonly #triggers = new Map<string, StoredTrigger>()
   readonly #registered = new Map<string, string>()
@@ -313,32 +327,103 @@ export class TriggerService {
   #queue: Promise<unknown> = Promise.resolve()
   #stopping = false
   #stopPromise: Promise<void> | undefined
-  #removeKeyboardInputListener: (() => void) | undefined
-  #removeKeyboardLifecycleListener: (() => void) | undefined
-  #keyboardConfig: NativeKeyboardModifier[] | undefined
+  readonly #removeInputListeners: Array<() => void> = []
+  readonly #removeLifecycleListeners: Array<() => void> = []
+  #removeConflictSubscriptionListener: (() => void) | undefined
+  #keyboardConfig: { modifiers: NativeKeyboardModifier[]; fullscreenDnd: boolean } | undefined
+  #mouseConfig: NativeMouseTriggerConfig | null | undefined
+  #activeMouseTriggerId: string | undefined
+  #lastStartupConflicts: HotkeyConflictItem[] = []
+  #pendingStartupConflicts: HotkeyConflictItem[] = []
 
   constructor(private readonly options: TriggerServiceOptions) {
+    this.#platform = options.platform ?? process.platform
+    this.#keyboardAdapter = options.keyboard
+    this.#mouseAdapter = options.mouse ?? (
+      options.keyboard && typeof options.keyboard.configureMouseTrigger === 'function'
+        ? options.keyboard as MouseTriggerAdapter
+        : undefined
+    )
     this.#store = options.store ?? new JsonFileStore(options.dataRoot, new Set([TRIGGER_FILE]))
-    if (options.keyboard) {
-      this.#removeKeyboardInputListener = options.keyboard.onInputEvent((event) => {
-        this.#handleKeyboardInput(event)
-      })
-      this.#removeKeyboardLifecycleListener = options.keyboard.onLifecycleEvent((event) => {
+
+    // 对同一底层原生输入通道去重绑定，避免 keyboard 与 mouse 共用 NativeHostClient 时事件触发两次
+    const inputAdapters = new Set<KeyboardDoubleTapAdapter | MouseTriggerAdapter>()
+    if (this.#keyboardAdapter) inputAdapters.add(this.#keyboardAdapter)
+    if (this.#mouseAdapter) inputAdapters.add(this.#mouseAdapter)
+
+    for (const adapter of inputAdapters) {
+      this.#removeInputListeners.push(adapter.onInputEvent((event) => {
+        this.#handleNativeInput(event)
+      }))
+      this.#removeLifecycleListeners.push(adapter.onLifecycleEvent((event) => {
         if (event.type === 'crashed') {
           this.#keyboardConfig = undefined
+          this.#mouseConfig = undefined
+          this.#activeMouseTriggerId = undefined
           return
         }
         if (event.type === 'restarted' && !this.#stopping) {
           this.#keyboardConfig = undefined
+          this.#mouseConfig = undefined
+          this.#activeMouseTriggerId = undefined
           void this.#serialize(async () => {
             await this.#syncKeyboardConfig()
+            await this.#syncMouseHookConfig(this.#triggers, false)
           }).catch((error: unknown) => {
-            console.warn('NativeHost32 重启后恢复双击修饰键失败', error)
+            console.warn('NativeHost32 重启后恢复输入触发器失败', error)
           })
         }
-      })
+      }))
     }
     this.#ready = this.#load()
+  }
+
+  waitUntilReady(): Promise<void> {
+    return this.#ready
+  }
+
+  getGlobalWakeHotkey(): { exists: boolean; enabled: boolean; key: string } {
+    const trigger = this.#triggers.get('global_wake_hotkey')
+    if (!trigger) return { exists: false, enabled: false, key: '' }
+    return {
+      exists: true,
+      enabled: trigger.enabled,
+      key: acceleratorOf(trigger) ?? ''
+    }
+  }
+
+  getStartupConflicts(): HotkeyConflictItem[] {
+    return this.#lastStartupConflicts.map((item) => ({ ...item }))
+  }
+
+  flushStartupConflicts(): void {
+    if (this.#stopping || this.#pendingStartupConflicts.length === 0) return
+    try {
+      const result = this.options.events.publishHost('hotkey_conflicts_detected', {
+        conflicts: this.#pendingStartupConflicts.map((item) => ({ ...item }))
+      })
+      if (result.delivered > 0) {
+        this.#pendingStartupConflicts = []
+        this.#removeConflictSubscriptionListener?.()
+        this.#removeConflictSubscriptionListener = undefined
+      }
+    } catch {
+      // 冲突推送失败不能影响主窗口正常加载
+    }
+  }
+
+  verifyRegistrations(): Promise<void> {
+    return this.#serialize(async () => {
+      const conflicts = await this.#verifyAndCollectConflicts()
+      this.#lastStartupConflicts = conflicts.map((item) => ({ ...item }))
+      if (conflicts.length > 0) {
+        this.#publishDetectedConflicts(conflicts, false)
+      } else {
+        this.#pendingStartupConflicts = []
+        this.#removeConflictSubscriptionListener?.()
+        this.#removeConflictSubscriptionListener = undefined
+      }
+    })
   }
 
   register(params: TriggerRegisterParams, caller: CallerIdentity): Promise<{ success: true; data: { triggerId: string } }> {
@@ -369,8 +454,16 @@ export class TriggerService {
       const next = new Map(this.#triggers)
       next.set(trigger.id, trigger)
       try {
+        await this.#syncMouseHookConfig(next, true)
+      } catch (error) {
+        if (registrationChanged && nextAccelerator) this.#unregister(trigger.id, nextAccelerator)
+        if (registrationChanged && previousAccelerator) this.#restore(trigger.id, previousAccelerator)
+        throw error
+      }
+      try {
         await this.#persist(next)
       } catch (error) {
+        await this.#syncMouseHookConfig(this.#triggers, false)
         if (registrationChanged && nextAccelerator) this.#unregister(trigger.id, nextAccelerator)
         if (registrationChanged && previousAccelerator) this.#restore(trigger.id, previousAccelerator)
         throw error
@@ -392,9 +485,11 @@ export class TriggerService {
 
       const next = new Map(this.#triggers)
       next.delete(triggerId)
+      await this.#syncMouseHookConfig(next, false)
       try {
         await this.#persist(next)
       } catch (error) {
+        await this.#syncMouseHookConfig(this.#triggers, false)
         if (previousAccelerator) this.#restore(triggerId, previousAccelerator)
         throw error
       }
@@ -443,6 +538,7 @@ export class TriggerService {
         }
       }
       await this.#syncKeyboardConfig()
+      await this.#syncMouseHookConfig(this.#triggers, false)
     })
   }
 
@@ -460,9 +556,11 @@ export class TriggerService {
       }
       const next = new Map(this.#triggers)
       for (const trigger of affected) next.delete(trigger.id)
+      await this.#syncMouseHookConfig(next, false)
       try {
         await this.#persist(next)
       } catch (error) {
+        await this.#syncMouseHookConfig(this.#triggers, false)
         for (const { trigger, accelerator } of registrations) this.#restore(trigger.id, accelerator)
         throw error
       }
@@ -480,6 +578,7 @@ export class TriggerService {
         const currentAccelerator = acceleratorOf(previous)
         if (
           params.enabled &&
+          previous.type === 'hotkey' &&
           currentAccelerator &&
           this.#registered.get(previous.id) !== currentAccelerator
         ) {
@@ -488,6 +587,11 @@ export class TriggerService {
           if (!this.#register(previous.id, currentAccelerator)) {
             throw new ZToolsError(errorCodes.triggerConflict, '快捷键无效或已被其他程序占用')
           }
+        }
+        if (params.enabled && previous.type === 'hook' && !this.#isEffectivelyEnabled(previous)) {
+          this.#requireSupported(previous, caller)
+          await this.#assertNoConflict(previous)
+          await this.#syncMouseHookConfig(this.#triggers, true)
         }
         await this.#syncKeyboardConfig()
         return { success: true, data: 'Trigger state updated' }
@@ -499,18 +603,32 @@ export class TriggerService {
       }
       const accelerator = acceleratorOf(trigger) ?? acceleratorOf(previous)
 
-      if (params.enabled && (!accelerator || !this.#register(trigger.id, accelerator))) {
-        throw new ZToolsError(errorCodes.triggerConflict, '快捷键无效或已被其他程序占用')
+      if (trigger.type === 'hotkey') {
+        if (params.enabled && (!accelerator || !this.#register(trigger.id, accelerator))) {
+          throw new ZToolsError(errorCodes.triggerConflict, '快捷键无效或已被其他程序占用')
+        }
+        if (!params.enabled && accelerator) this.#unregister(trigger.id, accelerator)
       }
-      if (!params.enabled && accelerator) this.#unregister(trigger.id, accelerator)
 
       const next = new Map(this.#triggers)
       next.set(trigger.id, trigger)
       try {
+        await this.#syncMouseHookConfig(next, params.enabled)
+      } catch (error) {
+        if (trigger.type === 'hotkey') {
+          if (params.enabled && accelerator) this.#unregister(trigger.id, accelerator)
+          else if (!params.enabled && accelerator) this.#restore(trigger.id, accelerator)
+        }
+        throw error
+      }
+      try {
         await this.#persist(next)
       } catch (error) {
-        if (params.enabled && accelerator) this.#unregister(trigger.id, accelerator)
-        else if (accelerator) this.#restore(trigger.id, accelerator)
+        await this.#syncMouseHookConfig(this.#triggers, false)
+        if (trigger.type === 'hotkey') {
+          if (params.enabled && accelerator) this.#unregister(trigger.id, accelerator)
+          else if (accelerator) this.#restore(trigger.id, accelerator)
+        }
         throw error
       }
       this.#replaceTriggers(next)
@@ -527,17 +645,21 @@ export class TriggerService {
     }
   }> {
     return this.#serialize(async () => {
-      const pluginId = this.#effectivePluginId(params.pluginId, caller)
-      const normalized = normalizedAccelerator(params.key)
+      // 校验插件调用方是否有权查询指定 pluginId
+      this.#effectivePluginId(params.pluginId, caller)
+      const normalized = normalizedAccelerator(params.key, this.#platform)
       const requestedModifier = doubleModifierOf(params.key)
       const conflicts = [...this.#triggers.values()]
         .filter((trigger) => {
+          if (!trigger.enabled) return false
+          if (params.excludeTriggerId && trigger.id === params.excludeTriggerId) return false
           const key = acceleratorOf(trigger)
-          return trigger.enabled && key !== undefined &&
-            (requestedModifier !== undefined
-              ? doubleModifierOf(key) === requestedModifier
-              : trigger.pluginId.toLowerCase() !== pluginId.toLowerCase() &&
-                normalizedAccelerator(key) === normalized)
+          if (key === undefined) return false
+          if (requestedModifier !== undefined) {
+            return doubleModifierOf(key) === requestedModifier
+          }
+          // 同插件不同触发器共用同一快捷键同样构成系统冲突，仅排除 excludeTriggerId 自身
+          return normalizedAccelerator(key, this.#platform) === normalized
         })
       const activeConflicts = []
       for (const trigger of conflicts) {
@@ -555,6 +677,9 @@ export class TriggerService {
 
   setRecorderCaptureActive(active: boolean): void {
     if (this.#stopping || !active) {
+      if (this.#recorderCaptureActive) {
+        this.#lastRecorderReleaseAt = Date.now()
+      }
       this.#recorderCaptureActive = false
       this.#releaseRecorderCapture()
       return
@@ -563,21 +688,35 @@ export class TriggerService {
     this.#acquireRecorderCapture()
   }
 
+  isRecorderCaptureActive(): boolean {
+    return this.#recorderCaptureActive
+  }
+
   stop(): Promise<void> {
     this.#recorderCaptureActive = false
     this.#releaseRecorderCapture()
     if (this.#stopPromise) return this.#stopPromise
     this.#stopping = true
-    this.#removeKeyboardInputListener?.()
-    this.#removeKeyboardLifecycleListener?.()
+    this.#pendingStartupConflicts = []
+    this.#removeConflictSubscriptionListener?.()
+    this.#removeConflictSubscriptionListener = undefined
+    for (const remove of this.#removeInputListeners) remove()
+    this.#removeInputListeners.length = 0
+    for (const remove of this.#removeLifecycleListeners) remove()
+    this.#removeLifecycleListeners.length = 0
     this.#stopPromise = this.#queue.catch(() => undefined).then(async () => {
       await this.#ready.catch(() => undefined)
       for (const [triggerId, accelerator] of this.#registered) {
         this.#unregister(triggerId, accelerator)
       }
-      if (this.options.keyboard) {
-        await this.options.keyboard.configureKeyboardDoubleTap([]).catch(() => undefined)
-        this.#keyboardConfig = []
+      if (this.#keyboardAdapter) {
+        await this.#keyboardAdapter.configureKeyboardDoubleTap([], true).catch(() => undefined)
+        this.#keyboardConfig = { modifiers: [], fullscreenDnd: true }
+      }
+      if (this.#mouseAdapter) {
+        await this.#mouseAdapter.configureMouseTrigger(null).catch(() => undefined)
+        this.#mouseConfig = null
+        this.#activeMouseTriggerId = undefined
       }
     })
     this.#queue = this.#stopPromise
@@ -586,6 +725,7 @@ export class TriggerService {
 
   async #load(): Promise<void> {
     const document = await this.#store.read(TRIGGER_FILE)
+    const isUninitializedDocument = document.triggers === undefined
     const values = document.triggers ?? []
     if (!Array.isArray(values)) {
       throw new ZToolsError(errorCodes.dataCorrupt, 'triggers.json 缺少 triggers 数组')
@@ -596,7 +736,7 @@ export class TriggerService {
     for (const [index, value] of values.entries()) {
       try {
         const trigger = parseStoredTrigger(value)
-        if (trigger.id === RETIRED_SUPER_PANEL_TRIGGER_ID) {
+        if (isRetiredTrigger(trigger)) {
           retiredFound = true
           continue
         }
@@ -610,36 +750,136 @@ export class TriggerService {
         this.#reportInvalidRecord(index, error)
       }
     }
+    let seededDefaultWake = false
+    if (isUninitializedDocument && typeof this.options.initialWakeHotkey === 'string') {
+      const wakeKey = this.options.initialWakeHotkey.trim()
+      if (wakeKey && !loaded.has('global_wake_hotkey')) {
+        const wakeValid = isDoubleModifier(wakeKey)
+          ? this.#keyboardAdapter !== undefined
+          : isValidElectronAccelerator(wakeKey) &&
+            getGlobalHotkeyBlacklistReason(wakeKey, this.#platform) === null
+        if (wakeValid) {
+          const defaultWakeTrigger: StoredTrigger = {
+            id: 'global_wake_hotkey',
+            pluginId: 'system',
+            type: 'hotkey',
+            config: { key: wakeKey },
+            action: { mode: 'builtin', target: 'toggle_main_window', params: {} },
+            enabled: true,
+            priority: 0,
+            createTime: new Date().toISOString(),
+            raw: {},
+            actionShape: 'nested'
+          }
+          loaded.set(defaultWakeTrigger.id, defaultWakeTrigger)
+          order.push({ triggerId: defaultWakeTrigger.id })
+          seededDefaultWake = true
+        }
+      }
+    }
     this.#document = document
     this.#order = order
-    if (retiredFound) {
+    if (retiredFound || seededDefaultWake) {
       try {
         await this.#persist(loaded)
       } catch (error) {
-        // 写回失败不影响本次运行：遗留记录已不在内存中，下次启动会再次清理
-        console.warn('清理旧超级面板快捷键记录失败', error)
+        // 写回失败不影响本次运行：冷启动默认或清理状态已在内存中生效
+        console.warn('初始化或清理 triggers.json 记录失败', error)
       }
     }
     this.#replaceTriggers(loaded)
-    for (const trigger of loaded.values()) {
+    const startupConflicts = await this.#verifyAndCollectConflicts()
+    this.#lastStartupConflicts = startupConflicts.map((item) => ({ ...item }))
+    if (startupConflicts.length > 0) {
+      this.#publishDetectedConflicts(startupConflicts, true)
+    }
+  }
+
+  async #verifyAndCollectConflicts(): Promise<HotkeyConflictItem[]> {
+    const conflicts: HotkeyConflictItem[] = []
+    for (const trigger of this.#triggers.values()) {
       const accelerator = trigger.enabled ? acceleratorOf(trigger) : undefined
       if (
         !accelerator ||
+        trigger.type !== 'hotkey' ||
         (isDoubleModifier(accelerator)
-          ? !this.options.keyboard
-          : !isValidElectronAccelerator(accelerator)) ||
-        !hasRuntimeAction(trigger, this.options.launchLocalApp !== undefined) ||
+          ? !this.#keyboardAdapter
+          : !isValidElectronAccelerator(accelerator) ||
+            getGlobalHotkeyBlacklistReason(accelerator, this.#platform) !== null) ||
+        !hasRuntimeAction(trigger) ||
         !(await this.#isPluginEnabled(trigger.pluginId))
       ) continue
+
+      if (isDoubleModifier(accelerator)) {
+        this.#registered.set(trigger.id, accelerator)
+        continue
+      }
+
+      const registeredMatches = this.#registered.get(trigger.id) === accelerator
+      const osStillRegistered = typeof this.options.shortcuts.isRegistered === 'function'
+        ? this.options.shortcuts.isRegistered(accelerator)
+        : registeredMatches
+      if (registeredMatches && osStillRegistered) {
+        continue
+      }
+      if (registeredMatches && !osStillRegistered) {
+        this.#registered.delete(trigger.id)
+      }
       try {
         if (!this.#register(trigger.id, accelerator)) {
           console.warn(`Global shortcut unavailable: ${trigger.id}`)
+          conflicts.push({
+            type: 'system',
+            key: accelerator,
+            pluginId: trigger.pluginId,
+            triggerId: trigger.id
+          })
         }
       } catch {
         console.warn(`Global shortcut registration failed: ${trigger.id}`)
+        conflicts.push({
+          type: 'system',
+          key: accelerator,
+          pluginId: trigger.pluginId,
+          triggerId: trigger.id
+        })
       }
     }
+    this.#keyboardConfig = undefined
+    this.#mouseConfig = undefined
     await this.#syncKeyboardConfig()
+    await this.#syncMouseHookConfig(this.#triggers, false)
+    return conflicts
+  }
+
+  #publishDetectedConflicts(conflicts: readonly HotkeyConflictItem[], deferIfUndelivered: boolean): void {
+    const payload = { conflicts: conflicts.map((item) => ({ ...item })) }
+    let delivered = 0
+    try {
+      delivered = this.options.events.publishHost('hotkey_conflicts_detected', payload).delivered
+    } catch {
+      delivered = 0
+    }
+    if (!deferIfUndelivered) return
+    if (delivered > 0) {
+      this.#pendingStartupConflicts = []
+      this.#removeConflictSubscriptionListener?.()
+      this.#removeConflictSubscriptionListener = undefined
+      return
+    }
+    this.#pendingStartupConflicts = conflicts.map((item) => ({ ...item }))
+    if (!this.#removeConflictSubscriptionListener && this.options.events.onSubscriptionChanged) {
+      this.#removeConflictSubscriptionListener = this.options.events.onSubscriptionChanged(
+        'hotkey_conflicts_detected',
+        (count) => {
+          if (count > 0 && !this.#stopping && this.#pendingStartupConflicts.length > 0) {
+            setImmediate(() => {
+              this.flushStartupConflicts()
+            })
+          }
+        }
+      )
+    }
   }
 
   #serialize<T>(operation: () => Promise<T>): Promise<T> {
@@ -700,7 +940,7 @@ export class TriggerService {
   }
 
   async #isPluginEnabled(pluginId: string): Promise<boolean> {
-    if (pluginId.toLowerCase() === 'system' || isLocalAppId(pluginId) || !this.options.state) return true
+    if (pluginId.toLowerCase() === 'system' || !this.options.state) return true
     try {
       return await this.options.state.isEnabled(pluginId, true)
     } catch (error) {
@@ -722,43 +962,108 @@ export class TriggerService {
   }
 
   #isEffectivelyEnabled(trigger: StoredTrigger): boolean {
+    if (trigger.type === 'hook') {
+      return (
+        trigger.enabled &&
+        this.#activeMouseTriggerId === trigger.id &&
+        this.#mouseConfig !== null &&
+        this.#mouseConfig !== undefined
+      )
+    }
     const accelerator = trigger.enabled ? acceleratorOf(trigger) : undefined
     return accelerator !== undefined && this.#registered.get(trigger.id) === accelerator
   }
 
   #requireSupported(trigger: StoredTrigger, caller?: CallerIdentity): void {
+    // 1. 插件调用方严格权限收敛：仅允许普通 hotkey 且动作只能打开自己的窗口
+    if (caller?.type === 'plugin') {
+      if (trigger.type !== 'hotkey') {
+        throw new ZToolsError(errorCodes.permissionDenied, '插件只允许注册普通快捷键触发器')
+      }
+      const pluginAccelerator = acceleratorOf(trigger)
+      if (pluginAccelerator && isDoubleModifier(pluginAccelerator)) {
+        throw new ZToolsError(errorCodes.permissionDenied, '插件不允许注册双击修饰键触发器')
+      }
+      if (
+        trigger.action.mode !== 'window' ||
+        trigger.action.target.toLowerCase() !== trigger.pluginId.toLowerCase()
+      ) {
+        throw new ZToolsError(errorCodes.permissionDenied, '插件只能打开自己的窗口动作')
+      }
+    }
+
+    // 2. 分类型校验支持情况、参数合法性与黑名单
+    if (trigger.type === 'hook') {
+      if (!this.#mouseAdapter) {
+        throw new ZToolsError(errorCodes.notSupported, '鼠标触发器需要 NativeHost32 输入适配器')
+      }
+      if (
+        trigger.config.kind === 'mouse' &&
+        trigger.config.button === 'right' &&
+        trigger.config.action === 'press'
+      ) {
+        throw new ZToolsError(errorCodes.invalidRequest, '为避免破坏系统右键菜单，右键仅支持长按触发')
+      }
+      if (!parseMouseHookConfig(trigger.config)) {
+        throw new ZToolsError(errorCodes.invalidRequest, '鼠标触发器配置无效')
+      }
+      if (!hasRuntimeAction(trigger)) {
+        throw new ZToolsError(errorCodes.notSupported, '该触发动作当前不受支持')
+      }
+      return
+    }
+
     const accelerator = acceleratorOf(trigger)
     if (trigger.type !== 'hotkey') {
-      throw new ZToolsError(errorCodes.notSupported, '当前阶段只支持全局快捷键触发器')
+      throw new ZToolsError(errorCodes.notSupported, '当前阶段只支持全局快捷键与鼠标触发器')
     }
     if (!accelerator) {
       throw new ZToolsError(errorCodes.invalidRequest, '快捷键不能为空')
     }
+    if (trigger.config.fullscreenDnd !== undefined && typeof trigger.config.fullscreenDnd !== 'boolean') {
+      throw new ZToolsError(errorCodes.invalidRequest, 'fullscreenDnd 必须是布尔值')
+    }
     if (isDoubleModifier(accelerator)) {
-      if (!this.options.keyboard) {
+      if (!this.#keyboardAdapter) {
         throw new ZToolsError(errorCodes.notSupported, '双击修饰键触发器需要 NativeHost32 输入适配器')
       }
-    } else if (!isValidElectronAccelerator(accelerator)) {
-      throw new ZToolsError(errorCodes.invalidRequest, '快捷键 Electron accelerator 格式无效')
+    } else {
+      if (!isValidElectronAccelerator(accelerator)) {
+        throw new ZToolsError(errorCodes.invalidRequest, '快捷键 Electron accelerator 格式无效')
+      }
+      const blacklistReason = getGlobalHotkeyBlacklistReason(accelerator, this.#platform)
+      if (blacklistReason) {
+        throw new ZToolsError(errorCodes.invalidRequest, blacklistReason)
+      }
     }
-    if (!hasRuntimeAction(trigger, this.options.launchLocalApp !== undefined)) {
+    if (!hasRuntimeAction(trigger)) {
       throw new ZToolsError(errorCodes.notSupported, '该触发动作当前不受支持')
-    }
-    if (
-      caller?.type === 'plugin' &&
-      trigger.action.mode === 'window' &&
-      trigger.action.target.toLowerCase() !== trigger.pluginId.toLowerCase()
-    ) {
-      throw new ZToolsError(errorCodes.permissionDenied, '插件只能打开自己的窗口动作')
     }
   }
 
   async #assertNoConflict(candidate: StoredTrigger): Promise<void> {
     if (!candidate.enabled) return
+    if (candidate.type === 'hook') {
+      // 底层同一时间最多只允许启用 1 组鼠标触发器
+      for (const trigger of this.#triggers.values()) {
+        if (
+          trigger.id !== candidate.id &&
+          trigger.enabled &&
+          trigger.type === 'hook' &&
+          await this.#isPluginEnabled(trigger.pluginId)
+        ) {
+          throw new ZToolsError(
+            errorCodes.triggerConflict,
+            `鼠标触发器同时只能启用 1 组，当前已被「${triggerOwnerName(trigger)}」占用`
+          )
+        }
+      }
+      return
+    }
     const accelerator = acceleratorOf(candidate)
     if (!accelerator) return
     const candidateModifier = doubleModifierOf(accelerator)
-    const normalized = normalizedAccelerator(accelerator)
+    const normalized = normalizedAccelerator(accelerator, this.#platform)
     // 同一个组合键在系统里只能注册一次：只要不是同一个触发器（无论是否属于同一插件）就算冲突，
     // 否则会落到系统注册失败，只能报出误导性的「操作系统拒绝注册」。
     for (const trigger of this.#triggers.values()) {
@@ -769,7 +1074,7 @@ export class TriggerService {
         key !== undefined &&
         (candidateModifier !== undefined
           ? doubleModifierOf(key) === candidateModifier
-          : normalizedAccelerator(key) === normalized) &&
+          : normalizedAccelerator(key, this.#platform) === normalized) &&
         await this.#isPluginEnabled(trigger.pluginId)
       ) {
         throw new ZToolsError(
@@ -796,10 +1101,10 @@ export class TriggerService {
   }
 
   #isAcceleratorRegisteredByTrigger(accelerator: string): boolean {
-    const target = normalizedAccelerator(accelerator)
+    const target = normalizedAccelerator(accelerator, this.#platform)
     if (!target) return false
     for (const registeredAccelerator of this.#registered.values()) {
-      if (normalizedAccelerator(registeredAccelerator) === target) {
+      if (normalizedAccelerator(registeredAccelerator, this.#platform) === target) {
         return true
       }
     }
@@ -808,7 +1113,7 @@ export class TriggerService {
 
   #acquireRecorderCapture(): void {
     if (this.#stopping || !this.#recorderCaptureActive) return
-    for (const accelerator of RECORDER_SPACE_ACCELERATORS) {
+    for (const accelerator of recorderSpaceAccelerators(this.#platform)) {
       if (this.#recorderCaptured.has(accelerator)) continue
       if (this.#isAcceleratorRegisteredByTrigger(accelerator)) continue
       try {
@@ -944,50 +1249,146 @@ export class TriggerService {
     })
   }
 
-  #handleKeyboardInput(event: NativeInputEvent): void {
-    if (this.#stopping || event.type !== 'keyboard-double-tap') return
+  #handleNativeInput(event: NativeInputEvent): void {
+    if (this.#stopping) return
+    if (event.type === 'mouse-trigger') {
+      const trigger = [...this.#triggers.values()].find((candidate) => {
+        if (!candidate.enabled || candidate.type !== 'hook') return false
+        if (!hasRuntimeAction(candidate)) return false
+        const config = parseMouseHookConfig(candidate.config)
+        return config !== undefined &&
+          config.button === event.config.button &&
+          config.action === event.config.action &&
+          config.longPressMs === event.config.longPressMs
+      })
+      if (!trigger) return
+      if (!this.options.state || trigger.pluginId.toLowerCase() === 'system') {
+        this.#dispatch(trigger)
+        return
+      }
+      void this.#isPluginEnabled(trigger.pluginId).then((enabled) => {
+        if (enabled && !this.#stopping && this.#triggers.get(trigger.id) === trigger) {
+          this.#dispatch(trigger)
+        }
+      })
+      return
+    }
+
+    if (event.type !== 'keyboard-double-tap') return
     const trigger = [...this.#triggers.values()].find((candidate) =>
-      candidate.enabled && hasRuntimeAction(candidate, this.options.launchLocalApp !== undefined) &&
+      candidate.enabled && hasRuntimeAction(candidate) &&
       doubleModifierOf(acceleratorOf(candidate) ?? '') === event.modifier
     )
     if (!trigger) return
-    if (!this.options.state || trigger.pluginId.toLowerCase() === 'system') {
+    const doubleAccelerator = DOUBLE_MODIFIER_ACCELERATORS[event.modifier]
+    const inRecorderCooldown = () =>
+      this.#recorderCaptureActive || (Date.now() - this.#lastRecorderReleaseAt) < 600
+    const checkRecorderAndDispatch = (): void => {
+      if (inRecorderCooldown()) {
+        if (this.#recorderCaptureActive && typeof this.options.forwardHotkeyToRecorder === 'function') {
+          try {
+            void Promise.resolve(this.options.forwardHotkeyToRecorder(doubleAccelerator)).catch(() => false)
+          } catch {
+            // 忽略转发异常
+          }
+          this.#lastRecorderReleaseAt = Date.now()
+          this.#recorderCaptureActive = false
+          this.#releaseRecorderCapture()
+        }
+        // 刚刚在前端 KeyDown 完成双击修饰键录制并退出录制态时，紧随而至的物理 KeyUp 不得误触发窗口唤醒或隐藏
+        return
+      }
       this.#dispatch(trigger)
+    }
+
+    if (!this.options.state || trigger.pluginId.toLowerCase() === 'system') {
+      checkRecorderAndDispatch()
       return
     }
     void this.#isPluginEnabled(trigger.pluginId).then((enabled) => {
       if (enabled && !this.#stopping && this.#triggers.get(trigger.id) === trigger) {
-        this.#dispatch(trigger)
+        checkRecorderAndDispatch()
       }
     })
   }
 
   async #syncKeyboardConfig(): Promise<void> {
-    const keyboard = this.options.keyboard
+    const keyboard = this.#keyboardAdapter
     if (!keyboard) return
     const modifiers: NativeKeyboardModifier[] = []
+    let fullscreenDnd = true
     for (const modifier of ['ctrl', 'alt', 'shift'] as const) {
       const trigger = [...this.#triggers.values()].find((candidate) =>
-        candidate.enabled && hasRuntimeAction(candidate, this.options.launchLocalApp !== undefined) &&
+        candidate.enabled && hasRuntimeAction(candidate) &&
         doubleModifierOf(acceleratorOf(candidate) ?? '') === modifier
       )
-      if (trigger && await this.#isPluginEnabled(trigger.pluginId)) modifiers.push(modifier)
+      if (trigger && await this.#isPluginEnabled(trigger.pluginId)) {
+        modifiers.push(modifier)
+        if (trigger.config.fullscreenDnd === false) {
+          fullscreenDnd = false
+        }
+      }
     }
     if (
       this.#keyboardConfig !== undefined &&
-      this.#keyboardConfig.length === modifiers.length &&
-      this.#keyboardConfig.every((modifier, index) => modifier === modifiers[index])
+      this.#keyboardConfig.fullscreenDnd === fullscreenDnd &&
+      this.#keyboardConfig.modifiers.length === modifiers.length &&
+      this.#keyboardConfig.modifiers.every((modifier, index) => modifier === modifiers[index])
     ) return
     try {
-      await keyboard.configureKeyboardDoubleTap(modifiers)
-      this.#keyboardConfig = modifiers
+      await keyboard.configureKeyboardDoubleTap(modifiers, fullscreenDnd)
+      this.#keyboardConfig = { modifiers, fullscreenDnd }
     } catch (error) {
       console.warn('NativeHost32 双击修饰键配置失败', error)
     }
   }
 
+  async #syncMouseHookConfig(
+    triggersMap: ReadonlyMap<string, StoredTrigger>,
+    throwOnError: boolean
+  ): Promise<void> {
+    const mouse = this.#mouseAdapter
+    if (!mouse) return
+    let desiredTriggerId: string | undefined
+    let desiredConfig: NativeMouseTriggerConfig | null = null
+    for (const candidate of triggersMap.values()) {
+      if (!candidate.enabled || candidate.type !== 'hook') continue
+      if (!hasRuntimeAction(candidate)) continue
+      const parsed = parseMouseHookConfig(candidate.config)
+      if (!parsed) continue
+      if (await this.#isPluginEnabled(candidate.pluginId)) {
+        desiredTriggerId = candidate.id
+        desiredConfig = parsed
+        break
+      }
+    }
+
+    const currentConfig = this.#mouseConfig
+    const sameConfig =
+      currentConfig !== undefined &&
+      this.#activeMouseTriggerId === desiredTriggerId &&
+      ((currentConfig === null && desiredConfig === null) ||
+        (currentConfig !== null &&
+          desiredConfig !== null &&
+          currentConfig.button === desiredConfig.button &&
+          currentConfig.action === desiredConfig.action &&
+          currentConfig.longPressMs === desiredConfig.longPressMs &&
+          (currentConfig.fullscreenDnd !== false) === (desiredConfig.fullscreenDnd !== false)))
+    if (sameConfig) return
+
+    try {
+      await mouse.configureMouseTrigger(desiredConfig)
+      this.#mouseConfig = desiredConfig
+      this.#activeMouseTriggerId = desiredTriggerId
+    } catch (error) {
+      if (throwOnError) throw error
+      console.warn('NativeHost32 鼠标触发器配置失败', error)
+    }
+  }
+
   #dispatch(trigger: StoredTrigger): void {
-    const keys = acceleratorOf(trigger) ?? ''
+    const mouseConfig = trigger.type === 'hook' ? parseMouseHookConfig(trigger.config) : undefined
+    const keys = acceleratorOf(trigger) ?? (mouseConfig ? `${mouseConfig.button}:${mouseConfig.action}` : '')
     try {
       this.options.events.publishHost('hotkey_triggered', { id: trigger.id, keys })
     } catch {
@@ -1003,16 +1404,6 @@ export class TriggerService {
         }).catch((error: unknown) => this.#publishActionFailure(trigger, error))
       } catch (error) {
         this.#publishActionFailure(trigger, error)
-      }
-    } else if (trigger.action.mode === 'builtin' && trigger.action.target === 'launch_local_app') {
-      const appId = localAppIdOf(trigger)
-      if (!appId || !this.options.launchLocalApp) return
-      try {
-        void this.options.launchLocalApp(appId).catch(() => {
-          console.error('Failed to launch local app from hotkey')
-        })
-      } catch {
-        console.error('Failed to launch local app from hotkey')
       }
     }
   }

@@ -26,7 +26,7 @@ import { _resetKeymapForTesting } from '@/utils/keymap'
 // ---------------------------------------------------------------------------
 // 测试插件：根页面用 usePopoutState 保存文本与目录，二级页面也用一个（不应被带走）
 // ---------------------------------------------------------------------------
-const probe = vi.hoisted(() => ({ setText: null, setDir: null, push: null, renders: [] }))
+const probe = vi.hoisted(() => ({ setText: null, setDir: null, push: null, renders: [], onConflict: null }))
 
 function ChildPage() {
   const [child] = usePopoutState('child', 'child-init')
@@ -42,6 +42,19 @@ function ProbeRoot() {
   return Detail({
     markdown: `text:${text}|dir:${dir}`,
     actions: ActionPanel({}, [Action.Push({ title: '下一页', target: ChildPage })])
+  })
+}
+
+function ConflictProbeRoot() {
+  return Detail({
+    markdown: 'conflict-probe',
+    actions: ActionPanel({}, [
+      Action({
+        title: '试图抢占 Ctrl+Shift+P 的插件动作',
+        shortcut: { modifiers: ['ctrl', 'shift'], key: 'p' },
+        onAction: () => probe.onConflict?.()
+      })
+    ])
   })
 }
 
@@ -64,12 +77,33 @@ vi.mock('@/router', () => ({ default: { push: mockPush, replace: vi.fn(), curren
 vi.mock('@/utils/officialPlugins', async (importOriginal) => {
   const actual = await importOriginal()
   const plugin = { pluginId: 'popout-probe', id: 'popout-probe', name: '交接探针', faIcon: 'fa-cube', command: ProbeRoot }
-  return { ...actual, getOfficialPlugin: (id) => (id === 'popout-probe' ? plugin : actual.getOfficialPlugin(id)) }
+  const conflictPlugin = {
+    pluginId: 'popout-conflict-probe',
+    id: 'popout-conflict-probe',
+    name: '冲突探针',
+    faIcon: 'fa-cube',
+    command: ConflictProbeRoot
+  }
+  return {
+    ...actual,
+    getOfficialPlugin: (id) =>
+      id === 'popout-probe'
+        ? plugin
+        : id === 'popout-conflict-probe'
+          ? conflictPlugin
+          : actual.getOfficialPlugin(id)
+  }
 })
 
 vi.mock('@/utils/pluginVisibility', async (importOriginal) => {
   const actual = await importOriginal()
-  return { ...actual, isPluginVisible: (value) => (value === 'popout-probe' || value === 'late-probe' ? true : actual.isPluginVisible(value)) }
+  return {
+    ...actual,
+    isPluginVisible: (value) =>
+      value === 'popout-probe' || value === 'popout-conflict-probe' || value === 'late-probe'
+        ? true
+        : actual.isPluginVisible(value)
+  }
 })
 
 // 已安装插件：代码加载慢于取交接状态
@@ -449,7 +483,7 @@ describe('DeclarativePage：弹出与独立窗口加载', () => {
 
     await wrapper.find('.declarative-popout-btn').trigger('click')
     await wrapper.find('.declarative-popout-btn').trigger('click')
-    window.dispatchEvent(new KeyboardEvent('keydown', { key: 'o', metaKey: true, shiftKey: true }))
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: 'p', metaKey: true, shiftKey: true }))
     await settle()
     expect(calls.filter((c) => c.method === 'window_open')).toHaveLength(1)
     expect(mockPush).not.toHaveBeenCalled()
@@ -608,5 +642,73 @@ describe('DeclarativePage：弹出与独立窗口加载', () => {
     expect(plain.text()).toContain('text:init')
     expect(calls.filter((c) => c.method === 'window_popout_handoff_take')).toHaveLength(1)
     plain.unmount()
+  })
+
+  it('Ctrl+Shift+P 走 HOST_RESERVED 优先于插件快捷键弹出；组字中与独立窗态均不误弹', async () => {
+    const onConflict = vi.fn()
+    probe.onConflict = onConflict
+    const calls = installFakeHost({
+      window_open: () => ({ success: true, windowInstanceStatus: 'created' })
+    })
+    setRoute({ pluginId: 'popout-conflict-probe', query: {} })
+    const wrapper = mountWith(DeclarativePage, { pluginId: 'popout-conflict-probe' })
+    await settle()
+
+    // 悬停提示已同步展示新热键而非旧 Ctrl+Shift+O
+    expect(wrapper.find('.declarative-popout-btn').attributes('title')).not.toContain('Ctrl+Shift+O')
+
+    // 组字中 (isComposing: true) 按 Ctrl+Shift+P 不弹出也不穿透给插件
+    const composing = new KeyboardEvent('keydown', {
+      key: 'Process',
+      code: 'KeyP',
+      ctrlKey: true,
+      shiftKey: true,
+      isComposing: true,
+      bubbles: true,
+      cancelable: true
+    })
+    Object.defineProperty(composing, 'keyCode', { value: 229 })
+    window.dispatchEvent(composing)
+    await settle()
+    expect(calls.filter((c) => c.method === 'window_open')).toHaveLength(0)
+    expect(onConflict).not.toHaveBeenCalled()
+
+    // 正常按下 Ctrl+Shift+P：宿主 HOST_RESERVED 优先拦截弹出独立窗口，插件冲突动作不触发
+    const popoutEv = new KeyboardEvent('keydown', {
+      key: 'p',
+      code: 'KeyP',
+      ctrlKey: true,
+      shiftKey: true,
+      bubbles: true,
+      cancelable: true
+    })
+    window.dispatchEvent(popoutEv)
+    await settle()
+    expect(popoutEv.defaultPrevented).toBe(true)
+    expect(calls.filter((c) => c.method === 'window_open')).toHaveLength(1)
+    expect(onConflict).not.toHaveBeenCalled()
+    wrapper.unmount()
+
+    // 已在独立窗口态下按 Ctrl+Shift+P：消费事件，不再重复弹出也不漏给插件
+    const calls2 = installFakeHost({
+      window_open: () => ({ success: true, windowInstanceStatus: 'created' })
+    })
+    setRoute({ name: 'popout', pluginId: 'popout-conflict-probe', query: {} })
+    const popoutWin = mountWith(DeclarativePage, { pluginId: 'popout-conflict-probe', isPopout: true })
+    await settle()
+    const inPopoutEv = new KeyboardEvent('keydown', {
+      key: 'p',
+      code: 'KeyP',
+      ctrlKey: true,
+      shiftKey: true,
+      bubbles: true,
+      cancelable: true
+    })
+    window.dispatchEvent(inPopoutEv)
+    await settle()
+    expect(inPopoutEv.defaultPrevented).toBe(true)
+    expect(calls2.filter((c) => c.method === 'window_open')).toHaveLength(0)
+    expect(onConflict).not.toHaveBeenCalled()
+    popoutWin.unmount()
   })
 })

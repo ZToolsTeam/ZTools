@@ -76,7 +76,13 @@ class FakePopoutWindow extends EventEmitter {
     }
     return new Promise((resolve, reject) => {
       this.#pending = { url, resolve: () => { this.loadedUrls.push(url); resolve() }, reject }
+      this.emit('load-pending')
     })
+  }
+
+  waitForPendingLoad(): Promise<void> {
+    if (this.#pending) return Promise.resolve()
+    return new Promise(resolve => { this.once('load-pending', resolve) })
   }
 
   finishLoad(): void {
@@ -593,5 +599,63 @@ test('集成：window_open 带 handoff 转交授权；新窗口加载失败 → 
     assert.equal(await canAccess(h.files, extraFile, popoutCaller, 'read'), false)
   } finally {
     await h.dispose()
+  }
+})
+
+test('插件关闭期间的加载与路径转交均取消，旧交接和授权不进入重开的新实例', { timeout: 10_000 }, async context => {
+  for (const phase of ['load', 'transfer'] as const) {
+    const h = await createHarness()
+    let release!: () => void
+    let entered!: () => void
+    const transferring = new Promise<void>(resolve => { entered = resolve })
+    const barrier = new Promise<void>(resolve => { release = resolve })
+    try {
+      const folder = path.join(h.data, 'private')
+      const file = await touch(path.join(folder, 'value.txt'))
+      await h.files.grantFolder(folder, h.mainCaller)
+      if (phase === 'transfer') {
+        const transfer = h.files.transferGrants.bind(h.files)
+        context.mock.method(h.files, 'transferGrants', async (...args: Parameters<FileSystemService['transferGrants']>) => {
+          entered()
+          await barrier
+          return transfer(...args)
+        })
+      } else {
+        h.nextWindow.deferLoads = true
+      }
+      const oldId = handoffId(`old-${phase}`)
+      const opening = h.windows.open({ url: popoutUrl('batch-rename', oldId),
+        handoff: handoff('batch-rename', oldId, { folder }, { paths: [folder] }) }, h.mainCaller)
+      const rejected = assert.rejects(opening, codeOf(errorCodes.cancelled))
+      const oldWindow = h.created[0]!
+      const oldCaller = h.popoutCaller(0)
+      if (phase === 'load') {
+        await oldWindow.waitForPendingLoad()
+        assert.equal(await canAccess(h.files, file, oldCaller, 'write'), true)
+      } else await transferring
+
+      h.windows.closePlugin('BATCH-RENAME')
+      assert.equal(oldWindow.isDestroyed(), true)
+      assert.equal(h.registry.get(oldCaller.webContentsId), undefined)
+      assert.equal(h.windows.takePopoutHandoff({ handoffId: oldId }, oldCaller).status, 'none')
+      assert.equal(await canAccess(h.files, file, oldCaller, 'read'), false)
+      h.nextWindow.deferLoads = false
+      const newId = handoffId(`new-${phase}`)
+      await h.windows.open({ url: popoutUrl('batch-rename', newId),
+        handoff: handoff('batch-rename', newId, { fresh: true }) }, h.mainCaller)
+      const fresh = h.popoutCaller(1)
+      assert.equal(h.windows.takePopoutHandoff({ handoffId: oldId }, fresh).status, 'none')
+      assert.equal(h.windows.takePopoutHandoff({ handoffId: newId }, fresh).status, 'ok')
+      release()
+      oldWindow.finishLoad()
+      await rejected
+      assert.equal(await canAccess(h.files, file, fresh, 'read'), false)
+      assert.equal((await h.windows.open({ url: popoutUrl('batch-rename', newId) }, h.mainCaller)).windowInstanceStatus, 'reused')
+      assert.equal(h.created.length, 2)
+    } finally {
+      release()
+      h.created[0]?.finishLoad()
+      await h.dispose()
+    }
   }
 })

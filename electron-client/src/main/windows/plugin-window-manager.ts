@@ -9,7 +9,7 @@ import type { PluginExitStatus } from '../services/event-service.js'
 import type { SdkApiLane } from '../../contracts/sdk-api-lane.js'
 import type { PluginManifest, PluginManifestRuntimeMetadata } from '../services/plugin-install-service.js'
 import type { PluginStateProvider } from '../services/plugin-state-service.js'
-import { secureWebPreferences } from './main-window.js'
+import { secureWebPreferences, suppressWindowsSystemMenu } from './main-window.js'
 import type { PluginSessionProvider } from './plugin-session-manager.js'
 import type { WindowRegistry } from './window-registry.js'
 import { ensureBoundsVisible } from './display-bounds.js'
@@ -556,6 +556,8 @@ export class PluginWindowManager {
         ...(pluginSession ? { session: pluginSession } : {})
       }
     })
+    // 抑制 Windows 默认系统菜单与 Alt+Space 抢焦
+    suppressWindowsSystemMenu(window)
     const record: PluginWindowRecord = {
       pluginId: manifest.id,
       instanceId,

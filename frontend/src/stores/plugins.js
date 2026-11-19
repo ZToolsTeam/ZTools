@@ -1,4 +1,5 @@
 import { normalizeCategoryNames } from '@/utils/pluginCategories'
+import { invalidatePluginSession } from '@/declarative/pluginSession'
 import { defineStore } from 'pinia'
 import router from '@/router'
 import { routeUtils } from '@/router/routes'
@@ -152,8 +153,11 @@ export const usePluginsStore = defineStore('plugins', {
     installedSet: new Set(),
     installedPlugins: [], // 已安装插件的完整信息列表
     installedListLoaded: false, // 最近一次是否从宿主成功读到本地已安装列表（失败时只有内置插件，不能当作完整列表）
+    _installedRequestId: 0,
+    _installedRevision: 0,
     hiddenBundledSet: new Set(), // 用户在设置中假卸载（隐藏）的内置插件 ID 集合（小写）
     _hiddenBundledLoaded: false, // 是否已从本地配置加载过 hiddenBundledSet
+    _hiddenBundledLoadPromise: null,
     _togglingBundledSet: new Set(), // 正在切换假卸载/还原状态的内置插件互斥锁
     downloadingSet: new Set(), // 正在下载的插件ID
     installingSet: new Set(), // 正在安装的插件ID集合（并发防重互斥）
@@ -855,25 +859,35 @@ export const usePluginsStore = defineStore('plugins', {
 
     async ensureHiddenBundledLoaded() {
       if (this._hiddenBundledLoaded) return
-      this._hiddenBundledLoaded = true
-      if (this.hiddenBundledSet.size > 0 || !window.ztools?.config?.get) return
-      try {
-        const raw = await window.ztools.config.get(
-          HIDDEN_BUNDLED_CONFIG_KEY,
-          '[]',
-          'user_settings.json'
-        )
-        this.hiddenBundledSet = new Set(sanitizeHiddenBundledIds(raw))
-      } catch (err) {
-        console.warn('[plugins] 读取内置插件隐藏配置失败:', err)
+      if (this._hiddenBundledLoadPromise) return this._hiddenBundledLoadPromise
+      if (this.hiddenBundledSet.size > 0 || !window.ztools?.config?.get) {
+        this._hiddenBundledLoaded = true
+        return
       }
+      this._hiddenBundledLoadPromise = (async () => {
+        try {
+          const raw = await window.ztools.config.get(HIDDEN_BUNDLED_CONFIG_KEY, '[]', 'user_settings.json')
+          this.hiddenBundledSet = new Set(sanitizeHiddenBundledIds(raw))
+          this._hiddenBundledLoaded = true
+        } catch (err) {
+          console.warn('[plugins] 读取内置插件隐藏配置失败:', err)
+        } finally {
+          this._hiddenBundledLoadPromise = null
+        }
+      })()
+      return this._hiddenBundledLoadPromise
     },
 
     async fetchInstalledPlugins() {
+      const requestId = ++this._installedRequestId
+      const revision = this._installedRevision
       await this.ensureHiddenBundledLoaded()
-      const bundledEntries = getBundledPluginEntries().filter((p) => !this.isBundledHidden(p.pluginId))
+      if (requestId !== this._installedRequestId) return this.installedPlugins
       try {
         const locals = await apiGetLocalPlugins()
+        if (requestId !== this._installedRequestId) return this.installedPlugins
+        if (revision !== this._installedRevision) return this.fetchInstalledPlugins()
+        const bundledEntries = getBundledPluginEntries().filter((p) => !this.isBundledHidden(p.pluginId))
         const officialList = [...bundledEntries, ...getOfficialPluginsList()]
 
         // 识别本地已装插件的下架标记
@@ -896,14 +910,8 @@ export const usePluginsStore = defineStore('plugins', {
         this.installedListLoaded = true
         const officialIds = officialList.map((p) => String(p.pluginId))
 
-        // 合并：保留当前 installedSet 中已有、宿主尚未返回的 ID，以及所有未隐藏的官方内置标杆应用 ID
-        const merged = new Set([...localIds, ...officialIds])
-        for (const id of this.installedSet) {
-          if (!(isBundledPlugin(id) && this.isBundledHidden(id))) {
-            merged.add(id)
-          }
-        }
-        this.installedSet = merged
+        // 最新宿主快照决定市场插件安装状态；未隐藏的包内插件仍由客户端提供。
+        this.installedSet = new Set([...localIds, ...officialIds])
 
         // 合并插件列表：本地插件 + 官方标杆应用（若本地已有同 ID 或别名则合并官方声明式定义并去重）
         const coveredOfficialKeys = new Set()
@@ -996,8 +1004,11 @@ export const usePluginsStore = defineStore('plugins', {
         this._patchInstalledIcons()
         return combined
       } catch (err) {
+        if (requestId !== this._installedRequestId) return this.installedPlugins
+        if (revision !== this._installedRevision) return this.fetchInstalledPlugins()
         console.warn('[plugins] 获取本地插件失败，回退官方内置标杆插件列表:', err)
         this.installedListLoaded = false
+        const bundledEntries = getBundledPluginEntries().filter((p) => !this.isBundledHidden(p.pluginId))
         const officialList = [...bundledEntries, ...getOfficialPluginsList()]
         const officialIds = officialList.map((p) => String(p.pluginId))
         this.installedSet = new Set(officialIds)
@@ -1034,6 +1045,15 @@ export const usePluginsStore = defineStore('plugins', {
       return Boolean(payload?.pluginId) && !this.installingSet.has(String(payload.pluginId))
     },
 
+    onPluginRuntimeStopped(payload) {
+      if (typeof payload?.pluginId !== 'string') return
+      const id = payload.pluginId.trim().toLowerCase()
+      if (!id || /[/\\]/.test(id) || id.includes('..')) return
+      this._installedRevision += 1
+      clearDeclarativePluginCache(id)
+      invalidatePluginSession(id)
+    },
+
     onInstallComplete(payload, managed = false) {
       if (payload && payload.pluginId) {
         const pluginId = String(payload.pluginId)
@@ -1050,7 +1070,7 @@ export const usePluginsStore = defineStore('plugins', {
         this.installingSet = nextInstalling
 
         if (payload.success) {
-          clearDeclarativePluginCache(pluginId)
+          this.onPluginRuntimeStopped({ pluginId })
           // 新装的插件告诉版本（官方版已登录时上报插件 ID；更新与重复通知不再上报；开源版为空操作，失败不影响安装结果）
           if (!this.installedSet.has(pluginId) && !payload.isUpdate) {
             notifyLifecycle('onInstalled', pluginId)
@@ -1114,7 +1134,9 @@ export const usePluginsStore = defineStore('plugins', {
           // 随客户端提供的插件不可卸载
           return
         }
-        clearDeclarativePluginCache(payload.pluginId)
+        this.onPluginRuntimeStopped(payload)
+        this.installedPlugins = this.installedPlugins.filter(plugin =>
+          normalizePluginId(plugin.pluginId || plugin.id).toLowerCase() !== normalizePluginId(payload.pluginId).toLowerCase())
         // 卸载事件与卸载调用可能各通知一次，只在第一次（插件还在已安装列表里）告诉版本
         if (this.installedSet.has(String(payload.pluginId))) {
           notifyLifecycle('onUninstalled', String(payload.pluginId))
@@ -1406,7 +1428,7 @@ export const usePluginsStore = defineStore('plugins', {
           (p) => normalizePluginId(p.pluginId || p.id).toLowerCase() !== canonicalId
         )
 
-        clearDeclarativePluginCache(canonicalId)
+        this.onPluginRuntimeStopped({ pluginId: canonicalId })
         if (window.ztools?.plugin?.closeWindow) {
           Promise.resolve(window.ztools.plugin.closeWindow(canonicalId)).catch((err) => {
             console.warn('[plugins] 关闭已卸载内置插件独立窗口失败:', err)
@@ -1457,6 +1479,7 @@ export const usePluginsStore = defineStore('plugins', {
 
         this.hiddenBundledSet = nextHidden
         this._hiddenBundledLoaded = true
+        this._installedRevision += 1
 
         const entry = getBundledPluginEntry(canonicalId)
         const resolvedId = entry?.pluginId || canonicalId

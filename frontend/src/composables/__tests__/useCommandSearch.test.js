@@ -1,9 +1,16 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest'
+import { effectScope } from 'vue'
 import { setActivePinia, createPinia } from 'pinia'
+import * as edition from '@edition'
 import {
   useCommandSearch,
   calculateFrecencyBonus,
   CATEGORY_RANKS,
+  CATEGORY_WEIGHTS,
+  PINNED_GRID_COLUMNS,
+  buildPinPayload,
+  canPinItem,
+  resolvePinKey,
   getCategoryRank,
   getCategoryWeight,
   loadFrecencyMap,
@@ -277,7 +284,7 @@ describe('useCommandSearch 统一搜索内核与 Frecency 排序测试套件', (
     expect(filteredItems.value.some((i) => i.key === 'timestamp:tz-world')).toBe(true)
   })
 
-  it('8. [悬浮条首屏数据] 合并固定插件、已添加本地软件与系统工具；/前缀 不再召回快捷方式', async () => {
+  it('8. [悬浮条首屏数据与旧版残留容错] 合并固定插件与系统工具，安全忽略旧版 type: local 残留项，且不再暴露 addLocalApp', async () => {
     const { usePluginsStore } = await import('@/stores/plugins')
     const pluginsStore = usePluginsStore()
     pluginsStore.installedPlugins = [
@@ -291,7 +298,6 @@ describe('useCommandSearch 统一搜索内核与 Frecency 排序测试套件', (
     ]
 
     const togglePinMock = vi.fn().mockResolvedValue({ success: true })
-    const addLocalAppMock = vi.fn().mockResolvedValue({ success: true, added: 1 })
     const getPanelDataMock = vi.fn().mockResolvedValue({
       success: true,
       data: {
@@ -311,6 +317,7 @@ describe('useCommandSearch 统一搜索内核与 Frecency 排序测试套件', (
             name: '控制面板',
             description: '打开 Windows 控制面板',
             type: 'system_tool',
+            pinned: true,
             keywords: ['control', 'kzmb']
           }
         ]
@@ -319,24 +326,26 @@ describe('useCommandSearch 统一搜索内核与 Frecency 排序测试套件', (
 
     window.__ztoolsLauncher = {
       getPanelData: getPanelDataMock,
-      togglePin: togglePinMock,
-      addLocalApp: addLocalAppMock
+      togglePin: togglePinMock
     }
 
     try {
+      const state = useCommandSearch({ enableFileSearch: false })
       const {
         filteredItems,
         pinnedItems,
         search,
         refreshPanelData,
-        toggleItemPin,
-        addLocalApp
-      } = useCommandSearch({ enableFileSearch: false })
+        toggleItemPin
+      } = state
+
+      expect(state.addLocalApp).toBeUndefined()
 
       await refreshPanelData({ force: true })
 
-      // 1. 首屏固定项包含已固定插件与已固定本地软件
-      expect(pinnedItems.value.map((i) => i.id || i.pluginId)).toEqual(['json-format', 'local_vscode'])
+      // 1. 首屏固定项包含已固定插件与已固定系统工具，旧版残留 type: 'local' 被安全忽略不崩溃
+      expect(pinnedItems.value.map((i) => i.pinKey)).toEqual(['plugin:json-format', 'system-tool:sys_control_panel'])
+      expect(filteredItems.value.some((i) => i.type === 'local-app' || i.id === 'local_vscode')).toBe(false)
 
       // 2. 搜索系统工具关键词可召回系统工具条目
       search('控制面板')
@@ -346,39 +355,53 @@ describe('useCommandSearch 统一搜索内核与 Frecency 排序测试套件', (
       search('/js')
       expect(filteredItems.value.some((i) => i.shortcutPrefix)).toBe(false)
 
-      // 4. 切换固定状态与添加本地软件桥接调用
+      // 4. 切换固定状态桥接调用
       const pinRes = await toggleItemPin(pinnedItems.value[0])
       expect(pinRes.success).toBe(true)
       expect(togglePinMock).toHaveBeenCalledWith('json-format', 'plugin')
-
-      const addRes = await addLocalApp()
-      expect(addRes).toEqual({ success: true, added: 1 })
-      expect(addLocalAppMock).toHaveBeenCalledOnce()
     } finally {
       delete window.__ztoolsLauncher
     }
   })
 
-  it('9. [全局 8 级分类权重验证] 同等匹配度且无历史记录时，严格遵循 1B > 1A > 2B > 2A > 3A > 3B > 4A > 4B', async () => {
-    // 1. 静态等级与权重分映射验证
-    expect(getCategoryRank({ key: 'system-settings' })).toBe(CATEGORY_RANKS.HOST_BUILTIN)
+  it('9. [全局 7 级分类权重验证] 严格遵循 系统工具(1) > 已安装软件(2) > 插件(3) > 子命令(4) > 本地文件夹(5) > 本地文件(6) > 宿主内置指令(7)', async () => {
+    // 1. 静态等级与权重分映射验证（确认已移除 USER_LOCAL_APP）
+    expect(CATEGORY_RANKS).toEqual({
+      SYSTEM_TOOL: 1,
+      INSTALLED_APP: 2,
+      PLUGIN: 3,
+      PLUGIN_FEATURE: 4,
+      FILE_DIRECTORY: 5,
+      FILE_REGULAR: 6,
+      HOST_BUILTIN: 7
+    })
+    expect(CATEGORY_WEIGHTS).toEqual({
+      1: 70,
+      2: 60,
+      3: 35,
+      4: 20,
+      5: 10,
+      6: 5,
+      7: 0
+    })
+    expect(CATEGORY_RANKS.USER_LOCAL_APP).toBeUndefined()
+
     expect(getCategoryRank({ type: 'system-tool' })).toBe(CATEGORY_RANKS.SYSTEM_TOOL)
     expect(getCategoryRank({ type: 'file', isApplication: true })).toBe(CATEGORY_RANKS.INSTALLED_APP)
-    expect(getCategoryRank({ type: 'local-app', isApplication: true })).toBe(CATEGORY_RANKS.USER_LOCAL_APP)
     expect(getCategoryRank({ type: 'plugin' })).toBe(CATEGORY_RANKS.PLUGIN)
     expect(getCategoryRank({ type: 'plugin-feature' })).toBe(CATEGORY_RANKS.PLUGIN_FEATURE)
     expect(getCategoryRank({ type: 'file', isDir: true })).toBe(CATEGORY_RANKS.FILE_DIRECTORY)
     expect(getCategoryRank({ type: 'file', isDir: false })).toBe(CATEGORY_RANKS.FILE_REGULAR)
+    expect(getCategoryRank({ key: 'system-settings' })).toBe(CATEGORY_RANKS.HOST_BUILTIN)
 
-    expect(getCategoryWeight({ key: 'system-settings' })).toBeGreaterThan(getCategoryWeight({ type: 'system-tool' }))
     expect(getCategoryWeight({ type: 'system-tool' })).toBeGreaterThan(getCategoryWeight({ type: 'file', isApplication: true }))
-    expect(getCategoryWeight({ type: 'file', isApplication: true })).toBeGreaterThan(getCategoryWeight({ type: 'local-app', isApplication: true }))
-    expect(getCategoryWeight({ type: 'local-app', isApplication: true })).toBeGreaterThan(getCategoryWeight({ type: 'plugin' }))
+    expect(getCategoryWeight({ type: 'file', isApplication: true })).toBeGreaterThan(getCategoryWeight({ type: 'plugin' }))
     expect(getCategoryWeight({ type: 'plugin' })).toBeGreaterThan(getCategoryWeight({ type: 'plugin-feature' }))
     expect(getCategoryWeight({ type: 'plugin-feature' })).toBeGreaterThan(getCategoryWeight({ type: 'file', isDir: true }))
     expect(getCategoryWeight({ type: 'file', isDir: true })).toBeGreaterThan(getCategoryWeight({ type: 'file', isDir: false }))
+    expect(getCategoryWeight({ type: 'file', isDir: false })).toBeGreaterThan(getCategoryWeight({ key: 'system-settings' }))
 
-    // 2. 端到端混排验证：构造同前缀命中的 1B, 1A, 2B, 2A, 3A, 3B, 4A, 4B
+    // 2. 端到端混排验证：构造同前缀命中的 系统工具、已安装软件、插件、子命令、宿主内置指令、本地文件夹、本地普通文件（含旧 local 残留干扰项）
     const { usePluginsStore } = await import('@/stores/plugins')
     const pluginsStore = usePluginsStore()
     pluginsStore.installedPlugins = [
@@ -389,7 +412,7 @@ describe('useCommandSearch 统一搜索内核与 Frecency 排序测试套件', (
         isDeclarative: true,
         features: [
           { code: 'main', explain: '系统中心插件' },
-          { code: 'sub-sys', explain: '系统子功能' }
+          { code: 'sub-sys', explain: '系统子功能环境变量与高阶配置管理中心' }
         ]
       }
     ]
@@ -422,7 +445,7 @@ describe('useCommandSearch 统一搜索内核与 Frecency 排序测试套件', (
     }
 
     try {
-      const { filteredItems, search, refreshApplications, refreshPanelData } = useCommandSearch({ enableFileSearch: true })
+      const { filteredItems, matchedPlugins, search, refreshApplications, refreshPanelData } = useCommandSearch({ enableFileSearch: true })
       await refreshApplications({ force: true })
       await refreshPanelData({ force: true })
 
@@ -430,16 +453,22 @@ describe('useCommandSearch 统一搜索内核与 Frecency 排序测试套件', (
       await new Promise((r) => setTimeout(r, 120))
 
       const orderedNames = filteredItems.value.map((i) => i.name)
-      // 验证 1B (系统设置) -> 1A (系统控制工具) -> 2B (系统安装软件) -> 2A (系统自选软件) -> 3A (系统中心插件) -> 3B (系统子功能) -> 4A (系统目录) -> 4B (系统文档.txt)
+      // 上段：系统工具(1) -> 已安装软件(2) -> 插件(3) -> 超长名称子命令(4) -> 宿主内置指令(7)；下段：本地文件夹(5) -> 本地普通文件(6)
       expect(orderedNames).toEqual([
-        '系统设置',
         '系统控制工具',
         '系统安装软件',
-        '系统自选软件',
         '系统中心插件',
-        '系统子功能',
+        '系统子功能环境变量与高阶配置管理中心',
+        '系统设置',
         '系统目录',
         '系统文档.txt'
+      ])
+      // matchedPlugins 不含已安装软件与文件
+      expect(matchedPlugins.value.map((i) => i.name)).toEqual([
+        '系统控制工具',
+        '系统中心插件',
+        '系统子功能环境变量与高阶配置管理中心',
+        '系统设置'
       ])
     } finally {
       delete window.__ztoolsLauncher
@@ -520,6 +549,318 @@ describe('useCommandSearch 统一搜索内核与 Frecency 排序测试套件', (
       expect(res).toEqual(expect.objectContaining({ success: true, type: 'route' }))
     } finally {
       delete window.__ztoolsWindowMode
+      delete window.__ztoolsLauncher
+    }
+  })
+
+  it('13. [全类型 PinnedEntry 构建、pinKey 规则与不可固定排除] 覆盖 5 类条目、绿色 .exe/开始菜单应用及旧 local-app 安全排除', () => {
+    expect(PINNED_GRID_COLUMNS).toBe(9)
+
+    // 不可固定项与历史残留 local-app 排除
+    expect(canPinItem(null)).toBe(false)
+    expect(canPinItem({ type: 'inline-calculator', ephemeral: true, key: 'inline-calc:math:1+1' })).toBe(false)
+    expect(canPinItem({ type: 'inline-color', ephemeral: true, key: 'inline-calc:color:#fff' })).toBe(false)
+    expect(canPinItem({ ephemeral: true, type: 'custom', key: 'temp' })).toBe(false)
+    expect(canPinItem({ type: 'market-search', key: 'market-search' })).toBe(false)
+    expect(buildPinPayload({ type: 'inline-calculator', ephemeral: true })).toBeNull()
+
+    const legacyLocalApp = { key: 'local-app:App_One', id: 'App_One', type: 'local-app' }
+    expect(canPinItem(legacyLocalApp)).toBe(false)
+    expect(buildPinPayload(legacyLocalApp)).toBeNull()
+    expect(buildPinPayload({ kind: 'local-app', appId: 'App_One' })).toBeNull()
+    expect(buildPinPayload({ id: 'App_One', panelItemType: 'local' })).toBeNull()
+    expect(resolvePinKey(legacyLocalApp)).toBe('')
+    expect(resolvePinKey({ kind: 'local-app', appId: 'App_One' })).toBe('')
+
+    // 5 类可固定项构建与 pinKey
+    const pluginItem = { type: 'plugin', pluginId: 'json-format', name: 'JSON 格式化' }
+    expect(buildPinPayload(pluginItem)).toEqual({ kind: 'plugin', pluginId: 'json-format' })
+    expect(resolvePinKey(pluginItem)).toBe('plugin:json-format')
+
+    const featureItem = { type: 'plugin-feature', pluginId: 'json-format', featureCode: 'json-codegen' }
+    expect(buildPinPayload(featureItem)).toEqual({
+      kind: 'plugin-feature',
+      pluginId: 'json-format',
+      featureCode: 'json-codegen'
+    })
+    expect(resolvePinKey(featureItem)).toBe('plugin-feature:json-format:json-codegen')
+
+    const builtinItem = { key: 'system-settings', name: '系统设置' }
+    expect(buildPinPayload(builtinItem)).toEqual({ kind: 'builtin', commandKey: 'system-settings' })
+    expect(resolvePinKey(builtinItem)).toBe('builtin:system-settings')
+
+    // 同 key 插件与宿主内置指令严格区分
+    const sameKeyPlugin = { key: 'system-settings', type: 'plugin', pluginId: 'system-settings' }
+    expect(resolvePinKey(sameKeyPlugin)).toBe('plugin:system-settings')
+
+    const sysTool = { key: 'system-tool:taskmgr', id: 'system-tool:taskmgr', type: 'system-tool', target: 'taskmgr' }
+    expect(buildPinPayload(sysTool)).toEqual({ kind: 'system-tool', toolId: 'taskmgr' })
+    expect(resolvePinKey(sysTool)).toBe('system-tool:taskmgr')
+
+    // 绿色 .exe 普通文件与开始菜单应用均走 kind: 'file'
+    const portableExe = { type: 'file', path: 'D:\\Portable\\Everything.exe', name: 'Everything.exe', isDir: false, isApplication: false }
+    expect(buildPinPayload(portableExe)).toEqual({
+      kind: 'file',
+      path: 'D:\\Portable\\Everything.exe',
+      name: 'Everything.exe',
+      isDir: false,
+      isApplication: false
+    })
+    expect(resolvePinKey(portableExe)).toBe('file:d:\\portable\\everything.exe')
+
+    const startMenuApp = { type: 'file', path: 'C:\\ProgramData\\Start Menu\\WeChat.lnk', name: '微信', isDir: false, isApplication: true }
+    expect(buildPinPayload(startMenuApp)).toEqual({
+      kind: 'file',
+      path: 'C:\\ProgramData\\Start Menu\\WeChat.lnk',
+      name: '微信',
+      isDir: false,
+      isApplication: true
+    })
+    expect(resolvePinKey(startMenuApp)).toBe('file:c:\\programdata\\start menu\\wechat.lnk')
+
+    const winFile = { type: 'file', path: 'C:\\Users\\Demo\\Docs\\', name: 'Docs', isDir: true, isApplication: false }
+    expect(buildPinPayload(winFile)).toEqual({
+      kind: 'file',
+      path: 'C:\\Users\\Demo\\Docs\\',
+      name: 'Docs',
+      isDir: true,
+      isApplication: false
+    })
+    expect(resolvePinKey(winFile)).toBe('file:c:\\users\\demo\\docs')
+    expect(resolvePinKey({ type: 'file', path: 'C:/Users/Demo/Docs/' })).toBe('file:c:\\users\\demo\\docs')
+    expect(resolvePinKey({ type: 'file', path: 'C:\\' })).toBe('file:c:\\')
+    expect(resolvePinKey({ type: 'file', path: '/Users/Demo/App/' })).toBe('file:/Users/Demo/App')
+    expect(resolvePinKey({ type: 'file', path: '/' })).toBe('file:/')
+  })
+
+  it('14. [全类型固定还原、旧 local-app 安全忽略、绿色 .exe 与开始菜单应用检索/固定、setPin/reorderPins/跨窗同步]', async () => {
+    const { usePluginsStore } = await import('@/stores/plugins')
+    const pluginsStore = usePluginsStore()
+    pluginsStore.hiddenBundledSet = new Set(['hidden-bundled'])
+    pluginsStore.revokedMap = { 'revoked-plugin': { revoked: true, reason: '官方下架' } }
+    pluginsStore.installedPlugins = [
+      {
+        pluginId: 'json-format',
+        name: 'JSON 格式化',
+        entry: 'dist/index.js',
+        isDeclarative: true,
+        features: [
+          { code: 'json-format', explain: 'JSON 格式化' },
+          { code: 'json-codegen', explain: 'JSON 生成类型' }
+        ]
+      },
+      { pluginId: 'other-plugin', name: '其他插件', entry: 'dist/index.js', isDeclarative: true },
+      { pluginId: 'disabled-plugin', name: '已禁用插件', enabled: false, entry: 'dist/index.js' },
+      {
+        pluginId: 'mac-only-plugin',
+        name: '仅 Mac 插件',
+        entry: 'dist/index.js',
+        targets: [{ runtime: 'electron', platform: 'macos' }]
+      },
+      { pluginId: 'revoked-plugin', name: '已下架插件', entry: 'dist/index.js', enabled: true }
+    ]
+
+    globalThis.__ZTOOLS_PLATFORM_OVERRIDE__ = 'win32'
+    const getFileIconMock = vi.fn().mockResolvedValue('data:image/png;base64,RkFMTEJBQ0s=')
+    const reportSpy = vi.fn()
+    const eventHandlers = new Map()
+    const subscribeMock = vi.fn().mockResolvedValue({ success: true })
+    const onMock = vi.fn((evt, fn) => {
+      eventHandlers.set(evt, fn)
+    })
+    const offMock = vi.fn((evt) => {
+      eventHandlers.delete(evt)
+    })
+
+    const initialPinnedEntries = [
+      { pinKey: 'plugin-feature:json-format:json-codegen', entry: { kind: 'plugin-feature', pluginId: 'json-format', featureCode: 'json-codegen' }, available: true },
+      { pinKey: 'builtin:system-settings', entry: { kind: 'builtin', commandKey: 'system-settings' }, available: true },
+      { pinKey: 'plugin:hidden-bundled', entry: { kind: 'plugin', pluginId: 'hidden-bundled' }, available: true },
+      { pinKey: 'plugin:revoked-plugin', entry: { kind: 'plugin', pluginId: 'revoked-plugin' }, available: true },
+      { pinKey: 'plugin:disabled-plugin', entry: { kind: 'plugin', pluginId: 'disabled-plugin' }, available: true },
+      { pinKey: 'plugin:mac-only-plugin', entry: { kind: 'plugin', pluginId: 'mac-only-plugin' }, available: true },
+      { pinKey: 'plugin:uninstalled-plugin', entry: { kind: 'plugin', pluginId: 'uninstalled-plugin' }, available: true },
+      { pinKey: 'plugin-feature:json-format:missing-feat', entry: { kind: 'plugin-feature', pluginId: 'json-format', featureCode: 'missing-feat' }, available: true },
+      { pinKey: 'builtin:removed-builtin', entry: { kind: 'builtin', commandKey: 'removed-builtin' }, available: true },
+      { pinKey: 'system-tool:taskmgr', entry: { kind: 'system-tool', toolId: 'taskmgr' }, available: true },
+      { pinKey: 'system-tool:missing-tool', entry: { kind: 'system-tool', toolId: 'missing-tool' }, available: true },
+      // 模拟旧缓存残留的 local-app 条目，必须被安全忽略且不影响其余 5 类固定项
+      { pinKey: 'local-app:app_1', entry: { kind: 'local-app', appId: 'app_1' }, available: true },
+      { pinKey: 'local-app:missing_app', entry: { kind: 'local-app', appId: 'missing_app' }, available: true },
+      { pinKey: 'file:c:\\apps\\wechat.exe', entry: { kind: 'file', path: 'C:\\Apps\\WeChat.exe', name: '微信', isDir: false, isApplication: true }, available: true },
+      { pinKey: 'file:c:\\docs\\missing.txt', entry: { kind: 'file', path: 'C:\\Docs\\missing.txt', name: 'missing.txt', isDir: false, isApplication: false }, available: false }
+    ]
+
+    let currentServerPins = initialPinnedEntries.filter((x) => x.entry.kind !== 'local-app')
+    const setPinMock = vi.fn(async (entry, pinned) => {
+      const pk = resolvePinKey(entry)
+      currentServerPins = pinned
+        ? [...currentServerPins.filter((x) => x.pinKey !== pk), { pinKey: pk, entry, available: true }]
+        : currentServerPins.filter((x) => x.pinKey !== pk)
+      return { success: true, pinned, pinKey: pk, pinnedEntries: currentServerPins }
+    })
+    const reorderPinsMock = vi.fn(async () => ({
+      success: false,
+      stale: true,
+      error: '列表已变化',
+      pinnedEntries: [initialPinnedEntries[1], initialPinnedEntries[0]]
+    }))
+
+    window.ztools = {
+      sys: { getFileIcon: getFileIconMock },
+      analytics: { report: reportSpy },
+      events: { subscribe: subscribeMock, on: onMock, off: offMock }
+    }
+    window.__ztoolsLauncher = {
+      searchFiles: vi.fn(async (_q, _l, opts) => {
+        if (opts?.scope === 'applications') {
+          return {
+            scope: 'applications',
+            files: [{ name: 'Notion.lnk', display_name: 'Notion', path: 'C:\\ProgramData\\Start Menu\\Notion.lnk', kind: 'application', is_dir: false, size: 0, mtime: 1 }]
+          }
+        }
+        return {
+          scope: 'files',
+          files: [
+            { name: 'notes.txt', path: 'C:\\Docs\\notes.txt', is_dir: false, size: 1, mtime: 1 },
+            { name: 'portable-tool.exe', path: 'D:\\Tools\\portable-tool.exe', is_dir: false, size: 2048, mtime: 2 }
+          ]
+        }
+      }),
+      getPanelData: vi.fn().mockResolvedValue({
+        success: true,
+        data: {
+          items: [
+            { id: 'system-tool:taskmgr', target: 'taskmgr', name: '任务管理器', type: 'system_tool', keywords: [] },
+            { id: 'app_1', name: '记事本', type: 'local', description: 'C:\\Windows\\notepad.exe' }
+          ],
+          pinnedEntries: initialPinnedEntries
+        }
+      }),
+      setPin: setPinMock,
+      reorderPins: reorderPinsMock
+    }
+
+    const scope = effectScope()
+    try {
+      const state = scope.run(() => useCommandSearch({ enableFileSearch: true }))
+      await Promise.resolve()
+      await Promise.resolve()
+      await new Promise((r) => setTimeout(r, 20))
+
+      expect(subscribeMock).toHaveBeenCalledWith('super_panel_changed')
+      expect(onMock).toHaveBeenCalledWith('super_panel_changed', expect.any(Function))
+
+      // 1. 隐藏/下架/禁用/平台不支持的插件不在 pinnedItems 展示，但底层 pinnedEntries 原位保留；残留 local-app 直接忽略
+      const pinKeys = state.pinnedItems.value.map((i) => i.pinKey)
+      expect(pinKeys).not.toContain('plugin:hidden-bundled')
+      expect(pinKeys).not.toContain('plugin:revoked-plugin')
+      expect(pinKeys).not.toContain('plugin:disabled-plugin')
+      expect(pinKeys).not.toContain('plugin:mac-only-plugin')
+      expect(pinKeys).not.toContain('local-app:app_1')
+      expect(pinKeys).not.toContain('local-app:missing_app')
+      expect(state.pinnedEntries.value).toHaveLength(initialPinnedEntries.length - 2)
+      expect(state.pinnedEntries.value.some((r) => r.entry.kind === 'local-app')).toBe(false)
+
+      // 2. 保持原搜索条目 key，不分裂；且失效项保留在固定区中标 available: false
+      const featurePin = state.pinnedItems.value.find((i) => i.pinKey === 'plugin-feature:json-format:json-codegen')
+      expect(featurePin?.key).toBe('json-format:json-codegen')
+      expect(featurePin?.available).toBe(true)
+
+      const builtinPin = state.pinnedItems.value.find((i) => i.pinKey === 'builtin:system-settings')
+      expect(builtinPin?.key).toBe('system-settings')
+      expect(builtinPin?.available).toBe(true)
+
+      const fileAppPin = state.pinnedItems.value.find((i) => i.pinKey === 'file:c:\\apps\\wechat.exe')
+      expect(fileAppPin?.key).toBe('file:C:\\Apps\\WeChat.exe')
+      expect(fileAppPin?.icon).toBe('data:image/png;base64,RkFMTEJBQ0s=')
+      expect(getFileIconMock).toHaveBeenCalledWith('C:\\Apps\\WeChat.exe')
+
+      const missingFilePin = state.pinnedItems.value.find((i) => i.pinKey === 'file:c:\\docs\\missing.txt')
+      expect(missingFilePin?.available).toBe(false)
+      expect(missingFilePin?.unavailableReason).toContain('missing.txt')
+      expect(getFileIconMock).not.toHaveBeenCalledWith('C:\\Docs\\missing.txt')
+
+      expect(state.pinnedItems.value.find((i) => i.pinKey === 'plugin:uninstalled-plugin')?.available).toBe(false)
+      expect(state.pinnedItems.value.find((i) => i.pinKey === 'plugin-feature:json-format:missing-feat')?.available).toBe(false)
+      expect(state.pinnedItems.value.find((i) => i.pinKey === 'builtin:removed-builtin')?.available).toBe(false)
+      expect(state.pinnedItems.value.find((i) => i.pinKey === 'system-tool:missing-tool')?.available).toBe(false)
+
+      // 3. 独立染色不串台：固定了内置 system-settings 与 json-codegen，同名插件和 json-format 主入口均不染 pinned
+      state.search('json')
+      const jsonMain = state.filteredItems.value.find((i) => i.key === 'json-format')
+      const jsonFeat = state.filteredItems.value.find((i) => i.key === 'json-format:json-codegen')
+      expect(jsonMain?.pinned).toBe(false)
+      expect(jsonFeat?.pinned).toBe(true)
+
+      state.search('系统设置')
+      const hostBuiltin = state.filteredItems.value.find((i) => i.key === 'system-settings' && !i.type)
+      expect(hostBuiltin?.pinned).toBe(true)
+
+      // 4. 绿色 .exe 普通文件与开始菜单应用均可检索并按 kind: 'file' 固定/取消固定
+      state.search('portable')
+      await new Promise((r) => setTimeout(r, 110))
+      const portableHit = state.filteredItems.value.find((i) => i.path === 'D:\\Tools\\portable-tool.exe')
+      expect(portableHit).toMatchObject({ type: 'file', isApplication: false, isDir: false, pinned: false })
+
+      const pinPortableRes = await state.setItemPinned(portableHit, true)
+      expect(pinPortableRes).toMatchObject({ success: true, pinned: true, pinKey: 'file:d:\\tools\\portable-tool.exe' })
+      expect(setPinMock).toHaveBeenCalledWith(
+        { kind: 'file', path: 'D:\\Tools\\portable-tool.exe', name: 'portable-tool.exe', isDir: false, isApplication: false },
+        true
+      )
+      expect(state.pinnedItems.value.some((i) => i.pinKey === 'file:d:\\tools\\portable-tool.exe')).toBe(true)
+
+      const unpinPortableRes = await state.setItemPinned(portableHit, false)
+      expect(unpinPortableRes).toMatchObject({ success: true, pinned: false })
+      expect(state.pinnedItems.value.some((i) => i.pinKey === 'file:d:\\tools\\portable-tool.exe')).toBe(false)
+
+      state.search('Notion')
+      const startMenuHit = state.filteredItems.value.find((i) => i.path === 'C:\\ProgramData\\Start Menu\\Notion.lnk')
+      expect(startMenuHit).toMatchObject({ type: 'file', isApplication: true, pinned: false })
+      const pinAppRes = await state.setItemPinned(startMenuHit, true)
+      expect(pinAppRes).toMatchObject({ success: true, pinned: true, pinKey: 'file:c:\\programdata\\start menu\\notion.lnk' })
+      expect(setPinMock).toHaveBeenCalledWith(
+        { kind: 'file', path: 'C:\\ProgramData\\Start Menu\\Notion.lnk', name: 'Notion', isDir: false, isApplication: true },
+        true
+      )
+      if (edition.EDITION === 'commercial') {
+        expect(reportSpy).toHaveBeenCalledWith('launcher_pin', '', { kind: 'file', action: 'pin' })
+      }
+
+      // setPin 失败时回滚本地
+      setPinMock.mockResolvedValueOnce({ success: false, error: '写入失败' })
+      const otherPlugin = { key: 'other-plugin', type: 'plugin', pluginId: 'other-plugin', name: '其他插件' }
+      const failRes = await state.setItemPinned(otherPlugin, true)
+      expect(failRes).toEqual({ success: false, error: '写入失败' })
+      expect(state.pinnedItems.value.some((i) => i.pinKey === 'plugin:other-plugin')).toBe(false)
+
+      // 5. reorderPinned 遇到 stale 时以主进程返回的 pinnedEntries 回滚同步
+      const reorderRes = await state.reorderPinned(['builtin:system-settings', 'plugin-feature:json-format:json-codegen'])
+      expect(reorderRes.success).toBe(false)
+      expect(reorderRes.stale).toBe(true)
+      expect(state.pinnedEntries.value.map((r) => r.pinKey)).toEqual([
+        'builtin:system-settings',
+        'plugin-feature:json-format:json-codegen'
+      ])
+
+      // 6. 跨窗广播 super_panel_changed 实时刷新
+      eventHandlers.get('super_panel_changed')({
+        payload: {
+          pinnedEntries: [
+            { pinKey: 'builtin:system-dashboard', entry: { kind: 'builtin', commandKey: 'system-dashboard' }, available: true }
+          ]
+        }
+      })
+      expect(state.pinnedItems.value.map((i) => i.pinKey)).toEqual(['builtin:system-dashboard'])
+
+      // 7. 销毁作用域成对注销事件监听
+      scope.stop()
+      expect(offMock).toHaveBeenCalledWith('super_panel_changed', expect.any(Function))
+    } finally {
+      scope.stop()
+      delete globalThis.__ZTOOLS_PLATFORM_OVERRIDE__
+      delete window.ztools
       delete window.__ztoolsLauncher
     }
   })

@@ -138,4 +138,47 @@ describe('HotkeyCaptureField 录入框', () => {
       window.ztools = previousZtools
     }
   })
+
+  it('消除焦点黑洞：外层容器支持回车触发，退出录制时主动失焦隐藏输入框并将焦点归还外层容器', async () => {
+    const wrapper = mount(HotkeyCaptureField, { attachTo: document.body, props: { hotkey: 'Alt+Space' } })
+    const recorder = wrapper.find('.hotkey-recorder')
+    const input = wrapper.find('.hotkey-hidden-input')
+
+    // 非录制态可通过键盘 Enter 激活录入
+    expect(recorder.attributes('tabindex')).toBe('0')
+    await recorder.trigger('keydown.enter')
+    expect(wrapper.emitted('start')).toHaveLength(1)
+
+    // 进入录制态后焦点落在隐藏输入框
+    await wrapper.setProps({ recording: true })
+    await nextTick()
+    expect(document.activeElement).toBe(input.element)
+
+    // 取消或完成录制退出录制态后，隐藏输入框立即失焦，焦点归还给外层容器
+    await wrapper.setProps({ recording: false })
+    await nextTick()
+    expect(document.activeElement).toBe(recorder.element)
+    wrapper.unmount()
+  })
+
+  it('不支持双击修饰键时不向 <ShortcutKeys> 传入 Double* 或中文说明文字', async () => {
+    const wrapper = mount(HotkeyCaptureField, {
+      props: {
+        hotkey: 'DoubleCtrl',
+        platform: 'macos',
+        supportsDoubleModifier: false
+      }
+    })
+    expect(wrapper.findComponent(ShortcutKeys).exists()).toBe(false)
+    expect(wrapper.text()).toContain('当前宿主不支持')
+
+    // 即使 recordingIsKeys 误设为 true，中文说明文字也不会进入 <ShortcutKeys>
+    await wrapper.setProps({
+      recording: true,
+      recordingText: '该组合与系统快捷键冲突',
+      recordingIsKeys: true
+    })
+    expect(wrapper.findComponent(ShortcutKeys).exists()).toBe(false)
+    expect(wrapper.find('.recording-text').text()).toContain('该组合与系统快捷键冲突')
+  })
 })

@@ -111,23 +111,35 @@ describe('空查询排序', () => {
     expect(names(state).slice(0, 2)).toEqual(['JSON 格式化', '任务管理器'])
   })
 
-  it('长期未用（低于活跃门槛）的条目回落到默认推荐梯队，按分类排在未用过的内置指令之后', async () => {
-    seedFrecency({ 'json-format': { count: 1, score: 1, lastUsed: Date.now() - 200 * DAY } })
+  it('长期未用（低于活跃门槛）的条目回落到默认推荐梯队，按分类排在活跃项之后且插件排在内置指令之前', async () => {
+    panelItems = [{ id: 'taskmgr', name: '任务管理器', type: 'system_tool', keywords: [] }]
+    seedFrecency({
+      'system-tool:taskmgr': { count: 2, score: 2, lastUsed: Date.now() - 1000 },
+      'json-format': { count: 1, score: 1, lastUsed: Date.now() - 200 * DAY }
+    })
     const state = create()
     await settle()
     const list = names(state)
-    expect(list[0]).toBe('系统设置')
-    expect(list.indexOf('JSON 格式化')).toBeGreaterThan(list.indexOf('系统设置'))
+    expect(list[0]).toBe('任务管理器')
+    expect(list.indexOf('JSON 格式化')).toBeGreaterThan(list.indexOf('任务管理器'))
+    expect(list.indexOf('JSON 格式化')).toBeLessThan(list.indexOf('系统设置'))
+    expect(list.slice(-4)).toEqual([
+      '系统设置',
+      '打开插件中心',
+      '创建新扩展 (Create Extension)',
+      '开源插件生态大仓 (ZTools Extensions)'
+    ])
   })
 
   it('另一个窗口写入使用记录（storage 事件）后重新排序', async () => {
     const state = create()
     await settle()
-    expect(names(state)[0]).toBe('系统设置')
-    const raw = JSON.stringify({ 'json-format': { count: 1, score: 1, lastUsed: Date.now() } })
+    expect(names(state)[0]).toBe('JSON 格式化')
+    expect(names(state).at(-1)).toBe('开源插件生态大仓 (ZTools Extensions)')
+    const raw = JSON.stringify({ 'system-settings': { count: 1, score: 1, lastUsed: Date.now() } })
     localStorage.setItem(FRECENCY_KEY, raw)
     window.dispatchEvent(new StorageEvent('storage', { key: FRECENCY_KEY, newValue: raw }))
-    expect(names(state)[0]).toBe('JSON 格式化')
+    expect(names(state)[0]).toBe('系统设置')
   })
 
   it('冷启动：程序列表返回前用使用记录占位显示用过的程序，打开前先等列表返回换成真实条目', async () => {
@@ -161,7 +173,7 @@ describe('空查询排序', () => {
 })
 
 describe('已安装程序去重', () => {
-  it('与用户添加的软件同名、或与系统工具同名的开始菜单程序只保留优先级高的一条，使用记录合并', async () => {
+  it('与系统工具同名的开始菜单程序只保留优先级更高的系统工具并合并使用记录；旧 local 残留项被忽略', async () => {
     searchFiles.mockImplementation(async (_q, _l, options) => {
       if (options?.scope === 'applications') {
         return {
@@ -178,22 +190,27 @@ describe('已安装程序去重', () => {
       { id: 'chrome', name: 'Google Chrome', type: 'local', description: 'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe' },
       { id: 'taskmgr', name: '任务管理器', type: 'system_tool', keywords: [] }
     ]
-    // 使用记录记在开始菜单那一份上
-    seedFrecency({ 'file:C:\\ProgramData\\Microsoft\\Windows\\Start Menu\\Programs\\Google Chrome.lnk': { count: 3, score: 3, lastUsed: Date.now() } })
+    // 使用记录记在开始菜单里的「任务管理器.lnk」上，应自动合并到系统工具「任务管理器」
+    seedFrecency({
+      'file:C:\\ProgramData\\Microsoft\\Windows\\Start Menu\\Programs\\任务管理器.lnk': { count: 3, score: 3, lastUsed: Date.now() },
+      'json-format': { count: 1, score: 1, lastUsed: Date.now() - 2 * HOUR }
+    })
     const state = create()
     await settle()
 
+    // 旧版 local 残留被忽略，开始菜单里的 Google Chrome 作为已安装应用正常召回
     state.search('chrome')
     const chromes = state.filteredItems.value.filter((item) => item.name === 'Google Chrome')
     expect(chromes).toHaveLength(1)
-    expect(chromes[0].type).toBe('local-app')
+    expect(chromes[0]).toMatchObject({ type: 'file', isApplication: true })
 
+    // 同名「任务管理器」只保留系统工具这一条
     state.search('任务管理器')
     expect(state.filteredItems.value.filter((item) => item.name === '任务管理器').map((item) => item.type)).toEqual(['system-tool'])
 
-    // 空查询：合并过来的使用记录让手动添加的 Chrome 进入活跃梯队排第一
+    // 空查询：开始菜单合并过来的使用记录让系统工具「任务管理器」进入活跃梯队排第一
     state.search('')
-    expect(state.filteredItems.value[0]).toMatchObject({ name: 'Google Chrome', type: 'local-app' })
+    expect(state.filteredItems.value[0]).toMatchObject({ name: '任务管理器', type: 'system-tool' })
   })
 })
 
@@ -248,9 +265,38 @@ describe('搜索词选择记忆', () => {
 
 describe('分类与固定标记', () => {
   it('未登记的条目类型归最低档；与内置指令同 key 的插件仍按插件归类', () => {
-    expect(getCategoryRank({ type: 'clipboard-entry' })).toBe(CATEGORY_RANKS.FILE_REGULAR)
+    expect(getCategoryRank({ type: 'clipboard-entry' })).toBe(CATEGORY_RANKS.HOST_BUILTIN)
     expect(getCategoryRank({ key: 'system-settings' })).toBe(CATEGORY_RANKS.HOST_BUILTIN)
     expect(getCategoryRank({ key: 'system-settings', type: 'plugin' })).toBe(CATEGORY_RANKS.PLUGIN)
+  })
+
+  it('空查询同热度活跃梯队与默认推荐梯队严格遵循 7 级分类顺序，四个宿主内置选项始终垫底', async () => {
+    panelItems = [
+      { id: 'taskmgr', name: '任务管理器', type: 'system_tool', keywords: [] },
+      { id: 'notepad', name: '记事本', type: 'local', description: 'C:\\Windows\\notepad.exe' }
+    ]
+    const now = Date.now()
+    // 赋予同一热度档（heatTier 相同）的活跃分，检验空查询分类等级决胜：系统工具(1) > 已安装软件(2) > 插件(3) > 子命令(4) > 宿主内置指令(7)
+    seedFrecency({
+      'system-settings': { count: 1, score: 1, lastUsed: now - 1000 },
+      'json-format:json-codegen': { count: 1, score: 1, lastUsed: now - 1000 },
+      'json-format': { count: 1, score: 1, lastUsed: now - 1000 },
+      'file:/Applications/WeChat.app': { count: 1, score: 1, lastUsed: now - 1000 },
+      'system-tool:taskmgr': { count: 1, score: 1, lastUsed: now - 1000 }
+    })
+    const state = create()
+    await settle()
+    const list = names(state)
+    expect(list).toEqual([
+      '任务管理器',
+      '微信',
+      'JSON 格式化',
+      'JSON 生成类型',
+      '系统设置',
+      '打开插件中心',
+      '创建新扩展 (Create Extension)',
+      '开源插件生态大仓 (ZTools Extensions)'
+    ])
   })
 
   it('插件被固定后只有主入口带固定标记，子命令不显示「已固定」', async () => {
@@ -262,5 +308,53 @@ describe('分类与固定标记', () => {
     const feature = state.filteredItems.value.find((item) => item.type === 'plugin-feature')
     expect(plugin.pinned).toBe(true)
     expect(feature.pinned).toBeFalsy()
+  })
+
+  it('超过 9 个固定项时，空查询下全部固定项在下方列表沉底不重复排在活跃区', async () => {
+    const plugins = Array.from({ length: 11 }, (_, idx) => ({
+      pluginId: `pin-plugin-${idx}`,
+      name: `固定插件 ${idx}`,
+      entry: 'dist/index.js',
+      isDeclarative: true
+    }))
+    usePluginsStore().installedPlugins = [
+      ...plugins,
+      { pluginId: 'unpinned-active', name: '活跃未固定插件', entry: 'dist/index.js', isDeclarative: true }
+    ]
+    const pinnedEntries = [
+      ...plugins.map((p) => ({
+        pinKey: `plugin:${p.pluginId}`,
+        entry: { kind: 'plugin', pluginId: p.pluginId },
+        available: true
+      })),
+      {
+        pinKey: 'builtin:system-settings',
+        entry: { kind: 'builtin', commandKey: 'system-settings' },
+        available: true
+      }
+    ]
+    window.__ztoolsLauncher.getPanelData = vi.fn(async () => ({
+      success: true,
+      data: { items: [], pinnedEntries }
+    }))
+
+    // 给第 11 个固定项与系统设置很高的近期使用分，若仍只沉底前 9 项则会抢到前排
+    const now = Date.now()
+    seedFrecency({
+      'pin-plugin-10': { count: 20, score: 20, lastUsed: now - 1000 },
+      'system-settings': { count: 20, score: 20, lastUsed: now - 1000 },
+      'unpinned-active': { count: 2, score: 2, lastUsed: now - 5000 }
+    })
+
+    const state = create({ enableFileSearch: false })
+    await settle()
+    expect(state.pinnedItems.value).toHaveLength(12)
+
+    const listKeys = state.filteredItems.value.map((item) => item.key)
+    expect(listKeys[0]).toBe('unpinned-active')
+    // 全部 12 个固定项（含第 11、12 个）全部位于末 12 位沉底
+    const tailKeys = new Set(listKeys.slice(-12))
+    expect(tailKeys.has('pin-plugin-10')).toBe(true)
+    expect(tailKeys.has('system-settings')).toBe(true)
   })
 })

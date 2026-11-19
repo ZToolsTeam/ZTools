@@ -246,6 +246,70 @@ describe('作用域 window：真实 contextBridge 冻结语义下不触发 Proxy
     expect(host.calls.at(-1).envelope.pluginSession).toBe(holder.token)
     release()
   })
+
+  it('沙箱全面屏蔽 __ztoolsLauncher：不可读、不可探测、不可枚举且不可改写或删除（含冻结属性不变式）', async () => {
+    const fakeLauncher = Object.freeze({ getPanelData: vi.fn(), setPin: vi.fn(), reorderPins: vi.fn() })
+    Object.defineProperty(window, '__ztoolsLauncher', { value: fakeLauncher, writable: true, configurable: true, enumerable: true })
+    const holder = createPluginSessionHolder('probe')
+    try {
+      const loaded = await loadProbe(`
+        exports.default = function Probe() {
+          'use strict';
+          let assignThrew = false
+          let defineThrew = false
+          let deleteThrew = false
+          try { window.__ztoolsLauncher = { hacked: true } } catch { assignThrew = true }
+          try { Object.defineProperty(window, '__ztoolsLauncher', { value: 1 }) } catch { defineThrew = true }
+          try { delete window.__ztoolsLauncher } catch { deleteThrew = true }
+          return {
+            winVal: window.__ztoolsLauncher,
+            globalVal: globalThis.__ztoolsLauncher,
+            selfVal: self.__ztoolsLauncher,
+            has: '__ztoolsLauncher' in window,
+            keysHas: Object.keys(window).includes('__ztoolsLauncher'),
+            ownKeysHas: Reflect.ownKeys(window).includes('__ztoolsLauncher'),
+            descriptor: Object.getOwnPropertyDescriptor(window, '__ztoolsLauncher'),
+            deleted: Reflect.deleteProperty(window, '__ztoolsLauncher'),
+            assignThrew,
+            defineThrew,
+            deleteThrew
+          }
+        }
+      `, holder)
+      const res = loaded.command()
+      expect(res.winVal).toBeUndefined()
+      expect(res.globalVal).toBeUndefined()
+      expect(res.selfVal).toBeUndefined()
+      expect(res.has).toBe(false)
+      expect(res.keysHas).toBe(false)
+      expect(res.ownKeysHas).toBe(false)
+      expect(res.descriptor).toBeUndefined()
+      expect(res.deleted).toBe(false)
+      expect(res.assignThrew).toBe(true)
+      expect(res.defineThrew).toBe(true)
+      expect(res.deleteThrew).toBe(true)
+      expect(window.__ztoolsLauncher).toBe(fakeLauncher)
+    } finally {
+      delete window.__ztoolsLauncher
+    }
+
+    // 真实 contextBridge 冻结语义（writable: false, configurable: false）也不触发 Proxy 不变式
+    const frozenRealWindow = {}
+    Object.defineProperty(frozenRealWindow, '__ztoolsLauncher', {
+      value: fakeLauncher,
+      writable: false,
+      configurable: false,
+      enumerable: true
+    })
+    const scoped = createScopedWindow(frozenRealWindow, host.bridge)
+    expect(scoped.__ztoolsLauncher).toBeUndefined()
+    expect('__ztoolsLauncher' in scoped).toBe(false)
+    expect(Reflect.ownKeys(scoped)).not.toContain('__ztoolsLauncher')
+    expect(Object.getOwnPropertyDescriptor(scoped, '__ztoolsLauncher')).toBeUndefined()
+    expect(Reflect.set(scoped, '__ztoolsLauncher', {})).toBe(false)
+    expect(Reflect.defineProperty(scoped, '__ztoolsLauncher', { value: 1 })).toBe(false)
+    expect(Reflect.deleteProperty(scoped, '__ztoolsLauncher')).toBe(false)
+  })
 })
 
 describe('会话 holder：引用计数、宽限期、在途调用、失败重试', () => {

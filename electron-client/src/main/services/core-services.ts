@@ -79,6 +79,8 @@ export interface CoreServices {
   nativeHost: OrdinaryNativeRuntimePort | null
   serviceClient: ServiceClient | null
   nativeInput: NativeInputAdapter | null
+  /** 当前原生输入通道是否已就绪（供 system-service 透出双击与鼠标触发能力） */
+  readonly nativeInputAvailable?: boolean
   sidecars: SidecarManager
   stop(): Promise<void>
 }
@@ -233,38 +235,60 @@ export function createCoreServices(
     nativeHost,
     serviceClient,
     nativeInput,
+    get nativeInputAvailable(): boolean {
+      return nativeInput !== null && nativeInput.state === 'ready'
+    },
     sidecars,
     stop: async () => {
-      notes.stop()
-      await geekTools.stop()
-      await webBrowser.stop()
-      await navigation.stop()
-      await calendar.stop()
-      await dictation.stop()
-      await screenAwareness.stop()
-      await focus.stop()
-      await mcp.stop()
-      await developer.stop()
-      await scriptCommands.stop()
-      clipboardHistory.stop()
-      snippets.stop()
-      analytics.stop()
-      await update.stop()
-      await sidecars.stop()
-      await frecency.flush()
-      hud.stop()
-      serviceClient?.stop()
-      const nativeHostShutdown = await nativeHost?.stop()
-      if (nativeHostShutdown) {
-        const serialized = JSON.stringify(nativeHostShutdown)
-        if (!nativeHostShutdown.completed || nativeHostShutdown.timedOut ||
-            nativeHostShutdown.forced || nativeHostShutdown.cancelFailed > 0 ||
-            nativeHostShutdown.stopFailed > 0 || nativeHostShutdown.internalFailures > 0) {
-          console.warn(`普通 Native Host 停机未完整确认： ${serialized}`)
-        } else {
-          console.info(`普通 Native Host 停机已完成： ${serialized}`)
+      // 逐项隔离停机异常，防止前序业务服务报错导致 sidecars / serviceClient / nativeHost 漏停
+      const stopStep = async (name: string, action: () => unknown): Promise<void> => {
+        try {
+          await action()
+        } catch (error) {
+          console.warn(`[core-services] 停机步骤 "${name}" 失败:`, error)
         }
       }
+
+      await stopStep('notes', () => notes.stop())
+      await stopStep('geekTools', () => geekTools.stop())
+      await stopStep('webBrowser', () => webBrowser.stop())
+      await stopStep('navigation', () => navigation.stop())
+      await stopStep('calendar', () => calendar.stop())
+      await stopStep('dictation', () => dictation.stop())
+      await stopStep('screenAwareness', () => screenAwareness.stop())
+      await stopStep('focus', () => focus.stop())
+      await stopStep('mcp', () => mcp.stop())
+      await stopStep('developer', () => developer.stop())
+      await stopStep('scriptCommands', () => scriptCommands.stop())
+      await stopStep('clipboardHistory', () => clipboardHistory.stop())
+      await stopStep('snippets', () => snippets.stop())
+      await stopStep('analytics', () => analytics.stop())
+      await stopStep('update', () => update.stop())
+      await stopStep('sidecars', async () => {
+        const sidecarStopReport = await sidecars.stop()
+        const sidecarStopSerialized = JSON.stringify(sidecarStopReport)
+        if (sidecarStopReport.uiaccess.error || sidecarStopReport.indexer.error) {
+          console.warn(`原生侧车停机存在异常：${sidecarStopSerialized}`)
+        } else {
+          console.info(`原生侧车停机已完成：${sidecarStopSerialized}`)
+        }
+      })
+      await stopStep('frecency', () => frecency.flush())
+      await stopStep('hud', () => hud.stop())
+      await stopStep('serviceClient', () => serviceClient?.stop())
+      await stopStep('nativeHost', async () => {
+        const nativeHostShutdown = await nativeHost?.stop()
+        if (nativeHostShutdown) {
+          const serialized = JSON.stringify(nativeHostShutdown)
+          if (!nativeHostShutdown.completed || nativeHostShutdown.timedOut ||
+              nativeHostShutdown.forced || nativeHostShutdown.cancelFailed > 0 ||
+              nativeHostShutdown.stopFailed > 0 || nativeHostShutdown.internalFailures > 0) {
+            console.warn(`普通 Native Host 停机未完整确认： ${serialized}`)
+          } else {
+            console.info(`普通 Native Host 停机已完成： ${serialized}`)
+          }
+        }
+      })
     }
   }
 }

@@ -200,7 +200,7 @@ describe('M1-4: 主界面焦点状态机 (Focus State Machine)', () => {
     fsm.transition('grid');
     assert.equal(fsm.state, 'grid');
 
-    // 任何状态下按 Ctrl+M 切换模态，重置焦点到 search
+    // 任何状态下按 Ctrl+U 切换模态，重置焦点到 search
     fsm.transition('search');
     assert.equal(fsm.state, 'search');
   });

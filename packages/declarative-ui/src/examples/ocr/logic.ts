@@ -1,18 +1,20 @@
 /**
  * 多语言离线屏幕与批量图片 OCR 文字提取业务逻辑层 (Ocr Logic)
- * 真实扫描本机 Pictures / Screenshots / Desktop / Downloads 下的图片与截图，对接本地 Windows.Media.Ocr / PP-OCRv4 引擎
  */
 
 import {
   callHostTransport,
   formatBytes,
-  getRealSystemPath,
   invokePluginService,
   isRealElectronHost,
-  scanRealDirectoryTree,
   showRealItemInFolder,
   writeRealClipboardText
 } from '../shared/native-ipc.js'
+import {
+  type ExampleImportRules,
+  type ExampleImportedFile,
+  pickExampleFolderFiles
+} from '../shared/file-import.js'
 
 export { formatBytes }
 
@@ -57,26 +59,36 @@ export interface OcrBatchResult {
   fromFallback?: boolean
 }
 
-function isStrictRealHost(hostOverride?: any): boolean {
+function isStrictRealHost(hostOverride?: unknown): boolean {
   if (isRealElectronHost(hostOverride)) return true
   if (hostOverride && typeof hostOverride === 'object') {
+    const h = hostOverride as Record<string, unknown>
     return Boolean(
-      hostOverride.__isRealElectronHost ||
-      hostOverride.isRealElectronHost ||
-      hostOverride.strictRealHost ||
-      hostOverride.system_get_path ||
-      hostOverride.system_search_files ||
-      hostOverride.filesystem_get_directory_contents ||
-      hostOverride.dllplugin_call ||
-      hostOverride.plugin_invoke ||
-      hostOverride.ocr_recognize_batch ||
-      hostOverride.screen_capture ||
-      hostOverride.screen_capture_ocr ||
-      hostOverride.transport?.call ||
-      hostOverride.dllplugin?.call
+      h.__isRealElectronHost ||
+        h.isRealElectronHost ||
+        h.strictRealHost ||
+        h.window_show_select_folder_dialog ||
+        h.filesystem_get_directory_contents ||
+        h.dllplugin_call ||
+        h.plugin_invoke ||
+        h.ocr_recognize_batch ||
+        h.screen_capture ||
+        h.screen_capture_ocr ||
+        (h.transport as { call?: unknown } | undefined)?.call ||
+        (h.dllplugin as { call?: unknown } | undefined)?.call
     )
   }
   return false
+}
+
+export const OCR_IMAGE_EXTENSIONS = ['.png', '.jpg', '.jpeg', '.webp', '.bmp', '.gif', '.tiff'] as const
+export const OCR_SUPPORTED_TEXT = '.png / .jpg / .jpeg / .webp / .bmp / .gif / .tiff'
+
+/** OCR 文件夹导入规则：单次上限 100 张图片 */
+export const OCR_IMPORT_RULES: ExampleImportRules = {
+  extensions: OCR_IMAGE_EXTENSIONS,
+  maxDepth: 5,
+  maxFiles: 100
 }
 
 export const OCR_LANGUAGE_MODELS: OcrLanguagePreset[] = [
@@ -122,40 +134,6 @@ export const OCR_LANGUAGE_MODELS: OcrLanguagePreset[] = [
   }
 ]
 
-export const INITIAL_OCR_QUEUE_ITEMS: OcrQueueItem[] = [
-  {
-    id: 'ocr-item-1',
-    name: 'Invoice_Cloud_Compute_2026Q3_Scan.png',
-    path: 'E:\\Captures\\Invoice_Cloud_Compute_2026Q3_Scan.png',
-    parentDir: 'E:\\Captures',
-    extension: '.png',
-    sizeBytes: 2180 * 1024,
-    sampleText: '增值税电子普通发票 · 购买方：极客效率科技有限公司 · 价税合计：¥12,480.00',
-    confidencePercent: 98.9
-  },
-  {
-    id: 'ocr-item-2',
-    name: 'Architecture_Spec_Page04_Snapshot.jpg',
-    path: 'E:\\Captures\\Architecture_Spec_Page04_Snapshot.jpg',
-    parentDir: 'E:\\Captures',
-    extension: '.jpg',
-    sizeBytes: 1850 * 1024,
-    sampleText: 'NTFS MFT 裸盘硬件级索引实测 100 万文件检索平均延迟仅 0.035ms，SLA < 10ms',
-    confidencePercent: 99.6
-  },
-  {
-    id: 'ocr-item-3',
-    name: 'Financial_Comparison_Matrix_Table.png',
-    path: 'E:\\Captures\\Financial_Comparison_Matrix_Table.png',
-    parentDir: 'E:\\Captures',
-    extension: '.png',
-    sizeBytes: 960 * 1024,
-    sampleText: '| 季度 | 活跃开发者 | 插件调用次数 | 平均延迟 |\n| Q3 | 128,400 | 45,200,000 | 18ms |',
-    confidencePercent: 98.2
-  }
-]
-
-const OCR_IMG_REGEX = /\.(?:png|jpg|jpeg|webp|bmp)$/i
 const STAMP_NOISE_LINE_REGEX = /(?:^[\s\-—_=]*第?\s*\d+\s*[\/／]\s*\d+\s*页?[\s\-—_=]*$|^[\s\-—_=]*Page\s+\d+(?:\s+of\s+\d+)?[\s\-—_=]*$|合同专用章|发票专用章|财务专用章|骑缝章|业务专用章|保密水印|内部资料\s*严禁外传)/i
 
 function isPlaceholderOcrText(text: string): boolean {
@@ -205,86 +183,65 @@ export function formatOcrOutputByStrategy(
   return items.map(i => `### ${i.name}\n${i.sampleText}`).join('\n\n')
 }
 
-export async function fetchOcrQueueSnapshot(hostOverride?: any): Promise<
+export function toOcrQueueItem(file: ExampleImportedFile, index = 0): OcrQueueItem {
+  return {
+    id: `ocr-${index}-${file.path}`,
+    name: file.name,
+    path: file.path,
+    parentDir: file.parentDir,
+    extension: file.extension || '.png',
+    sizeBytes: file.sizeBytes ?? 0,
+    sampleText: '',
+    confidencePercent: 0
+  }
+}
+
+/**
+ * 通过用户显式选择文件夹（window_show_select_folder_dialog + filesystem_get_directory_contents）导入待识别图片（最多 100 张）
+ */
+export async function fetchOcrQueueSnapshot(hostOverride?: unknown): Promise<
   OcrQueueItem[] & {
     scannedDirs: string[]
     items: OcrQueueItem[]
     files: OcrQueueItem[]
     models: OcrLanguagePreset[]
+    error?: string
   }
 > {
-  const strictReal = isStrictRealHost(hostOverride)
-  const [picturesDir, desktopDir, downloadsDir] = await Promise.all([
-    getRealSystemPath('pictures', hostOverride),
-    getRealSystemPath('desktop', hostOverride),
-    getRealSystemPath('downloads', hostOverride)
-  ])
-
-  const scannedDirs = [picturesDir, desktopDir, downloadsDir].filter(Boolean)
-  const discovered: OcrQueueItem[] = []
-  const seenPaths = new Set<string>()
-
-  for (const dir of scannedDirs) {
-    const scanRes = await scanRealDirectoryTree(dir, {
-      maxDepth: 2,
-      maxFiles: 180,
-      collectTopN: 20,
-      filterExt: OCR_IMG_REGEX,
-      hostOverride
-    })
-    for (const f of scanRes.files) {
-      if (f.isDir || f.sizeBytes <= 0 || !f.path || seenPaths.has(f.path)) continue
-      seenPaths.add(f.path)
-      const dot = f.name.lastIndexOf('.')
-      const ext = dot > 0 ? f.name.slice(dot).toLowerCase() : '.png'
-      discovered.push({
-        id: `ocr-${discovered.length}-${f.path}`,
-        name: f.name,
-        path: f.path,
-        parentDir: dir,
-        extension: ext,
-        sizeBytes: f.sizeBytes,
-        sampleText: '',
-        confidencePercent: 0
-      })
-    }
-  }
-
-  discovered.sort((a, b) => b.sizeBytes - a.sizeBytes)
-
-  if (strictReal) {
-    return Object.assign([...discovered], {
-      scannedDirs,
-      items: discovered,
-      files: discovered,
-      models: [...OCR_LANGUAGE_MODELS]
-    })
-  }
-
-  const items = discovered.length > 0 ? discovered : [...INITIAL_OCR_QUEUE_ITEMS]
+  const res = await pickExampleFolderFiles(
+    OCR_IMPORT_RULES,
+    { title: '选择包含待识别图片的文件夹（最多 100 张）' },
+    hostOverride
+  )
+  const items = res.files.map((f, idx) => toOcrQueueItem(f, idx)).sort((a, b) => b.sizeBytes - a.sizeBytes)
+  const scannedDirs = res.folderPath ? [res.folderPath] : []
   return Object.assign([...items], {
-    scannedDirs: scannedDirs.length > 0 ? scannedDirs : ['E:\\Captures'],
+    scannedDirs,
     items,
     files: items,
-    models: [...OCR_LANGUAGE_MODELS]
+    models: [...OCR_LANGUAGE_MODELS],
+    ...(res.error ? { error: res.error } : {})
   })
 }
 
 export const fetchOcrWorkspace = fetchOcrQueueSnapshot
 
-function extractRecognizedText(data: any): string {
+function extractRecognizedText(data: unknown): string {
   if (!data) return ''
   let raw = ''
   if (typeof data === 'string') raw = data.trim()
-  else if (typeof data.text === 'string') raw = data.text.trim()
-  else if (typeof data.ocrText === 'string') raw = data.ocrText.trim()
-  else if (typeof data.content === 'string') raw = data.content.trim()
-  else if (Array.isArray(data.lines)) {
-    raw = data.lines
-      .map((l: any) => (typeof l === 'string' ? l : String(l?.text || '')))
-      .filter(Boolean)
-      .join('\n')
-      .trim()
+  else if (typeof data === 'object') {
+    const rec = data as Record<string, unknown>
+    if (typeof rec.text === 'string') raw = rec.text.trim()
+    else if (typeof rec.ocrText === 'string') raw = rec.ocrText.trim()
+    else if (typeof rec.content === 'string') raw = rec.content.trim()
+    else if (Array.isArray(rec.lines)) {
+      raw = rec.lines
+        .map(l => (typeof l === 'string' ? l : String((l as Record<string, unknown>)?.text || '')))
+        .filter(Boolean)
+        .join('\n')
+        .trim()
+    }
   }
   if (isPlaceholderOcrText(raw)) return ''
   return raw
@@ -294,7 +251,7 @@ async function applyOcrPostAction(
   items: OcrQueueItem[],
   combinedText: string,
   config: OcrBatchConfig,
-  hostOverride?: any
+  hostOverride?: unknown
 ): Promise<string[]> {
   const postAction = config?.postAction || 'copy_clipboard'
   const ext = config?.layoutStrategy === 'markdown_table' ? '.md' : '.txt'
@@ -309,14 +266,8 @@ async function applyOcrPostAction(
       if (!item.path) continue
       const outPath = item.path.replace(/(\.[^.\\/]+)?$/, ext)
       const content =
-        items.length === 1
-          ? combinedText
-          : formatOcrOutputByStrategy([item], config?.layoutStrategy || 'natural_paragraph')
-      await callHostTransport<any>(
-        'filesystem_write_file',
-        { path: outPath, content, encoding: 'utf8' },
-        hostOverride
-      )
+        items.length === 1 ? combinedText : formatOcrOutputByStrategy([item], config?.layoutStrategy || 'natural_paragraph')
+      await callHostTransport('filesystem_write_file', { path: outPath, content, encoding: 'utf8' }, hostOverride)
       exportedFiles.push(outPath)
     }
   }
@@ -327,7 +278,7 @@ async function applyOcrPostAction(
 export async function executeBatchOcr(
   items: OcrQueueItem[],
   config: OcrBatchConfig = {},
-  hostOverride?: any
+  hostOverride?: unknown
 ): Promise<OcrBatchResult> {
   if (!Array.isArray(items) || items.length === 0) {
     return {
@@ -343,8 +294,7 @@ export async function executeBatchOcr(
 
   const strictReal = isStrictRealHost(hostOverride)
   const model =
-    OCR_LANGUAGE_MODELS.find(m => m.id === (config?.languageModelId || config?.lang)) ||
-    OCR_LANGUAGE_MODELS[0]
+    OCR_LANGUAGE_MODELS.find(m => m.id === (config?.languageModelId || config?.lang)) || OCR_LANGUAGE_MODELS[0]
   const lang = config?.lang || config?.languageModelId || model.engineCode
   const shouldFilterNoise = Boolean(config?.filterStampNoise)
 
@@ -353,7 +303,7 @@ export async function executeBatchOcr(
   let lastError = ''
 
   for (const item of items) {
-    const ocrRes = await invokePluginService<any>(
+    const ocrRes = await invokePluginService<Record<string, unknown>>(
       'OcrPlugin',
       'recognizeImage',
       {
@@ -373,13 +323,9 @@ export async function executeBatchOcr(
         typeof ocrRes.data?.confidence === 'number'
           ? ocrRes.data.confidence
           : typeof ocrRes.data?.confidencePercent === 'number'
-          ? ocrRes.data.confidencePercent
-          : 99.2
-      recognizedItems.push({
-        ...item,
-        sampleText: text,
-        confidencePercent: confidence
-      })
+            ? ocrRes.data.confidencePercent
+            : 99.2
+      recognizedItems.push({ ...item, sampleText: text, confidencePercent: confidence })
     } else {
       failedPaths.push(item.path)
       if (ocrRes.error || ocrRes.data?.error) {
@@ -389,10 +335,7 @@ export async function executeBatchOcr(
   }
 
   if (recognizedItems.length > 0) {
-    const combinedText = formatOcrOutputByStrategy(
-      recognizedItems,
-      config?.layoutStrategy || 'natural_paragraph'
-    )
+    const combinedText = formatOcrOutputByStrategy(recognizedItems, config?.layoutStrategy || 'natural_paragraph')
     const exportedFiles = await applyOcrPostAction(recognizedItems, combinedText, config, hostOverride)
     return {
       ok: true,
@@ -407,14 +350,11 @@ export async function executeBatchOcr(
     }
   }
 
-  // 兼容显式注入 ocr_recognize_batch 的测试桩
-  if (hostOverride && typeof hostOverride.ocr_recognize_batch === 'function') {
-    const batchRes = await callHostTransport<any>(
+  const hostRec = hostOverride as { ocr_recognize_batch?: unknown } | undefined
+  if (hostRec && typeof hostRec.ocr_recognize_batch === 'function') {
+    const batchRes = await callHostTransport<Record<string, unknown>>(
       'ocr_recognize_batch',
-      {
-        files: items.map(i => i.path),
-        ...config
-      },
+      { files: items.map(i => i.path), ...config },
       hostOverride
     )
     const validBatch = batchRes.ok && batchRes.data?.ok !== false
@@ -449,18 +389,9 @@ export async function executeBatchOcr(
     }
   }
 
-  // 仅在纯离线无宿主的静态演示测试中读取预置样本中的 sampleText（绝不将文件名或占位符当成 OCR 文本）
   const validPresetItems = items
-    .map(i => ({
-      ...i,
-      sampleText: cleanOcrStampNoise(i.sampleText, shouldFilterNoise)
-    }))
-    .filter(
-      i =>
-        i.sampleText &&
-        !isPlaceholderOcrText(i.sampleText) &&
-        !i.sampleText.includes(i.name)
-    )
+    .map(i => ({ ...i, sampleText: cleanOcrStampNoise(i.sampleText, shouldFilterNoise) }))
+    .filter(i => i.sampleText && !isPlaceholderOcrText(i.sampleText) && !i.sampleText.includes(i.name))
   if (validPresetItems.length === 0) {
     return {
       ok: false,
@@ -473,10 +404,7 @@ export async function executeBatchOcr(
     }
   }
 
-  const combinedText = formatOcrOutputByStrategy(
-    validPresetItems,
-    config?.layoutStrategy || 'natural_paragraph'
-  )
+  const combinedText = formatOcrOutputByStrategy(validPresetItems, config?.layoutStrategy || 'natural_paragraph')
   const exportedFiles = await applyOcrPostAction(validPresetItems, combinedText, config, hostOverride)
   return {
     ok: true,
@@ -490,34 +418,29 @@ export async function executeBatchOcr(
   }
 }
 
-export async function captureScreenAreaOcr(hostOverride?: any): Promise<{
+export async function captureScreenAreaOcr(hostOverride?: unknown): Promise<{
   ok: boolean
   text: string
   message: string
   error?: string
 }> {
-  // 1. 优先调用 OcrPlugin.captureAndRecognize
-  const pluginRes = await invokePluginService<any>('OcrPlugin', 'captureAndRecognize', {}, hostOverride)
+  const pluginRes = await invokePluginService<Record<string, unknown>>('OcrPlugin', 'captureAndRecognize', {}, hostOverride)
   const validPlugin = pluginRes.ok && pluginRes.data?.ok !== false
   const pluginText = validPlugin ? extractRecognizedText(pluginRes.data) : ''
   if (validPlugin && pluginText.length > 0) {
     await writeRealClipboardText(pluginText, hostOverride)
-    return {
-      ok: true,
-      text: pluginText,
-      message: '已完成框选区域 OCR 识别并写入剪贴板'
-    }
+    return { ok: true, text: pluginText, message: '已完成框选区域 OCR 识别并写入剪贴板' }
   }
 
-  // 2. 回退：先调用 screen_capture 获取截图路径，再调用 OcrPlugin.recognizeImage
-  const capRes = await callHostTransport<any>('screen_capture', {}, hostOverride)
-  if (capRes.ok && capRes.data && capRes.data?.ok !== false) {
+  const capRes = await callHostTransport<Record<string, unknown> | string>('screen_capture', {}, hostOverride)
+  const capObj = typeof capRes.data === 'object' && capRes.data !== null ? capRes.data : null
+  if (capRes.ok && capRes.data && capObj?.ok !== false) {
     const capturedPath =
       typeof capRes.data === 'string'
         ? capRes.data.trim()
-        : String(capRes.data?.path || capRes.data?.filePath || '').trim()
+        : String(capObj?.path || capObj?.filePath || '').trim()
     if (capturedPath) {
-      const recRes = await invokePluginService<any>(
+      const recRes = await invokePluginService<Record<string, unknown>>(
         'OcrPlugin',
         'recognizeImage',
         { path: capturedPath },
@@ -527,26 +450,17 @@ export async function captureScreenAreaOcr(hostOverride?: any): Promise<{
       const recText = validRec ? extractRecognizedText(recRes.data) : ''
       if (validRec && recText.length > 0) {
         await writeRealClipboardText(recText, hostOverride)
-        return {
-          ok: true,
-          text: recText,
-          message: '已完成框选区域 OCR 识别并写入剪贴板'
-        }
+        return { ok: true, text: recText, message: '已完成框选区域 OCR 识别并写入剪贴板' }
       }
     }
   }
 
-  // 3. 兼容 screen_capture_ocr 通道
-  const ipcRes = await callHostTransport<any>('screen_capture_ocr', {}, hostOverride)
+  const ipcRes = await callHostTransport<Record<string, unknown>>('screen_capture_ocr', {}, hostOverride)
   const validIpc = ipcRes.ok && ipcRes.data?.ok !== false
   const ipcText = validIpc ? extractRecognizedText(ipcRes.data) : ''
   if (validIpc && ipcText.length > 0) {
     await writeRealClipboardText(ipcText, hostOverride)
-    return {
-      ok: true,
-      text: ipcText,
-      message: '已完成框选区域 OCR 识别并写入剪贴板'
-    }
+    return { ok: true, text: ipcText, message: '已完成框选区域 OCR 识别并写入剪贴板' }
   }
 
   return {
@@ -557,7 +471,7 @@ export async function captureScreenAreaOcr(hostOverride?: any): Promise<{
   }
 }
 
-export async function openOcrFileLocation(fullPath: string, hostOverride?: any): Promise<boolean> {
+export async function openOcrFileLocation(fullPath: string, hostOverride?: unknown): Promise<boolean> {
   if (!fullPath) return false
   return showRealItemInFolder(fullPath, hostOverride)
 }

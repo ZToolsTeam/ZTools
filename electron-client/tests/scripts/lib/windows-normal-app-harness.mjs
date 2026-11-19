@@ -707,6 +707,27 @@ async function invokePublicPluginApi(page, source) {
 
 function sha256File(file) { return digest(fs.readFileSync(file)) }
 
+export function findMainRuntimeLogFiles(logDirectory, pid) {
+  if (typeof logDirectory !== 'string' || !logDirectory || !Number.isSafeInteger(pid) || pid <= 0) return []
+  let entries
+  try {
+    entries = fs.readdirSync(logDirectory, { withFileTypes: true })
+  } catch {
+    return []
+  }
+  const pattern = new RegExp(`^electron-main-\\d{4}-\\d{2}-\\d{2}T\\d{2}-\\d{2}-\\d{2}-\\d{3}Z-pid${pid}(?:-\\d+)?\\.log$`)
+  return entries
+    .filter(entry => entry.isFile() && pattern.test(entry.name))
+    .map(entry => {
+      const fullPath = path.join(logDirectory, entry.name)
+      let mtimeMs = 0
+      try { mtimeMs = fs.statSync(fullPath).mtimeMs } catch { mtimeMs = 0 }
+      return { fullPath, name: entry.name, mtimeMs }
+    })
+    .sort((a, b) => (b.mtimeMs - a.mtimeMs) || b.name.localeCompare(a.name))
+    .map(item => item.fullPath)
+}
+
 export class WindowsNormalAppHarness {
   constructor({ appRoot, executable, outputRoot, versions, ports = { cdp: NORMAL_APP_CDP_PORT, inspect: NORMAL_APP_INSPECT_PORT } }) {
     this.appRoot = path.resolve(appRoot)
@@ -779,13 +800,21 @@ export class WindowsNormalAppHarness {
         commitProof: mainPage.commitProof, runtimeEnablePolicy: 'after-expected-frame-commit',
         events: mainPage.events, readiness: mainPage.readiness, identity: mainPage.rawIdentity, validation: 'PASS' }
       if (requireReferenceRuntime) {
-        const logPath = path.join(profile.appDataPath, 'ZTools', 'Logs', `electron-main-${new Date().toISOString().slice(0, 10)}.log`)
-        const contents = await waitForCondition(() => fs.existsSync(logPath) ? fs.readFileSync(logPath, 'utf8') : '',
-          text => text.includes('Reference runtime available') || text.includes('Reference runtime unavailable'), 45_000,
-          'REFERENCE_RUNTIME_LOG_NOT_FOUND')
-        session.runtimeLogPath = logPath
-        session.runtimeLog = contents
-        session.referenceRuntime = contents.includes('Reference runtime available') ? 'AVAILABLE' : 'UNAVAILABLE'
+        const logDirectory = path.join(profile.appDataPath, 'ZTools', 'Logs')
+        const matchedLog = await waitForCondition(() => {
+          for (const candidate of findMainRuntimeLogFiles(logDirectory, child.pid)) {
+            try {
+              const text = fs.readFileSync(candidate, 'utf8')
+              if (text.includes('Reference runtime available') || text.includes('Reference runtime unavailable')) {
+                return { logPath: candidate, contents: text }
+              }
+            } catch { /* Retry while the log file is still being written. */ }
+          }
+          return null
+        }, Boolean, 45_000, 'REFERENCE_RUNTIME_LOG_NOT_FOUND')
+        session.runtimeLogPath = matchedLog.logPath
+        session.runtimeLog = matchedLog.contents
+        session.referenceRuntime = matchedLog.contents.includes('Reference runtime available') ? 'AVAILABLE' : 'UNAVAILABLE'
       }
       return session
     } catch (error) {
@@ -833,20 +862,24 @@ export class WindowsNormalAppHarness {
     const validation = validatePluginTargetOwnership(target, id, this.ports.cdp)
     if (validation.status !== 'PASS') throw new Error(validation.code)
     const page = await CdpClient.connect(target.webSocketDebuggerUrl, this.ports.cdp, '/devtools/page/')
-    const escapedId = id.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
-    const commitProof = await enableRendererAfterCommit(page, new RegExp(`^ztools://plugins/${escapedId}/`))
-    const identity = await waitForCondition(() => page.evaluate(`(() => ({ ready: document.readyState === 'complete', url: location.href,
-      isElectron: window.ztools?.isElectron?.() === true, nodeType: typeof process, requireType: typeof require,
-      sdkDbType: typeof window.ztools?.db, title: document.title }))()`),
-    value => value?.ready === true && value.isElectron === true && value.url.startsWith(`ztools://plugins/${id}/`),
-    30_000, 'PLUGIN_RENDERER_NOT_READY')
-    if (identity.nodeType !== 'undefined' || identity.requireType !== 'undefined' || identity.sdkDbType !== 'object') {
+    try {
+      const escapedId = id.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+      const commitProof = await enableRendererAfterCommit(page, new RegExp(`^ztools://plugins/${escapedId}/`))
+      const identity = await waitForCondition(() => page.evaluate(`(() => ({ ready: document.readyState === 'complete', url: location.href,
+        isElectron: window.ztools?.isElectron?.() === true, nodeType: typeof process, requireType: typeof require,
+        sdkDbType: typeof window.ztools?.db, title: document.title }))()`),
+      value => value?.ready === true && value.isElectron === true && value.url.startsWith(`ztools://plugins/${id}/`),
+      30_000, 'PLUGIN_RENDERER_NOT_READY')
+      if (identity.nodeType !== 'undefined' || identity.requireType !== 'undefined' || identity.sdkDbType !== 'object') {
+        throw new Error('PLUGIN_RENDERER_IDENTITY_MISMATCH')
+      }
+      const entry = { page, targetId: target.id, url: target.url, pluginId: id }
+      session.pluginPages.push(entry)
+      return { opened, target, page, identity, commitProof }
+    } catch (error) {
       page.dispose()
-      throw new Error('PLUGIN_RENDERER_IDENTITY_MISMATCH')
+      throw error
     }
-    const entry = { page, targetId: target.id, url: target.url, pluginId: id }
-    session.pluginPages.push(entry)
-    return { opened, target, page, identity, commitProof }
   }
 
   async close(session, pluginId) {

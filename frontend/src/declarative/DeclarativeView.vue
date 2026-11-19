@@ -119,7 +119,7 @@
           @click="executeAction(toggleDetailAction)"
         >
           <span class="text-[var(--rc-text-secondary)]">{{ cleanUiText(toggleDetailAction.props?.title) }}</span>
-          <ShortcutKeys :combo="formatActionShortcut(toggleDetailAction)" />
+          <ShortcutKeys :combo="resolvedBindings.hintOf(toggleDetailAction)" />
         </button>
       </div>
 
@@ -136,11 +136,11 @@
           data-decl-primary
           @click="executeAction(primaryAction)"
         >
-          <span class="truncate max-w-[180px]">{{ cleanUiText(primaryAction.props?.title) }}</span>
+          <span class="truncate max-w-[180px]">{{ resolveActionTitle(primaryAction) }}</span>
         </RcButton>
 
         <RcButton
-          v-if="secondaryAction"
+          v-if="secondaryAction && secondaryAction !== primaryAction"
           :variant="isDestructiveAction(secondaryAction) ? 'danger' : 'secondary'"
           size="sm"
           class="decl-foot-btn"
@@ -150,7 +150,7 @@
           data-decl-secondary
           @click="executeAction(secondaryAction)"
         >
-          <span class="truncate max-w-[160px]">{{ cleanUiText(secondaryAction.props?.title) }}</span>
+          <span class="truncate max-w-[160px]">{{ resolveActionTitle(secondaryAction) }}</span>
         </RcButton>
 
         <!-- 只有还有收起的动作时才显示；数量只计没在底栏露出的动作 -->
@@ -195,6 +195,13 @@
   </div>
 </template>
 
+<script>
+// 同窗口按 :key 同步切换插件时，旧组件 onUnmounted（postFlush）会晚于新组件 setup/watch 执行，
+// 用实例所有权编号防止旧实例卸载时将新实例已开启的文件夹拖入拦截覆写为 false。
+let nextFileInputOwnerId = 0;
+let activeFileInputOwnerId = 0;
+</script>
+
 <script setup>
 import { ref, computed, watch, nextTick, onMounted, onUnmounted } from "vue";
 import ShortcutKeys from '@/components/base/ShortcutKeys.vue'
@@ -208,7 +215,8 @@ import FormRenderer from "./components/FormRenderer.vue";
 import ActionPanelModal from "./components/ActionPanelModal.vue";
 import ToastOverlay from "./components/ToastOverlay.vue";
 import { getHostMethods } from "./hostMethods.js";
-import { cleanUiText, formatActionShortcut, isDestructiveAction } from "./uiText.js";
+import { cleanUiText, isDestructiveAction, resolveActionTitle } from "./uiText.js";
+import { resolveActionKeyBindings, normalizeEventShortcutKey } from "@/utils/actionKeyBindings.js";
 import { filterIncomingFiles } from "./fileInputFilter.js";
 import { useDeclarativeStack, assertClipboardText, hasOpenConfirm } from "./composables/useDeclarativeStack.js";
 import {
@@ -376,17 +384,25 @@ const dropOverlaySubtitle = computed(() => {
   return "支持拖入或按 Ctrl+V / ⌘V 粘贴输入";
 });
 
+const fileInputOwnerId = ++nextFileInputOwnerId;
+
 function syncPreloadFileInputInterception() {
   if (typeof window === "undefined") return;
   const setInterception = window.__ztoolsElectron?.setFileInputInterception;
   if (typeof setInterception !== "function") return;
   const active = isFileInputActive.value;
   const cfg = topFileInputConfig.value;
-  setInterception({
-    enabled: active,
-    allowImage: Boolean(active && cfg?.allowClipboardImage),
-    allowDirectories: Boolean(active && cfg?.allowDirectories)
-  });
+  if (active) {
+    activeFileInputOwnerId = fileInputOwnerId;
+    setInterception({
+      enabled: true,
+      allowImage: Boolean(cfg?.allowClipboardImage),
+      allowDirectories: Boolean(cfg?.allowDirectories)
+    });
+  } else if (activeFileInputOwnerId === fileInputOwnerId) {
+    activeFileInputOwnerId = 0;
+    setInterception({ enabled: false, allowImage: false, allowDirectories: false });
+  }
 }
 
 watch(
@@ -471,9 +487,16 @@ onUnmounted(() => {
     unlistenFileDrop();
     unlistenFileDrop = null;
   }
-  if (typeof window !== "undefined" && typeof window.__ztoolsElectron?.setFileInputInterception === "function") {
-    window.__ztoolsElectron.setFileInputInterception({ enabled: false, allowImage: false, allowDirectories: false });
+  if (activeFileInputOwnerId === fileInputOwnerId) {
+    activeFileInputOwnerId = 0;
+    if (typeof window !== "undefined" && typeof window.__ztoolsElectron?.setFileInputInterception === "function") {
+      window.__ztoolsElectron.setFileInputInterception({ enabled: false, allowImage: false, allowDirectories: false });
+    }
   }
+});
+
+onMounted(() => {
+  syncPreloadFileInputInterception();
 });
 
 function handleRootPaste(e) {
@@ -711,22 +734,27 @@ const isFormView = computed(() => currentDescriptor.value?.type === "Form");
 // 能映射到 Enter / ⌘Enter 的动作（子菜单里的动作只在 ⌘K 面板中出现）
 const directActions = computed(() => activeActions.value.filter((act) => !act._fromSubmenu));
 
-// 首要 Action (列表第一项动作)
-const primaryAction = computed(() => {
-  return directActions.value[0] || null;
-});
+// 统一「所见即所按」快捷键解析器：处理显式 Ctrl+Enter 优先次动作、重复冲突去重、宿主保留热键过滤
+const resolvedBindings = computed(() =>
+  resolveActionKeyBindings(activeActions.value, {
+    viewType: currentDescriptor.value?.type || "List"
+  })
+);
 
-// 次要 Action (对齐 Raycast 右下角第二顺位动作 Ctrl+Enter)；表单里 ⌘Enter 用于提交，第 2 个动作只进动作面板
-const secondaryAction = computed(() => {
-  if (isFormView.value) return null;
-  return directActions.value[1] || null;
-});
+// 首要 Action 与次要 Action（由统一解析器决定）
+const primaryAction = computed(() => resolvedBindings.value.primaryAction);
+const secondaryAction = computed(() => resolvedBindings.value.secondaryAction);
 
-const primaryShortcutCombo = computed(() => (isFormView.value ? "Ctrl+Enter" : "Enter"));
+const primaryShortcutCombo = computed(() => {
+  if (primaryAction.value) {
+    return resolvedBindings.value.hintOf(primaryAction.value) || (isFormView.value ? "Ctrl+Enter" : "Enter");
+  }
+  return isFormView.value ? "Ctrl+Enter" : "Enter";
+});
 
 const secondaryShortcutCombo = computed(() => {
   if (!secondaryAction.value) return "Ctrl+Enter";
-  return formatActionShortcut(secondaryAction.value) || "Ctrl+Enter";
+  return resolvedBindings.value.hintOf(secondaryAction.value) || "Ctrl+Enter";
 });
 
 const panelTargetTitle = computed(() => {
@@ -735,7 +763,7 @@ const panelTargetTitle = computed(() => {
   return target?.props?.title ? String(target.props.title) : "";
 });
 
-// 详情分栏切换动作：只在列表视图、且插件为它声明了快捷键时放到底栏左侧，显示的就是它真实的快捷键；
+// 详情分栏切换动作：只在列表视图、且插件为它声明了未冲突非保留快捷键时放到底栏左侧；
 // 按键由通用的动作快捷键处理（handleActionShortcut）负责，不再写死 Ctrl+D
 const DETAIL_TOGGLE_TITLE = /详情预览分栏|预览分栏|详情分栏|Toggle Details?/i;
 const toggleDetailAction = computed(() => {
@@ -746,7 +774,7 @@ const toggleDetailAction = computed(() => {
         act !== primaryAction.value &&
         act !== secondaryAction.value &&
         DETAIL_TOGGLE_TITLE.test(String(act.props?.title || "")) &&
-        Boolean(formatActionShortcut(act))
+        Boolean(resolvedBindings.value.hintOf(act))
     ) || null
   );
 });
@@ -996,46 +1024,6 @@ try {
   uiStore = null;
 }
 
-function normalizeShortcutKeyName(k) {
-  const lower = String(k || "").trim().toLowerCase();
-  if (lower === "return") return "enter";
-  if (lower === "del") return "delete";
-  if (lower === "up") return "arrowup";
-  if (lower === "down") return "arrowdown";
-  if (lower === "left") return "arrowleft";
-  if (lower === "right") return "arrowright";
-  if (lower === " " || lower === "spacebar") return "space";
-  return lower;
-}
-
-/**
- * 插件动作快捷键匹配。cmd / ctrl 声明在 macOS 上只对应 ⌘（metaKey），⌃ 不再误触；
- * Windows 上只对应 Ctrl（ctrlKey）。
- */
-function matchActionShortcut(e, rawShortcut) {
-  const shortcut = typeof rawShortcut === "string" ? { modifiers: [], key: rawShortcut } : rawShortcut;
-  if (!shortcut || typeof shortcut.key !== "string" || !shortcut.key.trim()) return false;
-  const mods = Array.isArray(shortcut.modifiers)
-    ? shortcut.modifiers.map((m) => String(m).toLowerCase())
-    : [];
-  const wantPrimary = mods.some((m) => m === "cmd" || m === "command" || m === "meta" || m === "ctrl" || m === "control");
-  const wantAlt = mods.some((m) => m === "opt" || m === "option" || m === "alt");
-  const wantShift = mods.some((m) => m === "shift");
-
-  const mac = isMacOS();
-  const hasPrimary = Boolean(mac ? e.metaKey : e.ctrlKey);
-  const hasOther = Boolean(mac ? e.ctrlKey : e.metaKey);
-  const hasAlt = Boolean(e.altKey);
-  const hasShift = Boolean(e.shiftKey);
-
-  if (hasOther || wantPrimary !== hasPrimary || wantAlt !== hasAlt || wantShift !== hasShift) {
-    return false;
-  }
-  const targetKey = normalizeShortcutKeyName(shortcut.key);
-  const eventKey = normalizeShortcutKeyName(e.key);
-  return targetKey === eventKey;
-}
-
 function isTextField(el) {
   if (!el || typeof el.tagName !== "string") return false;
   const tag = el.tagName.toUpperCase();
@@ -1053,18 +1041,21 @@ function hasTextSelection(el) {
 /** 输入框里的原生编辑组合键（全选 / 复制 / 粘贴 / 剪切 / 撤销 / 重做 / 按词或整行删除）保留给输入框本身 */
 function isNativeEditCombo(e) {
   const target = e.target;
-  if (!isTextField(target) || e.altKey) return false;
-  const keyLower = String(e.key || "").toLowerCase();
+  if (!isTextField(target) || e.altKey || !(e.ctrlKey || e.metaKey)) return false;
+  // 使用规范化事件键以兼容 Windows 中文 IME keyCode=229 ('Process') 场景
+  const keyLower = normalizeEventShortcutKey(e).toLowerCase();
   const hasValue = Boolean(target.value);
   if (!e.shiftKey) {
     if (keyLower === "c" || keyLower === "x") return hasTextSelection(target);
-    if (keyLower === "a" || keyLower === "v" || keyLower === "z" || keyLower === "y") return hasValue;
+    // 粘贴(Ctrl/⌘+V)、撤销(Ctrl/⌘+Z)、重做(Ctrl/⌘+Y)无论输入框是否为空一律保留给原生，防止空框被插件动作抢占
+    if (keyLower === "v" || keyLower === "z" || keyLower === "y") return true;
+    if (keyLower === "a") return hasValue;
     // ⌘⌫ / Ctrl+Backspace 删除光标前的整行或单词，⌘⌦ / Ctrl+Delete 删除光标后的内容
     if (keyLower === "backspace" || keyLower === "delete") return hasValue;
     return false;
   }
-  // ⌘⇧Z 重做
-  return keyLower === "z" && hasValue;
+  // ⌘⇧Z / Ctrl+Shift+Z 重做无论输入框是否为空一律保留给原生编辑
+  return keyLower === "z";
 }
 
 /** 事件是否属于本视图：目标在本视图根节点内，或焦点已丢到 body 上 */
@@ -1083,15 +1074,16 @@ function isEventForThisView(e) {
 function handleActionShortcut(e) {
   if (actionPanelVisible.value) return false;
   if (!(e.ctrlKey || e.metaKey || e.altKey)) {
+    const keyName = normalizeEventShortcutKey(e);
     const allowPlainDelete =
-      (e.key === "Delete" || e.key === "Backspace") &&
+      (keyName === "Delete" || keyName === "Backspace") &&
       (!isInputElement(e.target) || !e.target.value) &&
       !isInteractiveControlTarget(e.target, rootRef.value);
     if (!allowPlainDelete) return false;
   }
   if (!isEventForThisView(e)) return false;
   if (isNativeEditCombo(e)) return false;
-  const matched = activeActions.value.find((act) => matchActionShortcut(e, act.props?.shortcut));
+  const matched = resolvedBindings.value.matchEvent(e);
   if (!matched) return false;
   executeAction(matched);
   return true;
@@ -1128,14 +1120,16 @@ useKeymap(KEYMAP_SCOPES.DECLARATIVE, {
     if (actionPanelVisible.value) return false;
     // 表单：⌘Enter 提交（textarea 内 Enter 是换行，这是唯一的键盘保存方式）
     if (isFormView.value) {
-      if (primaryAction.value) {
-        executeAction(primaryAction.value);
+      const formSubmit = resolvedBindings.value.comboToAction.get("Ctrl+Enter") || primaryAction.value;
+      if (formSubmit) {
+        executeAction(formSubmit);
         return true;
       }
       return false;
     }
-    if (secondaryAction.value) {
-      executeAction(secondaryAction.value);
+    const targetSecondary = resolvedBindings.value.comboToAction.get("Ctrl+Enter") || secondaryAction.value;
+    if (targetSecondary) {
+      executeAction(targetSecondary);
       return true;
     }
     return false;
@@ -1241,8 +1235,9 @@ useKeymap(KEYMAP_SCOPES.DECLARATIVE, {
     if (isInteractiveControlTarget(e.target, rootRef.value)) {
       return false;
     }
-    if (primaryAction.value) {
-      executeAction(primaryAction.value);
+    const targetPrimary = (!isFormView.value && resolvedBindings.value.comboToAction.get("Enter")) || primaryAction.value;
+    if (targetPrimary) {
+      executeAction(targetPrimary);
       return true;
     }
     return false;
@@ -1252,10 +1247,7 @@ useKeymap(KEYMAP_SCOPES.DECLARATIVE, {
     if (isInteractiveControlTarget(e.target, rootRef.value)) {
       return false;
     }
-    const declaredSpace = activeActions.value.find((act) => {
-      const sc = act.props?.shortcut;
-      return sc === "space" || (sc && normalizeShortcutKeyName(sc.key) === "space" && !(sc.modifiers || []).length);
-    });
+    const declaredSpace = resolvedBindings.value.comboToAction.get("Space") || null;
     if (inInput) {
       // 搜索框为空时，空格用于勾选当前条目（布局二 / 三的可勾选列表）；有文字时照常输入空格
       const emptySearch = currentDescriptor.value?.type === "List" && e.target?.tagName === "INPUT" && !e.target.value;

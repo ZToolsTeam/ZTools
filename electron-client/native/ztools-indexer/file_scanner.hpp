@@ -6,6 +6,18 @@
 #endif
 #include <windows.h>
 #include <winioctl.h>
+#ifndef IO_REPARSE_TAG_MOUNT_POINT
+#define IO_REPARSE_TAG_MOUNT_POINT (0xA0000003L)
+#endif
+#ifndef IO_REPARSE_TAG_SYMLINK
+#define IO_REPARSE_TAG_SYMLINK (0xA000000CL)
+#endif
+#ifndef IO_REPARSE_TAG_APPEXECLINK
+#define IO_REPARSE_TAG_APPEXECLINK (0x8000001BL)
+#endif
+#ifndef IO_REPARSE_TAG_LX_SYMLINK
+#define IO_REPARSE_TAG_LX_SYMLINK (0xA000001DL)
+#endif
 #else
 #include <dirent.h>
 #include <sys/stat.h>
@@ -20,6 +32,9 @@
 #include <atomic>
 #include <chrono>
 #include <iostream>
+#include <unordered_set>
+#include <memory>
+#include <cwchar>
 
 #include "pinyin.hpp"
 
@@ -134,7 +149,7 @@ public:
 
     HANDLE hVol = CreateFileW(
       volume.c_str(),
-      GENERIC_READ | GENERIC_WRITE,
+      GENERIC_READ,
       FILE_SHARE_READ | FILE_SHARE_WRITE,
       NULL,
       OPEN_EXISTING,
@@ -201,6 +216,70 @@ public:
 class ConcurrentDirectoryScanner : public IFileScanner {
 public:
   static constexpr size_t kDefaultMaxEntries = 400000;
+  static constexpr int kProgramFilesMaxSubdirDepth = 3;
+
+  struct RootTarget {
+    std::wstring path;
+    size_t quota_group = 0;
+    // -1 表示常规无限制目录；>= 0 表示位于 Program Files / AppData\Local\Programs 内的相对层级
+    int restricted_depth = -1;
+  };
+
+  struct GroupQuotaTracker {
+    std::unique_ptr<std::atomic<size_t>[]> counts;
+    size_t group_count = 0;
+    size_t max_per_group = 0;
+
+    GroupQuotaTracker(size_t count, size_t max_entries)
+      : counts(count > 0 ? std::make_unique<std::atomic<size_t>[]>(count) : nullptr),
+        group_count(count),
+        max_per_group(max_entries) {
+      for (size_t i = 0; i < group_count; ++i) {
+        counts[i].store(0, std::memory_order_relaxed);
+      }
+    }
+
+    bool IsGroupFull(size_t group_idx) const noexcept {
+      if (max_per_group == 0 || group_idx >= group_count || !counts) return false;
+      return counts[group_idx].load(std::memory_order_relaxed) >= max_per_group;
+    }
+  };
+
+#ifdef _WIN32
+  struct DirIdentity {
+    DWORD volume_serial = 0;
+    uint64_t file_index = 0;
+
+    bool operator==(const DirIdentity& other) const noexcept {
+      return volume_serial == other.volume_serial && file_index == other.file_index;
+    }
+  };
+
+  struct DirIdentityHash {
+    size_t operator()(const DirIdentity& id) const noexcept {
+      uint64_t h = static_cast<uint64_t>(id.volume_serial) * 0x9E3779B97F4A7C15ULL;
+      h ^= id.file_index + 0x9E3779B97F4A7C15ULL + (h << 6) + (h >> 2);
+      return static_cast<size_t>(h);
+    }
+  };
+
+  struct VisitedDirTracker {
+    std::mutex mutex;
+    std::unordered_set<DirIdentity, DirIdentityHash> visited;
+
+    void MarkVisited(const DirIdentity& id) {
+      std::lock_guard<std::mutex> lk(mutex);
+      visited.insert(id);
+    }
+
+    bool TryMarkVisited(const DirIdentity& id) {
+      std::lock_guard<std::mutex> lk(mutex);
+      return visited.insert(id).second;
+    }
+  };
+#else
+  struct VisitedDirTracker {};
+#endif
 
   const char* GetName() const override { return "concurrent_directory"; }
 
@@ -251,11 +330,353 @@ public:
     return ScanRoots({target}, out_entries);
   }
 
-  bool ScanRoots(const std::vector<std::wstring>& targets, std::vector<FileEntry>& out_entries) {
+  bool ScanRoots(
+    const std::vector<std::wstring>& targets,
+    std::vector<FileEntry>& out_entries,
+    std::vector<std::wstring>* out_boundary_dirs = nullptr
+  ) {
+    std::vector<RootTarget> grouped_targets;
+    grouped_targets.reserve(targets.size());
+    for (const auto& t : targets) {
+      grouped_targets.push_back({t, 0, -1});
+    }
+
+    std::vector<RootTarget> boundary_targets;
+    std::vector<RootTarget>* boundary_ptr = out_boundary_dirs ? &boundary_targets : nullptr;
+    bool ok = ScanTargetsInternal(grouped_targets, out_entries, nullptr, boundary_ptr, nullptr);
+
+    if (out_boundary_dirs && !boundary_targets.empty()) {
+      out_boundary_dirs->reserve(out_boundary_dirs->size() + boundary_targets.size());
+      for (auto& b : boundary_targets) {
+        out_boundary_dirs->push_back(std::move(b.path));
+      }
+    }
+    return ok;
+  }
+
+  bool ScanGroupedRoots(
+    const std::vector<RootTarget>& targets,
+    std::vector<FileEntry>& out_entries,
+    GroupQuotaTracker& quota,
+    std::vector<RootTarget>* out_boundary_dirs = nullptr,
+    VisitedDirTracker* shared_visited = nullptr
+  ) {
+    return ScanTargetsInternal(targets, out_entries, &quota, out_boundary_dirs, shared_visited);
+  }
+
+private:
+  struct DiscoveredSubdir {
+    std::wstring path;
+    int restricted_depth = -1;
+  };
+
+#ifdef _WIN32
+  enum class DirFilterMode {
+    Normal,
+    AppDataRoot,
+    AppDataRoaming,
+    AppDataRoamingMicrosoft,
+    AppDataLocal,
+    ProgramDataRoot,
+    ProgramDataMicrosoft,
+    MicrosoftWindowsToStartMenu
+  };
+
+  static bool EqualsIgnoreCase(const wchar_t* a, const wchar_t* b) {
+    return _wcsicmp(a, b) == 0;
+  }
+
+  static bool EndsWithPathSegmentIgnoreCase(const std::wstring& path, const wchar_t* suffix) {
+    size_t path_len = path.size();
+    while (path_len > 0 && (path[path_len - 1] == L'\\' || path[path_len - 1] == L'/')) {
+      --path_len;
+    }
+    const size_t suffix_len = std::wcslen(suffix);
+    if (path_len < suffix_len) return false;
+    if (_wcsnicmp(path.c_str() + (path_len - suffix_len), suffix, suffix_len) != 0) {
+      return false;
+    }
+    if (path_len == suffix_len) return true;
+    const wchar_t prev = path[path_len - suffix_len - 1];
+    return prev == L'\\' || prev == L'/';
+  }
+
+  static DirFilterMode DetectDirFilterMode(const std::wstring& dir) {
+    if (EndsWithPathSegmentIgnoreCase(dir, L"AppData\\Roaming\\Microsoft\\Windows") ||
+        EndsWithPathSegmentIgnoreCase(dir, L"ProgramData\\Microsoft\\Windows")) {
+      return DirFilterMode::MicrosoftWindowsToStartMenu;
+    }
+    if (EndsWithPathSegmentIgnoreCase(dir, L"AppData\\Roaming\\Microsoft")) {
+      return DirFilterMode::AppDataRoamingMicrosoft;
+    }
+    if (EndsWithPathSegmentIgnoreCase(dir, L"ProgramData\\Microsoft")) {
+      return DirFilterMode::ProgramDataMicrosoft;
+    }
+    if (EndsWithPathSegmentIgnoreCase(dir, L"AppData\\Roaming")) {
+      return DirFilterMode::AppDataRoaming;
+    }
+    if (EndsWithPathSegmentIgnoreCase(dir, L"AppData\\Local")) {
+      return DirFilterMode::AppDataLocal;
+    }
+    if (EndsWithPathSegmentIgnoreCase(dir, L"AppData")) {
+      return DirFilterMode::AppDataRoot;
+    }
+    if (EndsWithPathSegmentIgnoreCase(dir, L"ProgramData")) {
+      return DirFilterMode::ProgramDataRoot;
+    }
+    return DirFilterMode::Normal;
+  }
+
+  static bool IsBlacklistedWindowsDirName(const wchar_t* name) {
+    return EqualsIgnoreCase(name, L"Windows") ||
+           EqualsIgnoreCase(name, L"Windows.old") ||
+           EqualsIgnoreCase(name, L"WinSxS") ||
+           EqualsIgnoreCase(name, L"WindowsApps") ||
+           EqualsIgnoreCase(name, L"ModifiableWindowsApps") ||
+           EqualsIgnoreCase(name, L"Windows Kits") ||
+           EqualsIgnoreCase(name, L"Windows Defender") ||
+           EqualsIgnoreCase(name, L"Windows Mail") ||
+           EqualsIgnoreCase(name, L"Windows Media Player") ||
+           EqualsIgnoreCase(name, L"Windows NT") ||
+           EqualsIgnoreCase(name, L"Windows Photo Viewer") ||
+           EqualsIgnoreCase(name, L"Windows Portable Devices") ||
+           EqualsIgnoreCase(name, L"Windows Security") ||
+           EqualsIgnoreCase(name, L"WindowsPowerShell") ||
+           EqualsIgnoreCase(name, L"Microsoft Shared") ||
+           EqualsIgnoreCase(name, L"Reference Assemblies") ||
+           EqualsIgnoreCase(name, L"SymCache") ||
+           EqualsIgnoreCase(name, L"symbols") ||
+           EqualsIgnoreCase(name, L"PerfLogs") ||
+           EqualsIgnoreCase(name, L"Recovery") ||
+           EqualsIgnoreCase(name, L"Config.Msi") ||
+           EqualsIgnoreCase(name, L"MSOCache") ||
+           EqualsIgnoreCase(name, L"$RECYCLE.BIN") ||
+           EqualsIgnoreCase(name, L"System Volume Information") ||
+           EqualsIgnoreCase(name, L"node_modules") ||
+           EqualsIgnoreCase(name, L"__pycache__") ||
+           EqualsIgnoreCase(name, L"target") ||
+           EqualsIgnoreCase(name, L"CMakeFiles") ||
+           EqualsIgnoreCase(name, L"dist") ||
+           EqualsIgnoreCase(name, L"build") ||
+           EqualsIgnoreCase(name, L"coverage") ||
+           EqualsIgnoreCase(name, L"obj") ||
+           EqualsIgnoreCase(name, L"venv") ||
+           EqualsIgnoreCase(name, L"bower_components") ||
+           EqualsIgnoreCase(name, L"GPUCache") ||
+           EqualsIgnoreCase(name, L"Code Cache") ||
+           EqualsIgnoreCase(name, L"CachedData") ||
+           EqualsIgnoreCase(name, L"DawnCache") ||
+           EqualsIgnoreCase(name, L"Crashpad");
+  }
+
+  // 评估目录项过滤与白名单走廊放行，同时给出子目录是否触发 Program Files 等浅层深度限制
+  static bool ShouldSkipWindowsEntry(
+    const WIN32_FIND_DATAW& find_data,
+    DirFilterMode filter_mode,
+    int current_restricted_depth,
+    int& out_child_restricted_depth
+  ) {
+    out_child_restricted_depth = -1;
+    const wchar_t* name = find_data.cFileName;
+    if (name[0] == L'\0' || name[0] == L'.') {
+      return true;
+    }
+
+    const DWORD attrs = find_data.dwFileAttributes;
+    if ((attrs & FILE_ATTRIBUTE_TEMPORARY) != 0 ||
+        (attrs & FILE_ATTRIBUTE_DEVICE) != 0 ||
+        (attrs & FILE_ATTRIBUTE_VIRTUAL) != 0) {
+      return true;
+    }
+
+    const bool is_dir = (attrs & FILE_ATTRIBUTE_DIRECTORY) != 0;
+    const bool is_reparse = (attrs & FILE_ATTRIBUTE_REPARSE_POINT) != 0;
+    if (is_reparse &&
+        (find_data.dwReserved0 == IO_REPARSE_TAG_APPEXECLINK ||
+         find_data.dwReserved0 == IO_REPARSE_TAG_LX_SYMLINK)) {
+      return true;
+    }
+
+    const bool is_hidden = (attrs & FILE_ATTRIBUTE_HIDDEN) != 0;
+    const bool is_system = (attrs & FILE_ATTRIBUTE_SYSTEM) != 0;
+
+    // 处于 AppData / ProgramData 精细白名单走廊时，只放行通往 Start Menu / Programs 的必要目录链
+    if (filter_mode != DirFilterMode::Normal) {
+      if (!is_dir || (is_hidden && is_system)) {
+        return true;
+      }
+      switch (filter_mode) {
+        case DirFilterMode::AppDataRoot:
+          return !(EqualsIgnoreCase(name, L"Roaming") || EqualsIgnoreCase(name, L"Local"));
+        case DirFilterMode::AppDataRoaming:
+        case DirFilterMode::ProgramDataRoot:
+          return !EqualsIgnoreCase(name, L"Microsoft");
+        case DirFilterMode::AppDataRoamingMicrosoft:
+        case DirFilterMode::ProgramDataMicrosoft:
+          return !EqualsIgnoreCase(name, L"Windows");
+        case DirFilterMode::MicrosoftWindowsToStartMenu:
+          return !EqualsIgnoreCase(name, L"Start Menu");
+        case DirFilterMode::AppDataLocal:
+          if (EqualsIgnoreCase(name, L"Programs")) {
+            out_child_restricted_depth = 0;
+            return false;
+          }
+          return true;
+        case DirFilterMode::Normal:
+          break;
+      }
+    }
+
+    if (!is_dir) {
+      // 普通隐藏或系统文件（如 desktop.ini、hiberfil.sys、~$ lock 文件）跳过；OneDrive 占位文件不带 HIDDEN/SYSTEM
+      if (is_hidden || is_system) {
+        return true;
+      }
+      return false;
+    }
+
+    // 目录仅在同时具有 HIDDEN 与 SYSTEM 时视为隐藏系统保护目录（如 $Recycle.Bin / XP 遗留兼容 Junction）跳过；
+    // 单独带有 SYSTEM 的正常文件夹（如 OneDrive / 本地化桌面、文档、Start Menu）应正常放行
+    if (is_hidden && is_system) {
+      return true;
+    }
+    if (is_hidden && !EqualsIgnoreCase(name, L"AppData") && !EqualsIgnoreCase(name, L"ProgramData")) {
+      return true;
+    }
+
+    if (IsBlacklistedWindowsDirName(name)) {
+      return true;
+    }
+
+    if (current_restricted_depth >= 0) {
+      out_child_restricted_depth = current_restricted_depth + 1;
+    } else if (EqualsIgnoreCase(name, L"Program Files") || EqualsIgnoreCase(name, L"Program Files (x86)")) {
+      out_child_restricted_depth = 0;
+    }
+
+    return false;
+  }
+
+  static bool GetDirectoryIdentityAndFinalPath(
+    const std::wstring& path,
+    DirIdentity& out_id,
+    std::wstring& out_final_path
+  ) {
+    out_final_path.clear();
+    HANDLE hDir = CreateFileW(
+      path.c_str(),
+      FILE_READ_ATTRIBUTES,
+      FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+      NULL,
+      OPEN_EXISTING,
+      FILE_FLAG_BACKUP_SEMANTICS,
+      NULL
+    );
+    if (hDir == INVALID_HANDLE_VALUE) {
+      return false;
+    }
+
+    BY_HANDLE_FILE_INFORMATION info{};
+    BOOL info_ok = GetFileInformationByHandle(hDir, &info);
+    if (!info_ok || (info.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) == 0) {
+      CloseHandle(hDir);
+      return false;
+    }
+
+    out_id.volume_serial = info.dwVolumeSerialNumber;
+    out_id.file_index = (static_cast<uint64_t>(info.nFileIndexHigh) << 32) | info.nFileIndexLow;
+
+    DWORD required = GetFinalPathNameByHandleW(hDir, NULL, 0, FILE_NAME_NORMALIZED);
+    if (required > 0) {
+      std::wstring buf(required, L'\0');
+      DWORD len = GetFinalPathNameByHandleW(hDir, &buf[0], required, FILE_NAME_NORMALIZED);
+      if (len > 0 && len < required) {
+        buf.resize(len);
+        if (buf.rfind(L"\\\\?\\UNC\\", 0) == 0) {
+          out_final_path = L"\\\\" + buf.substr(8);
+        } else if (buf.rfind(L"\\\\?\\", 0) == 0) {
+          out_final_path = buf.substr(4);
+        } else {
+          out_final_path = std::move(buf);
+        }
+        while (out_final_path.size() > 3 && out_final_path.back() == L'\\') {
+          out_final_path.pop_back();
+        }
+      }
+    }
+
+    CloseHandle(hDir);
+    return true;
+  }
+
+  static bool IsAncestorOrSamePath(const std::wstring& child_path, const std::wstring& ancestor_path) {
+    if (child_path.empty() || ancestor_path.empty()) return false;
+    std::wstring a = ancestor_path;
+    std::wstring c = child_path;
+    while (a.size() > 3 && a.back() == L'\\') a.pop_back();
+    while (c.size() > 3 && c.back() == L'\\') c.pop_back();
+    if (c.size() < a.size()) return false;
+    if (_wcsnicmp(c.c_str(), a.c_str(), a.size()) != 0) return false;
+    if (c.size() == a.size()) return true;
+    if (a.back() == L'\\') return true;
+    return c[a.size()] == L'\\';
+  }
+
+  // 防止重解析点直接跳转到系统关键目录或受控过滤黑名单目录
+  static bool IsBlockedFinalTargetPath(const std::wstring& target_final_path) {
+    if (target_final_path.empty()) return false;
+    size_t i = 0;
+    // 跳过盘符如 "C:\" 或 UNC 前缀 "\\"
+    if (target_final_path.size() >= 3 && target_final_path[1] == L':') {
+      i = 3;
+    }
+    size_t seg_idx = 0;
+    while (i < target_final_path.size()) {
+      while (i < target_final_path.size() && (target_final_path[i] == L'\\' || target_final_path[i] == L'/')) {
+        ++i;
+      }
+      if (i >= target_final_path.size()) break;
+      size_t start = i;
+      while (i < target_final_path.size() && target_final_path[i] != L'\\' && target_final_path[i] != L'/') {
+        ++i;
+      }
+      std::wstring seg = target_final_path.substr(start, i - start);
+      if (EqualsIgnoreCase(seg.c_str(), L"WinSxS") ||
+          EqualsIgnoreCase(seg.c_str(), L"Windows.old") ||
+          EqualsIgnoreCase(seg.c_str(), L"WindowsApps") ||
+          EqualsIgnoreCase(seg.c_str(), L"ModifiableWindowsApps") ||
+          EqualsIgnoreCase(seg.c_str(), L"node_modules") ||
+          EqualsIgnoreCase(seg.c_str(), L"__pycache__") ||
+          EqualsIgnoreCase(seg.c_str(), L"$RECYCLE.BIN") ||
+          EqualsIgnoreCase(seg.c_str(), L"System Volume Information")) {
+        return true;
+      }
+      // 盘符根下直接名为 Windows 的目录（如 C:\Windows）禁止通过链接绕过进入
+      if (seg_idx == 0 && EqualsIgnoreCase(seg.c_str(), L"Windows")) {
+        return true;
+      }
+      ++seg_idx;
+    }
+    return false;
+  }
+#endif
+
+  bool ScanTargetsInternal(
+    const std::vector<RootTarget>& targets,
+    std::vector<FileEntry>& out_entries,
+    GroupQuotaTracker* quota,
+    std::vector<RootTarget>* out_boundary_dirs,
+    VisitedDirTracker* shared_visited
+  ) {
     struct QueueItem {
       std::wstring path;
       size_t depth;
+      size_t quota_group;
+      int restricted_depth;
     };
+
+    VisitedDirTracker local_visited;
+    VisitedDirTracker* visited_tracker = shared_visited ? shared_visited : &local_visited;
 
     std::queue<QueueItem> dir_queue;
     std::mutex queue_mutex;
@@ -267,7 +688,10 @@ public:
     std::vector<std::vector<FileEntry>> thread_entries(thread_count_);
 
     for (const auto& t : targets) {
-      std::wstring root = t;
+      if (quota && quota->IsGroupFull(t.quota_group)) {
+        continue;
+      }
+      std::wstring root = t.path;
       if (root.empty()) root = L".";
       while (root.size() > 1 && (root.back() == L'\\' || root.back() == L'/')) {
         if (root.size() == 3 && root[1] == L':') break; // Keep "C:\" intact for FindFirstFileExW("C:\*")
@@ -276,7 +700,14 @@ public:
       if (root.size() == 2 && root[1] == L':') {
         root.push_back(L'\\');
       }
-      dir_queue.push({root, 0});
+#ifdef _WIN32
+      DirIdentity root_id{};
+      std::wstring unused_final;
+      if (GetDirectoryIdentityAndFinalPath(root, root_id, unused_final)) {
+        visited_tracker->MarkVisited(root_id);
+      }
+#endif
+      dir_queue.push({std::move(root), 0, t.quota_group, t.restricted_depth});
     }
 
     if (dir_queue.empty()) return false;
@@ -291,7 +722,10 @@ public:
 
         while (true) {
           if (cancel_flag_ && cancel_flag_->load(std::memory_order_relaxed)) {
-            done.store(true);
+            {
+              std::lock_guard<std::mutex> lock(queue_mutex);
+              done.store(true);
+            }
             cv.notify_all();
             break;
           }
@@ -316,38 +750,59 @@ public:
             }
           }
 
-          std::vector<std::wstring> subdirs;
-          if (!done.load(std::memory_order_relaxed)) {
+          std::atomic<size_t>& counter_ref =
+            (quota && current_item.quota_group < quota->group_count && quota->counts)
+              ? quota->counts[current_item.quota_group]
+              : total_collected;
+          const size_t effective_limit =
+            quota ? quota->max_per_group : max_entries_;
+
+          const bool group_already_full =
+            (effective_limit > 0 && counter_ref.load(std::memory_order_relaxed) >= effective_limit);
+
+          std::vector<DiscoveredSubdir> subdirs;
+          if (!done.load(std::memory_order_relaxed) && !group_already_full) {
             ScanSingleDirectory(
               current_item.path,
+              current_item.restricted_depth,
               local_entries,
               subdirs,
-              total_collected,
-              max_entries_,
-              cancel_flag_
+              counter_ref,
+              effective_limit,
+              cancel_flag_,
+              visited_tracker
             );
           }
 
           {
             std::lock_guard<std::mutex> lock(queue_mutex);
-            const bool limit_reached = (max_entries_ > 0 && total_collected.load(std::memory_order_relaxed) >= max_entries_);
             const bool cancelled = (cancel_flag_ && cancel_flag_->load(std::memory_order_relaxed));
+            const bool item_limit_reached =
+              (effective_limit > 0 && counter_ref.load(std::memory_order_relaxed) >= effective_limit);
+            const bool global_limit_reached = (!quota && item_limit_reached);
             const bool depth_allowed = (max_depth_ == 0 || current_item.depth + 1 < max_depth_);
-            if (!limit_reached && !cancelled && depth_allowed) {
-              for (auto& sd : subdirs) {
-                dir_queue.push({std::move(sd), current_item.depth + 1});
+
+            if (!cancelled && !item_limit_reached) {
+              if (depth_allowed) {
+                for (auto& sd : subdirs) {
+                  dir_queue.push({std::move(sd.path), current_item.depth + 1, current_item.quota_group, sd.restricted_depth});
+                }
+              } else if (out_boundary_dirs != nullptr) {
+                for (auto& sd : subdirs) {
+                  out_boundary_dirs->push_back({std::move(sd.path), current_item.quota_group, sd.restricted_depth});
+                }
               }
-            } else if (limit_reached || cancelled) {
+            } else if (cancelled || global_limit_reached) {
+              // 仅在全局取消或非分组模式达到全局配额时清空队列；多盘分组模式下单盘满配额不影响其他盘继续扫
               std::queue<QueueItem> empty;
               std::swap(dir_queue, empty);
             }
+
             active_workers--;
             if (active_workers.load() == 0 && dir_queue.empty()) {
               done.store(true);
-              cv.notify_all();
-            } else {
-              cv.notify_all();
             }
+            cv.notify_all();
           }
         }
       });
@@ -370,64 +825,15 @@ public:
     return true;
   }
 
-private:
-#ifdef _WIN32
-  static bool EqualsIgnoreCase(const wchar_t* a, const wchar_t* b) {
-    return _wcsicmp(a, b) == 0;
-  }
-
-  // 过滤 Windows 隐藏目录、系统底层目录及海量工程缓存目录（如 Windows / AppData / node_modules）
-  static bool ShouldSkipWindowsEntry(const WIN32_FIND_DATAW& find_data) {
-    const wchar_t* name = find_data.cFileName;
-    if (name[0] == L'\0' || name[0] == L'.') {
-      return true;
-    }
-    const DWORD attrs = find_data.dwFileAttributes;
-    if ((attrs & FILE_ATTRIBUTE_HIDDEN) != 0 ||
-        (attrs & FILE_ATTRIBUTE_SYSTEM) != 0 ||
-        (attrs & FILE_ATTRIBUTE_TEMPORARY) != 0) {
-      return true;
-    }
-    if ((attrs & FILE_ATTRIBUTE_DIRECTORY) != 0) {
-      if (EqualsIgnoreCase(name, L"Windows") ||
-          EqualsIgnoreCase(name, L"Windows.old") ||
-          EqualsIgnoreCase(name, L"WinSxS") ||
-          EqualsIgnoreCase(name, L"AppData") ||
-          EqualsIgnoreCase(name, L"ProgramData") ||
-          EqualsIgnoreCase(name, L"Program Files") ||
-          EqualsIgnoreCase(name, L"Program Files (x86)") ||
-          EqualsIgnoreCase(name, L"Windows Kits") ||
-          EqualsIgnoreCase(name, L"Microsoft Shared") ||
-          EqualsIgnoreCase(name, L"SymCache") ||
-          EqualsIgnoreCase(name, L"symbols") ||
-          EqualsIgnoreCase(name, L"PerfLogs") ||
-          EqualsIgnoreCase(name, L"node_modules") ||
-          EqualsIgnoreCase(name, L"__pycache__") ||
-          EqualsIgnoreCase(name, L"target") ||
-          EqualsIgnoreCase(name, L"CMakeFiles") ||
-          EqualsIgnoreCase(name, L"dist") ||
-          EqualsIgnoreCase(name, L"build") ||
-          EqualsIgnoreCase(name, L"coverage") ||
-          EqualsIgnoreCase(name, L"obj") ||
-          EqualsIgnoreCase(name, L"Packages") ||
-          EqualsIgnoreCase(name, L"venv") ||
-          EqualsIgnoreCase(name, L"bower_components") ||
-          EqualsIgnoreCase(name, L"$RECYCLE.BIN") ||
-          EqualsIgnoreCase(name, L"System Volume Information")) {
-        return true;
-      }
-    }
-    return false;
-  }
-#endif
-
   static void ScanSingleDirectory(
     const std::wstring& dir,
+    int current_restricted_depth,
     std::vector<FileEntry>& files,
-    std::vector<std::wstring>& subdirs,
+    std::vector<DiscoveredSubdir>& subdirs,
     std::atomic<size_t>& total_collected,
     size_t max_entries,
-    const std::atomic<bool>* cancel_flag
+    const std::atomic<bool>* cancel_flag,
+    VisitedDirTracker* visited_tracker
   ) {
 #ifdef _WIN32
     const bool has_trailing_slash = !dir.empty() && (dir.back() == L'\\' || dir.back() == L'/');
@@ -444,6 +850,10 @@ private:
 
     if (hFind == INVALID_HANDLE_VALUE) return;
 
+    const DirFilterMode filter_mode = DetectDirFilterMode(dir);
+    bool current_final_path_resolved = false;
+    std::wstring current_final_path;
+
     do {
       if (cancel_flag && cancel_flag->load(std::memory_order_relaxed)) {
         break;
@@ -451,13 +861,15 @@ private:
       if (max_entries > 0 && total_collected.load(std::memory_order_relaxed) >= max_entries) {
         break;
       }
-      if (ShouldSkipWindowsEntry(find_data)) {
+
+      int child_restricted_depth = -1;
+      if (ShouldSkipWindowsEntry(find_data, filter_mode, current_restricted_depth, child_restricted_depth)) {
         continue;
       }
 
       std::wstring filename = find_data.cFileName;
       std::wstring full_path = has_trailing_slash ? (dir + filename) : (dir + L"\\" + filename);
-      bool is_directory = (find_data.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) != 0;
+      const bool is_directory = (find_data.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) != 0;
 
       FileEntry entry;
       entry.name = WideToUtf8(filename);
@@ -470,13 +882,48 @@ private:
       files.push_back(std::move(entry));
       total_collected.fetch_add(1, std::memory_order_relaxed);
 
-      if (is_directory && !(find_data.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT)) {
-        subdirs.push_back(std::move(full_path));
+      bool can_descend = is_directory;
+      if (can_descend && filter_mode == DirFilterMode::Normal &&
+          current_restricted_depth >= kProgramFilesMaxSubdirDepth) {
+        can_descend = false;
+      }
+
+      if (can_descend && (find_data.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT) != 0) {
+        // Bit 29 (0x20000000) 为 Name Surrogate 标志，标识 Junction / Symlink 等可跳转链接；
+        // 非代理类重解析点（如 OneDrive 云按需文件 IO_REPARSE_TAG_CLOUD）直接作为实体目录正常深入
+        const bool is_name_surrogate = (find_data.dwReserved0 & 0x20000000UL) != 0;
+        if (is_name_surrogate) {
+          DirIdentity target_id{};
+          std::wstring target_final_path;
+          if (!GetDirectoryIdentityAndFinalPath(full_path, target_id, target_final_path)) {
+            can_descend = false;
+          } else if (IsBlockedFinalTargetPath(target_final_path)) {
+            can_descend = false;
+          } else {
+            if (!current_final_path_resolved) {
+              DirIdentity self_id{};
+              GetDirectoryIdentityAndFinalPath(dir, self_id, current_final_path);
+              current_final_path_resolved = true;
+            }
+            if (!current_final_path.empty() && !target_final_path.empty() &&
+                IsAncestorOrSamePath(current_final_path, target_final_path)) {
+              can_descend = false;
+            } else if (visited_tracker != nullptr && !visited_tracker->TryMarkVisited(target_id)) {
+              can_descend = false;
+            }
+          }
+        }
+      }
+
+      if (can_descend) {
+        subdirs.push_back({std::move(full_path), child_restricted_depth});
       }
     } while (FindNextFileW(hFind, &find_data));
 
     FindClose(hFind);
 #else
+    (void)current_restricted_depth;
+    (void)visited_tracker;
     std::string dir_utf8 = WideToUtf8(dir);
     if (dir_utf8.empty()) return;
     DIR* dp = opendir(dir_utf8.c_str());
@@ -521,7 +968,7 @@ private:
 
       bool is_app_bundle = name.size() > 4 && name.compare(name.size() - 4, 4, ".app") == 0;
       if (is_directory && !is_symlink && !is_app_bundle) {
-        subdirs.push_back(Utf8ToWide(full_utf8));
+        subdirs.push_back({Utf8ToWide(full_utf8), -1});
       }
     }
     closedir(dp);

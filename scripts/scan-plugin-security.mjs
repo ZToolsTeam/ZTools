@@ -689,6 +689,56 @@ export async function scanCodeSnippet(code, declaredPermissions = []) {
 const UI_GUIDELINES_HINT = '规则说明详见 docs/ui-guidelines.md'
 const COLORFUL_EMOJI_PATTERN = /[\u{1F300}-\u{1FAFF}\u{2600}-\u{27BF}]/u
 const RAINBOW_COLOR_PATTERN = /\b(?:tintColor|color)\s*:\s*Color\.(Blue|Green|Orange|Purple|Yellow|Magenta)\b/
+// 与客户端 shellShortcuts 保持一致：声明式插件内应避让宿主保留热键
+const RESERVED_HOST_SHORTCUTS = new Set(['Ctrl+Shift+P', 'Ctrl+,', 'Ctrl+U', 'Ctrl+K', 'Escape'])
+const STATIC_MOD_MAP = Object.freeze({
+  cmd: 'Ctrl',
+  command: 'Ctrl',
+  meta: 'Ctrl',
+  ctrl: 'Ctrl',
+  control: 'Ctrl',
+  opt: 'Alt',
+  option: 'Alt',
+  alt: 'Alt',
+  shift: 'Shift'
+})
+const STATIC_MOD_ORDER = ['Ctrl', 'Alt', 'Shift']
+
+function normalizeStaticShortcutKey(rawKey) {
+  const trimmed = String(rawKey || '').trim()
+  const lower = trimmed.toLowerCase()
+  if (!lower) return ''
+  if (lower === 'esc' || lower === 'escape') return 'Escape'
+  if (lower === 'return' || lower === 'enter') return 'Enter'
+  if (trimmed.length === 1) return trimmed.toUpperCase()
+  return trimmed.charAt(0).toUpperCase() + trimmed.slice(1)
+}
+
+function normalizeStaticShortcutCombo(modifiers, key) {
+  const mainKey = normalizeStaticShortcutKey(key)
+  if (!mainKey) return ''
+  const modSet = new Set()
+  for (const mod of modifiers) {
+    const mapped = STATIC_MOD_MAP[String(mod).toLowerCase()]
+    if (mapped) modSet.add(mapped)
+  }
+  const ordered = STATIC_MOD_ORDER.filter((m) => modSet.has(m))
+  return [...ordered, mainKey].join('+')
+}
+
+function lineNumberAt(content, index) {
+  let line = 1
+  for (let i = 0; i < index; i++) {
+    if (content.charCodeAt(i) === 10) line += 1
+  }
+  return line
+}
+
+function isCommentLineAt(content, index) {
+  const lineStart = content.lastIndexOf('\n', index) + 1
+  const before = content.slice(lineStart, index).trim()
+  return before.startsWith('//') || before.startsWith('*') || before.startsWith('/*')
+}
 
 export function lintDeclarativeLayout(content, relPath) {
   const warnings = []
@@ -706,6 +756,30 @@ export function lintDeclarativeLayout(content, relPath) {
   })
   if (/searchBarAccessory/.test(content) && /filterBar[\s\S]{0,400}groups\s*:/.test(content)) {
     push('UI_DUPLICATE_FILTER', 1, '已有搜索框右侧下拉筛选时，不应再传 filterBar.groups 胶囊筛选行')
+  }
+  // 静态扫描 Action shortcut 声明，命中宿主保留热键时给出避让 warning
+  const shortcutPattern = /\bshortcut\s*(?::\s*(\{[\s\S]{1,220}?\}|['"][^'"]{1,32}['"])|=\s*\{\s*(\{[\s\S]{1,220}?\})\s*\}|=\s*(['"][^'"]{1,32}['"]))/g
+  for (const match of content.matchAll(shortcutPattern)) {
+    const idx = match.index ?? 0
+    if (isCommentLineAt(content, idx)) continue
+    const objRaw = match[1] || match[2]
+    const strRaw = match[3]
+    let combo = ''
+    if (strRaw || (objRaw && (objRaw.startsWith("'") || objRaw.startsWith('"')))) {
+      const literal = (strRaw || objRaw).slice(1, -1)
+      combo = normalizeStaticShortcutCombo([], literal)
+    } else if (objRaw && objRaw.startsWith('{')) {
+      const keyMatch = /\bkey\s*:\s*(['"])([^'"]+)\1/.exec(objRaw)
+      if (!keyMatch) continue
+      const modsMatch = /\bmodifiers\s*:\s*\[([^\]]*)\]/.exec(objRaw)
+      const mods = modsMatch
+        ? [...modsMatch[1].matchAll(/(['"])([^'"]+)\1/g)].map((m) => m[2])
+        : []
+      combo = normalizeStaticShortcutCombo(mods, keyMatch[2])
+    }
+    if (combo && RESERVED_HOST_SHORTCUTS.has(combo)) {
+      push('UI_RESERVED_SHORTCUT', lineNumberAt(content, idx), `快捷键 ${combo} 为宿主保留热键，请避让`)
+    }
   }
   return warnings
 }

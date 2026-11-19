@@ -212,8 +212,13 @@ test('P01 lan-share: 真实宿主 HTTP 共享同步与异常/敏感文件拦截�
   assert.ok(fileItem)
   assert.equal(fileItem.title, 'report.pdf')
   assert.equal(fileItem.downloadCount, 5)
-  // 严禁混入虚构的 ZTools_Setup_1.1.7_x64.exe
+  // 严禁混入虚构文件，且禁止自动扫描默认目录或偷读剪贴板
   assert.equal(snap.items.some((i) => i.title.includes('ZTools_Setup_1.1.7')), false)
+  assert.equal(snap.items.some((i) => i.category === 'clipboard'), false)
+
+  // 冷启动（无运行服务时）列表应为空 []
+  const coldSnap = await fetchLanShareSnapshot()
+  assert.equal(coldSnap.items.length, 0)
 
   // 添加真实文件到共享队列
   const addRes = await addRealFileToShareQueue('D:\\Share\\notes.txt', hostBridge)

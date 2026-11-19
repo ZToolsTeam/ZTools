@@ -495,65 +495,91 @@ describe('MyPage Component', () => {
       expect(pluginsStore.openPlugin).toHaveBeenCalledWith('plugin-1')
     })
 
-    it('uses Command+P on macOS and does not treat physical Control+P as the pin shortcut', async () => {
-      window.ztools.sys.getInfo.mockResolvedValue({ platform: 'macos' })
-      await mountPage({ installedPlugins: basePlugins })
+    it('uses Command+P on macOS and does not treat physical Control+P as the pin shortcut, and acts on focusedCardIndex', async () => {
+      globalThis.__ZTOOLS_PLATFORM_OVERRIDE__ = 'darwin'
+      try {
+        await mountPage({ installedPlugins: basePlugins })
 
-      wrapper.vm.selectedPlugin = basePlugins[0]
-      const commandEvent = {
-        key: 'p',
-        ctrlKey: false,
-        metaKey: true,
-        preventDefault: vi.fn()
+        // 聚焦索引设为第 2 个插件（plugin-2），不再依赖右键 selectedPlugin
+        wrapper.vm.focusedCardIndex = 1
+        const commandEvent = new KeyboardEvent('keydown', {
+          key: 'p',
+          ctrlKey: false,
+          metaKey: true,
+          bubbles: true,
+          cancelable: true
+        })
+        wrapper.vm.handleKeyDown(commandEvent)
+        await flushPromises()
+
+        expect(commandEvent.defaultPrevented).toBe(true)
+        expect(wrapper.vm.isPinned('plugin-2')).toBe(true)
+        expect(wrapper.vm.isPinned('plugin-1')).toBe(false)
+
+        // macOS 下物理 Control+P 归一化为 Control+P，不会触发固定
+        const controlEvent = new KeyboardEvent('keydown', {
+          key: 'p',
+          ctrlKey: true,
+          metaKey: false,
+          bubbles: true,
+          cancelable: true
+        })
+        wrapper.vm.handleKeyDown(controlEvent)
+        await flushPromises()
+
+        expect(controlEvent.defaultPrevented).toBe(false)
+        expect(wrapper.vm.isPinned('plugin-2')).toBe(true)
+      } finally {
+        delete globalThis.__ZTOOLS_PLATFORM_OVERRIDE__
       }
-      wrapper.vm.handleKeyDown(commandEvent)
-      await flushPromises()
-
-      expect(commandEvent.preventDefault).toHaveBeenCalledOnce()
-      expect(wrapper.vm.isPinned('plugin-1')).toBe(true)
-
-      const controlEvent = {
-        key: 'p',
-        ctrlKey: true,
-        metaKey: false,
-        preventDefault: vi.fn()
-      }
-      wrapper.vm.handleKeyDown(controlEvent)
-      await flushPromises()
-
-      expect(controlEvent.preventDefault).not.toHaveBeenCalled()
-      expect(wrapper.vm.isPinned('plugin-1')).toBe(true)
     })
 
-    it('does not guess the platform-specific pin modifier when host detection is unknown', async () => {
-      window.ztools.sys.getInfo.mockResolvedValue({ platform: 'unknown' })
+    it('ignores handleKeyDown while IME is composing', async () => {
       await mountPage({ installedPlugins: basePlugins })
 
-      wrapper.vm.selectedPlugin = basePlugins[0]
-      const event = {
+      wrapper.vm.focusedCardIndex = 0
+      const composingPin = new KeyboardEvent('keydown', {
         key: 'p',
         ctrlKey: true,
-        metaKey: false,
-        preventDefault: vi.fn()
-      }
-      wrapper.vm.handleKeyDown(event)
+        isComposing: true,
+        bubbles: true,
+        cancelable: true
+      })
+      wrapper.vm.handleKeyDown(composingPin)
       await flushPromises()
 
-      expect(event.preventDefault).not.toHaveBeenCalled()
+      expect(composingPin.defaultPrevented).toBe(false)
       expect(wrapper.vm.isPinned('plugin-1')).toBe(false)
     })
 
-    it('confirms uninstall on delete', async () => {
+    it('does not trigger uninstall on bare Delete key press; uninstall remains accessible via context menu', async () => {
       await mountPage({ installedPlugins: basePlugins })
 
+      wrapper.vm.focusedCardIndex = 0
       wrapper.vm.selectedPlugin = basePlugins[0]
-      wrapper.vm.handleKeyDown({
-        key: 'Delete',
-        ctrlKey: false,
-        preventDefault: vi.fn()
-      })
+      Modal.confirm.mockClear()
 
-      expect(Modal.confirm).toHaveBeenCalled()
+      const delEvt = new KeyboardEvent('keydown', {
+        key: 'Delete',
+        bubbles: true,
+        cancelable: true
+      })
+      wrapper.vm.handleKeyDown(delEvt)
+      window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Delete', bubbles: true, cancelable: true }))
+      await flushPromises()
+
+      expect(delEvt.defaultPrevented).toBe(false)
+      expect(Modal.confirm).not.toHaveBeenCalled()
+      expect(pluginsStore.uninstallPlugin).not.toHaveBeenCalled()
+
+      // 通过右键操作菜单主动点击「卸载」仍可正常触发确认卸载
+      wrapper.vm.showPluginMenu(basePlugins[0], { preventDefault() {}, clientX: 10, clientY: 10 })
+      await flushPromises()
+      const dangerItem = wrapper.find('.context-menu .menu-item.danger')
+      expect(dangerItem.exists()).toBe(true)
+      await dangerItem.trigger('click')
+      await flushPromises()
+      expect(Modal.confirm).toHaveBeenCalledTimes(1)
       expect(pluginsStore.uninstallPlugin).toHaveBeenCalledWith('plugin-1')
     })
 
@@ -578,30 +604,19 @@ describe('MyPage Component', () => {
       expect(toastSpies.toastSuccess).not.toHaveBeenCalled()
     })
 
-    it('内置插件：右键菜单提供卸载并直接跳转设置页；按键盘 Delete 弹出防误触确认框，取消不跳转、确认后跳转设置页', async () => {
+    it('内置插件：右键菜单提供卸载并直接跳转设置页；裸按键盘 Delete 不再误触发弹窗', async () => {
       const bundled = { pluginId: 'calculator', name: '计算器' }
       await mountPage({ installedPlugins: [...basePlugins, bundled] })
       Modal.confirm.mockClear()
 
-      let capturedModalOpts = null
-      modalConfirmSpy.mockImplementationOnce((opts) => {
-        capturedModalOpts = opts
-      })
+      wrapper.vm.focusedCardIndex = basePlugins.length
       wrapper.vm.selectedPlugin = bundled
-      wrapper.vm.handleKeyDown({ key: 'Delete', ctrlKey: false, preventDefault: vi.fn() })
+      wrapper.vm.handleKeyDown(new KeyboardEvent('keydown', { key: 'Delete', bubbles: true, cancelable: true }))
       await flushPromises()
-      expect(Modal.confirm).toHaveBeenCalledTimes(1)
-      expect(capturedModalOpts?.title).toBe('前往设置管理内置插件')
+      expect(Modal.confirm).not.toHaveBeenCalled()
       expect(pluginsStore.uninstallPlugin).not.toHaveBeenCalled()
       expect(router.currentRoute.value.name).toBe('home')
 
-      capturedModalOpts?.onOk?.()
-      await flushPromises()
-      expect(router.currentRoute.value.name).toBe('advanced-settings')
-      expect(router.currentRoute.value.query.manageBundled).toBe('calculator')
-
-      await router.push('/')
-      Modal.confirm.mockClear()
       wrapper.vm.showPluginMenu(bundled, { preventDefault() {}, clientX: 10, clientY: 10 })
       await flushPromises()
       expect(wrapper.find('.context-menu').exists()).toBe(true)
@@ -1172,6 +1187,220 @@ describe('MyPage Component', () => {
       expect(pushSpy).toHaveBeenCalledWith(
         expect.objectContaining({ name: 'details', params: { pluginId: 'remote-fav' } })
       )
+    })
+  })
+
+  describe('[P1-#4] ResizeObserver 防抖、防循环与成对卸载清理', () => {
+    let computedStyleSpy
+    let currentGridColumnsCss
+    let gridMeasureCalls
+    let observerInstances
+    let rafQueue
+    let rafIdSeq
+    let rafMock
+    let cancelRafMock
+
+    function setupResizeAndRafHarness(initialColumnsCss = '1fr 1fr 1fr 1fr 1fr') {
+      currentGridColumnsCss = initialColumnsCss
+      gridMeasureCalls = 0
+      observerInstances = []
+      rafQueue = new Map()
+      rafIdSeq = 0
+
+      class MockResizeObserver {
+        constructor(callback) {
+          this.callback = callback
+          this.observedTargets = []
+          this.observe = vi.fn((el) => {
+            this.observedTargets.push(el)
+          })
+          this.unobserve = vi.fn((el) => {
+            this.observedTargets = this.observedTargets.filter((item) => item !== el)
+          })
+          this.disconnect = vi.fn(() => {
+            this.observedTargets = []
+          })
+          observerInstances.push(this)
+        }
+      }
+
+      rafMock = vi.fn((cb) => {
+        const id = ++rafIdSeq
+        rafQueue.set(id, cb)
+        return id
+      })
+      cancelRafMock = vi.fn((id) => {
+        rafQueue.delete(id)
+      })
+
+      vi.stubGlobal('ResizeObserver', MockResizeObserver)
+      vi.stubGlobal('requestAnimationFrame', rafMock)
+      vi.stubGlobal('cancelAnimationFrame', cancelRafMock)
+
+      const originalGetComputedStyle = window.getComputedStyle.bind(window)
+      computedStyleSpy = vi.spyOn(window, 'getComputedStyle').mockImplementation((el, pseudo) => {
+        if (el?.classList?.contains('plugin-tile-grid')) {
+          gridMeasureCalls += 1
+          return { gridTemplateColumns: currentGridColumnsCss }
+        }
+        return originalGetComputedStyle(el, pseudo)
+      })
+    }
+
+    function flushAnimationFrames() {
+      const entries = [...rafQueue.entries()]
+      rafQueue.clear()
+      for (const [, cb] of entries) {
+        cb(performance.now())
+      }
+    }
+
+    afterEach(() => {
+      computedStyleSpy?.mockRestore()
+      computedStyleSpy = null
+      vi.unstubAllGlobals()
+    })
+
+    it('连续多次宽度相同（如仅高度变化或亚像素抖动）触发 ResizeObserver 不重复调度计算，且组件 patch 不重建观察器', async () => {
+      setupResizeAndRafHarness('1fr 1fr 1fr 1fr 1fr')
+      const many = Array.from({ length: 12 }, (_, i) => ({
+        pluginId: `ro-${i}`,
+        name: `RO 插件 ${i}`
+      }))
+      await mountPage({ installedPlugins: many })
+
+      expect(observerInstances).toHaveLength(1)
+      const observer = observerInstances[0]
+      expect(observer.observe).toHaveBeenCalledTimes(1)
+      const bodyEl = wrapper.find('.my-plugins-body').element
+      expect(observer.observe).toHaveBeenCalledWith(bodyEl)
+
+      // 重置初始同步测量计数
+      rafMock.mockClear()
+      gridMeasureCalls = 0
+
+      // 首次收到宽 800：记录基准宽度并调度 1 次 rAF
+      observer.callback([{ target: bodyEl, contentRect: { width: 800, height: 240 } }])
+      expect(rafMock).toHaveBeenCalledTimes(1)
+      flushAnimationFrames()
+      await flushPromises()
+      expect(gridMeasureCalls).toBe(1)
+
+      // 连续 3 次同宽度（高度变化及 < 0.5px 亚像素抖动）：全部短路，不触发 rAF 也不重算
+      rafMock.mockClear()
+      gridMeasureCalls = 0
+      observer.callback([{ target: bodyEl, contentRect: { width: 800, height: 360 } }])
+      observer.callback([{ target: bodyEl, contentRect: { width: 800, height: 520 } }])
+      observer.callback([{ target: bodyEl, contentRect: { width: 800.3, height: 520 } }])
+      expect(rafMock).not.toHaveBeenCalled()
+      expect(gridMeasureCalls).toBe(0)
+
+      // 触发组件多次 patch（展开全部、切换标签）：ResizeObserver 仍为同一个实例且未 disconnect 重建
+      wrapper.vm.showAllPlugins = true
+      await flushPromises()
+      wrapper.vm.activeTab = 'favorites'
+      await flushPromises()
+      expect(observerInstances).toHaveLength(1)
+      expect(observer.disconnect).not.toHaveBeenCalled()
+      expect(observer.observe).toHaveBeenCalledTimes(1)
+    })
+
+    it('宽度变化时先取消重复帧再经 rAF 异步更新列数，且仅当列数真正变化时才更新状态', async () => {
+      setupResizeAndRafHarness('1fr 1fr 1fr 1fr 1fr')
+      const many = Array.from({ length: 12 }, (_, i) => ({
+        pluginId: `ro-col-${i}`,
+        name: `列数插件 ${i}`
+      }))
+      await mountPage({ installedPlugins: many })
+      const observer = observerInstances[0]
+      const bodyEl = wrapper.find('.my-plugins-body').element
+
+      // 确立初始宽度 800
+      observer.callback([{ target: bodyEl, contentRect: { width: 800, height: 240 } }])
+      flushAnimationFrames()
+      await flushPromises()
+      expect(wrapper.vm.gridColumns).toBe(5)
+
+      rafMock.mockClear()
+      cancelRafMock.mockClear()
+
+      // 宽度变化到 1040 与 1120（连续两帧挤压）：去重仅留最后 1 次 rAF，且在 rAF 触发前不修改 gridColumns
+      currentGridColumnsCss = '1fr 1fr 1fr 1fr 1fr 1fr'
+      observer.callback([{ target: bodyEl, contentRect: { width: 1040, height: 240 } }])
+      expect(rafMock).toHaveBeenCalledTimes(1)
+      expect(wrapper.vm.gridColumns).toBe(5)
+
+      observer.callback([{ target: bodyEl, contentRect: { width: 1120, height: 240 } }])
+      expect(cancelRafMock).toHaveBeenCalledTimes(1)
+      expect(rafMock).toHaveBeenCalledTimes(2)
+      expect(rafQueue.size).toBe(1)
+      expect(wrapper.vm.gridColumns).toBe(5)
+
+      // 刷新 rAF：异步更新为 6 列并反映到卡片属性
+      flushAnimationFrames()
+      await flushPromises()
+      expect(wrapper.vm.gridColumns).toBe(6)
+      expect(wrapper.find('.draggable-card').attributes('data-nav-cols')).toBe('6')
+    })
+
+    it('冷启动 loading 结束挂载容器时自动接入同一 ResizeObserver；卸载时成对 disconnect 并 cancelAnimationFrame', async () => {
+      setupResizeAndRafHarness('1fr 1fr 1fr 1fr 1fr')
+      const pendingConfigResolvers = []
+      configValues = {
+        'plugins.favorites': '[]',
+        'plugins.recents': '[]',
+        'my-page.pinned': '[]',
+        'my-page.recent-order': '[]',
+        'my-page.drag-tip-shown': ''
+      }
+      window.ztools.config.get = vi.fn(
+        () =>
+          new Promise((resolve) => {
+            pendingConfigResolvers.push(resolve)
+          })
+      )
+      router = createTestRouter()
+      await router.push('/')
+      await router.isReady()
+      pluginsStore.$patch({
+        installedSet: new Set(basePlugins.map((p) => p.pluginId)),
+        installedPlugins: basePlugins
+      })
+
+      wrapper = mount(MyPage, {
+        ...mountOptions,
+        global: { ...mountOptions.global, plugins: [router] }
+      })
+      await flushPromises()
+
+      // loading 期间容器尚未出现，只创建了观察器但尚未 observe
+      expect(observerInstances).toHaveLength(1)
+      const observer = observerInstances[0]
+      expect(observer.observe).not.toHaveBeenCalled()
+
+      // loading 完成渲染 .my-plugins-body 后，同一个观察器自动挂载 observe
+      for (const resolve of pendingConfigResolvers) {
+        resolve('[]')
+      }
+      await flushPromises()
+      expect(wrapper.find('.my-plugins-body').exists()).toBe(true)
+      expect(observerInstances).toHaveLength(1)
+      expect(observer.observe).toHaveBeenCalledTimes(1)
+      const bodyEl = wrapper.find('.my-plugins-body').element
+      expect(observer.observe).toHaveBeenCalledWith(bodyEl)
+
+      // 调度一次尚未执行的 rAF，然后卸载组件
+      currentGridColumnsCss = '1fr 1fr 1fr 1fr'
+      observer.callback([{ target: bodyEl, contentRect: { width: 640, height: 240 } }])
+      expect(rafQueue.size).toBe(1)
+      const pendingId = [...rafQueue.keys()][0]
+
+      wrapper.unmount()
+      wrapper = null
+
+      expect(observer.disconnect).toHaveBeenCalledTimes(1)
+      expect(cancelRafMock).toHaveBeenCalledWith(pendingId)
+      expect(rafQueue.size).toBe(0)
     })
   })
 

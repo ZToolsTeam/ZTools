@@ -1,4 +1,9 @@
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, beforeEach, afterEach } from 'vitest'
+import { defineComponent, h, ref, nextTick } from 'vue'
+import { mount } from '@vue/test-utils'
+import { List, Action } from '@ztools/declarative-ui'
+import DeclarativeView from '../DeclarativeView.vue'
+import { resolveActionTitle } from '../uiText.js'
 import { filterIncomingFiles, normalizeAllowedExtension } from '../fileInputFilter.js'
 
 describe('声明式视图文件输入过滤', () => {
@@ -49,5 +54,64 @@ describe('声明式视图文件输入过滤', () => {
     expect(normalizeAllowedExtension(' .Jpg ')).toBe('.jpg')
     expect(normalizeAllowedExtension('')).toBe('')
     expect(normalizeAllowedExtension(undefined)).toBe('')
+  })
+})
+
+describe('DeclarativeView 文件拦截所有权与内置动作默认标题', () => {
+  const prevElectron = globalThis.window?.__ztoolsElectron
+
+  beforeEach(() => {
+    globalThis.__ZTOOLS_PLATFORM_OVERRIDE__ = 'win32'
+  })
+
+  afterEach(() => {
+    delete globalThis.__ZTOOLS_PLATFORM_OVERRIDE__
+    if (globalThis.window) {
+      globalThis.window.__ztoolsElectron = prevElectron
+    }
+  })
+
+  it('同窗口同步切换插件实例时，旧实例卸载不会把新实例开启的文件夹拖拽拦截覆盖为 false', async () => {
+    const calls = []
+    globalThis.window.__ztoolsElectron = {
+      setFileInputInterception: (cfg) => calls.push(cfg)
+    }
+
+    const PluginA = () => List({ fileInput: { allowDirectories: true }, onFileInput: () => {} }, [])
+    const PluginB = () => List({ fileInput: { allowDirectories: true }, onFileInput: () => {} }, [])
+    const activeKey = ref('plugin-a')
+
+    const Host = defineComponent({
+      setup() {
+        return () =>
+          h(DeclarativeView, {
+            key: activeKey.value,
+            rootComponent: activeKey.value === 'plugin-a' ? PluginA : PluginB
+          })
+      }
+    })
+
+    const wrapper = mount(Host, { attachTo: document.body })
+    await nextTick()
+    expect(calls[calls.length - 1]).toEqual({ enabled: true, allowImage: false, allowDirectories: true })
+
+    // 同步切换 key：复现从缓存加载插件 B 替换插件 A 时 onUnmounted 晚于新组件 setup 执行的真实场景
+    activeKey.value = 'plugin-b'
+    await nextTick()
+    await nextTick()
+
+    expect(calls[calls.length - 1]).toEqual({ enabled: true, allowImage: false, allowDirectories: true })
+
+    // 彻底离开声明式视图后才复位为关闭状态
+    wrapper.unmount()
+    await nextTick()
+    expect(calls[calls.length - 1]).toEqual({ enabled: false, allowImage: false, allowDirectories: false })
+  })
+
+  it('resolveActionTitle：未显式传 title 时为内置动作类型生成规范中文名称', () => {
+    expect(resolveActionTitle(Action.ShowInFinder({ path: 'D:\\a.png' }), false)).toBe('在资源管理器中显示')
+    expect(resolveActionTitle(Action.ShowInFinder({ path: '/tmp/a.png' }), true)).toBe('在访达中显示')
+    expect(resolveActionTitle(Action.ShowInFinder({ path: 'D:\\a.png', title: '定位原图' }), false)).toBe('定位原图')
+    expect(resolveActionTitle(Action.CopyToClipboard({ content: 'x' }), false)).toBe('复制到剪贴板')
   })
 })

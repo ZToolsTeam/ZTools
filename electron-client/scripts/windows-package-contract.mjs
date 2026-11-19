@@ -20,6 +20,12 @@ export const WINDOWS_ONNXRUNTIME_WEB_VERSION = ONNXRUNTIME_WEB_VERSION
 export const OCR_MODEL_RESOURCE_DIRECTORY = 'resources/ocr'
 const PATH_ACCESS_BROKER_NAME = 'ZToolsPathAccessBroker.exe'
 const PATH_ACCESS_BROKER_RESOURCE_PATH = 'resources/native/ZToolsPathAccessBroker.exe'
+/** Windows 原生侧车可执行文件列表（编译输出位于 out/native/win32-x64/bin，打包位于 resources/native） */
+export const WINDOWS_NATIVE_SIDECARS = Object.freeze([
+  'ztools-indexer.exe',
+  'ztools-uiaccess.exe',
+  'ztools-uiaccess-standard.exe'
+])
 
 const ignoredWindowsPackagingPaths = [
   // 顶层只放行运行需要的 package.json、node_modules、out，其余一律排除：
@@ -194,4 +200,76 @@ export function verifyWindowsPathAccessBrokerDependency({ sdkContractVersion, de
   assertPeMachine(expectedFile, PE_MACHINE_X64, 'ZToolsPathAccessBroker')
   if (sha256(expectedFile) !== dependency.sha256) throw new Error('PathAccessBroker SHA-256 与 manifest 不一致')
   return { available: true, referenceRuntimeAvailable: sdkContractVersion >= 2, sdkContractVersion, file: expectedFile }
+}
+
+function assertControlledPath(fileSystem, targetPath, kind, label) {
+  let stats
+  try {
+    stats = fileSystem.lstatSync(targetPath)
+  } catch (error) {
+    if (error && typeof error === 'object' && error.code === 'ENOENT') {
+      throw new Error(`${label}不存在: ${targetPath}`)
+    }
+    throw error
+  }
+  const matchesKind = kind === 'dir' ? stats.isDirectory() : stats.isFile()
+  if (!matchesKind || stats.isSymbolicLink()) {
+    throw new Error(`${label}不是受控普通${kind === 'dir' ? '目录' : '文件'}: ${targetPath}`)
+  }
+  const canonical = path.resolve(fileSystem.realpathSync(targetPath))
+  const requested = path.resolve(targetPath)
+  if (!samePath(canonical, requested)) {
+    throw new Error(`${label}经过非受控链接: ${targetPath}`)
+  }
+  return requested
+}
+
+/** 校验并返回 Windows 原生侧车构建源路径（缺失或非 x64 PE 直接失败） */
+export function resolveWindowsNativeSidecarSources(clientRoot, fsApi = fs) {
+  if (typeof clientRoot !== 'string' || !clientRoot.trim()) {
+    throw new Error('clientRoot 不能为空')
+  }
+  const binDir = path.join(path.resolve(clientRoot), 'out', 'native', 'win32-x64', 'bin')
+  return WINDOWS_NATIVE_SIDECARS.map((name) => {
+    const sourcePath = path.join(binDir, name)
+    let resolved
+    try {
+      resolved = assertControlledPath(fsApi, sourcePath, 'file', `原生侧车 ${name}`)
+    } catch (error) {
+      const msg = error instanceof Error ? error.message : String(error)
+      throw new Error(`${msg}，请先运行 npm run build:native:sidecars`)
+    }
+    assertPeMachine(resolved, PE_MACHINE_X64, name)
+    return { name, sourcePath: resolved }
+  })
+}
+
+/** 将已校验的 Windows x64 原生侧车复制进打包应用目录 resources/native/ */
+export function stageWindowsNativeSidecars({ clientRoot, resourcesNativeDirectory, fsApi = fs }) {
+  const destDir = assertControlledPath(fsApi, resourcesNativeDirectory, 'dir', 'Windows native 资源目录')
+  const sources = resolveWindowsNativeSidecarSources(clientRoot, fsApi)
+  return sources.map(({ name, sourcePath }) => {
+    const destination = path.join(destDir, name)
+    fsApi.copyFileSync(sourcePath, destination, fs.constants.COPYFILE_EXCL)
+    return destination
+  })
+}
+
+/** 校验应用包内的 Windows 原生侧车位置唯一、非链接且为 x64 PE */
+export function verifyWindowsNativeSidecars({ applicationRoot, sidecarFilesByName, fsApi = fs }) {
+  if (!(sidecarFilesByName instanceof Map)) {
+    throw new Error('sidecarFilesByName 必须为 Map')
+  }
+  const verified = []
+  for (const name of WINDOWS_NATIVE_SIDECARS) {
+    const expectedFile = path.resolve(applicationRoot, 'resources', 'native', name)
+    const matchedFiles = sidecarFilesByName.get(name) ?? []
+    if (matchedFiles.length !== 1 || !samePath(matchedFiles[0], expectedFile)) {
+      throw new Error(`原生侧车 ${name} 打包位置或数量无效（预期仅位于 resources/native/${name}）`)
+    }
+    const resolved = assertControlledPath(fsApi, expectedFile, 'file', `打包产物侧车 ${name}`)
+    assertPeMachine(resolved, PE_MACHINE_X64, name)
+    verified.push(resolved)
+  }
+  return verified
 }

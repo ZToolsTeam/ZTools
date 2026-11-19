@@ -4,14 +4,18 @@ import type { CallerIdentity } from '../../src/contracts/capabilities.js'
 import { errorCodes, ZToolsError } from '../../src/contracts/errors.js'
 import {
   type KeyboardDoubleTapAdapter,
+  type MouseTriggerAdapter,
+  normalizedAccelerator,
   TriggerService,
   type GlobalShortcutAdapter,
   type TriggerDocumentStore
 } from '../../src/main/services/trigger-service.js'
+import { getGlobalHotkeyBlacklistReason } from '../../src/contracts/hotkey-rules.js'
 import type {
   NativeHostLifecycleEvent,
   NativeInputEvent,
-  NativeKeyboardModifier
+  NativeKeyboardModifier,
+  NativeMouseTriggerConfig
 } from '../../src/main/native-host/native-host-client.js'
 import type { JsonObject } from '../../src/main/services/json-file-store.js'
 import type { PluginStateProvider } from '../../src/main/services/plugin-state-service.js'
@@ -54,6 +58,10 @@ class FakeShortcuts implements GlobalShortcutAdapter {
     this.callbacks.delete(accelerator.toLowerCase())
   }
 
+  isRegistered(accelerator: string): boolean {
+    return this.callbacks.has(accelerator.toLowerCase())
+  }
+
   fire(accelerator: string): void {
     this.callbacks.get(accelerator.toLowerCase())?.()
   }
@@ -61,11 +69,44 @@ class FakeShortcuts implements GlobalShortcutAdapter {
 
 class FakeKeyboard implements KeyboardDoubleTapAdapter {
   readonly configurations: NativeKeyboardModifier[][] = []
+  readonly fullscreenDndFlags: boolean[] = []
   readonly inputListeners = new Set<(event: NativeInputEvent) => void>()
   readonly lifecycleListeners = new Set<(event: NativeHostLifecycleEvent) => void>()
 
-  async configureKeyboardDoubleTap(modifiers: readonly NativeKeyboardModifier[]): Promise<void> {
+  async configureKeyboardDoubleTap(
+    modifiers: readonly NativeKeyboardModifier[],
+    fullscreenDnd = true
+  ): Promise<void> {
     this.configurations.push([...modifiers])
+    this.fullscreenDndFlags.push(fullscreenDnd)
+  }
+
+  onInputEvent(listener: (event: NativeInputEvent) => void): () => void {
+    this.inputListeners.add(listener)
+    return () => this.inputListeners.delete(listener)
+  }
+
+  onLifecycleEvent(listener: (event: NativeHostLifecycleEvent) => void): () => void {
+    this.lifecycleListeners.add(listener)
+    return () => this.lifecycleListeners.delete(listener)
+  }
+
+  emit(event: NativeInputEvent): void {
+    for (const listener of this.inputListeners) listener(event)
+  }
+
+  emitLifecycle(event: NativeHostLifecycleEvent): void {
+    for (const listener of this.lifecycleListeners) listener(event)
+  }
+}
+
+class FakeMouse implements MouseTriggerAdapter {
+  readonly configurations: Array<NativeMouseTriggerConfig | null> = []
+  readonly inputListeners = new Set<(event: NativeInputEvent) => void>()
+  readonly lifecycleListeners = new Set<(event: NativeHostLifecycleEvent) => void>()
+
+  async configureMouseTrigger(config: NativeMouseTriggerConfig | null): Promise<void> {
+    this.configurations.push(config ? { ...config } : null)
   }
 
   onInputEvent(listener: (event: NativeInputEvent) => void): () => void {
@@ -94,12 +135,10 @@ function createService(store = new MemoryStore(), keyboard?: FakeKeyboard): {
   keyboard: FakeKeyboard | undefined
   events: Array<{ type: string; payload: unknown }>
   toggles: { count: number }
-  localAppLaunches: string[]
 } {
   const shortcuts = new FakeShortcuts()
   const events: Array<{ type: string; payload: unknown }> = []
   const toggles = { count: 0 }
-  const localAppLaunches: string[] = []
   const service = new TriggerService({
     dataRoot: 'unused-in-memory-store',
     store,
@@ -112,10 +151,9 @@ function createService(store = new MemoryStore(), keyboard?: FakeKeyboard): {
     },
     toggleMainWindow: () => { toggles.count += 1 },
     openPlugin: async () => undefined,
-    launchLocalApp: async (appId) => { localAppLaunches.push(appId) },
     ...(keyboard ? { keyboard } : {})
   })
-  return { service, store, shortcuts, keyboard, events, toggles, localAppLaunches }
+  return { service, store, shortcuts, keyboard, events, toggles }
 }
 
 function flatTrigger(overrides: Record<string, unknown> = {}): Record<string, unknown> {
@@ -267,56 +305,101 @@ test('registers flat and nested actions, persists nested Delphi-compatible JSON 
   await service.stop()
 })
 
-test('registers and reloads a Windows local-app hotkey through the ID-only Main port', async () => {
-  const appId = 'localapp:1234ABCD'
-  const first = createService()
-  await first.service.register(flatTrigger({
-    id: 'local_app_hotkey',
-    pluginId: appId,
-    config: { key: 'Ctrl+Alt+L' },
-    actionMode: 'builtin',
-    actionTarget: 'launch_local_app',
-    actionParams: { appId }
-  }) as never, mainCaller)
-
-  const persisted = (first.store.document.triggers as Array<Record<string, unknown>>)[0]
-  assert.ok(persisted)
-  assert.deepEqual(persisted.action, {
-    mode: 'builtin',
-    target: 'launch_local_app',
-    params: { appId }
+test('历史 triggers.json 含遗留 launch_local_app / localapp:* 触发器时，启动正常跳过并清理，且插件与全局唤醒热键不受影响', async () => {
+  const openedPlugins: Array<{ pluginId: string; payload?: Record<string, unknown> }> = []
+  const shortcuts = new FakeShortcuts()
+  const events: Array<{ type: string; payload: unknown }> = []
+  let toggleCount = 0
+  const store = new MemoryStore({
+    preserved: 'root-field',
+    triggers: [
+      {
+        id: 'legacy_nested_local_app',
+        pluginId: 'localapp:1234ABCD',
+        type: 'hotkey',
+        enabled: true,
+        config: { key: 'Ctrl+Alt+L' },
+        action: { mode: 'builtin', target: 'launch_local_app', params: { appId: 'localapp:1234ABCD' } }
+      },
+      {
+        id: 'legacy_flat_local_app',
+        pluginId: 'localapp:EFEF9999',
+        type: 'hotkey',
+        enabled: true,
+        config: { key: 'Ctrl+Alt+M' },
+        actionMode: 'builtin',
+        actionTarget: 'launch_local_app',
+        actionParams: { appId: 'localapp:EFEF9999' }
+      },
+      flatTrigger(),
+      {
+        id: 'plugin_window_hotkey',
+        pluginId: 'plugin.demo',
+        type: 'hotkey',
+        enabled: true,
+        config: { key: 'Ctrl+Alt+D' },
+        action: { mode: 'window', target: 'plugin.demo', params: { from: 'hotkey' } }
+      }
+    ]
   })
-  assert.equal(first.shortcuts.callbacks.has('ctrl+alt+l'), true)
-  first.shortcuts.fire('Ctrl+Alt+L')
-  assert.deepEqual(first.localAppLaunches, [appId])
-  await first.service.stop()
-  assert.equal(first.shortcuts.callbacks.size, 0)
 
-  const restarted = createService(first.store)
-  const listed = await restarted.service.list({ pluginId: '' }, mainCaller)
-  assert.equal(listed.data[0]?.effectiveEnabled, true)
-  assert.equal(restarted.shortcuts.callbacks.has('ctrl+alt+l'), true)
-  restarted.shortcuts.fire('Ctrl+Alt+L')
-  assert.deepEqual(restarted.localAppLaunches, [appId])
-  await restarted.service.stop()
-  assert.equal(restarted.shortcuts.callbacks.size, 0)
+  const service = new TriggerService({
+    dataRoot: 'unused-in-memory-store',
+    store,
+    shortcuts,
+    events: {
+      publishHost(type, payload) {
+        events.push({ type, payload })
+        return { success: true, delivered: 1 }
+      }
+    },
+    toggleMainWindow: () => { toggleCount += 1 },
+    openPlugin: async (params) => { openedPlugins.push(params) }
+  })
+
+  const listed = await service.list({ pluginId: '' }, mainCaller)
+  assert.deepEqual(listed.data.map((item) => item.id), ['global_wake_hotkey', 'plugin_window_hotkey'])
+  assert.equal(events.some((item) => item.type === 'trigger_config_invalid'), false)
+  assert.equal(shortcuts.callbacks.has('ctrl+alt+l'), false)
+  assert.equal(shortcuts.callbacks.has('ctrl+alt+m'), false)
+  assert.equal(shortcuts.callbacks.has('ctrl+shift+z'), true)
+  assert.equal(shortcuts.callbacks.has('ctrl+alt+d'), true)
+
+  // 插件热键与全局唤醒热键正常触发
+  shortcuts.fire('Ctrl+Shift+Z')
+  shortcuts.fire('Ctrl+Alt+D')
+  await new Promise<void>((resolve) => setImmediate(resolve))
+  assert.equal(toggleCount, 1)
+  assert.deepEqual(openedPlugins, [{ pluginId: 'plugin.demo', payload: { from: 'hotkey' } }])
+
+  // 旧本地软件占用的组合键可被插件自由重新绑定，无残留冲突
+  const conflict = await service.checkConflict({ key: 'Ctrl+Alt+L', pluginId: 'plugin.demo' }, mainCaller)
+  assert.equal(conflict.data.hasConflict, false)
+
+  // 磁盘文档已自动清理两项遗留 localapp 触发器
+  const persisted = store.document.triggers as Array<Record<string, unknown>>
+  assert.deepEqual(persisted.map((item) => item.id), ['global_wake_hotkey', 'plugin_window_hotkey'])
+  assert.equal(store.document.preserved, 'root-field')
+
+  await service.stop()
 })
 
-test('rejects local-app action paths, Mac IDs, extra parameters, and mismatched owners', async () => {
+test('拒绝注册已下线的 launch_local_app 动作（主窗口与插件调用方均拦截）', async () => {
   const { service, shortcuts, store } = createService()
-  const invalidActions = [
-    { pluginId: 'localapp:1234ABCD', actionParams: { appId: 'C:\\Apps\\Editor.exe' } },
-    { pluginId: 'localapp:mac:0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF', actionParams: {
-      appId: 'localapp:mac:0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF'
-    } },
-    { pluginId: 'localapp:1234ABCD', actionParams: { appId: 'localapp:1234ABCD', path: 'C:\\Apps\\Editor.exe' } },
-    { pluginId: 'plugin.one', actionParams: { appId: 'localapp:1234ABCD' } }
-  ]
+  const pluginCaller: CallerIdentity = {
+    type: 'plugin',
+    webContentsId: 2,
+    pluginId: 'plugin.one'
+  }
 
-  for (const [index, override] of invalidActions.entries()) {
+  for (const [index, override] of [
+    { pluginId: 'localapp:1234ABCD', actionParams: { appId: 'localapp:1234ABCD' } },
+    { pluginId: 'system', actionParams: { appId: 'localapp:1234ABCD' } },
+    { pluginId: 'plugin.one', actionParams: {} }
+  ].entries()) {
     await assert.rejects(
       service.register(flatTrigger({
-        id: `invalid_local_app_${index}`,
+        id: `rejected_local_app_${index}`,
         config: { key: `Ctrl+Alt+F${index + 1}` },
         actionMode: 'builtin',
         actionTarget: 'launch_local_app',
@@ -325,78 +408,21 @@ test('rejects local-app action paths, Mac IDs, extra parameters, and mismatched 
       (error) => error instanceof ZToolsError && error.code === errorCodes.notSupported
     )
   }
-  assert.equal(shortcuts.callbacks.size, 0)
-  assert.equal(store.document.triggers, undefined)
-  await service.stop()
-})
-
-test('does not register a local-app action without the Main ID lookup port', async () => {
-  const appId = 'localapp:1234ABCD'
-  const store = new MemoryStore()
-  const shortcuts = new FakeShortcuts()
-  const service = new TriggerService({
-    dataRoot: 'unused-in-memory-store',
-    store,
-    shortcuts,
-    events: { publishHost: () => ({ success: true, delivered: 0 }) },
-    toggleMainWindow: () => undefined,
-    openPlugin: async () => undefined
-  })
 
   await assert.rejects(
     service.register(flatTrigger({
-      id: 'local_app_without_port',
-      pluginId: appId,
-      actionMode: 'builtin',
-      actionTarget: 'launch_local_app',
-      actionParams: { appId }
-    }) as never, mainCaller),
-    (error) => error instanceof ZToolsError && error.code === errorCodes.notSupported
-  )
-  assert.equal(shortcuts.callbacks.size, 0)
-  assert.equal(store.document.triggers, undefined)
-  await service.stop()
-})
-
-test('does not let a plugin caller impersonate a local-app trigger owner', async () => {
-  const { service } = createService()
-  const appId = 'localapp:1234ABCD'
-  const pluginCaller: CallerIdentity = {
-    type: 'plugin',
-    webContentsId: 2,
-    pluginId: 'plugin.one'
-  }
-
-  await assert.rejects(
-    service.list({ pluginId: appId }, pluginCaller),
-    (error) => error instanceof ZToolsError && error.code === errorCodes.permissionDenied
-  )
-  await assert.rejects(
-    service.checkConflict({ key: 'Ctrl+Alt+L', pluginId: appId }, pluginCaller),
-    (error) => error instanceof ZToolsError && error.code === errorCodes.permissionDenied
-  )
-  await assert.rejects(
-    service.register(flatTrigger({
-      id: 'plugin_local_app_spoof',
-      pluginId: appId,
+      id: 'plugin_launch_local_app',
+      pluginId: 'plugin.one',
       config: { key: 'Ctrl+Alt+L' },
       actionMode: 'builtin',
       actionTarget: 'launch_local_app',
-      actionParams: { appId }
+      actionParams: { appId: 'localapp:1234ABCD' }
     }) as never, pluginCaller),
     (error) => error instanceof ZToolsError && error.code === errorCodes.permissionDenied
   )
-  await assert.rejects(
-    service.register(flatTrigger({
-      id: 'plugin_cross_owner_local_app',
-      pluginId: pluginCaller.pluginId,
-      config: { key: 'Ctrl+Alt+K' },
-      actionMode: 'builtin',
-      actionTarget: 'launch_local_app',
-      actionParams: { appId }
-    }) as never, pluginCaller),
-    (error) => error instanceof ZToolsError && error.code === errorCodes.notSupported
-  )
+
+  assert.equal(shortcuts.callbacks.size, 0)
+  assert.equal(store.document.triggers, undefined)
   await service.stop()
 })
 
@@ -553,7 +579,9 @@ test('enforces plugin ownership for register, list and mutation', async () => {
     id: 'one',
     pluginId: 'plugin.one',
     enabled: false,
-    config: { key: 'Alt+F8' }
+    config: { key: 'Alt+F8' },
+    actionMode: 'window',
+    actionTarget: 'plugin.one'
   }) as never, pluginCaller)
   await service.register(flatTrigger({
     id: 'two',
@@ -592,19 +620,17 @@ test('rejects unsupported trigger types and double modifiers without changing st
   await service.stop()
 })
 
-test('dispatches plugin-window and local-app hotkey actions with their payloads', async () => {
+test('dispatches plugin-window hotkey actions with their payloads', async () => {
   const store = new MemoryStore()
   const shortcuts = new FakeShortcuts()
   const opened: Array<{ pluginId: string; payload?: Record<string, unknown> }> = []
-  const launched: string[] = []
   const service = new TriggerService({
     dataRoot: 'unused-in-memory-store',
     store,
     shortcuts,
     events: { publishHost: () => ({ success: true, delivered: 0 }) },
     toggleMainWindow: () => undefined,
-    openPlugin: async (params) => { opened.push(params) },
-    launchLocalApp: async (appId) => { launched.push(appId) }
+    openPlugin: async (params) => { opened.push(params) }
   })
 
   await service.register({
@@ -614,14 +640,6 @@ test('dispatches plugin-window and local-app hotkey actions with their payloads'
     enabled: true,
     config: { key: 'Ctrl+Alt+1' },
     action: { mode: 'window', target: 'plugin.test', params: { source: 'hotkey', autoCapture: true } }
-  }, mainCaller)
-  await service.register({
-    id: 'launch-app-hotkey',
-    pluginId: 'localapp:ABCDEF12',
-    type: 'hotkey',
-    enabled: true,
-    config: { key: 'Ctrl+Alt+2' },
-    action: { mode: 'builtin', target: 'launch_local_app', params: { appId: 'localapp:ABCDEF12' } }
   }, mainCaller)
   await service.register({
     id: 'screenshot-feature-hotkey',
@@ -649,7 +667,6 @@ test('dispatches plugin-window and local-app hotkey actions with their payloads'
   }, mainCaller)
 
   shortcuts.fire('Ctrl+Alt+1')
-  shortcuts.fire('Ctrl+Alt+2')
   shortcuts.fire('Ctrl+Alt+3')
   shortcuts.fire('Ctrl+Alt+4')
   await new Promise<void>((resolve) => setImmediate(resolve))
@@ -663,7 +680,6 @@ test('dispatches plugin-window and local-app hotkey actions with their payloads'
     pluginId: 'ocr',
     payload: { source: 'ocr_capture_hotkey', autoCapture: true, autoRecognize: true }
   }])
-  assert.deepEqual(launched, ['localapp:ABCDEF12'])
   await service.stop()
 })
 
@@ -684,8 +700,7 @@ test('retries an enabled shortcut that was unavailable during startup', async ()
     shortcuts,
     events: { publishHost: () => ({ success: true, delivered: 0 }) },
     toggleMainWindow: () => undefined,
-    openPlugin: async () => undefined,
-    launchLocalApp: async () => undefined
+    openPlugin: async () => undefined
   })
   const initial = await service.list({ pluginId: '' }, mainCaller)
   assert.equal(initial.data[0]?.enabled, true)
@@ -727,8 +742,7 @@ test('does not register or fire triggers for disabled plugins, but restores them
     shortcuts,
     events: { publishHost(type, payload) { events.push({ type, payload }); return { success: true, delivered: 1 } } },
     toggleMainWindow: () => undefined,
-    openPlugin: async () => undefined,
-    launchLocalApp: async () => undefined
+    openPlugin: async () => undefined
   })
   await service.list({ pluginId: '' }, mainCaller)
   assert.equal(shortcuts.callbacks.size, 0)
@@ -825,8 +839,7 @@ test('does not treat disabled plugin triggers as active conflicts', async () => 
     shortcuts,
     events: { publishHost: () => ({ success: true, delivered: 0 }) },
     toggleMainWindow: () => undefined,
-    openPlugin: async () => undefined,
-    launchLocalApp: async () => undefined
+    openPlugin: async () => undefined
   })
   await service.list({ pluginId: '' }, mainCaller)
   assert.equal(shortcuts.callbacks.size, 1)
@@ -981,5 +994,510 @@ test('[边界] 修饰键顺序、大小写、空白与别名（Option = Alt）�
   recorderService.setRecorderCaptureActive(false)
   await recorderService.stop()
   assert.equal(free.data.hasConflict, false)
+  await service.stop()
+})
+
+test('normalizedAccelerator 与黑名单规则正确区分 macOS ⌘/⌃ 与跨平台禁区键位', async () => {
+  // macOS 下 Ctrl/Cmd/Command/CommandOrControl/CmdOrCtrl 均统一到 meta（⌘），物理 Control 单独保留为 ctrl（⌃）
+  assert.equal(normalizedAccelerator('Cmd+Space', 'darwin'), 'meta+space')
+  assert.equal(normalizedAccelerator('Command + Space', 'darwin'), 'meta+space')
+  assert.equal(normalizedAccelerator('CommandOrControl+Space', 'darwin'), 'meta+space')
+  assert.equal(normalizedAccelerator('CmdOrCtrl+Space', 'darwin'), 'meta+space')
+  assert.equal(normalizedAccelerator('Ctrl+Space', 'darwin'), 'meta+space')
+  assert.equal(normalizedAccelerator('Control + Space', 'darwin'), 'ctrl+space')
+  assert.equal(normalizedAccelerator('Option+Shift+Space', 'darwin'), 'alt+shift+space')
+
+  // Windows 下 CmdOrCtrl/Ctrl 均归一到 ctrl
+  assert.equal(normalizedAccelerator('CmdOrCtrl+Space', 'win32'), 'ctrl+space')
+  assert.equal(normalizedAccelerator('Ctrl+Alt+K', 'win32'), 'ctrl+alt+k')
+
+  // 黑名单函数与 TriggerService 拦截校验
+  assert.ok(getGlobalHotkeyBlacklistReason('Cmd+Q', 'darwin'))
+  assert.ok(getGlobalHotkeyBlacklistReason('Cmd+Tab', 'darwin'))
+  assert.ok(getGlobalHotkeyBlacklistReason('Cmd+Space', 'darwin'))
+  assert.ok(getGlobalHotkeyBlacklistReason('Alt+F4', 'win32'))
+  assert.ok(getGlobalHotkeyBlacklistReason('Ctrl+Shift+Escape', 'win32'))
+  assert.equal(getGlobalHotkeyBlacklistReason('Ctrl+Shift+Z', 'darwin'), null)
+
+  const macService = new TriggerService({
+    dataRoot: 'unused',
+    store: new MemoryStore(),
+    shortcuts: new FakeShortcuts(),
+    events: { publishHost: () => ({ success: true, delivered: 1 }) },
+    toggleMainWindow: () => undefined,
+    openPlugin: async () => undefined,
+    platform: 'darwin'
+  })
+  for (const blocked of ['Cmd+Q', 'Cmd+Tab', 'Cmd+Space']) {
+    await assert.rejects(
+      macService.register(flatTrigger({ id: `blk_${blocked}`, config: { key: blocked } }) as never, mainCaller),
+      (error) => error instanceof ZToolsError && error.code === errorCodes.invalidRequest
+    )
+  }
+  await macService.stop()
+
+  const winService = new TriggerService({
+    dataRoot: 'unused',
+    store: new MemoryStore(),
+    shortcuts: new FakeShortcuts(),
+    events: { publishHost: () => ({ success: true, delivered: 1 }) },
+    toggleMainWindow: () => undefined,
+    openPlugin: async () => undefined,
+    platform: 'win32'
+  })
+  for (const blocked of ['Alt+F4', 'Alt+Tab', 'Ctrl+Shift+Escape', 'Ctrl+C', 'A', 'Space']) {
+    await assert.rejects(
+      winService.register(flatTrigger({ id: `blk_${blocked}`, config: { key: blocked } }) as never, mainCaller),
+      (error) => error instanceof ZToolsError && error.code === errorCodes.invalidRequest
+    )
+  }
+  await winService.stop()
+})
+
+test('收紧插件调用方权限：禁止 hook/Double*/内置动作与跨插件目标，仅放行自身窗口快捷键', async () => {
+  const keyboard = new FakeKeyboard()
+  const mouse = new FakeMouse()
+  const shortcuts = new FakeShortcuts()
+  const service = new TriggerService({
+    dataRoot: 'unused',
+    store: new MemoryStore(),
+    shortcuts,
+    keyboard,
+    mouse,
+    events: { publishHost: () => ({ success: true, delivered: 1 }) },
+    toggleMainWindow: () => undefined,
+    openPlugin: async () => undefined,
+    platform: 'win32'
+  })
+  const pluginCaller: CallerIdentity = { type: 'plugin', webContentsId: 10, pluginId: 'demo.plugin' }
+
+  // 禁止注册鼠标 hook
+  await assert.rejects(
+    service.register({
+      id: 'p_hook',
+      pluginId: 'demo.plugin',
+      type: 'hook',
+      enabled: true,
+      config: { kind: 'mouse', button: 'middle', action: 'press', longPressMs: 300 },
+      actionMode: 'window',
+      actionTarget: 'demo.plugin'
+    } as never, pluginCaller),
+    (error) => error instanceof ZToolsError && error.code === errorCodes.permissionDenied
+  )
+
+  // 禁止注册双击修饰键
+  await assert.rejects(
+    service.register(flatTrigger({
+      id: 'p_double',
+      pluginId: 'demo.plugin',
+      config: { key: 'DoubleCtrl' },
+      actionMode: 'window',
+      actionTarget: 'demo.plugin'
+    }) as never, pluginCaller),
+    (error) => error instanceof ZToolsError && error.code === errorCodes.permissionDenied
+  )
+
+  // 禁止内置动作 toggle_main_window
+  await assert.rejects(
+    service.register(flatTrigger({
+      id: 'p_builtin',
+      pluginId: 'demo.plugin',
+      config: { key: 'Ctrl+Alt+1' },
+      actionMode: 'builtin',
+      actionTarget: 'toggle_main_window'
+    }) as never, pluginCaller),
+    (error) => error instanceof ZToolsError && error.code === errorCodes.permissionDenied
+  )
+
+  // 禁止指向其他插件窗口
+  await assert.rejects(
+    service.register(flatTrigger({
+      id: 'p_cross',
+      pluginId: 'demo.plugin',
+      config: { key: 'Ctrl+Alt+2' },
+      actionMode: 'window',
+      actionTarget: 'other.plugin'
+    }) as never, pluginCaller),
+    (error) => error instanceof ZToolsError && error.code === errorCodes.permissionDenied
+  )
+
+  // 合法自身窗口组合键注册通过
+  const ok = await service.register(flatTrigger({
+    id: 'p_ok',
+    pluginId: 'demo.plugin',
+    config: { key: 'Ctrl+Alt+3' },
+    actionMode: 'window',
+    actionTarget: 'demo.plugin'
+  }) as never, pluginCaller)
+  assert.deepEqual(ok, { success: true, data: { triggerId: 'p_ok' } })
+  assert.equal(shortcuts.callbacks.has('ctrl+alt+3'), true)
+
+  await service.stop()
+})
+
+test('冷启动 initialWakeHotkey 自动初始化全局唤醒触发器，不覆盖已有 triggers.json', async () => {
+  const freshStore = new MemoryStore()
+  const freshShortcuts = new FakeShortcuts()
+  const freshService = new TriggerService({
+    dataRoot: 'unused',
+    store: freshStore,
+    shortcuts: freshShortcuts,
+    events: { publishHost: () => ({ success: true, delivered: 1 }) },
+    toggleMainWindow: () => undefined,
+    openPlugin: async () => undefined,
+    initialWakeHotkey: 'Alt+Space',
+    platform: 'win32'
+  })
+  await freshService.waitUntilReady()
+  assert.deepEqual(freshService.getGlobalWakeHotkey(), { exists: true, enabled: true, key: 'Alt+Space' })
+  assert.equal(freshShortcuts.callbacks.has('alt+space'), true)
+  assert.equal(Array.isArray(freshStore.document.triggers), true)
+  await freshService.stop()
+
+  // 已有 triggers 数组但用户主动删掉了全局唤醒时，不得强制补种回来
+  const existingStore = new MemoryStore({ triggers: [] })
+  const existingService = new TriggerService({
+    dataRoot: 'unused',
+    store: existingStore,
+    shortcuts: new FakeShortcuts(),
+    events: { publishHost: () => ({ success: true, delivered: 1 }) },
+    toggleMainWindow: () => undefined,
+    openPlugin: async () => undefined,
+    initialWakeHotkey: 'Alt+Space',
+    platform: 'win32'
+  })
+  await existingService.waitUntilReady()
+  assert.deepEqual(existingService.getGlobalWakeHotkey(), { exists: false, enabled: false, key: '' })
+  await existingService.stop()
+})
+
+test('启动与唤醒冲突检测：记录冲突、支持订阅延迟补发，并在系统恢复后清空', async () => {
+  const store = new MemoryStore({
+    triggers: [
+      {
+        id: 'global_wake_hotkey',
+        pluginId: 'system',
+        type: 'hotkey',
+        enabled: true,
+        config: { key: 'Alt+Space' },
+        action: { mode: 'builtin', target: 'toggle_main_window', params: {} },
+        priority: 0,
+        createTime: '2026-08-24 12:00:00'
+      }
+    ]
+  })
+  const shortcuts = new FakeShortcuts()
+  shortcuts.unavailable.add('alt+space')
+  let deliveredCount = 0
+  const published: Array<{ type: string; payload: unknown }> = []
+  let subListener: ((eventName: string, subscriberCount: number) => void) | undefined
+
+  const service = new TriggerService({
+    dataRoot: 'unused',
+    store,
+    shortcuts,
+    events: {
+      publishHost(type, payload) {
+        published.push({ type, payload })
+        return { success: true, delivered: deliveredCount }
+      },
+      onSubscriptionChanged(eventName, listener) {
+        if (eventName === 'hotkey_conflicts_detected') {
+          subListener = (_ev, count) => listener(count)
+        }
+        return () => { subListener = undefined }
+      }
+    },
+    toggleMainWindow: () => undefined,
+    openPlugin: async () => undefined,
+    platform: 'win32'
+  })
+
+  await service.waitUntilReady()
+  assert.deepEqual(service.getStartupConflicts(), [{
+    type: 'system',
+    key: 'Alt+Space',
+    pluginId: 'system',
+    triggerId: 'global_wake_hotkey'
+  }])
+  // 启动期主窗口还未就绪（delivered = 0），发出去一次无订阅，留待补发
+  assert.equal(published.length, 1)
+
+  // 模拟主窗口就绪并注册监听：触发 onSubscriptionChanged 后通过 setImmediate 只补发一次
+  deliveredCount = 1
+  subListener?.('hotkey_conflicts_detected', 1)
+  await new Promise((resolve) => setImmediate(resolve))
+  assert.equal(published.length, 2)
+  // 再次调用 flushStartupConflicts 不会重复发
+  service.flushStartupConflicts()
+  assert.equal(published.length, 2)
+
+  // 外部释放热键后系统唤醒重验：自动重新注册成功且冲突列表清空
+  shortcuts.unavailable.delete('alt+space')
+  await service.verifyRegistrations()
+  assert.equal(shortcuts.callbacks.has('alt+space'), true)
+  assert.deepEqual(service.getStartupConflicts(), [])
+
+  // 运行期热键被系统静默夺走再唤起：再次发布冲突通知
+  shortcuts.callbacks.delete('alt+space')
+  shortcuts.unavailable.add('alt+space')
+  await service.verifyRegistrations()
+  assert.equal(published.length, 3)
+  assert.equal(published[2]?.type, 'hotkey_conflicts_detected')
+
+  await service.stop()
+})
+
+test('checkConflict 检出同插件不同触发器冲突，并支持 excludeTriggerId 排除自身', async () => {
+  const { service } = createService()
+  const caller: CallerIdentity = { type: 'plugin', webContentsId: 3, pluginId: 'plugin.self' }
+  await service.register(flatTrigger({
+    id: 'self_a',
+    pluginId: 'plugin.self',
+    config: { key: 'Ctrl+Alt+S' },
+    actionMode: 'window',
+    actionTarget: 'plugin.self'
+  }) as never, caller)
+
+  // 不传 excludeTriggerId 时，同插件也检测到 self_a 占用
+  const conflictWithoutExclude = await service.checkConflict(
+    { key: 'Ctrl+Alt+S', pluginId: 'plugin.self' },
+    caller
+  )
+  assert.equal(conflictWithoutExclude.data.hasConflict, true)
+  assert.equal(conflictWithoutExclude.data.conflicts[0]?.triggerId, 'self_a')
+
+  // 编辑自身 self_a 时传入 excludeTriggerId: 'self_a' 应放行
+  const selfExcluded = await service.checkConflict(
+    { key: 'Ctrl+Alt+S', pluginId: 'plugin.self', excludeTriggerId: 'self_a' },
+    caller
+  )
+  assert.equal(selfExcluded.data.hasConflict, false)
+
+  // 但排除一个不存在或别的 ID 时仍能准确检出冲突
+  const otherExcluded = await service.checkConflict(
+    { key: 'Ctrl+Alt+S', pluginId: 'plugin.self', excludeTriggerId: 'self_b' },
+    caller
+  )
+  assert.equal(otherExcluded.data.hasConflict, true)
+  await service.stop()
+})
+
+test('双击修饰键支持 fullscreenDnd 透传以及在录制框激活期间转发 DoubleCtrl', async () => {
+  const keyboard = new FakeKeyboard()
+  const forwarded: string[] = []
+  let toggleCount = 0
+  const service = new TriggerService({
+    dataRoot: 'unused',
+    store: new MemoryStore(),
+    shortcuts: new FakeShortcuts(),
+    keyboard,
+    events: { publishHost: () => ({ success: true, delivered: 1 }) },
+    toggleMainWindow: () => { toggleCount += 1 },
+    openPlugin: async () => undefined,
+    forwardHotkeyToRecorder: (accelerator) => {
+      forwarded.push(accelerator)
+      return true
+    },
+    platform: 'win32'
+  })
+
+  await service.register(flatTrigger({
+    id: 'global_wake_hotkey',
+    config: { key: 'DoubleCtrl', fullscreenDnd: false }
+  }) as never, mainCaller)
+  assert.deepEqual(keyboard.configurations.at(-1), ['ctrl'])
+  assert.equal(keyboard.fullscreenDndFlags.at(-1), false)
+
+  // 非录制态双击 Ctrl -> 触发唤醒主窗口
+  keyboard.emit({ type: 'keyboard-double-tap', modifier: 'ctrl' })
+  assert.equal(toggleCount, 1)
+  assert.deepEqual(forwarded, [])
+
+  // 录制框激活期间双击 Ctrl -> 拦截并转发给录制框，不触发唤醒
+  service.setRecorderCaptureActive(true)
+  assert.equal(service.isRecorderCaptureActive(), true)
+  keyboard.emit({ type: 'keyboard-double-tap', modifier: 'ctrl' })
+  assert.deepEqual(forwarded, ['DoubleCtrl'])
+  assert.equal(toggleCount, 1)
+  assert.equal(service.isRecorderCaptureActive(), false)
+
+  await service.stop()
+})
+
+test('鼠标触发钩子 (type: hook) 全生命周期：校验、单一活跃互斥、派发动作、崩溃重连自愈与停用注销', async () => {
+  const mouse = new FakeMouse()
+  const shortcuts = new FakeShortcuts()
+  const events: Array<{ type: string; payload: unknown }> = []
+  let toggleCount = 0
+  const service = new TriggerService({
+    dataRoot: 'unused',
+    store: new MemoryStore(),
+    shortcuts,
+    mouse,
+    events: {
+      publishHost(type, payload) {
+        events.push({ type, payload })
+        return { success: true, delivered: 1 }
+      }
+    },
+    toggleMainWindow: () => { toggleCount += 1 },
+    openPlugin: async () => undefined,
+    platform: 'win32'
+  })
+
+  // 1. 禁止 right + press 破坏右键菜单
+  await assert.rejects(
+    service.register({
+      id: 'hook_bad',
+      pluginId: 'system',
+      type: 'hook',
+      enabled: true,
+      config: { kind: 'mouse', button: 'right', action: 'press', longPressMs: 300 },
+      actionMode: 'builtin',
+      actionTarget: 'toggle_main_window'
+    } as never, mainCaller),
+    (error) => error instanceof ZToolsError && error.code === errorCodes.invalidRequest
+  )
+
+  // 2. 注册第一组活跃鼠标触发器
+  await service.register({
+    id: 'global_wake_mouse',
+    pluginId: 'system',
+    type: 'hook',
+    enabled: true,
+    config: { kind: 'mouse', button: 'forward', action: 'long', longPressMs: 320, fullscreenDnd: false },
+    actionMode: 'builtin',
+    actionTarget: 'toggle_main_window'
+  } as never, mainCaller)
+  assert.deepEqual(mouse.configurations.at(-1), {
+    button: 'forward',
+    action: 'long',
+    longPressMs: 320,
+    fullscreenDnd: false
+  })
+
+  // 3. 第二组启用鼠标触发器因互斥被拒绝
+  await assert.rejects(
+    service.register({
+      id: 'second_mouse_hook',
+      pluginId: 'system',
+      type: 'hook',
+      enabled: true,
+      config: { kind: 'mouse', button: 'middle', action: 'press', longPressMs: 280 },
+      actionMode: 'builtin',
+      actionTarget: 'toggle_main_window'
+    } as never, mainCaller),
+    (error) => error instanceof ZToolsError && error.code === errorCodes.triggerConflict
+  )
+
+  // 4. 命中触发器后执行动作并广播事件
+  mouse.emit({
+    type: 'mouse-trigger',
+    config: { button: 'forward', action: 'long', longPressMs: 320 }
+  })
+  assert.equal(toggleCount, 1)
+  assert.equal(events.some((item) => item.type === 'hotkey_triggered'), true)
+
+  // 5. 侧车崩溃后重启 -> 自动重新下发当前活跃鼠标配置实现自愈
+  mouse.emitLifecycle({ type: 'crashed', pid: undefined, exitCode: 1, signal: null, stderr: 'test' })
+  mouse.emitLifecycle({ type: 'restarted', attempt: 1, pid: 1234 })
+  await new Promise((resolve) => setTimeout(resolve, 20))
+  assert.deepEqual(mouse.configurations.at(-1), {
+    button: 'forward',
+    action: 'long',
+    longPressMs: 320,
+    fullscreenDnd: false
+  })
+
+  // 6. stop() 时下发 null 注销原生鼠标钩子
+  await service.stop()
+  assert.equal(mouse.configurations.at(-1), null)
+})
+
+test('openPlugin 异步失败时发布 hotkey_action_failed 事件', async () => {
+  const shortcuts = new FakeShortcuts()
+  const events: Array<{ type: string; payload: unknown }> = []
+  const service = new TriggerService({
+    dataRoot: 'unused',
+    store: new MemoryStore(),
+    shortcuts,
+    events: {
+      publishHost(type, payload) {
+        events.push({ type, payload })
+        return { success: true, delivered: 1 }
+      }
+    },
+    toggleMainWindow: () => undefined,
+    openPlugin: async () => {
+      throw new Error('插件窗口启动失败')
+    },
+    platform: 'win32'
+  })
+
+  await service.register({
+    id: 'plugin_open_fail',
+    pluginId: 'plugin.broken',
+    type: 'hotkey',
+    enabled: true,
+    config: { key: 'Ctrl+Alt+L' },
+    actionMode: 'window',
+    actionTarget: 'plugin.broken',
+    actionParams: {}
+  } as never, mainCaller)
+
+  shortcuts.fire('Ctrl+Alt+L')
+  await new Promise((resolve) => setTimeout(resolve, 20))
+  const failureEvent = events.find((item) => item.type === 'hotkey_action_failed')
+  assert.ok(failureEvent)
+  assert.deepEqual(failureEvent.payload, {
+    id: 'plugin_open_fail',
+    target: 'plugin.broken',
+    message: '插件窗口启动失败'
+  })
+  await service.stop()
+})
+
+test('[防误触] 退出双击修饰键录制后的 600ms 冷却期内，延迟到达的 KeyUp 不误触发切换窗口', async () => {
+  const keyboard = new FakeKeyboard()
+  let toggleCount = 0
+  let forwardedCount = 0
+  const service = new TriggerService({
+    dataRoot: 'unused',
+    store: new MemoryStore(),
+    shortcuts: new FakeShortcuts(),
+    events: { publishHost: () => ({ success: true, delivered: 0 }) },
+    toggleMainWindow: () => { toggleCount += 1 },
+    openPlugin: async () => undefined,
+    keyboard,
+    forwardHotkeyToRecorder: () => {
+      forwardedCount += 1
+      return true
+    },
+    platform: 'win32'
+  })
+
+  await service.register({
+    id: 'global_wake_hotkey',
+    pluginId: 'system',
+    type: 'hotkey',
+    enabled: true,
+    config: { key: 'DoubleCtrl' },
+    action: { mode: 'builtin', target: 'toggle_main_window', params: {} }
+  }, mainCaller)
+
+  // 1. 进入录制并由前端在 KeyDown 结束录制态退出，紧随其后的 KeyUp 到达
+  service.setRecorderCaptureActive(true)
+  service.setRecorderCaptureActive(false)
+  keyboard.emit({ type: 'keyboard-double-tap', modifier: 'ctrl' })
+  assert.equal(toggleCount, 0)
+  assert.equal(forwardedCount, 0)
+
+  // 2. 激活态下按下也会被转发给录制框而不触发切窗
+  service.setRecorderCaptureActive(true)
+  keyboard.emit({ type: 'keyboard-double-tap', modifier: 'ctrl' })
+  assert.equal(forwardedCount, 1)
+  assert.equal(toggleCount, 0)
+
   await service.stop()
 })

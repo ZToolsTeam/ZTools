@@ -724,18 +724,6 @@ class SystemAPI {
     return r && r.success === true
   }
 
-  /**
-   * 获取悬浮条固定的本地软件
-   * @returns {Promise<Array<{id: string, name: string}>>}
-   */
-  async getPanelLocalApps() {
-    const r = await this.transport.call('system_get_panel_local_apps', {})
-    if (r && r.success) {
-      return Array.isArray(r.apps) ? r.apps : []
-    }
-    throw new Error(r?.error || 'Get panel local apps failed')
-  }
-
 }
 
 export default SystemAPI

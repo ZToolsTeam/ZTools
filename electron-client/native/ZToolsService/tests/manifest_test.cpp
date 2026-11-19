@@ -123,21 +123,31 @@ class FakeExplorerRestarter final
 };
 
 bool ParseInputs(
+    const int argument_count,
     wchar_t* arguments[],
     ztools::service::PrivilegedDllPathConfig* const config,
     std::string* const plugin_id,
     std::string* const dll_id,
     std::string* const function_name) {
   config->data_root = arguments[2];
-  return WideToUtf8(arguments[3], plugin_id) &&
-         WideToUtf8(arguments[4], dll_id) &&
-         WideToUtf8(arguments[5], function_name);
+  config->manifest_trust.data_root = config->data_root;
+  if (argument_count == 7) {
+    if (!ztools::service::ParsePrivilegedManifestSha256(
+            arguments[3], &config->manifest_trust.manifest_sha256)) {
+      return false;
+    }
+    config->manifest_trust.trusted = true;
+  }
+  const int identity_index = argument_count == 7 ? 4 : 3;
+  return WideToUtf8(arguments[identity_index], plugin_id) &&
+         WideToUtf8(arguments[identity_index + 1], dll_id) &&
+         WideToUtf8(arguments[identity_index + 2], function_name);
 }
 
 }  // namespace
 
 int wmain(const int argument_count, wchar_t* arguments[]) {
-  if (argument_count != 6) {
+  if (argument_count != 6 && argument_count != 7) {
     return 2;
   }
   const std::wstring_view mode(arguments[1]);
@@ -150,7 +160,8 @@ int wmain(const int argument_count, wchar_t* arguments[]) {
   std::string dll_id;
   std::string function_name;
   if (!ParseInputs(
-          arguments, &config, &plugin_id, &dll_id, &function_name)) {
+          argument_count, arguments, &config, &plugin_id, &dll_id,
+          &function_name)) {
     return 3;
   }
   ztools::service::PrivilegedDllResolver resolver(std::move(config));
@@ -251,7 +262,8 @@ int wmain(const int argument_count, wchar_t* arguments[]) {
         ReadUint16(status.payload.data() + 4) ==
             ztools::service::kServicePolicyStatusVersion &&
         ReadUint16(status.payload.data() + 6) ==
-            ztools::service::kServicePolicyFlagSystemOnlyDependencies &&
+            (ztools::service::kServicePolicyFlagManifestTrusted |
+             ztools::service::kServicePolicyFlagSystemOnlyDependencies) &&
         ReadUint32(status.payload.data() + 8) == 1;
     std::vector<std::uint8_t> unknown = MakeCommand(
         static_cast<ztools::service::ServiceCommandType>(0xffff));
@@ -336,6 +348,17 @@ int wmain(const int argument_count, wchar_t* arguments[]) {
                     "{}"),
                 client_session_id),
             "DLL_CALL_FAILED") &&
+        IsFailure(
+            dispatcher.Dispatch(
+                MakeCommand(
+                    ztools::service::ServiceCommandType::dll_call,
+                    plugin_id,
+                    {},
+                    dll_id,
+                    "notInManifest",
+                    "{}"),
+                client_session_id),
+            "FUNCTION_NOT_ALLOWED") &&
         restart.success &&
         std::string_view(
             reinterpret_cast<const char*>(restart.payload.data()),
@@ -371,7 +394,7 @@ int wmain(const int argument_count, wchar_t* arguments[]) {
                 client_session_id),
             "COMMAND_INVALID");
     std::cout << "{\"success\":" << (passed ? "true" : "false")
-              << ",\"cases\":13,\"allowedTargets\":"
+              << ",\"cases\":14,\"allowedTargets\":"
               << policy.allowed_target_count() << "}" << '\n';
     return passed ? 0 : 5;
   }

@@ -36,3 +36,17 @@ export function decideCloseAction(
   if (preferences.closeConfirm) return 'confirm'
   return preferences.minimizeToTray ? 'hide' : 'quit'
 }
+
+export interface AllWindowsClosedState {
+  quitWhenAllWindowsClose: boolean
+  cancellationRequested: boolean
+  quitAllowed: boolean
+  quitInProgress: boolean
+}
+
+/** 仅在平台策略要求退出且主进程尚未进入退出清理流时才响应 window-all-closed 退出，防止停机销毁窗口时重入 app.quit */
+export function shouldQuitOnAllWindowsClosed(state: AllWindowsClosedState): boolean {
+  if (!state.quitWhenAllWindowsClose) return false
+  if (state.cancellationRequested || state.quitAllowed || state.quitInProgress) return false
+  return true
+}

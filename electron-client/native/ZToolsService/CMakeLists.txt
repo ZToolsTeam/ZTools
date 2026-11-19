@@ -23,6 +23,7 @@ configure_file(ztools_service_version.rc.in "${ZTOOLS_SERVICE_VERSION_RESOURCE}"
 
 add_executable(ZToolsService
   "${ZTOOLS_SERVICE_VERSION_RESOURCE}"
+  src/client_bridge.cpp
   src/command_dispatcher.cpp
   src/command_policy.cpp
   src/explorer_restarter.cpp
@@ -37,6 +38,7 @@ add_executable(ZToolsService
   src/service_command_protocol.cpp
   src/service_auth.cpp
   src/service_runtime.cpp
+  src/service_process_security.cpp
   src/service_secret.cpp
 )
 
@@ -93,6 +95,17 @@ if(ZTOOLS_BUILD_SERVICE_MANIFEST_TESTS)
   target_compile_options(ZToolsServiceManifestTest PRIVATE /W4 /WX /utf-8 /sdl /guard:cf)
   target_link_options(ZToolsServiceManifestTest PRIVATE /DYNAMICBASE /NXCOMPAT /guard:cf)
   target_link_libraries(ZToolsServiceManifestTest PRIVATE advapi32 bcrypt shell32 shlwapi wtsapi32 xmllite)
+  add_executable(ZToolsServiceBridgeTest
+    tests/client_bridge_policy_test.cpp
+    src/client_bridge.cpp
+    src/service_process_security.cpp
+  )
+  target_include_directories(ZToolsServiceBridgeTest PRIVATE include)
+  target_compile_definitions(ZToolsServiceBridgeTest PRIVATE UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX
+    ZTOOLS_BUILD_SERVICE_MANIFEST_TESTS=1)
+  target_compile_options(ZToolsServiceBridgeTest PRIVATE /W4 /WX /utf-8 /sdl /guard:cf)
+  target_link_options(ZToolsServiceBridgeTest PRIVATE /DYNAMICBASE /NXCOMPAT /guard:cf)
+  target_link_libraries(ZToolsServiceBridgeTest PRIVATE advapi32 shell32)
   add_dependencies(ZToolsServiceManifestTest ZToolsServicePrivateConsumer ZToolsServiceSessionFixture)
   set(ZTOOLS_SERVICE_MANIFEST_TEST_OUTPUT_DIR
     "${CMAKE_BINARY_DIR}/service-manifest-test-win32-ia32")
@@ -100,6 +113,7 @@ if(ZTOOLS_BUILD_SERVICE_MANIFEST_TESTS)
     ZToolsServicePrivateDependency
     ZToolsServicePrivateConsumer
     ZToolsServiceSessionFixture
+    ZToolsServiceBridgeTest
     PROPERTIES
       RUNTIME_OUTPUT_DIRECTORY_DEBUG "${ZTOOLS_SERVICE_MANIFEST_TEST_OUTPUT_DIR}"
       RUNTIME_OUTPUT_DIRECTORY_RELEASE "${ZTOOLS_SERVICE_MANIFEST_TEST_OUTPUT_DIR}"

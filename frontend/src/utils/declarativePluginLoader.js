@@ -499,6 +499,8 @@ async function defaultReadPluginFile(pluginId, relPath) {
 }
 
 const loadedPluginCache = new Map()
+const pluginLoadGenerations = new Map()
+let allLoadsGeneration = 0
 let lastCachedFetchRef = null
 
 /**
@@ -546,10 +548,13 @@ export function getCachedDeclarativePlugin(pluginId, options = {}) {
  */
 export function clearDeclarativePluginCache(pluginId) {
   if (!pluginId) {
+    allLoadsGeneration += 1
     loadedPluginCache.clear()
     return
   }
-  const prefix = `${String(pluginId).trim().toLowerCase()}::`
+  const id = String(pluginId).trim().toLowerCase()
+  pluginLoadGenerations.set(id, (pluginLoadGenerations.get(id) || 0) + 1)
+  const prefix = `${id}::`
   for (const key of loadedPluginCache.keys()) {
     if (key.startsWith(prefix)) {
       loadedPluginCache.delete(key)
@@ -575,6 +580,14 @@ export async function loadInstalledDeclarativePlugin(pluginId, options = {}) {
   const cached = getCachedDeclarativePlugin(pid, options)
   if (cached) {
     return cached
+  }
+
+  const loadGeneration = pluginLoadGenerations.get(pid.toLowerCase()) || 0
+  const globalGeneration = allLoadsGeneration
+  const requireCurrentLoad = () => {
+    if (loadGeneration !== (pluginLoadGenerations.get(pid.toLowerCase()) || 0) || globalGeneration !== allLoadsGeneration) {
+      throw Object.assign(new Error('插件已更新或停止，请重新打开'), { code: 'PLUGIN_CHANGED' })
+    }
   }
 
   // 内置官方插件随客户端分发，从 bundled-plugins/ 读取；其余插件从已安装目录 ztools://plugins/ 读取
@@ -618,6 +631,7 @@ export async function loadInstalledDeclarativePlugin(pluginId, options = {}) {
   }
 
   await collectModuleSources(entryRelPath)
+  requireCurrentLoad()
 
   // 3. 受控模块求值沙箱
   const evaluatedModules = new Map()
@@ -826,6 +840,7 @@ export async function loadInstalledDeclarativePlugin(pluginId, options = {}) {
     session: sessionHolder
   }
 
+  requireCurrentLoad()
   if (!options?.readFile && !options?.localStorage) {
     ensureCacheFreshForCurrentFetch()
     loadedPluginCache.set(buildPluginCacheKey(pid, requestedFeatureCode), loadedPlugin)

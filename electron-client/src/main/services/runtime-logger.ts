@@ -16,8 +16,32 @@ let activeLogFile: string | undefined
 let consoleHooked = false
 let processHooked = false
 
-function logFileName(now: Date): string {
-  return `electron-main-${now.toISOString().slice(0, 10)}.log`
+const MAX_LOG_FILE_ATTEMPTS = 1000
+
+function formatLogTimestamp(now: Date): string {
+  return now.toISOString().replace(/[:.]/g, '-')
+}
+
+function logFileName(now: Date, pid: number, sequence = 0): string {
+  const suffix = sequence > 0 ? `-${sequence}` : ''
+  return `electron-main-${formatLogTimestamp(now)}-pid${pid}${suffix}.log`
+}
+
+function createUniqueLogFile(logDirectory: string, now: Date, pid: number): string {
+  for (let sequence = 0; sequence < MAX_LOG_FILE_ATTEMPTS; sequence += 1) {
+    const candidate = path.join(logDirectory, logFileName(now, pid, sequence))
+    try {
+      // 使用原子排他创建确保每次启动（含同毫秒重复初始化）拥有独立日志文件
+      const fd = fs.openSync(candidate, 'wx')
+      fs.closeSync(fd)
+      return candidate
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException | undefined)?.code
+      if (code === 'EEXIST') continue
+      throw error
+    }
+  }
+  throw new Error(`Unable to allocate unique runtime log file in ${logDirectory}`)
 }
 
 function formatMessage(values: unknown[]): string {
@@ -66,6 +90,21 @@ function hookProcessErrors(): void {
   process.on('uncaughtExceptionMonitor', (error, origin) => {
     append('ERROR', 'process', [`Uncaught exception (${origin})`, error])
   })
+  // 移除 Node 默认的 onWarning（其内部走 console.error 导致 DeprecationWarning 在日志中被误记为 [ERROR]），
+  // 改为统一路由到 [WARN] 日志并通过 originalConsole.warn 保留终端可见性
+  for (const listener of process.listeners('warning')) {
+    if (listener.name === 'onWarning') {
+      process.removeListener('warning', listener)
+    }
+  }
+  process.on('warning', (warning) => {
+    const codeSuffix = 'code' in warning && typeof warning.code === 'string' && warning.code
+      ? ` [${warning.code}]`
+      : ''
+    const formatted = `${warning.name}${codeSuffix}: ${warning.message}`
+    append('WARN', 'node-warning', [formatted])
+    originalConsole.warn(formatted)
+  })
   process.on('exit', (code) => {
     append('INFO', 'process', ['Process exiting', { code }])
   })
@@ -73,8 +112,12 @@ function hookProcessErrors(): void {
 
 export function initializeRuntimeLogging(logDirectory: string): string | undefined {
   try {
+    if (typeof logDirectory !== 'string' || logDirectory.trim().length === 0) {
+      originalConsole.error('Runtime file logging initialization failed: logDirectory is empty')
+      return undefined
+    }
     fs.mkdirSync(logDirectory, { recursive: true })
-    activeLogFile = path.join(logDirectory, logFileName(new Date()))
+    activeLogFile = createUniqueLogFile(logDirectory, new Date(), process.pid)
     hookConsole()
     hookProcessErrors()
     append('INFO', 'logger', ['Runtime file logging initialized', { logFile: activeLogFile }])

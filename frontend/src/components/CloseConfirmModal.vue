@@ -1,12 +1,14 @@
 <script setup>
 import { RcButton, RcDialog } from '@/components/base'
-import { ref, watch, computed } from 'vue'
+import { ref, watch, computed, onBeforeUnmount } from 'vue'
+import { isComposingEvent } from '@/utils/keymap'
 
 import { useUIStore } from '@/stores/ui'
 
 const ui = useUIStore()
 // 默认勾选"下次不再询问"，让用户选择后不再打扰
 const doNotAskAgain = ref(true)
+let isResolving = false
 const dialogVisible = computed({
   get: () => ui.showCloseConfirm,
   set: (val) => {
@@ -15,11 +17,30 @@ const dialogVisible = computed({
 })
 
 watch(dialogVisible, (v) => {
+  if (v) {
+    isResolving = false
+    window.addEventListener('keydown', handleWindowEscape, true)
+    return
+  }
+  window.removeEventListener('keydown', handleWindowEscape, true)
   // 弹窗关闭后重置为默认选中状态，下次打开仍保持默认勾选
-  if (!v) doNotAskAgain.value = true
+  doNotAskAgain.value = true
+}, { immediate: true })
+
+onBeforeUnmount(() => {
+  window.removeEventListener('keydown', handleWindowEscape, true)
 })
 
+function handleWindowEscape(event) {
+  if (!dialogVisible.value || event.key !== 'Escape' || isComposingEvent(event)) return
+  event.preventDefault()
+  event.stopPropagation()
+  void onCancel()
+}
+
 const onMinimize = async () => {
+  if (isResolving) return
+  isResolving = true
   try {
     // 如果勾选了"下次不再询问"，保存配置：关闭退出确认 + 开启最小化到托盘
     if (doNotAskAgain.value && window?.ztools?.settings?.set) {
@@ -40,16 +61,23 @@ const onMinimize = async () => {
   }
 }
 const onCancel = async () => {
-  if (window?.ztools?.win?.sendCloseConfirmResult) {
-    await window.ztools.win.sendCloseConfirmResult({
-      confirmed: false,
-      doNotAskAgain: false,
-      action: 'cancel'
-    })
+  if (isResolving) return
+  isResolving = true
+  try {
+    if (window?.ztools?.win?.sendCloseConfirmResult) {
+      await window.ztools.win.sendCloseConfirmResult({
+        confirmed: false,
+        doNotAskAgain: false,
+        action: 'cancel'
+      })
+    }
+  } finally {
+    ui.closeCloseConfirm()
   }
-  ui.closeCloseConfirm()
 }
 const onExit = async () => {
+  if (isResolving) return
+  isResolving = true
   try {
     if (doNotAskAgain.value && window?.ztools?.settings?.set) {
       await window.ztools.settings.set('closeConfirm', false)
@@ -77,7 +105,6 @@ const onExit = async () => {
     :width="420"
     :mask="false"
     :mask-closable="false"
-    :keyboard="false"
     wrap-class-name="close-confirm-modal"
     @cancel="onCancel"
   >

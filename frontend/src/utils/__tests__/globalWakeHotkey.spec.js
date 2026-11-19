@@ -1,9 +1,16 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import {
   DEFAULT_GLOBAL_WAKE_HOTKEY,
-  syncGlobalWakeHotkey,
+  MOUSE_WAKE_OPTIONS,
+  MOUSE_WAKE_TRIGGER_ID,
+  buildMouseWakeTrigger,
+  clampMouseLongPressMs,
   currentGlobalWakeHotkey,
-  refreshCurrentGlobalWakeHotkey
+  parseMouseWakeTrigger,
+  refreshCurrentGlobalWakeHotkey,
+  syncFullscreenDndToTriggers,
+  syncGlobalWakeHotkey,
+  syncMouseWakeHook
 } from '../globalWakeHotkey'
 
 // mock getHotkey
@@ -284,5 +291,124 @@ describe('当前唤醒快捷键（界面提示用）', () => {
     currentGlobalWakeHotkey.value = 'Ctrl+Q'
     hotkeyMock.getHotkey.mockRejectedValueOnce(new Error('IPC 超时'))
     expect(await refreshCurrentGlobalWakeHotkey()).toBe('Ctrl+Q')
+  })
+})
+
+describe('Windows 原生鼠标快捷唤醒与全屏免打扰同步', () => {
+  let triggerMock
+
+  beforeEach(() => {
+    triggerMock = {
+      list: vi.fn().mockResolvedValue({ data: [] }),
+      register: vi.fn().mockResolvedValue({ success: true, data: { triggerId: MOUSE_WAKE_TRIGGER_ID } }),
+      unregister: vi.fn().mockResolvedValue({ success: true })
+    }
+    window.ztools = { trigger: triggerMock }
+  })
+
+  afterEach(() => {
+    delete window.ztools
+  })
+
+  it('鼠标选项严格排除右键单击，并正确钳制 200~500ms 长按阈值', () => {
+    expect(MOUSE_WAKE_OPTIONS.map((item) => item.value)).toEqual([
+      'off',
+      'middle:press',
+      'middle:long',
+      'right:long',
+      'backward:press',
+      'backward:long',
+      'forward:press',
+      'forward:long'
+    ])
+    expect(MOUSE_WAKE_OPTIONS.some((item) => item.value === 'right:press')).toBe(false)
+
+    expect(clampMouseLongPressMs(50)).toBe(200)
+    expect(clampMouseLongPressMs(900)).toBe(500)
+    expect(clampMouseLongPressMs(349.6)).toBe(350)
+    expect(clampMouseLongPressMs('invalid')).toBe(300)
+  })
+
+  it('构建的鼠标钩子触发器满足主进程 validateMethodParams(trigger_register) 契约并能正确解析和同步关闭', async () => {
+    const { validateMethodParams } = await import('../../../../electron-client/src/contracts/method-params.ts')
+
+    const payload = buildMouseWakeTrigger({
+      mode: 'right:long',
+      longPressMs: 350,
+      fullscreenDnd: true
+    })
+    expect(() => validateMethodParams('trigger_register', structuredClone(payload))).not.toThrow()
+    expect(payload).toMatchObject({
+      id: MOUSE_WAKE_TRIGGER_ID,
+      pluginId: 'system',
+      type: 'hook',
+      config: { kind: 'mouse', button: 'right', action: 'long', longPressMs: 350, fullscreenDnd: true },
+      action: { mode: 'builtin', target: 'toggle_main_window', params: {} }
+    })
+
+    // 解析触发器列表还原配置（未配置时默认开启全屏免打扰）
+    expect(parseMouseWakeTrigger([])).toEqual({
+      exists: false,
+      mode: 'off',
+      longPressMs: 300,
+      fullscreenDnd: true
+    })
+    expect(parseMouseWakeTrigger([payload])).toEqual({
+      exists: true,
+      mode: 'right:long',
+      longPressMs: 350,
+      fullscreenDnd: true
+    })
+
+    // 注册保存鼠标钩子
+    const regResult = await syncMouseWakeHook({ mode: 'middle:press', longPressMs: 100, fullscreenDnd: false })
+    expect(regResult.success).toBe(true)
+    expect(triggerMock.register).toHaveBeenCalledWith(
+      expect.objectContaining({
+        id: MOUSE_WAKE_TRIGGER_ID,
+        type: 'hook',
+        config: expect.objectContaining({ kind: 'mouse', button: 'middle', action: 'press', longPressMs: 200 })
+      })
+    )
+
+    // 关闭时仅注销存在的 mouse_wake_hook
+    triggerMock.list.mockResolvedValue({ data: [payload] })
+    const offResult = await syncMouseWakeHook({ mode: 'off' })
+    expect(offResult.success).toBe(true)
+    expect(triggerMock.unregister).toHaveBeenCalledWith(MOUSE_WAKE_TRIGGER_ID)
+  })
+
+  it('全屏免打扰开关仅同步至 mouse_wake_hook 与 Double* 热键触发器', async () => {
+    const mouseTrigger = {
+      id: MOUSE_WAKE_TRIGGER_ID,
+      pluginId: 'system',
+      type: 'hook',
+      enabled: true,
+      config: { kind: 'mouse', button: 'middle', action: 'long', longPressMs: 300, fullscreenDnd: false },
+      action: { mode: 'builtin', target: 'toggle_main_window', params: {} }
+    }
+    const doubleCtrlTrigger = {
+      id: 'global_wake_hotkey',
+      pluginId: 'system',
+      type: 'hotkey',
+      enabled: true,
+      config: { key: 'DoubleCtrl', fullscreenDnd: false },
+      action: { mode: 'builtin', target: 'toggle_main_window', params: {} }
+    }
+    const normalHotkeyTrigger = {
+      id: 'plugin_launch_demo',
+      pluginId: 'demo',
+      type: 'hotkey',
+      enabled: true,
+      config: { key: 'Ctrl+Alt+D' },
+      action: { mode: 'window', target: 'demo', params: {} }
+    }
+    triggerMock.list.mockResolvedValue({ data: [mouseTrigger, doubleCtrlTrigger, normalHotkeyTrigger] })
+
+    const res = await syncFullscreenDndToTriggers(true)
+    expect(res).toMatchObject({ success: true, updatedCount: 2 })
+    expect(triggerMock.register).toHaveBeenCalledTimes(2)
+    expect(triggerMock.register.mock.calls[0][0].config.fullscreenDnd).toBe(true)
+    expect(triggerMock.register.mock.calls[1][0].config.fullscreenDnd).toBe(true)
   })
 })

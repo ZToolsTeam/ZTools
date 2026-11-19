@@ -6,7 +6,8 @@ import { errorCodes, toPublicError, ZToolsError } from '../../src/contracts/erro
 import { INFINITE_TIMEOUT, MAX_REQUEST_BYTES, MAX_TIMEOUT_MS, parseRequest } from '../../src/contracts/ipc.js'
 import { validateMethodParams } from '../../src/contracts/method-params.js'
 import { RUNTIME_CAPABILITY_IDS } from '../../src/contracts/runtime-capability.js'
-import type { CallerIdentity } from '../../src/contracts/capabilities.js'
+import { isAllowedMethod, type CallerIdentity } from '../../src/contracts/capabilities.js'
+import { dispatchAuthorizedIpcRequest } from '../../src/main/ipc/router.js'
 import type { FileSystemService } from '../../src/main/services/file-system-service.js'
 import { ScreenService, type ScreenAdapter } from '../../src/main/services/screen-service.js'
 
@@ -126,7 +127,9 @@ test('trigger accelerators accept Electron 43 key codes and reject malformed syn
     'A+Ctrl',
     'Ctrl+Plus',
     'Ctrl+\\',
-    "Ctrl+'"
+    "Ctrl+'",
+    'DoubleCtrl',
+    'F1'
   ]) {
     assert.doesNotThrow(() => validateMethodParams('trigger_register', triggerParams(key)))
     assert.doesNotThrow(() => validateMethodParams('trigger_check_conflict', { key, pluginId: '' }))
@@ -138,9 +141,11 @@ test('trigger accelerators accept Electron 43 key codes and reject malformed syn
     '+A',
     'Ctrl++',
     'Ctrl+Shift+A+B',
+    'Ctrl+Ctrl+A',
     'Ctrl+F25',
     'Ctrl+NotAKey',
-    'DoubleCtrl',
+    'A',
+    'Space',
     'Ctrl+\nA'
   ]) {
     assert.throws(
@@ -803,37 +808,88 @@ test('file Base64 validation accepts 8/16 MiB without recursive regex overflow',
   assert.throws(() => validateMethodParams('filesystem_write_file', { ...params, content: boundary.slice(0, -4) + '!AAA' }), /Base64/)
 })
 
-test('local app trigger IDs are admitted only for the exact existing Windows builtin action', () => {
-  const appId = 'localapp:ABCD1234'
-  const base = { pluginId: appId, type: 'hotkey', enabled: true, config: { key: 'Ctrl+Alt+F24' } }
-  assert.doesNotThrow(() => validateMethodParams('trigger_register', {
-    ...base, action: { mode: 'builtin', target: 'launch_local_app', params: { appId } }
-  }))
-  assert.doesNotThrow(() => validateMethodParams('trigger_register', {
-    ...base, actionMode: 'builtin', actionTarget: 'launch_local_app', actionParams: { appId }
-  }))
-  assert.doesNotThrow(() => validateMethodParams('trigger_list', { pluginId: appId }))
-  assert.doesNotThrow(() => validateMethodParams('trigger_check_conflict', { pluginId: appId, key: 'Ctrl+Alt+F24' }))
-  for (const action of [
-    { mode: 'builtin', target: 'launch_local_app', params: { appId, path: 'C:/untrusted.exe' } },
-    { mode: 'builtin', target: 'launch_local_app', params: { appId: 'localapp:1234ABCD' } },
-    { mode: 'builtin', target: 'toggle_main_window', params: {} },
-    { mode: 'script', target: 'launch_local_app', params: { appId } }
-  ]) assert.throws(() => validateMethodParams('trigger_register', { ...base, action }))
-  assert.throws(() => validateMethodParams('trigger_register', {
-    ...base, type: 'timer', config: {}, action: { mode: 'builtin', target: 'launch_local_app', params: { appId } }
-  }))
-})
+test('已下线的 system_get_panel_local_apps、launch_local_app 与 localapp:* 标识在鉴权及参数契约层被全面拒绝', () => {
+  const mainCaller: CallerIdentity = { type: 'main', webContentsId: 1 }
+  const pluginCaller: CallerIdentity = { type: 'plugin', webContentsId: 2, pluginId: 'plugin.test' }
 
-test('local trigger owner syntax never widens generic plugin identity or admits a Mac shortcut promise', () => {
-  for (const pluginId of ['localapp:ABCD1234', 'localapp:mac:' + 'A'.repeat(64)]) {
-    assert.throws(() => validateMethodParams('plugin_open', { pluginId }))
+  // 1. system_get_panel_local_apps 已从 AllowedMethod 移除，鉴权与参数校验均报 METHOD_NOT_FOUND
+  assert.equal(isAllowedMethod('system_get_panel_local_apps'), false)
+  for (const caller of [mainCaller, pluginCaller]) {
+    const res = dispatchAuthorizedIpcRequest(caller, {
+      messageId: 'removed-local-apps-1',
+      method: 'system_get_panel_local_apps',
+      params: {}
+    })
+    assert.equal(res.success, false)
+    if (!res.success) {
+      assert.equal(res.error.code, errorCodes.methodNotFound)
+    }
   }
-  const pluginId = 'localapp:mac:' + 'A'.repeat(64)
-  assert.throws(() => validateMethodParams('trigger_register', {
-    pluginId, type: 'hotkey', enabled: true, config: { key: 'Ctrl+Alt+F24' },
-    action: { mode: 'builtin', target: 'launch_local_app', params: { appId: pluginId } }
-  }))
-  assert.throws(() => validateMethodParams('trigger_list', { pluginId }))
-  assert.throws(() => validateMethodParams('trigger_check_conflict', { pluginId, key: 'Ctrl+Alt+F24' }))
+  assert.throws(
+    () => validateMethodParams('system_get_panel_local_apps' as never, {}),
+    (error) => error instanceof ZToolsError && error.code === errorCodes.methodNotFound
+  )
+
+  // 2. trigger_register 传入 launch_local_app 或其它未知 builtin target 一律拒绝
+  const appId = 'localapp:ABCD1234'
+  for (const candidate of [
+    {
+      pluginId: appId,
+      type: 'hotkey',
+      enabled: true,
+      config: { key: 'Ctrl+Alt+F24' },
+      action: { mode: 'builtin', target: 'launch_local_app', params: { appId } }
+    },
+    {
+      pluginId: appId,
+      type: 'hotkey',
+      enabled: true,
+      config: { key: 'Ctrl+Alt+F24' },
+      actionMode: 'builtin',
+      actionTarget: 'launch_local_app',
+      actionParams: { appId }
+    },
+    {
+      pluginId: 'system',
+      type: 'hotkey',
+      enabled: true,
+      config: { key: 'Ctrl+Alt+F24' },
+      action: { mode: 'builtin', target: 'launch_local_app', params: {} }
+    },
+    {
+      pluginId: 'plugin.test',
+      type: 'hotkey',
+      enabled: true,
+      config: { key: 'Ctrl+Alt+F24' },
+      action: { mode: 'builtin', target: 'launch_local_app', params: {} }
+    },
+    {
+      pluginId: 'system',
+      type: 'hotkey',
+      enabled: true,
+      config: { key: 'Ctrl+Alt+F24' },
+      action: { mode: 'builtin', target: 'toggle_super_panel', params: {} }
+    }
+  ]) {
+    assert.throws(
+      () => validateMethodParams('trigger_register', candidate),
+      (error) => error instanceof ZToolsError && error.code === errorCodes.invalidRequest
+    )
+  }
+
+  // 3. localapp:* 标识在 plugin_open、trigger_list、trigger_check_conflict 均拒绝
+  for (const pluginId of ['localapp:ABCD1234', 'localapp:mac:' + 'A'.repeat(64)]) {
+    assert.throws(
+      () => validateMethodParams('plugin_open', { pluginId }),
+      (error) => error instanceof ZToolsError && error.code === errorCodes.invalidRequest
+    )
+    assert.throws(
+      () => validateMethodParams('trigger_list', { pluginId }),
+      (error) => error instanceof ZToolsError && error.code === errorCodes.invalidRequest
+    )
+    assert.throws(
+      () => validateMethodParams('trigger_check_conflict', { pluginId, key: 'Ctrl+Alt+F24' }),
+      (error) => error instanceof ZToolsError && error.code === errorCodes.invalidRequest
+    )
+  }
 })

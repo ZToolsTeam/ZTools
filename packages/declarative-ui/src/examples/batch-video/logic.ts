@@ -1,16 +1,11 @@
 /**
  * 批量视频转码、裁剪与动图工坊业务逻辑层 (BatchVideo 2.0 Logic)
  * 提供 12 大核心视频批处理能力，Windows 下通过 dllplugin_call 调用原生插件 batch-video
- * 真实扫描本机 Videos / Downloads / Desktop 目录下的视频媒体文件，生成工业级 FFmpeg 管线参数
  */
 
-import {
-  formatBytes,
-  getRealSystemPath,
-  invokeDllPluginCapability,
-  scanRealDirectoryTree,
-  showRealItemInFolder
-} from '../shared/native-ipc.js'
+import { formatBytes, showRealItemInFolder } from '../shared/native-ipc.js'
+import { cloneCapabilityItems, filterCapabilityList, invokeValidatedDllCapability, validateCapabilityArgs } from '../shared/capability-helpers.js'
+import { type ExampleImportRules, type ExampleImportedFile, pickExampleFolderFiles } from '../shared/file-import.js'
 
 export { formatBytes } from '../shared/native-ipc.js'
 
@@ -47,6 +42,17 @@ export interface RealVideoFileItem {
 export const DLL_PLUGIN_NAME = 'BatchVideoPlugin'
 export const FORBIDDEN_TARGET_PATTERN = new RegExp('\\\\Windows\\\\System32|\\.\\.\\\\|\\.\\./', 'i')
 export const FORBIDDEN_REASON = '视频批处理输出路径不可指向系统受保护目录或包含路径穿越'
+
+export const BATCH_VIDEO_EXTENSIONS = ['.mp4', '.mkv', '.mov', '.avi', '.flv', '.webm', '.wmv', '.ts', '.m4v', '.gif'] as const
+export const BATCH_VIDEO_SUPPORTED_TEXT = '.mp4 / .mkv / .mov / .avi / .webm / .gif'
+
+export const BATCH_VIDEO_IMPORT_RULES: ExampleImportRules = {
+  extensions: BATCH_VIDEO_EXTENSIONS,
+  maxDepth: 5,
+  maxFiles: 500,
+  excludeFile: name => /_(?:ztools|out)\.[a-z0-9]+$/i.test(name),
+  forbiddenPath: FORBIDDEN_TARGET_PATTERN
+}
 
 /**
  * 12 大视频批处理模式
@@ -175,143 +181,70 @@ export const VIDEO_WORKSHOP_MODES: CapabilityActionItem[] = [
 ]
 
 export function getCapabilityItems(): CapabilityActionItem[] {
-  return VIDEO_WORKSHOP_MODES.map(item => ({
-    ...item,
-    params: { ...item.params }
-  }))
+  return cloneCapabilityItems(VIDEO_WORKSHOP_MODES)
 }
 
 export function filterCapabilityItems(items: CapabilityActionItem[], query: string): CapabilityActionItem[] {
-  if (!Array.isArray(items)) return []
-  const q = typeof query === 'string' ? query.trim().toLowerCase() : ''
-  if (!q) return items
-  return items.filter(item => {
-    if (!item || typeof item.title !== 'string') return false
-    return (
-      item.title.toLowerCase().includes(q) ||
-      item.subtitle.toLowerCase().includes(q) ||
-      item.tag.toLowerCase().includes(q) ||
-      item.method.toLowerCase().includes(q)
-    )
-  })
+  return filterCapabilityList(items, query)
 }
 
 export function validateInvocationPayload(method: string, params: unknown): { valid: boolean; error?: string } {
-  if (typeof method !== 'string' || method.trim().length === 0) {
-    return { valid: false, error: 'INVALID_METHOD: 调用方法名不能为空' }
-  }
-  if (method.length > 128 || !/^[A-Za-z0-9_]+$/.test(method.trim())) {
-    return { valid: false, error: 'INVALID_METHOD_FORMAT: 方法名包含非法字符或超长' }
-  }
-  if (params === null || params === undefined || typeof params !== 'object' || Array.isArray(params)) {
-    return { valid: false, error: 'INVALID_PARAMS: 参数必须为非空对象' }
-  }
-
-  const record = params as Record<string, unknown>
-  for (const [key, val] of Object.entries(record)) {
-    if (typeof val === 'string') {
-      if (val.length > 4096) {
-        return { valid: false, error: `PARAM_TOO_LONG: 参数 ${key} 超过最大长度限制` }
-      }
-      if (FORBIDDEN_TARGET_PATTERN.test(val)) {
-        return { valid: false, error: `SECURITY_INTERCEPTED: ${FORBIDDEN_REASON}` }
-      }
-    } else if (typeof val === 'number') {
-      if (!Number.isFinite(val) || val < -1000 || val > 100_000_000) {
-        return { valid: false, error: `PARAM_OUT_OF_RANGE: 数值参数 ${key} 越界或非有限数` }
-      }
-    }
-  }
-
-  return { valid: true }
+  return validateCapabilityArgs(method, params, FORBIDDEN_TARGET_PATTERN, FORBIDDEN_REASON)
 }
 
 export async function invokeNativeCapability(
   method: string,
   params: Record<string, unknown>,
-  hostBridge?: any
+  hostBridge?: unknown
 ): Promise<NativeInvocationResult> {
-  const check = validateInvocationPayload(method, params)
-  if (!check.valid) {
-    throw new Error(check.error || '参数校验失败')
-  }
-  const res = await invokeDllPluginCapability(DLL_PLUGIN_NAME, method, params, hostBridge)
-  return {
-    ok: res.ok,
-    pluginName: DLL_PLUGIN_NAME,
-    method: method.trim(),
-    data: res.data ?? undefined,
-    error: res.error,
-    fromFallback: res.fromFallback
-  }
+  return invokeValidatedDllCapability(DLL_PLUGIN_NAME, method, params, FORBIDDEN_TARGET_PATTERN, FORBIDDEN_REASON, hostBridge)
 }
-
-const VIDEO_EXT_REGEX = /\.(?:mp4|mkv|mov|avi|flv|webm|wmv|ts|m4v|gif)$/i
 
 export type VideoWorkspaceSnapshot = RealVideoFileItem[] & {
   scannedDirs: string[]
   files: RealVideoFileItem[]
   items: RealVideoFileItem[]
   presets: CapabilityActionItem[]
+  error?: string
+}
+
+export function toRealVideoFileItem(file: ExampleImportedFile, index = 0): RealVideoFileItem {
+  const sizeBytes = file.sizeBytes ?? 0
+  return {
+    id: `vid-${index}-${file.path}`,
+    name: file.name,
+    path: file.path,
+    parentDir: file.parentDir,
+    extension: file.extension || '.mp4',
+    sizeBytes,
+    estimatedCompressedBytes: Math.round(sizeBytes * 0.42)
+  }
 }
 
 /**
- * 深度扫描本机 Videos / Downloads / Desktop 目录下的真实视频文件
- * 严禁回退扫描非视频文件充当视频，严禁在真实宿主下拼接 INITIAL_SAMPLE_VIDEOS
+ * 通过用户显式选择文件夹（window_show_select_folder_dialog + filesystem_get_directory_contents）导入视频工作区
  */
-export async function fetchRealVideoWorkspace(hostOverride?: any): Promise<VideoWorkspaceSnapshot> {
-  const [videosDir, downloadsDir, desktopDir] = await Promise.all([
-    getRealSystemPath('videos', hostOverride),
-    getRealSystemPath('downloads', hostOverride),
-    getRealSystemPath('desktop', hostOverride)
-  ])
-
-  const scannedDirs = [videosDir, downloadsDir, desktopDir].filter(Boolean)
-  const files: RealVideoFileItem[] = []
-  const seenPaths = new Set<string>()
-
-  for (const dir of scannedDirs) {
-    const videoScan = await scanRealDirectoryTree(dir, {
-      maxDepth: 2,
-      maxFiles: 250,
-      collectTopN: 40,
-      filterExt: VIDEO_EXT_REGEX,
-      hostOverride
-    })
-    for (const f of videoScan.files) {
-      if (f.sizeBytes <= 0) continue
-      if (!VIDEO_EXT_REGEX.test(f.name)) continue
-      const normPath = f.path.toLowerCase()
-      if (seenPaths.has(normPath)) continue
-      seenPaths.add(normPath)
-      const dot = f.name.lastIndexOf('.')
-      const ext = dot > 0 ? f.name.slice(dot).toLowerCase() : '.mp4'
-      files.push({
-        id: `vid-${files.length}-${f.path}`,
-        name: f.name,
-        path: f.path,
-        parentDir: dir,
-        extension: ext,
-        sizeBytes: f.sizeBytes,
-        estimatedCompressedBytes: Math.round(f.sizeBytes * 0.42)
-      })
-    }
-  }
-
-  files.sort((a, b) => b.sizeBytes - a.sizeBytes)
+export async function fetchRealVideoWorkspace(hostOverride?: unknown): Promise<VideoWorkspaceSnapshot> {
   const presets = getCapabilityItems()
-
+  const res = await pickExampleFolderFiles(
+    BATCH_VIDEO_IMPORT_RULES,
+    { title: '选择包含视频文件的文件夹' },
+    hostOverride
+  )
+  const files = res.files.map((f, idx) => toRealVideoFileItem(f, idx)).sort((a, b) => b.sizeBytes - a.sizeBytes)
+  const scannedDirs = res.folderPath ? [res.folderPath] : []
   return Object.assign([...files], {
     scannedDirs,
     files,
     items: files,
-    presets
+    presets,
+    ...(res.error ? { error: res.error } : {})
   })
 }
 
 export const scanLocalVideoQueue = fetchRealVideoWorkspace
 
-export async function openVideoFileLocation(fullPath: string, hostOverride?: any): Promise<boolean> {
+export async function openVideoFileLocation(fullPath: string, hostOverride?: unknown): Promise<boolean> {
   if (!fullPath) return false
   return showRealItemInFolder(fullPath, hostOverride)
 }

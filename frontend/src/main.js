@@ -31,77 +31,99 @@ app.use(pinia)
 app.use(router)
 app.mount('#app')
 
+/**
+ * 识别当前是否为悬浮条（launcher）或独立弹出插件窗（popout）等辅助窗口
+ * 优先依据 window.__ztoolsWindowMode，非显式辅助模式时回退检查 URL search/hash
+ */
+function detectAuxiliaryWindow() {
+  if (typeof window === 'undefined') return false
+  const mode = window.__ztoolsWindowMode
+  if (mode === 'launcher' || mode === 'popout') return true
+  const search = window.location?.search || ''
+  const hash = window.location?.hash || ''
+  const isLauncher = search.includes('mode=launcher') || hash.includes('launcher')
+  const isPopout =
+    search.includes('popout=1') ||
+    hash.startsWith('#/popout/') ||
+    hash.includes('/popout/')
+  return isLauncher || isPopout
+}
+
+const isAuxiliaryWindow = detectAuxiliaryWindow()
+
 // 全局暴露 router 供宿主控制与 CDP 联调
 window.__router = router
-
-// 首屏空闲时预热核心路由组件
-preloadCoreRoutes()
 
 // ===== 初始化主题 =====
 const themeStore = useThemeStore(pinia)
 themeStore.init()
 
-// ===== 初始化用户状态 =====
-const userStore = useUserStore(pinia)
-userStore.initEventListeners()
-
-// ===== 初始化插件状态 =====
-const pluginsStore = usePluginsStore(pinia)
-pluginsStore.init()
-
 // ===== 注册全局 Toast 函数（供 CEF-IPC SDK 使用）=====
 const { toast } = useToast()
 window.__ztoolsToast = toast
 
-// ===== 注册全局导航方法（供宿主端或托盘调用）=====
-window.__navigateTo = async (path, options) => {
-  const nav = useNavStore(pinia)
-  const pageName = path.replace(/^\//, '')
+if (!isAuxiliaryWindow) {
+  // 首屏空闲时预热核心路由组件
+  preloadCoreRoutes()
 
-  // 优先通过内置插件门面打开设置面板
-  if (pageName === 'advanced-settings' || pageName === 'settings') {
-    const res = await openSettings({ ...options, router })
-    if (res?.fallback && res?.type === 'route') {
-      nav.setPage('advanced-settings')
-    }
-    return
-  }
+  // ===== 初始化用户状态 =====
+  const userStore = useUserStore(pinia)
+  userStore.initEventListeners()
 
-  if (pageName) nav.setPage(pageName)
+  // ===== 初始化插件状态 =====
+  const pluginsStore = usePluginsStore(pinia)
+  pluginsStore.init()
 
-  router.push({ name: pageName || 'my' })
-    .catch((err) => {
-      console.warn('[main] 路由导航失败:', err)
-    })
-}
+  // ===== 注册全局导航方法（供宿主端或托盘调用）=====
+  window.__navigateTo = async (path, options) => {
+    const nav = useNavStore(pinia)
+    const pageName = path.replace(/^\//, '')
 
-// ===== 启动时同步全局唤醒快捷键 =====
-const syncGlobalWakeHotkeyOnStartup = async () => {
-  const maxAttempts = 5
-
-  for (let i = 0; i < maxAttempts; i++) {
-    try {
-      const result = await syncGlobalWakeHotkey()
-      if (result.success) {
-        return
+    // 优先通过内置插件门面打开设置面板
+    if (pageName === 'advanced-settings' || pageName === 'settings') {
+      const res = await openSettings({ ...options, router })
+      if (res?.fallback && res?.type === 'route') {
+        nav.setPage('advanced-settings')
       }
-      // 只有快捷键服务还没就绪才值得重试；被占用等失败重试也没用，直接报出真实原因
-      if (result.reason !== 'trigger_unavailable') {
-        console.warn('全局唤醒快捷键注册失败:', result.message || result.reason, result.hotkey)
-        return
-      }
-    } catch (error) {
-      console.error('Failed to sync global wake hotkey on startup:', error)
       return
     }
 
-    await new Promise((resolve) => setTimeout(resolve, 500))
+    if (pageName) nav.setPage(pageName)
+
+    router.push({ name: pageName || 'my' })
+      .catch((err) => {
+        console.warn('[main] 路由导航失败:', err)
+      })
   }
 
-  console.warn('Global wake hotkey sync skipped: trigger is unavailable')
-}
+  // ===== 启动时同步全局唤醒快捷键 =====
+  const syncGlobalWakeHotkeyOnStartup = async () => {
+    const maxAttempts = 5
 
-syncGlobalWakeHotkeyOnStartup()
+    for (let i = 0; i < maxAttempts; i++) {
+      try {
+        const result = await syncGlobalWakeHotkey()
+        if (result.success) {
+          return
+        }
+        // 只有快捷键服务还没就绪才值得重试；被占用等失败重试也没用，直接报出真实原因
+        if (result.reason !== 'trigger_unavailable') {
+          console.warn('全局唤醒快捷键注册失败:', result.message || result.reason, result.hotkey)
+          return
+        }
+      } catch (error) {
+        console.error('Failed to sync global wake hotkey on startup:', error)
+        return
+      }
+
+      await new Promise((resolve) => setTimeout(resolve, 500))
+    }
+
+    console.warn('Global wake hotkey sync skipped: trigger is unavailable')
+  }
+
+  syncGlobalWakeHotkeyOnStartup()
+}
 
 // ===== 阻止浏览器默认的文件拖放行为 =====
 document.addEventListener(
@@ -122,36 +144,38 @@ document.addEventListener(
   true
 )
 
-// ===== 更新检查回调 =====
-// 更新编排由 Delphi 端统一管理，前端只负责展示通知
-function update_handler(msgType, msgData) {
-  // console.log('[update]', msgType, JSON.stringify(msgData))
+// ===== 更新检查与工作台导航回调（仅主工作台注册，避免辅助窗口双端重复弹窗） =====
+if (!isAuxiliaryWindow) {
+  // 更新编排由 Delphi 端统一管理，前端只负责展示通知
+  function update_handler(msgType, msgData) {
+    // console.log('[update]', msgType, JSON.stringify(msgData))
 
-  if (msgType === 'update.checkResult') {
-    // Delphi 端已处理优先级编排，前端做防御性检查
-    // App 优先于 Web：App 有更新时只展示 App（安装包含 Web 资源）
-    if (msgData.app) {
-      // console.log(`[update] 发现 App 更新: ${msgData.app.version}`)
-      window.__showUpdateNotification?.('app', msgData.app)
-    } else if (msgData.web) {
-      // console.log(`[update] 发现 Web 更新: ${msgData.web.version}，静默执行`)
-      window.__silentWebUpdate?.(msgData.web)
+    if (msgType === 'update.checkResult') {
+      // Delphi 端已处理优先级编排，前端做防御性检查
+      // App 优先于 Web：App 有更新时只展示 App（安装包含 Web 资源）
+      if (msgData.app) {
+        // console.log(`[update] 发现 App 更新: ${msgData.app.version}`)
+        window.__showUpdateNotification?.('app', msgData.app)
+      } else if (msgData.web) {
+        // console.log(`[update] 发现 Web 更新: ${msgData.web.version}，静默执行`)
+        window.__silentWebUpdate?.(msgData.web)
+      }
+    } else if (msgType === 'update.checkError') {
+      console.error('[update] 检查更新失败:', msgData.error)
+    } else if (msgType === 'navigation.open') {
+      // 悬浮条请求工作台跳到指定页面；只接受站内已注册的 hash 路由
+      const route = msgData?.route
+      if (typeof route !== 'string' || !route.startsWith('/') || route.startsWith('//')) return
+      if (router.resolve(route).matched.length === 0) return
+      router.push(route).catch((err) => {
+        console.warn('[main] navigation.open 路由跳转失败:', err)
+      })
+    } else if (msgType === 'update.complete') {
+      // console.log('[update] 更新完成:', msgData)
+      window.__updateComplete?.(msgData.type, msgData.success, msgData.message)
     }
-  } else if (msgType === 'update.checkError') {
-    console.error('[update] 检查更新失败:', msgData.error)
-  } else if (msgType === 'navigation.open') {
-    // 悬浮条请求工作台跳到指定页面；只接受站内已注册的 hash 路由
-    const route = msgData?.route
-    if (typeof route !== 'string' || !route.startsWith('/') || route.startsWith('//')) return
-    if (router.resolve(route).matched.length === 0) return
-    router.push(route).catch((err) => {
-      console.warn('[main] navigation.open 路由跳转失败:', err)
-    })
-  } else if (msgType === 'update.complete') {
-    // console.log('[update] 更新完成:', msgData)
-    window.__updateComplete?.(msgData.type, msgData.success, msgData.message)
   }
-}
-if (typeof window !== 'undefined' && window.ztools?.events?.transport?.setMessageCallback) {
-  window.ztools.events.transport.setMessageCallback(update_handler)
+  if (typeof window !== 'undefined' && window.ztools?.events?.transport?.setMessageCallback) {
+    window.ztools.events.transport.setMessageCallback(update_handler)
+  }
 }

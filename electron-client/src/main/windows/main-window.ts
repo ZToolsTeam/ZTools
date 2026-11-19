@@ -6,6 +6,7 @@ import type { FileSystemService } from '../services/file-system-service.js'
 import { selectFileResourceRoute } from '../protocol/file-resource-dispatch.js'
 import type { ReferenceFileResources } from '../protocol/reference-file-resources.js'
 import { ensureBoundsVisible } from './display-bounds.js'
+import { doubleModifierOf } from '../../contracts/hotkey-rules.js'
 
 export function isWindows11OrLater(): boolean {
   if (process.platform !== 'win32') return false
@@ -189,6 +190,8 @@ export interface MainWindowOptions {
   initialSize?: { width: number; height: number }
   persistNormalBounds?: (bounds: Electron.Rectangle) => void
   onToggleLauncher?: (() => void) | undefined
+  /** 当前主窗口是否处于快捷键录制激活态，仅激活态拦截 Ctrl+Space / Alt+Space */
+  isRecorderCaptureActive?: (() => boolean) | undefined
 }
 
 export function secureWebPreferences(): Electron.WebPreferences {
@@ -252,6 +255,16 @@ export function acceleratorToRecorderKeyPayload(
   platform: NodeJS.Platform = process.platform
 ): RecorderKeyPayload | null {
   if (typeof accelerator !== 'string' || !accelerator.trim()) return null
+  const doubleModifier = doubleModifierOf(accelerator)
+  if (doubleModifier === 'ctrl') {
+    return { key: 'DoubleCtrl', code: 'DoubleCtrl', ctrlKey: true, altKey: false, shiftKey: false, metaKey: false }
+  }
+  if (doubleModifier === 'alt') {
+    return { key: 'DoubleAlt', code: 'DoubleAlt', ctrlKey: false, altKey: true, shiftKey: false, metaKey: false }
+  }
+  if (doubleModifier === 'shift') {
+    return { key: 'DoubleShift', code: 'DoubleShift', ctrlKey: false, altKey: false, shiftKey: true, metaKey: false }
+  }
   const tokens = accelerator
     .split('+')
     .map((t) => t.trim())
@@ -343,8 +356,13 @@ export function handleMainWindowBeforeInputEvent(
     isDestroyed?: (() => boolean) | undefined
     sendIpc?: ((channel: string) => void) | undefined
     forwardRecorderKey?: ((payload: RecorderKeyPayload) => void) | undefined
+    isRecorderCaptureActive?: (() => boolean) | undefined
   }
 ): boolean {
+  // 仅在录制框处于激活态时拦截 (Alt/Ctrl)+Space，非录制态放行系统输入法切换与用户按键
+  if (options.isRecorderCaptureActive?.() !== true) {
+    return false
+  }
   const isSpace =
     input.code === 'Space' ||
     input.key === ' ' ||
@@ -462,6 +480,7 @@ export function createMainWindow(options: MainWindowOptions): BrowserWindow {
   window.webContents.on('before-input-event', (event, input) => {
     handleMainWindowBeforeInputEvent(event, input, {
       ...(options.onToggleLauncher ? { onToggleLauncher: options.onToggleLauncher } : {}),
+      ...(options.isRecorderCaptureActive ? { isRecorderCaptureActive: options.isRecorderCaptureActive } : {}),
       isDestroyed: () => window.isDestroyed(),
       sendIpc: (channel) => window.webContents.send(channel),
       forwardRecorderKey: (payload) => {

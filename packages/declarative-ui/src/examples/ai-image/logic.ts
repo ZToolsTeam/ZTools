@@ -1,18 +1,20 @@
 /**
  * AI 图像超分放大、人像/商品去背景与画质修复业务逻辑层 (AiImage Logic)
- * 真实扫描本机 Pictures / Desktop / Downloads 目录下的图像文件，对接 AiImagePlugin 引擎
  */
 
 import {
   callHostTransport,
   formatBytes,
   getRealFileSize,
-  getRealSystemPath,
   invokePluginService,
   isRealElectronHost,
-  scanRealDirectoryTree,
   showRealItemInFolder
 } from '../shared/native-ipc.js'
+import {
+  type ExampleImportRules,
+  type ExampleImportedFile,
+  pickExampleFolderFiles
+} from '../shared/file-import.js'
 
 export { formatBytes }
 
@@ -76,6 +78,17 @@ function isStrictRealHost(hostOverride?: unknown): boolean {
 
 export const FORBIDDEN_PATH_PATTERN = new RegExp('\\\\Windows\\\\System32|\\.\\.\\\\|\\.\\./', 'i')
 
+export const AI_IMAGE_EXTENSIONS = ['.png', '.jpg', '.jpeg', '.webp', '.bmp'] as const
+export const AI_IMAGE_SUPPORTED_TEXT = '.png / .jpg / .jpeg / .webp / .bmp'
+
+export const AI_IMAGE_IMPORT_RULES: ExampleImportRules = {
+  extensions: AI_IMAGE_EXTENSIONS,
+  maxDepth: 5,
+  maxFiles: 500,
+  excludeFile: name => /_(?:1x|2x|4x)\.(?:png|webp|jpg)$/i.test(name),
+  forbiddenPath: FORBIDDEN_PATH_PATTERN
+}
+
 export const AI_IMAGE_ENGINES: AiImageEnginePreset[] = [
   {
     id: 'realesrgan-x4plus',
@@ -119,71 +132,6 @@ export const AI_IMAGE_ENGINES: AiImageEnginePreset[] = [
   }
 ]
 
-export const INITIAL_AI_IMAGE_FILES: AiImageFileItem[] = [
-  {
-    id: 'ai-img-1',
-    name: 'Product_Keynote_Hero_Banner_1080p.png',
-    path: 'D:\\Workspace\\Pictures\\Design\\Product_Keynote_Hero_Banner_1080p.png',
-    parentDir: 'D:\\Workspace\\Pictures\\Design',
-    extension: '.png',
-    sizeBytes: 4820 * 1024,
-    width: 1920,
-    height: 1080
-  },
-  {
-    id: 'ai-img-2',
-    name: 'Anime_Concept_Art_Illustration_Raw.jpg',
-    path: 'D:\\Workspace\\Pictures\\Artworks\\Anime_Concept_Art_Illustration_Raw.jpg',
-    parentDir: 'D:\\Workspace\\Pictures\\Artworks',
-    extension: '.jpg',
-    sizeBytes: 2450 * 1024,
-    width: 1280,
-    height: 720
-  },
-  {
-    id: 'ai-img-3',
-    name: 'ECommerce_Mechanical_Keyboard_Shot.png',
-    path: 'D:\\Workspace\\Desktop\\ECommerce_Mechanical_Keyboard_Shot.png',
-    parentDir: 'D:\\Workspace\\Desktop',
-    extension: '.png',
-    sizeBytes: 6140 * 1024,
-    width: 2048,
-    height: 1536
-  },
-  {
-    id: 'ai-img-4',
-    name: 'Portrait_Speaker_Avatar_LowRes.jpg',
-    path: 'D:\\Workspace\\Downloads\\Portrait_Speaker_Avatar_LowRes.jpg',
-    parentDir: 'D:\\Workspace\\Downloads',
-    extension: '.jpg',
-    sizeBytes: 860 * 1024,
-    width: 800,
-    height: 800
-  },
-  {
-    id: 'ai-img-5',
-    name: 'UI_Architecture_Diagram_Export.webp',
-    path: 'D:\\Workspace\\Pictures\\Screenshots\\UI_Architecture_Diagram_Export.webp',
-    parentDir: 'D:\\Workspace\\Pictures\\Screenshots',
-    extension: '.webp',
-    sizeBytes: 1580 * 1024,
-    width: 1920,
-    height: 1200
-  },
-  {
-    id: 'ai-img-6',
-    name: 'Game_Texture_Asset_Diffuse_Map.png',
-    path: 'D:\\Workspace\\Pictures\\Assets\\Game_Texture_Asset_Diffuse_Map.png',
-    parentDir: 'D:\\Workspace\\Pictures\\Assets',
-    extension: '.png',
-    sizeBytes: 3290 * 1024,
-    width: 1024,
-    height: 1024
-  }
-]
-
-const IMAGE_EXT_REGEX = /\.(?:png|jpg|jpeg|webp|bmp)$/i
-
 export function estimateTargetResolution(width: number, height: number, scale: '1x' | '2x' | '4x'): string {
   const factor = scale === '4x' ? 4 : scale === '2x' ? 2 : 1
   const w = Math.max(1, Math.round(width * factor))
@@ -210,62 +158,40 @@ export type AiImageQueueSnapshot = AiImageFileItem[] & {
   files: AiImageFileItem[]
   items: AiImageFileItem[]
   engines: AiImageEnginePreset[]
+  error?: string
 }
 
-export async function fetchAiImageQueue(hostOverride?: any): Promise<AiImageQueueSnapshot> {
-  const strictReal = isStrictRealHost(hostOverride)
-  const [picturesDir, desktopDir, downloadsDir] = await Promise.all([
-    getRealSystemPath('pictures', hostOverride),
-    getRealSystemPath('desktop', hostOverride),
-    getRealSystemPath('downloads', hostOverride)
-  ])
-
-  const scannedDirs = [picturesDir, desktopDir, downloadsDir].filter(Boolean)
-  const discovered: AiImageFileItem[] = []
-  const seenPaths = new Set<string>()
-
-  for (const dir of scannedDirs) {
-    const scanRes = await scanRealDirectoryTree(dir, {
-      maxDepth: 2,
-      maxFiles: 200,
-      collectTopN: 40,
-      filterExt: IMAGE_EXT_REGEX,
-      hostOverride
-    })
-    for (const f of scanRes.files) {
-      if (f.sizeBytes <= 0) continue
-      const normPath = f.path.toLowerCase()
-      if (seenPaths.has(normPath)) continue
-      seenPaths.add(normPath)
-      const dot = f.name.lastIndexOf('.')
-      const ext = dot > 0 ? f.name.slice(dot).toLowerCase() : '.png'
-      discovered.push({
-        id: `ai-img-${discovered.length}-${f.path}`,
-        name: f.name,
-        path: f.path,
-        parentDir: dir,
-        extension: ext,
-        sizeBytes: f.sizeBytes,
-        width: f.sizeBytes > 2 * 1024 * 1024 ? 1920 : 1280,
-        height: f.sizeBytes > 2 * 1024 * 1024 ? 1080 : 720
-      })
-    }
+export function toAiImageFileItem(file: ExampleImportedFile, index = 0): AiImageFileItem {
+  const sizeBytes = file.sizeBytes ?? 0
+  return {
+    id: `ai-img-${index}-${file.path}`,
+    name: file.name,
+    path: file.path,
+    parentDir: file.parentDir,
+    extension: file.extension || '.png',
+    sizeBytes,
+    width: sizeBytes > 2 * 1024 * 1024 ? 1920 : 1280,
+    height: sizeBytes > 2 * 1024 * 1024 ? 1080 : 720
   }
+}
 
-  discovered.sort((a, b) => b.sizeBytes - a.sizeBytes)
-
-  // 真实宿主下只展示真实扫描到的图片文件，严禁在 < 4 时拼接 INITIAL_AI_IMAGE_FILES
-  const files = strictReal
-    ? discovered
-    : discovered.length > 0
-      ? discovered
-      : [...INITIAL_AI_IMAGE_FILES]
-
+/**
+ * 通过用户显式选择文件夹（window_show_select_folder_dialog + filesystem_get_directory_contents）导入待处理图像
+ */
+export async function fetchAiImageQueue(hostOverride?: unknown): Promise<AiImageQueueSnapshot> {
+  const res = await pickExampleFolderFiles(
+    AI_IMAGE_IMPORT_RULES,
+    { title: '选择包含待处理图片的文件夹' },
+    hostOverride
+  )
+  const files = res.files.map((f, idx) => toAiImageFileItem(f, idx)).sort((a, b) => b.sizeBytes - a.sizeBytes)
+  const scannedDirs = res.folderPath ? [res.folderPath] : []
   return Object.assign([...files], {
     scannedDirs,
     files,
     items: files,
-    engines: [...AI_IMAGE_ENGINES]
+    engines: [...AI_IMAGE_ENGINES],
+    ...(res.error ? { error: res.error } : {})
   })
 }
 
@@ -274,7 +200,7 @@ export const fetchAiImageWorkspace = fetchAiImageQueue
 export async function executeAiImageBatch(
   files: AiImageFileItem[],
   config: AiImageBatchConfig,
-  hostOverride?: any
+  hostOverride?: unknown
 ): Promise<AiImageBatchResult> {
   if (!Array.isArray(files) || files.length === 0) {
     return {
@@ -331,7 +257,7 @@ export async function executeAiImageBatch(
     const defaultOutputPath = f.path.replace(/(\.[^.\\/]+)?$/, `_${config.scaleFactor}.${config.outputFormat}`)
     const numericScale = parseInt(String(config.scaleFactor), 10) || 2
 
-    const pluginRes = await invokePluginService<any>(
+    const pluginRes = await invokePluginService<Record<string, unknown>>(
       'AiImagePlugin',
       'processImage',
       {
@@ -350,45 +276,27 @@ export async function executeAiImageBatch(
     )
 
     if (pluginRes.ok && pluginRes.data?.ok !== false) {
-      const data = pluginRes.data
-      const itemRes =
-        typeof data === 'object' && data !== null && Array.isArray(data.results) && data.results.length > 0
-          ? data.results[0]
-          : data
+      const data = pluginRes.data as Record<string, unknown> | undefined
+      const resultsArr = Array.isArray(data?.results) ? (data.results as Array<Record<string, unknown>>) : null
+      const itemRes = resultsArr && resultsArr.length > 0 ? resultsArr[0] : data
       const outPath =
-        (typeof itemRes === 'object' && itemRes !== null
-          ? itemRes.outputPath || itemRes.path || itemRes.filePath
-          : '') ||
-        (typeof data === 'object' && data !== null ? data.outputPath || data.path || data.filePath : '') ||
+        String(itemRes?.outputPath || itemRes?.path || itemRes?.filePath || data?.outputPath || data?.path || data?.filePath || '') ||
         defaultOutputPath
-      let realSize = Number(
-        typeof itemRes === 'object' && itemRes !== null
-          ? itemRes.outputBytes ?? itemRes.sizeBytes ?? itemRes.outputSizeBytes ?? itemRes.size ?? 0
-          : 0
-      )
+      let realSize = Number(itemRes?.outputBytes ?? itemRes?.sizeBytes ?? itemRes?.outputSizeBytes ?? itemRes?.size ?? 0)
       if (!Number.isFinite(realSize) || realSize <= 0) {
         realSize = await getRealFileSize(outPath, hostOverride)
       }
-      if (
-        realSize > 0 ||
-        (typeof itemRes === 'object' && itemRes !== null && (itemRes.ok === true || Boolean(itemRes.outputPath))) ||
-        (typeof data === 'object' && data !== null && data.ok === true)
-      ) {
+      if (realSize > 0 || itemRes?.ok === true || Boolean(itemRes?.outputPath) || data?.ok === true) {
         const finalSize = realSize > 0 ? realSize : f.sizeBytes
         f.outputSizeBytes = finalSize
         f.outputPath = outPath
         totalOutputBytes += finalSize
-        outputs.push({
-          inputPath: f.path,
-          outputPath: outPath,
-          sizeBytes: finalSize,
-          ok: true
-        })
+        outputs.push({ inputPath: f.path, outputPath: outPath, sizeBytes: finalSize, ok: true })
         continue
       }
     }
 
-    lastError = pluginRes.error || (pluginRes.data && pluginRes.data.error) || ''
+    lastError = pluginRes.error || String(pluginRes.data?.error || '')
   }
 
   if (outputs.length > 0) {
@@ -404,8 +312,7 @@ export async function executeAiImageBatch(
     }
   }
 
-  // 兼容宿主级批量通道 ai_image_process_batch
-  const ipcRes = await callHostTransport<any>(
+  const ipcRes = await callHostTransport<Record<string, unknown>>(
     'ai_image_process_batch',
     {
       files: files.map(f => f.path),
@@ -419,25 +326,19 @@ export async function executeAiImageBatch(
   )
 
   if (ipcRes.ok && ipcRes.data?.ok !== false) {
+    const resultsArr = Array.isArray(ipcRes.data?.results) ? (ipcRes.data.results as Array<Record<string, unknown>>) : null
     for (let i = 0; i < files.length; i++) {
       const f = files[i]
-      const itemRes = Array.isArray(ipcRes.data?.results)
-        ? ipcRes.data.results[i] ?? ipcRes.data.results[0]
-        : ipcRes.data
+      const itemRes = resultsArr ? (resultsArr[i] ?? resultsArr[0]) : ipcRes.data
       const outPath =
-        itemRes?.outputPath ||
+        String(itemRes?.outputPath || '') ||
         f.path.replace(/(\.[^.\\/]+)?$/, `_${config.scaleFactor}.${config.outputFormat}`)
       const realSize =
         Number(itemRes?.outputBytes ?? itemRes?.sizeBytes ?? itemRes?.outputSizeBytes ?? 0) ||
         (await getRealFileSize(outPath, hostOverride)) ||
         f.sizeBytes
       totalOutputBytes += realSize
-      outputs.push({
-        inputPath: f.path,
-        outputPath: outPath,
-        sizeBytes: realSize,
-        ok: true
-      })
+      outputs.push({ inputPath: f.path, outputPath: outPath, sizeBytes: realSize, ok: true })
     }
     return {
       ok: true,
@@ -451,7 +352,6 @@ export async function executeAiImageBatch(
     }
   }
 
-  // 真实宿主下处理失败时如实返回 ok: false
   if (strictReal) {
     const errMsg = lastError || ipcRes.error || 'AI_IMAGE_ENGINE_FAILED: AI 图像处理引擎调用失败或未生成有效输出文件'
     return {
@@ -467,33 +367,22 @@ export async function executeAiImageBatch(
     }
   }
 
-  // 纯离线无宿主快照测试回退
-  for (const f of files) {
-    const outPath = f.path.replace(/(\.[^.\\/]+)?$/, `_${config.scaleFactor}.${config.outputFormat}`)
-    totalOutputBytes += f.sizeBytes
-    outputs.push({
-      inputPath: f.path,
-      outputPath: outPath,
-      sizeBytes: f.sizeBytes,
-      ok: true
-    })
-  }
-
   return {
-    ok: true,
-    processedCount: files.length,
+    ok: false,
+    processedCount: 0,
     engineId: effectiveEngineId,
     targetResolution: targetRes,
     outputFormat: config.outputFormat,
-    totalOutputBytes,
-    outputs,
-    fromFallback: true
+    totalOutputBytes: 0,
+    outputs: [],
+    error: '请在 ZTools 客户端中执行 AI 图像推理任务',
+    fromFallback: false
   }
 }
 
 export const runAiImageBatch = executeAiImageBatch
 
-export async function openAiImageLocation(fullPath: string, hostOverride?: any): Promise<boolean> {
+export async function openAiImageLocation(fullPath: string, hostOverride?: unknown): Promise<boolean> {
   if (!fullPath) return false
   return showRealItemInFolder(fullPath, hostOverride)
 }

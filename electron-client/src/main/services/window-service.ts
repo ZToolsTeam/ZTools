@@ -29,6 +29,7 @@ import {
   normalizeAccentTheme,
   POPOUT_TITLE_BAR_HEIGHT,
   secureWebPreferences,
+  suppressWindowsSystemMenu,
   updateWindowTheme
 } from '../windows/main-window.js'
 
@@ -395,6 +396,7 @@ export class WindowService {
       try {
         // 复用窗口时 URL 只有 hash 不同（同文档导航，页面不重载）：页面按 URL 里新的 handoff 编号重新取状态
         await existing.loadURL(targetUrl)
+        if (existing.isDestroyed()) throw new ZToolsError(errorCodes.cancelled, '插件窗口已关闭')
       } catch (error) {
         staged?.rollback()
         if (superseded()) throw new ZToolsError(errorCodes.cancelled, '已被更新的弹出请求取代')
@@ -445,6 +447,8 @@ export class WindowService {
       ...(isMac ? { vibrancy: 'sidebar' } : {}),
       webPreferences: secureWebPreferences()
     })
+    // 抑制 Windows 独立弹出窗口的系统默认菜单
+    suppressWindowsSystemMenu(popout)
 
     if (this.#registry && popout.webContents && typeof popout.webContents.id === 'number') {
       try {
@@ -485,18 +489,21 @@ export class WindowService {
       // 先登记交接状态与授权、再加载：页面一加载就可能来取
       staged = handoff ? await this.#stageHandoff(popout.webContents.id, handoff, caller) : undefined
       await popout.loadURL(targetUrl)
+      if (popout.isDestroyed()) throw new ZToolsError(errorCodes.cancelled, '插件窗口已关闭')
       if (!popout.isDestroyed()) {
         popout.show()
         popout.focus()
       }
     } catch (error) {
       staged?.rollback()
+      const cancelled = superseded() || popout.isDestroyed()
       // 加载被同一插件更新的弹出请求打断（复用了这个窗口）：窗口留给新请求，本次按取消处理
       if (superseded() && !popout.isDestroyed() && this.#popoutWindows.get(popoutKey) === popout) {
         throw new ZToolsError(errorCodes.cancelled, '已被更新的弹出请求取代')
       }
       if (this.#popoutWindows.get(popoutKey) === popout) this.#popoutWindows.delete(popoutKey)
       if (!popout.isDestroyed()) popout.destroy()
+      if (cancelled) throw new ZToolsError(errorCodes.cancelled, '插件窗口已关闭或弹出请求已被取代')
       throw error
     }
 
@@ -885,6 +892,17 @@ export class WindowService {
     }
   }
 
+  /** 插件停用或替换前，销毁独立宿主窗口并作废在途交接。 */
+  closePlugin(pluginId: string): void {
+    const key = `plugin:${pluginId.trim().toLowerCase()}`
+    this.#popoutGenerations.set(key, (this.#popoutGenerations.get(key) ?? 0) + 1)
+    const window = this.#popoutWindows.get(key)
+    this.#popoutWindows.delete(key)
+    if (!window) return
+    this.#dropHandoff(window.webContents.id)
+    if (!window.isDestroyed()) window.destroy()
+  }
+
   /**
    * 同步更新所有已打开独立弹出窗口（popout）的标题栏覆盖层符号色与窗口底色，
    * 并缓存最新主题供后续新弹出的独立窗口继承。
@@ -948,7 +966,10 @@ export class WindowService {
     return { success: true }
   }
 
-  toggleDevTools(caller: CallerIdentity): { success: true } {
+  toggleDevTools(caller: CallerIdentity, isPackaged: boolean = app?.isPackaged === true): { success: true } {
+    if (isPackaged) {
+      throw new ZToolsError(errorCodes.permissionDenied, '正式版不允许打开开发者工具')
+    }
     const contents = callerWindow(caller).webContents
     if (contents.isDevToolsOpened()) contents.closeDevTools()
     else contents.openDevTools({ mode: 'detach' })

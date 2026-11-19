@@ -6,7 +6,7 @@
  *    - 16 / 8 / 4 线程分块并发下载配置 (`-x16 -s16 -k1M`)
  *    - 真实探测 Aria2 JSON-RPC 守护进程 (`http://127.0.0.1:6800/jsonrpc`) 与本机下载环境
  *    - 真实读取本机剪贴板自动嗅探 HTTP/HTTPS/FTP/Magnet/Torrent 下载链接
- *    - 真实扫描本机 `Downloads` 目录下的全部已下载文件（安装包、压缩归档、视频媒体、镜像与文档）
+ *    - 支持显式导入本地下载目录或文件（选择文件 / 选择文件夹 / 拖入文件夹）
  *    - 真实探测下载盘符剩余可用空间，防止磁盘写满
  *    - 支持三态勾选批量移入回收站、打开文件、在 Explorer 中定位文件与发起真实下载任务
  */
@@ -19,7 +19,6 @@ import {
   isRealElectronHost,
   openRealPath,
   resolveRealSpecialPaths,
-  scanRealDirectoryTree,
   showRealItemInFolder,
   showRealToast,
   trashRealItem,
@@ -27,6 +26,20 @@ import {
   formatBytes,
   type NativeInvocationResult
 } from "../shared/native-ipc.js";
+import {
+  pickExampleFolderFiles,
+  probeExampleDriveSpace,
+  type ExampleImportResult,
+  type ExampleImportRules,
+  type ExampleImportedFile
+} from "../shared/file-import.js";
+
+export const MULTI_DOWNLOAD_IMPORT_RULES: ExampleImportRules = {
+  maxDepth: 5,
+  maxFiles: 500,
+  skipEmptyFiles: true,
+  forbiddenPath: /(^|[\\/])(Windows|System32|SysWOW64|Program Files|Program Files \(x86\)|Boot|Recovery)($|[\\/])/i
+};
 
 export { formatBytes };
 export type { NativeInvocationResult };
@@ -262,103 +275,89 @@ export async function readClipboardDownloadUrl(hostBridge?: unknown): Promise<{
   return { url: "", protocol: "支持 HTTP/FTP/Magnet", suggestedFileName: "" };
 }
 
-export async function fetchMultiDownloadSnapshot(hostBridge?: unknown): Promise<MultiDownloadSnapshot> {
-  const paths = await resolveRealSpecialPaths(hostBridge);
-  const downloadDir = paths.downloads || `${paths.userProfile}\\Downloads`;
-  const driveLetter = (downloadDir.match(/^[A-Za-z]:/) || ["C:"])[0].toUpperCase();
+export function toDownloadedFileItem(entry: ExampleImportedFile): DownloadedFileItem {
+  const ext = String(entry.extension || "").toLowerCase() || ".bin";
+  const catMeta = classifyDownloadedExtension(ext);
+  return {
+    id: entry.path,
+    name: entry.name,
+    path: entry.path,
+    ext,
+    sizeBytes: Number(entry.sizeBytes ?? 0),
+    mtimeMs: Number(entry.lastModifiedMs ?? 0),
+    category: catMeta.id,
+    categoryName: catMeta.name,
+    categoryColor: "var(--rc-text-muted)",
+    categoryIcon: catMeta.icon
+  };
+}
 
-  const [diskRes, sysRes, rawEntries, aria2RpcOnline, clipInfo] = await Promise.all([
-    callHostTransport<{ total?: number; used?: number; available?: number; free?: number }>(
-      "system_get_disk_usage",
-      { drive: `${driveLetter}\\` },
-      hostBridge
-    ),
-    invokeHostCapability<Record<string, unknown>>("system.info", { includeStorage: true }, hostBridge),
-    scanRealDirectoryTree(downloadDir, { maxDepth: 2, maxFiles: 220, hostOverride: hostBridge }),
-    probeAria2JsonRpc(),
-    readClipboardDownloadUrl(hostBridge)
-  ]);
-
-  let driveFreeBytes = 0;
-  let driveTotalBytes = 0;
-  if (diskRes.ok && diskRes.data) {
-    driveTotalBytes = Number(diskRes.data.total || 0);
-    const used = Number(diskRes.data.used || 0);
-    driveFreeBytes = Number(
-      diskRes.data.available ?? diskRes.data.free ?? Math.max(0, driveTotalBytes - used)
-    );
-  } else if (sysRes.ok && sysRes.data) {
-    const storageArr = Array.isArray((sysRes.data as { storage?: unknown }).storage)
-      ? ((sysRes.data as { storage: Array<Record<string, unknown>> }).storage)
-      : [];
-    const matchedDrive =
-      storageArr.find((d) => String(d.mount || d.fs || "").toUpperCase().startsWith(driveLetter)) ||
-      storageArr[0];
-    if (matchedDrive) {
-      driveTotalBytes = Number(matchedDrive.size || matchedDrive.total || 0);
-      const used = Number(matchedDrive.used || 0);
-      driveFreeBytes = Number(matchedDrive.available || matchedDrive.free || Math.max(0, driveTotalBytes - used));
-    }
-  }
-
-  const files: DownloadedFileItem[] = [];
-  let totalSizeBytes = 0;
+export function computeDownloadCategoryStats(
+  files: DownloadedFileItem[]
+): MultiDownloadSnapshot["categoryStats"] {
   const catMap = new Map<DownloadFileCategory, { sizeBytes: number; count: number }>();
   for (const cat of DOWNLOAD_CATEGORIES) {
     catMap.set(cat.id, { sizeBytes: 0, count: 0 });
   }
-
-  const fileList = Array.isArray(rawEntries) ? rawEntries : (rawEntries?.files || []);
-  for (const entry of fileList) {
-    const isDir = Boolean(entry.isDirectory || entry.isDir);
-    const sz = Number(entry.sizeBytes ?? entry.size ?? 0);
-    if (isDir || sz <= 0) continue;
-    const ext = String(entry.ext || "").toLowerCase() || ".bin";
-    const catMeta = classifyDownloadedExtension(ext);
-    totalSizeBytes += sz;
-    const stat = catMap.get(catMeta.id)!;
-    stat.sizeBytes += sz;
+  for (const f of files) {
+    const stat = catMap.get(f.category) || catMap.get("other")!;
+    stat.sizeBytes += f.sizeBytes;
     stat.count += 1;
-
-    files.push({
-      id: entry.path,
-      name: entry.name,
-      path: entry.path,
-      ext,
-      sizeBytes: sz,
-      mtimeMs: Number(entry.mtimeMs ?? entry.mtime ?? Date.now()),
-      category: catMeta.id,
-      categoryName: catMeta.name,
-      categoryColor: catMeta.color,
-      categoryIcon: catMeta.icon
-    });
   }
-
-  files.sort((a, b) => b.mtimeMs - a.mtimeMs || b.sizeBytes - a.sizeBytes);
-
-  const categoryStats = DOWNLOAD_CATEGORIES.map((c) => {
+  return DOWNLOAD_CATEGORIES.map((c) => {
     const st = catMap.get(c.id) || { sizeBytes: 0, count: 0 };
     return {
       category: c.id,
       name: c.name,
-      color: c.color,
+      color: "var(--rc-text-muted)",
       sizeBytes: st.sizeBytes,
       count: st.count
     };
   }).filter((s) => s.sizeBytes > 0);
+}
+
+export async function ensureMultiDownloadDirectory(currentDir: string, hostBridge?: unknown): Promise<string> {
+  if (currentDir && currentDir.trim()) return currentDir.trim();
+  const paths = await resolveRealSpecialPaths(hostBridge);
+  return paths.downloads || (paths.userProfile ? `${paths.userProfile}\\Downloads` : "");
+}
+
+export async function importMultiDownloadFolder(
+  hostBridge?: unknown
+): Promise<Omit<ExampleImportResult, "files"> & { files: DownloadedFileItem[]; downloadDir: string }> {
+  const { files: imported, ...rest } = await pickExampleFolderFiles(
+    MULTI_DOWNLOAD_IMPORT_RULES,
+    { title: "选择下载文件夹" },
+    hostBridge
+  );
+  const files = imported.map(toDownloadedFileItem);
+  const downloadDir = files[0]?.path ? imported[0].parentDir : "";
+  return { ...rest, files, downloadDir };
+}
+
+export async function fetchMultiDownloadSnapshot(
+  hostBridge?: unknown,
+  downloadDirHint = ""
+): Promise<MultiDownloadSnapshot> {
+  const cleanDir = String(downloadDirHint || "").trim();
+  const driveLetter = (cleanDir.match(/^[A-Za-z]:/) || ["C:"])[0].toUpperCase();
+  const [{ freeBytes: driveFreeBytes, totalBytes: driveTotalBytes }, aria2RpcOnline] = await Promise.all([
+    probeExampleDriveSpace(driveLetter, hostBridge),
+    probeAria2JsonRpc()
+  ]);
 
   return {
-    downloadDir,
+    downloadDir: cleanDir,
     driveLetter,
     driveFreeBytes,
     driveTotalBytes,
     aria2RpcOnline,
     aria2Endpoint: "http://127.0.0.1:6800/jsonrpc",
-    sniffedClipboardUrl: clipInfo.url,
-    sniffedProtocol: clipInfo.protocol,
-    files,
-    totalSizeBytes,
-    categoryStats,
+    sniffedClipboardUrl: "",
+    sniffedProtocol: "未检测（粘贴链接或点读剪贴板）",
+    files: [],
+    totalSizeBytes: 0,
+    categoryStats: [],
     updatedAt: new Date().toLocaleTimeString()
   };
 }

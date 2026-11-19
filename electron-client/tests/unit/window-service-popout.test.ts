@@ -6,7 +6,11 @@ import type { CallerIdentity } from '../../src/contracts/capabilities.js'
 import { errorCodes } from '../../src/contracts/errors.js'
 import type { FileSystemService } from '../../src/main/services/file-system-service.js'
 import { extractPopoutKey, requireLocalUrl, WindowService } from '../../src/main/services/window-service.js'
-import { POPOUT_TITLE_BAR_HEIGHT, TRANSPARENT_TITLE_BAR_OVERLAY_COLOR } from '../../src/main/windows/main-window.js'
+import {
+  POPOUT_TITLE_BAR_HEIGHT,
+  TRANSPARENT_TITLE_BAR_OVERLAY_COLOR,
+  WM_SYSCHAR
+} from '../../src/main/windows/main-window.js'
 import { WindowRegistry } from '../../src/main/windows/window-registry.js'
 
 class FakePopoutWindow extends EventEmitter {
@@ -18,6 +22,8 @@ class FakePopoutWindow extends EventEmitter {
   loadedUrls: string[] = []
   overlays: Electron.TitleBarOverlayOptions[] = []
   backgrounds: string[] = []
+  hookedMessages: number[] = []
+  menuRemoved = false
   shouldFailLoad = false
   shouldThrowOverlay = false
   readonly webContents: WebContents
@@ -100,6 +106,14 @@ class FakePopoutWindow extends EventEmitter {
 
   setBackgroundColor(color: string): void {
     this.backgrounds.push(color)
+  }
+
+  removeMenu(): void {
+    this.menuRemoved = true
+  }
+
+  hookWindowMessage(message: number, _callback: (wParam: Buffer, lParam: Buffer) => void): void {
+    this.hookedMessages.push(message)
   }
 
   destroy(): void {
@@ -306,5 +320,85 @@ test('WindowService.updateTheme synchronizes popout transparent titleBarOverlay 
   service.stop()
   for (const win of createdWindows) {
     assert.equal(win.isDestroyed(), true)
+  }
+})
+
+test('关闭插件取消新建或复用中的加载，旧请求不删除新实例且不影响其他插件', async context => {
+  for (const [reuse, failAfterClose] of [[false, false], [true, false], [false, true], [true, true]] as const) {
+    const created: FakePopoutWindow[] = []
+    let blockLoad = false
+    let entered!: () => void
+    let release!: () => void
+    const loading = new Promise<void>(resolve => { entered = resolve })
+    const barrier = new Promise<void>(resolve => { release = resolve })
+    const service = new WindowService({} as FileSystemService, undefined, undefined, () => {
+      const window = new FakePopoutWindow(500 + created.length)
+      window.loadURL = async url => {
+        if (blockLoad) {
+          entered()
+          await barrier
+          if (failAfterClose) throw new Error('ERR_ABORTED')
+        }
+        window.loadedUrls.push(url)
+      }
+      created.push(window)
+      return window as unknown as BrowserWindow
+    })
+    context.after(() => { release(); service.stop() })
+    await service.open({ url: 'index.html#/popout/todo' }, mainCaller)
+    if (reuse) await service.open({ url: 'index.html#/popout/memo' }, mainCaller)
+    blockLoad = true
+    const opening = service.open({ url: 'index.html#/popout/memo' }, mainCaller)
+    const rejected = assert.rejects(opening, { code: errorCodes.cancelled })
+    await loading
+    service.closePlugin('MEMO')
+    assert.equal(created[1]!.isDestroyed(), true)
+    assert.equal(created[0]!.isDestroyed(), false)
+    blockLoad = false
+    assert.equal((await service.open({ url: 'index.html#/popout/memo' }, mainCaller)).windowInstanceStatus, 'created')
+    release()
+    await rejected
+    assert.equal((await service.open({ url: 'index.html#/popout/memo' }, mainCaller)).windowInstanceStatus, 'reused')
+    assert.equal(created.length, 3, '旧请求清理后仍复用新实例')
+    service.closePlugin('memo')
+    service.closePlugin('memo')
+    assert.equal(created[2]!.isDestroyed(), true)
+    service.stop()
+  }
+})
+
+test('Popout 窗口接入 Windows 系统菜单抑制且 toggleDevTools 在正式版拒绝打开开发者工具', async () => {
+  const created: FakePopoutWindow[] = []
+  const registry = new WindowRegistry()
+  const service = new WindowService({} as FileSystemService, registry, registry, () => {
+    const win = new FakePopoutWindow(801 + created.length)
+    created.push(win)
+    return win as unknown as BrowserWindow
+  })
+  try {
+    await service.open({ url: 'index.html#/popout/json-formatter' }, mainCaller)
+    const popout = created[0]!
+    if (process.platform === 'win32') {
+      assert.equal(popout.menuRemoved, true, 'win32 Popout 创建后必须移除原生菜单')
+      assert.deepEqual(popout.hookedMessages, [WM_SYSCHAR], 'win32 Popout 必须挂载 WM_SYSCHAR 拦截')
+      let sysMenuPrevented = false
+      popout.emit('system-context-menu', { preventDefault: () => { sysMenuPrevented = true } })
+      assert.equal(sysMenuPrevented, true, 'win32 Popout 必须拦截系统右键菜单')
+    }
+
+    assert.throws(
+      () => service.toggleDevTools(mainCaller, true),
+      (error: unknown) => error instanceof Error && 'code' in error && error.code === errorCodes.permissionDenied
+    )
+    try {
+      service.toggleDevTools(mainCaller, false)
+    } catch (error) {
+      assert.ok(
+        !(error instanceof Error && 'code' in error && error.code === errorCodes.permissionDenied),
+        '非正式版不应触发 permissionDenied 拦截'
+      )
+    }
+  } finally {
+    service.stop()
   }
 })

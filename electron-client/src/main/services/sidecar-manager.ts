@@ -1,4 +1,4 @@
-import { spawn, type ChildProcess } from 'node:child_process'
+import { spawn, spawnSync, type ChildProcess } from 'node:child_process'
 import readline from 'node:readline'
 import path from 'node:path'
 import fs from 'node:fs'
@@ -157,15 +157,218 @@ export interface IndexerStatsResult {
   index_type: string
 }
 
+export interface SidecarBinaryResolveContext {
+  isPackaged?: boolean | undefined
+  resourcesPath?: string | undefined
+  appPath?: string | undefined
+  cwd?: string | undefined
+  platform?: NodeJS.Platform | undefined
+  arch?: string | undefined
+  env?: NodeJS.ProcessEnv | undefined
+  defaultApp?: boolean | undefined
+}
+
 export interface SidecarProcessOptions {
   name: string
   binaryName: string
-  fallbackBinaryName?: string
-  args?: string[]
-  cwd?: string
-  heartbeatIntervalMs?: number
-  maxRestartsWithinWindow?: number
-  restartWindowMs?: number
+  fallbackBinaryName?: string | undefined
+  args?: string[] | undefined
+  cwd?: string | undefined
+  heartbeatIntervalMs?: number | undefined
+  maxRestartsWithinWindow?: number | undefined
+  restartWindowMs?: number | undefined
+  resolveContext?: SidecarBinaryResolveContext | undefined
+}
+
+export interface SidecarStopOutcome {
+  name: string
+  previousState: SidecarState
+  pid: number | null
+  exitMethod: 'none' | 'already-exited' | 'rpc-shutdown' | 'sigterm' | 'taskkill'
+  forced: boolean
+  error?: string
+}
+
+export interface SidecarManagerStopReport {
+  uiaccess: SidecarStopOutcome
+  indexer: SidecarStopOutcome
+}
+
+function isControlledRegularFile(filePath: string): boolean {
+  try {
+    const stats = fs.lstatSync(filePath)
+    if (!stats.isFile() || stats.isSymbolicLink()) return false
+    const canonical = path.resolve(fs.realpathSync(filePath))
+    const requested = path.resolve(filePath)
+    return process.platform === 'win32'
+      ? canonical.toLowerCase() === requested.toLowerCase()
+      : canonical === requested
+  } catch {
+    return false
+  }
+}
+
+/**
+ * 解析侧车可执行文件路径：
+ * - 打包态优先并仅从受控 resources/native/ 目录定位，避免命中 app.asar 虚拟路径或外部 cwd 劫持
+ * - 开发态与单测态按构建输出目录及工作目录回退查找
+ */
+export function resolveSidecarBinaryPath(
+  name: string,
+  context: SidecarBinaryResolveContext = {}
+): string | null {
+  const env = context.env ?? process.env
+  const envKey = `ZTOOLS_${name.toUpperCase().replace(/[^A-Z0-9]/g, '_')}_PATH`
+  const envOverride = env[envKey]
+  if (envOverride && fs.existsSync(envOverride)) {
+    return envOverride
+  }
+
+  const platform = context.platform ?? process.platform
+  const arch = context.arch ?? process.arch
+  const isWin = platform === 'win32'
+  const binName = isWin ? `${name}.exe` : name
+  const resourcesPath = context.resourcesPath ?? process.resourcesPath
+  const defaultApp = context.defaultApp ?? Boolean(process.defaultApp)
+  const isPackaged =
+    context.isPackaged ??
+    (typeof resourcesPath === 'string' && resourcesPath.length > 0 && !defaultApp)
+
+  const platformDirs = isWin
+    ? ['win32-x64']
+    : [`darwin-${arch}`, 'darwin-universal', 'darwin']
+
+  if (isPackaged) {
+    if (typeof resourcesPath !== 'string' || resourcesPath.length === 0) {
+      return null
+    }
+    const packagedCandidates = [
+      path.join(resourcesPath, 'native', binName),
+      ...platformDirs.map((dir) => path.join(resourcesPath, 'native', dir, 'bin', binName))
+    ]
+    for (const candidate of packagedCandidates) {
+      if (isControlledRegularFile(candidate)) {
+        return candidate
+      }
+    }
+    return null
+  }
+
+  const appRoot = context.appPath ?? path.resolve(__dirname, '..', '..', '..')
+  const cwd = context.cwd ?? process.cwd()
+  const devCandidates: string[] = []
+  for (const dir of platformDirs) {
+    devCandidates.push(
+      path.join(appRoot, 'out', 'native', dir, 'bin', binName),
+      path.join(appRoot, 'resources', 'native', dir, 'bin', binName),
+      path.join(cwd, 'out', 'native', dir, 'bin', binName),
+      path.join(cwd, 'electron-client', 'out', 'native', dir, 'bin', binName)
+    )
+  }
+  if (!isWin) {
+    devCandidates.push(
+      path.join(appRoot, 'out', 'native', 'win32-x64', 'bin', `${name}.exe`),
+      path.join(appRoot, 'resources', 'native', 'win32-x64', 'bin', `${name}.exe`),
+      path.join(cwd, 'out', 'native', 'win32-x64', 'bin', `${name}.exe`),
+      path.join(cwd, 'electron-client', 'out', 'native', 'win32-x64', 'bin', `${name}.exe`)
+    )
+  }
+
+  for (const candidate of devCandidates) {
+    if (fs.existsSync(candidate)) {
+      return candidate
+    }
+  }
+  return null
+}
+
+function normalizePathPrefix(targetPath: string): string {
+  const resolved = path.win32.resolve(targetPath).toLowerCase()
+  return resolved.endsWith('\\') ? resolved : `${resolved}\\`
+}
+
+/**
+ * Windows 强制要求带 uiAccess="true" 清单的可执行文件必须位于系统受信任位置且签名有效。
+ * 非受信任目录（例如便携版、非 Program Files 自定义路径）直接尝试 spawn 必然触发 EACCES。
+ */
+export function isTrustedWindowsUiAccessLocation(
+  executablePath: string,
+  env: NodeJS.ProcessEnv = process.env
+): boolean {
+  const normalizedTarget = path.win32.resolve(executablePath).toLowerCase()
+  const systemRoot = env.SystemRoot || env.WINDIR || 'C:\\Windows'
+  const trustedRoots = [
+    env.ProgramFiles,
+    env['ProgramFiles(x86)'],
+    env.ProgramW6432,
+    path.win32.join(systemRoot, 'System32')
+  ].filter((item): item is string => typeof item === 'string' && item.trim().length > 0)
+
+  return trustedRoots.some((root) => normalizedTarget.startsWith(normalizePathPrefix(root)))
+}
+
+function hasCustomSidecarPathOverride(
+  binaryName: string,
+  context: SidecarBinaryResolveContext = {}
+): boolean {
+  const env = context.env ?? process.env
+  const envKey = `ZTOOLS_${binaryName.toUpperCase().replace(/[^A-Z0-9]/g, '_')}_PATH`
+  return Boolean(env[envKey])
+}
+
+function isPackagedContext(context: SidecarBinaryResolveContext = {}): boolean {
+  const resourcesPath = context.resourcesPath ?? process.resourcesPath
+  const defaultApp = context.defaultApp ?? Boolean(process.defaultApp)
+  return (
+    context.isPackaged ??
+    (typeof resourcesPath === 'string' && resourcesPath.length > 0 && !defaultApp)
+  )
+}
+
+function formatSidecarError(err: unknown): string {
+  return err instanceof Error ? err.message : String(err)
+}
+
+function hasProcessExited(child: ChildProcess): boolean {
+  return child.exitCode !== null || child.signalCode !== null
+}
+
+function waitForChildExit(child: ChildProcess, timeoutMs: number): Promise<boolean> {
+  if (hasProcessExited(child)) return Promise.resolve(true)
+  return new Promise((resolve) => {
+    let settled = false
+    const onExit = () => {
+      if (settled) return
+      settled = true
+      clearTimeout(timer)
+      resolve(true)
+    }
+    const timer = setTimeout(() => {
+      if (settled) return
+      settled = true
+      child.removeListener('exit', onExit)
+      resolve(hasProcessExited(child))
+    }, timeoutMs)
+    child.once('exit', onExit)
+  })
+}
+
+function forceKillProcessTree(pid: number): boolean {
+  if (!Number.isSafeInteger(pid) || pid <= 0) return false
+  if (process.platform === 'win32') {
+    const res = spawnSync('taskkill', ['/F', '/T', '/PID', String(pid)], {
+      windowsHide: true,
+      stdio: 'ignore',
+      timeout: 3000
+    })
+    return res.status === 0
+  }
+  try {
+    process.kill(pid, 'SIGKILL')
+    return true
+  } catch {
+    return false
+  }
 }
 
 export class ManagedSidecarProcess {
@@ -173,6 +376,9 @@ export class ManagedSidecarProcess {
   public child: ChildProcess | null = null
   public pid: number | null = null
   public lastError: string | null = null
+  public activeBinary: string | null = null
+  public usingFallback = false
+  public fallbackReason: string | null = null
   public restartCount = 0
 
   private nextRequestId = 1
@@ -184,91 +390,148 @@ export class ManagedSidecarProcess {
 
   private heartbeatTimer: NodeJS.Timeout | null = null
   private restartTimer: NodeJS.Timeout | null = null
+  private handshakeTimer: NodeJS.Timeout | null = null
   private restartTimestamps: number[] = []
   private intentionallyStopped = false
   private rl: readline.Interface | null = null
+  private abortPendingSpawn: ((err: Error) => void) | null = null
+  private startPromise: Promise<void> | null = null
+  private stopPromise: Promise<SidecarStopOutcome> | null = null
 
   constructor(public readonly options: SidecarProcessOptions) {}
 
   public async start(): Promise<void> {
+    if (this.stopPromise) {
+      await this.stopPromise.catch(() => undefined)
+    }
+    if (this.startPromise) {
+      return this.startPromise
+    }
     if (this.state === 'running' || this.state === 'starting') return
+
+    this.startPromise = this.performStart().finally(() => {
+      this.startPromise = null
+    })
+    return this.startPromise
+  }
+
+  private async performStart(): Promise<void> {
     this.intentionallyStopped = false
     this.state = 'starting'
+    this.lastError = null
+    this.activeBinary = null
+    this.usingFallback = false
+    this.fallbackReason = null
 
+    const resolveContext = this.options.resolveContext
+    const platform = resolveContext?.platform ?? process.platform
+    const env = resolveContext?.env ?? process.env
     const binaryPath = this.resolveBinaryPath(this.options.binaryName)
-    if (!binaryPath) {
-      // Check fallback binary if available
-      if (this.options.fallbackBinaryName) {
-        const fallbackPath = this.resolveBinaryPath(this.options.fallbackBinaryName)
-        if (fallbackPath) {
-          await this.spawnProcess(fallbackPath)
-          return
-        }
+    const fallbackPath = this.options.fallbackBinaryName
+      ? this.resolveBinaryPath(this.options.fallbackBinaryName)
+      : null
+
+    let primaryFailureReason: string | null = null
+
+    // Windows 打包态若未安装在受信任系统目录，直接跳过必然触发 EACCES 的 uiAccess 试探并优雅降级
+    const shouldSkipUntrustedUiAccess =
+      platform === 'win32' &&
+      this.options.binaryName === 'ztools-uiaccess' &&
+      Boolean(this.options.fallbackBinaryName) &&
+      Boolean(fallbackPath) &&
+      Boolean(binaryPath) &&
+      !hasCustomSidecarPathOverride(this.options.binaryName, resolveContext) &&
+      isPackagedContext(resolveContext) &&
+      !isTrustedWindowsUiAccessLocation(binaryPath!, env)
+
+    if (shouldSkipUntrustedUiAccess) {
+      primaryFailureReason = `untrusted-install-location: ${binaryPath}`
+    } else if (binaryPath) {
+      try {
+        await this.spawnProcess(binaryPath, this.options.binaryName)
+        return
+      } catch (err) {
+        primaryFailureReason = formatSidecarError(err)
       }
-      this.state = 'degraded'
-      this.lastError = `Binary not found: ${this.options.binaryName}`
+    } else {
+      primaryFailureReason = `Binary not found: ${this.options.binaryName}`
+    }
+
+    if (this.intentionallyStopped) {
+      this.state = 'stopped'
       return
     }
 
-    try {
-      await this.spawnProcess(binaryPath)
-    } catch (err) {
-      // If primary binary fails (e.g. EACCES on uiAccess manifest), try fallback binary
-      if (this.options.fallbackBinaryName) {
-        const fallbackPath = this.resolveBinaryPath(this.options.fallbackBinaryName)
-        if (fallbackPath && fallbackPath !== binaryPath) {
-          try {
-            await this.spawnProcess(fallbackPath)
-            return
-          } catch (fallbackErr) {
-            this.lastError = String(fallbackErr)
-          }
-        }
+    // 主二进制缺失、不可信任或启动失败时尝试回退二进制，回退成功后清除陈旧 lastError 并保留降级原因
+    if (this.options.fallbackBinaryName && fallbackPath && fallbackPath !== binaryPath) {
+      try {
+        await this.spawnProcess(fallbackPath, this.options.fallbackBinaryName)
+        this.usingFallback = true
+        this.fallbackReason = primaryFailureReason
+        this.lastError = null
+        return
+      } catch (fallbackErr) {
+        this.state = 'degraded'
+        this.activeBinary = null
+        this.usingFallback = false
+        this.fallbackReason = primaryFailureReason
+        this.lastError = formatSidecarError(fallbackErr)
+        return
       }
-      this.state = 'degraded'
-      this.lastError = String(err)
     }
+
+    this.state = 'degraded'
+    this.activeBinary = null
+    this.lastError = primaryFailureReason
   }
 
   private resolveBinaryPath(name: string): string | null {
-    const envKey = `ZTOOLS_${name.toUpperCase().replace(/[^A-Z0-9]/g, '_')}_PATH`
-    if (process.env[envKey] && fs.existsSync(process.env[envKey])) {
-      return process.env[envKey]!
-    }
-
-    const appRoot = path.resolve(__dirname, '..', '..', '..')
-    const isWin = process.platform === 'win32'
-    const binName = isWin ? `${name}.exe` : name
-    const platformDirs = isWin
-      ? ['win32-x64']
-      : [`darwin-${process.arch}`, 'darwin-universal', 'darwin']
-    const candidates: string[] = []
-    for (const dir of platformDirs) {
-      candidates.push(
-        path.join(appRoot, 'out', 'native', dir, 'bin', binName),
-        path.join(appRoot, 'resources', 'native', dir, 'bin', binName),
-        path.join(process.cwd(), 'out', 'native', dir, 'bin', binName),
-        path.join(process.cwd(), 'electron-client', 'out', 'native', dir, 'bin', binName)
-      )
-    }
-    const legacyCandidates = [
-      path.join(appRoot, 'out', 'native', 'win32-x64', 'bin', `${name}.exe`),
-      path.join(appRoot, 'resources', 'native', 'win32-x64', 'bin', `${name}.exe`),
-      path.join(process.cwd(), 'out', 'native', 'win32-x64', 'bin', `${name}.exe`),
-      path.join(process.cwd(), 'electron-client', 'out', 'native', 'win32-x64', 'bin', `${name}.exe`)
-    ]
-
-    for (const c of [...candidates, ...legacyCandidates]) {
-      if (fs.existsSync(c)) {
-        return c
-      }
-    }
-    return null
+    return resolveSidecarBinaryPath(name, this.options.resolveContext)
   }
 
-  private spawnProcess(executablePath: string): Promise<void> {
+  private cleanupSpawnResources(child: ChildProcess): void {
+    if (this.handshakeTimer) {
+      clearTimeout(this.handshakeTimer)
+      this.handshakeTimer = null
+    }
+    if (this.child !== child) return
+    if (this.rl) {
+      this.rl.close()
+      this.rl = null
+    }
+    if (!child.killed && !hasProcessExited(child)) {
+      child.kill('SIGTERM')
+    }
+    this.child = null
+    this.pid = null
+    this.activeBinary = null
+  }
+
+  private spawnProcess(executablePath: string, binaryLabel: string): Promise<void> {
+    if (this.intentionallyStopped) {
+      return Promise.reject(new Error('Sidecar stopped during startup'))
+    }
     return new Promise((resolve, reject) => {
       let settled = false
+      const settleError = (err: unknown): void => {
+        if (settled) return
+        settled = true
+        this.abortPendingSpawn = null
+        reject(err)
+      }
+      const settleSuccess = (): void => {
+        if (settled) return
+        settled = true
+        this.abortPendingSpawn = null
+        resolve()
+      }
+      this.abortPendingSpawn = (abortErr: Error): void => {
+        if (this.handshakeTimer) {
+          clearTimeout(this.handshakeTimer)
+          this.handshakeTimer = null
+        }
+        settleError(abortErr)
+      }
 
       try {
         const sessionToken = crypto.randomBytes(24).toString('hex')
@@ -289,8 +552,8 @@ export class ManagedSidecarProcess {
           if (this.child !== child) return
           this.lastError = err.message
           if (!settled) {
-            settled = true
-            reject(err)
+            this.cleanupSpawnResources(child)
+            settleError(err)
           } else {
             this.handleUnexpectedExit()
           }
@@ -298,16 +561,25 @@ export class ManagedSidecarProcess {
 
         child.on('exit', (code, signal) => {
           if (this.child !== child) return
-          this.handleExit(code, signal)
           if (!settled) {
-            settled = true
-            reject(new Error(`Sidecar exited prematurely with code ${code}, signal ${signal}`))
+            // 启动与握手尚未完成前的退出交回 performStart() 做回退或 degraded 收敛，不调度后台重连定时器
+            this.cleanupSpawnResources(child)
+            settleError(new Error(`Sidecar exited prematurely with code ${code}, signal ${signal}`))
+            return
           }
+          this.handleExit(code, signal)
         })
 
         if (!child.stdout || !child.stdin) {
           throw new Error('Failed to attach stdio pipes')
         }
+
+        // 避免侧车瞬时退出后 stdin 写入触发未捕获 EPIPE / 流销毁异常
+        child.stdin.on('error', (err) => {
+          if (this.child === child && !this.intentionallyStopped) {
+            this.lastError = err.message
+          }
+        })
 
         this.rl = readline.createInterface({ input: child.stdout })
         this.rl.on('line', (line) => {
@@ -315,67 +587,115 @@ export class ManagedSidecarProcess {
         })
 
         // Verify with initial handshake & ping
-        setTimeout(async () => {
+        if (this.handshakeTimer) {
+          clearTimeout(this.handshakeTimer)
+          this.handshakeTimer = null
+        }
+        this.handshakeTimer = setTimeout(async () => {
+          this.handshakeTimer = null
+          if (this.child !== child || this.intentionallyStopped) {
+            settleError(new Error('Sidecar spawn aborted before handshake'))
+            return
+          }
           try {
             await this.sendRequest('handshake', { token: sessionToken }, 3000)
             await this.sendRequest('ping', {}, 3000)
+            if (this.child !== child || this.intentionallyStopped) {
+              throw new Error('Sidecar stopped during handshake')
+            }
             this.state = 'running'
+            this.activeBinary = binaryLabel
+            this.lastError = null
             this.startHeartbeat()
-            if (!settled) {
-              settled = true
-              resolve()
-            }
+            settleSuccess()
           } catch (handshakeErr) {
-            if (this.rl) {
-              this.rl.close()
-              this.rl = null
-            }
-            if (this.child && !this.child.killed) {
-              this.child.kill('SIGTERM')
-              this.child = null
-              this.pid = null
-            }
-            if (!settled) {
-              settled = true
-              reject(handshakeErr)
-            }
+            this.cleanupSpawnResources(child)
+            settleError(handshakeErr)
           }
         }, 100)
       } catch (err) {
-        if (this.rl) {
-          this.rl.close()
-          this.rl = null
+        if (this.child) {
+          this.cleanupSpawnResources(this.child)
         }
-        if (this.child && !this.child.killed) {
-          this.child.kill('SIGTERM')
-          this.child = null
-          this.pid = null
-        }
-        if (!settled) {
-          settled = true
-          reject(err)
-        }
+        settleError(err)
       }
     })
   }
 
-  public async stop(): Promise<void> {
+  public async stop(): Promise<SidecarStopOutcome> {
+    if (this.stopPromise) {
+      return this.stopPromise
+    }
+    this.stopPromise = this.performStop().finally(() => {
+      this.stopPromise = null
+    })
+    return this.stopPromise
+  }
+
+  private async performStop(): Promise<SidecarStopOutcome> {
+    const previousState = this.state
+    const child = this.child
+    const pid = child?.pid ?? this.pid
+    const hadPendingHandshake = Boolean(this.handshakeTimer) || previousState === 'starting'
+    const pendingSpawnAbort = this.abortPendingSpawn
+    this.abortPendingSpawn = null
+
     this.intentionallyStopped = true
     this.stopHeartbeat()
+    if (this.handshakeTimer) {
+      clearTimeout(this.handshakeTimer)
+      this.handshakeTimer = null
+    }
     if (this.restartTimer) {
       clearTimeout(this.restartTimer)
       this.restartTimer = null
     }
     this.clearPendingRequests(new Error('Sidecar stopped'))
 
-    if (this.child && !this.child.killed) {
-      try {
-        await this.sendRequest('shutdown', {}, 1000).catch(() => {})
-      } catch {
-        // Ignore shutdown error
+    let exitMethod: SidecarStopOutcome['exitMethod'] = 'none'
+    let forced = false
+    let stopError: string | undefined
+
+    if (child) {
+      if (hasProcessExited(child)) {
+        exitMethod = 'already-exited'
+      } else {
+        // 尚未完成初始握手时不发 shutdown RPC 避免白等 1s 超时，直接走宽限终止
+        let exitedGracefully = false
+        if (!hadPendingHandshake) {
+          try {
+            await this.sendRequest('shutdown', {}, 1000).catch(() => undefined)
+          } catch {
+            // 忽略停机 RPC 错误，继续走宽限等待与强杀兜底
+          }
+          exitedGracefully = await waitForChildExit(child, 400)
+        }
+        if (exitedGracefully) {
+          exitMethod = 'rpc-shutdown'
+        } else {
+          if (this.child === child && !child.killed && !hasProcessExited(child)) {
+            try {
+              child.kill('SIGTERM')
+            } catch (err) {
+              stopError = formatSidecarError(err)
+            }
+          }
+          const exitedOnSigterm = await waitForChildExit(child, hadPendingHandshake ? 250 : 500)
+          if (exitedOnSigterm) {
+            exitMethod = 'sigterm'
+          } else {
+            forced = true
+            exitMethod = 'taskkill'
+            const killed = pid ? forceKillProcessTree(pid) : false
+            if (!killed && !hasProcessExited(child)) {
+              stopError = stopError || 'Failed to force-terminate sidecar process tree'
+            }
+          }
+        }
       }
-      this.child.kill('SIGTERM')
-      this.child = null
+      if (this.child === child) {
+        this.child = null
+      }
     }
 
     if (this.rl) {
@@ -385,6 +705,16 @@ export class ManagedSidecarProcess {
 
     this.state = 'stopped'
     this.pid = null
+    this.activeBinary = null
+    pendingSpawnAbort?.(new Error('Sidecar stopped during startup'))
+    return {
+      name: this.options.name,
+      previousState,
+      pid,
+      exitMethod,
+      forced,
+      ...(stopError ? { error: stopError } : {})
+    }
   }
 
   public async restart(): Promise<void> {
@@ -450,12 +780,17 @@ export class ManagedSidecarProcess {
 
   private handleExit(_code: number | null, _signal: NodeJS.Signals | null) {
     this.stopHeartbeat()
+    if (this.handshakeTimer) {
+      clearTimeout(this.handshakeTimer)
+      this.handshakeTimer = null
+    }
     if (this.rl) {
       this.rl.close()
       this.rl = null
     }
     this.pid = null
     this.child = null
+    this.activeBinary = null
 
     if (this.intentionallyStopped) {
       this.state = 'stopped'
@@ -474,10 +809,24 @@ export class ManagedSidecarProcess {
     }
     if (this.child) {
       const oldChild = this.child
+      const oldPid = oldChild.pid ?? this.pid
       this.child = null
       this.pid = null
-      if (!oldChild.killed) {
-        oldChild.kill('SIGTERM')
+      this.activeBinary = null
+      if (!oldChild.killed && !hasProcessExited(oldChild)) {
+        try {
+          oldChild.kill('SIGTERM')
+        } catch {
+          // 忽略 SIGTERM 发送异常，交由进程树强杀兜底
+        }
+        // SIGTERM 若未能在短窗内结束子进程，则强杀整棵进程树防止孤儿残留
+        if (oldPid) {
+          void waitForChildExit(oldChild, 300).then((exited) => {
+            if (!exited && !hasProcessExited(oldChild)) {
+              forceKillProcessTree(oldPid)
+            }
+          })
+        }
       }
     }
 
@@ -547,6 +896,10 @@ export class ManagedSidecarProcess {
   }
 }
 
+export interface SidecarManagerOptions {
+  resolveContext?: SidecarBinaryResolveContext | undefined
+}
+
 export class SidecarManager {
   private uiaccessProcess: ManagedSidecarProcess
   private indexerProcess: ManagedSidecarProcess
@@ -555,18 +908,20 @@ export class SidecarManager {
   private fallbackFiles: FileRecord[] = []
   private pastedHistory: string[] = []
 
-  constructor() {
+  constructor(options: SidecarManagerOptions = {}) {
     this.uiaccessProcess = new ManagedSidecarProcess({
       name: 'ztools-uiaccess',
       binaryName: 'ztools-uiaccess',
       fallbackBinaryName: 'ztools-uiaccess-standard',
-      heartbeatIntervalMs: 15000
+      heartbeatIntervalMs: 15000,
+      resolveContext: options.resolveContext
     })
 
     this.indexerProcess = new ManagedSidecarProcess({
       name: 'ztools-indexer',
       binaryName: 'ztools-indexer',
-      heartbeatIntervalMs: 15000
+      heartbeatIntervalMs: 15000,
+      resolveContext: options.resolveContext
     })
   }
 
@@ -578,18 +933,23 @@ export class SidecarManager {
     this.fallbackFiles = [...files]
   }
 
-  public async startAll(): Promise<void> {
+  public async startAll(signal?: AbortSignal): Promise<void> {
+    if (signal?.aborted) return
     await Promise.allSettled([
       this.uiaccessProcess.start(),
       this.indexerProcess.start()
     ])
+    if (signal?.aborted) {
+      await this.stop()
+    }
   }
 
-  public async stop(): Promise<void> {
-    await Promise.allSettled([
+  public async stop(): Promise<SidecarManagerStopReport> {
+    const [uiaccess, indexer] = await Promise.all([
       this.uiaccessProcess.stop(),
       this.indexerProcess.stop()
     ])
+    return { uiaccess, indexer }
   }
 
   public getStatus() {
@@ -597,12 +957,18 @@ export class SidecarManager {
       uiaccess: {
         state: this.uiaccessProcess.state,
         pid: this.uiaccessProcess.pid,
+        activeBinary: this.uiaccessProcess.activeBinary,
+        usingFallback: this.uiaccessProcess.usingFallback,
+        fallbackReason: this.uiaccessProcess.fallbackReason,
         restarts: this.uiaccessProcess.restartCount,
         lastError: this.uiaccessProcess.lastError
       },
       indexer: {
         state: this.indexerProcess.state,
         pid: this.indexerProcess.pid,
+        activeBinary: this.indexerProcess.activeBinary,
+        usingFallback: this.indexerProcess.usingFallback,
+        fallbackReason: this.indexerProcess.fallbackReason,
         restarts: this.indexerProcess.restartCount,
         lastError: this.indexerProcess.lastError
       }

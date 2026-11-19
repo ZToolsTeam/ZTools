@@ -5,7 +5,7 @@
     :class="`is-${placement}`"
     @click.self="emit('close')"
   >
-    <div class="action-panel" role="dialog" aria-label="动作" @keydown.stop="handleKeyDown">
+    <div ref="panelRef" class="action-panel" role="dialog" aria-modal="true" aria-label="动作" @keydown.stop="handleKeyDown">
       <!-- 搜索框 -->
       <div class="action-panel-search">
         <label for="action-panel-query" class="sr-only">搜索动作</label>
@@ -46,7 +46,7 @@
               <DeclarativeIcon v-if="action.props?.icon" :icon="action.props.icon" :size="15" class="action-panel-icon" />
               <span v-else class="action-panel-icon-slot" aria-hidden="true"></span>
             </template>
-            <span class="action-panel-title">{{ action.props?.title || '未命名动作' }}</span>
+            <span class="action-panel-title">{{ resolveActionTitle(action) }}</span>
             <ShortcutKeys v-if="keyHintOf(action)" :combo="keyHintOf(action)" />
           </div>
         </template>
@@ -69,13 +69,14 @@
 import { ref, computed, watch, nextTick, onUnmounted } from "vue";
 import ShortcutKeys from '@/components/base/ShortcutKeys.vue'
 import DeclarativeIcon from "./DeclarativeIcon.vue";
-import { actionKeyHint, isDestructiveAction } from "../uiText.js";
+import { isDestructiveAction, resolveActionTitle } from "../uiText.js";
 import {
   registerKeyHandler,
   KEYMAP_SCOPES,
   isComposingEvent,
   normalizeEventKeyCombo
 } from "@/utils/keymap.js";
+import { resolveActionKeyBindings, normalizeEventShortcutKey } from "@/utils/actionKeyBindings.js";
 
 const props = defineProps({
   visible: {
@@ -99,29 +100,26 @@ const props = defineProps({
   viewType: {
     type: String,
     default: "List"
+  },
+  /** 可选自定义保留键集合；默认走声明式插件保留热键集，宿主面板可按需覆写 */
+  reservedCombos: {
+    type: Object,
+    default: undefined
   }
 });
 
 /**
- * 每个动作的键位提示：按它在未过滤动作列表里的原始位置计算（搜索过滤后不会错位），
- * 表单里第 1 个动作是 ⌘Enter（Enter 在多行输入里是换行），子菜单里的动作没有固定键位。
+ * 统一「所见即所按」键位解析：保证动作面板键帽与视图底栏完全一致、去除重复与保留冲突徽标。
  */
-const keyHints = computed(() => {
-  const map = new Map();
-  let directIndex = 0;
-  for (const action of props.actions || []) {
-    if (action?._fromSubmenu) {
-      map.set(action, actionKeyHint(action, -1, props.viewType));
-      continue;
-    }
-    map.set(action, actionKeyHint(action, directIndex, props.viewType));
-    directIndex += 1;
-  }
-  return map;
-});
+const resolvedBindings = computed(() =>
+  resolveActionKeyBindings(props.actions || [], {
+    viewType: props.viewType,
+    ...(props.reservedCombos !== undefined ? { reservedCombos: props.reservedCombos } : {})
+  })
+);
 
 function keyHintOf(action) {
-  return keyHints.value.get(action) || "";
+  return resolvedBindings.value.hintOf(action);
 }
 
 const emit = defineEmits(["close", "trigger"]);
@@ -176,7 +174,7 @@ const filteredActions = computed(() => {
   if (!query.value.trim()) return props.actions;
   const q = query.value.toLowerCase();
   return props.actions.filter((a) => {
-    const title = (a.props?.title || "").toLowerCase();
+    const title = resolveActionTitle(a).toLowerCase();
     if (title.includes(q)) return true;
     // 子菜单里的动作也能按子菜单标题搜到（例如搜「数量」找到「快速调节生成数量」下的各项）
     return Boolean(a._fromSubmenu) && String(a._sectionTitle || "").toLowerCase().includes(q);
@@ -197,10 +195,92 @@ function selectAt(idx) {
     });
   }
 }
+const panelRef = ref(null);
 const searchInputRef = ref(null);
 
 // 记录已处理的事件对象，防止窗口捕获阶段 keymap 与面板根节点 @keydown 重复执行两次
 const handledEvents = new WeakSet();
+
+function isPanelTextField(el) {
+  if (!el || typeof el.tagName !== "string") return false;
+  const tag = el.tagName.toUpperCase();
+  return (
+    tag === "TEXTAREA" ||
+    (tag === "INPUT" && !["checkbox", "radio", "button", "submit"].includes(String(el.type || "").toLowerCase()))
+  );
+}
+
+function hasInputSelection(el) {
+  try {
+    return typeof el.selectionStart === "number" && el.selectionStart !== el.selectionEnd;
+  } catch {
+    return false;
+  }
+}
+
+/** 获取面板内可聚焦元素，实现模态 Tab / Shift+Tab 焦点环 */
+function getPanelFocusableElements() {
+  const root = panelRef.value;
+  if (!root || typeof root.querySelectorAll !== "function") return [];
+  return Array.from(
+    root.querySelectorAll('a[href], button, input, select, textarea, [tabindex]:not([tabindex="-1"])')
+  ).filter((el) => !el.disabled && !el.hasAttribute("disabled") && el.getAttribute("aria-hidden") !== "true");
+}
+
+function handlePanelTab(e) {
+  const focusables = getPanelFocusableElements();
+  if (focusables.length === 0) {
+    searchInputRef.value?.focus?.();
+    return;
+  }
+  const active = typeof document !== "undefined" ? document.activeElement : null;
+  const idx = active ? focusables.indexOf(active) : -1;
+  const nextIdx =
+    idx === -1
+      ? e.shiftKey
+        ? focusables.length - 1
+        : 0
+      : (idx + (e.shiftKey ? -1 : 1) + focusables.length) % focusables.length;
+  focusables[nextIdx]?.focus?.();
+}
+
+/**
+ * 判断面板搜索框内的输入/原生编辑冲突：
+ * - 无修饰单键：单字符和空格保留给搜索输入；框非空时 Delete/Backspace/方向键保留给文本编辑；
+ * - 带 Ctrl/⌘ 组合键：有选区时保留复制/剪切；框非空时保留全选/粘贴/撤销/重做/按词删，其余或空框直接允许命中动作快捷键。
+ */
+function isPanelInputEditConflict(e) {
+  const target = e?.target;
+  const inPanelInput = isPanelTextField(target) || (searchInputRef.value && target === searchInputRef.value);
+  if (!inPanelInput) return false;
+
+  const hasModifier = Boolean(e.ctrlKey || e.metaKey || e.altKey);
+  const hasValue = Boolean(target?.value);
+  const key = normalizeEventShortcutKey(e);
+  const keyLower = key.toLowerCase();
+
+  if (!hasModifier) {
+    if (key === "Space" || (typeof e.key === "string" && e.key.length === 1)) return true;
+    if (hasValue && ["Delete", "Backspace", "ArrowLeft", "ArrowRight", "Home", "End"].includes(key)) {
+      return true;
+    }
+    return false;
+  }
+
+  if (e.altKey) return false;
+  if (!e.shiftKey) {
+    if (keyLower === "c" || keyLower === "x") return hasInputSelection(target);
+    if (["a", "v", "z", "y", "backspace", "delete"].includes(keyLower)) return hasValue;
+    return false;
+  }
+  return keyLower === "z" && hasValue;
+}
+
+function matchVisibleShortcutAction(e, list) {
+  const matched = resolvedBindings.value.matchEvent(e);
+  if (!matched || !list.includes(matched)) return null;
+  return matched;
+}
 
 function processPanelKeyEvent(e, precomputedCombo) {
   if (!props.visible || !e) return false;
@@ -214,9 +294,22 @@ function processPanelKeyEvent(e, precomputedCombo) {
     emit("close");
     return true;
   }
+  if (e.key === "Escape" || e.key === "Esc") {
+    handledEvents.add(e);
+    emit("close");
+    return true;
+  }
+  if (e.key === "Tab" && !e.ctrlKey && !e.metaKey && !e.altKey) {
+    handledEvents.add(e);
+    handlePanelTab(e);
+    return true;
+  }
 
   const list = filteredActions.value;
   const len = list.length;
+  const inSearchWithText =
+    Boolean(e.target?.value) &&
+    (isPanelTextField(e.target) || (searchInputRef.value && e.target === searchInputRef.value));
 
   if (e.key === "ArrowDown") {
     handledEvents.add(e);
@@ -235,6 +328,8 @@ function processPanelKeyEvent(e, precomputedCombo) {
     return true;
   }
   if (e.key === "Home" && !e.shiftKey && !e.ctrlKey && !e.metaKey && !e.altKey) {
+    // 搜索框内有文字时放行 Home 让光标回到行首，不跳转到动作列表首项
+    if (inSearchWithText) return false;
     handledEvents.add(e);
     if (len > 0) {
       lockPointerAtCurrentPos();
@@ -243,6 +338,8 @@ function processPanelKeyEvent(e, precomputedCombo) {
     return true;
   }
   if (e.key === "End" && !e.shiftKey && !e.ctrlKey && !e.metaKey && !e.altKey) {
+    // 搜索框内有文字时放行 End 让光标移至行尾，不跳转到动作列表末项
+    if (inSearchWithText) return false;
     handledEvents.add(e);
     if (len > 0) {
       lockPointerAtCurrentPos();
@@ -266,20 +363,31 @@ function processPanelKeyEvent(e, precomputedCombo) {
     }
     return true;
   }
-  if (e.key === "Enter") {
+  if (e.key === "Enter" && !e.altKey && !e.shiftKey) {
     handledEvents.add(e);
-    // ⌘Enter / Ctrl+Enter 在底栏是「次动作」，面板里不能把它当 Enter 执行高亮项（可能是破坏性动作）
-    if (e.metaKey || e.ctrlKey) return true;
+    if (e.metaKey || e.ctrlKey) {
+      // 显式绑定了 Ctrl+Enter 的动作允许在面板内按 Ctrl+Enter 直达；无显式绑定时不误把 Ctrl+Enter 当成 Enter 执行高亮项
+      const explicitCtrlEnter = matchVisibleShortcutAction(e, list);
+      if (explicitCtrlEnter) {
+        executeAction(explicitCtrlEnter);
+      }
+      return true;
+    }
     const action = list[selectedIndex.value];
     if (action) {
       executeAction(action);
     }
     return true;
   }
-  if (e.key === "Escape" || e.key === "Esc") {
-    handledEvents.add(e);
-    emit("close");
-    return true;
+
+  // 在面板打开态支持直接按列表内任一动作的显式快捷键立即触发并关闭面板
+  if (!isPanelInputEditConflict(e)) {
+    const matched = matchVisibleShortcutAction(e, list);
+    if (matched) {
+      handledEvents.add(e);
+      executeAction(matched);
+      return true;
+    }
   }
   return false;
 }

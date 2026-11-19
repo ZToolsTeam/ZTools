@@ -1,6 +1,6 @@
 import { describe, it, expect, afterEach, vi } from 'vitest'
 import { mount } from '@vue/test-utils'
-import { isPluginSupportedOnCurrentPlatform, WINDOWS_EXCLUSIVE_PLUGIN_IDS, UNAVAILABLE_PLUGIN_IDS, shortcutKeys, isSymbolKey, getPluginPlatforms, getPluginPlatformLabel } from '@/utils/platform'
+import { isPluginSupportedOnCurrentPlatform, WINDOWS_EXCLUSIVE_PLUGIN_IDS, UNAVAILABLE_PLUGIN_IDS, shortcutKeys, shortcutLabel, isSymbolKey, getPluginPlatforms, getPluginPlatformLabel } from '@/utils/platform'
 import { getBundledPluginEntries } from '@/utils/bundledPlugins'
 import fs from 'node:fs'
 import path from 'node:path'
@@ -125,12 +125,22 @@ describe('shortcutKeys：逐键拆分的键帽文本', () => {
     expect(shortcutKeys('Alt+Space', false)).toEqual(['Alt', 'Space'])
   })
 
-  it('特殊键按平台习惯显示，单字母统一大写', () => {
+  it('特殊键按平台习惯显示，单字母统一大写；支持 macOS ⌘/⌃ 区分、双击修饰键与逗号/弹出新键位', () => {
     expect(shortcutKeys('Enter', true)).toEqual(['↵'])
     expect(shortcutKeys('Enter', false)).toEqual(['Enter'])
     expect(shortcutKeys('Escape', true)).toEqual(['Esc'])
     expect(shortcutKeys('ctrl+k', true)).toEqual(['⌘', 'K'])
     expect(shortcutKeys('ArrowUp', false)).toEqual(['↑'])
+    // macOS 区分逻辑 Command(⌘) 与物理 Control(⌃)
+    expect(shortcutKeys('Ctrl+Control+B', true)).toEqual(['⌘', '⌃', 'B'])
+    expect(shortcutKeys('Ctrl+,', true)).toEqual(['⌘', ','])
+    expect(shortcutKeys('Ctrl+,', false)).toEqual(['Ctrl', ','])
+    expect(shortcutKeys('Ctrl+Shift+P', true)).toEqual(['⌘', '⇧', 'P'])
+    expect(shortcutKeys('DoubleCtrl', false)).toEqual(['双击 Ctrl'])
+    expect(shortcutKeys('DoubleCtrl', true)).toEqual(['双击 ⌃'])
+    expect(shortcutLabel('Ctrl+,', true)).toBe('⌘,')
+    expect(shortcutLabel('Ctrl+Shift+P', false)).toBe('Ctrl+Shift+P')
+    expect(shortcutLabel('DoubleAlt', false)).toBe('双击 Alt')
   })
 
   it('[破坏性] 非法输入返回空数组；原型链键名原样显示，不命中映射表', () => {

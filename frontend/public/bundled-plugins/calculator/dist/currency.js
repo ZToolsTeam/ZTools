@@ -240,7 +240,7 @@ export default function CurrencyCommand(props) {
     const refreshAction = Action({
         title: "刷新汇率",
         icon: Icon.ArrowClockwise,
-        shortcut: { modifiers: ["cmd"], key: "r" },
+        shortcut: { modifiers: ["ctrl"], key: "r" },
         onAction: () => loadRates(true)
     });
     const openSourceAction = Action.OpenInBrowser({
@@ -251,7 +251,7 @@ export default function CurrencyCommand(props) {
         const favoriteAction = Action({
             title: row.favorite ? "取消收藏" : "收藏（置顶）",
             icon: row.favorite ? Icon.StarDisabled : Icon.Star,
-            shortcut: { modifiers: ["cmd"], key: "d" },
+            shortcut: { modifiers: ["ctrl"], key: "d" },
             onAction: () => toggle(row.code)
         });
         const value = row.value;

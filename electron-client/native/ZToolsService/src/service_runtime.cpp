@@ -56,11 +56,6 @@ bool ServiceRuntime::Start() noexcept {
           expected, RuntimeState::starting, std::memory_order_acq_rel)) {
     return false;
   }
-  if (options_.mode == RuntimeMode::service && !IsValidServiceSecret(options_.secret)) {
-    last_error_.store(ERROR_INVALID_DATA, std::memory_order_relaxed);
-    state_.store(RuntimeState::failed, std::memory_order_release);
-    return false;
-  }
   if (stop_event_ == nullptr) {
     state_.store(RuntimeState::failed, std::memory_order_release);
     return false;

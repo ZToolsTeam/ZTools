@@ -192,5 +192,26 @@ describe('Sidebar.vue 侧边栏高亮与导航测试', () => {
     const wrapper = mount(Sidebar, { global: { plugins: [pinia] } })
     const settingsItem = wrapper.findAll('.sidebar-item').find((i) => i.text().includes('设置'))
     expect(settingsItem.find('.sidebar-kbd').exists()).toBe(true)
+    expect(settingsItem.findAll('.sidebar-kbd kbd').map((k) => k.text())).toEqual(['Ctrl', ','])
+  })
+
+  it('收起侧栏按钮 title 动态随平台显示 Toggle Sidebar 快捷键，不含硬编码 Ctrl+B', () => {
+    const winWrapper = mount(Sidebar, { global: { plugins: [pinia] } })
+    const winToggle = winWrapper.find('aside.sidebar-root > .sidebar-toggle-btn')
+    expect(winToggle.attributes('title')).toContain('Ctrl+B')
+    winWrapper.unmount()
+
+    globalThis.__ZTOOLS_PLATFORM_OVERRIDE__ = 'darwin'
+    try {
+      const macWrapper = mount(Sidebar, { global: { plugins: [pinia] } })
+      const macToggle = macWrapper.find('aside.sidebar-root > .sidebar-toggle-btn')
+      expect(macToggle.attributes('title')).toContain('⌘B')
+      expect(macToggle.attributes('title')).not.toContain('Ctrl+B')
+      const macSettings = macWrapper.findAll('.sidebar-item').find((i) => i.text().includes('设置'))
+      expect(macSettings.findAll('.sidebar-kbd kbd').map((k) => k.text())).toEqual(['⌘', ','])
+      macWrapper.unmount()
+    } finally {
+      delete globalThis.__ZTOOLS_PLATFORM_OVERRIDE__
+    }
   })
 })

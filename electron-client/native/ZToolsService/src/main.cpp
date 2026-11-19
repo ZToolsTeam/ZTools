@@ -1,5 +1,6 @@
 #include "ztools_service/service_runtime.hpp"
 #include "ztools_service/console_log.hpp"
+#include "ztools_service/client_bridge.hpp"
 
 #include "ztools_service/named_pipe_server.hpp"
 #include "ztools_service/pipe_protocol.hpp"
@@ -26,6 +27,21 @@ using ztools::service::ServiceRuntime;
 
 // Set once by wmain before the SCM callback or console runtime starts.
 std::wstring g_data_root_override;
+
+#if defined(ZTOOLS_BUILD_SERVICE_MANIFEST_TESTS)
+std::wstring g_test_console_pipe;
+
+bool IsIsolatedTestPipe(const std::wstring_view value) noexcept {
+  constexpr std::wstring_view prefix = L"\\\\.\\pipe\\ZToolsPrivilegedService.v1.integration.";
+  if (!value.starts_with(prefix) || value.size() <= prefix.size() || value.size() > 240) return false;
+  for (const wchar_t character : value.substr(prefix.size())) {
+    if ((character >= L'a' && character <= L'z') || (character >= L'A' && character <= L'Z') ||
+        (character >= L'0' && character <= L'9') || character == L'.' || character == L'-' || character == L'_') continue;
+    return false;
+  }
+  return true;
+}
+#endif
 
 bool SetDataRootOverride(const std::wstring& value) {
   if (value.empty() || !g_data_root_override.empty()) return false;
@@ -680,16 +696,12 @@ void WINAPI ServiceMain(const DWORD /*argument_count*/, wchar_t** /*arguments*/)
   g_checkpoint.store(1, std::memory_order_relaxed);
   ReportServiceStatus(SERVICE_START_PENDING, NO_ERROR, 3'000);
 
-  ztools::service::ServiceSecret secret{};
   std::wstring data_root;
   std::wstring user_sid_string;
-  std::wstring secret_path;
   DWORD identity_error = ERROR_SUCCESS;
-  if (!ztools::service::LoadInstalledServiceSecret(
+  if (!ztools::service::ResolveServiceDataRoot(
           ztools::service::PipeIdentityMode::service,
-          &secret,
           &data_root,
-          &secret_path,
           &user_sid_string,
           &identity_error)) {
     ReportServiceStatus(SERVICE_STOPPED, identity_error, 0);
@@ -706,11 +718,10 @@ void WINAPI ServiceMain(const DWORD /*argument_count*/, wchar_t** /*arguments*/)
   ServiceRuntime runtime({
       ztools::service::RuntimeMode::service,
       ztools::service::kServicePipeName,
-      secret,
+      {},
       user_sid_string,
       manifest_config,
   });
-  ztools::service::SecureEraseServiceBytes(secret);
   if (!runtime.Start()) {
     ReportServiceStatus(SERVICE_STOPPED, runtime.last_error(), 0);
     return;
@@ -744,16 +755,12 @@ BOOL WINAPI ConsoleControlHandler(const DWORD control) {
 
 int RunConsole() {
   ztools::service::g_console_logging.store(true, std::memory_order_relaxed);
-  ztools::service::ServiceSecret secret{};
   std::wstring data_root;
   std::wstring user_sid_string;
-  std::wstring secret_path;
   DWORD identity_error = ERROR_SUCCESS;
-  if (!ztools::service::LoadInstalledServiceSecret(
+  if (!ztools::service::ResolveServiceDataRoot(
           ztools::service::PipeIdentityMode::current_process,
-          &secret,
           &data_root,
-          &secret_path,
           &user_sid_string,
           &identity_error)) {
     std::wcerr << L"ZToolsService user identity unavailable: " << identity_error << L'\n';
@@ -768,14 +775,17 @@ int RunConsole() {
       data_root,
       &manifest_config,
       &manifest_error);
+  std::wstring pipe_name(ztools::service::kServicePipeName);
+#if defined(ZTOOLS_BUILD_SERVICE_MANIFEST_TESTS)
+  if (!g_test_console_pipe.empty()) pipe_name = g_test_console_pipe;
+#endif
   ServiceRuntime runtime({
       ztools::service::RuntimeMode::console,
-      ztools::service::kServicePipeName,
-      secret,
+      pipe_name,
+      {},
       user_sid_string,
       manifest_config,
   });
-  ztools::service::SecureEraseServiceBytes(secret);
   if (!runtime.Start()) {
     std::wcerr << L"ZToolsService failed to start: " << runtime.last_error() << L'\n';
     return 10;
@@ -788,7 +798,7 @@ int RunConsole() {
   PublishRuntime(&runtime);
   std::wcout << L"ZToolsService ready; transport=named-pipe; protocolVersion="
              << ztools::service::kServiceProtocolVersion << L"; pipe="
-             << ztools::service::kServicePipeName << std::endl;
+             << pipe_name << std::endl;
   const DWORD wait_result = runtime.WaitForStop(INFINITE);
   runtime.Stop();
   ClearRuntime();
@@ -918,10 +928,7 @@ int RunIntegrationTestServer(
     const std::wstring_view pipe_name,
     const std::wstring_view data_root = {},
     const std::wstring_view manifest_sha256 = {}) {
-  constexpr std::wstring_view prefix =
-      L"\\\\.\\pipe\\ZToolsPrivilegedService.v1.integration.";
-  if (!pipe_name.starts_with(prefix) || pipe_name.size() > 240 ||
-      pipe_name.find(L'\0') != std::wstring_view::npos ||
+  if (!IsIsolatedTestPipe(pipe_name) ||
       data_root.find(L'\0') != std::wstring_view::npos ||
       manifest_sha256.find(L'\0') != std::wstring_view::npos ||
       (!manifest_sha256.empty() && data_root.empty())) {
@@ -996,8 +1003,11 @@ void ShowUsage() {
              << L"              Override Data for console or SCM mode; directory must exist\n"
              << L"              Relative paths use the process working directory\n"
              << L"  --self-test  Verify lifecycle transitions and exit\n"
+             << L"  --client-bridge <pipe> <timeout-ms>\n"
+             << L"              Verify the SCM service and forward its pipe over stdio\n"
 #if defined(ZTOOLS_BUILD_SERVICE_MANIFEST_TESTS)
              << L"  --integration-test-server <pipe> [data-root [manifest-sha256]]\n"
+             << L"  --console --test-pipe <isolated-integration-pipe>\n"
 #endif
              << L"  --help       Show this help\n";
 }
@@ -1005,6 +1015,11 @@ void ShowUsage() {
 }  // namespace
 
 int wmain(const int argument_count, wchar_t* arguments[]) {
+  if (argument_count >= 2 && std::wstring_view(arguments[1]) == L"--client-bridge") {
+    return ztools::service::RunClientBridge(
+        argument_count == 4 ? std::wstring_view(arguments[2]) : std::wstring_view{},
+        argument_count == 4 ? std::wstring_view(arguments[3]) : std::wstring_view{});
+  }
 #if defined(ZTOOLS_BUILD_SERVICE_MANIFEST_TESTS)
   if ((argument_count >= 3 && argument_count <= 5) &&
       std::wstring_view(arguments[1]) == L"--integration-test-server") {
@@ -1031,6 +1046,17 @@ int wmain(const int argument_count, wchar_t* arguments[]) {
       console_mode = true;
       continue;
     }
+#if defined(ZTOOLS_BUILD_SERVICE_MANIFEST_TESTS)
+    if (argument == L"--test-pipe" && index + 1 < argument_count) {
+      const std::wstring_view test_pipe(arguments[++index]);
+      if (!g_test_console_pipe.empty() || !IsIsolatedTestPipe(test_pipe)) {
+        std::wcerr << L"Invalid or duplicate isolated --test-pipe\n";
+        return 2;
+      }
+      g_test_console_pipe.assign(test_pipe);
+      continue;
+    }
+#endif
     std::wstring value;
     if (argument == L"--data-root" && index + 1 < argument_count) {
       value = arguments[++index];
@@ -1047,6 +1073,12 @@ int wmain(const int argument_count, wchar_t* arguments[]) {
       return 2;
     }
   }
+#if defined(ZTOOLS_BUILD_SERVICE_MANIFEST_TESTS)
+  if (!g_test_console_pipe.empty() && !console_mode) {
+    std::wcerr << L"--test-pipe requires --console\n";
+    return 2;
+  }
+#endif
   if (console_mode) return RunConsole();
 
   SERVICE_TABLE_ENTRYW service_table[] = {

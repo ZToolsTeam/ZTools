@@ -17,6 +17,7 @@
 #include <atomic>
 #include <chrono>
 #include <functional>
+#include <iterator>
 
 #include "file_scanner.hpp"
 #include "flat_trie.hpp"
@@ -116,44 +117,80 @@ int main(int argc, char* argv[]) {
     // req.method == "index_path"
     std::string path_str = req.params.get_string("path", ".");
     std::string scanner_pref = req.params.get_string("scanner", "auto");
+    const bool force_staged = req.params.get_bool("staged", false);
 
     auto t0 = std::chrono::high_resolution_clock::now();
     std::vector<FileEntry> entries;
     std::string scanner_used = "concurrent_directory";
 
+    auto run_staged_concurrent_scan = [&](
+      const std::vector<ConcurrentDirectoryScanner::RootTarget>& root_targets,
+      size_t per_group_max_entries,
+      std::vector<FileEntry>& out_entries,
+      bool publish_quick_stage
+    ) {
+      if (root_targets.empty() || cancel_scan.load(std::memory_order_relaxed)) return;
+
+      ConcurrentDirectoryScanner::GroupQuotaTracker quota(root_targets.size(), per_group_max_entries);
+      ConcurrentDirectoryScanner::VisitedDirTracker visited_tracker;
+
+      if (publish_quick_stage) {
+        // Stage 1: 并发扫描全盘前 4 层并收集未深入的边界子目录，随后立即上线浅层索引
+        static constexpr size_t kQuickStageMaxDepth = 4;
+        std::vector<ConcurrentDirectoryScanner::RootTarget> boundary_dirs;
+        ConcurrentDirectoryScanner quickScanner(0, 0, &cancel_scan, kQuickStageMaxDepth);
+        quickScanner.ScanGroupedRoots(root_targets, out_entries, quota, &boundary_dirs, &visited_tracker);
+
+        if (!out_entries.empty() && !cancel_scan.load(std::memory_order_relaxed)) {
+          std::vector<FileEntry> quick_copy = out_entries;
+          FlatTrieIndex quick_staging(false);
+          quick_staging.Build(std::move(quick_copy));
+          std::lock_guard<std::mutex> lk(index_mutex);
+          index.SwapData(quick_staging);
+        }
+
+        // Stage 2: 以 boundary_dirs 为起点多盘真并发续扫深层目录，合并结果而绝不重扫前 4 层
+        if (!boundary_dirs.empty() && !cancel_scan.load(std::memory_order_relaxed)) {
+          std::vector<FileEntry> stage2_entries;
+          ConcurrentDirectoryScanner deepScanner(0, 0, &cancel_scan, 0);
+          deepScanner.ScanGroupedRoots(boundary_dirs, stage2_entries, quota, nullptr, &visited_tracker);
+          if (!stage2_entries.empty()) {
+            out_entries.reserve(out_entries.size() + stage2_entries.size());
+            out_entries.insert(
+              out_entries.end(),
+              std::make_move_iterator(stage2_entries.begin()),
+              std::make_move_iterator(stage2_entries.end())
+            );
+          }
+        }
+      } else {
+        // 已有索引刷新时直接多盘并发一趟扫完，仍按每盘独立配额上限控制
+        ConcurrentDirectoryScanner fullScanner(0, 0, &cancel_scan, 0);
+        fullScanner.ScanGroupedRoots(root_targets, out_entries, quota, nullptr, &visited_tracker);
+      }
+    };
+
     if (path_str == "*" || path_str == "all") {
       std::vector<std::wstring> drives = ConcurrentDirectoryScanner::EnumerateFixedDrives();
       scanner_used = "all_drives_concurrent";
 
-      // Stage 1: 若当前索引为空，先极速扫描所有盘符前 4 层目录并立即上线，确保启动百毫秒内全盘浅层即可搜
       bool is_empty = false;
       {
         std::lock_guard<std::mutex> lk(index_mutex);
         is_empty = (index.Size() == 0);
       }
-      if (is_empty && !cancel_scan.load(std::memory_order_relaxed)) {
-        std::vector<FileEntry> quick_entries;
-        ConcurrentDirectoryScanner quickScanner(0, 60000, &cancel_scan, 4);
-        quickScanner.ScanRoots(drives, quick_entries);
-        if (!quick_entries.empty() && !cancel_scan.load(std::memory_order_relaxed)) {
-          FlatTrieIndex quick_staging(false);
-          quick_staging.Build(std::move(quick_entries));
-          std::lock_guard<std::mutex> lk(index_mutex);
-          index.SwapData(quick_staging);
-        }
-      }
 
-      // Stage 2: 按盘符独立配额（单盘上限 150,000 条）执行全盘深度扫描，防止单盘大目录挤占其他盘符配额
       static constexpr size_t kPerDriveMaxEntries = 150000;
-      for (const auto& drive : drives) {
-        if (cancel_scan.load(std::memory_order_relaxed)) break;
-        ConcurrentDirectoryScanner driveScanner(0, kPerDriveMaxEntries, &cancel_scan, 0);
-        driveScanner.Scan(drive, entries);
+      std::vector<ConcurrentDirectoryScanner::RootTarget> root_targets;
+      root_targets.reserve(drives.size());
+      for (size_t i = 0; i < drives.size(); ++i) {
+        root_targets.push_back({drives[i], i, -1});
       }
+      run_staged_concurrent_scan(root_targets, kPerDriveMaxEntries, entries, is_empty || force_staged);
     } else {
       std::wstring wpath = Utf8ToWide(path_str);
       bool is_drive_root = (wpath.size() <= 3) || (wpath.size() == 2 && wpath[1] == L':');
-      if (scanner_pref == "usn" || (scanner_pref == "auto" && is_drive_root)) {
+      if (!force_staged && (scanner_pref == "usn" || (scanner_pref == "auto" && is_drive_root))) {
         UsnJournalScanner usn;
         if (usn.Scan(wpath, entries)) {
           scanner_used = "usn_journal";
@@ -161,14 +198,19 @@ int main(int argc, char* argv[]) {
       }
 
       if (entries.empty()) {
-        ConcurrentDirectoryScanner dirScanner(0, ConcurrentDirectoryScanner::kDefaultMaxEntries, &cancel_scan);
-        dirScanner.Scan(wpath, entries);
+        if (force_staged) {
+          std::vector<ConcurrentDirectoryScanner::RootTarget> targets = {{wpath, 0, -1}};
+          run_staged_concurrent_scan(targets, ConcurrentDirectoryScanner::kDefaultMaxEntries, entries, true);
+        } else {
+          ConcurrentDirectoryScanner dirScanner(0, ConcurrentDirectoryScanner::kDefaultMaxEntries, &cancel_scan);
+          dirScanner.Scan(wpath, entries);
 #ifdef __APPLE__
-        if (path_str.rfind("/Users/", 0) == 0 && !cancel_scan.load(std::memory_order_relaxed)) {
-          dirScanner.Scan(Utf8ToWide("/Applications"), entries);
-          dirScanner.Scan(Utf8ToWide("/System/Applications"), entries);
-        }
+          if (path_str.rfind("/Users/", 0) == 0 && !cancel_scan.load(std::memory_order_relaxed)) {
+            dirScanner.Scan(Utf8ToWide("/Applications"), entries);
+            dirScanner.Scan(Utf8ToWide("/System/Applications"), entries);
+          }
 #endif
+        }
         scanner_used = "concurrent_directory";
       }
     }

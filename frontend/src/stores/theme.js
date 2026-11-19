@@ -55,11 +55,11 @@ export const useThemeStore = defineStore('theme', {
       }
 
       try {
-        const configGet = window.ztools?.config?.get
-        const [savedTheme, savedAccent] = configGet
+        const hasConfigGet = typeof window.ztools?.config?.get === 'function'
+        const [savedTheme, savedAccent] = hasConfigGet
           ? await Promise.all([
-              configGet('ui.theme', null, 'user_settings.json'),
-              configGet('ui.accent', null, 'user_settings.json')
+              window.ztools.config.get('ui.theme', null, 'user_settings.json'),
+              window.ztools.config.get('ui.accent', null, 'user_settings.json')
             ])
           : [null, null]
 

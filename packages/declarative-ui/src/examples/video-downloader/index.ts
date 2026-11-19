@@ -1,180 +1,94 @@
 /**
- * ZTools 2.0 标杆原生插件视图: 全平台流媒体音视频解析与下载工坊 (Video Downloader 2.0 - 布局二：左 32% 平台分类树 + 右 68% 可勾选视频库列表)
+ * ZTools 2.0 标杆原生插件视图: 全平台流媒体音视频解析与下载工坊 (Video Downloader 2.0 - 布局二：左 32% 平台分类树 + 右 68% 视频队列)
  *
- * 严格遵循 ZTools 效率工具箱 UI 与交互设计五大黄金法则：
- * 1. 布局二（Master-SubList Cleaner）：左 32% 6 大流媒体平台解析导航树 + 右 68% 本机已下载视频媒体勾选明细队列
- * 2. 顶部唯一筛选：searchBarAccessory Dropdown 切换视频画质与音轨提取档位 (4K 60fps / 1080P / 720P / MP3 / FLAC / 含字幕)
- * 3. 单行极简状态条：filterBar.summaryText 融合剪贴板平台自动识别、存储空间与已选视频统计，仅保留 1 个全局重新扫描按钮
- * 4. 零彩色 Emoji 与去彩虹化：100% 单色 SVG 图标、中性灰体积进度条与无边框胶囊标签
+ * 严格遵循显式导入规范：
+ * 1. 挂载时不扫描本机 Videos/Downloads 目录、不读取剪贴板，初始视频队列为空 `[]`
+ * 2. 顶栏 filterBar.actions 最多 2 个：「选择文件」「选择文件夹」，另支持拖入视频/文件夹与粘贴下载链接
+ * 3. 本次下载完成的文件或手动导入的视频均汇总展示在右栏，动作面板支持「从列表移除」与「清空列表」
  */
 
 import { Action, ActionPanel, Icon, List, useEffect, useState } from "../../index.js";
-import { isRealElectronHost } from "../shared/native-ipc.js";
+import { getRealFileSize } from "../shared/native-ipc.js";
+import {
+  buildImportEmptyActionPanel,
+  buildListManagementSection,
+  useExampleImportQueue
+} from "../shared/import-ui.js";
 import {
   STREAM_PLATFORMS,
+  VIDEO_DOWNLOADER_IMPORT_RULES,
   VIDEO_QUALITY_PRESETS,
   detectVideoPlatform,
+  ensureVideoSaveDirectory,
   fetchVideoDownloaderSnapshot,
   formatBytes,
   openLocalVideoFile,
   openLocalVideoFolder,
   parseAndDownloadStreamVideo,
+  readClipboardStreamUrl,
+  toLocalMediaVideoItem,
   trashLocalVideoFiles,
   type LocalMediaVideoItem,
   type StreamPlatformId,
-  type VideoDownloaderSnapshot,
   type VideoQualityPresetId
 } from "./logic.js";
 
-function createInitialVideoSnapshot(): VideoDownloaderSnapshot {
-  if (isRealElectronHost()) {
-    return {
-      saveDir: "",
-      driveLetter: "C:",
-      driveFreeBytes: 0,
-      clipboardUrl: "",
-      detectedPlatform: STREAM_PLATFORMS[0],
-      videos: [],
-      totalSizeBytes: 0,
-      tierStats: [],
-      updatedAt: "正在扫描本机视频库..."
-    };
-  }
-  const defaultVideos: LocalMediaVideoItem[] = [
-    {
-      id: "vid_init_0",
-      name: "Bilibili_4K60_TechReview_BV1xx411c7mD.mp4",
-      path: "C:\\Users\\Default\\Videos\\Bilibili_4K60_TechReview_BV1xx411c7mD.mp4",
-      ext: ".mp4",
-      sizeBytes: 680 * 1024 * 1024,
-      mtimeMs: Date.now() - 3600_000,
-      sourceDirLabel: "Videos 视频库",
-      resolutionTier: "large_hd",
-      resolutionLabel: "4K / 超清原画",
-      color: "var(--rc-text-muted)"
-    },
-    {
-      id: "vid_init_1",
-      name: "Douyin_NoWatermark_1080P_Clip.mp4",
-      path: "C:\\Users\\Default\\Videos\\Douyin_NoWatermark_1080P_Clip.mp4",
-      ext: ".mp4",
-      sizeBytes: 42 * 1024 * 1024,
-      mtimeMs: Date.now() - 7200_000,
-      sourceDirLabel: "Videos 视频库",
-      resolutionTier: "standard",
-      resolutionLabel: "1080P 高清",
-      color: "var(--rc-text-muted)"
-    },
-    {
-      id: "vid_init_2",
-      name: "YouTube_Keynote_2026_1080P_WithSubs.mkv",
-      path: "C:\\Users\\Default\\Downloads\\YouTube_Keynote_2026_1080P_WithSubs.mkv",
-      ext: ".mkv",
-      sizeBytes: 410 * 1024 * 1024,
-      mtimeMs: Date.now() - 10800_000,
-      sourceDirLabel: "Downloads 下载库",
-      resolutionTier: "large_hd",
-      resolutionLabel: "4K / 超清原画",
-      color: "var(--rc-text-muted)"
-    },
-    {
-      id: "vid_init_3",
-      name: "Kuaishou_LiveReplay_Highlight.mp4",
-      path: "C:\\Users\\Default\\Videos\\Kuaishou_LiveReplay_Highlight.mp4",
-      ext: ".mp4",
-      sizeBytes: 85 * 1024 * 1024,
-      mtimeMs: Date.now() - 14400_000,
-      sourceDirLabel: "Videos 视频库",
-      resolutionTier: "standard",
-      resolutionLabel: "1080P 高清",
-      color: "var(--rc-text-muted)"
-    },
-    {
-      id: "vid_init_4",
-      name: "HLS_Stream_Merged_Lecture_01.mp4",
-      path: "C:\\Users\\Default\\Downloads\\HLS_Stream_Merged_Lecture_01.mp4",
-      ext: ".mp4",
-      sizeBytes: 156 * 1024 * 1024,
-      mtimeMs: Date.now() - 18000_000,
-      sourceDirLabel: "Downloads 下载库",
-      resolutionTier: "standard",
-      resolutionLabel: "1080P 高清",
-      color: "var(--rc-text-muted)"
-    }
-  ];
-
-  const totalSizeBytes = defaultVideos.reduce((acc, item) => acc + item.sizeBytes, 0);
-
-  return {
-    saveDir: "C:\\Users\\Default\\Videos",
-    driveLetter: "C:",
-    driveFreeBytes: 128 * 1024 * 1024 * 1024,
-    clipboardUrl: "",
-    detectedPlatform: STREAM_PLATFORMS[0],
-    videos: defaultVideos,
-    totalSizeBytes,
-    tierStats: [
-      {
-        tier: "large_hd",
-        label: "4K / 超清原画 (>200MB)",
-        color: "var(--rc-text-muted)",
-        sizeBytes: 1090 * 1024 * 1024,
-        count: 2
-      },
-      {
-        tier: "standard",
-        label: "1080P 标准高清 (20~200MB)",
-        color: "var(--rc-text-muted)",
-        sizeBytes: 283 * 1024 * 1024,
-        count: 3
-      }
-    ],
-    updatedAt: "初始化就绪"
-  };
-}
-
 export function VideoDownloaderCommand() {
-  const [snapshot, setSnapshot] = useState<VideoDownloaderSnapshot>(() => createInitialVideoSnapshot());
+  const [saveDir, setSaveDir] = useState<string>("");
+  const [driveLetter, setDriveLetter] = useState<string>("C:");
+  const [driveFreeBytes, setDriveFreeBytes] = useState<number>(0);
   const [selectedPlatform, setSelectedPlatform] = useState<StreamPlatformId>("auto");
   const [selectedQuality, setSelectedQuality] = useState<VideoQualityPresetId>("q_1080p_mp4");
-  const [checkedIds, setCheckedIds] = useState<string[]>(() =>
-    isRealElectronHost() ? [] : ["vid_init_0", "vid_init_1"]
-  );
   const [searchText, setSearchText] = useState<string>("");
   const [streamInput, setStreamInput] = useState<string>("");
   const [statusBanner, setStatusBanner] = useState<string>("");
   const [isLoading, setIsLoading] = useState<boolean>(false);
 
-  const reloadVideoSnapshot = async () => {
-    setIsLoading(true);
-    try {
-      const data = await fetchVideoDownloaderSnapshot();
-      if (isRealElectronHost() || data.videos.length > 0) {
-        setSnapshot(data);
-        setCheckedIds(data.videos.slice(0, 5).map((v) => v.id));
-        if (data.clipboardUrl && !streamInput) {
-          setStreamInput(data.clipboardUrl);
-        }
-        setStatusBanner(
-          data.videos.length > 0
-            ? `已扫描本地媒体库 · 共 ${data.videos.length} 个视频 (${formatBytes(data.totalSizeBytes)})`
-            : `媒体保存目录 ${data.saveDir} · 暂无本地视频 · 盘符剩余可用 ${formatBytes(data.driveFreeBytes)}`
-        );
-      } else {
-        setStatusBanner(
-          `媒体保存目录 ${data.saveDir} · 盘符剩余可用 ${formatBytes(data.driveFreeBytes)}`
-        );
+  const queue = useExampleImportQueue<LocalMediaVideoItem>({
+    rules: VIDEO_DOWNLOADER_IMPORT_RULES,
+    toItem: (entry) => toLocalMediaVideoItem(entry, entry.parentDir || "手动导入"),
+    pathOf: (item) => item.path,
+    idOf: (item) => item.id,
+    fileTitle: "选择本地视频文件",
+    folderTitle: "选择本地视频文件夹",
+    filterName: "视频文件",
+    supportedText: "仅支持 mp4/mkv/mov/webm/flv/avi 等视频格式",
+    defaultChecked: false,
+    isBusy: () => isLoading,
+    dropTitle: "拖入视频文件或文件夹",
+    dropSubtitle: "松开后加入本地视频队列，或按 Ctrl+V 粘贴视频链接",
+    onTextPaste: (text) => {
+      const detectedPaste = detectVideoPlatform(text);
+      if (!detectedPaste.url) return false;
+      setStreamInput(detectedPaste.url);
+      setStatusBanner(`已从粘贴识别 ${detectedPaste.platform.name} 链接`);
+      return true;
+    },
+    onImported: (added, merged) => {
+      if (added[0]?.path && !saveDir) {
+        const idx = Math.max(added[0].path.lastIndexOf("/"), added[0].path.lastIndexOf("\\"));
+        if (idx > 0) setSaveDir(added[0].path.slice(0, idx));
       }
-    } catch (err) {
-      setStatusBanner(`扫描本地视频库失败: ${err instanceof Error ? err.message : String(err)}`);
-    } finally {
-      setIsLoading(false);
-    }
-  };
+      setStatusBanner(`已导入 ${added.length} 个视频，当前共 ${merged.length} 项`);
+    },
+    onCleared: () => setStatusBanner("已清空本地视频列表")
+  });
 
   useEffect(() => {
-    void reloadVideoSnapshot();
-  }, []);
+    let active = true;
+    void fetchVideoDownloaderSnapshot(undefined, saveDir)
+      .then((snap) => {
+        if (!active) return;
+        setDriveLetter(snap.driveLetter);
+        setDriveFreeBytes(snap.driveFreeBytes);
+      })
+      .catch(() => {
+        // 磁盘空间探测失败时维持默认空状态，不阻塞界面渲染
+      });
+    return () => {
+      active = false;
+    };
+  }, [saveDir]);
 
   const handleSearchChange = (text: string) => {
     setSearchText(text);
@@ -183,7 +97,7 @@ export function VideoDownloaderCommand() {
     }
   };
 
-  const activeInputText = streamInput.trim() || snapshot.clipboardUrl;
+  const activeInputText = streamInput.trim();
   const detected = detectVideoPlatform(activeInputText);
   const currentQuality =
     VIDEO_QUALITY_PRESETS.find((q) => q.id === selectedQuality) || VIDEO_QUALITY_PRESETS[1];
@@ -191,11 +105,11 @@ export function VideoDownloaderCommand() {
   const isUrlSearch = /(https?:\/\/|\bBV[0-9A-Za-z]{10}\b)/i.test(searchText.trim());
   const keyword = isUrlSearch ? "" : searchText.trim().toLowerCase();
 
-  const filteredVideos = snapshot.videos.filter((video) => {
+  const filteredVideos = queue.items.filter((video) => {
     if (selectedPlatform !== "auto") {
       const nameLower = video.name.toLowerCase();
       if (selectedPlatform === "bilibili" && !nameLower.includes("bili") && !nameLower.includes("bv")) {
-        // 若用户选择了特定平台但本地文件名无特定前缀，按文件名搜索或保留展示以支持本地管理
+        // 保留本地已有视频展示以便统一管理
       }
     }
     if (!keyword) return true;
@@ -204,39 +118,73 @@ export function VideoDownloaderCommand() {
       .includes(keyword);
   });
 
-  const checkedSet = new Set(checkedIds);
-  const selectedVideos = snapshot.videos.filter((v) => checkedSet.has(v.id));
+  const checkedSet = new Set(queue.checkedIds);
+  const selectedVideos = queue.items.filter((v) => checkedSet.has(v.id));
   const selectedTotalBytes = selectedVideos.reduce((acc, item) => acc + item.sizeBytes, 0);
+  const totalSizeBytes = queue.items.reduce((acc, item) => acc + item.sizeBytes, 0);
 
-  const toggleVideoCheck = (id: string) => {
-    setCheckedIds((prev) => (prev.includes(id) ? prev.filter((item) => item !== id) : [...prev, id]));
-  };
-
-  const toggleAllVisible = () => {
-    const visibleIds = filteredVideos.map((v) => v.id);
-    const allChecked = visibleIds.length > 0 && visibleIds.every((id) => checkedSet.has(id));
-    if (allChecked) {
-      const removeSet = new Set(visibleIds);
-      setCheckedIds((prev) => prev.filter((id) => !removeSet.has(id)));
-    } else {
-      setCheckedIds((prev) => Array.from(new Set([...prev, ...visibleIds])));
+  const handleReadClipboardUrl = async () => {
+    const clip = await readClipboardStreamUrl();
+    if (!clip.url) {
+      setStatusBanner("剪贴板中未检测到 B站/抖音/快手/YouTube/M3U8 视频链接");
+      return;
     }
+    setStreamInput(clip.url);
+    setStatusBanner(`已识别剪贴板链接：${clip.platform.name}`);
   };
 
   const handleParseAndDownload = async (rawInput?: string) => {
     const target = (rawInput ?? activeInputText).trim();
     if (!target) {
-      setStatusBanner("请先复制视频分享口令/链接到剪贴板，或在顶部搜索框粘贴 B站/抖音/YouTube/M3U8 链接");
+      setStatusBanner("请在搜索框粘贴视频链接，或先点击「读取剪贴板链接」");
       return;
     }
     setIsLoading(true);
     try {
-      const res = await parseAndDownloadStreamVideo(target, snapshot.saveDir, currentQuality);
+      const resolvedDir = await ensureVideoSaveDirectory(saveDir);
+      if (!resolvedDir) {
+        setStatusBanner("未能获取视频保存目录，请先通过「选择文件夹」指定目录");
+        return;
+      }
+      if (!saveDir) setSaveDir(resolvedDir);
+      const res = await parseAndDownloadStreamVideo(target, resolvedDir, currentQuality);
       setStatusBanner(res.message);
-      await reloadVideoSnapshot();
+      const destPath =
+        res.ok && res.data && typeof res.data === "object"
+          ? String((res.data as { destPath?: unknown }).destPath || "")
+          : "";
+      if (res.ok && destPath) {
+        const size = await getRealFileSize(destPath);
+        const name = destPath.split(/[\\/]/).pop() || "downloaded_video.mp4";
+        const extIdx = name.lastIndexOf(".");
+        const item = toLocalMediaVideoItem(
+          {
+            path: destPath,
+            name,
+            parentDir: resolvedDir,
+            extension: extIdx > 0 ? name.slice(extIdx).toLowerCase() : ".mp4",
+            sizeBytes: size,
+            lastModifiedMs: Date.now()
+          },
+          "本次下载"
+        );
+        queue.setItems((prev) =>
+          prev.some((v) => v.path.toLowerCase() === destPath.toLowerCase()) ? prev : [item, ...prev]
+        );
+      }
     } finally {
       setIsLoading(false);
     }
+  };
+
+  const handleOpenSaveDirectory = async () => {
+    const resolvedDir = await ensureVideoSaveDirectory(saveDir);
+    if (!resolvedDir) {
+      setStatusBanner("暂无可打开的保存目录，请先导入文件夹");
+      return;
+    }
+    if (!saveDir) setSaveDir(resolvedDir);
+    await openLocalVideoFile(resolvedDir);
   };
 
   const handleTrashSelected = async () => {
@@ -248,56 +196,68 @@ export function VideoDownloaderCommand() {
         targets.map((v) => v.path),
         targets
       );
+      if (res.deletedCount > 0) {
+        const removedPaths = new Set(targets.map((t) => t.path.toLowerCase()));
+        queue.setItems((prev) => prev.filter((item) => !removedPaths.has(item.path.toLowerCase())));
+        queue.setCheckedIds((prev) =>
+          prev.filter((id) => !targets.some((t) => t.id === id))
+        );
+      }
       setStatusBanner(
         res.deletedCount > 0
           ? `已将 ${res.deletedCount} 个本地视频移入回收站，释放 ${formatBytes(res.freedBytes)}`
           : "本地视频清理操作未删除任何文件"
       );
-      await reloadVideoSnapshot();
     } finally {
       setIsLoading(false);
     }
   };
 
   const maxVideoBytes = Math.max(1, ...filteredVideos.map((v) => v.sizeBytes));
-
   const summaryText =
+    queue.importStatusText ||
     statusBanner ||
-    `解析引擎: ${detected.platform.name} · 档位: ${currentQuality.badge} · 本地视频库 ${filteredVideos.length} 项 (已选 ${selectedVideos.length} 项 / ${formatBytes(selectedTotalBytes)})`;
+    `解析引擎: ${detected.platform.name} · 档位: ${currentQuality.badge} · 队列 ${filteredVideos.length} 项 (${driveLetter} 可用 ${formatBytes(driveFreeBytes)})`;
 
   const leftNavNodes = [
     List.Item({
       id: "nav-plat-auto",
-      title: "全部平台与本地视频库",
-      subtitle: `${snapshot.saveDir} (智能探测剪贴板分享链接)`,
+      title: "全部平台与本地视频队列",
+      subtitle: saveDir || "尚未指定保存目录（点击选择文件夹或粘贴链接开始）",
       icon: Icon.Video,
       onSelect: () => setSelectedPlatform("auto"),
       accessories: [
         { progress: 1 },
-        { tag: { value: `${snapshot.videos.length} 部` } },
-        { text: formatBytes(snapshot.totalSizeBytes) }
+        { tag: { value: `${queue.items.length} 部` } },
+        { text: formatBytes(totalSizeBytes) }
       ],
       actions: ActionPanel({
         children: [
           Action({
-            title: activeInputText
-              ? `一键解析并下载 [${currentQuality.badge}] (Enter)`
-              : "读取剪贴板口令并解析下载 (Enter)",
+            title: activeInputText ? `一键解析并下载 [${currentQuality.badge}]` : "解析当前输入链接",
             icon: Icon.Download,
             onAction: () => handleParseAndDownload(activeInputText)
           }),
           Action({
-            title: "打开视频保存目录 (Ctrl+Enter)",
+            title: "读取剪贴板中的视频链接",
+            icon: Icon.Clipboard,
+            onAction: handleReadClipboardUrl
+          }),
+          Action({
+            title: "打开视频保存目录",
             icon: Icon.Folder,
-            onAction: async () => {
-              await openLocalVideoFile(snapshot.saveDir);
-            }
+            onAction: handleOpenSaveDirectory
           }),
           Action({
             title: `清理已勾选本地视频 (${selectedVideos.length} 部)`,
             icon: Icon.Trash,
             style: "destructive",
             onAction: handleTrashSelected
+          }),
+          buildListManagementSection({
+            onPickFiles: queue.handlePickFiles,
+            onPickFolder: queue.handlePickFolder,
+            onClear: queue.clearQueue
           })
         ]
       })
@@ -319,7 +279,7 @@ export function VideoDownloaderCommand() {
         actions: ActionPanel({
           children: [
             Action({
-              title: `使用 ${platform.name} 引擎解析下载 (Enter)`,
+              title: `使用 ${platform.name} 引擎解析下载`,
               icon: Icon.Download,
               onAction: () => {
                 setSelectedPlatform(platform.id);
@@ -327,11 +287,14 @@ export function VideoDownloaderCommand() {
               }
             }),
             Action({
-              title: "打开本地视频保存目录 (Ctrl+Enter)",
+              title: "读取剪贴板中的视频链接",
+              icon: Icon.Clipboard,
+              onAction: handleReadClipboardUrl
+            }),
+            Action({
+              title: "打开本地视频保存目录",
               icon: Icon.Folder,
-              onAction: async () => {
-                await openLocalVideoFile(snapshot.saveDir);
-              }
+              onAction: handleOpenSaveDirectory
             })
           ]
         })
@@ -339,10 +302,13 @@ export function VideoDownloaderCommand() {
     })
   ];
 
+  const allChecked = filteredVideos.length > 0 && filteredVideos.every((v) => checkedSet.has(v.id));
+  const someChecked = filteredVideos.some((v) => checkedSet.has(v.id));
+
   const subListItems = filteredVideos.map((video) => {
     const isChecked = checkedSet.has(video.id);
     const ratio = Math.min(1, video.sizeBytes / maxVideoBytes);
-    const dateStr = video.mtimeMs > 0 ? new Date(video.mtimeMs).toLocaleDateString() : "近期下载";
+    const dateStr = video.mtimeMs > 0 ? new Date(video.mtimeMs).toLocaleDateString() : "本地文件";
 
     return List.Item({
       id: `vid-item-${video.id}`,
@@ -351,8 +317,8 @@ export function VideoDownloaderCommand() {
       icon: Icon.Video,
       checkable: true,
       checked: isChecked,
-      onCheckChange: () => toggleVideoCheck(video.id),
-      onToggleCheck: () => toggleVideoCheck(video.id),
+      onCheckChange: () => queue.toggleCheck(video.id),
+      onToggleCheck: () => queue.toggleCheck(video.id),
       accessories: [
         { progress: ratio },
         { tag: { value: video.resolutionLabel } },
@@ -361,9 +327,7 @@ export function VideoDownloaderCommand() {
       actions: ActionPanel({
         children: [
           Action({
-            title: activeInputText
-              ? `解析下载剪贴板视频 [${currentQuality.badge}] (Enter)`
-              : "使用系统播放器打开此视频 (Enter)",
+            title: activeInputText ? `解析下载当前视频 [${currentQuality.badge}]` : "使用系统播放器打开此视频",
             icon: activeInputText ? Icon.Download : Icon.Play,
             onAction: async () => {
               if (activeInputText) {
@@ -374,7 +338,7 @@ export function VideoDownloaderCommand() {
             }
           }),
           Action({
-            title: "在资源管理器中定位视频文件 (Ctrl+Enter)",
+            title: "在资源管理器中定位视频文件",
             icon: Icon.Folder,
             onAction: async () => {
               await openLocalVideoFolder(video.path);
@@ -383,13 +347,21 @@ export function VideoDownloaderCommand() {
           Action({
             title: isChecked ? "取消勾选此视频" : "勾选此视频",
             icon: Icon.CheckCircle,
-            onAction: () => toggleVideoCheck(video.id)
+            onAction: () => queue.toggleCheck(video.id)
           }),
           Action({
             title: `批量移入回收站清理 (${selectedVideos.length} 部 / ${formatBytes(selectedTotalBytes)})`,
             icon: Icon.Trash,
             style: "destructive",
             onAction: handleTrashSelected
+          }),
+          buildListManagementSection({
+            onRemove: () => queue.removeItem(video.id),
+            onPickFiles: queue.handlePickFiles,
+            onPickFolder: queue.handlePickFolder,
+            onToggleAll: () => queue.toggleAllVisible(filteredVideos),
+            allSelected: allChecked,
+            onClear: queue.clearQueue
           })
         ]
       })
@@ -398,17 +370,15 @@ export function VideoDownloaderCommand() {
 
   const activePlatformName =
     selectedPlatform === "auto"
-      ? "全部平台与本地媒体库"
+      ? "全部平台与本地视频队列"
       : STREAM_PLATFORMS.find((p) => p.id === selectedPlatform)?.name || "流媒体视频";
 
-  const allChecked = filteredVideos.length > 0 && filteredVideos.every((v) => checkedSet.has(v.id));
-  const someChecked = filteredVideos.some((v) => checkedSet.has(v.id));
-
   return List({
-    isLoading,
-    searchBarPlaceholder: "粘贴 Bilibili BV号 / 抖音口令 / 快手 / YouTube / M3U8 链接，或搜索本地视频...",
+    isLoading: isLoading || queue.isImporting,
+    searchBarPlaceholder: "粘贴 Bilibili BV号 / 抖音口令 / 快手 / YouTube / M3U8 链接，或搜索已导入视频...",
     onSearchTextChange: handleSearchChange,
     isShowingDetail: false,
+    ...queue.fileInputProps,
     searchBarAccessory: List.Dropdown({
       tooltip: "选择目标画质或音频提取封装格式",
       value: selectedQuality,
@@ -422,26 +392,24 @@ export function VideoDownloaderCommand() {
     }),
     filterBar: {
       summaryText,
-      actions: [
-        {
-          id: "rescan",
-          title: "重新扫描",
-          style: "secondary",
-          onAction: () => {
-            void reloadVideoSnapshot();
-          }
-        }
-      ]
+      actions: queue.topBarActions
     },
     subList: {
-      title: `${activePlatformName} · 本地已保存视频明细 (${filteredVideos.length} 部 · 已选 ${formatBytes(selectedTotalBytes)})`,
-      subtitle: snapshot.saveDir,
-      emptyText: "当前筛选条件下暂无本地视频文件",
+      title: `${activePlatformName} (${filteredVideos.length} 部 · 已选 ${formatBytes(selectedTotalBytes)})`,
+      subtitle: saveDir || "支持拖入视频/文件夹、选择文件或粘贴链接下载",
+      emptyText: "队列为空，请点击顶部「选择文件 / 选择文件夹」导入视频，或粘贴视频链接下载",
       checkable: filteredVideos.length > 0,
       checked: allChecked ? true : someChecked ? "indeterminate" : false,
-      onCheckChange: () => toggleAllVisible(),
+      onCheckChange: () => queue.toggleAllVisible(filteredVideos),
       items: subListItems
     },
+    actions: buildImportEmptyActionPanel(queue.handlePickFiles, queue.handlePickFolder, [
+      Action({
+        title: "读取剪贴板中的视频链接",
+        icon: Icon.Clipboard,
+        onAction: handleReadClipboardUrl
+      })
+    ]),
     children: [
       List.Section({
         title: "流媒体平台解析引擎导航 (32%)",

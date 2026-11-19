@@ -1,13 +1,13 @@
 <script setup>
 import HotkeyCaptureField from '@/components/HotkeyCaptureField.vue'
 import { RcDialog } from '@/components/base'
-import { CircleXIcon, MonitorIcon, SearchIcon, SquarePlusIcon } from '@lucide/vue'
+import { CircleXIcon, SearchIcon, SquarePlusIcon } from '@lucide/vue'
 /**
  * 启动快捷键管理弹窗
- * 展示所有已安装插件和悬浮条固定的本地软件，支持设置/修改/清除全局快捷键
+ * 展示所有已安装插件，支持设置/修改/清除全局快捷键
  * 通过 IPC trigger 系列接口与原生宿主端交互
  */
-import { ref, computed, onBeforeUnmount } from 'vue'
+import { ref, computed, nextTick, onBeforeUnmount } from 'vue'
 import { usePluginsStore } from '@/stores/plugins'
 import { storeToRefs } from 'pinia'
 import { message } from 'ant-design-vue'
@@ -18,10 +18,10 @@ import {
   buildLaunchHotkeyRegistration
 } from '@/utils/launchHotkeyTargets'
 import {
-  formatHotkeyForPlatform,
   getHotkeyHostCapabilities,
   getHotkeyRuleDescription,
   getHotkeyWaitText,
+  getShellReserveWarning,
   interpretRecorderKeydown,
   resetHotkeyRecorderState
 } from '@/utils/hotkeyRecorder'
@@ -32,10 +32,9 @@ const visible = ref(false)
 const hotkeyPlatform = ref('unknown')
 const supportsDoubleModifierHotkeys = ref(false)
 const searchText = ref('')
+const highlightedTargetId = ref('')
 // 启动快捷键映射：{ targetId: { triggerId, triggerIds, key, kind, ownerId } }
 const pluginHotkeyMap = ref({})
-// 悬浮条固定的本地软件
-const localApps = ref([])
 // 当前正在录入快捷键的目标ID
 const recordingPluginId = ref(null)
 // 录入中显示的临时按键文本
@@ -43,54 +42,56 @@ const recordingText = ref('')
 const recordingIsKeys = ref(false)
 // 操作加载状态
 const loadingPluginId = ref(null)
+const fieldRefs = new Map()
+const itemRefs = new Map()
+
+const setFieldRef = (id, el) => {
+  const key = String(id)
+  if (el) {
+    fieldRefs.set(key, el)
+  } else {
+    fieldRefs.delete(key)
+  }
+}
+
+const setItemRef = (id, el) => {
+  const key = String(id)
+  if (el) {
+    itemRefs.set(key, el)
+  } else {
+    itemRefs.delete(key)
+  }
+}
 
 const pluginsStore = usePluginsStore()
 const { installedPlugins } = storeToRefs(pluginsStore)
 
 const launchTargets = computed(() => {
-  const plugins = (installedPlugins.value || []).map(plugin => ({
+  return (installedPlugins.value || []).map(plugin => ({
     id: String(plugin.pluginId),
     kind: 'plugin',
     name: plugin.name || plugin.pluginId,
     iconPath: plugin.iconPath || '',
     icon: plugin.icon || ''
   }))
-  const apps = localApps.value.map(app => ({
-    id: String(app.id),
-    kind: 'localApp',
-    name: app.name || app.id
-  }))
-  const knownIds = new Set(apps.map(app => app.id))
-  const invalidApps = Object.entries(pluginHotkeyMap.value)
-    .filter(([id, item]) => item.kind === 'localApp' && !knownIds.has(id))
-    .map(([id]) => ({
-      id,
-      kind: 'localApp',
-      name: `${id}（已从悬浮条移除）`,
-      invalid: true
-    }))
-  return [...plugins, ...apps, ...invalidApps]
 })
 
-/** 按搜索关键词过滤启动目标 */
+/** 按搜索关键词过滤启动目标（支持名称与 ID 匹配） */
 const filteredTargets = computed(() => {
   const keyword = searchText.value.trim().toLowerCase()
   if (!keyword) return launchTargets.value
   return launchTargets.value.filter(target =>
-    target.name.toLowerCase().includes(keyword)
+    target.name.toLowerCase().includes(keyword) ||
+    target.id.toLowerCase().includes(keyword)
   )
 })
 
-/** 获取启动目标的快捷键显示文本 */
+/** 获取启动目标原始快捷键，由 HotkeyCaptureField 按平台渲染 */
 const getPluginHotkey = (targetId) => {
-  return formatHotkeyForPlatform(
-    pluginHotkeyMap.value[String(targetId)]?.key || '',
-    hotkeyPlatform.value,
-    supportsDoubleModifierHotkeys.value
-  )
+  return pluginHotkeyMap.value[String(targetId)]?.key || ''
 }
 
-/** 获取插件图标 URL；本地软件使用类型占位图标。 */
+/** 获取插件图标 URL */
 const getPluginIcon = (target) => {
   if (target.kind !== 'plugin') return ''
   // 优先使用本地图标，其次远程图标
@@ -99,25 +100,47 @@ const getPluginIcon = (target) => {
   return ''
 }
 
-const getTargetTypeName = target => target.kind === 'localApp' ? '本地软件' : '插件'
+const getTargetTypeName = () => '插件'
 
 // ========== 弹窗生命周期 ==========
 
-/** 显示弹窗；每次都从触发器注册表读取最新数据，避免复用过期缓存。 */
-const show = async () => {
+/** 显示弹窗；每次都从触发器注册表读取最新数据，支持按传入 pluginId 自动填充搜索并高亮定位目标行。 */
+const show = async (options = {}) => {
+  const targetPluginId =
+    typeof options === 'string'
+      ? options.trim()
+      : (typeof options?.pluginId === 'string' ? options.pluginId.trim() : '')
   resetHotkeyRecorderState()
   const capabilities = await getHotkeyHostCapabilities()
   hotkeyPlatform.value = capabilities.platform
   supportsDoubleModifierHotkeys.value = capabilities.supportsDoubleModifierHotkeys
-  searchText.value = ''
+  searchText.value = targetPluginId
+  highlightedTargetId.value = ''
   recordingPluginId.value = null
-  await Promise.all([loadLocalApps(), loadTriggers()])
+  await loadTriggers()
+  if (targetPluginId) {
+    const lowerTarget = targetPluginId.toLowerCase()
+    const matchedTarget = launchTargets.value.find(
+      (target) =>
+        target.id.toLowerCase() === lowerTarget ||
+        target.name.toLowerCase() === lowerTarget
+    )
+    if (matchedTarget) {
+      searchText.value = matchedTarget.name || matchedTarget.id
+      highlightedTargetId.value = matchedTarget.id
+    }
+  }
   visible.value = true
+  if (highlightedTargetId.value) {
+    await nextTick()
+    itemRefs.get(highlightedTargetId.value)?.scrollIntoView?.({ block: 'nearest' })
+  }
 }
 
 /** 隐藏弹窗 */
 const hide = () => {
-  cancelRecording()
+  cancelRecording(false)
+  highlightedTargetId.value = ''
   visible.value = false
 }
 
@@ -146,21 +169,6 @@ async function loadTriggers() {
   }
 }
 
-async function loadLocalApps() {
-  try {
-    if (!window.ztools?.sys?.getPanelLocalApps) {
-      localApps.value = []
-      return
-    }
-    const apps = await window.ztools.sys.getPanelLocalApps()
-    localApps.value = Array.isArray(apps) ? apps : []
-  } catch (e) {
-    console.error('加载悬浮条本地软件失败:', e)
-    localApps.value = []
-    message.error('加载悬浮条本地软件失败')
-  }
-}
-
 // ========== 快捷键录入 ==========
 
 /** 开始录入快捷键（录入框组件负责聚焦） */
@@ -171,12 +179,16 @@ const startRecording = (targetId) => {
   recordingIsKeys.value = false
 }
 
-/** 取消录入 */
-const cancelRecording = () => {
+/** 取消录入；键盘取消时主动失焦并归还焦点给触发容器，彻底根治二次 Esc 被隐藏 input 吞掉的问题 */
+const cancelRecording = (restoreFocus = false) => {
+  const activeId = recordingPluginId.value
   resetHotkeyRecorderState()
   recordingPluginId.value = null
   recordingText.value = ''
   recordingIsKeys.value = false
+  if (activeId) {
+    fieldRefs.get(String(activeId))?.blurInput?.({ restoreFocus })
+  }
 }
 
 /** 录入框里的按键：Esc 取消、⌫ 清除，组合键完整后做冲突检测并保存 */
@@ -187,11 +199,11 @@ const handleKeydown = async (event, target) => {
     allowDoubleTap: supportsDoubleModifierHotkeys.value
   })
   if (result.action === 'cancel') {
-    cancelRecording()
+    cancelRecording(true)
     return
   }
   if (result.action === 'clear') {
-    cancelRecording()
+    cancelRecording(true)
     if (getPluginHotkey(target.id)) await clearHotkey(target.id)
     return
   }
@@ -253,22 +265,22 @@ async function handleHotkeyRecorded(target, hotkeyStr) {
 
     // 2. 本地检测：与同一目标的其他快捷键冲突
     if (await hasSameTargetHotkeyConflict(target, hotkeyStr)) {
-      cancelRecording()
+      cancelRecording(true)
       return
     }
 
-    // 3. IPC 检测：与其他启动快捷键冲突
+    // 3. IPC 检测：与其他启动快捷键冲突（携带当前 triggerId 避免自我误报）
+    const currentTriggerId = pluginHotkeyMap.value[target.id]?.triggerId || ''
     if (window.ztools?.trigger?.checkConflict) {
       const ownerId = pluginHotkeyMap.value[target.id]?.ownerId || target.id
-      const conflictResult = await window.ztools.trigger.checkConflict(hotkeyStr, ownerId)
+      const conflictResult = currentTriggerId
+        ? await window.ztools.trigger.checkConflict(hotkeyStr, ownerId, currentTriggerId)
+        : await window.ztools.trigger.checkConflict(hotkeyStr, ownerId)
       const data = conflictResult?.data || conflictResult || {}
       if (data.hasConflict && data.conflicts?.length > 0) {
-        const names = data.conflicts.map(c => {
-          const localApp = localApps.value.find(app => app.id === c.pluginId)
-          return localApp?.name || c.pluginName || c.pluginId
-        }).join('、')
+        const names = data.conflicts.map(c => c.pluginName || c.pluginId).join('、')
         message.warning(`该快捷键与启动项「${names}」冲突`)
-        cancelRecording()
+        cancelRecording(true)
         return
       }
     }
@@ -299,11 +311,11 @@ async function handleHotkeyRecorded(target, hotkeyStr) {
       message.warning('新快捷键已启用，但部分历史快捷键未清理；可重试清除')
     }
 
-    cancelRecording()
+    cancelRecording(true)
   } catch (e) {
     console.error('快捷键设置失败:', e)
     message.error('快捷键设置失败: ' + (e.message || '未知错误'))
-    cancelRecording()
+    cancelRecording(true)
   } finally {
     loadingPluginId.value = null
   }
@@ -355,6 +367,10 @@ async function doRegister(target, hotkeyStr) {
   }
   emit('update:count', Object.keys(pluginHotkeyMap.value).length)
   message.success('快捷键设置成功')
+  const reserveWarning = getShellReserveWarning(hotkeyStr)
+  if (reserveWarning) {
+    message.warning(reserveWarning)
+  }
   return triggerId
 }
 
@@ -437,7 +453,7 @@ defineExpose({ show, hide, updateMap, configuredCount })
     <!-- 搜索框 -->
     <a-input
       v-model:value="searchText"
-      placeholder="搜索插件或本地软件..."
+      placeholder="搜索插件..."
       allow-clear
       class="mb-3"
     >
@@ -452,14 +468,16 @@ defineExpose({ show, hide, updateMap, configuredCount })
     <!-- 启动目标列表 -->
     <div class="plugin-hotkey-list">
       <div v-if="filteredTargets.length === 0" class="empty-tip">
-        {{ searchText ? '未找到匹配的启动项' : '暂无可配置的插件或本地软件' }}
+        {{ searchText ? '未找到匹配的启动项' : '暂无可配置的插件' }}
       </div>
 
       <div
         v-for="target in filteredTargets"
         :key="target.id"
+        :ref="(el) => setItemRef(target.id, el)"
+        :data-target-id="target.id"
         class="plugin-hotkey-item"
-        :class="{ invalid: target.invalid }"
+        :class="{ invalid: target.invalid, 'is-highlighted': highlightedTargetId === target.id }"
       >
         <!-- 启动项图标 -->
         <div class="plugin-icon-wrap">
@@ -470,7 +488,7 @@ defineExpose({ show, hide, updateMap, configuredCount })
             :alt="target.name"
           />
           <div v-else class="plugin-icon-placeholder">
-            <component :is="target.kind === 'localApp' ? MonitorIcon : SquarePlusIcon" aria-hidden="true" />
+            <SquarePlusIcon aria-hidden="true" />
           </div>
         </div>
 
@@ -482,16 +500,19 @@ defineExpose({ show, hide, updateMap, configuredCount })
 
         <!-- 快捷键区域 -->
         <HotkeyCaptureField
+          :ref="(el) => setFieldRef(target.id, el)"
           :hotkey="getPluginHotkey(target.id)"
           :recording="recordingPluginId === target.id"
           :loading="loadingPluginId === target.id"
           :disabled="target.invalid"
+          :platform="hotkeyPlatform"
+          :supports-double-modifier="supportsDoubleModifierHotkeys"
           :recording-text="recordingText"
           :recording-is-keys="recordingIsKeys"
           :wait-text="getHotkeyWaitText(hotkeyPlatform, supportsDoubleModifierHotkeys)"
           empty-text="未设置"
           @start="startRecording(target.id)"
-          @cancel="cancelRecording"
+          @cancel="cancelRecording(false)"
           @keydown="handleKeydown($event, target)"
           @clear="clearHotkey(target.id)"
         />
@@ -531,6 +552,11 @@ defineExpose({ show, hide, updateMap, configuredCount })
 
 .plugin-hotkey-item.invalid {
   opacity: 0.72;
+}
+
+.plugin-hotkey-item.is-highlighted {
+  background: var(--rc-accent-subtle);
+  outline: 1px solid var(--rc-accent);
 }
 
 .plugin-icon-wrap {

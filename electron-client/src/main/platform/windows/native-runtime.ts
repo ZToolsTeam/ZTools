@@ -1,6 +1,7 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import { createHash } from 'node:crypto'
+import { errorCodes, ZToolsError } from '../../../contracts/errors.js'
 import { NativeHostClient } from '../../native-host/native-host-client.js'
 import { ServiceClient } from '../../service/service-client.js'
 import type { PlatformNativeRuntime } from '../native-runtime.js'
@@ -82,7 +83,10 @@ export function createWindowsNativeRuntime(
       ? { trustedManifestSha256: nativeHostManifest.sha256 }
       : {})
   })
-  const serviceClient = new ServiceClient({ dataRoot: options.dataRoot })
+  const bridgeExecutable = options.isPackaged
+    ? path.join(path.dirname(options.resourcesPath), 'ZToolsService.exe')
+    : path.join(options.appPath, 'out', 'native', 'service-win32-ia32', 'ZToolsService.exe')
+  const serviceClient = new ServiceClient({ bridgeExecutable })
 
   nativeHost.onLifecycleEvent((event) => {
     const serialized = JSON.stringify(event)
@@ -99,23 +103,32 @@ export function createWindowsNativeRuntime(
     serviceClient,
     async start(signal?: AbortSignal) {
       if (signal?.aborted) return
-      try {
-        await nativeHost.start(undefined, signal)
-      } catch (error) {
-        if (signal?.aborted) return
-        console.warn('NativeHost32 unavailable; continuing with JavaScript capabilities', error)
-      }
-      if (signal?.aborted) return
-      try {
-        if (signal?.aborted) return
-        const serviceReady = await serviceClient.start(undefined, signal)
-        if (!serviceReady) {
-          console.warn(`ZToolsService unavailable: ${JSON.stringify(serviceClient.diagnostics)}`)
-        }
-      } catch (error) {
-        if (signal?.aborted) return
-        console.warn('ZToolsService unavailable; continuing without privileged capabilities', error)
-      }
+      // NativeHost32 与 ZToolsService 相互独立，并行启动握手以缩短冷启动等待
+      await Promise.all([
+        (async () => {
+          try {
+            await nativeHost.start(undefined, signal)
+          } catch (error) {
+            if (signal?.aborted) return
+            console.warn('NativeHost32 unavailable; continuing with JavaScript capabilities', error)
+          }
+        })(),
+        (async () => {
+          try {
+            const serviceReady = await serviceClient.start(undefined, signal)
+            if (!serviceReady && !signal?.aborted) {
+              console.warn(`ZToolsService unavailable: ${JSON.stringify(serviceClient.diagnostics)}`)
+            }
+          } catch (error) {
+            if (signal?.aborted) return
+            if (error instanceof ZToolsError &&
+                (error.code === errorCodes.serviceAuthentication || error.code === errorCodes.serviceProtocol)) {
+              throw error
+            }
+            console.warn('ZToolsService unavailable; continuing without privileged capabilities', error)
+          }
+        })()
+      ])
     }
   }
 }

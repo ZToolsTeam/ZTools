@@ -53,16 +53,16 @@ describe("uiText 共用工具", () => {
     expect(displayText(undefined)).toBe("");
   });
 
-  it("[边界] formatActionShortcut 忽略缺 key、未知或重复修饰键、非数组修饰键", () => {
-    expect(formatActionShortcut({ props: { shortcut: { modifiers: ["cmd", "meta", "shift"], key: "c" } } })).toBe("Ctrl+Shift+c");
-    expect(formatActionShortcut({ props: { shortcut: { modifiers: ["hyper"], key: "k" } } })).toBe("k");
-    expect(formatActionShortcut({ props: { shortcut: { modifiers: "cmd", key: "x" } } })).toBe("x");
+  it("[边界] formatActionShortcut 支持纯字符串与对象规范化，忽略缺 key 或未知修饰键", () => {
+    expect(formatActionShortcut({ props: { shortcut: { modifiers: ["cmd", "meta", "shift"], key: "c" } } })).toBe("Ctrl+Shift+C");
+    expect(formatActionShortcut({ props: { shortcut: { modifiers: ["hyper"], key: "k" } } })).toBe("K");
+    expect(formatActionShortcut({ props: { shortcut: { modifiers: "cmd", key: "x" } } })).toBe("X");
     expect(formatActionShortcut({ props: { shortcut: { modifiers: ["cmd"] } } })).toBe("");
-    expect(formatActionShortcut({ props: { shortcut: "space" } })).toBe("");
+    expect(formatActionShortcut({ props: { shortcut: "space" } })).toBe("Space");
     expect(formatActionShortcut(null)).toBe("");
   });
 
-  it("actionKeyHint：声明的快捷键优先；列表第 1/2 个为 Enter / ⌘Enter；表单只有第 1 个；子菜单与非法下标无提示", () => {
+  it("actionKeyHint：声明的快捷键优先且屏蔽宿主保留键；列表第 1/2 个为 Enter / ⌘Enter；表单只有第 1 个；子菜单与非法下标无提示", () => {
     const a = { props: { title: "a" } };
     expect(actionKeyHint(a, 0, "List")).toBe("Enter");
     expect(actionKeyHint(a, 1, "Detail")).toBe("Ctrl+Enter");
@@ -71,7 +71,10 @@ describe("uiText 共用工具", () => {
     expect(actionKeyHint(a, 1, "Form")).toBe("");
     expect(actionKeyHint({ ...a, _fromSubmenu: true }, 0, "List")).toBe("");
     expect(actionKeyHint(a, -1, "List")).toBe("");
-    expect(actionKeyHint({ props: { shortcut: { modifiers: ["cmd"], key: "o" } } }, 5, "List")).toBe("Ctrl+o");
+    expect(actionKeyHint({ props: { shortcut: { modifiers: ["cmd"], key: "o" } } }, 5, "List")).toBe("Ctrl+O");
+    // 宿主保留热键（如 Ctrl+Shift+P、Ctrl+K、Escape）返回空串，避免渲染假徽标
+    expect(actionKeyHint({ props: { shortcut: { modifiers: ["ctrl", "shift"], key: "p" } } }, 2, "List")).toBe("");
+    expect(actionKeyHint({ props: { shortcut: "escape" } }, 2, "List")).toBe("");
     expect(isDestructiveAction({ props: { style: "Destructive" } })).toBe(true);
     expect(isDestructiveAction({ props: {} })).toBe(false);
   });
@@ -295,7 +298,7 @@ describe("底栏动作", () => {
           actions: ActionPanel({}, [
             Action({ title: "打开", onAction: () => log.push("open") }),
             Action({ title: "复制", onAction: () => log.push("copy") }),
-            Action({ title: "切换详情预览分栏", shortcut: { modifiers: ["cmd", "shift"], key: "p" }, onAction: () => log.push("toggle") })
+            Action({ title: "切换详情预览分栏", shortcut: { modifiers: ["cmd", "shift"], key: "b" }, onAction: () => log.push("toggle") })
           ])
         })
       ])
@@ -303,8 +306,8 @@ describe("底栏动作", () => {
     await flush();
     const toggle = wrapper.find("[data-decl-toggle-detail]");
     expect(toggle.exists()).toBe(true);
-    // ⌘ ⇧ P 三枚键帽，而不是写死的 ⌘ D
-    expect(toggle.findAll("kbd").map((k) => k.text())).toEqual(["⌘", "⇧", "P"]);
+    // ⌘ ⇧ B 三枚键帽，而不是写死的 ⌘ D（且避让宿主保留热键 ⌘⇧P）
+    expect(toggle.findAll("kbd").map((k) => k.text())).toEqual(["⌘", "⇧", "B"]);
     // 已在底栏露出，不计入面板按钮
     expect(wrapper.find("[data-decl-action-panel]").exists()).toBe(false);
 
@@ -312,7 +315,7 @@ describe("底栏动作", () => {
     press(input, "d", { metaKey: true });
     await flush();
     expect(log).toEqual([]);
-    press(input, "p", { metaKey: true, shiftKey: true });
+    press(input, "b", { metaKey: true, shiftKey: true });
     await flush();
     expect(log).toEqual(["toggle"]);
   });

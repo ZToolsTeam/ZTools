@@ -1,25 +1,18 @@
 /**
  * ZTools 统一快捷键分发器 (Unified Keymap Dispatcher)
- * 按优先级分发：动作面板 > 声明式舞台 > 搜索候选 > 页面 > 全局
+ * 按优先级分发：动作面板 > 宿主保留 > 声明式舞台 > 搜索候选 > 页面 > 全局
  * 保证每个按键只处理一次并 stopPropagation()
- *
- * 核心键位契约：
- * - Enter: 主动作
- * - Ctrl+Enter / Cmd+Enter: 次动作
- * - Ctrl+K / Cmd+K: 动作面板
- * - Esc / Escape: 逐级返回
- * - Ctrl+M / Cmd+M: 双模态切换 (Launcher <-> Dashboard)
- * - Ctrl+F / Cmd+F: 聚焦搜索
- * - Ctrl+I / Cmd+I: 打开设置
  */
 
 import { onActivated, onDeactivated, onUnmounted, getCurrentInstance } from 'vue'
+import { isMacOS } from '@/utils/platform.js'
+import { OPEN_SETTINGS_SHORTCUT } from '@/utils/shellShortcuts.js'
 
-/** 打开设置的默认快捷键单一信源（macOS 自动按平台展示为 ⌘ I 并归一化匹配） */
-export const OPEN_SETTINGS_SHORTCUT = 'Ctrl+I'
+export { OPEN_SETTINGS_SHORTCUT }
 
 export const KEYMAP_SCOPES = Object.freeze({
   ACTION_PANEL: 'action_panel',
+  HOST_RESERVED: 'host_reserved',
   DECLARATIVE: 'declarative',
   SEARCH: 'search',
   PAGE: 'page',
@@ -28,6 +21,7 @@ export const KEYMAP_SCOPES = Object.freeze({
 
 const SCOPE_ORDER = Object.freeze([
   KEYMAP_SCOPES.ACTION_PANEL,
+  KEYMAP_SCOPES.HOST_RESERVED,
   KEYMAP_SCOPES.DECLARATIVE,
   KEYMAP_SCOPES.SEARCH,
   KEYMAP_SCOPES.PAGE,
@@ -40,19 +34,26 @@ const registry = new Map(SCOPE_ORDER.map((scope) => [scope, []]))
 let isListenerAttached = false
 
 /**
- * 规范化按键标识，用于 keymap 映射匹配
+ * 规范化按键标识，用于 keymap 映射匹配：
+ * - macOS：⌘ (metaKey) -> 'Ctrl'，物理 ⌃ (ctrlKey) -> 'Control'（避免误伤 Emacs 编辑键 ⌃F/B/K/P/U）
+ * - Windows / 其他：Ctrl (ctrlKey) -> 'Ctrl'，Win (metaKey) -> 'Meta'
  * 返回格式如: 'Ctrl+K', 'Ctrl+Enter', 'Escape', 'Enter', 'ArrowDown' 等
  */
 export function normalizeEventKeyCombo(event) {
   if (!event || typeof event !== 'object') return ''
   if (isComposingEvent(event)) return ''
 
+  const mac = isMacOS()
   const parts = []
-  const hasCtrl = Boolean(event.ctrlKey || event.metaKey)
+  const hasPrimary = Boolean(mac ? event.metaKey : event.ctrlKey)
+  const hasSecondaryControl = Boolean(mac ? event.ctrlKey : false)
+  const hasMetaNonMac = Boolean(!mac ? event.metaKey : false)
   const hasAlt = Boolean(event.altKey)
   const hasShift = Boolean(event.shiftKey)
 
-  if (hasCtrl) parts.push('Ctrl')
+  if (hasPrimary) parts.push('Ctrl')
+  if (hasSecondaryControl) parts.push('Control')
+  if (hasMetaNonMac) parts.push('Meta')
   if (hasAlt) parts.push('Alt')
   if (hasShift) parts.push('Shift')
 
@@ -67,6 +68,8 @@ export function normalizeEventKeyCombo(event) {
     (!hasShift && event.code === 'Comma' && (!key || key === 'Process' || key === 'Unidentified'))
   ) {
     key = ','
+  } else if (key === '+') {
+    key = 'Plus'
   } else if (imeLetter) {
     key = imeLetter
   } else if (key.length === 1) {
@@ -82,26 +85,30 @@ export function normalizeEventKeyCombo(event) {
   return parts.join('+')
 }
 
+function hasPrimaryModifier(event) {
+  return isMacOS() ? Boolean(event?.metaKey) : Boolean(event?.ctrlKey)
+}
+
 /**
- * 判断是否为非组字状态下显式触发的 Ctrl/Cmd + 逗号组合键
+ * 判断是否为非组字状态下显式触发的主修饰键 + 逗号组合键
  * Windows 中文输入法在未组字时按下 Ctrl+, 可能上报 keyCode=229 / key='Process' 或全角 '，'，
- * 此类明确携带 Ctrl/Meta 的物理逗号按键不属于候选词确认，应放行进入快捷键分发。
+ * 此类明确携带主修饰键的物理逗号按键不属于候选词确认，应放行进入快捷键分发。
  */
 function isExplicitModifiedCommaKey(event) {
   if (!event || typeof event !== 'object') return false
   if (event.isComposing || event.target?.composing === true) return false
-  if (!(event.ctrlKey || event.metaKey) || event.shiftKey) return false
+  if (!hasPrimaryModifier(event) || event.shiftKey) return false
   return event.code === 'Comma' || event.key === ',' || event.key === '，'
 }
 
 /**
- * 从非组字状态下显式携带 Ctrl/Cmd 且由输入法包装的物理字母按键事件中还原大写字母（如 KeyI -> 'I'）
- * Windows 中文输入法在输入框聚焦但未组字时按下 Ctrl+I 等组合键，可能上报 keyCode=229 与 key='Process'/'Unidentified'。
+ * 从非组字状态下显式携带主修饰键且由输入法包装的物理字母按键事件中还原大写字母（如 KeyU -> 'U'）
+ * Windows 中文输入法在输入框聚焦但未组字时按下 Ctrl+U 等组合键，可能上报 keyCode=229 与 key='Process'/'Unidentified'。
  */
 function extractExplicitModifiedLetterFromCode(event) {
   if (!event || typeof event !== 'object') return ''
   if (event.isComposing || event.target?.composing === true) return ''
-  if (!(event.ctrlKey || event.metaKey)) return ''
+  if (!hasPrimaryModifier(event)) return ''
   if (event.key && event.key !== 'Process' && event.key !== 'Unidentified') return ''
   if (typeof event.code !== 'string') return ''
   const match = /^Key([A-Z])$/.exec(event.code)
@@ -246,11 +253,25 @@ export function dispatchKeyEvent(event) {
   const inInput = isInputElement(event.target)
   const protectInputEdit =
     inInput && isInputProtectedKey(event)
+  const isEscapeInInput = inInput && combo === 'Escape'
 
   for (const scope of SCOPE_ORDER) {
     const handlers = registry.get(scope) || []
     // 输入框内的光标移动、选区与删除键绝不穿透到 PAGE / GLOBAL 页面级网格快捷键
     if (protectInputEdit && (scope === KEYMAP_SCOPES.PAGE || scope === KEYMAP_SCOPES.GLOBAL)) {
+      continue
+    }
+    // 统一 Esc 先失焦再回退规则：焦点在普通输入框（未被 SEARCH/PAGE/DECLARATIVE 接管）时，
+    // 第一次按 Escape 跳过 GLOBAL 返回主页，交给组件自身或冒泡后自动 blur()
+    if (isEscapeInInput && scope === KEYMAP_SCOPES.GLOBAL) {
+      const targetEl = event.target
+      if (targetEl && typeof targetEl.blur === 'function') {
+        Promise.resolve().then(() => {
+          if (!event.defaultPrevented && typeof document !== 'undefined' && document.activeElement === targetEl) {
+            targetEl.blur()
+          }
+        })
+      }
       continue
     }
     let blockedByModal = false

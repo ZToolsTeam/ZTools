@@ -5,18 +5,16 @@
  * 1. 与 Windows 原生插件 video-downloader 能力一致：
  *    - 6 大流媒体平台智能探测器 (`detectVideoPlatform`：Bilibili BV/av号、抖音分享口令、快手、微博视频、YouTube、通用 M3U8/MP4 直链)
  *    - 6 大画质与音轨封装档位（4K 60fps 原画合并、1080P 高码率 MP4、720P 轻量流畅、仅提取 320kbps MP3 音频、导出无损 FLAC 音轨、连同字幕与封面打包）
- *    - 真实扫描本机 `Videos` 与 `Downloads` 目录下的全部已保存视频文件库
- *    - 真实读取剪贴板自动提取分享口令中的视频 URL，支持一键解析下载、打开播放与定位目录
+ *    - 支持显式导入本地已保存视频库（选择文件 / 选择文件夹 / 拖入文件夹）
+ *    - 支持用户主动读取剪贴板中的分享口令并一键解析下载、打开播放与定位目录
  */
 
 import {
   callHostTransport,
-  invokeHostCapability,
   invokePluginService,
   isRealElectronHost,
   openRealPath,
   resolveRealSpecialPaths,
-  scanRealDirectoryTree,
   showRealItemInFolder,
   showRealToast,
   trashRealItem,
@@ -24,6 +22,21 @@ import {
   formatBytes,
   type NativeInvocationResult
 } from "../shared/native-ipc.js";
+import {
+  pickExampleFolderFiles,
+  probeExampleDriveSpace,
+  type ExampleImportResult,
+  type ExampleImportRules,
+  type ExampleImportedFile
+} from "../shared/file-import.js";
+
+export const VIDEO_DOWNLOADER_IMPORT_RULES: ExampleImportRules = {
+  extensions: [".mp4", ".mkv", ".mov", ".webm", ".flv", ".avi", ".m4v", ".ts"],
+  maxDepth: 5,
+  maxFiles: 500,
+  skipEmptyFiles: true,
+  forbiddenPath: /(^|[\\/])(Windows|System32|SysWOW64|Program Files|Program Files \(x86\)|Boot|Recovery)($|[\\/])/i
+};
 
 export { formatBytes };
 export type { NativeInvocationResult };
@@ -244,129 +257,86 @@ export async function readClipboardStreamUrl(hostBridge?: unknown): Promise<{
   return { url: "", platform: STREAM_PLATFORMS[0] };
 }
 
-const VIDEO_EXT_SET = new Set([".mp4", ".mkv", ".mov", ".webm", ".flv", ".avi", ".m4v", ".ts"]);
-
-export async function fetchVideoDownloaderSnapshot(hostBridge?: unknown): Promise<VideoDownloaderSnapshot> {
-  const paths = await resolveRealSpecialPaths(hostBridge);
-  const videosDir = paths.videos || `${paths.userProfile}\\Videos`;
-  const downloadsDir = paths.downloads || `${paths.userProfile}\\Downloads`;
-  const driveLetter = (videosDir.match(/^[A-Za-z]:/) || ["C:"])[0].toUpperCase();
-
-  const [diskUsageRes, sysRes, videoEntries, downloadEntries, clipDetected] = await Promise.all([
-    callHostTransport<Record<string, unknown>>(
-      "system_get_disk_usage",
-      { drive: `${driveLetter}\\` },
-      hostBridge
-    ),
-    invokeHostCapability<Record<string, unknown>>("system.info", { includeStorage: true }, hostBridge),
-    scanRealDirectoryTree(
-      videosDir,
-      { maxDepth: 3, maxFiles: 180, filterExt: /\.(?:mp4|mkv|mov|webm|flv|avi)$/i },
-      hostBridge
-    ),
-    scanRealDirectoryTree(
-      downloadsDir,
-      { maxDepth: 2, maxFiles: 180, filterExt: /\.(?:mp4|mkv|mov|webm|flv|avi)$/i },
-      hostBridge
-    ),
-    readClipboardStreamUrl(hostBridge)
-  ]);
-
-  let driveFreeBytes = 0;
-  if (diskUsageRes.ok && diskUsageRes.data && typeof diskUsageRes.data === "object") {
-    const d = diskUsageRes.data;
-    const total = Number(d.total ?? d.size ?? d.totalBytes ?? 0);
-    const used = Number(d.used ?? d.usedBytes ?? 0);
-    const avail = Number(d.available ?? d.free ?? d.availableBytes ?? d.freeBytes ?? Math.max(0, total - used));
-    if (Number.isFinite(avail) && avail > 0) {
-      driveFreeBytes = avail;
-    }
+export function toLocalMediaVideoItem(
+  entry: ExampleImportedFile,
+  sourceDirLabel = "已导入视频"
+): LocalMediaVideoItem {
+  const sizeBytes = Number(entry.sizeBytes ?? 0);
+  let resolutionTier: "large_hd" | "standard" | "short_clip" = "short_clip";
+  let resolutionLabel = "短视频与动图 (<10MB)";
+  if (sizeBytes >= 50 * 1024 * 1024) {
+    resolutionTier = "large_hd";
+    resolutionLabel = "超清长视频 (>50MB)";
+  } else if (sizeBytes >= 10 * 1024 * 1024) {
+    resolutionTier = "standard";
+    resolutionLabel = "高清中型视频 (10~50MB)";
   }
-
-  if (driveFreeBytes <= 0 && sysRes.ok && sysRes.data) {
-    const storageArr = Array.isArray((sysRes.data as { storage?: unknown }).storage)
-      ? ((sysRes.data as { storage: Array<Record<string, unknown>> }).storage)
-      : [];
-    const matched =
-      storageArr.find((d) => String(d.mount || d.fs || "").toUpperCase().startsWith(driveLetter)) ||
-      storageArr[0];
-    if (matched) {
-      const total = Number(matched.size || matched.total || 0);
-      const used = Number(matched.used || 0);
-      driveFreeBytes = Number(matched.available || matched.free || Math.max(0, total - used));
-    }
-  }
-
-  const seenPaths = new Set<string>();
-  const videos: LocalMediaVideoItem[] = [];
-  let totalSizeBytes = 0;
-
-  const tiers = {
-    large_hd: { label: "超清长视频 (>50MB)", color: "#ec4899", sizeBytes: 0, count: 0 },
-    standard: { label: "高清中型视频 (10~50MB)", color: "#3b82f6", sizeBytes: 0, count: 0 },
-    short_clip: { label: "短视频与动图 (<10MB)", color: "#10b981", sizeBytes: 0, count: 0 }
+  return {
+    id: entry.path,
+    name: entry.name,
+    path: entry.path,
+    ext: entry.extension || ".mp4",
+    sizeBytes,
+    mtimeMs: Number(entry.lastModifiedMs ?? 0),
+    sourceDirLabel,
+    resolutionTier,
+    resolutionLabel,
+    color: "var(--rc-text-muted)"
   };
+}
 
-  const mergeList = [
-    ...videoEntries.files.map((e) => ({ entry: e, label: "Videos 视频库" })),
-    ...downloadEntries.files.map((e) => ({ entry: e, label: "Downloads 下载目录" }))
-  ];
-
-  for (const { entry, label } of mergeList) {
-    if (entry.isDirectory || entry.sizeBytes <= 0) continue;
-    const ext = String(entry.ext || "").toLowerCase();
-    if (!VIDEO_EXT_SET.has(ext)) continue;
-    const normKey = entry.path.toLowerCase();
-    if (seenPaths.has(normKey)) continue;
-    seenPaths.add(normKey);
-
-    totalSizeBytes += entry.sizeBytes;
-    let resolutionTier: "large_hd" | "standard" | "short_clip" = "short_clip";
-    if (entry.sizeBytes >= 50 * 1024 * 1024) {
-      resolutionTier = "large_hd";
-    } else if (entry.sizeBytes >= 10 * 1024 * 1024) {
-      resolutionTier = "standard";
-    }
-
-    const t = tiers[resolutionTier];
-    t.sizeBytes += entry.sizeBytes;
+export function computeVideoTierStats(videos: LocalMediaVideoItem[]): VideoDownloaderSnapshot["tierStats"] {
+  const tiers = {
+    large_hd: { label: "超清长视频 (>50MB)", color: "var(--rc-text-muted)", sizeBytes: 0, count: 0 },
+    standard: { label: "高清中型视频 (10~50MB)", color: "var(--rc-text-muted)", sizeBytes: 0, count: 0 },
+    short_clip: { label: "短视频与动图 (<10MB)", color: "var(--rc-text-muted)", sizeBytes: 0, count: 0 }
+  };
+  for (const v of videos) {
+    const t = tiers[v.resolutionTier] || tiers.short_clip;
+    t.sizeBytes += v.sizeBytes;
     t.count += 1;
-
-    videos.push({
-      id: entry.path,
-      name: entry.name,
-      path: entry.path,
-      ext: ext || ".mp4",
-      sizeBytes: entry.sizeBytes,
-      mtimeMs: entry.mtimeMs,
-      sourceDirLabel: label,
-      resolutionTier,
-      resolutionLabel: t.label,
-      color: t.color
-    });
   }
-
-  videos.sort((a, b) => b.mtimeMs - a.mtimeMs || b.sizeBytes - a.sizeBytes);
-
-  const tierStats = Object.entries(tiers)
-    .map(([tier, val]) => ({
-      tier,
-      label: val.label,
-      color: val.color,
-      sizeBytes: val.sizeBytes,
-      count: val.count
-    }))
+  return Object.entries(tiers)
+    .map(([tier, val]) => ({ tier, label: val.label, color: val.color, sizeBytes: val.sizeBytes, count: val.count }))
     .filter((s) => s.sizeBytes > 0);
+}
+
+export async function ensureVideoSaveDirectory(currentDir: string, hostBridge?: unknown): Promise<string> {
+  if (currentDir && currentDir.trim()) return currentDir.trim();
+  const paths = await resolveRealSpecialPaths(hostBridge);
+  return paths.videos || paths.downloads || (paths.userProfile ? `${paths.userProfile}\\Videos` : "");
+}
+
+export async function importVideoDownloaderFolder(
+  hostBridge?: unknown
+): Promise<ExampleImportResult & { videos: LocalMediaVideoItem[]; saveDir: string }> {
+  const result = await pickExampleFolderFiles(
+    VIDEO_DOWNLOADER_IMPORT_RULES,
+    { title: "选择视频文件夹" },
+    hostBridge
+  );
+  const videos = result.files.map((f) => toLocalMediaVideoItem(f, f.parentDir || "导入文件夹"));
+  const saveDir = videos[0]?.path ? result.files[0].parentDir : "";
+  return { ...result, videos, saveDir };
+}
+
+export async function fetchVideoDownloaderSnapshot(
+  hostBridge?: unknown,
+  saveDirHint = ""
+): Promise<VideoDownloaderSnapshot> {
+  const cleanDir = String(saveDirHint || "").trim();
+  const driveLetter = (cleanDir.match(/^[A-Za-z]:/) || ["C:"])[0].toUpperCase();
+  const { freeBytes: driveFreeBytes } = await probeExampleDriveSpace(driveLetter, hostBridge);
 
   return {
-    saveDir: videosDir,
+    saveDir: cleanDir,
     driveLetter,
     driveFreeBytes,
-    clipboardUrl: clipDetected.url,
-    detectedPlatform: clipDetected.platform,
-    videos,
-    totalSizeBytes,
-    tierStats,
+    clipboardUrl: "",
+    detectedPlatform: STREAM_PLATFORMS[0],
+    videos: [],
+    totalSizeBytes: 0,
+    tierStats: [],
     updatedAt: new Date().toLocaleTimeString()
   };
 }

@@ -1,5 +1,7 @@
 cmake_minimum_required(VERSION 3.24)
 project(ZToolsPathAccess LANGUAGES CXX)
+# 静态链接 MSVC 运行库（/MT），避免目标机器缺少 VC++ Redistributable 时启动失败
+set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
 add_library(ZToolsPathAccess STATIC path_access.cpp)
 if(APPLE)
   enable_language(OBJCXX)

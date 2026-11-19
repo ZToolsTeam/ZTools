@@ -1,0 +1,20 @@
+cmake_minimum_required(VERSION 3.24)
+project(ztools-indexer-thread-pool-regression LANGUAGES CXX)
+
+set(CMAKE_CXX_STANDARD 20)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+
+add_executable(ztools-indexer-thread-pool-regression thread_pool_regression.cpp)
+target_include_directories(ztools-indexer-thread-pool-regression PRIVATE ../ ../../shared)
+if(MSVC)
+  target_compile_options(ztools-indexer-thread-pool-regression PRIVATE /W4 /utf-8 /sdl /GS)
+else()
+  find_package(Threads REQUIRED)
+  target_link_libraries(ztools-indexer-thread-pool-regression PRIVATE Threads::Threads)
+  target_compile_options(ztools-indexer-thread-pool-regression PRIVATE -Wall -Wextra)
+endif()
+
+enable_testing()
+add_test(NAME indexer-thread-pool-completion COMMAND ztools-indexer-thread-pool-regression)
+set_tests_properties(indexer-thread-pool-completion PROPERTIES TIMEOUT 60)

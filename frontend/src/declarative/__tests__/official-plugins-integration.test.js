@@ -685,7 +685,7 @@ describe('官方标杆声明式应用注册表与端到端集成测试', () => {
       })
     })
 
-    it('5.2 [LauncherBar 原位秒开第三方 V2 插件 + Ctrl+K 子命令聚合 + Ctrl+M 跨窗接力 + 沙箱异常自愈]', async () => {
+    it('5.2 [LauncherBar 原位秒开第三方 V2 插件 + Ctrl+K 子命令聚合 + Ctrl+U 跨窗接力 + 沙箱异常自愈]', async () => {
       const LauncherBar = (await import('@/components/LauncherBar.vue')).default
 
       // 模拟 fetch 读取本地已安装第三方 V2 插件资源
@@ -824,8 +824,8 @@ describe('官方标杆声明式应用注册表与端到端集成测试', () => {
       expect(wrapper.text()).toContain('第一条社区极客笔记')
       expect(window.__ztoolsLauncher.hide).not.toHaveBeenCalled()
 
-      // 4. 在原位声明式视图触发 Ctrl+M 展开工作台，验证路由自动指向 /declarative/community-notes
-      await wrapper.trigger('keydown', { key: 'm', ctrlKey: true })
+      // 4. 在原位声明式视图触发 Ctrl+U 展开工作台，验证路由自动指向 /declarative/community-notes
+      await wrapper.trigger('keydown', { key: 'u', ctrlKey: true })
       await nextTick()
       expect(expandSpy).toHaveBeenCalledWith(expect.stringContaining('/declarative/community-notes'))
 

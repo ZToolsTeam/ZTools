@@ -3,6 +3,8 @@ project(ztools-uiaccess LANGUAGES CXX RC)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
+# 静态链接 MSVC 运行库（/MT），避免目标机器缺少 VC++ Redistributable 时启动失败
+set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
 
 add_executable(ztools-uiaccess
   main.cpp

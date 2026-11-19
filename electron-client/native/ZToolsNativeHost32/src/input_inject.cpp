@@ -1,8 +1,10 @@
 #include "input_inject.hpp"
 
 #include <Windows.h>
+#include <shellapi.h>
 
 #include <algorithm>
+#include <array>
 #include <climits>
 #include <cstdint>
 #include <limits>
@@ -35,6 +37,8 @@ INPUT KeyboardInput(WORD virtual_key, DWORD flags = 0) {
   input.type = INPUT_KEYBOARD;
   input.ki.wVk = virtual_key;
   input.ki.dwFlags = flags;
+  // 所有由本侧车注入的键盘事件统一写入魔数签名，防止钩子自回放循环
+  input.ki.dwExtraInfo = static_cast<ULONG_PTR>(kZToolsInjectedExtraInfo);
   return input;
 }
 
@@ -54,6 +58,31 @@ INPUT MouseMoveInput(std::int32_t x, std::int32_t y) {
   input.mi.dy = AbsoluteCoordinate(y, GetSystemMetrics(SM_YVIRTUALSCREEN),
     GetSystemMetrics(SM_CYVIRTUALSCREEN));
   input.mi.dwFlags = MOUSEEVENTF_MOVE | MOUSEEVENTF_ABSOLUTE | MOUSEEVENTF_VIRTUALDESK;
+  // 所有由本侧车注入的鼠标移动事件统一写入魔数签名
+  input.mi.dwExtraInfo = static_cast<ULONG_PTR>(kZToolsInjectedExtraInfo);
+  return input;
+}
+
+INPUT MakeMouseReplayInput(MouseButton button, bool is_up) {
+  INPUT input{};
+  input.type = INPUT_MOUSE;
+  input.mi.dwExtraInfo = static_cast<ULONG_PTR>(kZToolsInjectedExtraInfo);
+  switch (button) {
+    case MouseButton::Middle:
+      input.mi.dwFlags = is_up ? MOUSEEVENTF_MIDDLEUP : MOUSEEVENTF_MIDDLEDOWN;
+      break;
+    case MouseButton::Right:
+      input.mi.dwFlags = is_up ? MOUSEEVENTF_RIGHTUP : MOUSEEVENTF_RIGHTDOWN;
+      break;
+    case MouseButton::Forward:
+      input.mi.dwFlags = is_up ? MOUSEEVENTF_XUP : MOUSEEVENTF_XDOWN;
+      input.mi.mouseData = XBUTTON2;
+      break;
+    case MouseButton::Backward:
+      input.mi.dwFlags = is_up ? MOUSEEVENTF_XUP : MOUSEEVENTF_XDOWN;
+      input.mi.mouseData = XBUTTON1;
+      break;
+  }
   return input;
 }
 
@@ -148,6 +177,7 @@ bool InjectText(const std::vector<std::uint8_t>& utf8, std::string& error) {
     down.type = INPUT_KEYBOARD;
     down.ki.wScan = static_cast<WORD>(character);
     down.ki.dwFlags = KEYEVENTF_UNICODE;
+    down.ki.dwExtraInfo = static_cast<ULONG_PTR>(kZToolsInjectedExtraInfo);
     INPUT up = down;
     up.ki.dwFlags = KEYEVENTF_UNICODE | KEYEVENTF_KEYUP;
     inputs.push_back(down);
@@ -184,6 +214,7 @@ bool InjectMouseClick(
   INPUT press{};
   press.type = INPUT_MOUSE;
   press.mi.dwFlags = down;
+  press.mi.dwExtraInfo = static_cast<ULONG_PTR>(kZToolsInjectedExtraInfo);
   INPUT release = press;
   release.mi.dwFlags = up;
   if (has_position) {
@@ -202,7 +233,53 @@ bool InjectMouseWheel(std::int32_t delta, std::string& error) {
   input.type = INPUT_MOUSE;
   input.mi.mouseData = static_cast<DWORD>(delta);
   input.mi.dwFlags = MOUSEEVENTF_WHEEL;
+  input.mi.dwExtraInfo = static_cast<ULONG_PTR>(kZToolsInjectedExtraInfo);
   return SendInputs({input}, error);
+}
+
+bool ReplayMouseButtonDown(MouseButton button) {
+  INPUT input = MakeMouseReplayInput(button, false);
+  return SendInput(1, &input, sizeof(INPUT)) == 1;
+}
+
+bool ReplayMouseButtonClick(MouseButton button) {
+  std::array<INPUT, 2> inputs{
+    MakeMouseReplayInput(button, false),
+    MakeMouseReplayInput(button, true),
+  };
+  return SendInput(static_cast<UINT>(inputs.size()), inputs.data(), sizeof(INPUT)) == inputs.size();
+}
+
+bool IsFullscreenDndActive(FullscreenDndThrottle& throttle, std::uint64_t now_ms) {
+  bool cached = false;
+  if (throttle.TryGetCached(now_ms, cached)) {
+    return cached;
+  }
+  QUERY_USER_NOTIFICATION_STATE state = QUNS_ACCEPTS_NOTIFICATIONS;
+  bool active = false;
+  if (SUCCEEDED(SHQueryUserNotificationState(&state))) {
+    active = (state == QUNS_BUSY ||
+      state == QUNS_RUNNING_D3D_FULL_SCREEN ||
+      state == QUNS_PRESENTATION_MODE);
+  }
+  throttle.Update(now_ms, active);
+  return active;
+}
+
+bool IsAnyMouseButtonPressed() {
+  static constexpr std::array<int, 5> kMouseVks{
+    VK_LBUTTON,
+    VK_RBUTTON,
+    VK_MBUTTON,
+    VK_XBUTTON1,
+    VK_XBUTTON2,
+  };
+  for (const int vk : kMouseVks) {
+    if ((static_cast<std::uint16_t>(GetAsyncKeyState(vk)) & 0x8000U) != 0U) {
+      return true;
+    }
+  }
+  return false;
 }
 
 }  // namespace ztools::native_host

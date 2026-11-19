@@ -13,7 +13,7 @@ target_include_directories(ZToolsNativeHost32 PRIVATE include)
 target_compile_definitions(ZToolsNativeHost32 PRIVATE UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX)
 target_compile_options(ZToolsNativeHost32 PRIVATE /W4 /WX /utf-8 /sdl /guard:cf)
 target_link_options(ZToolsNativeHost32 PRIVATE /DYNAMICBASE /NXCOMPAT /guard:cf)
-target_link_libraries(ZToolsNativeHost32 PRIVATE bcrypt ole32 shlwapi user32 xmllite)
+target_link_libraries(ZToolsNativeHost32 PRIVATE bcrypt ole32 shell32 shlwapi user32 xmllite)
 
 set_target_properties(ZToolsNativeHost32 PROPERTIES
   RUNTIME_OUTPUT_DIRECTORY_DEBUG "${ZTOOLS_NATIVE_OUTPUT_DIR}"
@@ -35,6 +35,16 @@ if(ZTOOLS_BUILD_NATIVE_TEST_FIXTURE)
   set_target_properties(ZToolsDllCancelTest PROPERTIES
     RUNTIME_OUTPUT_DIRECTORY_RELEASE "${ZTOOLS_NATIVE_TEST_OUTPUT_DIR}"
     RUNTIME_OUTPUT_DIRECTORY_DEBUG "${ZTOOLS_NATIVE_TEST_OUTPUT_DIR}"
+  )
+  add_executable(hook_state_test tests/hook_state_test.cpp)
+  target_include_directories(hook_state_test PRIVATE include)
+  target_compile_options(hook_state_test PRIVATE /W4 /WX /utf-8 /sdl /guard:cf)
+  target_link_options(hook_state_test PRIVATE /DYNAMICBASE /NXCOMPAT /guard:cf)
+  set_target_properties(hook_state_test PROPERTIES
+    RUNTIME_OUTPUT_DIRECTORY_DEBUG "${ZTOOLS_NATIVE_TEST_OUTPUT_DIR}"
+    RUNTIME_OUTPUT_DIRECTORY_RELEASE "${ZTOOLS_NATIVE_TEST_OUTPUT_DIR}"
+    RUNTIME_OUTPUT_DIRECTORY_RELWITHDEBINFO "${ZTOOLS_NATIVE_TEST_OUTPUT_DIR}"
+    RUNTIME_OUTPUT_DIRECTORY_MINSIZEREL "${ZTOOLS_NATIVE_TEST_OUTPUT_DIR}"
   )
   target_compile_definitions(ZToolsNativeTestPlugin PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX)
   target_compile_options(ZToolsNativeTestPlugin PRIVATE /W4 /WX /utf-8 /sdl /guard:cf)

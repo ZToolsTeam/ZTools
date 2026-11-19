@@ -405,7 +405,7 @@ export {
   formatBytes as formatPdfBytes
 } from "./pdf/logic.js";
 
-// 48. 多线程分块高速下载工作台 (Multi-Download - 真实扫描 Downloads、Aria2 16 线程分块与剪贴板嗅探)
+// 48. 多线程分块高速下载工作台 (Multi-Download - 显式导入文件与目录、Aria2 16 线程分块下载)
 export { default as MultiDownloadCommand } from "./multi-download/index.js";
 export {
   type DownloadedFileItem,
@@ -416,7 +416,9 @@ export {
   FORBIDDEN_REASON as FORBIDDEN_MULTI_DOWNLOAD_REASON,
   DOWNLOAD_CATEGORIES,
   THREAD_SPLIT_PRESETS,
+  MULTI_DOWNLOAD_IMPORT_RULES,
   fetchMultiDownloadSnapshot,
+  importMultiDownloadFolder,
   startMultiThreadDownloadTask,
   deleteDownloadedFiles,
   openDownloadedFileLocation,
@@ -424,7 +426,7 @@ export {
   formatBytes as formatMultiDownloadBytes
 } from "./multi-download/logic.js";
 
-// 49. 全平台流媒体音视频解析与下载工坊 (Video Downloader - 6 大平台解析器、6 大画质封装与本地视频媒体库)
+// 49. 全平台流媒体音视频解析与下载工坊 (Video Downloader - 显式导入视频库、6 大平台解析器与画质封装)
 export { default as VideoDownloaderCommand } from "./video-downloader/index.js";
 export {
   type LocalMediaVideoItem,
@@ -435,8 +437,10 @@ export {
   FORBIDDEN_REASON as FORBIDDEN_VIDEO_DOWNLOADER_REASON,
   STREAM_PLATFORMS,
   VIDEO_QUALITY_PRESETS,
+  VIDEO_DOWNLOADER_IMPORT_RULES,
   detectVideoPlatform,
   fetchVideoDownloaderSnapshot,
+  importVideoDownloaderFolder,
   parseAndDownloadStreamVideo,
   trashLocalVideoFiles,
   openLocalVideoFile,
@@ -565,7 +569,8 @@ export { default as ShredderCommand } from "./shredder/index.js";
 export {
   SHRED_STANDARDS,
   SHRED_CATEGORIES,
-  createInitialShredderSnapshot,
+  SHREDDER_IMPORT_RULES,
+  createEmptyShredderSnapshot,
   fetchShredCandidates,
   executeSecureShred,
   openShredCandidateLocation,
@@ -589,8 +594,10 @@ export {
 export { default as SqlitePluginCommand } from "./sqlite-plugin/index.js";
 export {
   SQLITE_TABLES,
-  createInitialSqliteWorkspace,
+  SQLITE_IMPORT_RULES,
+  createEmptySqliteWorkspace,
   fetchSqliteWorkspace,
+  importSqliteDatabasesFromFolder,
   exportTableRecords,
   executeSqliteQuery,
   openSqliteDbLocation,
@@ -603,7 +610,7 @@ export {
   type AiImageEnginePreset,
   type AiImageFileItem,
   AI_IMAGE_ENGINES,
-  INITIAL_AI_IMAGE_FILES,
+  AI_IMAGE_IMPORT_RULES,
   estimateTargetResolution,
   fetchAiImageWorkspace,
   openAiImageLocation,
@@ -617,7 +624,7 @@ export {
   type AiVideoFileItem,
   type AiVideoModelPreset,
   AI_VIDEO_MODELS,
-  INITIAL_AI_VIDEO_FILES,
+  AI_VIDEO_IMPORT_RULES,
   fetchAiVideoWorkspace,
   openAiVideoLocation,
   runAiVideoBatch,
@@ -629,7 +636,7 @@ export { default as OcrCommand } from "./ocr/index.js";
 export {
   type OcrLanguagePreset,
   type OcrQueueItem,
-  INITIAL_OCR_QUEUE_ITEMS,
+  OCR_IMPORT_RULES,
   OCR_LANGUAGE_MODELS,
   captureScreenAreaOcr,
   executeBatchOcr,

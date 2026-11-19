@@ -74,22 +74,18 @@ async function withRealElectronWindow(handlers, fn) {
 // ============================================================================
 // P27: ocr
 // ============================================================================
-test('P27 ocr: 真实宿主队列扫描、OcrPlugin.recognizeImage / captureAndRecognize 剪贴板写入与失败拦截', async () => {
+test('P27 ocr: 显式文件夹导入、OcrPlugin.recognizeImage / captureAndRecognize 剪贴板写入与失败拦截', async () => {
   let clipboardText = ''
 
   await withRealElectronWindow(
     {
-      system_get_path: ({ name }) => (name === 'pictures' ? 'D:\\RealPics' : ''),
-      system_search_files: ({ query }) => {
-        if (query === 'dir:D:\\RealPics') {
-          return {
-            files: [
-              { name: 'invoice_01.png', path: 'D:\\RealPics\\invoice_01.png', is_dir: false, size: 128000, mtime: 1700000000 }
-            ]
-          }
-        }
-        return { files: [] }
-      },
+      window_show_select_folder_dialog: () => ({ canceled: false, folderPath: 'D:\\RealPics' }),
+      filesystem_get_directory_contents: () => ({
+        success: true,
+        files: [
+          { name: 'invoice_01.png', size: 128000, isDirectory: false, lastModified: '2026-11-16T00:00:00.000Z' }
+        ]
+      }),
       dllplugin_call: ({ plugin, func, params }) => {
         assert.equal(plugin, 'OcrPlugin')
         if (func === 'recognizeImage') {
@@ -105,12 +101,14 @@ test('P27 ocr: 真实宿主队列扫描、OcrPlugin.recognizeImage / captureAndR
         return true
       }
     },
-    async () => {
-      // 1. 仅 1 张真实图片时严禁拼接 INITIAL_OCR_QUEUE_ITEMS
+    async (calls) => {
+      // 1. 显式导入 1 张图片时严禁拼接假样本，且禁止调用 system_get_path / system_search_files
       const snapshot = await ocr.fetchOcrQueueSnapshot()
       assert.equal(snapshot.length, 1)
       assert.equal(snapshot.items.length, 1)
       assert.equal(snapshot[0].path, 'D:\\RealPics\\invoice_01.png')
+      assert.equal(calls.some(c => c.channel === 'system_get_path'), false)
+      assert.equal(calls.some(c => c.channel === 'system_search_files'), false)
 
       // 2. 批量 OCR 识别并写入真实剪贴板
       const batchRes = await ocr.executeBatchOcr(snapshot.items, {
@@ -260,20 +258,16 @@ test('P28 record: 真实宿主录像扫描、RecordPlugin 启停录屏与状态�
 // ============================================================================
 // P29: ai-image
 // ============================================================================
-test('P29 ai-image: 真实宿主扫描、AiImagePlugin.processImage 真实输出体积读取与异常拦截', async () => {
+test('P29 ai-image: 显式文件夹导入、AiImagePlugin.processImage 真实输出体积读取与异常拦截', async () => {
   await withRealElectronWindow(
     {
-      system_get_path: ({ name }) => (name === 'pictures' ? 'D:\\RealImages' : ''),
-      system_search_files: ({ query }) => {
-        if (query === 'dir:D:\\RealImages') {
-          return {
-            files: [
-              { name: 'photo.png', path: 'D:\\RealImages\\photo.png', is_dir: false, size: 500000, mtime: 1700000000 }
-            ]
-          }
-        }
-        return { files: [] }
-      },
+      window_show_select_folder_dialog: () => ({ canceled: false, folderPath: 'D:\\RealImages' }),
+      filesystem_get_directory_contents: () => ({
+        success: true,
+        files: [
+          { name: 'photo.png', size: 500000, isDirectory: false, lastModified: '2026-11-16T00:00:00.000Z' }
+        ]
+      }),
       dllplugin_call: ({ plugin, func, params }) => {
         assert.equal(plugin, 'AiImagePlugin')
         assert.equal(func, 'processImage')
@@ -295,9 +289,11 @@ test('P29 ai-image: 真实宿主扫描、AiImagePlugin.processImage 真实输出
         return { size: 0 }
       }
     },
-    async () => {
+    async (calls) => {
       const queue = await aiImage.fetchAiImageQueue()
-      assert.equal(queue.files.length, 1, '真实宿主下严禁拼接 INITIAL_AI_IMAGE_FILES')
+      assert.equal(queue.files.length, 1, '显式导入下严禁拼接假样本')
+      assert.equal(calls.some(c => c.channel === 'system_get_path'), false)
+      assert.equal(calls.some(c => c.channel === 'system_search_files'), false)
 
       const batchRes = await aiImage.executeAiImageBatch(queue.files, {
         engineId: 'realesrgan-x4plus',
@@ -374,20 +370,16 @@ test('P29 ai-image: 真实宿主扫描、AiImagePlugin.processImage 真实输出
 // ============================================================================
 // P30: ai-video
 // ============================================================================
-test('P30 ai-video: 真实宿主扫描、AiVideoPlugin.enhanceVideo 真实文件校验与无产出拦截', async () => {
+test('P30 ai-video: 显式文件夹导入、AiVideoPlugin.enhanceVideo 真实文件校验与无产出拦截', async () => {
   await withRealElectronWindow(
     {
-      system_get_path: ({ name }) => (name === 'videos' ? 'D:\\RealClips' : ''),
-      system_search_files: ({ query }) => {
-        if (query === 'dir:D:\\RealClips') {
-          return {
-            files: [
-              { name: 'clip.mp4', path: 'D:\\RealClips\\clip.mp4', is_dir: false, size: 8000000, mtime: 1700000000 }
-            ]
-          }
-        }
-        return { files: [] }
-      },
+      window_show_select_folder_dialog: () => ({ canceled: false, folderPath: 'D:\\RealClips' }),
+      filesystem_get_directory_contents: () => ({
+        success: true,
+        files: [
+          { name: 'clip.mp4', size: 8000000, isDirectory: false, lastModified: '2026-11-16T00:00:00.000Z' }
+        ]
+      }),
       dllplugin_call: ({ plugin, func }) => {
         assert.equal(plugin, 'AiVideoPlugin')
         assert.equal(func, 'enhanceVideo')
@@ -398,9 +390,11 @@ test('P30 ai-video: 真实宿主扫描、AiVideoPlugin.enhanceVideo 真实文件
         }
       }
     },
-    async () => {
+    async (calls) => {
       const queue = await aiVideo.fetchAiVideoQueue()
-      assert.equal(queue.files.length, 1, '真实宿主下严禁拼接 INITIAL_AI_VIDEO_FILES')
+      assert.equal(queue.files.length, 1, '显式导入下严禁拼接假样本')
+      assert.equal(calls.some(c => c.channel === 'system_get_path'), false)
+      assert.equal(calls.some(c => c.channel === 'system_search_files'), false)
 
       const res = await aiVideo.executeAiVideoBatch(queue.files, {
         modelId: 'rife-v4-6',
@@ -452,59 +446,62 @@ test('P30 ai-video: 真实宿主扫描、AiVideoPlugin.enhanceVideo 真实文件
 // ============================================================================
 // P31, P32, P33: batch-video, batch-audio, pdf
 // ============================================================================
-test('P31/P32/P33 batch-video & batch-audio & pdf: 对接 dllplugin_call，真实宿主拒绝 simulated:true 与非对应类型文件充数', async () => {
+test('P31/P32/P33 batch-video & batch-audio & pdf: 显式文件夹导入、对接 dllplugin_call 拒绝 simulated:true 与非对应类型充数', async () => {
+  let folderSeq = 0
+  const folders = ['D:\\Media\\Videos', 'D:\\Media\\Music', 'D:\\Media\\Docs']
+
   await withRealElectronWindow(
     {
-      system_get_path: ({ name }) => {
-        if (name === 'videos') return 'D:\\Media\\Videos'
-        if (name === 'music') return 'D:\\Media\\Music'
-        if (name === 'documents') return 'D:\\Media\\Docs'
-        return ''
-      },
-      system_search_files: ({ query }) => {
-        if (query === 'dir:D:\\Media\\Videos') {
+      window_show_select_folder_dialog: () => ({
+        canceled: false,
+        folderPath: folders[folderSeq++] || 'D:\\Media\\Docs'
+      }),
+      filesystem_get_directory_contents: ({ path: targetDir }) => {
+        if (targetDir === 'D:\\Media\\Videos') {
           // 目录下只有 .txt 文件，无视频文件：batch-video 绝不可把 .txt 当成视频返回
           return {
-            files: [
-              { name: 'notes.txt', path: 'D:\\Media\\Videos\\notes.txt', is_dir: false, size: 2048, mtime: 1700000000 }
-            ]
+            success: true,
+            files: [{ name: 'notes.txt', size: 2048, isDirectory: false }]
           }
         }
-        if (query === 'dir:D:\\Media\\Music') {
+        if (targetDir === 'D:\\Media\\Music') {
           return {
+            success: true,
             files: [
-              { name: 'readme.md', path: 'D:\\Media\\Music\\readme.md', is_dir: false, size: 1024, mtime: 1700000000 },
-              { name: 'song.flac', path: 'D:\\Media\\Music\\song.flac', is_dir: false, size: 24000000, mtime: 1700000000 }
+              { name: 'readme.md', size: 1024, isDirectory: false },
+              { name: 'song.flac', size: 24000000, isDirectory: false }
             ]
           }
         }
-        if (query === 'dir:D:\\Media\\Docs') {
+        if (targetDir === 'D:\\Media\\Docs') {
           return {
-            files: [
-              { name: 'arch.pdf', path: 'D:\\Media\\Docs\\arch.pdf', is_dir: false, size: 640000, mtime: 1700000000 }
-            ]
+            success: true,
+            files: [{ name: 'arch.pdf', size: 640000, isDirectory: false }]
           }
         }
-        return { files: [] }
+        return { success: true, files: [] }
       },
       dllplugin_call: ({ plugin, func, params }) => {
         return { executed: true, plugin, func, inputPath: params.inputPath }
       }
     },
-    async () => {
-      // 1. batch-video 目录无视频时应返回 0 项，严禁回退扫描 .txt 充当视频，严禁拼接 INITIAL_SAMPLE_VIDEOS
+    async (calls) => {
+      // 1. batch-video 目录无视频时应返回 0 项，严禁把 .txt 充当视频
       const vidQueue = await batchVideo.scanLocalVideoQueue()
       assert.equal(vidQueue.files.length, 0)
 
-      // 2. batch-audio 只返回 .flac，过滤 .md，且不拼接 INITIAL_SAMPLE_AUDIOS
+      // 2. batch-audio 只返回 .flac，过滤 .md
       const audQueue = await batchAudio.scanLocalAudioQueue()
       assert.equal(audQueue.files.length, 1)
       assert.equal(audQueue.files[0].name, 'song.flac')
 
-      // 3. pdf 只返回真实扫描到的 1 份文档，不拼接 INITIAL_SAMPLE_PDFS
+      // 3. pdf 只返回真实导入的 1 份文档
       const pdfQueue = await pdf.scanLocalPdfQueue()
       assert.equal(pdfQueue.files.length, 1)
       assert.equal(pdfQueue.files[0].name, 'arch.pdf')
+
+      assert.equal(calls.some(c => c.channel === 'system_get_path'), false)
+      assert.equal(calls.some(c => c.channel === 'system_search_files'), false)
 
       // 4. invokeNativeCapability 走真实 dllplugin_call 通道
       const vRes = await batchVideo.invokeNativeCapability('BatchCompressVideo', { crf: 23, inputPath: 'D:\\Media\\a.mp4' })

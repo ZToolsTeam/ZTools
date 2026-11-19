@@ -1,4 +1,7 @@
 import { app, Menu, type MenuItemConstructorOptions } from 'electron'
+import { SHELL_SHORTCUTS } from '../../../contracts/hotkey-rules.js'
+
+const MACOS_PREFERENCES_ACCELERATOR = SHELL_SHORTCUTS.OPEN_SETTINGS.replace(/^Ctrl\+/i, 'Command+')
 
 export interface MacosApplicationMenuOptions {
   readonly onOpenPreferences?: () => void
@@ -33,7 +36,7 @@ export function macosAppSubmenuItems(options: MacosApplicationMenuOptions = {}):
       { type: 'separator' },
       {
         label: '偏好设置...',
-        accelerator: 'Command+I',
+        accelerator: MACOS_PREFERENCES_ACCELERATOR,
         click: () => options.onOpenPreferences?.()
       }
     )

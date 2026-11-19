@@ -5,7 +5,8 @@ import fs from 'node:fs'
 import path from 'node:path'
 
 import {
-  // Shared IPC Bridge
+  // Runtime & Bridge
+  renderDeclarativeRoot,
   callHostTransport,
   probeRealDiskDrives,
   // 1. Disk Analyzer
@@ -75,6 +76,8 @@ const fixtureWorkspaceDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ztools-batch1
 for (const [name, size] of Object.entries(FIXTURE_FILES)) {
   fs.writeFileSync(path.join(fixtureWorkspaceDir, name), Buffer.alloc(size, 1))
 }
+fs.mkdirSync(path.join(fixtureWorkspaceDir, 'nested'), { recursive: true })
+fs.writeFileSync(path.join(fixtureWorkspaceDir, 'nested', 'sub-only.txt'), Buffer.alloc(128, 2))
 after(() => fs.rmSync(fixtureWorkspaceDir, { recursive: true, force: true }))
 
 /**
@@ -87,11 +90,21 @@ function createRealNodeIntegrationBridge() {
   const usedMem = Math.max(0, totalMem - freeMem)
   const memPct = Math.round((usedMem / totalMem) * 100)
   const workspaceDir = fixtureWorkspaceDir
+  const calls = []
 
   return {
+    calls,
     transport: {
       async call(method, params = {}) {
+        calls.push(method)
         switch (method) {
+          case 'window_show_select_folder_dialog': {
+            return { canceled: false, folderPath: workspaceDir }
+          }
+          case 'filesystem_directory_exists': {
+            const p = params.path
+            return Boolean(p && fs.existsSync(p) && fs.statSync(p).isDirectory())
+          }
           case 'system_get_disk_usage': {
             if (/^[CD]:[\\/]?$/i.test(String(params.drive || ''))) {
               return {
@@ -392,8 +405,18 @@ test('5. [BatchRename / BatchVideo / BatchAudio / PDF] 真实文件工作台、�
     'demofile.txt'
   )
 
-  const renameFiles = await fetchRealBatchRenameFiles('downloads', bridge)
-  assert.ok(renameFiles.files.length > 0, '应从真实工作目录加载待重命名文件')
+  const renameBridge = createRealNodeIntegrationBridge()
+  const renameFiles = await fetchRealBatchRenameFiles(renameBridge)
+  assert.ok(renameFiles.files.length > 0, '应通过显式文件夹选择加载待重命名文件')
+  assert.equal(
+    renameFiles.files.some((f) => f.name === 'sub-only.txt'),
+    false,
+    'batch-rename 仅允许读取一级子文件，不得递归进 nested 子目录'
+  )
+  assert.ok(renameBridge.calls.includes('window_show_select_folder_dialog'))
+  assert.ok(renameBridge.calls.includes('filesystem_get_directory_contents'))
+  assert.equal(renameBridge.calls.includes('system_get_path'), false)
+  assert.equal(renameBridge.calls.includes('system_search_files'), false)
 
   // 拦截 System32 与路径穿越重命名
   const blockRenameSys = await executeRealFileRename(
@@ -411,12 +434,17 @@ test('5. [BatchRename / BatchVideo / BatchAudio / PDF] 真实文件工作台、�
   )
   assert.equal(blockTraversal.ok, false)
 
-  // BatchVideo / BatchAudio / PDF 真实工作区扫描与异常注入测试
+  // BatchVideo / BatchAudio / PDF 显式文件夹导入工作区与异常注入测试
+  const wsBridge = createRealNodeIntegrationBridge()
   const [videoWs, audioWs, pdfWs] = await Promise.all([
-    fetchRealVideoWorkspace(bridge),
-    fetchRealAudioWorkspace(bridge),
-    fetchRealPdfWorkspace(bridge)
+    fetchRealVideoWorkspace(wsBridge),
+    fetchRealAudioWorkspace(wsBridge),
+    fetchRealPdfWorkspace(wsBridge)
   ])
+  assert.ok(wsBridge.calls.includes('window_show_select_folder_dialog'))
+  assert.ok(wsBridge.calls.includes('filesystem_get_directory_contents'))
+  assert.equal(wsBridge.calls.includes('system_get_path'), false)
+  assert.equal(wsBridge.calls.includes('system_search_files'), false)
   // 只收录对应类型的真实文件，不拿其它文件充数
   assert.deepEqual(videoWs.files.map((f) => f.name).sort(), ['demo-recording.mp4', 'meeting.mov'])
   assert.deepEqual(audioWs.files.map((f) => f.name).sort(), ['podcast.mp3', 'voice-memo.wav'])
@@ -455,8 +483,43 @@ test('5. [BatchRename / BatchVideo / BatchAudio / PDF] 真实文件工作台、�
     /MALFORMED_DLL_RESPONSE/
   )
 
-  assert.equal(BatchRenameCommand().type, 'List')
-  assert.equal(BatchVideoCommand().type, 'List')
-  assert.equal(BatchAudioCommand().type, 'List')
-  assert.equal(PdfCommand().type, 'List')
+  // 组件挂载零启动扫描校验：初始列表为空 []，顶栏最多 2 按钮，不调用 system_get_path / system_search_files
+  const prevWindow = globalThis.window
+  const mountCalls = []
+  globalThis.window = {
+    __ztoolsElectron: {
+      transport: {
+        methods: new Proxy(
+          {},
+          {
+            get(_t, method) {
+              return async () => {
+                mountCalls.push(String(method))
+                return { success: true, data: {} }
+              }
+            }
+          }
+        )
+      }
+    }
+  }
+  try {
+    for (const Cmd of [BatchRenameCommand, BatchVideoCommand, BatchAudioCommand, PdfCommand]) {
+      const root = renderDeclarativeRoot(Cmd)
+      await new Promise((resolve) => setTimeout(resolve, 10))
+      const tree = root.getLatest()
+      const fb = tree.props?.filterBar?.props || tree.props?.filterBar
+      const subList = tree.props?.subList?.props || tree.props?.subList
+      assert.equal(tree.type, 'List')
+      assert.equal(subList.items.length, 0, '挂载后初始队列必须为空')
+      assert.ok(Array.isArray(fb?.actions) && fb.actions.length <= 2, '顶栏按钮严禁超过 2 个')
+      root.unmount()
+    }
+    assert.equal(mountCalls.includes('system_get_path'), false, '示例挂载严禁触发 system_get_path')
+    assert.equal(mountCalls.includes('system_search_files'), false, '示例挂载严禁触发 system_search_files')
+    assert.equal(mountCalls.includes('clipboard_read_text'), false, '示例挂载严禁读取剪贴板')
+  } finally {
+    if (prevWindow === undefined) delete globalThis.window
+    else globalThis.window = prevWindow
+  }
 })

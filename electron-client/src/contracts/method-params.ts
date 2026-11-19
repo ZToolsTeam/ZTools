@@ -533,6 +533,7 @@ export interface TriggerSetEnabledParams extends TriggerKeyParams {
 export interface TriggerConflictParams {
   key: string
   pluginId: string
+  excludeTriggerId?: string
 }
 
 export interface SystemNotifyParams {
@@ -998,7 +999,7 @@ function validateNetworkCookie(params: Record<string, unknown>): void {
   ])
   const name = requireString(params, 'name', { min: 1, max: 256 })
   const cookieValue = requireString(params, 'value', { max: 4096 })
-  if (/[^!#$%&'*+.^_`|~0-9A-Za-z-]/.test(name) || /[\x00-\x1F\x7F;]/.test(cookieValue)) {
+  if (/[^!#$%&'*+.^_`|~0-9A-Za-z-]/.test(name) || /[\u0000-\u001F\u007F;]/.test(cookieValue)) {
     throw new ZToolsError(errorCodes.invalidRequest, 'Cookie 名称或值无效')
   }
   if (params.url !== undefined) requireHttpUrl(params, 'url')
@@ -1461,6 +1462,12 @@ function requireTriggerIdentifier(value: Record<string, unknown>, key: string): 
   return identifier
 }
 
+import {
+  doubleModifierOf,
+  getGlobalHotkeyBlacklistReason,
+  isDoubleModifier
+} from './hotkey-rules.js'
+
 const ELECTRON_ACCELERATOR_MODIFIERS = new Set([
   'command', 'cmd',
   'control', 'ctrl',
@@ -1494,9 +1501,24 @@ function isElectronAcceleratorKeyCode(token: string): boolean {
     ELECTRON_ACCELERATOR_PUNCTUATION.has(token)
 }
 
+function isStandaloneFunctionKeyToken(token: string): boolean {
+  return /^f(?:[1-9]|1[0-9]|2[0-4])$/i.test(token)
+}
+
+function canonicalModifierGroup(token: string): string {
+  const lower = token.toLowerCase()
+  if (lower === 'alt' || lower === 'option' || lower === 'altgr') return 'alt'
+  if (lower === 'shift') return 'shift'
+  if (lower === 'cmd' || lower === 'command' || lower === 'meta' || lower === 'super') return 'meta'
+  if (lower === 'commandorcontrol' || lower === 'cmdorctrl') return 'cmdorctrl'
+  if (lower === 'ctrl' || lower === 'control') return 'ctrl'
+  return lower
+}
+
 /**
  * Checks Electron 43.4.1's accelerator tokens without relying on
  * globalShortcut.register() exceptions, whose wording is not a stable API.
+ * 禁止裸单键（仅 F1-F24 豁免）与重复修饰键。
  */
 export function isValidElectronAccelerator(value: string): boolean {
   if (value.length === 0 || /[\0-\x20\x7f]/.test(value.replace(/[\t ]/g, ''))) return false
@@ -1504,25 +1526,70 @@ export function isValidElectronAccelerator(value: string): boolean {
   const tokens = value.split('+').map((token) => token.trim())
   if (tokens.some((token) => token === '')) return false
 
-  let keyCodeFound = false
+  let keyCode = ''
+  const seenModifiers = new Set<string>()
   for (const token of tokens) {
     if (!token) return false
     const normalized = token.toLowerCase()
-    if (ELECTRON_ACCELERATOR_MODIFIERS.has(normalized)) continue
-    if (keyCodeFound || !isElectronAcceleratorKeyCode(token)) {
+    if (ELECTRON_ACCELERATOR_MODIFIERS.has(normalized)) {
+      const group = canonicalModifierGroup(normalized)
+      if (seenModifiers.has(group)) return false
+      seenModifiers.add(group)
+      continue
+    }
+    if (keyCode || !isElectronAcceleratorKeyCode(token)) {
       return false
     }
-    keyCodeFound = true
+    keyCode = token
   }
-  return keyCodeFound
+  if (!keyCode) return false
+  if (seenModifiers.size === 0 && !isStandaloneFunctionKeyToken(keyCode)) {
+    return false
+  }
+  return true
 }
 
 function requireHotkey(value: Record<string, unknown>, key: string): string {
   const hotkey = requireString(value, key, { min: 1, max: 128 }).trim()
+  if (isDoubleModifier(hotkey)) {
+    if (!doubleModifierOf(hotkey)) {
+      throw new ZToolsError(errorCodes.invalidRequest, `${key} 双击修饰键格式无效`)
+    }
+    return hotkey
+  }
   if (!isValidElectronAccelerator(hotkey)) {
     throw new ZToolsError(errorCodes.invalidRequest, `${key} Electron 快捷键格式无效`)
   }
+  const blacklistReason = getGlobalHotkeyBlacklistReason(hotkey)
+  if (blacklistReason) {
+    throw new ZToolsError(errorCodes.invalidRequest, blacklistReason)
+  }
   return hotkey
+}
+
+const VALID_MOUSE_HOOK_BUTTONS = new Set(['middle', 'right', 'forward', 'backward'])
+const VALID_MOUSE_HOOK_ACTIONS = new Set(['press', 'long'])
+
+function validateMouseHookTriggerConfig(config: Record<string, unknown>): void {
+  rejectUnknownKeys(config, ['kind', 'button', 'action', 'longPressMs', 'fullscreenDnd'])
+  if (config.kind !== 'mouse') {
+    throw new ZToolsError(errorCodes.invalidRequest, 'hook.config.kind 必须为 mouse')
+  }
+  const button = String(config.button ?? '')
+  const action = String(config.action ?? '')
+  if (!VALID_MOUSE_HOOK_BUTTONS.has(button)) {
+    throw new ZToolsError(errorCodes.invalidRequest, '鼠标触发按键无效')
+  }
+  if (!VALID_MOUSE_HOOK_ACTIONS.has(action)) {
+    throw new ZToolsError(errorCodes.invalidRequest, '鼠标触发动作无效')
+  }
+  if (button === 'right' && action === 'press') {
+    throw new ZToolsError(errorCodes.invalidRequest, '为避免破坏系统右键菜单，右键仅支持长按触发')
+  }
+  requireInteger(config, 'longPressMs', { min: 200, max: 500 })
+  if (config.fullscreenDnd !== undefined) {
+    requireBoolean(config, 'fullscreenDnd')
+  }
 }
 
 function validateTriggerAction(value: unknown): void {
@@ -1537,8 +1604,6 @@ function validateTriggerAction(value: unknown): void {
 }
 
 function requireTriggerOwnerIdentifier(params: Record<string, unknown>, key: string): void {
-  const value = requireString(params, key, { min: 1, max: 128 })
-  if (/^localapp:[A-F0-9]{8}$/i.test(value)) return
   requirePluginIdentifier(params, key)
 }
 
@@ -1563,8 +1628,13 @@ function validateTriggerRegister(params: Record<string, unknown>): void {
   if (!isRecord(params.config)) throw new ZToolsError(errorCodes.invalidRequest, 'config 必须是对象')
   requireSerializable(params.config, 'config', 64 * 1024)
   if (params.type === 'hotkey') {
-    rejectUnknownKeys(params.config, ['key'])
+    rejectUnknownKeys(params.config, ['key', 'fullscreenDnd'])
     requireHotkey(params.config, 'key')
+    if (params.config.fullscreenDnd !== undefined) {
+      requireBoolean(params.config, 'fullscreenDnd')
+    }
+  } else if (params.type === 'hook') {
+    validateMouseHookTriggerConfig(params.config)
   }
 
   const hasNestedAction = params.action !== undefined
@@ -1584,16 +1654,10 @@ function validateTriggerRegister(params: Record<string, unknown>): void {
   const action = hasNestedAction ? params.action as Record<string, unknown> : {
     mode: params.actionMode, target: params.actionTarget, params: params.actionParams
   }
-  if (action.mode === 'builtin' && action.target === 'launch_local_app') {
-    const actionParams = action.params as Record<string, unknown>
-    rejectUnknownKeys(actionParams, ['appId'])
-    const appId = requireString(actionParams, 'appId', { min: 1, max: 128 })
-    if (params.type !== 'hotkey' || !/^localapp:[A-F0-9]{8}$/i.test(appId) || params.pluginId !== appId) {
-      throw new ZToolsError(errorCodes.invalidRequest, '本地应用快捷键必须绑定同一已保存 Windows 应用 ID')
-    }
-  } else {
-    requirePluginIdentifier(params, 'pluginId')
+  if (action.mode === 'builtin' && action.target !== 'toggle_main_window') {
+    throw new ZToolsError(errorCodes.invalidRequest, '不支持的内置触发动作')
   }
+  requirePluginIdentifier(params, 'pluginId')
   if (params.priority !== undefined) {
     requireInteger(params, 'priority', { min: -1_000_000, max: 1_000_000 })
   }
@@ -1808,9 +1872,10 @@ export function validateMethodParams(method: AllowedMethod, params: unknown): vo
       requireBoolean(params, 'enabled')
       return
     case 'trigger_check_conflict':
-      rejectUnknownKeys(params, ['key', 'pluginId'])
+      rejectUnknownKeys(params, ['key', 'pluginId', 'excludeTriggerId'])
       requireHotkey(params, 'key')
       if (params.pluginId !== '') requireTriggerOwnerIdentifier(params, 'pluginId')
+      if (params.excludeTriggerId !== undefined) requireTriggerIdentifier(params, 'excludeTriggerId')
       return
     case 'system_notify':
       rejectUnknownKeys(params, ['title', 'message', 'modal'])
@@ -1842,7 +1907,6 @@ export function validateMethodParams(method: AllowedMethod, params: unknown): vo
     case 'system_get_network_stats':
     case 'system_get_battery_status':
     case 'system_reload_hotkeys':
-    case 'system_get_panel_local_apps':
       rejectUnknownKeys(params, [])
       return
     case 'runtime_capability_get': {

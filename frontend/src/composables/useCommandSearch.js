@@ -3,8 +3,8 @@
  *
  * 1. 程序列表在窗口打开时取一次，与插件、子命令一起在本地当场匹配，按键后同一帧就有结果；
  * 2. 普通文件走主进程检索，晚到的结果单独排在下面一段，不让已显示的结果跳位；
- * 3. 全局 8 级分类权重：1B 宿主系统指令 > 1A 系统原生工具 > 2B 系统已安装软件 > 2A 用户自主加入软件
- *    > 3A 已安装插件 > 3B 插件子命令 > 4A 本地文件夹 > 4B 本地普通文件；
+ * 3. 全局 7 级分类权重：系统原生工具 > 系统已安装软件 > 已安装插件
+ *    > 插件子命令 > 本地文件夹 > 本地普通文件 > 宿主内置指令；
  * 4. 连续输入时按请求序号丢弃过期的文件结果。
  */
 
@@ -19,7 +19,9 @@ import {
 } from '@/utils/pinyinSearch'
 import { openSettings } from '@/utils/internalPlugins'
 import { getOfficialPlugin } from '@/utils/officialPlugins'
+import { isPluginSupportedOnCurrentPlatform } from '@/utils/platform'
 import { switchWindowMode, WINDOW_MODES } from '@/utils/windowMode'
+import { track } from '@edition'
 // 与内置计算器插件同一份计算引擎（由 scripts/sync-bundled-plugins.mjs 同步）
 import { evaluateCalculatorQuery, addCalculatorHistory } from '@/vendor/calculator-engine.js'
 
@@ -28,8 +30,8 @@ const STORAGE_KEY_QUERY_CHOICES = 'ztools_command_query_choices'
 const MAX_QUERY_CHOICES = 300
 /** 每个搜索词最多记住的候选条目数 */
 const MAX_CHOICES_PER_QUERY = 5
-/** 顶部固定常用磁贴最多展示 9 个（Alt+1~9 直达） */
-export const TOP_PINNED_GRID_LIMIT = 9
+/** 顶部固定常用磁贴宫格列数（自适应 1 排至 2 排滚动，不限制总数量） */
+export const PINNED_GRID_COLUMNS = 9
 /** 使用频次的半衰期：30 天前的一次使用只算半次，长期不用的条目自然退场 */
 const FREQUENCY_HALF_LIFE_MS = 30 * 24 * 60 * 60 * 1000
 /** 搜索态 Frecency 加分上限；空查询直接用不封顶的原始分，避免常用项同时到顶后失去先后 */
@@ -137,7 +139,7 @@ export function evaluateInlineCommandItem(rawQuery) {
   }
 }
 
-// 内置快捷工具条目定义（1B: 宿主系统指令）
+// 内置快捷工具条目定义（宿主内置指令，处于最低分类权重）
 export const BUILTIN_COMMAND_ITEMS = Object.freeze([
   {
     key: 'system-settings',
@@ -200,46 +202,199 @@ export const BUILTIN_COMMAND_ITEMS = Object.freeze([
 const BUILTIN_COMMAND_KEY_SET = new Set(BUILTIN_COMMAND_ITEMS.map((item) => item.key))
 
 /**
- * 全局 8 级分类权重顺序（1B > 1A > 2B > 2A > 3A > 3B > 4A > 4B）：
+ * 归一化固定文件路径用于唯一键生成：
+ * Windows 路径去掉非根盘符末尾分隔符并转小写；POSIX 路径去掉非根目录末尾斜杠并保持大小写。
+ */
+function normalizePinFilePath(rawPath) {
+  const p = String(rawPath || '').trim()
+  if (!p) return ''
+  if (/^[a-z]:[\\/]|^\\\\/i.test(p)) {
+    const isUnc = p.startsWith('\\\\')
+    const slashesUnified = p.replace(/\//g, '\\').replace(/\\{2,}/g, '\\')
+    const winNormalized = isUnc ? `\\${slashesUnified}` : slashesUnified
+    const stripped = /^[a-z]:\\+$/i.test(winNormalized)
+      ? winNormalized.slice(0, 3)
+      : winNormalized.replace(/\\+$/, '')
+    return stripped.toLowerCase()
+  }
+  const posixNormalized = p.replace(/\/{2,}/g, '/')
+  return posixNormalized === '/' ? '/' : (posixNormalized.replace(/\/+$/, '') || '/')
+}
+
+/**
+ * 规范化结构化的 PinnedEntry 描述符（支持 plugin、plugin-feature、builtin、system-tool、file 共 5 类）
+ */
+function normalizePinEntry(raw) {
+  if (!raw || typeof raw !== 'object') return null
+  switch (raw.kind) {
+    case 'plugin': {
+      const pluginId = String(raw.pluginId || '').trim()
+      return pluginId ? { kind: 'plugin', pluginId } : null
+    }
+    case 'plugin-feature': {
+      const pluginId = String(raw.pluginId || '').trim()
+      const featureCode = String(raw.featureCode || '').trim()
+      return pluginId && featureCode ? { kind: 'plugin-feature', pluginId, featureCode } : null
+    }
+    case 'builtin': {
+      const commandKey = String(raw.commandKey || '').trim()
+      return commandKey ? { kind: 'builtin', commandKey } : null
+    }
+    case 'system-tool': {
+      const toolId = String(raw.toolId || '').trim()
+      return toolId ? { kind: 'system-tool', toolId } : null
+    }
+    case 'file': {
+      const path = typeof raw.path === 'string' ? raw.path : ''
+      if (!path.trim()) return null
+      return {
+        kind: 'file',
+        path,
+        name: String(raw.name || raw.title || raw.fileName || path),
+        isDir: Boolean(raw.isDir),
+        isApplication: Boolean(raw.isApplication)
+      }
+    }
+    default:
+      return null
+  }
+}
+
+/**
+ * 将搜索结果条目或面板条目构建为 5 类可固定 PinnedEntry 描述符；
+ * 即时计算、单位换算、色值速查、工作台市场跳转项及旧版残留 local 条目返回 null（不可固定）。
+ */
+export function buildPinPayload(item) {
+  if (!item || typeof item !== 'object') return null
+  if (
+    item.ephemeral ||
+    item.type === 'inline-calculator' ||
+    item.type === 'inline-color' ||
+    item.type === 'market-search' ||
+    item.type === 'local-app' ||
+    item.type === 'local' ||
+    item.panelItemType === 'local'
+  ) {
+    return null
+  }
+  if (typeof item.kind === 'string' && !item.type) {
+    return normalizePinEntry(item)
+  }
+  if (item.type === 'plugin-feature') {
+    const pluginId = String(item.pluginId || '').trim()
+    const featureCode = String(item.featureCode || '').trim()
+    return pluginId && featureCode ? { kind: 'plugin-feature', pluginId, featureCode } : null
+  }
+  if (item.type === 'builtin-command' || (!item.type && BUILTIN_COMMAND_KEY_SET.has(item.key))) {
+    const commandKey = String(item.key || '').trim()
+    return commandKey ? { kind: 'builtin', commandKey } : null
+  }
+  if (item.type === 'system-tool' || item.panelItemType === 'system_tool') {
+    const rawTarget =
+      item.target ||
+      (typeof item.id === 'string' ? item.id.replace(/^system-tool:/, '') : '') ||
+      (typeof item.key === 'string' && item.key.startsWith('system-tool:') ? item.key.slice('system-tool:'.length) : '')
+    const toolId = String(rawTarget || '').trim()
+    return toolId ? { kind: 'system-tool', toolId } : null
+  }
+  if (item.type === 'file') {
+    const path = typeof item.path === 'string' ? item.path : ''
+    if (!path.trim()) return null
+    return {
+      kind: 'file',
+      path,
+      name: String(item.name || item.title || item.fileName || path),
+      isDir: Boolean(item.isDir),
+      isApplication: Boolean(item.isApplication)
+    }
+  }
+  if (item.type === 'plugin' || (!item.type && (item.pluginId || item.id))) {
+    const pluginId = String(item.pluginId || item.id || '').trim()
+    return pluginId ? { kind: 'plugin', pluginId } : null
+  }
+  if (item.pinEntry && typeof item.pinEntry === 'object') {
+    return normalizePinEntry(item.pinEntry)
+  }
+  return null
+}
+
+/**
+ * 判断条目是否允许固定到悬浮条首屏
+ */
+export function canPinItem(item) {
+  return Boolean(buildPinPayload(item))
+}
+
+/**
+ * 计算条目的唯一固定键 pinKey（与主进程规则严格对齐，且与 item.key 保持隔离）
+ */
+export function resolvePinKey(itemOrEntry) {
+  if (!itemOrEntry || typeof itemOrEntry !== 'object') return ''
+  const source = itemOrEntry.entry && !itemOrEntry.type && !itemOrEntry.kind
+    ? itemOrEntry.entry
+    : itemOrEntry
+  const entry = typeof source.kind === 'string' && !source.type
+    ? normalizePinEntry(source)
+    : buildPinPayload(source)
+  if (!entry) {
+    if (typeof source.kind === 'string') return ''
+    const rawPinKey = typeof itemOrEntry.pinKey === 'string' ? itemOrEntry.pinKey.trim() : ''
+    return rawPinKey && !rawPinKey.startsWith('local-app:') ? rawPinKey : ''
+  }
+  switch (entry.kind) {
+    case 'plugin':
+      return `plugin:${entry.pluginId}`
+    case 'plugin-feature':
+      return `plugin-feature:${entry.pluginId}:${entry.featureCode}`
+    case 'builtin':
+      return `builtin:${entry.commandKey}`
+    case 'system-tool':
+      return `system-tool:${entry.toolId}`
+    case 'file': {
+      const normalized = normalizePinFilePath(entry.path)
+      return normalized ? `file:${normalized}` : ''
+    }
+    default:
+      return ''
+  }
+}
+
+/**
+ * 全局 7 级分类权重顺序（系统原生工具 > 系统已安装软件 > 已安装插件 > 插件子命令 > 本地文件夹 > 本地普通文件 > 宿主内置指令）：
  * 数值越小代表分类优先级越高
  */
 export const CATEGORY_RANKS = Object.freeze({
-  HOST_BUILTIN: 1,      // 1B: 宿主系统指令 (BUILTIN_COMMAND_ITEMS)
-  SYSTEM_TOOL: 2,       // 1A: 系统原生工具 (system-tool)
-  INSTALLED_APP: 3,     // 2B: 系统已安装的软件 (isApplication && type !== 'local-app')
-  USER_LOCAL_APP: 4,    // 2A: 用户自主加入的软件 (local-app)
-  PLUGIN: 5,            // 3A: 已安装插件主入口 (plugin)
-  PLUGIN_FEATURE: 6,    // 3B: 插件子命令 (plugin-feature)
-  FILE_DIRECTORY: 7,    // 4A: 本地文件夹 (file && isDir)
-  FILE_REGULAR: 8       // 4B: 本地普通文件 (file && !isDir)
+  SYSTEM_TOOL: 1,       // 系统原生工具 (system-tool)
+  INSTALLED_APP: 2,     // 系统已安装的软件 (isApplication)
+  PLUGIN: 3,            // 已安装插件主入口 (plugin)
+  PLUGIN_FEATURE: 4,    // 插件子命令 (plugin-feature)
+  FILE_DIRECTORY: 5,    // 本地文件夹 (file && isDir)
+  FILE_REGULAR: 6,      // 本地普通文件 (file && !isDir)
+  HOST_BUILTIN: 7       // 宿主内置指令 (BUILTIN_COMMAND_ITEMS) — 最低排序位置
 })
 
 /** 搜索态各分类对应的附加权重分（CategoryWeight） */
 export const CATEGORY_WEIGHTS = Object.freeze({
-  [CATEGORY_RANKS.HOST_BUILTIN]: 80,
   [CATEGORY_RANKS.SYSTEM_TOOL]: 70,
   [CATEGORY_RANKS.INSTALLED_APP]: 60,
-  [CATEGORY_RANKS.USER_LOCAL_APP]: 50,
   [CATEGORY_RANKS.PLUGIN]: 35,
   [CATEGORY_RANKS.PLUGIN_FEATURE]: 20,
   [CATEGORY_RANKS.FILE_DIRECTORY]: 10,
-  [CATEGORY_RANKS.FILE_REGULAR]: 0
+  [CATEGORY_RANKS.FILE_REGULAR]: 5,
+  [CATEGORY_RANKS.HOST_BUILTIN]: 0
 })
 
 /**
- * 获取条目的全局分类等级（1 ~ 8，越小越优先）
+ * 获取条目的全局分类等级（1 ~ 7，越小越优先）
  */
 export function getCategoryRank(item) {
-  if (!item || typeof item !== 'object') return CATEGORY_RANKS.FILE_REGULAR
+  if (!item || typeof item !== 'object') return CATEGORY_RANKS.HOST_BUILTIN
   // 内置指令没有 type 字段，只按登记的 key 识别；同 key 的插件仍按插件归类
   if (item.type === 'builtin-command' || (!item.type && BUILTIN_COMMAND_KEY_SET.has(item.key))) {
     return CATEGORY_RANKS.HOST_BUILTIN
   }
   if (item.type === 'system-tool') {
     return CATEGORY_RANKS.SYSTEM_TOOL
-  }
-  if (item.type === 'local-app') {
-    return CATEGORY_RANKS.USER_LOCAL_APP
   }
   if (item.isApplication) {
     return CATEGORY_RANKS.INSTALLED_APP
@@ -254,11 +409,11 @@ export function getCategoryRank(item) {
     return item.isDir ? CATEGORY_RANKS.FILE_DIRECTORY : CATEGORY_RANKS.FILE_REGULAR
   }
   // 未登记的条目类型一律归最低档，新增类型不会悄悄排到最前面
-  return CATEGORY_RANKS.FILE_REGULAR
+  return CATEGORY_RANKS.HOST_BUILTIN
 }
 
 /**
- * 获取条目的分类权重加分（0 ~ 80）
+ * 获取条目的分类权重加分（0 ~ 70）
  */
 export function getCategoryWeight(item) {
   return CATEGORY_WEIGHTS[getCategoryRank(item)] ?? 0
@@ -376,7 +531,7 @@ export function calculateFrecencyBonus(stats, now = Date.now()) {
 }
 
 /**
- * 合并同一程序在多个 key 下的使用记录（如手动添加的软件与开始菜单里的同一个程序）
+ * 合并同一程序在多个 key 下的使用记录（如系统工具与开始菜单里的同名程序）
  */
 function mergeUsageStats(list) {
   const valid = list.filter(isValidUsageStats)
@@ -622,36 +777,26 @@ function computeUserDirBoost(filePath) {
   return 0
 }
 
-const ABSOLUTE_PATH_RE = /^(?:[a-z]:[\\/]|\\\\|\/)/i
-
 function normalizeAppName(name) {
   return String(name || '').trim().toLowerCase()
 }
 
-function normalizeAppPath(filePath) {
-  const p = String(filePath || '').trim()
-  return ABSOLUTE_PATH_RE.test(p) ? p.replace(/[\\/]+$/, '').toLowerCase() : ''
-}
-
 /**
- * 去掉与「用户添加的软件（2A）」「系统工具（1A）」同路径或同名的已安装程序（2B），
- * 保留优先级更高的那一条，并记下被合并程序的使用记录 key，排序时合并到保留的条目上。
+ * 去掉与「系统工具」同名的已安装程序，
+ * 保留优先级更高的系统工具，并记下被合并程序的使用记录 key，排序时合并到保留的条目上。
  * @returns {{ apps: object[], aliases: Map<string, string[]> }}
  */
 function dedupeInstalledApps(apps, ownerItems) {
   const aliases = new Map()
   if (!apps.length || !ownerItems.length) return { apps, aliases }
-  const byPath = new Map()
   const byName = new Map()
   for (const owner of ownerItems) {
-    const path = owner.type === 'local-app' ? normalizeAppPath(owner.targetPath) : ''
-    if (path && !byPath.has(path)) byPath.set(path, owner.key)
     const name = normalizeAppName(owner.name)
     if (name && !byName.has(name)) byName.set(name, owner.key)
   }
   const kept = []
   for (const app of apps) {
-    const ownerKey = byPath.get(normalizeAppPath(app.path)) || byName.get(normalizeAppName(app.name))
+    const ownerKey = byName.get(normalizeAppName(app.name))
     if (!ownerKey) {
       kept.push(app)
       continue
@@ -683,7 +828,7 @@ function buildPendingApplicationItems(frecencyMap) {
  * 空查询（Zero-Query）排序比较器：
  * 1. 梯队优先级：活跃未固定项 (0) > 未使用默认推荐项 (1) > 已在顶部固定宫格展示的项 (2)
  * 2. 热度档：不封顶的 Frecency 原始分按 5 分一档取整后比较（先分档再比，保证比较器满足传递性）
- * 3. 同一热度档内按全局分类等级决胜：1B(1) > 1A(2) > 2B(3) > 2A(4) > 3A(5) > 3B(6)
+ * 3. 同一热度档内按全局分类等级决胜：系统工具(1) > 已安装软件(2) > 插件(3) > 子命令(4) > 宿主内置指令(7)
  * 4. 最后使用时间戳决胜（确保刚用过的排在前面），再保持原始顺序
  */
 export function compareEmptyQuery(a, b) {
@@ -697,7 +842,7 @@ export function compareEmptyQuery(a, b) {
 /**
  * 搜索态主候选段排序比较器：
  * 1. 综合得分 CompositeScore = TierScore + CategoryWeight + MatchQualityScore + FrecencyBoost + QueryPrefixBoost
- * 2. 同分时严格按全局分类等级决胜：1B(1) > 1A(2) > 2B(3) > 2A(4) > 3A(5) > 3B(6) > 4A(7) > 4B(8)
+ * 2. 同分时严格按全局分类等级决胜：系统工具(1) > 已安装软件(2) > 插件(3) > 子命令(4) > 宿主内置指令(7)
  * 3. 最后使用时间决胜，再按名称紧凑度与原始顺序稳定排列
  */
 function compareRanked(a, b) {
@@ -709,7 +854,7 @@ function compareRanked(a, b) {
 }
 
 /**
- * 本地文件段排序比较器（4A 本地文件夹 > 4B 本地普通文件）
+ * 本地文件段排序比较器（本地文件夹(5) > 本地普通文件(6)）
  */
 function compareFiles(a, b) {
   return b.tierScore - a.tierScore ||
@@ -826,6 +971,272 @@ function buildCommandCandidates(pluginsStore) {
 }
 
 /**
+ * 规范化主进程返回的 pinnedEntries 列表
+ */
+function normalizePinnedEntriesList(rawList) {
+  if (!Array.isArray(rawList)) return []
+  const result = []
+  const seen = new Set()
+  for (const raw of rawList) {
+    if (!raw || typeof raw !== 'object') continue
+    const entry = raw.entry && typeof raw.entry === 'object' ? normalizePinEntry(raw.entry) : null
+    if (!entry) continue
+    const pinKey = typeof raw.pinKey === 'string' && raw.pinKey.trim()
+      ? raw.pinKey.trim()
+      : resolvePinKey(entry)
+    if (!pinKey || seen.has(pinKey)) continue
+    seen.add(pinKey)
+    result.push({
+      pinKey,
+      entry,
+      available: raw.available !== false,
+      iconUrl: typeof raw.iconUrl === 'string' ? raw.iconUrl : ''
+    })
+  }
+  return result
+}
+
+/**
+ * 兼容旧版 getPanelData 仅返回 items（含 pinned: true 的插件与系统工具）时的结构转换；
+ * 旧缓存中残留的 type: 'local' 条目直接安全忽略。
+ */
+function buildLegacyPinnedEntries(rawItems) {
+  if (!Array.isArray(rawItems)) return []
+  const result = []
+  const seen = new Set()
+  for (const raw of rawItems) {
+    if (!raw || typeof raw !== 'object' || !raw.pinned || !raw.id) continue
+    const entry = raw.type === 'system_tool'
+      ? { kind: 'system-tool', toolId: String(raw.id).trim() }
+      : raw.type === 'plugin' || !raw.type
+        ? { kind: 'plugin', pluginId: String(raw.id).trim() }
+        : null
+    if (!entry) continue
+    const pinKey = resolvePinKey(entry)
+    if (!pinKey || seen.has(pinKey)) continue
+    seen.add(pinKey)
+    result.push({
+      pinKey,
+      entry,
+      available: raw.available !== false,
+      iconUrl: typeof raw.iconUrl === 'string' ? raw.iconUrl : ''
+    })
+  }
+  return result
+}
+
+/**
+ * 按 pinnedKeySet 对条目独立染色，不改变条目的原始 item.key
+ */
+function withPinState(item, pinKeySet) {
+  if (!item || typeof item !== 'object') return item
+  const pinKey = resolvePinKey(item)
+  const pinned = Boolean(pinKey && pinKeySet.has(pinKey))
+  if (item.pinned === pinned && (!pinKey || item.pinKey === pinKey)) return item
+  return {
+    ...item,
+    ...(pinKey ? { pinKey } : {}),
+    pinned
+  }
+}
+
+/**
+ * 判断固定条目关联插件是否因用户隐藏、官方下架、被禁用或平台不支持而暂不展示（保留原位置，恢复后重现）
+ */
+function shouldHidePinnedPlugin(pluginId, rawPlugin, pluginsStore) {
+  const pid = String(pluginId || '').trim()
+  if (!pid) return false
+  if (pluginsStore.isBundledHidden?.(pid)) return true
+  if (rawPlugin?.revoked === true || pluginsStore.isRevoked?.(pid)) return true
+  if (rawPlugin && rawPlugin.enabled === false) return true
+  if (rawPlugin && !isPluginSupportedOnCurrentPlatform(rawPlugin)) return true
+  if (!rawPlugin && !isPluginSupportedOnCurrentPlatform(pid)) return true
+  return false
+}
+
+/**
+ * 按单个 PinnedEntry 记录还原展示条目；返回 null 表示暂时隐藏不显示，available: false 表示已失效需灰显保留
+ */
+function restorePinnedEntryRecord(record, ctx) {
+  const { pinKey, entry } = record
+  const { candidateByPinKey, installedPluginMap, installedAppsByPinKey, pluginsStore, resolvedApplicationIcons } = ctx
+
+  switch (entry.kind) {
+    case 'plugin': {
+      const rawPlugin = installedPluginMap.get(entry.pluginId) || installedPluginMap.get(entry.pluginId.toLowerCase())
+      if (shouldHidePinnedPlugin(entry.pluginId, rawPlugin, pluginsStore)) return null
+      const candidate = candidateByPinKey.get(pinKey)
+      if (candidate) {
+        return {
+          ...candidate,
+          icon: candidate.icon || record.iconUrl || '',
+          pinned: true,
+          pinKey,
+          pinEntry: entry,
+          available: true
+        }
+      }
+      return {
+        key: entry.pluginId,
+        id: entry.pluginId,
+        pluginId: entry.pluginId,
+        type: 'plugin',
+        name: entry.pluginId,
+        title: entry.pluginId,
+        description: '该插件已卸载或不可用',
+        subtitle: '该插件已卸载或不可用',
+        badge: '已失效',
+        faIcon: 'fa-cube',
+        icon: record.iconUrl || '',
+        pinned: true,
+        pinKey,
+        pinEntry: entry,
+        available: false,
+        unavailableReason: `插件「${entry.pluginId}」已卸载`
+      }
+    }
+
+    case 'plugin-feature': {
+      const rawPlugin = installedPluginMap.get(entry.pluginId) || installedPluginMap.get(entry.pluginId.toLowerCase())
+      if (shouldHidePinnedPlugin(entry.pluginId, rawPlugin, pluginsStore)) return null
+      const candidate = candidateByPinKey.get(pinKey)
+      if (candidate) {
+        return {
+          ...candidate,
+          icon: candidate.icon || record.iconUrl || '',
+          pinned: true,
+          pinKey,
+          pinEntry: entry,
+          available: true
+        }
+      }
+      const featureKey = `${entry.pluginId}:${entry.featureCode}`
+      const reason = rawPlugin
+        ? `插件子命令「${entry.featureCode}」已不存在`
+        : `插件「${entry.pluginId}」已卸载`
+      return {
+        key: featureKey,
+        id: featureKey,
+        pluginId: entry.pluginId,
+        featureCode: entry.featureCode,
+        type: 'plugin-feature',
+        name: entry.featureCode,
+        title: entry.featureCode,
+        description: rawPlugin ? '该插件子命令已不存在' : '所属插件已卸载',
+        subtitle: rawPlugin ? '该插件子命令已不存在' : '所属插件已卸载',
+        badge: '已失效',
+        faIcon: 'fa-cube',
+        icon: record.iconUrl || rawPlugin?.icon || '',
+        pinned: true,
+        pinKey,
+        pinEntry: entry,
+        available: false,
+        unavailableReason: reason
+      }
+    }
+
+    case 'builtin': {
+      const candidate = candidateByPinKey.get(pinKey)
+      if (candidate) {
+        return {
+          ...candidate,
+          pinned: true,
+          pinKey,
+          pinEntry: entry,
+          available: true
+        }
+      }
+      return {
+        key: entry.commandKey,
+        id: entry.commandKey,
+        type: 'builtin-command',
+        name: entry.commandKey,
+        title: entry.commandKey,
+        description: '该内置指令已失效',
+        subtitle: '该内置指令已失效',
+        badge: '已失效',
+        faIcon: 'fa-sliders',
+        icon: record.iconUrl || '',
+        pinned: true,
+        pinKey,
+        pinEntry: entry,
+        available: false,
+        unavailableReason: `内置指令「${entry.commandKey}」不可用`
+      }
+    }
+
+    case 'system-tool': {
+      const candidate = candidateByPinKey.get(pinKey)
+      if (candidate && record.available !== false) {
+        return {
+          ...candidate,
+          icon: candidate.icon || record.iconUrl || '',
+          pinned: true,
+          pinKey,
+          pinEntry: entry,
+          available: true
+        }
+      }
+      return {
+        key: `system-tool:${entry.toolId}`,
+        id: entry.toolId,
+        type: 'system-tool',
+        panelItemType: 'system_tool',
+        name: candidate?.name || entry.toolId,
+        title: candidate?.title || candidate?.name || entry.toolId,
+        description: '该系统工具当前不可用',
+        subtitle: '该系统工具当前不可用',
+        badge: '已失效',
+        faIcon: 'fa-cog',
+        icon: record.iconUrl || candidate?.icon || '',
+        pinned: true,
+        pinKey,
+        pinEntry: entry,
+        available: false,
+        unavailableReason: `系统工具「${candidate?.name || entry.toolId}」不可用`
+      }
+    }
+
+    case 'file': {
+      const matchedApp = installedAppsByPinKey.get(pinKey)
+      const available = record.available !== false
+      const fileName = entry.path.split(/[\\/]/).filter(Boolean).pop() || entry.path
+      const displayName = entry.name || matchedApp?.name || fileName
+      const parentPath = entry.path.replace(/[\\/][^\\/]+$/, '')
+      const cachedIcon = entry.isApplication && available ? (resolvedApplicationIcons.get(entry.path) || '') : ''
+      const icon = record.iconUrl || matchedApp?.icon || cachedIcon
+      const kindLabel = entry.isApplication ? '应用' : entry.isDir ? '文件夹' : '文件'
+      return {
+        ...(matchedApp || {}),
+        key: 'file:' + (matchedApp?.path || entry.path),
+        type: 'file',
+        name: displayName,
+        title: displayName,
+        fileName: matchedApp?.fileName || fileName,
+        path: entry.path,
+        isDir: Boolean(entry.isDir),
+        isApplication: Boolean(entry.isApplication),
+        badge: available ? kindLabel : '已失效',
+        faIcon: entry.isApplication ? 'fa-th-large' : resolveFileFaIcon(fileName, Boolean(entry.isDir)),
+        description: available ? truncatePath(parentPath) : '原文件或文件夹已不存在',
+        subtitle: available ? truncatePath(parentPath) : '原文件或文件夹已不存在',
+        actionLabel: '打开',
+        icon,
+        pinned: true,
+        pinKey,
+        pinEntry: entry,
+        isPinnedTile: true,
+        available,
+        ...(available ? {} : { unavailableReason: `${kindLabel}「${displayName}」不存在或已移动` })
+      }
+    }
+
+    default:
+      return null
+  }
+}
+
+/**
  * 统一搜索内核 Composable
  * @param {object} [options]
  * @param {boolean} [options.enableFileSearch=true] 是否启用本地文件搜索
@@ -849,7 +1260,11 @@ export function useCommandSearch(options = {}) {
   const fileSearchError = ref('')
   const fileSearchDegraded = ref(false)
   const panelRawItems = ref([])
+  const pinnedEntries = ref([])
+  const hasStructuredPinnedEntries = ref(false)
+  const iconVersion = ref(0)
   const applicationIcons = new Map()
+  const resolvedApplicationIcons = new Map()
   const failedIconPaths = new Set()
 
   let searchRequestId = 0
@@ -869,7 +1284,22 @@ export function useCommandSearch(options = {}) {
     return window.__ztoolsLauncher || null
   }
 
-  /** 读取悬浮条首屏数据（固定项、已添加本地软件、系统工具） */
+  /** 将最新读取到的 panel 数据应用到本地状态 */
+  function applyPanelPayload(data) {
+    if (!data || typeof data !== 'object') return
+    if (Array.isArray(data.items)) {
+      panelRawItems.value = data.items
+    }
+    if (Array.isArray(data.pinnedEntries)) {
+      hasStructuredPinnedEntries.value = true
+      pinnedEntries.value = normalizePinnedEntriesList(data.pinnedEntries)
+    } else if (Array.isArray(data.items)) {
+      hasStructuredPinnedEntries.value = false
+      pinnedEntries.value = buildLegacyPinnedEntries(data.items)
+    }
+  }
+
+  /** 读取悬浮条首屏数据（固定项与系统工具） */
   function refreshPanelData({ force = false } = {}) {
     if (disposed) return Promise.resolve()
     const bridge = panelBridge()
@@ -879,10 +1309,7 @@ export function useCommandSearch(options = {}) {
       try {
         const res = await bridge.getPanelData()
         if (disposed) return
-        const data = res?.data ?? res
-        if (Array.isArray(data?.items)) {
-          panelRawItems.value = data.items
-        }
+        applyPanelPayload(res?.data ?? res)
       } catch (err) {
         console.warn('[useCommandSearch] 读取悬浮条首屏数据失败:', err)
       } finally {
@@ -892,66 +1319,199 @@ export function useCommandSearch(options = {}) {
     return panelDataRequest
   }
 
-  /** 切换插件或本地软件在悬浮条首屏的固定状态 */
-  async function toggleItemPin(item) {
-    if (!item || typeof item !== 'object') return { success: false }
-    const isLocal = item.type === 'local-app' || item.panelItemType === 'local'
-    const targetId = String(isLocal ? item.id : (item.pluginId || item.id || '')).trim()
-    if (!targetId) return { success: false }
-    const itemType = isLocal ? 'local' : 'plugin'
-    const nextPinned = !item.pinned
-
-    // 本地乐观更新，保证磁贴宫格与列表标签即时响应
-    const idx = panelRawItems.value.findIndex((entry) => entry?.id === targetId && entry?.type === itemType)
+  /** 同步兼容旧版 panelRawItems 中的固定状态 */
+  function syncLegacyRawItemPinned(entry, targetPinned) {
+    if (entry.kind !== 'plugin') return
+    const targetId = entry.pluginId
+    const idx = panelRawItems.value.findIndex((raw) => raw?.id === targetId && raw?.type === 'plugin')
     if (idx >= 0) {
       const updated = [...panelRawItems.value]
-      updated[idx] = { ...updated[idx], pinned: nextPinned }
+      updated[idx] = { ...updated[idx], pinned: targetPinned }
       panelRawItems.value = updated
-    } else {
+    } else if (targetPinned) {
       panelRawItems.value = [
         ...panelRawItems.value,
-        {
-          id: targetId,
-          name: item.name || item.title || targetId,
-          description: item.description || item.subtitle || '',
-          iconUrl: item.icon || '',
-          type: itemType,
-          pinned: nextPinned,
-          recent: true
-        }
+        { id: targetId, name: targetId, type: 'plugin', pinned: true, recent: true }
       ]
     }
+  }
+
+  /** 幂等设置条目的固定/取消固定状态，并以主进程返回的最新列表刷新状态 */
+  async function setItemPinned(item, pinned) {
+    if (!item || typeof item !== 'object') return { success: false }
+    const entry = buildPinPayload(item)
+    if (!entry) return { success: false }
+    const pinKey = resolvePinKey(entry)
+    if (!pinKey) return { success: false }
+
+    const targetPinned = Boolean(pinned)
+    const prevEntries = [...pinnedEntries.value]
+    const prevRawItems = [...panelRawItems.value]
+    const prevStructured = hasStructuredPinnedEntries.value
+
+    // 本地乐观更新
+    if (targetPinned) {
+      if (!pinnedEntries.value.some((record) => record.pinKey === pinKey)) {
+        pinnedEntries.value = [
+          ...pinnedEntries.value,
+          {
+            pinKey,
+            entry,
+            available: item.available !== false,
+            iconUrl: typeof item.icon === 'string' ? item.icon : ''
+          }
+        ]
+      }
+    } else {
+      pinnedEntries.value = pinnedEntries.value.filter((record) => record.pinKey !== pinKey)
+    }
+    syncLegacyRawItemPinned(entry, targetPinned)
 
     const bridge = panelBridge()
-    if (typeof bridge?.togglePin === 'function') {
+    if (typeof bridge?.setPin === 'function') {
       try {
-        await bridge.togglePin(targetId, itemType)
-        await refreshPanelData({ force: true })
+        const res = await bridge.setPin(entry, targetPinned)
+        const data = res?.data ?? res
+        if (res?.success === false || data?.success === false) {
+          pinnedEntries.value = prevEntries
+          panelRawItems.value = prevRawItems
+          hasStructuredPinnedEntries.value = prevStructured
+          return {
+            success: false,
+            error: data?.error?.message || data?.error || res?.error?.message || res?.error || '切换固定状态失败'
+          }
+        }
+        if (Array.isArray(data?.pinnedEntries)) {
+          hasStructuredPinnedEntries.value = true
+          pinnedEntries.value = normalizePinnedEntriesList(data.pinnedEntries)
+        }
+        track('launcher_pin', '', { kind: entry.kind, action: targetPinned ? 'pin' : 'unpin' })
+        return {
+          success: true,
+          pinned: typeof data?.pinned === 'boolean' ? data.pinned : targetPinned,
+          pinKey: data?.pinKey || pinKey
+        }
       } catch (err) {
+        pinnedEntries.value = prevEntries
+        panelRawItems.value = prevRawItems
+        hasStructuredPinnedEntries.value = prevStructured
+        console.warn('[useCommandSearch] 设置固定状态失败:', err)
+        return { success: false, error: err?.message || '切换固定状态失败' }
+      }
+    }
+
+    // 兼容仅提供旧 togglePin 接口的测试替身
+    if (typeof bridge?.togglePin === 'function' && entry.kind === 'plugin') {
+      try {
+        await bridge.togglePin(entry.pluginId, 'plugin')
+        await refreshPanelData({ force: true })
+        track('launcher_pin', '', { kind: entry.kind, action: targetPinned ? 'pin' : 'unpin' })
+        return { success: true, pinned: targetPinned, pinKey }
+      } catch (err) {
+        pinnedEntries.value = prevEntries
+        panelRawItems.value = prevRawItems
+        hasStructuredPinnedEntries.value = prevStructured
         console.warn('[useCommandSearch] 切换固定状态失败:', err)
         return { success: false, error: err?.message || '切换固定状态失败' }
       }
     }
-    return { success: true, pinned: nextPinned }
+
+    hasStructuredPinnedEntries.value = true
+    track('launcher_pin', '', { kind: entry.kind, action: targetPinned ? 'pin' : 'unpin' })
+    return { success: true, pinned: targetPinned, pinKey }
   }
 
-  /** 调用宿主文件选择器添加本地软件到悬浮条 */
-  async function addLocalApp() {
-    const bridge = panelBridge()
-    if (typeof bridge?.addLocalApp !== 'function') {
-      return { success: false, added: 0, error: '当前环境不支持添加本地软件' }
+  /** 切换条目在悬浮条首屏的固定状态 */
+  async function toggleItemPin(item) {
+    if (!item || typeof item !== 'object') return { success: false }
+    return setItemPinned(item, !item.pinned)
+  }
+
+  /** 本地交换两个可见固定项在完整存储数组中的位置，保持被隐藏项的下标不动 */
+  function swapPinnedKeys(keyA, keyB) {
+    if (!keyA || !keyB || keyA === keyB) return null
+    const list = [...pinnedEntries.value]
+    const idxA = list.findIndex((record) => record.pinKey === keyA)
+    const idxB = list.findIndex((record) => record.pinKey === keyB)
+    if (idxA < 0 || idxB < 0) return null
+    const temp = list[idxA]
+    list[idxA] = list[idxB]
+    list[idxB] = temp
+    pinnedEntries.value = list
+    return list.map((record) => record.pinKey)
+  }
+
+  /** 将完整的 pinnedEntries 列表回滚为指定快照 */
+  function restorePinnedEntries(snapshot) {
+    if (Array.isArray(snapshot)) {
+      pinnedEntries.value = normalizePinnedEntriesList(snapshot)
     }
-    try {
-      const res = await bridge.addLocalApp()
-      const data = res?.data ?? res
-      if (data?.added > 0) {
-        await refreshPanelData({ force: true })
+  }
+
+  /** 提交完整 pinKey 数组到主进程并同步最新顺序，遇到 stale 或失败时回滚 */
+  async function reorderPinned(order, reorderOptions = {}) {
+    if (!Array.isArray(order) || order.length === 0) {
+      return { success: false, error: '无效的排序列表' }
+    }
+    const normalizedOrder = order.map((k) => String(k || '').trim()).filter(Boolean)
+    const prevEntries = Array.isArray(reorderOptions.baselineEntries)
+      ? reorderOptions.baselineEntries
+      : [...pinnedEntries.value]
+    const prevMap = new Map(pinnedEntries.value.map((record) => [record.pinKey, record]))
+    const reordered = []
+    const used = new Set()
+    for (const key of normalizedOrder) {
+      if (used.has(key)) continue
+      const rec = prevMap.get(key)
+      if (rec) {
+        used.add(key)
+        reordered.push(rec)
       }
-      return { success: res?.success !== false, added: Number(data?.added) || 0 }
-    } catch (err) {
-      console.warn('[useCommandSearch] 添加本地软件失败:', err)
-      return { success: false, added: 0, error: err?.message || '添加本地软件失败' }
     }
+    for (const rec of pinnedEntries.value) {
+      if (!used.has(rec.pinKey)) {
+        used.add(rec.pinKey)
+        reordered.push(rec)
+      }
+    }
+    pinnedEntries.value = reordered
+    const fullOrder = reordered.map((record) => record.pinKey)
+    const kind = reorderOptions.kind || reordered[0]?.entry?.kind || 'unknown'
+
+    const bridge = panelBridge()
+    if (typeof bridge?.reorderPins === 'function') {
+      try {
+        const res = await bridge.reorderPins(fullOrder)
+        const data = res?.data ?? res
+        if (res?.success === false || data?.success === false || data?.stale) {
+          if (Array.isArray(data?.pinnedEntries)) {
+            hasStructuredPinnedEntries.value = true
+            pinnedEntries.value = normalizePinnedEntriesList(data.pinnedEntries)
+          } else {
+            pinnedEntries.value = prevEntries
+          }
+          return {
+            success: false,
+            stale: Boolean(data?.stale),
+            error: data?.error?.message || data?.error || res?.error?.message || res?.error || (data?.stale ? '固定列表已变更，已同步最新顺序' : '调整固定排序失败'),
+            pinnedEntries: pinnedEntries.value
+          }
+        }
+        if (Array.isArray(data?.pinnedEntries)) {
+          hasStructuredPinnedEntries.value = true
+          pinnedEntries.value = normalizePinnedEntriesList(data.pinnedEntries)
+        }
+        track('launcher_pin', '', { kind, action: 'reorder' })
+        return { success: true, pinnedEntries: pinnedEntries.value }
+      } catch (err) {
+        pinnedEntries.value = prevEntries
+        console.warn('[useCommandSearch] 调整固定排序失败:', err)
+        return { success: false, error: err?.message || '调整固定排序失败', pinnedEntries: pinnedEntries.value }
+      }
+    }
+
+    track('launcher_pin', '', { kind, action: 'reorder' })
+    return { success: true, pinnedEntries: pinnedEntries.value }
   }
 
   /**
@@ -1029,7 +1589,9 @@ export function useCommandSearch(options = {}) {
       const data = res?.data ?? res
       const rawFiles = Array.isArray(data?.files) ? data.files : []
       fileSearchDegraded.value = data?.degraded === true
-      fileResults.value = rawFiles.filter(isFileRecord).map(toFileItem)
+      fileResults.value = rawFiles
+        .filter(isFileRecord)
+        .map((f) => withPinState(toFileItem(f), pinnedKeySet.value))
     } catch (err) {
       if (currentReq === searchRequestId) {
         fileResults.value = []
@@ -1046,7 +1608,9 @@ export function useCommandSearch(options = {}) {
   async function loadApplicationIcons(items) {
     const api = typeof window !== 'undefined' ? window.ztools?.sys : null
     if (!api?.getFileIcon) return
-    const targets = items.filter((item) => item?.isApplication && !item.icon && !failedIconPaths.has(item.path))
+    const targets = items.filter(
+      (item) => item?.isApplication && item.available !== false && !item.icon && item.path && !failedIconPaths.has(item.path)
+    )
     await Promise.all(targets.map(async (item) => {
       try {
         let pending = applicationIcons.get(item.path)
@@ -1059,6 +1623,11 @@ export function useCommandSearch(options = {}) {
         if (disposed) return
         if (typeof icon === 'string' && icon.startsWith('data:image/')) {
           item.icon = icon
+          if (resolvedApplicationIcons.size >= MAX_APPLICATION_ICON_CACHE) {
+            resolvedApplicationIcons.delete(resolvedApplicationIcons.keys().next().value)
+          }
+          resolvedApplicationIcons.set(item.path, icon)
+          iconVersion.value++
         } else {
           failedIconPaths.add(item.path)
         }
@@ -1130,11 +1699,33 @@ export function useCommandSearch(options = {}) {
       frecencyVersion.value++
     }
   }
+  // 悬浮条与工作台跨窗口同步固定面板变化
+  const onSuperPanelChanged = (envelope) => {
+    if (disposed) return
+    const payload = envelope?.payload ?? envelope
+    if (payload && typeof payload === 'object') {
+      applyPanelPayload(payload)
+    }
+    if (!Array.isArray(payload?.pinnedEntries)) {
+      void refreshPanelData({ force: true })
+    }
+  }
   let grantRefreshTimer = null
   if (getCurrentScope()) {
     if (typeof window !== 'undefined') {
       window.addEventListener('focus', onWindowFocus)
       window.addEventListener('storage', onStorage)
+    }
+    const eventsApi = typeof window !== 'undefined' ? window.ztools?.events : null
+    if (eventsApi) {
+      if (typeof eventsApi.subscribe === 'function') {
+        Promise.resolve(eventsApi.subscribe('super_panel_changed')).catch((err) => {
+          console.warn('[useCommandSearch] 订阅 super_panel_changed 失败:', err)
+        })
+      }
+      if (typeof eventsApi.on === 'function') {
+        eventsApi.on('super_panel_changed', onSuperPanelChanged)
+      }
     }
     if (enableApplications) {
       grantRefreshTimer = setInterval(() => { void refreshApplications() }, APPLICATION_GRANT_REFRESH_MS)
@@ -1148,123 +1739,123 @@ export function useCommandSearch(options = {}) {
         window.removeEventListener('focus', onWindowFocus)
         window.removeEventListener('storage', onStorage)
       }
+      if (eventsApi && typeof eventsApi.off === 'function') {
+        eventsApi.off('super_panel_changed', onSuperPanelChanged)
+      }
       applicationIcons.clear()
+      resolvedApplicationIcons.clear()
+      failedIconPaths.clear()
     })
   }
   void refreshApplications({ force: true })
   void refreshPanelData({ force: true })
 
-  const pinnedPluginIds = computed(() => {
+  const pinnedKeySet = computed(() => {
     const set = new Set()
-    for (const item of panelRawItems.value) {
-      if (item?.type === 'plugin' && item.pinned && item.id) {
-        set.add(String(item.id).trim())
-      }
+    for (const record of pinnedEntries.value) {
+      if (record?.pinKey) set.add(record.pinKey)
     }
     return set
   })
 
-  const panelLocalAppItems = computed(() =>
-    panelRawItems.value
-      .filter((item) => item?.type === 'local' && item.id)
-      .map((item) => ({
-        key: 'local-app:' + item.id,
-        id: String(item.id),
-        type: 'local-app',
-        panelItemType: 'local',
-        isApplication: true,
-        // 主进程把程序所在路径放在 description 里，用于和开始菜单 / 应用目录里的同一程序去重
-        targetPath: normalizeAppPath(item.path || item.description) ? String(item.path || item.description) : '',
-        name: String(item.name || item.id),
-        title: String(item.name || item.id),
-        description: String(item.description || '已添加本地软件'),
-        subtitle: String(item.description || '已添加本地软件'),
-        icon: String(item.iconUrl || ''),
-        faIcon: 'fa-th-large',
-        pinned: Boolean(item.pinned),
-        recent: Boolean(item.recent),
-        badge: '本地软件',
-        actionLabel: '启动'
-      }))
-  )
+  watch(pinnedKeySet, (nextSet) => {
+    if (fileResults.value.length > 0) {
+      fileResults.value = fileResults.value.map((item) => withPinState(item, nextSet))
+    }
+  })
 
   const panelSystemToolItems = computed(() =>
     panelRawItems.value
       .filter((item) => item?.type === 'system_tool' && item.id)
-      .map((item) => ({
-        key: 'system-tool:' + item.id,
-        id: String(item.id),
-        type: 'system-tool',
-        panelItemType: 'system_tool',
-        name: String(item.name || item.id),
-        title: String(item.name || item.id),
-        description: String(item.description || '系统内置工具'),
-        subtitle: String(item.description || '系统内置工具'),
-        icon: String(item.iconUrl || ''),
-        faIcon: resolveCommandFaIcon(item.name || item.id, 'system'),
-        keywords: Array.isArray(item.keywords) ? item.keywords : [],
-        cmds: Array.isArray(item.keywords) ? item.keywords : [],
-        badge: '系统工具',
-        actionLabel: '打开'
-      }))
+      .map((item) => {
+        const rawId = String(item.id)
+        const target = item.target ? String(item.target) : rawId.replace(/^system-tool:/, '')
+        const key = rawId.startsWith('system-tool:') ? rawId : `system-tool:${rawId}`
+        return {
+          key,
+          id: rawId,
+          target,
+          type: 'system-tool',
+          panelItemType: 'system_tool',
+          name: String(item.name || rawId),
+          title: String(item.name || rawId),
+          description: String(item.description || '系统内置工具'),
+          subtitle: String(item.description || '系统内置工具'),
+          icon: String(item.iconUrl || ''),
+          faIcon: resolveCommandFaIcon(item.name || rawId, 'system'),
+          keywords: Array.isArray(item.keywords) ? item.keywords : [],
+          cmds: Array.isArray(item.keywords) ? item.keywords : [],
+          badge: '系统工具',
+          actionLabel: '打开'
+        }
+      })
   )
 
   const commandCandidates = computed(() => {
-    const base = buildCommandCandidates(pluginsStore).map((item) => {
-      // 只给插件主入口打固定标记：子命令不能单独固定，带上标记会误显示「已固定」
-      if (item.type === 'plugin' && pinnedPluginIds.value.has(String(item.pluginId || item.key || '').trim())) {
-        return { ...item, pinned: true }
-      }
-      return item
-    })
-    return [...base, ...panelLocalAppItems.value, ...panelSystemToolItems.value]
+    const base = buildCommandCandidates(pluginsStore)
+    const pinKeys = pinnedKeySet.value
+    return [...base, ...panelSystemToolItems.value]
+      .map((item) => withPinState(item, pinKeys))
   })
 
-  /** 已安装程序（2B）：去掉与用户添加的软件、系统工具重复的那一份 */
-  const installedApps = computed(() =>
-    dedupeInstalledApps(
+  /** 已安装程序：去掉与系统工具同名的那一份，并独立染色 */
+  const installedApps = computed(() => {
+    const deduped = dedupeInstalledApps(
       applicationsAvailable.value ? applicationResults.value : [],
-      [...panelLocalAppItems.value, ...panelSystemToolItems.value]
+      panelSystemToolItems.value
     )
-  )
+    const pinKeys = pinnedKeySet.value
+    return {
+      apps: deduped.apps.map((app) => withPinState(app, pinKeys)),
+      aliases: deduped.aliases
+    }
+  })
 
-  /** 首屏置顶磁贴列表（包含用户固定的插件与本地软件） */
+  /** 首屏置顶磁贴列表（严格按 pinnedEntries 顺序还原 5 类条目并过滤隐藏/禁用/下架/不支持平台项） */
   const pinnedItems = computed(() => {
-    const items = []
-    const seen = new Set()
+    void iconVersion.value
+    const candidateByPinKey = new Map()
     for (const candidate of commandCandidates.value) {
-      if (candidate.type === 'plugin-feature') continue
-      if (candidate.pinned) {
-        const k = candidate.key || candidate.pluginId || candidate.id
-        if (k && !seen.has(k)) {
-          seen.add(k)
-          items.push(candidate)
-        }
+      const pk = candidate.pinKey || resolvePinKey(candidate)
+      if (pk && !candidateByPinKey.has(pk)) {
+        candidateByPinKey.set(pk, candidate)
       }
     }
-    // 兜底：若 panelRawItems 中有固定插件尚未出现在 commandCandidates 中，也补齐展示
-    for (const raw of panelRawItems.value) {
-      if (!raw?.pinned || !raw.id) continue
-      const k = raw.type === 'local' ? 'local-app:' + raw.id : String(raw.id)
-      if (seen.has(k) || seen.has(String(raw.id))) continue
-      seen.add(k)
-      items.push({
-        key: k,
-        id: String(raw.id),
-        pluginId: raw.type === 'plugin' ? String(raw.id) : undefined,
-        type: raw.type === 'local' ? 'local-app' : 'plugin',
-        panelItemType: raw.type === 'local' ? 'local' : 'plugin',
-        name: String(raw.name || raw.id),
-        title: String(raw.name || raw.id),
-        description: String(raw.description || ''),
-        subtitle: String(raw.description || ''),
-        icon: String(raw.iconUrl || ''),
-        pinned: true,
-        badge: raw.type === 'local' ? '本地软件' : '插件',
-        actionLabel: '启动'
-      })
+
+    const installedPluginMap = new Map()
+    for (const p of pluginsStore.installedPlugins || []) {
+      if (!p || typeof p !== 'object') continue
+      const pid = String(p.pluginId || p.id || '').trim()
+      if (!pid) continue
+      if (!installedPluginMap.has(pid)) installedPluginMap.set(pid, p)
+      const lower = pid.toLowerCase()
+      if (!installedPluginMap.has(lower)) installedPluginMap.set(lower, p)
     }
-    return items
+
+    const installedAppsByPinKey = new Map()
+    for (const app of applicationResults.value) {
+      const pk = resolvePinKey(app)
+      if (pk && !installedAppsByPinKey.has(pk)) {
+        installedAppsByPinKey.set(pk, app)
+      }
+    }
+
+    const ctx = {
+      candidateByPinKey,
+      installedPluginMap,
+      installedAppsByPinKey,
+      pluginsStore,
+      resolvedApplicationIcons
+    }
+
+    const result = []
+    for (const record of pinnedEntries.value) {
+      const restored = restorePinnedEntryRecord(record, ctx)
+      if (restored) {
+        result.push(restored)
+      }
+    }
+    return result
   })
 
   /**
@@ -1278,7 +1869,7 @@ export function useCommandSearch(options = {}) {
     const now = Date.now()
     const candidates = commandCandidates.value
     const ranges = new Map()
-    const appOwners = [...panelLocalAppItems.value, ...panelSystemToolItems.value]
+    const appOwners = panelSystemToolItems.value
 
     /** 条目的使用记录：被去重合并掉的同一程序的记录一并算上 */
     const usageStatsOf = (item, aliases) => {
@@ -1287,20 +1878,32 @@ export function useCommandSearch(options = {}) {
       return merged ? mergeUsageStats([own, ...merged.map((key) => frecencyMap[key])]) : own
     }
 
+    const pinKeys = pinnedKeySet.value
+
     if (!q) {
-      // 顶部固定宫格已展示的 key 集合：在下方列表中归入第 3 梯队后置沉底，避免首屏上下两处重复显示同一批图标
+      // 顶部固定宫格已展示的全部条目集合：在下方列表中归入第 3 梯队后置沉底，避免首屏上下两处重复显示
       const topPinnedKeys = new Set(
         pinnedItems.value
-          .slice(0, TOP_PINNED_GRID_LIMIT)
           .map((item) => item.key || item.pluginId || item.id)
           .filter(Boolean)
       )
+      const topPinnedPinKeys = new Set(
+        pinnedItems.value
+          .map((item) => item.pinKey || resolvePinKey(item))
+          .filter(Boolean)
+      )
 
-      // 空查询纳入用过的本机已安装软件（2B）；未曾打开过的本机系统软件不塞入空查询，保持首屏清爽。
+      // 空查询纳入用过的本机已安装软件；未曾打开过的本机系统软件不塞入空查询，保持首屏清爽。
       // 程序列表第一次返回前，用使用记录里存下的名称与路径占位，避免列表返回后用过的程序突然插到前面
-      const { apps, aliases } = applicationsAvailable.value || applicationsSettled.value
-        ? installedApps.value
-        : dedupeInstalledApps(buildPendingApplicationItems(frecencyMap), appOwners)
+      let apps
+      let aliases
+      if (applicationsAvailable.value || applicationsSettled.value) {
+        ({ apps, aliases } = installedApps.value)
+      } else {
+        const pending = dedupeInstalledApps(buildPendingApplicationItems(frecencyMap), appOwners)
+        apps = pending.apps.map((app) => withPinState(app, pinKeys))
+        aliases = pending.aliases
+      }
       const usedSystemApps = apps.filter((app) => Boolean(frecencyMap[app.key]))
 
       const emptyPool = [
@@ -1316,8 +1919,11 @@ export function useCommandSearch(options = {}) {
           const lastUsed = Number(stats?.lastUsed) || 0
           const categoryRank = getCategoryRank(item)
           const itemKey = item.key || item.pluginId || item.id
-          const isTopPinned = Boolean(itemKey && topPinnedKeys.has(itemKey))
-          // 梯队 0：活跃未固定项；梯队 1：未使用或长期未用的默认推荐项（按 1B>1A>2B>2A>3A 排列）；梯队 2：顶部已展示固定项
+          const itemPinKey = item.pinKey || resolvePinKey(item)
+          const isTopPinned = itemPinKey
+            ? topPinnedPinKeys.has(itemPinKey)
+            : Boolean(itemKey && topPinnedKeys.has(itemKey))
+          // 梯队 0：活跃未固定项；梯队 1：未使用或长期未用的默认推荐项（按分类权重排列，宿主内置指令垫底）；梯队 2：顶部已展示固定项
           const emptyBucket = isTopPinned ? 2 : (frecency >= EMPTY_QUERY_ACTIVE_MIN_FRECENCY ? 0 : 1)
           return {
             item,
@@ -1331,7 +1937,7 @@ export function useCommandSearch(options = {}) {
         .sort(compareEmptyQuery)
 
       const top = scoredEmpty.map((entry) => entry.item)
-      const commands = top.filter((item) => !(item.isApplication && item.type !== 'local-app'))
+      const commands = top.filter((item) => !item.isApplication)
       return { commands, top, files: [], ranges }
     }
 
@@ -1345,9 +1951,15 @@ export function useCommandSearch(options = {}) {
     const rawApps = applicationsAvailable.value
       ? applicationResults.value
       : fileResults.value.filter((item) => item?.isApplication)
-    const { apps: localApps, aliases } = applicationsAvailable.value
-      ? installedApps.value
-      : dedupeInstalledApps(rawApps, appOwners)
+    let matchedApps
+    let aliases
+    if (applicationsAvailable.value) {
+      ({ apps: matchedApps, aliases } = installedApps.value)
+    } else {
+      const legacyApps = dedupeInstalledApps(rawApps, appOwners)
+      matchedApps = legacyApps.apps.map((app) => withPinState(app, pinKeys))
+      aliases = legacyApps.aliases
+    }
 
     const toEntry = (item, index, match) => {
       if (match.range && item.key) ranges.set(item.key, match.range)
@@ -1378,7 +1990,7 @@ export function useCommandSearch(options = {}) {
     }
 
     const entries = []
-    ;[...candidates, ...localApps].forEach((item, index) => {
+    ;[...candidates, ...matchedApps].forEach((item, index) => {
       const match = matchItemWithQuery(item, q)
       if (match.matched) entries.push(toEntry(item, index, match))
     })
@@ -1409,14 +2021,14 @@ export function useCommandSearch(options = {}) {
     fileEntries.sort(compareFiles)
 
     const ranked = entries.map((entry) => entry.item)
-    const commands = ranked.filter((item) => !(item.isApplication && item.type !== 'local-app'))
+    const commands = ranked.filter((item) => !item.isApplication)
     // Raycast rootSearch: 当输入命中有效算式/单位换算/汇率/日期/色值时，置顶展示临时结果卡片
     const inlineItem = evaluateInlineCommandItem(rawQuery)
     const prefixItems = inlineItem ? [inlineItem] : []
     return {
       commands: [...prefixItems, ...commands],
       top: [...prefixItems, ...ranked],
-      files: fileEntries.map((entry) => entry.item),
+      files: fileEntries.map((entry) => withPinState(entry.item, pinKeys)),
       ranges
     }
   })
@@ -1437,14 +2049,22 @@ export function useCommandSearch(options = {}) {
 
   // 排在前面的程序按需取图标（主进程有缓存），取不到的本次不再重试
   watch(
-    () => filteredItems.value
-      .slice(0, APPLICATION_ICON_BATCH)
-      .filter((item) => item?.isApplication && !item.icon && !failedIconPaths.has(item.path))
+    () => [
+      ...filteredItems.value.slice(0, APPLICATION_ICON_BATCH),
+      ...pinnedItems.value
+    ]
+      .filter((item) => item?.isApplication && item.available !== false && !item.icon && item.path && !failedIconPaths.has(item.path))
       .map((item) => item.path)
       .join('\n'),
     (pending) => {
-      if (pending) void loadApplicationIcons(filteredItems.value.slice(0, APPLICATION_ICON_BATCH))
-    }
+      if (pending) {
+        void loadApplicationIcons([
+          ...filteredItems.value.slice(0, APPLICATION_ICON_BATCH),
+          ...pinnedItems.value
+        ])
+      }
+    },
+    { immediate: true }
   )
 
   return {
@@ -1462,9 +2082,13 @@ export function useCommandSearch(options = {}) {
     highlightParts,
     refreshApplications,
     refreshPanelData,
+    pinnedEntries,
     pinnedItems,
+    setItemPinned,
     toggleItemPin,
-    addLocalApp,
+    reorderPinned,
+    swapPinnedKeys,
+    restorePinnedEntries,
     builtinSystemItems: BUILTIN_COMMAND_ITEMS
   }
 }

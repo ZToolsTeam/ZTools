@@ -111,7 +111,6 @@ export const methodCapabilities = {
   system_get_network_stats: ['main', 'plugin'],
   system_get_battery_status: ['main', 'plugin'],
   system_reload_hotkeys: ['main', 'plugin'],
-  system_get_panel_local_apps: ['main', 'plugin'],
   system_search_files: ['main', 'plugin'],
   dllplugin_list: ['main', 'plugin'],
   dllplugin_call: ['main', 'plugin'],

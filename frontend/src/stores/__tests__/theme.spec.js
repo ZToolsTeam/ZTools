@@ -1,8 +1,12 @@
+import { readFileSync } from 'node:fs'
+import path from 'node:path'
+import vm from 'node:vm'
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { setActivePinia, createPinia } from 'pinia'
 import { useThemeStore } from '../theme'
 import { useEventsStore } from '../events'
 import { ACCENT_THEMES } from '@/constants/themes'
+import ConfigAPI from '../../../public/js/cef-ipc/src/api/config.js'
 
 describe('useThemeStore', () => {
   beforeEach(() => {
@@ -287,6 +291,197 @@ describe('useThemeStore', () => {
       eventsStore.destroy()
       expect(off).toHaveBeenCalledWith('system.AccentColorChange', handler)
       expect(handlers.has('system.AccentColorChange')).toBe(false)
+    })
+  })
+
+  describe('[P0-#1 集成回归] 真实 ES Class 原型与打包后 ztools-api.js 的 this 绑定与主题初始化', () => {
+    function loadRealBundledSdk(handlers = {}) {
+      const sdkBundlePath = path.resolve(process.cwd(), 'public/sdk/ztools-api.js')
+      const code = readFileSync(sdkBundlePath, 'utf8')
+      const calls = []
+
+      const methods = {}
+      const supportedMethods = [
+        'app_ready',
+        'config_get',
+        'config_set',
+        'get_system_info',
+        'event_subscribe',
+        'event_unsubscribe'
+      ]
+      for (const method of supportedMethods) {
+        methods[method] = async (request) => {
+          calls.push({ method, params: request.params })
+          const customHandler = handlers[method]
+          const data = customHandler ? await customHandler(request.params) : { success: true }
+          return { messageId: request.messageId, success: true, data }
+        }
+      }
+
+      const sandboxWindow = {
+        __ztoolsElectron: {
+          contractVersion: 1,
+          transport: { methods, cancellations: {}, setMessageCallback() {} }
+        },
+        localStorage: null,
+        addEventListener() {}
+      }
+
+      const context = {
+        window: sandboxWindow,
+        document: { addEventListener() {}, removeEventListener() {} },
+        navigator: { userAgent: 'vitest', platform: 'Win32' },
+        localStorage: { getItem() { return null }, setItem() {} },
+        console,
+        Date,
+        Math,
+        Promise,
+        Map,
+        Set,
+        Object,
+        Array,
+        JSON,
+        String,
+        Number,
+        Boolean,
+        Error,
+        TypeError,
+        RangeError,
+        RegExp,
+        TextEncoder,
+        TextDecoder,
+        setTimeout,
+        clearTimeout,
+        encodeURIComponent
+      }
+
+      vm.runInNewContext(code, context, { timeout: 3000, filename: sdkBundlePath })
+      return { sdk: sandboxWindow.ztools, calls }
+    }
+
+    it('挂接未额外 bind 的真实 ConfigAPI 与依赖 this.transport 的 SystemAPI 原型类时，themeStore.init() 完整读取配置、迁移旧缓存并读取 sys.getInfo 不报错', async () => {
+      class PrototypeSystemAPI {
+        constructor(transport) {
+          this.transport = transport
+        }
+        async getInfo() {
+          return this.transport.call('get_system_info', {})
+        }
+      }
+
+      // 1. 场景 A：宿主配置已保存明暗主题与主题色
+      const transportA = {
+        call: vi.fn(async (method, params) => {
+          if (method === 'config_get' && params.path === 'ui.theme') return { value: 'dark' }
+          if (method === 'config_get' && params.path === 'ui.accent') return { value: 'iris' }
+          if (method === 'get_system_info') return { darkMode: false }
+          return { success: true }
+        })
+      }
+      global.window.ztools = {
+        config: new ConfigAPI(transportA),
+        sys: new PrototypeSystemAPI(transportA)
+      }
+
+      const storeA = useThemeStore()
+      await storeA.init()
+      expect(storeA.mode).toBe('dark')
+      expect(storeA.isDark).toBe(true)
+      expect(storeA.accent).toBe('iris')
+      expect(document.documentElement.classList.contains('dark')).toBe(true)
+      expect(document.documentElement.dataset.accent).toBe('iris')
+
+      // 2. 场景 B：仅存在旧 localStorage 主题色且主题为 system，验证旧缓存迁移与 sys.getInfo() 原型调用
+      setActivePinia(createPinia())
+      localStorage.clear()
+      localStorage.setItem('ztools_accent', 'jade')
+      const transportB = {
+        call: vi.fn(async (method) => {
+          if (method === 'config_get') return { value: null }
+          if (method === 'config_set') return { success: true }
+          if (method === 'get_system_info') return { darkMode: true }
+          return { success: true }
+        })
+      }
+      global.window.ztools = {
+        config: new ConfigAPI(transportB),
+        sys: new PrototypeSystemAPI(transportB)
+      }
+
+      const storeB = useThemeStore()
+      await storeB.init()
+      expect(storeB.mode).toBe('system')
+      expect(storeB.isDark).toBe(true)
+      expect(storeB.accent).toBe('jade')
+      expect(transportB.call).toHaveBeenCalledWith('config_set', {
+        file: 'user_settings.json',
+        path: 'ui.accent',
+        value: 'jade',
+        sync_enabled: true
+      })
+      expect(transportB.call).toHaveBeenCalledWith('get_system_info', {})
+
+      // 3. 场景 C：存在旧 localStorage 主题偏好时同步写入宿主配置
+      setActivePinia(createPinia())
+      localStorage.clear()
+      localStorage.setItem('ztools_theme', 'dark')
+      const storeC = useThemeStore()
+      await storeC.init()
+      expect(storeC.mode).toBe('dark')
+      expect(storeC.isDark).toBe(true)
+      expect(transportB.call).toHaveBeenCalledWith('config_set', {
+        file: 'user_settings.json',
+        path: 'ui.theme',
+        value: 'dark',
+        sync_enabled: true
+      })
+    })
+
+    it('打包后的 ztools-api.js 已自动绑定全部模块方法：解构 config.get / sys.getInfo / protocol.fileUrl 均不丢失 this，并可完整驱动 themeStore.init()', async () => {
+      const configStore = new Map()
+      const { sdk, calls } = loadRealBundledSdk({
+        config_get: (params) => ({
+          value: configStore.has(params.path) ? configStore.get(params.path) : params.default
+        }),
+        config_set: (params) => {
+          configStore.set(params.path, params.value)
+          return { success: true }
+        },
+        get_system_info: () => ({ success: true, darkMode: true })
+      })
+
+      try {
+        // 裸解构方法脱离对象直接调用：若未 bind 会直接抛 TypeError (Cannot read properties of undefined)
+        const { get, set } = sdk.config
+        const { getInfo } = sdk.sys
+        const { fileUrl } = sdk.protocol
+
+        expect(await set('ui.accent', 'crimson', true, 'user_settings.json')).toBe(true)
+        expect(await get('ui.accent', null, 'user_settings.json')).toBe('crimson')
+        expect(await getInfo()).toMatchObject({ success: true, darkMode: true })
+        expect(fileUrl('C:\\test\\demo.txt')).toBe('ztools://file/C%3A/test/demo.txt')
+
+        // 将打包产出的真实 sdk 挂载到 window.ztools，模拟旧 localStorage 主题迁移 + 宿主读值 + sys.getInfo
+        localStorage.setItem('ztools_theme', 'light')
+        configStore.delete('ui.theme')
+        global.window.ztools = sdk
+
+        const store = useThemeStore()
+        await store.init()
+        expect(store.mode).toBe('light')
+        expect(store.isDark).toBe(false)
+        expect(store.accent).toBe('crimson')
+        expect(configStore.get('ui.theme')).toBe('light')
+        expect(calls.some((item) => item.method === 'config_get')).toBe(true)
+        expect(calls.some((item) => item.method === 'config_set')).toBe(true)
+
+        // 切换回 system 模式触发真实 sdk.sys.getInfo() 读取
+        await store.setTheme('system')
+        expect(store.isDark).toBe(true)
+        expect(calls.some((item) => item.method === 'get_system_info')).toBe(true)
+      } finally {
+        await sdk.destroy()
+      }
     })
   })
 })

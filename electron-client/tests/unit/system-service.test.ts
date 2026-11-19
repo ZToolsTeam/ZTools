@@ -101,14 +101,24 @@ test('system service exposes compatible queries and cleans caller-owned blockers
       return { url: 'https://example.test/page', browser: 'Chrome' }
     }
   }
-  const service = new SystemService(files, registry, adapter, process.platform, power, browser)
-  const macService = new SystemService(files, registry, adapter, 'darwin')
+  const service = new SystemService(files, registry, adapter, process.platform, power, browser, undefined, true)
+  const macService = new SystemService(files, registry, adapter, 'darwin', undefined, undefined, undefined, true)
+  const winUnavailableService = new SystemService(files, registry, adapter, 'win32', undefined, undefined, undefined, false)
 
   try {
     const macInfo = await macService.getInfo(mainCaller)
     assert.equal(macInfo.platform, 'macos')
     assert.equal(macInfo.osName, 'macOS')
     assert.equal(macInfo.osVersion, '15.0.1')
+    assert.equal(macInfo.supportsDoubleModifierHotkeys, false)
+    assert.equal(macInfo.supportsMouseTriggers, false)
+    assert.equal((await winUnavailableService.getInfo(mainCaller)).supportsDoubleModifierHotkeys, false)
+    assert.equal((await winUnavailableService.getInfo(mainCaller)).supportsMouseTriggers, false)
+    if (process.platform === 'win32') {
+      const winInfo = await service.getInfo(mainCaller)
+      assert.equal(winInfo.supportsDoubleModifierHotkeys, true)
+      assert.equal(winInfo.supportsMouseTriggers, true)
+    }
     assert.equal(Object.hasOwn(macInfo, 'windowsFamily'), false)
     assert.equal(Object.hasOwn(macInfo, 'windowsRelease'), false)
     assert.equal(Object.hasOwn(macInfo, 'osMajor'), false)

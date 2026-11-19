@@ -33,7 +33,7 @@
           v-if="!effectiveIsPopout && headerPluginMeta"
           type="button"
           class="declarative-popout-btn flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-medium text-[var(--rc-text-secondary)] hover:text-[var(--rc-text-primary)] hover:bg-[var(--rc-surface-hover)] border border-[var(--rc-border)] transition-all cursor-pointer"
-          title="弹出为独立常驻窗口，自动携带当前搜索与选中状态 (Ctrl+Shift+O)"
+          :title="`弹出为独立常驻窗口，自动携带当前搜索与选中状态 (${popoutShortcutText})`"
           @click="handlePopout"
         >
           <ExternalLinkIcon class="w-3.5 h-3.5" aria-hidden="true" />
@@ -127,8 +127,9 @@ import { useNavStore } from '@/stores/nav'
 import { useUIStore } from '@/stores/ui'
 import { getOfficialPlugin } from '@/utils/officialPlugins'
 import { isPluginVisible } from '@/utils/pluginVisibility'
-import { isPluginSupportedOnCurrentPlatform, isMacOS, isWindows } from '@/utils/platform'
-import { isModalOpen } from '@/utils/keymap'
+import { isPluginSupportedOnCurrentPlatform, isMacOS, isWindows, shortcutLabel } from '@/utils/platform'
+import { useKeymap, KEYMAP_SCOPES, isModalOpen } from '@/utils/keymap'
+import { POPOUT_WINDOW_SHORTCUT } from '@/utils/shellShortcuts'
 import { getCachedDeclarativePlugin, loadInstalledDeclarativePlugin } from '@/utils/declarativePluginLoader'
 import DeclarativeView from '@/declarative/DeclarativeView.vue'
 import DeclEmptyState from '@/declarative/components/DeclEmptyState.vue'
@@ -191,31 +192,29 @@ const initialSnapshot = computed(() => {
   return { searchText, segmentedValue, dropdownValue, selectedId }
 })
 
-function handleKeyDown(e) {
-  if (isModalOpen()) return
-  if ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key.toLowerCase() === 'o') {
-    if (!effectiveIsPopout.value && plugin.value) {
-      e.preventDefault()
-      handlePopout()
-    }
+// 悬停提示展示当前平台规范键帽文案（Ctrl+Shift+P / ⌘⇧P）
+const popoutShortcutText = shortcutLabel(POPOUT_WINDOW_SHORTCUT)
+
+// 宿主保留热键：优先于声明式插件自身的快捷键注册，防止插件冲突阻塞独立窗口弹出
+useKeymap(KEYMAP_SCOPES.HOST_RESERVED, {
+  [POPOUT_WINDOW_SHORTCUT]: () => {
+    if (isModalOpen()) return false
+    if (effectiveIsPopout.value) return true
+    if (!plugin.value) return false
+    handlePopout()
+    return true
   }
-}
+})
 
 onMounted(() => {
   if (getActivePinia()) {
     useUIStore().focusDeclarative()
-  }
-  if (typeof window !== 'undefined') {
-    window.addEventListener('keydown', handleKeyDown)
   }
 })
 
 onUnmounted(() => {
   if (getActivePinia()) {
     useUIStore().restoreFocusAfterDeclarative()
-  }
-  if (typeof window !== 'undefined') {
-    window.removeEventListener('keydown', handleKeyDown)
   }
 })
 
@@ -247,7 +246,15 @@ const plugin = computed(() => {
 })
 
 // 当前显示的已安装声明式插件持有会话归属（加密存储、结束进程等需要知道「是哪个插件」的能力依赖它）
-useDeclarativePluginSession(plugin)
+let currentLoadToken = 0
+useDeclarativePluginSession(plugin, {
+  onInvalidated() {
+    currentLoadToken += 1
+    dynamicPlugin.value = null
+    loadingDynamic.value = false
+    loadError.value = '插件已更新或停止，请重新打开'
+  }
+})
 
 // 子页面标题（由声明式视图上报），显示在面包屑插件名之后；根页面为空
 const viewTitle = ref('')
@@ -369,8 +376,6 @@ watch(
   },
   { immediate: true }
 )
-
-let currentLoadToken = 0
 
 watch(
   [targetPluginId, targetFeatureCode],

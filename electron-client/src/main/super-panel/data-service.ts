@@ -1,48 +1,34 @@
-import { spawn } from 'node:child_process'
+import type { Stats } from 'node:fs'
 import fs from 'node:fs/promises'
-import path from 'node:path'
-import { createHash } from 'node:crypto'
+import type { CallerIdentity } from '../../contracts/capabilities.js'
 import type { ConfigService } from '../services/config-service.js'
-import { JsonFileStore, type JsonObject } from '../services/json-file-store.js'
-import { inspectMacApplicationBundle, type MacApplicationBundle } from '../platform/macos/local-application.js'
+import type { JsonObject } from '../services/json-file-store.js'
 import { PluginStateService, type PluginStateProvider } from '../services/plugin-state-service.js'
 import type { SystemToolsListResult, SystemToolsProvider, SystemToolTarget } from '../services/system-tools-service.js'
-import { decodeSuperPanelConfig } from './config.js'
+import {
+  CURRENT_PINNED_SCHEMA_VERSION,
+  MAX_PINNED_ENTRIES,
+  PLUGIN_ID_PATTERN,
+  SYSTEM_TOOL_ID_PATTERN,
+  parsePinnedEntry,
+  parseSuperPanelConfig,
+  resolvePinKey,
+  type PinnedEntry,
+  type SuperPanelConfig
+} from './config.js'
 
-const LOCAL_APPS_FILE = 'local_apps.json'
-const PLUGIN_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/
-const LOCAL_APP_ID_PATTERN = /^localapp:(?:[A-F0-9]{8}|mac:[A-F0-9]{64})$/i
-const MAC_LOCAL_APP_ID_PATTERN = /^localapp:mac:[A-F0-9]{64}$/i
-const MAX_LOCAL_APP_PATH_LENGTH = 32 * 1024
+const FILE_CHECK_CONCURRENCY = 8
+const MAX_FILE_ICON_CACHE = 512
+const MAX_PIN_KEY_LENGTH = 32_800
 
-interface LocalAppBase {
-  id: string
-  name: string
-  arguments: string
-  useCount: number
-  lastUsedAt: string
-}
-
-interface WindowsLocalApp extends LocalAppBase {
-  type: 'windows-exe'
-  exePath: string
-  workingDir: string
-  iconPath: string
-}
-
-interface MacLocalApp extends LocalAppBase {
-  type: 'mac-app-bundle'
-  appPath: string
-  bundleIdentifier: string
-}
-
-type LocalApp = WindowsLocalApp | MacLocalApp
-
-interface SuperPanelDataServiceOptions {
+export interface SuperPanelDataServiceOptions {
   platform?: NodeJS.Platform
-  inspectMacApplicationBundle?: (selectedPath: string, signal?: AbortSignal) => Promise<MacApplicationBundle>
+  pluginState?: PluginStateProvider
+  resolveAuthorizedReadPath?: (rawPath: string, caller?: CallerIdentity) => Promise<string>
+  revealPath?: (fullPath: string) => void | Promise<void>
+  readMacosApplicationIcon?: (appPath: string) => Promise<string>
+  onChanged?: () => void
 }
-const SYSTEM_TOOL_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
@@ -63,21 +49,6 @@ function pluginKeywords(manifest: Record<string, unknown>): string[] {
   ).slice(0, 100)
 }
 
-function localAppId(executable: string): string {
-  const source = `${executable.trim().replaceAll('/', '\\').toLowerCase()}|`
-  let hash = 0x811c9dc5
-  for (let index = 0; index < source.length; index += 1) {
-    hash ^= source.charCodeAt(index)
-    hash = Math.imul(hash, 0x01000193) >>> 0
-  }
-  return `localapp:${hash.toString(16).toUpperCase().padStart(8, '0')}`
-}
-
-function macLocalAppId(appPath: string): string {
-  const digest = createHash('sha256').update(`mac-app-bundle\0${appPath}`, 'utf8').digest('hex').toUpperCase()
-  return `localapp:mac:${digest}`
-}
-
 function pluginState(document: JsonObject, pluginId: string): Record<string, unknown> {
   const value = document[pluginId]
   return isRecord(value) ? value : {}
@@ -85,7 +56,7 @@ function pluginState(document: JsonObject, pluginId: string): Record<string, unk
 
 export interface SuperPanelItem {
   id: string
-  type: 'plugin' | 'local' | 'system_tool'
+  type: 'plugin' | 'system_tool'
   name: string
   description: string
   iconUrl: string
@@ -96,9 +67,49 @@ export interface SuperPanelItem {
   target?: string
 }
 
+export interface ResolvedPinnedEntry {
+  pinKey: string
+  entry: PinnedEntry
+  available: boolean
+  iconUrl?: string
+}
+
 export interface SuperPanelData {
   success: true
   items: SuperPanelItem[]
+  pinnedEntries: ResolvedPinnedEntry[]
+}
+
+export interface SetPinResult {
+  success: true
+  pinned: boolean
+  pinKey: string
+  pinnedEntries: ResolvedPinnedEntry[]
+}
+
+export type ReorderPinsResult =
+  | { success: true; pinnedEntries: ResolvedPinnedEntry[] }
+  | { success: false; stale: true; error: string; pinnedEntries: ResolvedPinnedEntry[] }
+
+async function mapWithConcurrency<T, R>(
+  items: readonly T[],
+  limit: number,
+  worker: (item: T, index: number) => Promise<R>
+): Promise<R[]> {
+  if (items.length === 0) return []
+  const results = new Array<R>(items.length)
+  let nextIndex = 0
+  const workerCount = Math.min(Math.max(1, limit), items.length)
+  await Promise.all(
+    Array.from({ length: workerCount }, async () => {
+      while (nextIndex < items.length) {
+        const currentIndex = nextIndex
+        nextIndex += 1
+        results[currentIndex] = await worker(items[currentIndex]!, currentIndex)
+      }
+    })
+  )
+  return results
 }
 
 /** 悬浮条展示的最近使用插件条数（原超级面板可配，现固定为默认值） */
@@ -110,10 +121,6 @@ interface PluginProvider {
 
 interface OpenPathAdapter {
   (fullPath: string): Promise<string>
-}
-
-interface LaunchProcessAdapter {
-  (fullPath: string, args: readonly string[], workingDir: string): Promise<string>
 }
 
 interface FileIconAdapter {
@@ -156,107 +163,19 @@ function compareRecentUsage(left: PanelItemEntry, right: PanelItemEntry): number
   return left.sourceOrder - right.sourceOrder
 }
 
-function compareLocalUsage(left: PanelItemEntry, right: PanelItemEntry): number {
-  if (left.useCount !== right.useCount) return right.useCount - left.useCount
-  const timestampOrder = right.lastUsedAt.localeCompare(left.lastUsedAt, undefined, { sensitivity: 'base' })
-  if (timestampOrder !== 0) return timestampOrder
-  const nameOrder = left.item.name.localeCompare(right.item.name, undefined, { sensitivity: 'base' })
-  return nameOrder || left.sourceOrder - right.sourceOrder
-}
-
-function parseWindowsArguments(value: string): string[] | null {
-  if (value.includes('\0')) return null
-  const output: string[] = []
-  let current = ''
-  let started = false
-  let quoted = false
-  let index = 0
-  while (index < value.length) {
-    const character = value[index]
-    if ((character === ' ' || character === '\t') && !quoted) {
-      if (started) {
-        output.push(current)
-        current = ''
-        started = false
-      }
-      index += 1
-      continue
-    }
-    started = true
-    if (character === '\\') {
-      let slashCount = 0
-      while (value[index + slashCount] === '\\') slashCount += 1
-      if (value[index + slashCount] === '"') {
-        current += '\\'.repeat(Math.floor(slashCount / 2))
-        index += slashCount
-        if (slashCount % 2 === 1) {
-          current += '"'
-          index += 1
-        } else if (quoted && value[index + 1] === '"') {
-          current += '"'
-          index += 2
-        } else {
-          quoted = !quoted
-          index += 1
-        }
-      } else {
-        current += '\\'.repeat(slashCount)
-        index += slashCount
-      }
-      continue
-    }
-    if (character === '"') {
-      if (quoted && value[index + 1] === '"') {
-        current += '"'
-        index += 2
-      } else {
-        quoted = !quoted
-        index += 1
-      }
-      continue
-    }
-    current += character
-    index += 1
-  }
-  if (started) output.push(current)
-  return output
-}
-
-function launchLocalProcess(
-  fullPath: string,
-  args: readonly string[],
-  workingDir: string
-): Promise<string> {
-  return new Promise((resolve) => {
-    let settled = false
-    const finish = (message: string) => {
-      if (settled) return
-      settled = true
-      resolve(message)
-    }
-    try {
-      const child = spawn(fullPath, [...args], {
-        cwd: workingDir,
-        detached: true,
-        shell: false,
-        stdio: 'ignore'
-      })
-      child.once('error', (error) => finish(error instanceof Error ? error.message : '启动失败'))
-      child.once('spawn', () => {
-        child.unref()
-        finish('')
-      })
-    } catch (error) {
-      finish(error instanceof Error ? error.message : '启动失败')
-    }
-  })
+interface LoadedSuperPanelState {
+  source: Record<string, unknown>
+  config: SuperPanelConfig
 }
 
 export class SuperPanelDataService {
-  readonly #store: JsonFileStore
   readonly #platform: NodeJS.Platform
-  readonly #inspectMacApplicationBundle: (selectedPath: string, signal?: AbortSignal) => Promise<MacApplicationBundle>
-  readonly #lifetimeController = new AbortController()
+  readonly #resolveAuthorizedReadPath: ((rawPath: string, caller?: CallerIdentity) => Promise<string>) | undefined
+  readonly #revealPath: ((fullPath: string) => void | Promise<void>) | undefined
+  readonly #readMacosApplicationIcon: ((appPath: string) => Promise<string>) | undefined
+  readonly #onChanged: (() => void) | undefined
+  readonly #fileIconCache = new Map<string, string>()
+  #configWriteQueue: Promise<void> = Promise.resolve()
   #stopped = false
 
   constructor(
@@ -265,35 +184,43 @@ export class SuperPanelDataService {
     private readonly getPlugins: PluginProvider,
     private readonly openPath: OpenPathAdapter,
     optionsOrState: SuperPanelDataServiceOptions | PluginStateProvider = {},
-    private readonly launchProcess: LaunchProcessAdapter = launchLocalProcess,
     private readonly getFileIcon?: FileIconAdapter,
-    private readonly systemTools?: SystemToolsProvider
+    private readonly systemTools?: SystemToolsProvider,
+    extraOptions?: SuperPanelDataServiceOptions
   ) {
-    this.#store = new JsonFileStore(dataRoot, new Set([LOCAL_APPS_FILE]))
-    const options = 'readAll' in optionsOrState ? {} : optionsOrState
-    this.#pluginState = 'readAll' in optionsOrState ? optionsOrState : new PluginStateService(dataRoot)
+    const hasProvider = 'readAll' in optionsOrState
+    const options: SuperPanelDataServiceOptions = hasProvider
+      ? (extraOptions ?? {})
+      : { ...optionsOrState, ...extraOptions }
+    this.#pluginState = hasProvider
+      ? optionsOrState
+      : (options.pluginState ?? new PluginStateService(dataRoot))
     this.#platform = options.platform ?? process.platform
-    this.#inspectMacApplicationBundle = options.inspectMacApplicationBundle ?? inspectMacApplicationBundle
-
+    this.#resolveAuthorizedReadPath = options.resolveAuthorizedReadPath
+    this.#revealPath = options.revealPath
+    this.#readMacosApplicationIcon = options.readMacosApplicationIcon
+    this.#onChanged = options.onChanged
   }
 
   stop(): void {
     if (this.#stopped) return
     this.#stopped = true
-    this.#lifetimeController.abort()
+    this.#fileIconCache.clear()
   }
 
   readonly #pluginState: PluginStateProvider
 
   async getData(): Promise<SuperPanelData> {
-    const [configuration, state, localDocument, pluginResult, systemTools] = await Promise.all([
-      this.#readConfiguration(),
+    const [configuration, state, pluginResult, systemTools] = await Promise.all([
+      this.#ensureMigratedConfiguration(),
       this.#pluginState.readAll(),
-      this.#store.read(LOCAL_APPS_FILE),
       this.getPlugins(),
       this.#readSystemTools()
     ])
-    const pinnedLocalApps = new Set(configuration.pinnedLocalApps)
+    const pinnedPluginIds = new Set<string>()
+    for (const entry of configuration.pinnedEntries) {
+      if (entry.kind === 'plugin') pinnedPluginIds.add(entry.pluginId)
+    }
     const pluginItems: PanelItemEntry[] = []
     for (const manifest of pluginResult.data.slice(0, 1000)) {
       const id = stringValue(manifest.id, 128)
@@ -304,7 +231,7 @@ export class SuperPanelDataService {
         ? currentState.enabled
         : manifest.enabled !== false
       if (!enabled) continue
-      const pinned = currentState.pinned === true
+      const pinned = pinnedPluginIds.has(id)
       const lastUsedAt = stringValue(currentState.last_used_at, 128)
       const recent = lastUsedAt !== ''
       const iconUrl = stringValue(currentState.icon_url, 32 * 1024)
@@ -326,28 +253,6 @@ export class SuperPanelDataService {
         sourceOrder: pluginItems.length
       })
     }
-    const localItems: PanelItemEntry[] = await Promise.all(this.#readLocalApps(localDocument).map(async (app, sourceOrder) => {
-      const pinned = pinnedLocalApps.has(app.id)
-      const recent = app.useCount > 0
-      return {
-        item: {
-          id: app.id,
-          type: 'local',
-          name: app.name,
-          description: app.type === 'mac-app-bundle' ? app.appPath : app.exePath,
-          iconUrl: app.type === 'windows-exe' ? await this.#readLocalIcon(app) : '',
-          keywords: [],
-          pinned,
-          recent,
-          common: pinned || recent
-        },
-        useCount: app.useCount,
-        lastUsedAt: app.lastUsedAt,
-        lastUsedTimestamp: usageTimestamp(app.lastUsedAt),
-        sourceOrder
-      }
-    }))
-    localItems.sort(compareLocalUsage)
     const recentLimit = RECENT_PLUGIN_LIMIT
     const orderedPlugins = [
       ...pluginItems.filter(({ item }) => item.pinned),
@@ -357,200 +262,165 @@ export class SuperPanelDataService {
         .slice(0, recentLimit),
       ...pluginItems.filter(({ item, lastUsedTimestamp }) => !item.pinned && lastUsedTimestamp === null)
     ].map(({ item }) => item)
+    const pinnedEntries = await this.#resolvePinnedEntries(configuration.pinnedEntries)
     return {
       success: true,
-      items: [...orderedPlugins, ...localItems.map(({ item }) => item), ...systemTools]
+      items: [...orderedPlugins, ...systemTools],
+      pinnedEntries
     }
   }
 
-  async getPanelLocalApps(): Promise<Array<{ id: string; name: string }>> {
-    const document = await this.#store.read(LOCAL_APPS_FILE)
-    return this.#readLocalApps(document)
-      .filter((app): app is WindowsLocalApp => app.type === 'windows-exe')
-      .map(({ id, name }) => ({ id, name }))
+  async setPin(entryInput: unknown, pinned: unknown, caller?: CallerIdentity): Promise<SetPinResult> {
+    this.#assertActive()
+    if (typeof pinned !== 'boolean') {
+      throw new Error('pinned 参数必须为布尔值')
+    }
+    const parsedEntry = parsePinnedEntry(entryInput, this.#platform)
+    if (!parsedEntry) {
+      throw new Error('固定项格式无效')
+    }
+
+    let targetEntry: PinnedEntry = parsedEntry
+    if (pinned && parsedEntry.kind === 'file') {
+      targetEntry = await this.#authorizeAndNormalizePinnedFile(parsedEntry, caller)
+    }
+
+    return this.#enqueueConfigWrite(async () => {
+      const state = await this.#loadMigratedStateInLock()
+      return this.#applySetPinInLock(state, targetEntry, pinned)
+    })
+  }
+
+  async reorderPins(order: unknown): Promise<ReorderPinsResult> {
+    this.#assertActive()
+    if (!Array.isArray(order) || order.length > MAX_PINNED_ENTRIES) {
+      throw new Error('固定排序列表无效')
+    }
+    const normalizedOrder: string[] = []
+    const seen = new Set<string>()
+    for (const item of order) {
+      if (typeof item !== 'string' || item.length === 0 || item.length > MAX_PIN_KEY_LENGTH || item.includes('\0')) {
+        throw new Error('固定排序列表无效')
+      }
+      if (seen.has(item)) {
+        throw new Error('固定排序列表包含重复项')
+      }
+      seen.add(item)
+      normalizedOrder.push(item)
+    }
+
+    return this.#enqueueConfigWrite(async () => {
+      const state = await this.#loadMigratedStateInLock()
+      const currentEntries = state.config.pinnedEntries
+      const entryByKey = new Map<string, PinnedEntry>()
+      for (const entry of currentEntries) {
+        entryByKey.set(resolvePinKey(entry, this.#platform), entry)
+      }
+
+      const matchesSet =
+        normalizedOrder.length === entryByKey.size &&
+        normalizedOrder.every((key) => entryByKey.has(key))
+
+      if (!matchesSet) {
+        return {
+          success: false,
+          stale: true,
+          error: '固定列表已变化，请重试',
+          pinnedEntries: await this.#resolvePinnedEntries(currentEntries)
+        }
+      }
+
+      const nextEntries = normalizedOrder.map((key) => entryByKey.get(key)!)
+      const nextSource: Record<string, unknown> = {
+        ...state.source,
+        pinnedSchemaVersion: CURRENT_PINNED_SCHEMA_VERSION,
+        pinnedEntries: nextEntries
+      }
+      delete nextSource.pinnedLocalApps
+      await this.config.set('user_settings.json', 'super_panel', JSON.stringify(nextSource), false)
+      this.#notifyChanged()
+      return {
+        success: true,
+        pinnedEntries: await this.#resolvePinnedEntries(nextEntries)
+      }
+    })
   }
 
   async togglePin(id: string, itemType: string): Promise<boolean> {
-    if (itemType === 'local') {
-      if (!LOCAL_APP_ID_PATTERN.test(id)) throw new Error('本地软件 ID 无效')
-      const raw = await this.config.get('user_settings.json', 'super_panel', {})
-      let source: Record<string, unknown> = {}
-      try {
-        const parsed: unknown = JSON.parse(raw)
-        if (isRecord(parsed)) source = parsed
-      } catch {
-        // A damaged group is replaced by the validated defaults below.
-      }
-      const configuration = decodeSuperPanelConfig(JSON.stringify(source))
-      const pinned = new Set(configuration.pinnedLocalApps)
-      const nextPinned = !pinned.has(id)
-      if (nextPinned) pinned.add(id)
-      else pinned.delete(id)
-      source.pinnedLocalApps = [...pinned]
-      await this.config.set('user_settings.json', 'super_panel', JSON.stringify(source), false)
+    this.#assertActive()
+    if (itemType !== 'plugin') {
+      throw new Error('不支持的项目类型')
+    }
+    if (!PLUGIN_ID_PATTERN.test(id)) throw new Error('插件 ID 无效')
+    const entry: PinnedEntry = { kind: 'plugin', pluginId: id }
+
+    return this.#enqueueConfigWrite(async () => {
+      const state = await this.#loadMigratedStateInLock()
+      const pinKey = resolvePinKey(entry, this.#platform)
+      const currentlyPinned = state.config.pinnedEntries.some(
+        (item) => resolvePinKey(item, this.#platform) === pinKey
+      )
+      const nextPinned = !currentlyPinned
+      await this.#applySetPinInLock(state, entry, nextPinned)
       return nextPinned
-    }
-    if (itemType !== 'plugin' || !PLUGIN_ID_PATTERN.test(id)) throw new Error('插件 ID 无效')
-    let pinned = false
-    await this.#pluginState.update(id, (current) => {
-      pinned = current.pinned !== true
-      current.pinned = pinned
-      current.updated_at = new Date().toISOString()
     })
-    return pinned
   }
 
-  async addLocalApps(paths: readonly string[]): Promise<number> {
+  async openPinnedFile(pinKey: string, action: 'open' | 'reveal' = 'open'): Promise<void> {
     this.#assertActive()
-    const additions: Array<Record<string, unknown>> = []
-    for (const selected of paths.slice(0, 32)) {
-      this.#assertActive()
-      if (this.#platform === 'darwin') {
-        let application: MacApplicationBundle
-        try {
-          application = await this.#inspectMacApplicationBundle(selected, this.#lifetimeController.signal)
-        } catch {
-          this.#assertActive()
-          continue
-        }
-        this.#assertActive()
-        if (
-          application.appPath.length > MAX_LOCAL_APP_PATH_LENGTH ||
-          !path.posix.isAbsolute(application.appPath) ||
-          path.posix.normalize(application.appPath) !== application.appPath ||
-          path.posix.extname(application.appPath).toLowerCase() !== '.app' ||
-          !isBundleIdentifier(application.bundleIdentifier)
-        ) continue
-        const name = path.posix.basename(application.appPath).replace(/\.app$/i, '')
-        if (!name || name.length > 256) continue
-        additions.push({
-          id: macLocalAppId(application.appPath),
-          type: 'mac-app-bundle',
-          name,
-          appPath: application.appPath,
-          bundleIdentifier: application.bundleIdentifier,
-          source: 'manual',
-          panelEnabled: true,
-          useCount: 0,
-          lastUsedAt: '',
-          addedAt: new Date().toISOString()
-        })
-      } else {
-        if (!path.isAbsolute(selected) || selected.includes('\0') || path.extname(selected).toLowerCase() !== '.exe') continue
-        const realPath = await fs.realpath(selected).catch(() => '')
-        this.#assertActive()
-        if (!realPath || path.extname(realPath).toLowerCase() !== '.exe') continue
-        const stat = await fs.lstat(realPath).catch(() => undefined)
-        this.#assertActive()
-        if (!stat?.isFile() || stat.isSymbolicLink()) continue
-        additions.push({
-          id: localAppId(realPath),
-          name: path.basename(realPath, path.extname(realPath)),
-          exePath: realPath,
-          arguments: '',
-          workingDir: path.dirname(realPath),
-          iconPath: realPath,
-          publisher: '',
-          version: '',
-          source: 'manual',
-          panelEnabled: true,
-          useCount: 0,
-          lastUsedAt: '',
-          addedAt: new Date().toISOString()
-        })
-      }
+    if (
+      typeof pinKey !== 'string' ||
+      !pinKey.startsWith('file:') ||
+      pinKey.length > MAX_PIN_KEY_LENGTH ||
+      pinKey.includes('\0')
+    ) {
+      throw new Error('固定项目标不存在或已失效')
     }
-    if (additions.length === 0) return 0
-    this.#assertActive()
-    let added = 0
-    await this.#store.update(LOCAL_APPS_FILE, (document) => {
-      this.#assertActive()
-      const apps: unknown[] = Array.isArray(document.apps) ? document.apps : []
-      const indexes = new Map<string, number>()
-      apps.slice(0, 1000).forEach((item, index) => {
-        if (isRecord(item) && typeof item.id === 'string') indexes.set(item.id.toLowerCase(), index)
-      })
-      for (const addition of additions) {
-        const id = addition.id as string
-        const existingIndex = indexes.get(id.toLowerCase())
-        if (existingIndex === undefined) {
-          if (apps.length >= 1000) continue
-          indexes.set(id.toLowerCase(), apps.length)
-          apps.push(addition)
-          added += 1
-        } else {
-          const existing = apps[existingIndex]
-          if (!isRecord(existing)) continue
-          if (
-            addition.type === 'mac-app-bundle' &&
-            (existing.type !== 'mac-app-bundle' || existing.appPath !== addition.appPath)
-          ) {
-            throw new Error('本地软件 ID 冲突，拒绝覆盖已有应用')
-          }
-          apps[existingIndex] = { ...existing, ...addition, panelEnabled: true }
-        }
-      }
-      document.apps = apps
-    })
-    this.#assertActive()
-    return added
-  }
+    if (action !== 'open' && action !== 'reveal') {
+      throw new Error('固定项打开动作无效')
+    }
 
-  async launchLocalApp(id: string): Promise<void> {
+    const configuration = await this.#ensureMigratedConfiguration()
     this.#assertActive()
-    if (!LOCAL_APP_ID_PATTERN.test(id)) throw new Error('本地软件 ID 无效')
-    const document = await this.#store.read(LOCAL_APPS_FILE)
+    const targetEntry = configuration.pinnedEntries.find(
+      (entry): entry is Extract<PinnedEntry, { kind: 'file' }> =>
+        entry.kind === 'file' && resolvePinKey(entry, this.#platform) === pinKey
+    )
+    if (!targetEntry) {
+      throw new Error('固定项目标不存在或已失效')
+    }
+
+    const lstatResult = await fs.lstat(targetEntry.path).catch(() => undefined)
     this.#assertActive()
-    const app = this.#readLocalApps(document).find((item) => item.id.toLowerCase() === id.toLowerCase())
-    if (!app) throw new Error('本地软件不存在或不受当前平台支持')
-    if (app.type === 'mac-app-bundle') {
-      const application = await this.#inspectMacApplicationBundle(app.appPath, this.#lifetimeController.signal)
-      this.#assertActive()
-      if (application.appPath !== app.appPath || application.bundleIdentifier !== app.bundleIdentifier) {
-        throw new Error('macOS 应用身份已变化')
+    if (!lstatResult || lstatResult.isSymbolicLink()) {
+      throw new Error('固定项目标不存在或已失效')
+    }
+    const realPath = await fs.realpath(targetEntry.path).catch(() => '')
+    this.#assertActive()
+    if (!realPath) {
+      throw new Error('固定项目标不存在或已失效')
+    }
+    const realStat = await fs.lstat(realPath).catch(() => undefined)
+    this.#assertActive()
+    if (!realStat || realStat.isSymbolicLink() || (!realStat.isFile() && !realStat.isDirectory())) {
+      throw new Error('固定项目标不存在或已失效')
+    }
+
+    if (action === 'reveal') {
+      if (realStat.isDirectory()) {
+        const result = await this.openPath(realPath)
+        if (result !== '') throw new Error(result)
+        return
       }
-      this.#assertActive()
-      const result = await this.openPath(application.appPath)
-      this.#assertActive()
-      if (result !== '') throw new Error(result)
-      await this.#incrementLocalAppUsage(id)
+      if (!this.#revealPath) {
+        throw new Error('文件定位能力不可用')
+      }
+      await this.#revealPath(realPath)
       return
     }
-    const args = parseWindowsArguments(app.arguments)
-    if (!args) throw new Error('本地软件参数无效')
-    const realPath = await fs.realpath(app.exePath).catch(() => '')
-    this.#assertActive()
-    if (!realPath || path.extname(realPath).toLowerCase() !== '.exe') throw new Error('本地软件路径无效')
-    this.#assertActive()
-    let workingDir = path.dirname(realPath)
-    if (app.workingDir) {
-      const candidate = await fs.realpath(app.workingDir).catch(() => '')
-      const stats = candidate ? await fs.stat(candidate).catch(() => undefined) : undefined
-      if (stats?.isDirectory()) workingDir = candidate
-    }
-    this.#assertActive()
-    const result = args.length === 0
-      ? await this.openPath(realPath)
-      : await this.launchProcess(realPath, args, workingDir)
-    this.#assertActive()
-    if (result !== '') throw new Error(result)
-    await this.#incrementLocalAppUsage(id)
-  }
 
-  async #incrementLocalAppUsage(id: string): Promise<void> {
-    this.#assertActive()
-    await this.#store.update(LOCAL_APPS_FILE, (nextDocument) => {
-      this.#assertActive()
-      if (!Array.isArray(nextDocument.apps)) return
-      const target = nextDocument.apps.find((item) =>
-        isRecord(item) && typeof item.id === 'string' && item.id.toLowerCase() === id.toLowerCase()
-      )
-      if (!isRecord(target)) return
-      const useCount = usageCount(target.useCount)
-      target.useCount = Math.min(useCount + 1, Number.MAX_SAFE_INTEGER)
-      target.lastUsedAt = new Date().toISOString()
-    })
-    this.#assertActive()
+    const result = await this.openPath(realPath)
+    if (result !== '') throw new Error(result)
   }
 
   #assertActive(): void {
@@ -609,92 +479,243 @@ export class SuperPanelDataService {
     }
   }
 
-  async #readLocalIcon(app: { exePath: string; iconPath: string }): Promise<string> {
-    if (!this.getFileIcon) return ''
-    const source = app.iconPath || app.exePath
-    const realPath = await fs.realpath(source).catch(() => '')
-    if (!realPath) return ''
-    const stat = await fs.lstat(realPath).catch(() => undefined)
-    if (!stat?.isFile() || stat.isSymbolicLink()) return ''
+  #enqueueConfigWrite<T>(task: () => Promise<T>): Promise<T> {
+    this.#assertActive()
+    const next = this.#configWriteQueue.then(async () => {
+      this.#assertActive()
+      return task()
+    })
+    this.#configWriteQueue = next.then(() => undefined, () => undefined)
+    return next
+  }
+
+  async #readRawSuperPanelState(): Promise<LoadedSuperPanelState> {
+    const raw = await this.config.get('user_settings.json', 'super_panel', {})
+    let source: Record<string, unknown> = {}
     try {
-      return iconDataUrl(await this.getFileIcon(realPath))
+      const parsed: unknown = JSON.parse(raw)
+      if (isRecord(parsed)) source = parsed
     } catch {
+      // 损坏的 super_panel 分组由 parseSuperPanelConfig 安全回退为默认值
+    }
+    return {
+      source,
+      config: parseSuperPanelConfig(source, this.#platform)
+    }
+  }
+
+  async #ensureMigratedConfiguration(): Promise<SuperPanelConfig> {
+    const loaded = await this.#readRawSuperPanelState()
+    if (loaded.config.pinnedSchemaVersion === CURRENT_PINNED_SCHEMA_VERSION) {
+      return loaded.config
+    }
+    const migrated = await this.#enqueueConfigWrite(() => this.#loadMigratedStateInLock())
+    return migrated.config
+  }
+
+  async #loadMigratedStateInLock(): Promise<LoadedSuperPanelState> {
+    const loaded = await this.#readRawSuperPanelState()
+    if (loaded.config.pinnedSchemaVersion === CURRENT_PINNED_SCHEMA_VERSION) {
+      return loaded
+    }
+
+    const pluginDoc = await this.#pluginState.readAll()
+    const candidates: PinnedEntry[] = []
+    for (const [pluginId, rawState] of Object.entries(pluginDoc)) {
+      if (
+        isRecord(rawState) &&
+        rawState.pinned === true &&
+        PLUGIN_ID_PATTERN.test(pluginId)
+      ) {
+        candidates.push({ kind: 'plugin', pluginId })
+      }
+    }
+    for (const entry of loaded.config.pinnedEntries) {
+      candidates.push(entry)
+    }
+
+    const mergedEntries: PinnedEntry[] = []
+    const seenKeys = new Set<string>()
+    for (const entry of candidates) {
+      const key = resolvePinKey(entry, this.#platform)
+      if (seenKeys.has(key)) continue
+      seenKeys.add(key)
+      mergedEntries.push(entry)
+      if (mergedEntries.length >= MAX_PINNED_ENTRIES) break
+    }
+
+    const nextSource: Record<string, unknown> = {
+      ...loaded.source,
+      pinnedSchemaVersion: CURRENT_PINNED_SCHEMA_VERSION,
+      pinnedEntries: mergedEntries
+    }
+    delete nextSource.pinnedLocalApps
+    await this.config.set('user_settings.json', 'super_panel', JSON.stringify(nextSource), false)
+    return {
+      source: nextSource,
+      config: {
+        pinnedSchemaVersion: CURRENT_PINNED_SCHEMA_VERSION,
+        pinnedEntries: mergedEntries
+      }
+    }
+  }
+
+  async #authorizeAndNormalizePinnedFile(
+    entry: Extract<PinnedEntry, { kind: 'file' }>,
+    caller?: CallerIdentity
+  ): Promise<Extract<PinnedEntry, { kind: 'file' }>> {
+    if (!this.#resolveAuthorizedReadPath) {
+      throw new Error('文件读权限校验器未配置')
+    }
+    const authorizedPath = await this.#resolveAuthorizedReadPath(entry.path, caller)
+    this.#assertActive()
+    const inputStat = await fs.lstat(entry.path).catch(() => undefined)
+    this.#assertActive()
+    if (!inputStat || inputStat.isSymbolicLink()) {
+      throw new Error('不允许固定符号链接或无效路径')
+    }
+    const realPath = await fs.realpath(authorizedPath).catch(() => '')
+    this.#assertActive()
+    if (!realPath) {
+      throw new Error('目标文件或目录不存在')
+    }
+    const realStat = await fs.lstat(realPath).catch(() => undefined)
+    this.#assertActive()
+    if (!realStat || realStat.isSymbolicLink() || (!realStat.isFile() && !realStat.isDirectory())) {
+      throw new Error('目标不是普通文件或目录')
+    }
+    return { ...entry, path: realPath }
+  }
+
+  async #applySetPinInLock(
+    state: LoadedSuperPanelState,
+    entry: PinnedEntry,
+    pinned: boolean
+  ): Promise<SetPinResult> {
+    const pinKey = resolvePinKey(entry, this.#platform)
+    const currentEntries = state.config.pinnedEntries
+    const exists = currentEntries.some((item) => resolvePinKey(item, this.#platform) === pinKey)
+
+    if (pinned) {
+      if (exists) {
+        return {
+          success: true,
+          pinned: true,
+          pinKey,
+          pinnedEntries: await this.#resolvePinnedEntries(currentEntries)
+        }
+      }
+      if (currentEntries.length >= MAX_PINNED_ENTRIES) {
+        throw new Error('固定数量已达上限')
+      }
+      const nextEntries = [...currentEntries, entry]
+      const nextSource: Record<string, unknown> = {
+        ...state.source,
+        pinnedSchemaVersion: CURRENT_PINNED_SCHEMA_VERSION,
+        pinnedEntries: nextEntries
+      }
+      delete nextSource.pinnedLocalApps
+      await this.config.set('user_settings.json', 'super_panel', JSON.stringify(nextSource), false)
+      if (entry.kind === 'plugin') {
+        await this.#pluginState.update(entry.pluginId, (current) => {
+          current.pinned = true
+          current.updated_at = new Date().toISOString()
+        })
+      }
+      this.#notifyChanged()
+      return {
+        success: true,
+        pinned: true,
+        pinKey,
+        pinnedEntries: await this.#resolvePinnedEntries(nextEntries)
+      }
+    }
+
+    const nextEntries = currentEntries.filter((item) => resolvePinKey(item, this.#platform) !== pinKey)
+    const removed = nextEntries.length !== currentEntries.length
+    const nextSource: Record<string, unknown> = {
+      ...state.source,
+      pinnedSchemaVersion: CURRENT_PINNED_SCHEMA_VERSION,
+      pinnedEntries: nextEntries
+    }
+    delete nextSource.pinnedLocalApps
+    if (removed) {
+      await this.config.set('user_settings.json', 'super_panel', JSON.stringify(nextSource), false)
+    }
+    if (entry.kind === 'plugin' && removed) {
+      await this.#pluginState.update(entry.pluginId, (current) => {
+        current.pinned = false
+        current.updated_at = new Date().toISOString()
+      })
+    }
+    if (removed) {
+      this.#notifyChanged()
+    }
+    return {
+      success: true,
+      pinned: false,
+      pinKey,
+      pinnedEntries: await this.#resolvePinnedEntries(nextEntries)
+    }
+  }
+
+  async #resolvePinnedEntries(entries: readonly PinnedEntry[]): Promise<ResolvedPinnedEntry[]> {
+    return mapWithConcurrency(entries, FILE_CHECK_CONCURRENCY, async (entry): Promise<ResolvedPinnedEntry> => {
+      const pinKey = resolvePinKey(entry, this.#platform)
+      if (entry.kind !== 'file') {
+        return { pinKey, entry, available: true }
+      }
+      let stat: Stats | undefined
+      try {
+        stat = await fs.lstat(entry.path)
+      } catch {
+        return { pinKey, entry, available: false }
+      }
+      const available = !stat.isSymbolicLink() && (stat.isFile() || stat.isDirectory())
+      if (!available) {
+        return { pinKey, entry, available: false }
+      }
+      if (!entry.isApplication) {
+        return { pinKey, entry, available: true }
+      }
+      const iconUrl = await this.#readPinnedFileIcon(pinKey, entry.path, stat.mtimeMs)
+      return iconUrl ? { pinKey, entry, available: true, iconUrl } : { pinKey, entry, available: true }
+    })
+  }
+
+  async #readPinnedFileIcon(pinKey: string, filePath: string, mtimeMs: number): Promise<string> {
+    const cacheKey = `${pinKey}:${mtimeMs}`
+    const cached = this.#fileIconCache.get(cacheKey)
+    if (cached !== undefined) {
+      this.#fileIconCache.delete(cacheKey)
+      this.#fileIconCache.set(cacheKey, cached)
+      return cached
+    }
+    try {
+      const rawIcon = this.#platform === 'darwin' && filePath.toLowerCase().endsWith('.app')
+        ? await (this.#readMacosApplicationIcon?.(filePath) ?? this.getFileIcon?.(filePath) ?? Promise.resolve(''))
+        : await (this.getFileIcon?.(filePath) ?? Promise.resolve(''))
+      const validated = iconDataUrl(rawIcon)
+      if (!validated) return ''
+      if (this.#fileIconCache.size >= MAX_FILE_ICON_CACHE) {
+        const oldest = this.#fileIconCache.keys().next().value
+        if (oldest !== undefined) this.#fileIconCache.delete(oldest)
+      }
+      this.#fileIconCache.set(cacheKey, validated)
+      return validated
+    } catch (error) {
+      console.warn('读取固定应用图标失败:', error instanceof Error ? error.message : String(error))
       return ''
     }
   }
 
-  async #readConfiguration() {
-    const raw = await this.config.get('user_settings.json', 'super_panel', {})
-    return decodeSuperPanelConfig(raw)
-  }
-
-  #readLocalApps(document: JsonObject): LocalApp[] {
-    if (!Array.isArray(document.apps)) return []
-    const output: LocalApp[] = []
-    for (const value of document.apps.slice(0, 1000)) {
-      if (!isRecord(value) || value.panelEnabled === false) continue
-      const id = stringValue(value.id, 128)
-      const name = stringValue(value.name, 256)
-      const useCount = Number.isSafeInteger(value.useCount) && (value.useCount as number) >= 0
-        ? value.useCount as number
-        : 0
-      if (
-        this.#platform === 'darwin' &&
-        value.type === 'mac-app-bundle' &&
-        MAC_LOCAL_APP_ID_PATTERN.test(id)
-      ) {
-        const appPath = stringValue(value.appPath, MAX_LOCAL_APP_PATH_LENGTH)
-        const bundleIdentifier = stringValue(value.bundleIdentifier, 255)
-        if (
-          !name ||
-          !path.posix.isAbsolute(appPath) ||
-          path.posix.normalize(appPath) !== appPath ||
-          path.posix.extname(appPath).toLowerCase() !== '.app' ||
-          id.toLowerCase() !== macLocalAppId(appPath).toLowerCase() ||
-          !isBundleIdentifier(bundleIdentifier) ||
-          value.arguments !== undefined
-        ) continue
-        output.push({
-          id,
-          name,
-          type: 'mac-app-bundle',
-          appPath,
-          bundleIdentifier,
-          arguments: '',
-          lastUsedAt: stringValue(value.lastUsedAt, 128),
-          useCount
-        })
-        continue
-      }
-
-      const isLegacyWindowsApp = value.type === undefined
-      if (
-        this.#platform === 'win32' &&
-        (value.type === 'windows-exe' || isLegacyWindowsApp) &&
-        LOCAL_APP_ID_PATTERN.test(id) &&
-        !MAC_LOCAL_APP_ID_PATTERN.test(id)
-      ) {
-        const exePath = stringValue(value.exePath, MAX_LOCAL_APP_PATH_LENGTH)
-        if (!name || !path.isAbsolute(exePath)) continue
-        output.push({
-          id,
-          name,
-          type: 'windows-exe',
-          exePath,
-          workingDir: path.isAbsolute(stringValue(value.workingDir, MAX_LOCAL_APP_PATH_LENGTH)) ? stringValue(value.workingDir, MAX_LOCAL_APP_PATH_LENGTH) : '',
-          iconPath: path.isAbsolute(stringValue(value.iconPath, MAX_LOCAL_APP_PATH_LENGTH)) ? stringValue(value.iconPath, MAX_LOCAL_APP_PATH_LENGTH) : exePath,
-          lastUsedAt: stringValue(value.lastUsedAt, 128),
-          arguments: stringValue(value.arguments, 4096),
-          useCount
-        })
-      }
+  #notifyChanged(): void {
+    try {
+      this.#onChanged?.()
+    } catch (error) {
+      console.warn('通知悬浮条固定变更失败:', error instanceof Error ? error.message : String(error))
     }
-    return output
   }
-}
-
-function isBundleIdentifier(value: string): boolean {
-  return /^[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?(?:\.[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?)+$/.test(value)
 }
 
 function systemToolCategoryKeywords(category: string): string[] {

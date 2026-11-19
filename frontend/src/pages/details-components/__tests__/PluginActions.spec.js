@@ -49,12 +49,29 @@ describe('插件详情操作菜单', () => {
     expect(wrapper.emitted('uninstall')).toHaveLength(1)
   })
 
-  it('已绑定快捷键时菜单项显示「修改快捷键」并在右侧列出当前组合键；点击发出 set-hotkey', async () => {
-    const wrapper = mount(PluginActions, { props: { isInstalled: true, hotkeyText: '⌘⇧M' }, global: { stubs } })
-    const item = wrapper.findAll('.rc-menu-item').find((el) => el.text().includes('修改快捷键'))
-    expect(item.find('.rc-menu-hint').text()).toBe('⌘⇧M')
-    await item.trigger('click')
-    expect(wrapper.emitted('set-hotkey')).toHaveLength(1)
+  it('已绑定快捷键时菜单项显示「修改快捷键」并在右侧按平台渲染组合键帽；点击发出 set-hotkey', async () => {
+    const winWrapper = mount(PluginActions, {
+      props: { isInstalled: true, hotkeyText: 'Ctrl+Shift+M' },
+      global: { stubs }
+    })
+    const winItem = winWrapper.findAll('.rc-menu-item').find((el) => el.text().includes('修改快捷键'))
+    expect(winItem.findAll('kbd').map((k) => k.text())).toEqual(['Ctrl', 'Shift', 'M'])
+    await winItem.trigger('click')
+    expect(winWrapper.emitted('set-hotkey')).toHaveLength(1)
+    winWrapper.unmount()
+
+    globalThis.__ZTOOLS_PLATFORM_OVERRIDE__ = 'darwin'
+    try {
+      const macWrapper = mount(PluginActions, {
+        props: { isInstalled: true, hotkeyText: 'Ctrl+Shift+M' },
+        global: { stubs }
+      })
+      const macItem = macWrapper.findAll('.rc-menu-item').find((el) => el.text().includes('修改快捷键'))
+      expect(macItem.findAll('kbd').map((k) => k.text())).toEqual(['⌘', '⇧', 'M'])
+      macWrapper.unmount()
+    } finally {
+      delete globalThis.__ZTOOLS_PLATFORM_OVERRIDE__
+    }
   })
 
   it('正在生成桌面快捷方式时该项禁用，点击不会重复发出事件', async () => {

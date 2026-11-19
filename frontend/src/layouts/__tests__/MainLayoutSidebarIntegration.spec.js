@@ -145,7 +145,7 @@ describe('方案 A 架构：MainLayout 与通透侧边栏端到端集成测试',
     wrapper.unmount()
   })
 
-  it('2. [快捷键] Ctrl+B / Cmd+B 切换侧栏收起与展开状态', async () => {
+  it('2. [快捷键] Windows Ctrl+B 切换侧栏且忽略孤立 Meta+B；macOS ⌘B 切换且物理 ⌃B 不误触发', async () => {
     const wrapper = mount(MainLayout, {
       global: {
         plugins: [pinia, router],
@@ -157,13 +157,30 @@ describe('方案 A 架构：MainLayout 与通透侧边栏端到端集成测试',
     })
     await flushPromises()
 
+    // Windows 下 Ctrl+B 切换收起，独立 Meta+B 不走已清理的 Cmd+B 死分支
     dispatchKeyEvent(new KeyboardEvent('keydown', { key: 'b', ctrlKey: true }))
     await flushPromises()
     expect(wrapper.find('aside.sidebar-root').classes()).toContain('is-collapsed')
 
     dispatchKeyEvent(new KeyboardEvent('keydown', { key: 'b', metaKey: true }))
     await flushPromises()
-    expect(wrapper.find('aside.sidebar-root').classes()).not.toContain('is-collapsed')
+    expect(wrapper.find('aside.sidebar-root').classes()).toContain('is-collapsed')
+
+    // macOS 下 ⌘B(metaKey) 归一化为 Ctrl+B 切换展开，物理 ⌃B(ctrlKey) 归一化为 Control+B 不误触发
+    globalThis.__ZTOOLS_PLATFORM_OVERRIDE__ = 'darwin'
+    try {
+      dispatchKeyEvent(new KeyboardEvent('keydown', { key: 'b', ctrlKey: true }))
+      await flushPromises()
+      expect(wrapper.find('aside.sidebar-root').classes()).toContain('is-collapsed')
+
+      dispatchKeyEvent(new KeyboardEvent('keydown', { key: 'b', metaKey: true }))
+      await flushPromises()
+      expect(wrapper.find('aside.sidebar-root').classes()).not.toContain('is-collapsed')
+    } finally {
+      delete globalThis.__ZTOOLS_PLATFORM_OVERRIDE__
+    }
+
+    wrapper.unmount()
   })
 
   it('4. [Beyond Happy Path 异常容错] 非法路由参数与异常路由下无报错无污染', async () => {
@@ -194,7 +211,7 @@ describe('方案 A 架构：MainLayout 与通透侧边栏端到端集成测试',
     expect(wrapper.find('.test-declarative-page').exists()).toBe(true)
   })
 
-  it('[快捷键] ⌘I / Ctrl+I 打开设置并同步侧边栏键帽；已在设置页不重复入栈，组字中与 Ctrl+Shift+I 不误触', async () => {
+  it('[快捷键] ⌘, / Ctrl+, 打开设置并同步侧边栏键帽；已在设置页不重复入栈，组字中与 Ctrl+Shift+, 不误触', async () => {
     const wrapper = mount(MainLayout, {
       global: {
         plugins: [pinia, router],
@@ -204,50 +221,78 @@ describe('方案 A 架构：MainLayout 与通透侧边栏端到端集成测试',
     await flushPromises()
     const nav = useNavStore()
 
-    // 侧边栏「设置」项键帽显示 Ctrl I
+    // 侧边栏「设置」项键帽显示 Ctrl ,
     const settingsItem = wrapper
       .findAll('aside.sidebar-root .sidebar-item')
       .find((item) => item.find('.sidebar-label').exists() && item.find('.sidebar-label').text() === '设置')
     expect(settingsItem).toBeTruthy()
-    expect(settingsItem.findAll('kbd').map((k) => k.text())).toEqual(['Ctrl', 'I'])
+    expect(settingsItem.findAll('kbd').map((k) => k.text())).toEqual(['Ctrl', ','])
 
-    // macOS：metaKey 归一化为 Ctrl
-    const handled = dispatchKeyEvent(new KeyboardEvent('keydown', { key: 'i', metaKey: true }))
-    await flushPromises()
-    expect(handled).toBe(true)
-    expect(router.currentRoute.value.name).toBe('advanced-settings')
-    expect(nav.currentPage).toBe('advanced-settings')
+    // macOS：metaKey + , 归一化为 Ctrl+,，物理 ctrlKey 不误触
+    globalThis.__ZTOOLS_PLATFORM_OVERRIDE__ = 'darwin'
+    try {
+      const physicalCtrl = dispatchKeyEvent(new KeyboardEvent('keydown', { key: ',', ctrlKey: true }))
+      expect(physicalCtrl).toBe(false)
+      const handled = dispatchKeyEvent(new KeyboardEvent('keydown', { key: ',', metaKey: true }))
+      await flushPromises()
+      expect(handled).toBe(true)
+      expect(router.currentRoute.value.name).toBe('advanced-settings')
+      expect(nav.currentPage).toBe('advanced-settings')
+    } finally {
+      delete globalThis.__ZTOOLS_PLATFORM_OVERRIDE__
+    }
 
-    // 已在设置页时重复按 Ctrl+I 不会重复 push
+    // 已在设置页时重复按 Ctrl+, 不会重复 push
     const pushSpy = vi.spyOn(router, 'push')
-    dispatchKeyEvent(new KeyboardEvent('keydown', { key: 'i', ctrlKey: true }))
+    dispatchKeyEvent(new KeyboardEvent('keydown', { key: ',', ctrlKey: true }))
     await flushPromises()
     expect(router.currentRoute.value.name).toBe('advanced-settings')
     expect(pushSpy).not.toHaveBeenCalled()
     pushSpy.mockRestore()
 
-    // 不带修饰键的 i 与开发者工具快捷键 Ctrl+Shift+I 均不触发打开设置
+    // 不带修饰键的逗号与 Ctrl+Shift+, 均不触发打开设置
     await router.push('/')
-    expect(dispatchKeyEvent(new KeyboardEvent('keydown', { key: 'i' }))).toBe(false)
-    expect(dispatchKeyEvent(new KeyboardEvent('keydown', { key: 'I', ctrlKey: true, shiftKey: true }))).toBe(false)
+    expect(dispatchKeyEvent(new KeyboardEvent('keydown', { key: ',' }))).toBe(false)
+    expect(dispatchKeyEvent(new KeyboardEvent('keydown', { key: ',', ctrlKey: true, shiftKey: true }))).toBe(false)
     await flushPromises()
     expect(router.currentRoute.value.name).toBe('my')
 
-    // Windows 中文输入法非组字态 (keyCode 229 + key Process + code KeyI) 同样打开设置
-    const imeKeyI = new KeyboardEvent('keydown', { key: 'Process', code: 'KeyI', ctrlKey: true, isComposing: false })
-    Object.defineProperty(imeKeyI, 'keyCode', { value: 229 })
-    expect(dispatchKeyEvent(imeKeyI)).toBe(true)
+    // Windows 中文输入法非组字态 (keyCode 229 + key Process + code Comma) 同样打开设置
+    const imeComma = new KeyboardEvent('keydown', { key: 'Process', code: 'Comma', ctrlKey: true, isComposing: false })
+    Object.defineProperty(imeComma, 'keyCode', { value: 229 })
+    expect(dispatchKeyEvent(imeComma)).toBe(true)
     await flushPromises()
     expect(router.currentRoute.value.name).toBe('advanced-settings')
 
     // 正在拼音组字时不误触发跳转
     await router.push('/')
-    const composingKeyI = new KeyboardEvent('keydown', { key: 'Process', code: 'KeyI', ctrlKey: true, isComposing: true })
-    Object.defineProperty(composingKeyI, 'keyCode', { value: 229 })
-    expect(dispatchKeyEvent(composingKeyI)).toBe(false)
+    const composingComma = new KeyboardEvent('keydown', { key: 'Process', code: 'Comma', ctrlKey: true, isComposing: true })
+    Object.defineProperty(composingComma, 'keyCode', { value: 229 })
+    expect(dispatchKeyEvent(composingComma)).toBe(false)
     await flushPromises()
     expect(router.currentRoute.value.name).toBe('my')
 
+    wrapper.unmount()
+  })
+
+  it('[快捷键] Ctrl+U 触发工作台与悬浮条切换，原 Ctrl+M 不再误触', async () => {
+    const windowMode = await import('@/utils/windowMode')
+    const switchSpy = vi.spyOn(windowMode, 'switchWindowMode').mockImplementation(() => {})
+    const wrapper = mount(MainLayout, {
+      global: {
+        plugins: [pinia, router],
+        stubs: { SearchBar: true, HeaderGeekModeTrigger: true }
+      }
+    })
+    await flushPromises()
+
+    expect(dispatchKeyEvent(new KeyboardEvent('keydown', { key: 'm', ctrlKey: true }))).toBe(false)
+    expect(switchSpy).not.toHaveBeenCalled()
+
+    expect(dispatchKeyEvent(new KeyboardEvent('keydown', { key: 'u', ctrlKey: true }))).toBe(true)
+    expect(switchSpy).toHaveBeenCalledWith(windowMode.WINDOW_MODES.LAUNCHER)
+
+    switchSpy.mockRestore()
     wrapper.unmount()
   })
 
@@ -440,6 +485,74 @@ describe('方案 A 架构：MainLayout 与通透侧边栏端到端集成测试',
     expect(keepAliveRouter.currentRoute.value.name).toBe('details')
     expect(keepAliveRouter.currentRoute.value.params.pluginId).toBe('kill-process')
     expect(wrapper.find('.switch-tab-btn').text()).toBe('Tab: comments')
+
+    wrapper.unmount()
+  })
+
+  it('7. [KeepAlive] 设置页携带一次性查询参数返回并 replace 清参时，复用同一实例且保留切后的 Tab 状态', async () => {
+    let settingsMounts = 0
+    let settingsUnmounts = 0
+    const SettingsKeepAliveProbe = defineComponent({
+      name: 'AdvancedSettings',
+      setup() {
+        const currentRoute = keepAliveRouter.currentRoute
+        const activeTab = ref('general')
+        const consumeQuery = async () => {
+          if (currentRoute.value.query.manageBundled) {
+            activeTab.value = 'bundled'
+            await keepAliveRouter.replace({
+              query: { ...currentRoute.value.query, manageBundled: undefined }
+            })
+          }
+        }
+        return { activeTab, consumeQuery }
+      },
+      mounted() {
+        settingsMounts += 1
+        void this.consumeQuery()
+      },
+      activated() {
+        void this.consumeQuery()
+      },
+      unmounted() {
+        settingsUnmounts += 1
+      },
+      template: '<div data-testid="settings-probe" :data-tab="activeTab">Tab: {{ activeTab }}</div>'
+    })
+
+    const settingsRouter = createRouter({
+      history: createMemoryHistory(),
+      routes: [
+        { path: '/', name: 'my', component: { template: '<div />' } },
+        { path: '/plugin/:pluginId', name: 'details', component: { template: '<div />' } },
+        { path: '/advanced-settings', name: 'advanced-settings', component: SettingsKeepAliveProbe }
+      ]
+    })
+    // 让组件内部访问同一路由实例
+    const keepAliveRouter = settingsRouter
+    await settingsRouter.push('/advanced-settings')
+    await settingsRouter.isReady()
+
+    const wrapper = mount(MainLayout, {
+      global: {
+        plugins: [pinia, settingsRouter],
+        stubs: { SearchBar: true, HeaderGeekModeTrigger: true }
+      }
+    })
+    await flushPromises()
+    expect(settingsMounts).toBe(1)
+    expect(wrapper.find('[data-testid="settings-probe"]').attributes('data-tab')).toBe('general')
+
+    // 跳转到详情页，再携带 ?manageBundled=calculator 返回设置页
+    await settingsRouter.push({ name: 'details', params: { pluginId: 'calculator' } })
+    await flushPromises()
+    await settingsRouter.push({ name: 'advanced-settings', query: { manageBundled: 'calculator' } })
+    await flushPromises()
+
+    expect(settingsMounts).toBe(1, '设置页经 query 跳转后应复用 KeepAlive 缓存实例而非重建')
+    expect(settingsUnmounts).toBe(0)
+    expect(settingsRouter.currentRoute.value.query.manageBundled).toBeUndefined()
+    expect(wrapper.find('[data-testid="settings-probe"]').attributes('data-tab')).toBe('bundled')
 
     wrapper.unmount()
   })

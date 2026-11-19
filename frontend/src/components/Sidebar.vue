@@ -19,7 +19,8 @@ import { feedbackEntry, headerExtraComponents, useFeedbackIndicator } from '@edi
 import { BrandGlyph } from '@/components/base'
 import ShortcutKeys from '@/components/base/ShortcutKeys.vue'
 import { CATEGORY_GLYPHS } from '@/utils/brandIcons'
-import { OPEN_SETTINGS_SHORTCUT } from '@/utils/keymap'
+import { shortcutLabel } from '@/utils/platform'
+import { OPEN_SETTINGS_SHORTCUT, SHELL_SHORTCUTS } from '@/utils/shellShortcuts'
 
 const route = useRoute()
 const router = useRouter()
@@ -33,6 +34,7 @@ const { hasUnread: hasUnreadFeedback } = useFeedbackIndicator()
 const isCollapsed = computed(() => uiStore.isSidebarCollapsed)
 const toggleSidebar = () => uiStore.toggleSidebar()
 const settingsKey = OPEN_SETTINGS_SHORTCUT
+const toggleSidebarHint = shortcutLabel(SHELL_SHORTCUTS.TOGGLE_SIDEBAR)
 
 // 响应式路由与即时操作融合的高亮判断：点击瞬间即时高亮反馈，彻底消除假死与卡顿感
 const isMyActive = computed(() => {
@@ -381,7 +383,7 @@ const handleSidebarKeydown = (event) => {
       class="sidebar-toggle-btn"
       :aria-label="isCollapsed ? '展开侧边栏' : '收起侧边栏'"
       :aria-expanded="!isCollapsed"
-      :title="isCollapsed ? '展开侧边栏 (Ctrl+B)' : '收起侧边栏 (Ctrl+B)'"
+      :title="isCollapsed ? `展开侧边栏 (${toggleSidebarHint})` : `收起侧边栏 (${toggleSidebarHint})`"
       @click="toggleSidebar"
     >
       <ChevronRightIcon v-if="isCollapsed" class="w-3.5 h-3.5" />

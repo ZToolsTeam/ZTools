@@ -173,7 +173,15 @@ const MAC_SHORTCUT_SYMBOLS = Object.freeze({
   shift: '⇧',
   enter: '↵',
   escape: 'Esc',
-  esc: 'Esc'
+  esc: 'Esc',
+  plus: '+'
+})
+
+const DOUBLE_MODIFIER_LABELS = Object.freeze({
+  doublectrl: { mac: '双击 ⌃', win: '双击 Ctrl' },
+  doublecontrol: { mac: '双击 ⌃', win: '双击 Ctrl' },
+  doublealt: { mac: '双击 ⌥', win: '双击 Alt' },
+  doubleshift: { mac: '双击 ⇧', win: '双击 Shift' }
 })
 
 /**
@@ -185,8 +193,14 @@ const MAC_SHORTCUT_SYMBOLS = Object.freeze({
  */
 export function shortcutLabel(combo, mac = isMacOS()) {
   if (typeof combo !== 'string' || !combo.trim()) return ''
+  const compact = combo.replace(/[+\s]/g, '').toLowerCase()
+  if (Object.hasOwn(DOUBLE_MODIFIER_LABELS, compact)) {
+    return DOUBLE_MODIFIER_LABELS[compact][mac ? 'mac' : 'win']
+  }
   const tokens = combo.split('+').map((token) => token.trim()).filter(Boolean)
-  if (!mac) return tokens.join('+')
+  if (!mac) {
+    return tokens.map((token) => (token.toLowerCase() === 'plus' ? '+' : token)).join('+')
+  }
   // 用 hasOwn 查表，避免 constructor / __proto__ 等键名命中原型属性
   return tokens
     .map((token) => {
@@ -215,7 +229,8 @@ const KEY_NAMES = Object.freeze({
   arrowright: { mac: '→', win: '→' },
   backspace: { mac: '⌫', win: 'Backspace' },
   delete: { mac: '⌦', win: 'Del' },
-  tab: { mac: '⇥', win: 'Tab' }
+  tab: { mac: '⇥', win: 'Tab' },
+  plus: { mac: '+', win: '+' }
 })
 
 /**
@@ -227,6 +242,10 @@ const KEY_NAMES = Object.freeze({
  */
 export function shortcutKeys(combo, mac = isMacOS()) {
   if (typeof combo !== 'string' || !combo.trim()) return []
+  const compact = combo.replace(/[+\s]/g, '').toLowerCase()
+  if (Object.hasOwn(DOUBLE_MODIFIER_LABELS, compact)) {
+    return [DOUBLE_MODIFIER_LABELS[compact][mac ? 'mac' : 'win']]
+  }
   return combo.split('+').map((token) => token.trim()).filter(Boolean).map((token) => {
     const key = token.toLowerCase()
     if (Object.hasOwn(KEY_NAMES, key)) return KEY_NAMES[key][mac ? 'mac' : 'win']

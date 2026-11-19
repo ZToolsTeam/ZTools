@@ -101,7 +101,6 @@ export interface ActionPanelSubmenuProps extends BaseProps {
   title: string;
   icon?: IconResolvable;
   children?: any;
-  shortcut?: KeyboardShortcut;
 }
 
 // -------------------------------------------------------------

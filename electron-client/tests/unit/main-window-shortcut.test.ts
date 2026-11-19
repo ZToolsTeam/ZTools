@@ -24,15 +24,48 @@ function createMockEvent(): BeforeInputEventLike & { isPrevented: () => boolean 
 }
 
 test('主窗口与极客条 Alt+Space / Ctrl+Space 消息流转及 Windows 系统菜单抑制测试套件', async (t) => {
-  await t.test('1. [主窗口 Alt+Space 与 Ctrl+Space 拦截转发] 阻断系统菜单/IME 干扰并将 keyDown 转发至录制框', () => {
+  await t.test('1. [主窗口 Alt+Space 与 Ctrl+Space 拦截转发] 仅在录制态阻断系统菜单/IME 干扰并将 keyDown 转发至录制框', () => {
     const forwarded: RecorderKeyPayload[] = []
 
+    // 非录制态：不再无条件吞掉 Alt+Space / Ctrl+Space
+    const idleAltSpace = createMockEvent()
+    assert.equal(
+      handleMainWindowBeforeInputEvent(
+        idleAltSpace,
+        { alt: true, key: ' ', code: 'Space', type: 'keyDown' },
+        {
+          isDestroyed: () => false,
+          forwardRecorderKey: (payload) => { forwarded.push(payload) }
+        }
+      ),
+      false
+    )
+    assert.equal(idleAltSpace.isPrevented(), false, '未开启录制态时不得拦截 Alt+Space')
+
+    const idleCtrlSpace = createMockEvent()
+    assert.equal(
+      handleMainWindowBeforeInputEvent(
+        idleCtrlSpace,
+        { control: true, key: 'Process', code: 'Space', type: 'keyDown' },
+        {
+          isDestroyed: () => false,
+          isRecorderCaptureActive: () => false,
+          forwardRecorderKey: (payload) => { forwarded.push(payload) }
+        }
+      ),
+      false
+    )
+    assert.equal(idleCtrlSpace.isPrevented(), false, 'isRecorderCaptureActive 为 false 时不得拦截 Ctrl+Space')
+    assert.equal(forwarded.length, 0)
+
+    // 录制态：拦截并派发给录制框
     const altSpaceDown = createMockEvent()
     const handledAltDown = handleMainWindowBeforeInputEvent(
       altSpaceDown,
       { alt: true, key: ' ', code: 'Space', type: 'keyDown' },
       {
         isDestroyed: () => false,
+        isRecorderCaptureActive: () => true,
         forwardRecorderKey: (payload) => { forwarded.push(payload) }
       }
     )
@@ -54,6 +87,7 @@ test('主窗口与极客条 Alt+Space / Ctrl+Space 消息流转及 Windows 系�
       { alt: true, key: ' ', code: 'Space', type: 'keyUp' },
       {
         isDestroyed: () => false,
+        isRecorderCaptureActive: () => true,
         forwardRecorderKey: (payload) => { forwarded.push(payload) }
       }
     )
@@ -67,6 +101,7 @@ test('主窗口与极客条 Alt+Space / Ctrl+Space 消息流转及 Windows 系�
       { control: true, key: 'Process', code: 'Space', type: 'keyDown' },
       {
         isDestroyed: () => false,
+        isRecorderCaptureActive: () => true,
         forwardRecorderKey: (payload) => { forwarded.push(payload) }
       }
     )
@@ -108,7 +143,31 @@ test('主窗口与极客条 Alt+Space / Ctrl+Space 消息流转及 Windows 系�
       shiftKey: true,
       metaKey: false
     })
-    assert.equal(acceleratorToRecorderKeyPayload('DoubleCtrl', 'win32'), null)
+    assert.deepEqual(acceleratorToRecorderKeyPayload('DoubleCtrl', 'win32'), {
+      key: 'DoubleCtrl',
+      code: 'DoubleCtrl',
+      ctrlKey: true,
+      altKey: false,
+      shiftKey: false,
+      metaKey: false
+    })
+    assert.deepEqual(acceleratorToRecorderKeyPayload('DoubleAlt', 'win32'), {
+      key: 'DoubleAlt',
+      code: 'DoubleAlt',
+      ctrlKey: false,
+      altKey: true,
+      shiftKey: false,
+      metaKey: false
+    })
+    assert.deepEqual(acceleratorToRecorderKeyPayload('DoubleShift', 'win32'), {
+      key: 'DoubleShift',
+      code: 'DoubleShift',
+      ctrlKey: false,
+      altKey: false,
+      shiftKey: true,
+      metaKey: false
+    })
+    assert.equal(acceleratorToRecorderKeyPayload('InvalidKey', 'win32'), null)
 
     let executedCode = ''
     const ok = await dispatchRecorderKeyToWebContents(

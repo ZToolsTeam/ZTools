@@ -12,6 +12,7 @@ import {
   isInteractiveControlTarget,
   isModalOpen
 } from '../keymap.js'
+import { POPOUT_WINDOW_SHORTCUT, TOGGLE_MODE_SHORTCUT } from '../shellShortcuts.js'
 
 describe('keymap 统一快捷键分发器测试套件', () => {
   beforeEach(() => {
@@ -133,7 +134,7 @@ describe('keymap 统一快捷键分发器测试套件', () => {
     expect(audit).toEqual(['declarative_esc_passthrough', 'global_esc'])
   })
 
-  it('3. [核心设计键位规范匹配] Enter, Ctrl+Enter, Ctrl+K, Esc, Ctrl+M, Ctrl+F, Alt+Space', () => {
+  it('3. [核心设计键位规范匹配] Enter, Ctrl+Enter, Ctrl+K, Esc, Ctrl+U, Ctrl+F, Ctrl+Shift+P, Alt+Space', () => {
     const triggered = []
 
     registerKeyHandler(KEYMAP_SCOPES.GLOBAL, {
@@ -141,7 +142,8 @@ describe('keymap 统一快捷键分发器测试套件', () => {
       'Ctrl+Enter': () => { triggered.push('ctrl_enter'); return true },
       'Ctrl+K': () => { triggered.push('ctrl_k'); return true },
       'Escape': () => { triggered.push('esc'); return true },
-      'Ctrl+M': () => { triggered.push('ctrl_m'); return true },
+      [TOGGLE_MODE_SHORTCUT]: () => { triggered.push('ctrl_u'); return true },
+      [POPOUT_WINDOW_SHORTCUT]: () => { triggered.push('ctrl_shift_p'); return true },
       'Ctrl+F': () => { triggered.push('ctrl_f'); return true },
       'Alt+Space': () => { triggered.push('alt_space'); return true }
     })
@@ -150,7 +152,8 @@ describe('keymap 统一快捷键分发器测试套件', () => {
     dispatchKeyEvent({ key: 'Enter', ctrlKey: true })
     dispatchKeyEvent({ key: 'k', ctrlKey: true })
     dispatchKeyEvent({ key: 'Escape' })
-    dispatchKeyEvent({ key: 'm', metaKey: true }) // Cmd+M on macOS
+    dispatchKeyEvent({ key: 'u', ctrlKey: true })
+    dispatchKeyEvent({ key: 'p', ctrlKey: true, shiftKey: true })
     dispatchKeyEvent({ key: 'f', ctrlKey: true })
     dispatchKeyEvent({ key: ' ', altKey: true, code: 'Space' })
 
@@ -159,7 +162,8 @@ describe('keymap 统一快捷键分发器测试套件', () => {
       'ctrl_enter',
       'ctrl_k',
       'esc',
-      'ctrl_m',
+      'ctrl_u',
+      'ctrl_shift_p',
       'ctrl_f',
       'alt_space'
     ])
@@ -168,6 +172,32 @@ describe('keymap 统一快捷键分发器测试套件', () => {
     expect(normalizeEventKeyCombo({ key: ' ', altKey: true, code: 'Space' })).toBe('Alt+Space')
     expect(normalizeEventKeyCombo({ key: ' ', code: 'Space' })).toBe('Space')
     expect(normalizeEventKeyCombo({ key: ' ', ctrlKey: true, code: 'Space' })).toBe('Ctrl+Space')
+  })
+
+  it('3.1 [跨端修饰键归一化矩阵] Windows 与 macOS 分别区分 ⌘/⌃ 与 Win/Ctrl', () => {
+    // Windows 下 ctrlKey 映射为 Ctrl，metaKey 保持 Meta
+    globalThis.__ZTOOLS_PLATFORM_OVERRIDE__ = 'win32'
+    try {
+      expect(normalizeEventKeyCombo({ key: 'u', ctrlKey: true })).toBe('Ctrl+U')
+      expect(normalizeEventKeyCombo({ key: 'u', metaKey: true })).toBe('Meta+U')
+      expect(normalizeEventKeyCombo({ key: ',', ctrlKey: true })).toBe('Ctrl+,')
+      expect(normalizeEventKeyCombo({ key: ',', metaKey: true })).toBe('Meta+,')
+      expect(normalizeEventKeyCombo({ key: 'p', ctrlKey: true, shiftKey: true })).toBe('Ctrl+Shift+P')
+    } finally {
+      delete globalThis.__ZTOOLS_PLATFORM_OVERRIDE__
+    }
+
+    // macOS 下 Command(metaKey) 映射为逻辑 Ctrl，物理 Control(ctrlKey) 保持 Control
+    globalThis.__ZTOOLS_PLATFORM_OVERRIDE__ = 'darwin'
+    try {
+      expect(normalizeEventKeyCombo({ key: 'u', metaKey: true })).toBe('Ctrl+U')
+      expect(normalizeEventKeyCombo({ key: 'u', ctrlKey: true })).toBe('Control+U')
+      expect(normalizeEventKeyCombo({ key: ',', metaKey: true })).toBe('Ctrl+,')
+      expect(normalizeEventKeyCombo({ key: ',', ctrlKey: true })).toBe('Control+,')
+      expect(normalizeEventKeyCombo({ key: 'p', metaKey: true, shiftKey: true })).toBe('Ctrl+Shift+P')
+    } finally {
+      delete globalThis.__ZTOOLS_PLATFORM_OVERRIDE__
+    }
   })
 
   it('4. [Beyond Happy Path 异常容错] 非法输入、空事件、异常隔离与注销幂等', () => {
@@ -272,17 +302,25 @@ describe('keymap 统一快捷键分发器测试套件', () => {
       const openSettingsHandler = vi.fn(() => true)
       registerKeyHandler(KEYMAP_SCOPES.GLOBAL, { 'Ctrl+,': openSettingsHandler })
 
-      // 1. 中文全角逗号 Ctrl+， / Cmd+，
+      // 1. Windows 常规与中文全角逗号 Ctrl+，
       const fullWidthCtrl = new KeyboardEvent('keydown', { key: '，', code: 'Comma', ctrlKey: true, cancelable: true })
       expect(dispatchKeyEvent(fullWidthCtrl)).toBe(true)
       expect(fullWidthCtrl.defaultPrevented).toBe(true)
       expect(openSettingsHandler).toHaveBeenCalledTimes(1)
 
-      const fullWidthMeta = new KeyboardEvent('keydown', { key: '，', metaKey: true, cancelable: true })
-      expect(dispatchKeyEvent(fullWidthMeta)).toBe(true)
-      expect(openSettingsHandler).toHaveBeenCalledTimes(2)
+      // 2. macOS 下 Command+，命中 Ctrl+,，物理 Control+，保持 Control+, 不误触
+      globalThis.__ZTOOLS_PLATFORM_OVERRIDE__ = 'darwin'
+      try {
+        const fullWidthMeta = new KeyboardEvent('keydown', { key: '，', metaKey: true, cancelable: true })
+        expect(dispatchKeyEvent(fullWidthMeta)).toBe(true)
+        expect(openSettingsHandler).toHaveBeenCalledTimes(2)
+        const physicalCtrlComma = new KeyboardEvent('keydown', { key: '，', ctrlKey: true, cancelable: true })
+        expect(dispatchKeyEvent(physicalCtrlComma)).toBe(false)
+      } finally {
+        delete globalThis.__ZTOOLS_PLATFORM_OVERRIDE__
+      }
 
-      // 2. Windows 中文输入法未组字态上报 keyCode=229 + key='Process' + code='Comma'
+      // 3. Windows 中文输入法未组字态上报 keyCode=229 + key='Process' + code='Comma'
       const imeWrapped = new KeyboardEvent('keydown', {
         key: 'Process',
         code: 'Comma',
@@ -295,7 +333,7 @@ describe('keymap 统一快捷键分发器测试套件', () => {
       expect(imeWrapped.defaultPrevented).toBe(true)
       expect(openSettingsHandler).toHaveBeenCalledTimes(3)
 
-      // 3. [异常/边界] 正在拼音组字（isComposing: true 或 target.composing: true）时绝不误触发且不打断输入法
+      // 4. [异常/边界] 正在拼音组字（isComposing: true 或 target.composing: true）时绝不误触发且不打断输入法
       const activeComposing = new KeyboardEvent('keydown', {
         key: 'Process',
         code: 'Comma',
@@ -318,7 +356,7 @@ describe('keymap 统一快捷键分发器测试套件', () => {
       expect(dispatchKeyEvent(targetComposingEvt)).toBe(false)
       expect(targetComposingEvt.preventDefault).not.toHaveBeenCalled()
 
-      // 4. [边界] Shift 修饰（Ctrl+Shift+,）与国际键盘（法文 AZERTY code=Comma 输出 ';'）不误判为 Ctrl+,
+      // 5. [边界] Shift 修饰（Ctrl+Shift+,）与国际键盘（法文 AZERTY code=Comma 输出 ';'）不误判为 Ctrl+,
       expect(normalizeEventKeyCombo({ key: '<', code: 'Comma', ctrlKey: true, shiftKey: true })).toBe('Ctrl+Shift+<')
       expect(normalizeEventKeyCombo({ key: ';', code: 'Comma', ctrlKey: true })).toBe('Ctrl+;')
       expect(normalizeEventKeyCombo(null)).toBe('')
@@ -326,43 +364,49 @@ describe('keymap 统一快捷键分发器测试套件', () => {
       expect(openSettingsHandler).toHaveBeenCalledTimes(3)
     })
 
-    it('[打开设置单一信源与中文输入法字母键兼容] OPEN_SETTINGS_SHORTCUT 为 Ctrl+I，非组字 IME 229/KeyI 命中 Ctrl+I，组字中与 Ctrl+Shift+I 绝不误触', () => {
-      expect(OPEN_SETTINGS_SHORTCUT).toBe('Ctrl+I')
+    it('[打开设置单一信源与中文输入法字母键兼容] OPEN_SETTINGS_SHORTCUT 为 Ctrl+,，非组字 IME 229/KeyU 命中 Ctrl+U，组字中与 Ctrl+Shift+U 绝不误触', () => {
+      expect(OPEN_SETTINGS_SHORTCUT).toBe('Ctrl+,')
+      expect(TOGGLE_MODE_SHORTCUT).toBe('Ctrl+U')
 
-      const openSettingsHandler = vi.fn(() => true)
-      registerKeyHandler(KEYMAP_SCOPES.GLOBAL, { [OPEN_SETTINGS_SHORTCUT]: openSettingsHandler })
+      const toggleModeHandler = vi.fn(() => true)
+      registerKeyHandler(KEYMAP_SCOPES.GLOBAL, { [TOGGLE_MODE_SHORTCUT]: toggleModeHandler })
 
-      // 1. 常规 Ctrl+i / Cmd+I
-      const normalCtrl = new KeyboardEvent('keydown', { key: 'i', code: 'KeyI', ctrlKey: true, cancelable: true })
+      // 1. 常规 Ctrl+u / macOS Cmd+U
+      const normalCtrl = new KeyboardEvent('keydown', { key: 'u', code: 'KeyU', ctrlKey: true, cancelable: true })
       expect(dispatchKeyEvent(normalCtrl)).toBe(true)
       expect(normalCtrl.defaultPrevented).toBe(true)
-      expect(openSettingsHandler).toHaveBeenCalledTimes(1)
+      expect(toggleModeHandler).toHaveBeenCalledTimes(1)
 
-      const normalMeta = new KeyboardEvent('keydown', { key: 'I', code: 'KeyI', metaKey: true, cancelable: true })
-      expect(dispatchKeyEvent(normalMeta)).toBe(true)
-      expect(openSettingsHandler).toHaveBeenCalledTimes(2)
+      globalThis.__ZTOOLS_PLATFORM_OVERRIDE__ = 'darwin'
+      try {
+        const normalMeta = new KeyboardEvent('keydown', { key: 'U', code: 'KeyU', metaKey: true, cancelable: true })
+        expect(dispatchKeyEvent(normalMeta)).toBe(true)
+        expect(toggleModeHandler).toHaveBeenCalledTimes(2)
+      } finally {
+        delete globalThis.__ZTOOLS_PLATFORM_OVERRIDE__
+      }
 
-      // 2. Windows 中文输入法激活但未组字时上报 keyCode=229 + key='Process'/'Unidentified'/'' + code='KeyI'
+      // 2. Windows 中文输入法激活但未组字时上报 keyCode=229 + key='Process'/'Unidentified'/'' + code='KeyU'
       for (const placeholderKey of ['Process', 'Unidentified', '']) {
         const imeLetterEvt = new KeyboardEvent('keydown', {
           key: placeholderKey,
-          code: 'KeyI',
+          code: 'KeyU',
           ctrlKey: true,
           isComposing: false,
           cancelable: true
         })
         Object.defineProperty(imeLetterEvt, 'keyCode', { value: 229 })
         expect(isComposingEvent(imeLetterEvt)).toBe(false)
-        expect(normalizeEventKeyCombo(imeLetterEvt)).toBe('Ctrl+I')
+        expect(normalizeEventKeyCombo(imeLetterEvt)).toBe('Ctrl+U')
         expect(dispatchKeyEvent(imeLetterEvt)).toBe(true)
         expect(imeLetterEvt.defaultPrevented).toBe(true)
       }
-      expect(openSettingsHandler).toHaveBeenCalledTimes(5)
+      expect(toggleModeHandler).toHaveBeenCalledTimes(5)
 
       // 3. [异常/边界] 正在拼音组字（isComposing: true 或 target.composing: true）或无修饰键 229 时绝不误触
       const activeComposing = new KeyboardEvent('keydown', {
         key: 'Process',
-        code: 'KeyI',
+        code: 'KeyU',
         ctrlKey: true,
         isComposing: true,
         cancelable: true
@@ -376,7 +420,7 @@ describe('keymap 统一快捷键分发器测试套件', () => {
       const targetComposingEvt = {
         keyCode: 229,
         key: 'Process',
-        code: 'KeyI',
+        code: 'KeyU',
         ctrlKey: true,
         target: { tagName: 'INPUT', composing: true },
         preventDefault: vi.fn(),
@@ -388,7 +432,7 @@ describe('keymap 统一快捷键分发器测试套件', () => {
 
       const bareImeKey = new KeyboardEvent('keydown', {
         key: 'Process',
-        code: 'KeyI',
+        code: 'KeyU',
         isComposing: false,
         cancelable: true
       })
@@ -396,31 +440,67 @@ describe('keymap 统一快捷键分发器测试套件', () => {
       expect(isComposingEvent(bareImeKey)).toBe(true)
       expect(dispatchKeyEvent(bareImeKey)).toBe(false)
 
-      // 4. [边界] Ctrl+Shift+I（常规与 IME 229）均归一化为 Ctrl+Shift+I，绝不误触 Ctrl+I；非 IME 占位键保留原布局字符
-      const ctrlShiftI = new KeyboardEvent('keydown', {
-        key: 'I',
-        code: 'KeyI',
+      // 4. [边界] Ctrl+Shift+U（常规与 IME 229）均归一化为 Ctrl+Shift+U，绝不误触 Ctrl+U；非 IME 占位键保留原布局字符
+      const ctrlShiftU = new KeyboardEvent('keydown', {
+        key: 'U',
+        code: 'KeyU',
         ctrlKey: true,
         shiftKey: true,
         cancelable: true
       })
-      expect(normalizeEventKeyCombo(ctrlShiftI)).toBe('Ctrl+Shift+I')
-      expect(dispatchKeyEvent(ctrlShiftI)).toBe(false)
+      expect(normalizeEventKeyCombo(ctrlShiftU)).toBe('Ctrl+Shift+U')
+      expect(dispatchKeyEvent(ctrlShiftU)).toBe(false)
 
-      const imeCtrlShiftI = new KeyboardEvent('keydown', {
+      const imeCtrlShiftU = new KeyboardEvent('keydown', {
         key: 'Process',
-        code: 'KeyI',
+        code: 'KeyU',
         ctrlKey: true,
         shiftKey: true,
         isComposing: false,
         cancelable: true
       })
-      Object.defineProperty(imeCtrlShiftI, 'keyCode', { value: 229 })
-      expect(normalizeEventKeyCombo(imeCtrlShiftI)).toBe('Ctrl+Shift+I')
-      expect(dispatchKeyEvent(imeCtrlShiftI)).toBe(false)
+      Object.defineProperty(imeCtrlShiftU, 'keyCode', { value: 229 })
+      expect(normalizeEventKeyCombo(imeCtrlShiftU)).toBe('Ctrl+Shift+U')
+      expect(dispatchKeyEvent(imeCtrlShiftU)).toBe(false)
 
-      expect(normalizeEventKeyCombo({ key: 'c', code: 'KeyI', ctrlKey: true })).toBe('Ctrl+C')
-      expect(openSettingsHandler).toHaveBeenCalledTimes(5)
+      expect(normalizeEventKeyCombo({ key: 'c', code: 'KeyU', ctrlKey: true })).toBe('Ctrl+C')
+      expect(toggleModeHandler).toHaveBeenCalledTimes(5)
+    })
+
+    it('[统一 Esc 先失焦] 普通输入框聚焦时按 Esc 不穿透至 GLOBAL，优先异步失焦；已消费时不强行失焦', async () => {
+      const globalEsc = vi.fn(() => true)
+      registerKeyHandler(KEYMAP_SCOPES.GLOBAL, { Escape: globalEsc })
+
+      const input = document.createElement('input')
+      document.body.appendChild(input)
+      try {
+        input.focus()
+        expect(document.activeElement).toBe(input)
+
+        const escEvent = new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true })
+        Object.defineProperty(escEvent, 'target', { value: input })
+        expect(dispatchKeyEvent(escEvent)).toBe(false)
+        expect(globalEsc).not.toHaveBeenCalled()
+
+        // 微任务后由全局分发器统一失焦
+        await Promise.resolve()
+        expect(document.activeElement).not.toBe(input)
+
+        // 若页面级已拦截并消费了 Esc，则按原 handler 返回 true，不再下沉也不会误触 global
+        const pageEsc = vi.fn(() => true)
+        const unregPage = registerKeyHandler(KEYMAP_SCOPES.PAGE, { Escape: pageEsc })
+        input.focus()
+        const escHandledByPage = new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true })
+        Object.defineProperty(escHandledByPage, 'target', { value: input })
+        expect(dispatchKeyEvent(escHandledByPage)).toBe(true)
+        expect(pageEsc).toHaveBeenCalledOnce()
+        expect(globalEsc).not.toHaveBeenCalled()
+        await Promise.resolve()
+        expect(document.activeElement).toBe(input)
+        unregPage()
+      } finally {
+        input.remove()
+      }
     })
   })
 

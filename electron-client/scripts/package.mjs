@@ -10,6 +10,8 @@ import {
   createWindowsPackagerOptions,
   getWindowsArtifactRoot,
   OCR_MODEL_RESOURCE_DIRECTORY,
+  resolveWindowsNativeSidecarSources,
+  stageWindowsNativeSidecars,
   WINDOWS_CLASSIC_LEVEL_VERSION,
   WINDOWS_ELECTRON_VERSION,
   WINDOWS_ONNXRUNTIME_WEB_VERSION
@@ -114,6 +116,7 @@ if (fs.existsSync(outputRoot)) throw new Error(`输出目录已存在，请归�
 if (!fs.existsSync(nativeHostSource)) throw new Error(`NativeHost32 产物不存在: ${nativeHostSource}`)
 if (!fs.existsSync(serviceSource)) throw new Error(`ZToolsService 产物不存在: ${serviceSource}`)
 if (!fs.existsSync(pathAccessBrokerSource)) throw new Error(`ZToolsPathAccessBroker 产物不存在: ${pathAccessBrokerSource}`)
+resolveWindowsNativeSidecarSources(root)
 if (!hostOnly && !fs.existsSync(privilegedManifestSource)) {
   throw new Error(`ZToolsService 生产特权清单不存在: ${privilegedManifestSource}`)
 }
@@ -165,6 +168,11 @@ for (const applicationPath of applicationPaths) {
     throw new Error('未找到 x64 ZToolsPathAccessBroker.exe（out/native/win32-x64/bin），请先运行 npm run build:native:win:path-access-broker')
   }
   console.log(`已打包 x64 PathAccessBroker: ${pathAccessBroker}`)
+  const stagedSidecars = stageWindowsNativeSidecars({
+    clientRoot: root,
+    resourcesNativeDirectory: nativeDirectory
+  })
+  console.log(`已打包原生侧车 (${stagedSidecars.length}): ${stagedSidecars.map((file) => path.basename(file)).join(', ')}`)
   const pathAccessBrokerSha256 = createHash('sha256').update(fs.readFileSync(pathAccessBroker)).digest('hex')
   fs.writeFileSync(
     path.join(nativeDirectory, '.ztools-native-host.xml'),

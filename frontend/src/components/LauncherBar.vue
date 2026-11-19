@@ -44,7 +44,7 @@
             ref="inputRef"
             v-model="query"
             type="text"
-            placeholder="搜索插件、本地软件、系统工具、文件或输入 / 快捷方式"
+            placeholder="搜索插件、本地软件、系统工具或文件"
             class="launcher-input"
             autocomplete="off"
             spellcheck="false"
@@ -63,45 +63,41 @@
           <button
             type="button"
             class="launcher-workbench-btn"
-            title="添加本地软件到悬浮条"
-            aria-label="添加本地软件"
-            @click="handleAddLocalApp"
-          >
-            + 添加软件
-          </button>
-          <button
-            type="button"
-            class="launcher-workbench-btn"
             :title="`展开为工作台 ${workbenchHint}`"
             @click="expandToDashboard()"
           >
             工作台
-            <ShortcutKeys combo="Ctrl+M" />
+            <ShortcutKeys :combo="TOGGLE_MODE_SHORTCUT" />
           </button>
         </div>
         <div class="launcher-hairline" aria-hidden="true"></div>
 
         <!-- 1.5 首屏固定磁贴宫格（搜索词为空且存在固定项时展示，输入搜索词自动收起让位） -->
         <div
-          v-if="!query.trim() && pinnedItems.length > 0"
+          v-if="!query.trim() && displayedPinnedItems.length > 0"
           class="launcher-pinned-section"
           aria-label="固定常用"
         >
           <div class="launcher-pinned-header">
-            <span class="launcher-pinned-title">固定常用 ({{ pinnedItems.length }})</span>
-            <span class="launcher-pinned-hint">Alt+1~9 直达 · Ctrl+P 固定/取消</span>
+            <span class="launcher-pinned-title">固定常用 ({{ displayedPinnedItems.length }})</span>
+            <span class="launcher-pinned-hint">{{ pinnedHeaderHint }}</span>
           </div>
-          <div ref="pinnedGridRef" class="launcher-pinned-grid" tabindex="-1">
+          <div
+            ref="pinnedGridRef"
+            class="launcher-pinned-grid"
+            :class="{ 'is-two-rows': displayedPinnedItems.length >= 10 }"
+            tabindex="-1"
+          >
             <div
               v-for="(pinItem, pinIdx) in displayedPinnedItems"
-              :key="pinItem.key || pinItem.id || pinIdx"
+              :key="pinItem.pinKey || pinItem.key || pinItem.id || pinIdx"
               class="launcher-pinned-tile"
-              :class="{ 'is-focused': pinnedFocusIndex === pinIdx }"
+              :class="{ 'is-focused': pinnedFocusIndex === pinIdx, 'is-unavailable': pinItem.available === false }"
               :data-nav-index="pinIdx"
               data-nav-group="pinned"
               role="button"
               tabindex="-1"
-              :title="`${pinItem.name || pinItem.title} (Alt+${pinIdx + 1})`"
+              :title="pinItem.available === false ? `${pinItem.name || pinItem.title}（已失效）` : (pinItem.name || pinItem.title)"
               @click="executeItem(pinItem)"
             >
               <button
@@ -114,13 +110,23 @@
               >
                 ×
               </button>
+              <img
+                v-if="pinItem.isApplication && isTileImageIcon(pinItem.icon) && !failedTileIconKeys.has(tileIconKey(pinItem, pinIdx))"
+                :src="pinItem.icon"
+                class="launcher-pinned-app-icon"
+                alt=""
+                @error="markTileIconFailed(tileIconKey(pinItem, pinIdx))"
+              />
               <RcSquircle
+                v-else
+                class="launcher-pinned-icon"
                 :glyph="resolveItemGlyph(pinItem)"
                 :fallback-glyph="resolveKeywordGlyph(pinItem.name || pinItem.title)"
-                :src="isTileImageIcon(pinItem.icon) ? pinItem.icon : ''"
+                :src="!pinItem.isApplication && isTileImageIcon(pinItem.icon) ? pinItem.icon : ''"
                 :size="24"
               />
               <span class="launcher-pinned-name">{{ pinItem.name || pinItem.title }}</span>
+              <span v-if="pinItem.available === false" class="launcher-pinned-unavailable-tag">已失效</span>
             </div>
           </div>
         </div>
@@ -169,6 +175,14 @@
           <div class="flex items-center gap-4">
             <span class="launcher-foot-hint is-primary">打开 <ShortcutKeys combo="Enter" /></span>
             <button
+              v-if="currentFocusedItem?.type === 'file' && currentFocusedItem?.available !== false"
+              type="button"
+              class="launcher-foot-hint"
+              @click="revealFocusedFile"
+            >
+              定位 <ShortcutKeys combo="Ctrl+Enter" />
+            </button>
+            <button
               v-if="canPinActiveItem"
               type="button"
               class="launcher-foot-hint"
@@ -190,6 +204,7 @@
       v-if="actionPanelVisible"
       :visible="actionPanelVisible"
       :actions="activeItemActions"
+      :reserved-combos="LAUNCHER_PANEL_RESERVED_SHORTCUTS"
       @close="actionPanelVisible = false"
       @trigger="runLauncherAction"
     />
@@ -217,15 +232,28 @@ import {
   isDeclarativePluginItem,
   normalizePluginFeatures,
   copyInlineAnswerToClipboard,
-  TOP_PINNED_GRID_LIMIT
+  PINNED_GRID_COLUMNS,
+  canPinItem,
+  resolvePinKey
 } from '@/composables/useCommandSearch'
 import {
   useKeymap,
+  registerKeyHandler,
   KEYMAP_SCOPES,
   OPEN_SETTINGS_SHORTCUT,
   dispatchKeyEvent,
-  isComposingEvent
+  isComposingEvent,
+  isInputElement
 } from '@/utils/keymap'
+import {
+  TOGGLE_MODE_SHORTCUT,
+  POPOUT_WINDOW_SHORTCUT,
+  SHELL_SHORTCUTS
+} from '@/utils/shellShortcuts'
+import {
+  resolveActionKeyBindings,
+  normalizeEventShortcutKey
+} from '@/utils/actionKeyBindings'
 import { collectVisualRowsFromDOM, computeVisualNavStep } from '@/composables/useVisualGridNav'
 import ActionPanelModal from '@/declarative/components/ActionPanelModal.vue'
 import DeclarativeView from '@/declarative/DeclarativeView.vue'
@@ -243,7 +271,7 @@ const pluginsStore = usePluginsStore()
 // 由宿主选择圆角策略；系统裁切时页面铺满窗口，避免两层圆角和边框互相露底。
 const nativeCorners = new URLSearchParams(window.location.search).get('nativeCorners') === '1'
 // 悬停提示是纯文本，按平台格式化（键帽展示统一走 ShortcutKeys）
-const workbenchHint = shortcutLabel('Ctrl+M')
+const workbenchHint = shortcutLabel(TOGGLE_MODE_SHORTCUT)
 
 const inputRef = ref(null)
 const pinnedGridRef = ref(null)
@@ -255,15 +283,19 @@ const pinnedAnchorX = ref(null)
 const actionPanelVisible = ref(false)
 const activeDeclarativePlugin = ref(null)
 // 悬浮条里原位渲染的已安装声明式插件持有会话归属
-useDeclarativePluginSession(activeDeclarativePlugin)
+useDeclarativePluginSession(activeDeclarativePlugin, { onInvalidated: exitDeclarative })
 const loadingDeclarative = ref(false)
 const declarativeLoadError = ref('')
 const noViewStatus = ref(null)
+const failedTileIconKeys = ref(new Set())
 const itemElements = new Map()
 
 let declarativeLoadToken = 0
 let executingNoViewKey = ''
 let noViewStatusTimer = null
+let reorderTimer = null
+let pendingReorderBaseline = null
+let reorderGeneration = 0
 
 const commandSearch = useCommandSearch({ enableFileSearch: true })
 const {
@@ -278,9 +310,14 @@ const {
   recordUsage,
   highlightParts
 } = commandSearch
+const pinnedEntries = commandSearch.pinnedEntries || computed(() => [])
 const pinnedItems = commandSearch.pinnedItems || computed(() => [])
 const toggleItemPin = commandSearch.toggleItemPin || (async () => ({ success: false }))
-const addLocalApp = commandSearch.addLocalApp || (async () => ({ success: false, added: 0 }))
+const setItemPinned = commandSearch.setItemPinned
+  || ((item, pinned) => (Boolean(pinned) !== Boolean(item?.pinned) ? toggleItemPin(item) : Promise.resolve({ success: true, pinned: Boolean(pinned) })))
+const reorderPinned = commandSearch.reorderPinned || (async () => ({ success: true }))
+const swapPinnedKeys = commandSearch.swapPinnedKeys || null
+const restorePinnedEntries = commandSearch.restorePinnedEntries || null
 const refreshPanelData = commandSearch.refreshPanelData || (() => Promise.resolve())
 const prepareItemForLaunch = commandSearch.prepareItemForLaunch || (async (item) => item)
 
@@ -288,19 +325,37 @@ function isTileImageIcon(icon) {
   return typeof icon === 'string' && /^(https?:|data:image\/|ztools:)/.test(icon)
 }
 
-function canPinItem(item) {
-  if (!item || typeof item !== 'object') return false
-  return item.type === 'plugin' || item.type === 'local-app'
+function tileIconKey(item, idx) {
+  return `${item?.pinKey || item?.key || idx}:${item?.icon || ''}`
+}
+
+function markTileIconFailed(key) {
+  if (!key || failedTileIconKeys.value.has(key)) return
+  const next = new Set(failedTileIconKeys.value)
+  next.add(key)
+  failedTileIconKeys.value = next
 }
 
 const displayedPinnedItems = computed(() => {
   if (query.value.trim()) return []
-  return (pinnedItems.value || []).slice(0, TOP_PINNED_GRID_LIMIT)
+  return pinnedItems.value || []
+})
+
+const pinnedHeaderHint = computed(() => {
+  const pinShortcut = shortcutLabel('Ctrl+P')
+  if (pinnedFocusIndex.value >= 0) {
+    const reorderShortcut = isMacOS()
+      ? `${shortcutLabel('Ctrl+Shift')}←/→`
+      : `${shortcutLabel('Ctrl+Shift')}+←/→`
+    return `方向键选择 · Enter 打开 · ${reorderShortcut} 调整顺序 · ${pinShortcut} 取消固定`
+  }
+  return `↑ 进入固定区 · ${pinShortcut} 固定/取消`
 })
 
 async function handleTogglePin(item) {
   if (!canPinItem(item)) return
-  const res = await toggleItemPin(item)
+  const targetPinned = !item.pinned
+  const res = await setItemPinned(item, targetPinned)
   if (res?.success) {
     showNoViewFeedback(
       res.pinned
@@ -308,15 +363,6 @@ async function handleTogglePin(item) {
         : `✓ 已取消固定「${item.name || item.title}」`,
       false
     )
-  } else if (res?.error) {
-    showNoViewFeedback(res.error, true)
-  }
-}
-
-async function handleAddLocalApp() {
-  const res = await addLocalApp()
-  if (res?.added > 0) {
-    showNoViewFeedback(`✓ 已添加 ${res.added} 个本地软件`, false)
   } else if (res?.error) {
     showNoViewFeedback(res.error, true)
   }
@@ -380,9 +426,60 @@ const runLauncherAction = (action) => {
   }
 }
 
+function appendPinnedTileActions(actions, item) {
+  if (pinnedFocusIndex.value < 0) return
+  if (canPinItem(item) && !actions.some((a) => a.props?.title === '从悬浮条首屏取消固定' || a.props?.title === '固定到悬浮条首屏')) {
+    actions.push({
+      type: 'Action',
+      props: {
+        title: item.pinned ? '从悬浮条首屏取消固定' : '固定到悬浮条首屏',
+        shortcut: { modifiers: ['Ctrl'], key: 'P' },
+        onAction: () => {
+          actionPanelVisible.value = false
+          handleTogglePin(item)
+        }
+      }
+    })
+  }
+  const total = displayedPinnedItems.value.length
+  if (total <= 1) return
+  if (pinnedFocusIndex.value > 0) {
+    actions.push({
+      type: 'Action',
+      props: {
+        title: '前移',
+        shortcut: { modifiers: ['Ctrl', 'Shift'], key: 'ArrowLeft' },
+        onAction: () => {
+          actionPanelVisible.value = false
+          handlePinnedReorder(-1, true)
+        }
+      }
+    })
+  }
+  if (pinnedFocusIndex.value < total - 1) {
+    actions.push({
+      type: 'Action',
+      props: {
+        title: '后移',
+        shortcut: { modifiers: ['Ctrl', 'Shift'], key: 'ArrowRight' },
+        onAction: () => {
+          actionPanelVisible.value = false
+          handlePinnedReorder(1, true)
+        }
+      }
+    })
+  }
+}
+
 const activeItemActions = computed(() => {
   const item = currentFocusedItem.value
   if (!item) return []
+
+  if (item.available === false) {
+    const unavailableActions = []
+    appendPinnedTileActions(unavailableActions, item)
+    return unavailableActions
+  }
 
   if (item.type === 'inline-calculator' || item.type === 'inline-color') {
     const calcActions = [
@@ -467,14 +564,18 @@ const activeItemActions = computed(() => {
   }
 
   if (item.type === 'file') {
-    return [
+    const fileActions = [
       {
         type: 'Action',
         props: {
           title: item.isApplication ? '打开应用' : item.isDir ? '打开文件夹' : '打开文件',
           onAction: () => {
             actionPanelVisible.value = false
-            openFile(item.path)
+            if (item.isPinnedTile && item.pinKey) {
+              void openPinnedFileItem(item, 'open')
+            } else {
+              openFile(item.path)
+            }
           }
         }
       },
@@ -485,7 +586,11 @@ const activeItemActions = computed(() => {
           shortcut: { modifiers: ['Ctrl'], key: 'Enter' },
           onAction: () => {
             actionPanelVisible.value = false
-            showInFolder(item.path)
+            if (item.isPinnedTile && item.pinKey) {
+              void openPinnedFileItem(item, 'reveal')
+            } else {
+              showInFolder(item.path)
+            }
           }
         }
       },
@@ -510,19 +615,34 @@ const activeItemActions = computed(() => {
             copyFileText(item.fileName || item.name, '文件名')
           }
         }
-      },
-      {
-        type: 'Action',
-        props: {
-          title: '展开为完整工作台',
-          shortcut: { modifiers: ['Ctrl'], key: 'M' },
-          onAction: () => {
-            actionPanelVisible.value = false
-            expandToDashboard()
-          }
-        }
       }
     ]
+    if (canPinItem(item)) {
+      fileActions.push({
+        type: 'Action',
+        props: {
+          title: item.pinned ? '从悬浮条首屏取消固定' : '固定到悬浮条首屏',
+          shortcut: { modifiers: ['Ctrl'], key: 'P' },
+          onAction: () => {
+            actionPanelVisible.value = false
+            handleTogglePin(item)
+          }
+        }
+      })
+    }
+    appendPinnedTileActions(fileActions, item)
+    fileActions.push({
+      type: 'Action',
+      props: {
+        title: '展开为完整工作台',
+        shortcut: { modifiers: ['Ctrl'], key: 'U' },
+        onAction: () => {
+          actionPanelVisible.value = false
+          expandToDashboard()
+        }
+      }
+    })
+    return fileActions
   }
 
   const actions = [
@@ -572,7 +692,7 @@ const activeItemActions = computed(() => {
       type: 'Action',
       props: {
         title: '在独立常驻窗口中打开',
-        shortcut: { modifiers: ['Ctrl', 'Shift'], key: 'O' },
+        shortcut: { modifiers: ['Ctrl', 'Shift'], key: 'P' },
         onAction: () => {
           actionPanelVisible.value = false
           popoutDeclarativePlugin(item.pluginId, item.featureCode || '')
@@ -595,16 +715,7 @@ const activeItemActions = computed(() => {
     })
   }
 
-  actions.push({
-    type: 'Action',
-    props: {
-      title: '添加本地软件到悬浮条',
-      onAction: () => {
-        actionPanelVisible.value = false
-        handleAddLocalApp()
-      }
-    }
-  })
+  appendPinnedTileActions(actions, item)
 
   if (item.pluginId) {
     actions.push({
@@ -624,7 +735,7 @@ const activeItemActions = computed(() => {
     type: 'Action',
     props: {
       title: '展开为完整应用中心大窗口',
-      shortcut: { modifiers: ['Ctrl'], key: 'M' },
+      shortcut: { modifiers: ['Ctrl'], key: 'U' },
       onAction: () => {
         actionPanelVisible.value = false
         expandToDashboard()
@@ -649,6 +760,22 @@ function resetPinnedFocus() {
   pinnedAnchorX.value = null
 }
 
+function resetPinnedScroll() {
+  if (pinnedGridRef.value) {
+    pinnedGridRef.value.scrollTop = 0
+  }
+}
+
+function scrollPinnedTileIntoView(index = pinnedFocusIndex.value) {
+  if (index < 0) return
+  nextTick(() => {
+    const el = pinnedGridRef.value?.querySelector?.(`[data-nav-index="${index}"]`)
+    if (el && typeof el.scrollIntoView === 'function') {
+      el.scrollIntoView({ block: 'nearest', behavior: 'instant' })
+    }
+  })
+}
+
 function focusPinnedGrid() {
   inputRef.value?.blur?.()
   pinnedGridRef.value?.focus?.({ preventScroll: true })
@@ -664,24 +791,67 @@ function getPinnedVisualRows() {
   if (count <= 0) return []
   return collectVisualRowsFromDOM(pinnedGridRef.value, {
     totalCount: count,
-    fallbackColumns: TOP_PINNED_GRID_LIMIT || 9,
+    fallbackColumns: PINNED_GRID_COLUMNS || 9,
     getGroup: () => 'pinned'
   })
+}
+
+/**
+ * 计算按 ↑ 进入固定宫格时的目标磁贴：当前可见区域最后一排第 1 项；
+ * 在 JSDOM 无真实几何时安全回退为最后一排第 1 项。
+ */
+function resolveLastVisiblePinnedRowFirstCell(rows) {
+  if (!rows.length) return null
+  const container = pinnedGridRef.value
+  if (!container) return rows[rows.length - 1][0]
+
+  const clientHeight = Number(container.clientHeight) || 0
+  const scrollTop = Number(container.scrollTop) || 0
+  const containerRect = typeof container.getBoundingClientRect === 'function'
+    ? container.getBoundingClientRect()
+    : { top: 0, bottom: 0, height: 0 }
+
+  if (containerRect.height > 0) {
+    const visibleRows = rows.filter((row) => {
+      const cell = row[0]
+      return cell.height > 0 && cell.top >= containerRect.top - 4 && (cell.top + cell.height) <= containerRect.bottom + 4
+    })
+    if (visibleRows.length > 0) return visibleRows[visibleRows.length - 1][0]
+  }
+
+  if (clientHeight > 0 && typeof container.querySelector === 'function') {
+    const visibleRows = rows.filter((row) => {
+      const el = container.querySelector(`[data-nav-index="${row[0].index}"]`)
+      if (!el) return false
+      const top = Number(el.offsetTop) || 0
+      const height = Number(el.offsetHeight) || 0
+      return height > 0 && top >= scrollTop - 4 && (top + height) <= (scrollTop + clientHeight + 4)
+    })
+    if (visibleRows.length > 0) return visibleRows[visibleRows.length - 1][0]
+  }
+
+  return rows[rows.length - 1][0]
 }
 
 watch(query, (newVal) => {
   if (newVal.trim()) {
     resetPinnedFocus()
+  } else {
+    nextTick(resetPinnedScroll)
   }
   activeIndex.value = 0
   scrollToActiveItem()
   search(newVal)
 })
 
-// 固定项减少或清空时钳制宫格焦点索引
+// 固定项减少或清空时钳制宫格焦点索引；回退到 <= 9 项时复位滚动位置
 watch(
   () => displayedPinnedItems.value.length,
   (len) => {
+    if (len <= PINNED_GRID_COLUMNS) {
+      resetPinnedScroll()
+      nextTick(resetPinnedScroll)
+    }
     if (pinnedFocusIndex.value < 0) return
     if (len <= 0) {
       focusSearchInputFromPinned()
@@ -698,8 +868,10 @@ watch(() => visibleItems.value.length, (length) => {
 
 function clearQuery() {
   resetPinnedFocus()
+  resetPinnedScroll()
   clearSearch()
   activeIndex.value = 0
+  nextTick(resetPinnedScroll)
 }
 
 function exitDeclarative() {
@@ -746,6 +918,7 @@ function handleLauncherArrowDown() {
     if (step.nextAnchorX !== null) {
       pinnedAnchorX.value = step.nextAnchorX
     }
+    scrollPinnedTileIntoView(pinnedFocusIndex.value)
     return true
   }
 
@@ -778,22 +951,23 @@ function handleLauncherArrowUp() {
     if (step.nextAnchorX !== null) {
       pinnedAnchorX.value = step.nextAnchorX
     }
+    scrollPinnedTileIntoView(pinnedFocusIndex.value)
     return true
   }
 
-  // 空搜索词且存在首屏固定宫格时，从列表第 0 行按 ↑ 进入正上方固定宫格最后一行第 1 项
+  // 空搜索词且存在首屏固定宫格时，从列表第 0 行按 ↑ 进入当前可见区域最后一排第 1 项
   if (
     !query.value.trim() &&
     displayedPinnedItems.value.length > 0 &&
     (visibleItems.value.length === 0 || activeIndex.value === 0)
   ) {
     const rows = getPinnedVisualRows()
-    if (rows.length > 0) {
-      const lastRow = rows[rows.length - 1]
-      const targetCell = lastRow[0]
+    const targetCell = resolveLastVisiblePinnedRowFirstCell(rows)
+    if (targetCell) {
       pinnedFocusIndex.value = targetCell.index
       pinnedAnchorX.value = targetCell.centerX
       focusPinnedGrid()
+      scrollPinnedTileIntoView(targetCell.index)
       return true
     }
   }
@@ -820,6 +994,7 @@ function handleLauncherHorizontalKey(key) {
   if (step.nextAnchorX !== null) {
     pinnedAnchorX.value = step.nextAnchorX
   }
+  scrollPinnedTileIntoView(pinnedFocusIndex.value)
   return true
 }
 
@@ -837,6 +1012,7 @@ function handleLauncherHomeEnd(key) {
     if (step.nextAnchorX !== null) {
       pinnedAnchorX.value = step.nextAnchorX
     }
+    scrollPinnedTileIntoView(pinnedFocusIndex.value)
     return true
   }
 
@@ -860,6 +1036,7 @@ function handleLauncherPageStep(delta) {
     }
     if (delta < 0) {
       pinnedFocusIndex.value = 0
+      scrollPinnedTileIntoView(0)
       return true
     }
     return false
@@ -873,9 +1050,170 @@ function handleLauncherPageStep(delta) {
   return false
 }
 
-// 跨窗口级直达热键（非模态挂载于顶层作用域，保证动作面板打开期间按 Ctrl+I / Ctrl+M 仍能立即收起面板并跳转主窗口）
+/**
+ * 调整固定磁贴顺序（跨行连续交换相邻可见项，跳过隐藏/下架项并维持其在底层数组的位置）；
+ * 本地乐观更新后 150ms 防抖提交主进程，失败或 stale 时回滚并提示。
+ */
+function handlePinnedReorder(delta, allowFromPanel = false) {
+  if (!allowFromPanel && isLauncherNavBlocked()) return false
+  if (pinnedFocusIndex.value < 0) return false
+  const list = displayedPinnedItems.value
+  const curIdx = pinnedFocusIndex.value
+  const targetIdx = curIdx + delta
+  if (list.length <= 1 || targetIdx < 0 || targetIdx >= list.length) return true
+
+  const curItem = list[curIdx]
+  const adjItem = list[targetIdx]
+  if (!curItem || !adjItem) return true
+
+  const curPinKey = curItem.pinKey || resolvePinKey(curItem)
+  const adjPinKey = adjItem.pinKey || resolvePinKey(adjItem)
+  if (!curPinKey || !adjPinKey) return true
+
+  const movedKind = curItem.pinEntry?.kind || resolvePinKey(curItem).split(':')[0] || 'unknown'
+  if (reorderTimer === null && !pendingReorderBaseline && Array.isArray(pinnedEntries.value) && pinnedEntries.value.length > 0) {
+    pendingReorderBaseline = [...pinnedEntries.value]
+  }
+
+  let nextOrder = null
+  if (typeof swapPinnedKeys === 'function' && Array.isArray(pinnedEntries.value) && pinnedEntries.value.length > 0) {
+    nextOrder = swapPinnedKeys(curPinKey, adjPinKey)
+  } else {
+    const keys = list.map((item) => item.pinKey || resolvePinKey(item)).filter(Boolean)
+    const temp = keys[curIdx]
+    keys[curIdx] = keys[targetIdx]
+    keys[targetIdx] = temp
+    nextOrder = keys
+  }
+  if (!Array.isArray(nextOrder) || nextOrder.length === 0) return true
+
+  pinnedFocusIndex.value = targetIdx
+  pinnedAnchorX.value = null
+  scrollPinnedTileIntoView(targetIdx)
+
+  if (reorderTimer) {
+    clearTimeout(reorderTimer)
+    reorderTimer = null
+  }
+  const generation = ++reorderGeneration
+  const baseline = pendingReorderBaseline
+  reorderTimer = setTimeout(() => {
+    reorderTimer = null
+    pendingReorderBaseline = null
+    void commitPinnedReorder(nextOrder, movedKind, baseline, generation)
+  }, 150)
+
+  return true
+}
+
+async function commitPinnedReorder(order, kind, baseline, generation) {
+  const res = await reorderPinned(order, { kind, baselineEntries: baseline })
+  if (res?.success === false || res?.stale) {
+    if (generation === reorderGeneration || res?.stale) {
+      if (!Array.isArray(res?.pinnedEntries) && baseline && typeof restorePinnedEntries === 'function') {
+        restorePinnedEntries(baseline)
+      }
+      showNoViewFeedback(res?.error || '调整固定顺序失败，已恢复原顺序', true)
+    }
+  }
+}
+
+// 悬浮条动作面板专属保留键：不屏蔽 Ctrl+U（展开工作台）与 Ctrl+Shift+P（独立窗），使其在面板中可见且可直达
+const LAUNCHER_PANEL_RESERVED_SHORTCUTS = new Set([
+  SHELL_SHORTCUTS.ACTION_PANEL,
+  SHELL_SHORTCUTS.OPEN_SETTINGS,
+  'Escape'
+])
+
+// 悬浮条「所见即所按」快捷键解析器
+const resolvedLauncherBindings = computed(() =>
+  resolveActionKeyBindings(activeItemActions.value, {
+    viewType: 'List',
+    reservedCombos: LAUNCHER_PANEL_RESERVED_SHORTCUTS
+  })
+)
+
+function revealFocusedFile() {
+  const cur = currentFocusedItem.value
+  if (!cur || cur.type !== 'file' || cur.available === false) return
+  if (cur.isPinnedTile && cur.pinKey) {
+    void openPinnedFileItem(cur, 'reveal')
+  } else {
+    showInFolder(cur.path)
+  }
+}
+
+function hasLauncherInputSelection(el) {
+  try {
+    return typeof el?.selectionStart === 'number' && el.selectionStart !== el.selectionEnd
+  } catch {
+    return false
+  }
+}
+
+/** 悬浮条搜索框里的原生编辑键保留给输入框（有选区保护 Ctrl+C/X；粘贴/撤销/重做始终保护） */
+function isLauncherNativeEditCombo(e) {
+  const target = e?.target
+  if (!target || typeof target.tagName !== 'string') return false
+  const tag = target.tagName.toUpperCase()
+  const isText =
+    tag === 'TEXTAREA' ||
+    (tag === 'INPUT' && !['checkbox', 'radio', 'button', 'submit'].includes(String(target.type || '').toLowerCase()))
+  if (!isText || e.altKey || !(e.ctrlKey || e.metaKey)) return false
+
+  const keyLower = normalizeEventShortcutKey(e).toLowerCase()
+  const hasValue = Boolean(target.value)
+  if (!e.shiftKey) {
+    if (keyLower === 'c' || keyLower === 'x') return hasLauncherInputSelection(target)
+    if (keyLower === 'v' || keyLower === 'z' || keyLower === 'y') return true
+    if (keyLower === 'a' || keyLower === 'backspace' || keyLower === 'delete') return hasValue
+    return false
+  }
+  return keyLower === 'z'
+}
+
+/** 悬浮条非编辑态直达当前聚焦条目的动作快捷键（如 Ctrl+Shift+C、Ctrl+C、Ctrl+O 等） */
+function handleLauncherActionShortcut(e) {
+  if (actionPanelVisible.value) return false
+  if (activeDeclarativePlugin.value || loadingDeclarative.value || declarativeLoadError.value) return false
+  if (!(e.ctrlKey || e.metaKey || e.altKey)) {
+    if (isInputElement(e.target)) return false
+    const keyName = normalizeEventShortcutKey(e)
+    if (['Enter', 'Escape', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Home', 'End', 'PageUp', 'PageDown', 'Tab'].includes(keyName)) {
+      return false
+    }
+  }
+  if (isLauncherNativeEditCombo(e)) return false
+  const matched = resolvedLauncherBindings.value.matchEvent(e)
+  if (!matched) return false
+  runLauncherAction(matched)
+  return true
+}
+
+// 宿主保留热键：高于 DECLARATIVE 作用域，保证悬浮条内嵌运行插件时 Ctrl+Shift+P 仍能弹出独立常驻窗口
+useKeymap(KEYMAP_SCOPES.HOST_RESERVED, {
+  [POPOUT_WINDOW_SHORTCUT]: () => {
+    if (actionPanelVisible.value) return false
+    if (activeDeclarativePlugin.value) {
+      popoutDeclarativePlugin(
+        activeDeclarativePlugin.value.pluginId,
+        activeDeclarativePlugin.value.featureCode || '',
+        collectDeclarativeQuery(activeDeclarativePlugin.value)
+      )
+      return true
+    }
+    const cur = currentFocusedItem.value
+    if (cur && cur.pluginId && isDeclarativeTarget(cur.pluginId, cur) && cur.mode !== 'no-view') {
+      popoutDeclarativePlugin(cur.pluginId, cur.featureCode || '')
+      return true
+    }
+    return false
+  }
+})
+
+// 跨窗口级直达热键（非模态挂载于顶层作用域，保证动作面板打开期间按 Ctrl+, / Ctrl+U 仍能立即收起面板并跳转主窗口）
 useKeymap(KEYMAP_SCOPES.ACTION_PANEL, {
-  'Ctrl+M': () => {
+  [TOGGLE_MODE_SHORTCUT]: () => {
     expandToDashboard()
     return true
   },
@@ -884,6 +1222,10 @@ useKeymap(KEYMAP_SCOPES.ACTION_PANEL, {
     return true
   }
 })
+
+// 先注册通用动作快捷键解析器，再注册固定页级按键表（LIFO 确保 Enter / Ctrl+K / Ctrl+P 等固定键优先）
+const unregisterLauncherActionShortcuts = registerKeyHandler(KEYMAP_SCOPES.PAGE, handleLauncherActionShortcut)
+onBeforeUnmount(() => unregisterLauncherActionShortcuts())
 
 // 统一注册极客工具条按键 (PAGE 作用域)
 useKeymap(KEYMAP_SCOPES.PAGE, {
@@ -942,14 +1284,18 @@ useKeymap(KEYMAP_SCOPES.PAGE, {
     if (actionPanelVisible.value) return false
     if (activeDeclarativePlugin.value || loadingDeclarative.value || declarativeLoadError.value) return false
     const cur = currentFocusedItem.value
-    if (cur && cur.type === 'file') {
-      showInFolder(cur.path)
-      return true
-    } else if (cur) {
+    if (!cur) return false
+    if (cur.available === false) {
       executeItem(cur)
       return true
     }
-    return false
+    if (cur.type === 'file') {
+      revealFocusedFile()
+      return true
+    } else {
+      executeItem(cur)
+      return true
+    }
   },
   'Ctrl+K': () => {
     if (activeDeclarativePlugin.value || loadingDeclarative.value || declarativeLoadError.value) return false
@@ -966,31 +1312,8 @@ useKeymap(KEYMAP_SCOPES.PAGE, {
     }
     return false
   },
-  'Alt+1': () => triggerPinnedByIndex(0),
-  'Alt+2': () => triggerPinnedByIndex(1),
-  'Alt+3': () => triggerPinnedByIndex(2),
-  'Alt+4': () => triggerPinnedByIndex(3),
-  'Alt+5': () => triggerPinnedByIndex(4),
-  'Alt+6': () => triggerPinnedByIndex(5),
-  'Alt+7': () => triggerPinnedByIndex(6),
-  'Alt+8': () => triggerPinnedByIndex(7),
-  'Alt+9': () => triggerPinnedByIndex(8),
-  'Ctrl+Shift+O': () => {
-    if (activeDeclarativePlugin.value) {
-      popoutDeclarativePlugin(
-        activeDeclarativePlugin.value.pluginId,
-        activeDeclarativePlugin.value.featureCode || '',
-        collectDeclarativeQuery(activeDeclarativePlugin.value)
-      )
-      return true
-    }
-    const cur = currentFocusedItem.value
-    if (cur && cur.pluginId && isDeclarativeTarget(cur.pluginId, cur) && cur.mode !== 'no-view') {
-      popoutDeclarativePlugin(cur.pluginId, cur.featureCode || '')
-      return true
-    }
-    return false
-  },
+  'Ctrl+Shift+ArrowLeft': () => handlePinnedReorder(-1),
+  'Ctrl+Shift+ArrowRight': () => handlePinnedReorder(1),
   'Escape': () => {
     if (loadingDeclarative.value || declarativeLoadError.value) {
       exitDeclarative()
@@ -999,6 +1322,9 @@ useKeymap(KEYMAP_SCOPES.PAGE, {
     if (activeDeclarativePlugin.value) return false
     if (actionPanelVisible.value) {
       actionPanelVisible.value = false
+      return true
+    } else if (pinnedFocusIndex.value >= 0) {
+      focusSearchInputFromPinned()
       return true
     } else if (query.value) {
       clearQuery()
@@ -1094,12 +1420,27 @@ function showInFolder(filePath) {
   return runFileAction(filePath, 'showItemInFolder', '定位文件失败')
 }
 
-function triggerPinnedByIndex(idx) {
-  if (activeDeclarativePlugin.value || loadingDeclarative.value || declarativeLoadError.value) return false
-  const target = pinnedItems.value[idx]
-  if (!target) return false
-  executeItem(target)
-  return true
+async function openPinnedFileItem(item, action = 'open') {
+  if (!item?.pinKey || fileActionPending) return
+  fileActionPending = true
+  const searchAtStart = query.value
+  const failureMessage = action === 'reveal' ? '定位文件失败' : '打开文件失败'
+  try {
+    const bridge = window.__ztoolsLauncher
+    if (typeof bridge?.openPanelItem !== 'function') {
+      throw new Error('当前环境不支持启动该条目')
+    }
+    const res = await bridge.openPanelItem(item.pinKey, 'pinned', '', action)
+    if (res?.success === false) {
+      throw new Error(res?.error?.message || res?.error || failureMessage)
+    }
+    finishExternalLaunch(searchAtStart)
+  } catch (err) {
+    console.warn('[LauncherBar] 打开固定文件条目失败:', err)
+    showNoViewFeedback(err?.message || failureMessage, true)
+  } finally {
+    fileActionPending = false
+  }
 }
 
 async function openPanelEntry(item) {
@@ -1110,7 +1451,7 @@ async function openPanelEntry(item) {
     if (typeof bridge?.openPanelItem !== 'function') {
       throw new Error('当前环境不支持启动该条目')
     }
-    const itemType = item.panelItemType || (item.type === 'local-app' ? 'local' : 'system_tool')
+    const itemType = item.panelItemType || 'system_tool'
     const res = await bridge.openPanelItem(item.id, itemType, query.value)
     if (res?.success === false) {
       throw new Error(res?.error?.message || res?.error || '打开条目失败')
@@ -1124,6 +1465,10 @@ async function openPanelEntry(item) {
 
 function executeItem(item) {
   if (!item) return
+  if (item.available === false) {
+    showNoViewFeedback(item.unavailableReason || '该固定项已失效，可按 Ctrl+P 或点击 × 取消固定', true)
+    return
+  }
   if (!item.omitFromFrecencyTracking) {
     recordUsage(item.key || item.pluginId, item)
   }
@@ -1137,13 +1482,18 @@ function executeItem(item) {
     })
     return
   }
-  if (item.type === 'local-app' || item.type === 'system-tool') {
+  if (item.type === 'system-tool') {
     openPanelEntry(item)
     return
   }
   if (item.type === 'file') {
-    if (item.pendingGrant) void openPendingApplication(item)
-    else openFile(item.path)
+    if (item.isPinnedTile && item.pinKey) {
+      void openPinnedFileItem(item, 'open')
+    } else if (item.pendingGrant) {
+      void openPendingApplication(item)
+    } else {
+      openFile(item.path)
+    }
   } else if (typeof item.action === 'function') {
     item.action()
   } else if (item.mode === 'no-view' && item.pluginId) {
@@ -1349,6 +1699,7 @@ function hideLauncher() {
 function handleWindowFocus() {
   actionPanelVisible.value = false
   resetPinnedFocus()
+  resetPinnedScroll()
   void refreshPanelData()
   if (!activeDeclarativePlugin.value && !loadingDeclarative.value && !declarativeLoadError.value) {
     inputRef.value?.focus()
@@ -1378,9 +1729,15 @@ onMounted(async () => {
 
 onBeforeUnmount(() => {
   declarativeLoadToken++
+  reorderGeneration++
   if (noViewStatusTimer) {
     clearTimeout(noViewStatusTimer)
     noViewStatusTimer = null
+  }
+  if (reorderTimer) {
+    clearTimeout(reorderTimer)
+    reorderTimer = null
+    pendingReorderBaseline = null
   }
   if (typeof window !== 'undefined') {
     window.removeEventListener('focus', handleWindowFocus)
@@ -1519,16 +1876,27 @@ watch(
 }
 
 .launcher-pinned-grid {
-  display: flex;
-  flex-wrap: wrap;
+  --pinned-tile-h: 55px;
+  display: grid;
+  grid-template-columns: repeat(9, minmax(0, 1fr));
+  grid-auto-rows: var(--pinned-tile-h);
   gap: 6px;
+  max-height: var(--pinned-tile-h);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-width: thin;
   outline: none;
+}
+
+.launcher-pinned-grid.is-two-rows {
+  max-height: calc(var(--pinned-tile-h) * 2 + 6px);
 }
 
 .launcher-pinned-tile {
   position: relative;
-  width: 68px;
-  flex-shrink: 0;
+  height: 100%;
+  min-width: 0;
+  box-sizing: border-box;
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -1554,6 +1922,36 @@ watch(
   box-shadow: var(--rc-focus-ring);
 }
 
+.launcher-pinned-tile.is-unavailable {
+  opacity: 0.56;
+}
+
+.launcher-pinned-tile.is-unavailable .launcher-pinned-icon,
+.launcher-pinned-tile.is-unavailable .launcher-pinned-app-icon {
+  filter: grayscale(1);
+}
+
+.launcher-pinned-app-icon {
+  width: 24px;
+  height: 24px;
+  flex-shrink: 0;
+  object-fit: contain;
+}
+
+.launcher-pinned-unavailable-tag {
+  position: absolute;
+  top: 2px;
+  left: 3px;
+  padding: 0 3px;
+  border-radius: 3px;
+  border: 1px solid var(--rc-border);
+  background: var(--rc-surface);
+  font-size: 9px;
+  line-height: 12px;
+  color: var(--rc-text-faint);
+  pointer-events: none;
+}
+
 .launcher-pinned-unpin {
   position: absolute;
   top: 2px;
@@ -1573,7 +1971,8 @@ watch(
   cursor: pointer;
 }
 
-.launcher-pinned-tile:hover .launcher-pinned-unpin {
+.launcher-pinned-tile:hover .launcher-pinned-unpin,
+.launcher-pinned-tile.is-unavailable .launcher-pinned-unpin {
   opacity: 1;
 }
 

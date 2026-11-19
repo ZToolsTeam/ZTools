@@ -3,9 +3,11 @@ import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
+import { EventEmitter } from 'node:events'
 import { validateMacSnapshot, validateExistingCdpIdentitySnapshot, parseExistingCdpIdentityArguments,
   runExistingCdpIdentity, inspectMainProcessIdentity, collectInstalledPluginInventory,
-  runExistingAppAboutNavigation, runMacAppIntegration, MAC_AUTOMATIC_CASES, main } from './macos-app-integration.mjs'
+  runExistingAppAboutNavigation, runMacAppIntegration, MAC_AUTOMATIC_CASES, main,
+  selectMacMainPageTarget, startMacNormalDatabaseChainSession, stopMacNormalDatabaseChainSession } from './macos-app-integration.mjs'
 
 test('startup exception still produces a failed reviewable report without raw diagnostic data', async () => {
   const output = fs.mkdtempSync(path.join(os.tmpdir(), 'ztools-mac-failed-start-'))
@@ -119,10 +121,11 @@ test('existing-App identity validator rejects wrong runtime, target, versions, a
 })
 
 test('attach-existing CLI requires a loopback port, expected platform, executable path, and output directory', () => {
+  const output = path.resolve('evidence')
   const options = parseExistingCdpIdentityArguments(['--attach-existing', '--existing-cdp-port', '9338',
     '--main-inspect-port', '9339', '--expected-user-data', 'C:\\Users\\tester\\AppData\\Roaming\\ztools-electron-client',
     '--expected-platform', 'windows', '--expect-process-arch', 'x64', '--expected-process-path', 'E:\\ZTools\\electron.exe',
-    '--output', 'E:\\evidence', '--action', 'about-roundtrip'])
+    '--output', output, '--action', 'about-roundtrip'])
   assert.equal(options.port, 9338)
   assert.equal(options.mainInspectPort, 9339)
   assert.equal(options.expectedElectronUserDataPath, 'C:\\Users\\tester\\AppData\\Roaming\\ztools-electron-client')
@@ -130,15 +133,15 @@ test('attach-existing CLI requires a loopback port, expected platform, executabl
   assert.equal(options.action, 'about-roundtrip')
   assert.throws(() => parseExistingCdpIdentityArguments(['--attach-existing', '--existing-cdp-port', '80',
     '--expected-platform', 'windows', '--expect-process-arch', 'x64', '--expected-process-path', 'E:\\ZTools\\electron.exe',
-    '--output', 'E:\\evidence']), /INVALID_EXISTING_CDP_PORT/)
+    '--output', output]), /INVALID_EXISTING_CDP_PORT/)
   assert.throws(() => parseExistingCdpIdentityArguments(['--existing-cdp-port', '9338', '--expected-platform', 'windows',
-    '--expect-process-arch', 'x64', '--expected-process-path', 'E:\\ZTools\\electron.exe', '--output', 'E:\\evidence']), /ATTACH_EXISTING_REQUIRED/)
+    '--expect-process-arch', 'x64', '--expected-process-path', 'E:\\ZTools\\electron.exe', '--output', output]), /ATTACH_EXISTING_REQUIRED/)
   assert.throws(() => parseExistingCdpIdentityArguments(['--attach-existing', '--existing-cdp-port', '9338',
     '--expected-platform', 'windows', '--expect-process-arch', 'x64', '--expected-process-path', 'E:\\ZTools\\electron.exe',
-    '--output', 'E:\\evidence', '--action', 'open-account-and-submit']), /ACTION_NOT_PREPARED/)
+    '--output', output, '--action', 'open-account-and-submit']), /ACTION_NOT_PREPARED/)
   assert.throws(() => parseExistingCdpIdentityArguments(['--attach-existing', '--existing-cdp-port', '9338',
     '--main-inspect-port', '9338', '--expected-platform', 'windows', '--expect-process-arch', 'x64',
-    '--expected-process-path', 'E:\\ZTools\\electron.exe', '--output', 'E:\\evidence']), /INSPECTOR_PORT_COLLISION/)
+    '--expected-process-path', 'E:\\ZTools\\electron.exe', '--output', output]), /INSPECTOR_PORT_COLLISION/)
 })
 
 test('identity runner refuses to call SDK userData a Main userData when no explicit inspector port is supplied', async () => {
@@ -260,4 +263,121 @@ test('existing-CDP main writes a baseline report without upgrading its status to
     assert.equal(report.scope, 'normal-app-cdp-identity-baseline')
     assert.equal(report.cleanup, 'EXISTING_PROCESS_LEFT_RUNNING')
   } finally { fs.rmSync(output, { recursive: true, force: true }) }
+})
+
+const normalMainTarget = { id: 'normal-main', type: 'page', url: 'ztools://web/index.html#/my',
+  webSocketDebuggerUrl: 'ws://127.0.0.1:19421/devtools/page/normal-main' }
+const normalLauncherTarget = { id: 'normal-launcher', type: 'page', url: 'ztools://web/index.html?mode=launcher#/launcher',
+  webSocketDebuggerUrl: 'ws://127.0.0.1:19421/devtools/page/normal-launcher' }
+
+test('主窗口选择按明确URL区分Launcher，保留双主窗口歧义拒绝', () => {
+  assert.equal(selectMacMainPageTarget([normalLauncherTarget, normalMainTarget]), normalMainTarget)
+  assert.equal(selectMacMainPageTarget([normalMainTarget, normalLauncherTarget]), normalMainTarget)
+  assert.equal(selectMacMainPageTarget([normalLauncherTarget]), undefined)
+  assert.throws(() => selectMacMainPageTarget([normalMainTarget, { ...normalMainTarget, id: 'second' }]), /AMBIGUOUS_NORMAL_APP_TARGET/)
+  for (const url of ['https://web/index.html', 'ztools://web/other.html', 'ztools://web/index.html?other=true',
+    'ztools://user:password@web/index.html', 'ztools://web:1234/index.html', 'ztools://web/index.html\n']) {
+    assert.equal(selectMacMainPageTarget([{ ...normalMainTarget, url }]), undefined)
+  }
+})
+
+function normalSessionFixture({ runtimeAppName = 'ztools-electron-client',
+  targets = [normalLauncherTarget, normalMainTarget], browserPid = 4321 } = {}) {
+  const calls = []
+  const child = Object.assign(new EventEmitter(), { pid: 4321, exitCode: null, signalCode: null })
+  const exit = () => { child.exitCode = 0; child.emit('exit', 0) }
+  child.kill = signal => { calls.push({ action: 'kill', signal }); exit() }
+  const appRoot = '/Applications/Fixture.app'
+  const appArchive = path.join(appRoot, 'Contents/Resources/app.asar')
+  const preflight = { status: 'PASS', appRoot, executable: path.join(appRoot, 'Contents/MacOS/ZTools'),
+    bundleId: 'test.ztools.fixture', appVersion: '1.1.7.1', runtimeAppName, minimumOs: '13.0',
+    expectedProcessArch: 'arm64', slices: ['arm64', 'x86_64'] }
+  const profile = { root: '/isolated/profile', appDataPath: '/isolated/profile/appData',
+    userDataPath: '/isolated/profile/appData/ZTools', sessionDataPath: '/isolated/profile/sessionData' }
+  const options = { app: appRoot, output: '/isolated', profile, 'bundle-id': preflight.bundleId,
+    'minimum-os': '13.0', 'expect-process-arch': 'arm64' }
+  const main = { pid: child.pid, execPath: preflight.executable, processArch: 'arm64',
+    electronVersion: '43.4.1', appVersion: preflight.appVersion, isPackaged: true,
+    appPath: appArchive, mainEntry: path.join(appArchive, 'out/main/bootstrap.js'),
+    ...Object.fromEntries(['appDataPath', 'userDataPath', 'sessionDataPath'].flatMap(key => [
+      [key, profile[key]], [key.replace(/Path$/, 'RealPath'), profile[key]]
+    ])) }
+  const inspector = {
+    async evaluate(expression, evaluationOptions) {
+      calls.push({ action: 'inspector-evaluate', expression, options: evaluationOptions })
+      if (expression.includes('app.quit();')) { exit(); return true }
+      return main
+    },
+    dispose() { calls.push({ action: 'inspector-dispose' }) }
+  }
+  const browser = {
+    async call(method) {
+      calls.push({ action: 'browser-call', method })
+      if (method === 'SystemInfo.getProcessInfo') return { processInfo: [{ type: 'browser', id: browserPid }] }
+      if (method === 'Browser.close') { exit(); return {} }
+      throw new Error('UNEXPECTED_BROWSER_CALL')
+    },
+    dispose() { calls.push({ action: 'browser-dispose' }) }
+  }
+  const page = {
+    async call(method, params) {
+      calls.push({ action: 'page-call', method, params })
+      assert.equal(method, 'Runtime.evaluate')
+      return { result: { value: snapshot() } }
+    },
+    dispose() { calls.push({ action: 'page-dispose' }) }
+  }
+  let nextPort = 19421
+  const dependencies = {
+    platform: 'darwin', preflight,
+    allocatePort: async () => { calls.push({ action: 'allocate-port' }); return nextPort++ },
+    spawnApp(executable, args, spawnOptions) { calls.push({ action: 'spawn', executable, args, options: spawnOptions }); return child },
+    async isolationGate(config) {
+      calls.push({ action: 'gate', config })
+      return { status: 'PASS', resumed: true, client: inspector }
+    },
+    fetchImpl: async url => ({ ok: true, json: async () => url.endsWith('/json/list') ? targets
+      : { webSocketDebuggerUrl: 'ws://127.0.0.1:19421/devtools/browser/owned' } }),
+    connect: async url => { calls.push({ action: 'connect', url }); return url.includes('/devtools/browser/') ? browser : page }
+  }
+  return { calls, options, dependencies, child }
+}
+
+test('隔离normal-session使用静态预检包名与同步主进程求值，renderer继续await异步且只连接主窗口', async () => {
+  const h = normalSessionFixture()
+  const session = await startMacNormalDatabaseChainSession(h.options, h.dependencies)
+  try {
+    assert.equal(h.calls.find(call => call.action === 'gate').config.appName, 'ztools-electron-client')
+    assert.equal(session.mainPage.target, normalMainTarget)
+    assert.equal(h.calls.some(call => call.action === 'connect' && call.url === normalLauncherTarget.webSocketDebuggerUrl), false)
+    assert.equal(h.calls.find(call => call.action === 'inspector-evaluate').options.awaitPromise, false)
+    assert.equal(h.calls.find(call => call.action === 'page-call').params.awaitPromise, true)
+    assert.equal(session.browserVerified, true)
+  } finally {
+    const cleanup = await stopMacNormalDatabaseChainSession(session)
+    assert.equal(cleanup.normalQuitConfirmed, true)
+  }
+  const quitting = h.calls.filter(call => call.action === 'inspector-evaluate').at(-1)
+  assert.match(quitting.expression, /app.quit/)
+  assert.deepEqual(quitting.options, { awaitPromise: false, timeoutMs: 3000 })
+  assert.equal(h.calls.some(call => call.action === 'kill'), false)
+})
+
+test('normal-session在启动前拒绝缺失或畸形静态包名，保留owned browser PID与双主窗口拒绝', async () => {
+  for (const value of [undefined, null, '', '\u0000', 'x'.repeat(129)]) {
+    const h = normalSessionFixture()
+    h.dependencies.preflight.runtimeAppName = value
+    await assert.rejects(startMacNormalDatabaseChainSession(h.options, h.dependencies), /APP_PREFLIGHT_IDENTITY_MISMATCH/)
+    assert.deepEqual(h.calls, [], '身份无效不能分配端口或启动进程')
+  }
+  for (const [overrides, code] of [
+    [{ browserPid: 9999 }, 'OWNED_CDP_PROCESS_MISMATCH'],
+    [{ targets: [normalMainTarget, { ...normalMainTarget, id: 'second' }] }, 'AMBIGUOUS_NORMAL_APP_TARGET']
+  ]) {
+    const h = normalSessionFixture(overrides)
+    await assert.rejects(startMacNormalDatabaseChainSession(h.options, h.dependencies), new RegExp(code))
+    assert.equal(h.calls.some(call => call.action === 'page-call'), false)
+    assert.equal(h.calls.some(call => call.method === 'Browser.close'), false, '未确认owned browser之前不得关闭浏览器')
+    assert.equal(h.child.exitCode, 0)
+  }
 })

@@ -257,7 +257,10 @@ import { createPathSemanticsAdapter } from '../platform/path-semantics.js'
 import type { PathSemanticsAdapter } from '../platform/path-semantics.js'
 import { ScreenService } from '../services/screen-service.js'
 import type { ScreenClipboardAdapters } from '../platform/screen-clipboard.js'
-import { createElectronGlobalShortcutAdapter } from '../platform/common/electron-global-shortcut.js'
+import {
+  createElectronGlobalShortcutAdapter,
+  toElectronAccelerator
+} from '../platform/common/electron-global-shortcut.js'
 import type { SystemPlatformAdapter } from '../platform/system.js'
 import { ShellService } from '../services/shell-service.js'
 import { RuntimePermissionMonitorService } from '../services/runtime-permission-monitor-service.js'
@@ -267,7 +270,11 @@ import { RuntimeCapabilityRequestCancellationService } from '../services/runtime
 import { LoginItemConfigService } from '../services/login-item-config-service.js'
 import type { MacosLoginItemAdapter } from '../platform/macos/login-item.js'
 import { SystemService } from '../services/system-service.js'
-import { TriggerService, type KeyboardDoubleTapAdapter } from '../services/trigger-service.js'
+import {
+  TriggerService,
+  type KeyboardDoubleTapAdapter,
+  type MouseTriggerAdapter
+} from '../services/trigger-service.js'
 import { AutostartService, initializeDefaultAutostart } from '../services/autostart-service.js'
 import { WindowService } from '../services/window-service.js'
 import type { WindowRegistry } from '../windows/window-registry.js'
@@ -407,9 +414,9 @@ export interface IpcRouterOptions {
     pluginRoot: string
   }
   toggleMainWindow(): void
-  getPanelLocalApps(): Promise<Array<{ id: string; name: string }>>
-  launchLocalApp?(appId: string): Promise<void>
   forwardHotkeyToRecorder?(accelerator: string): Promise<boolean> | boolean
+  /** 冷启动时若 triggers.json 尚未初始化，用于自动建立全局唤醒热键 */
+  initialWakeHotkey?: string
   closeConfirmationResolved(): void
   screenClipboardAdapters: ScreenClipboardAdapters
   systemPlatformAdapter: SystemPlatformAdapter
@@ -778,6 +785,11 @@ export class IpcRouter {
     this.#events.publishHost('system.AccentColorChange', { accent })
   }
 
+  publishSuperPanelChanged(): void {
+    if (this.#stopping) return
+    this.#events.publishHostToMain('super_panel_changed', {})
+  }
+
   refreshPermissionOwner(webContentsId: number): Promise<void> {
     const owner = this.registry.get(webContentsId)
     return owner && !this.#stopping ? this.#permissionMonitor.refreshOwner(owner) : Promise.resolve()
@@ -791,6 +803,22 @@ export class IpcRouter {
     return this.#events.publishHost('ui_close_confirm_request', { origin }).delivered > 0
   }
 
+  getGlobalWakeHotkey(): { exists: boolean; enabled: boolean; key: string } {
+    return this.#triggers.getGlobalWakeHotkey()
+  }
+
+  flushStartupHotkeyConflicts(): void {
+    this.#triggers.flushStartupConflicts()
+  }
+
+  verifyTriggersOnResume(): Promise<void> {
+    return this.#triggers.verifyRegistrations()
+  }
+
+  isRecorderCaptureActive(): boolean {
+    return this.#triggers.isRecorderCaptureActive()
+  }
+
   static async create(
     registry: WindowRegistry,
     services: CoreServices,
@@ -800,6 +828,11 @@ export class IpcRouter {
     const router = await constructWithRouterRollback((scope) =>
       new IpcRouter(registry, services, options, mainApp, scope)
     )
+    try {
+      await router.#triggers.waitUntilReady()
+    } catch (error) {
+      console.warn('初始化全局触发器状态失败', error)
+    }
     try {
       const persistedAccent = await services.config.get('user_settings.json', 'ui.accent', 'ember')
       router.#windows.updateTheme({
@@ -1065,6 +1098,10 @@ export class IpcRouter {
       ['configureKeyboardDoubleTap', 'onInputEvent', 'onLifecycleEvent']
         .every(method => typeof (keyboardCandidate as Record<string, unknown>)[method] === 'function')
       ? keyboardCandidate as KeyboardDoubleTapAdapter : undefined
+    const mousePort = nativePlatform === 'win32' && keyboardCandidate !== null && typeof keyboardCandidate === 'object' &&
+      ['configureMouseTrigger', 'onInputEvent', 'onLifecycleEvent']
+        .every(method => typeof (keyboardCandidate as Record<string, unknown>)[method] === 'function')
+      ? keyboardCandidate as MouseTriggerAdapter : undefined
     const pluginRuntimeTarget = { platform: nativePlatform, runtime: 'electron', arch: process.arch }
     const macNativeCatalogLookup = (pluginId: string, componentId: string) =>
       services.nativeHost?.getApprovedMacComponent?.(pluginId, componentId)
@@ -1122,29 +1159,45 @@ export class IpcRouter {
       }),
       (dispose) => dispose()
     )
+    const baseShortcutAdapter = createElectronGlobalShortcutAdapter(globalShortcut)
+    const shortcutsAdapter = {
+      ...baseShortcutAdapter,
+      ...(typeof globalShortcut?.isRegistered === 'function'
+        ? {
+            isRegistered: (accelerator: string) =>
+              globalShortcut.isRegistered(toElectronAccelerator(accelerator))
+          }
+        : {})
+    }
     this.#triggers = constructionScope.own(
       new TriggerService({
         dataRoot: services.dataRoot,
-        shortcuts: createElectronGlobalShortcutAdapter(globalShortcut),
+        shortcuts: shortcutsAdapter,
         events,
         state: this.#pluginState,
         openPlugin: (params) => this.openPlugin(params),
         ...(keyboardPort ? { keyboard: keyboardPort } : {}),
+        ...(mousePort ? { mouse: mousePort } : {}),
+        ...(options.initialWakeHotkey !== undefined ? { initialWakeHotkey: options.initialWakeHotkey } : {}),
         toggleMainWindow: options.toggleMainWindow,
-        ...(options.launchLocalApp ? { launchLocalApp: options.launchLocalApp } : {}),
         ...(options.forwardHotkeyToRecorder ? { forwardHotkeyToRecorder: options.forwardHotkeyToRecorder } : {})
       }),
       (triggers) => triggers.stop()
     )
     const hotkeyProbe = new HotkeyProbeService(nativeHotkeyProbe(macHotkeysHelperPath(mainApp.isPackaged, process.resourcesPath)), globalShortcut, () => app.isReady())
     const triggers = this.#triggers
+    const stopDeclarativePlugin = (pluginId: string): void => {
+      this.#attribution?.revokePlugin(pluginId)
+      windows.closePlugin(pluginId)
+      events.publishHostToMain('plugin_runtime_stopped', { pluginId })
+    }
     this.#plugins = constructionScope.own(
       new PluginInstallService(services.dataRoot, events, {
         state: this.#pluginState,
         libraryMetadata: services.libraryMetadata,
         analytics: (event, pluginId, data) => {
           // 安装 / 更新 / 卸载完成：旧清单签发的会话立即失效（权限可能已变）
-          this.#attribution?.revokePlugin(pluginId)
+          stopDeclarativePlugin(pluginId)
           services.analytics.reportHost(event, pluginId, data)
         },
         runtimeTarget: pluginRuntimeTarget,
@@ -1363,7 +1416,10 @@ export class IpcRouter {
       },
       getNativeId: () => options.systemPlatformAdapter.getNativeId(),
       startPreventSleep: (mode = 'display') => powerSaveBlocker.start(mode === 'system' ? 'prevent-app-suspension' : 'prevent-display-sleep'),
-      stopPreventSleep: (id) => powerSaveBlocker.stop(id)
+      stopPreventSleep: (id) => powerSaveBlocker.stop(id),
+      nativeInputAvailable: () => typeof services.nativeInputAvailable === 'boolean'
+        ? services.nativeInputAvailable
+        : services.nativeInput?.state === 'ready'
     }), (system) => system.stop())
     const system = this.#system
     const config = new LoginItemConfigService(services.config, options.loginItems)
@@ -1385,6 +1441,17 @@ export class IpcRouter {
     const autostart = this.#autostart
     const capabilityAuthorization = this.#capabilityAuthorization
     const diagnosticFailures = this.#diagnosticFailures
+    const syncWakeHotkeyIfTarget = async (triggerId: string): Promise<void> => {
+      if (triggerId !== 'global_wake_hotkey') return
+      const wakeState = triggers.getGlobalWakeHotkey()
+      const nextWakeKey = wakeState.enabled ? wakeState.key : ''
+      try {
+        await services.config.set?.('user_settings.json', 'hotkey.global', nextWakeKey, true)
+      } catch (error) {
+        console.warn('同步全局唤醒快捷键设置失败:', error)
+      }
+      options.onTrayStatePossiblyChanged?.()
+    }
     this.#handlers = {
       async app_ready(params) {
         return { accepted: true, params }
@@ -1502,7 +1569,7 @@ export class IpcRouter {
           const enabled = await pluginState.toggleEnabled(manifest.id, manifest.enabled !== false)
           await triggers.syncPluginEnabled(manifest.id, enabled)
           if (!enabled) {
-            attribution.revokePlugin(manifest.id)
+            stopDeclarativePlugin(manifest.id)
             system.releasePluginPowerSessions(manifest.id)
             await pluginWindows.closePlugin(manifest.id)
           }
@@ -1513,7 +1580,7 @@ export class IpcRouter {
         const input = params as { pluginId: string; revoked: boolean; reason?: string }
         await plugins.markRevoked(input.pluginId, input.revoked, input.reason)
         if (input.revoked) {
-          attribution.revokePlugin(input.pluginId)
+          stopDeclarativePlugin(input.pluginId)
           system.releasePluginPowerSessions(input.pluginId)
           await pluginWindows.closePlugin(input.pluginId)
           await dllPlugins.unloadPlugin(input.pluginId)
@@ -1530,6 +1597,7 @@ export class IpcRouter {
         ) {
           throw new ZToolsError(errorCodes.permissionDenied, '插件只能关闭自己的窗口')
         }
+        if (isHostCaller(caller) && input.instanceId === undefined) windows.closePlugin(input.pluginId)
         return pluginWindows.close(input.pluginId, input.instanceId)
       },
       async plugin_create_shortcut(params, caller) {
@@ -1555,14 +1623,14 @@ export class IpcRouter {
       },
       async plugin_install(params) {
         const input = params as PluginInstallParams
-        attribution.revokePlugin(input.pluginId)
+        stopDeclarativePlugin(input.pluginId)
         await pluginWindows.closePlugin(input.pluginId)
         await dllPlugins.unloadPlugin(input.pluginId)
         return plugins.startInstall(input, false)
       },
       async plugin_update(params) {
         const input = params as PluginInstallParams
-        attribution.revokePlugin(input.pluginId)
+        stopDeclarativePlugin(input.pluginId)
         await pluginWindows.closePlugin(input.pluginId)
         await dllPlugins.unloadPlugin(input.pluginId)
         return plugins.startInstall(input, true)
@@ -1571,7 +1639,7 @@ export class IpcRouter {
         const input = params as PluginKeyParams
         return uninstallPluginWithCleanup(input.pluginId, {
           async stopRuntime(pluginId) {
-            attribution.revokePlugin(pluginId)
+            stopDeclarativePlugin(pluginId)
             system.releasePluginPowerSessions(pluginId)
             await pluginWindows.closePlugin(pluginId)
             await dllPlugins.unloadPlugin(pluginId)
@@ -1672,16 +1740,24 @@ export class IpcRouter {
         return deferredCapability('特权 Explorer 重启', 'M3')
       },
       async trigger_register(params, caller) {
-        return triggers.register(params as TriggerRegisterParams, caller)
+        const result = await triggers.register(params as TriggerRegisterParams, caller)
+        await syncWakeHotkeyIfTarget(result.data.triggerId)
+        return result
       },
       async trigger_unregister(params, caller) {
-        return triggers.unregister((params as { triggerId: string }).triggerId, caller)
+        const triggerId = (params as { triggerId: string }).triggerId
+        const result = await triggers.unregister(triggerId, caller)
+        await syncWakeHotkeyIfTarget(triggerId)
+        return result
       },
       async trigger_list(params, caller) {
         return triggers.list(params as TriggerListParams, caller)
       },
       async trigger_set_enabled(params, caller) {
-        return triggers.setEnabled(params as TriggerSetEnabledParams, caller)
+        const input = params as TriggerSetEnabledParams
+        const result = await triggers.setEnabled(input, caller)
+        await syncWakeHotkeyIfTarget(input.triggerId)
+        return result
       },
       async trigger_check_conflict(params, caller) {
         return triggers.checkConflict(params as TriggerConflictParams, caller)
@@ -1886,9 +1962,6 @@ export class IpcRouter {
         // 快捷键设置变更后刷新托盘菜单中的唤醒快捷键提示
         options.onTrayStatePossiblyChanged?.()
         return { success: true }
-      },
-      async system_get_panel_local_apps() {
-        return { success: true, data: await options.getPanelLocalApps() }
       },
       async dllplugin_list(_params, caller) {
         return dllPlugins.list(caller)
@@ -2384,7 +2457,7 @@ export class IpcRouter {
         return windows.hideRecordBar(caller)
       },
       async window_toggle_devtools(_params, caller) {
-        return windows.toggleDevTools(caller)
+        return windows.toggleDevTools(caller, mainApp.isPackaged)
       },
       async ui_close_confirm_result(params, caller) {
         try {

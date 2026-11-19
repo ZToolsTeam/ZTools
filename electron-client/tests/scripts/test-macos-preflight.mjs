@@ -6,11 +6,12 @@ import { inspectMacApp, parseMacTestArguments, compareOsVersions } from '../../s
 const app = path.resolve('fixture', 'Test.app')
 const options = { app, output: path.resolve('reports'), 'bundle-id': 'test.ztools.fixture',
   'minimum-os': '12.0', 'expect-process-arch': 'arm64' }
-function setup({ info = {}, system = '13.0', arches = 'arm64 x86_64' } = {}) {
+function setup({ info = {}, system = '13.0', arches = 'arm64 x86_64',
+  appPackage = { name: 'ztools-electron-client', version: '1.1.7.1' } } = {}) {
   const calls = []
   return { calls, dependencies: {
     platform: 'darwin',
-    readAppPackage: () => ({ version: '1.1.7.1' }),
+    readAppPackage: () => appPackage,
     fsApi: {
       realpathSync: value => value,
       statSync: value => ({ isDirectory: () => value === app, isFile: () => value !== app }),
@@ -45,11 +46,28 @@ test('注入Mac预检核实元数据、双切片和依赖；不冒充进程架�
   assert.equal(result.status, 'PASS')
   assert.equal(result.processArch, null)
   assert.equal(result.electronVersion, null)
+  assert.equal(result.runtimeAppName, 'ztools-electron-client')
   assert.match(result.executableSha256, /^[a-f0-9]{64}$/)
   assert.deepEqual(h.calls.map(c => c.tool), ['/usr/bin/plutil', '/usr/bin/sw_vers', '/usr/bin/lipo'])
   for (const call of h.calls) assert.deepEqual(call.runOptions,
     { encoding: 'utf8', shell: false, timeout: 15_000, maxBuffer: 1024 * 1024 })
   assert.deepEqual(h.calls[0].args, ['-convert', 'json', '-o', '-', path.join(app, 'Contents', 'Info.plist')])
+})
+
+test('运行时包名只来自静态manifest，优先productName且拒绝畸形或缺失身份', () => {
+  const version = '1.1.7.1'
+  const product = inspectMacApp(options, setup({ appPackage: { version, name: 'npm-name', productName: 'ZTools' } }).dependencies)
+  assert.equal(product.status, 'PASS')
+  assert.equal(product.runtimeAppName, 'ZTools')
+  assert.equal(inspectMacApp(options, setup({ appPackage: { version, name: 'x'.repeat(128) } }).dependencies).status, 'PASS')
+  for (const invalid of [undefined, null, '', ' ', ' leading', 'trailing ', 'a\nb', 'a\u0000b', 'a\u0085b', 'x'.repeat(129), 42, []]) {
+    for (const appPackage of [{ version, name: invalid }, { version, name: 'valid-name', productName: invalid }]) {
+      assert.deepEqual(inspectMacApp(options, setup({ appPackage }).dependencies), { status: 'FAIL', code: 'INVALID_APP_NAME_METADATA' })
+    }
+  }
+  for (const appPackage of [null, [], { version }]) {
+    assert.deepEqual(inspectMacApp(options, setup({ appPackage }).dependencies), { status: 'FAIL', code: 'INVALID_APP_NAME_METADATA' })
+  }
 })
 
 test('错误Bundle ID、OS元数据、thin slice和未知工具输出失败关闭', () => {

@@ -285,8 +285,8 @@ describe('MyPage Properties', () => {
     fc.assert(
       fc.property(fc.string(), (pluginId) => {
         // Verify shortcut can be triggered
-        const shortcuts = ['Ctrl+P', 'Enter', 'Delete']
-        return shortcuts.length === 3
+        const shortcuts = ['Ctrl+P', 'Enter', 'Ctrl+K', 'Escape']
+        return shortcuts.length === 4
       }),
       { numRuns: 100 }
     )
