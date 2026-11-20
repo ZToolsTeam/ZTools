@@ -971,7 +971,7 @@ describe('MyPage Component', () => {
       pluginsStore.$patch({ recents: ['plugin-2', 'plugin-1'], recentUsedAt: { 'plugin-2': Date.now() - 5 * 60_000 } })
       await flushPromises()
       const times = wrapper.findAll('.recent-row .recent-time').map((n) => n.text())
-      expect(times).toEqual(['5 分钟前', ''])
+      expect(times).toEqual(['5分钟前', ''])
     })
   })
 

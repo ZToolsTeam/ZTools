@@ -11,6 +11,11 @@ import {
   sanitizeHiddenBundledIds
 } from '@/stores/plugins'
 import { evaluateInlineCommandItem } from '@/composables/useCommandSearch'
+import { setI18nLocale } from '@/i18n'
+
+beforeEach(() => {
+  setI18nLocale('zh-CN')
+})
 
 const toastSpies = vi.hoisted(() => ({
   success: vi.fn(),

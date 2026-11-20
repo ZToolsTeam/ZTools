@@ -156,10 +156,10 @@ onUnmounted(() => {
 :global(.rc-menu) {
   padding: 4px;
   border: 1px solid var(--rc-border-highlight);
-  border-radius: 10px;
+  border-radius: var(--rc-radius-md);
   background: var(--rc-surface);
   box-shadow: var(--rc-shadow-lg);
-  font-size: 13px;
+  font-size: var(--rc-fs-body);
   user-select: none;
 }
 
@@ -171,13 +171,13 @@ onUnmounted(() => {
   height: 32px;
   padding: 0 10px;
   border: none;
-  border-radius: 6px;
+  border-radius: var(--rc-radius-sm);
   background: transparent;
   color: var(--rc-text-primary);
   font: inherit;
   text-align: left;
   cursor: pointer;
-  transition: background-color 0.15s ease;
+  transition: background-color var(--rc-dur) ease;
 }
 
 :global(.rc-menu-item:hover:not(:disabled)),
@@ -202,7 +202,7 @@ onUnmounted(() => {
 
 :global(.rc-menu-icon) {
   flex-shrink: 0;
-  font-size: 16px;
+  font-size: var(--rc-fs-title-sm);
   color: var(--rc-text-muted);
 }
 
@@ -217,7 +217,7 @@ onUnmounted(() => {
 
 :global(.rc-menu-hint) {
   color: var(--rc-text-faint);
-  font-size: 12px;
+  font-size: var(--rc-fs-small);
   font-variant-numeric: tabular-nums;
 }
 

@@ -1,4 +1,5 @@
 import { getPluginCategories } from '../utils/pluginCategories'
+import { t } from '@/i18n'
 /**
  * 插件目录（CDN 静态索引）公共能力
  *
@@ -76,7 +77,7 @@ async function fetchCatalogList() {
           : Array.isArray(raw?.list)
             ? raw.list
             : null
-      if (!list) throw new Error('插件目录格式无效')
+      if (!list) throw new Error(t('pluginCatalog.invalidFormat'))
       _v2CatalogCache = list
       _v2CatalogCacheTime = Date.now()
       return list
@@ -85,7 +86,7 @@ async function fetchCatalogList() {
       controller?.abort()
     }
   } catch (cause) {
-    const error = new Error('插件目录暂不可用，请检查网络后重试', { cause })
+    const error = new Error(t('pluginCatalog.unavailable'), { cause })
     error.code = 'PLUGIN_CATALOG_UNAVAILABLE'
     throw error
   }
@@ -138,18 +139,18 @@ export async function findInV2StaticCatalog(pluginId, options) {
 export function buildCatalogDownloadInfo(entry) {
   if (!entry) return null
   if (entry.revoked) {
-    const reason = entry.revokedReason || entry.revoked_reason || '该插件已被官方安全下架'
-    const err = new Error(`插件已被官方安全下架: ${reason}`)
+    const reason = entry.revokedReason || entry.revoked_reason || t('pluginCatalog.revokedDefaultReason')
+    const err = new Error(t('pluginCatalog.revokedWithReason', { reason }))
     err.code = 'PLUGIN_REVOKED'
     throw err
   }
   if (entry.draft) {
-    const err = new Error(entry.draftReason || '插件尚未发布')
+    const err = new Error(entry.draftReason || t('pluginCatalog.notPublished'))
     err.code = 'PLUGIN_NOT_PUBLISHED'
     throw err
   }
   if (!isV2PluginDownloadUrl(entry.downloadUrl) || !SHA256_PATTERN.test(entry.sha256 || entry.checksum || '')) {
-    const err = new Error('插件缺少有效的新版安装包或 SHA-256 校验值')
+    const err = new Error(t('pluginCatalog.invalidPackage'))
     err.code = 'PLUGIN_INVALID_PACKAGE'
     throw err
   }
@@ -169,7 +170,7 @@ export function normalizePluginVersionError(payload = {}) {
   const data = payload.data || payload
   const errors = data.errors || payload.errors || {}
   const err = new Error(
-    data.message || payload.message || '当前版本不满足此插件要求，请先升级客户端'
+    data.message || payload.message || t('pluginCatalog.versionIncompatible')
   )
   err.code = data.code || payload.code || errors.code || PLUGIN_VERSION_INCOMPATIBLE
   err.status = payload.status || data.status || 426
@@ -196,10 +197,10 @@ export function getPluginVersionIncompatibleMessage(err) {
     err?.currentAppVersion || err?.errors?.currentAppVersion
 
   if (minAppVersion && currentAppVersion) {
-    return `当前 App 版本 ${currentAppVersion} 低于插件要求 ${minAppVersion}，请先升级客户端`
+    return t('pluginCatalog.versionTooLow', { current: currentAppVersion, min: minAppVersion })
   }
 
-  return err?.message || '当前版本不满足此插件要求，请先升级客户端'
+  return err?.message || t('pluginCatalog.versionIncompatible')
 }
 
 /**
@@ -210,14 +211,14 @@ export async function resolveUpdatePlatform(platform) {
 
   if (resolvedPlatform === undefined) {
     if (typeof window === 'undefined' || typeof window.ztools?.sys?.getInfo !== 'function') {
-      throw new Error('无法读取宿主平台信息，已取消更新检查')
+      throw new Error(t('pluginCatalog.platformInfoUnavailable'))
     }
 
     try {
       const info = await window.ztools.sys.getInfo()
       resolvedPlatform = info?.platform
     } catch {
-      throw new Error('读取宿主平台失败，已取消更新检查')
+      throw new Error(t('pluginCatalog.platformReadFailed'))
     }
   }
 
@@ -226,9 +227,7 @@ export async function resolveUpdatePlatform(platform) {
       typeof resolvedPlatform === 'string' && resolvedPlatform.trim()
         ? resolvedPlatform
         : 'unknown'
-    throw new Error(
-      `当前平台“${platformName}”不支持更新检查（仅支持 Windows/macOS）`
-    )
+    throw new Error(t('pluginCatalog.platformUnsupported', { platform: platformName }))
   }
 
   return resolvedPlatform
@@ -249,24 +248,27 @@ export function noUpdate(pluginId, message) {
 export function buildCatalogUpdateInfo(entry, currentVersion, platform) {
   const pluginId = entry?.pluginId || entry?.id || ''
   if (entry?.revoked) {
-    return { ...noUpdate(pluginId, '插件已下架'), revoked: true,
-      revokedReason: entry.revokedReason || entry.revoked_reason || '该插件已被官方下架禁用' }
+    return {
+      ...noUpdate(pluginId, t('pluginCatalog.revokedShort')),
+      revoked: true,
+      revokedReason: entry.revokedReason || entry.revoked_reason || t('pluginCatalog.revokedDisabledReason')
+    }
   }
-  if (entry?.draft) return noUpdate(pluginId, '插件尚未发布')
+  if (entry?.draft) return noUpdate(pluginId, t('pluginCatalog.notPublished'))
   const platforms = getPluginPlatforms(entry)
   if (platforms && !platforms.includes(platform)) {
-    return noUpdate(pluginId, '新版本不支持当前平台')
+    return noUpdate(pluginId, t('pluginCatalog.updatePlatformUnsupported'))
   }
   const latest = String(entry?.version || '').trim()
   const cmp = compareNumericVersions(latest, String(currentVersion || '').trim())
   if (cmp === null || cmp <= 0) {
-    return { ...noUpdate(pluginId, '已是最新版本'), version: latest }
+    return { ...noUpdate(pluginId, t('pluginCatalog.alreadyLatest')), version: latest }
   }
   const sha256 = String(entry.sha256 || entry.checksum || '').trim().toLowerCase()
   const downloadUrl = String(entry.downloadUrl || entry.download_url || '').trim()
   // 主进程安装时强制校验 SHA-256，缺校验值或下载地址的条目装不上，不提示更新
   if (!SHA256_PATTERN.test(sha256) || !isV2PluginDownloadUrl(downloadUrl)) {
-    return { ...noUpdate(pluginId, '新版本缺少下载信息'), version: latest }
+    return { ...noUpdate(pluginId, t('pluginCatalog.missingDownloadInfo')), version: latest }
   }
   const size = Number(entry.size ?? entry.file_size ?? entry.fileSize ?? 0) || 0
   const info = {
@@ -280,7 +282,7 @@ export function buildCatalogUpdateInfo(entry, currentVersion, platform) {
     file_size: size,
     fileSize: size,
     release_notes: entry.releaseNotes || entry.release_notes || '',
-    message: '发现新版本',
+    message: t('pluginCatalog.newVersionFound'),
     source: 'static-catalog'
   }
   // minZToolsVersion 是插件 API 版本，不是客户端版本，这里不当作客户端最低版本

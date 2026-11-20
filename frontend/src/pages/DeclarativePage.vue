@@ -16,10 +16,10 @@
         面包屑：插件名 / 子页面标题。返回入口只在底栏（「返回工作台 Esc」/「返回 Esc」），这里不再重复；
         独立窗口的 Esc 提示也只在底栏显示一处。
       -->
-      <nav class="flex items-center gap-2 min-w-0" aria-label="当前位置" style="-webkit-app-region: no-drag">
+      <nav class="flex items-center gap-2 min-w-0" :aria-label="t('declarativePage.breadcrumbAria')" style="-webkit-app-region: no-drag">
         <div v-if="headerPluginMeta" class="flex items-center gap-2 min-w-0">
-          <RcSquircle :glyph="resolvePluginGlyph(headerPluginMeta.pluginId || headerPluginMeta.id || targetPluginId)" :fallback-glyph="resolveKeywordGlyph(headerPluginMeta.name || headerPluginMeta.title)" :size="22" />
-          <span class="text-sm font-semibold text-[var(--rc-text-primary)] truncate" :title="headerPluginMeta.featureExplain || headerPluginMeta.name">{{ headerPluginMeta.name }}</span>
+          <RcSquircle :glyph="resolvePluginGlyph(headerPluginMeta.pluginId || headerPluginMeta.id || targetPluginId)" :fallback-glyph="resolveKeywordGlyph(getLocalizedPluginName(headerPluginMeta))" :size="22" />
+          <span class="text-sm font-semibold text-[var(--rc-text-primary)] truncate" :title="headerPluginMeta.featureExplain || getLocalizedPluginName(headerPluginMeta)">{{ getLocalizedPluginName(headerPluginMeta) }}</span>
         </div>
         <template v-if="viewTitle">
           <span class="text-[var(--rc-text-faint)] flex-shrink-0" aria-hidden="true">/</span>
@@ -32,36 +32,36 @@
         <button
           v-if="!effectiveIsPopout && headerPluginMeta"
           type="button"
-          class="declarative-popout-btn flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-medium text-[var(--rc-text-secondary)] hover:text-[var(--rc-text-primary)] hover:bg-[var(--rc-surface-hover)] border border-[var(--rc-border)] transition-all cursor-pointer"
-          :title="`弹出为独立常驻窗口，自动携带当前搜索与选中状态 (${popoutShortcutText})`"
+          class="declarative-popout-btn flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-medium text-[var(--rc-text-secondary)] hover:text-[var(--rc-text-primary)] hover:bg-[var(--rc-surface-hover)] border border-[var(--rc-border)] transition-all cursor-pointer whitespace-nowrap"
+          :title="t('declarativePage.popoutTooltip', { shortcut: popoutShortcutText })"
           @click="handlePopout"
         >
           <ExternalLinkIcon class="w-3.5 h-3.5" aria-hidden="true" />
-          <span>独立窗口</span>
+          <span>{{ t('declarativePage.popout') }}</span>
         </button>
 
         <!-- 独立窗口模式：提供【窗口置顶】与【收回工作台】控制 -->
         <template v-if="effectiveIsPopout">
           <button
             type="button"
-            class="declarative-pin-btn flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-medium transition-all border cursor-pointer"
+            class="declarative-pin-btn flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-medium transition-all border cursor-pointer whitespace-nowrap"
             :class="isAlwaysOnTop
               ? 'bg-[var(--rc-warning-subtle)] text-[var(--rc-warning)] border-[var(--rc-border)]'
               : 'bg-[var(--rc-surface-hover)] text-[var(--rc-text-secondary)] hover:text-[var(--rc-text-primary)] hover:bg-[var(--rc-surface-hover)] border-[var(--rc-border)]'"
-            title="切换独立窗口始终置顶 (Always on Top)"
+            :title="t('declarativePage.alwaysOnTopTooltip')"
             @click="toggleAlwaysOnTop"
           >
-            <PinIcon class="text-[11px]" />
-            <span>{{ isAlwaysOnTop ? '已置顶' : '置顶' }}</span>
+            <PinIcon class="text-[length:var(--rc-fs-caption)]" />
+            <span>{{ isAlwaysOnTop ? t('declarativePage.pinnedTop') : t('declarativePage.pinTop') }}</span>
           </button>
 
           <button
             type="button"
-            class="declarative-dock-btn flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-medium text-[var(--rc-text-secondary)] hover:text-[var(--rc-text-primary)] hover:bg-[var(--rc-surface-hover)] border border-[var(--rc-border)] transition-all cursor-pointer"
-            title="收回至主工作台视图"
+            class="declarative-dock-btn flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-medium text-[var(--rc-text-secondary)] hover:text-[var(--rc-text-primary)] hover:bg-[var(--rc-surface-hover)] border border-[var(--rc-border)] transition-all cursor-pointer whitespace-nowrap"
+            :title="t('declarativePage.dockBackTooltip')"
             @click="dockBackToMain"
           >
-            <span>收回工作台</span>
+            <span>{{ t('declarativePage.dockBack') }}</span>
           </button>
         </template>
       </div>
@@ -103,7 +103,7 @@
           <TriangleAlertIcon class="w-5 h-5" aria-hidden="true" />
         </template>
         <template v-if="loadError && !unsupportedOfficial && !hiddenPlugin" #description>
-          插件「<code class="font-mono text-[var(--rc-text-secondary)]">{{ targetPluginId || pluginId }}</code>」没有注册或加载失败。
+          {{ t('declarativePage.errorNotFoundDesc', { id: targetPluginId || pluginId }) }}
           <span class="block mt-2 font-mono text-[var(--rc-error)] break-all">{{ loadError }}</span>
         </template>
         <button
@@ -111,7 +111,7 @@
           class="declarative-error-back-btn h-8 px-3.5 rounded-[var(--rc-radius-md)] text-xs font-medium bg-[var(--rc-surface-hover)] hover:bg-[var(--rc-surface-active)] text-[var(--rc-text-primary)] border border-[var(--rc-border)] transition-colors cursor-pointer"
           @click="goBack"
         >
-          返回我的插件列表
+          {{ t('declarativePage.backToMyPlugins') }}
         </button>
       </DeclEmptyState>
     </div>
@@ -141,6 +141,10 @@ import { getBundledPluginEntry, resolveBundledReplacement, resolveBundledReplace
 import { useDeclarativePluginSession } from '@/declarative/composables/useDeclarativePluginSession'
 import { isHandoffId, requestPopoutWindow, takePopoutHandoff } from '@/declarative/popoutHandoff'
 import { track } from '@edition'
+import { useAppI18n } from '@/i18n'
+import { getLocalizedPluginName } from '@/utils/pluginI18n'
+
+const { t } = useAppI18n()
 
 // 宿主窗口控制（弹出窗口调整尺寸、置顶），经 composable 访问，页面不直接依赖 api 层
 const nativeWin = useHostWindowApi()
@@ -252,7 +256,7 @@ useDeclarativePluginSession(plugin, {
     currentLoadToken += 1
     dynamicPlugin.value = null
     loadingDynamic.value = false
-    loadError.value = '插件已更新或停止，请重新打开'
+    loadError.value = t('declarativePage.sessionInvalidated')
   }
 })
 
@@ -268,20 +272,23 @@ watch([targetPluginId, targetFeatureCode], () => {
 
 // 异常状态文案：未开放 / 当前系统不可用 / 未找到或加载失败
 const errorTitle = computed(() => {
-  if (hiddenPlugin.value) return '该插件暂未开放'
-  if (unsupportedOfficial.value) return '当前系统暂不可用'
-  return '未找到指定的声明式应用'
+  if (hiddenPlugin.value) return t('declarativePage.errorHiddenTitle')
+  if (unsupportedOfficial.value) return t('declarativePage.errorUnsupportedTitle')
+  return t('declarativePage.errorNotFoundTitle')
 })
 
 const errorDescription = computed(() => {
-  if (hiddenPlugin.value) return '这个插件还在完善中，完成真实功能验收后才会开放。'
+  if (hiddenPlugin.value) return t('declarativePage.errorHiddenDesc')
   if (unsupportedOfficial.value) return loadError.value
-  return `插件「${targetPluginId.value || props.pluginId}」没有注册或加载失败。`
+  return t('declarativePage.errorNotFoundDesc', { id: targetPluginId.value || props.pluginId })
 })
 
 const headerPluginMeta = computed(() => {
   if (unsupportedOfficial.value || hiddenPlugin.value) return null
-  return plugin.value || getBundledPluginEntry(targetPluginId.value)
+  const bundled = getBundledPluginEntry(targetPluginId.value)
+  if (!plugin.value) return bundled
+  const i18n = plugin.value.i18n || bundled?.i18n
+  return i18n ? { ...(bundled || {}), ...plugin.value, i18n } : plugin.value
 })
 
 // ---------------------------------------------------------------------------
@@ -345,7 +352,7 @@ watch(
     handoffMountKey.value += 1
     handoffPending.value = false
     pendingHandoffNotice.value = result.status === 'failed' || result.status === 'timeout'
-      ? '未能恢复弹出前的内容'
+      ? t('declarativePage.handoffRestoreFailed')
       : result.notice || ''
   },
   { immediate: true }
@@ -386,7 +393,7 @@ watch(
     if (id && !isPluginVisible(id)) {
       dynamicPlugin.value = null
       loadingDynamic.value = false
-      loadError.value = '该插件暂未开放'
+      loadError.value = t('declarativePage.errorHiddenTitle')
       return
     }
 
@@ -394,7 +401,7 @@ watch(
       dynamicPlugin.value = null
       loadingDynamic.value = false
       const meta = getOfficialPlugin(id) || getBundledPluginEntry(id)
-      loadError.value = `「${meta?.name || id}」在当前系统上暂不可用`
+      loadError.value = t('declarativePage.unsupportedPluginDesc', { name: getLocalizedPluginName(meta) || id })
       return
     }
 
@@ -421,7 +428,7 @@ watch(
     } catch (err) {
       if (token === currentLoadToken) {
         dynamicPlugin.value = null
-        loadError.value = err?.message || String(err) || '动态加载声明式插件失败'
+        loadError.value = err?.message || String(err) || t('declarativePage.dynamicLoadFailed')
       }
     } finally {
       if (token === currentLoadToken) {
@@ -459,7 +466,7 @@ async function handlePopout() {
     if (result.outcome === 'kept') {
       // 主进程明确拒绝（窗口数上限等）：保持原样，内容不动
       if (result.error?.code !== 'CANCELLED') {
-        showViewToast(`无法打开独立窗口：${result.error?.message || '未知错误'}`)
+        showViewToast(t('declarativePage.popoutFailed', { reason: result.error?.message || t('common.unknownError') }))
       }
       return
     }

@@ -21,7 +21,10 @@ import ShortcutKeys from '@/components/base/ShortcutKeys.vue'
 import { CATEGORY_GLYPHS } from '@/utils/brandIcons'
 import { shortcutLabel } from '@/utils/platform'
 import { OPEN_SETTINGS_SHORTCUT, SHELL_SHORTCUTS } from '@/utils/shellShortcuts'
+import { useAppI18n } from '@/i18n'
+import { getLocalizedCategoryName } from '@/utils/pluginI18n'
 
+const { t } = useAppI18n()
 const route = useRoute()
 const router = useRouter()
 const nav = useNavStore()
@@ -220,13 +223,13 @@ const handleSidebarKeydown = (event) => {
           tabindex="0"
           :aria-current="isMyActive ? 'page' : undefined"
           :class="{ active: isMyActive }"
-          :title="isCollapsed ? '主页' : undefined"
+          :title="isCollapsed ? t('nav.home') : undefined"
           @click="goMyPage"
           @keydown.enter.prevent="goMyPage"
           @keydown.space.prevent="goMyPage"
         >
           <BrandGlyph kind="home" :size="16" />
-          <span v-if="!isCollapsed" class="sidebar-label truncate">主页</span>
+          <span v-if="!isCollapsed" class="sidebar-label truncate">{{ t('nav.home') }}</span>
         </div>
 
         <div
@@ -235,13 +238,13 @@ const handleSidebarKeydown = (event) => {
           tabindex="0"
           :aria-current="isMarketActive ? 'page' : undefined"
           :class="{ active: isMarketActive }"
-          :title="isCollapsed ? '插件市场' : undefined"
+          :title="isCollapsed ? t('nav.market') : undefined"
           @click="goMarket"
           @keydown.enter.prevent="goMarket"
           @keydown.space.prevent="goMarket"
         >
           <BrandGlyph kind="store" :size="16" />
-          <span v-if="!isCollapsed" class="sidebar-label truncate">插件市场</span>
+          <span v-if="!isCollapsed" class="sidebar-label truncate">{{ t('nav.market') }}</span>
         </div>
 
         <!-- 插件市场下的分类列表 -->
@@ -269,13 +272,13 @@ const handleSidebarKeydown = (event) => {
               role="button"
               tabindex="0"
               :aria-current="undefined"
-              :title="isCollapsed ? '重试分类' : undefined"
+              :title="isCollapsed ? t('nav.retryCategories') : undefined"
               @click="retryCategories"
               @keydown.enter.prevent="retryCategories"
               @keydown.space.prevent="retryCategories"
             >
               <RotateCwIcon class="w-4 h-4" />
-              <span v-if="!isCollapsed" class="sidebar-label truncate">重试分类</span>
+              <span v-if="!isCollapsed" class="sidebar-label truncate">{{ t('nav.retryCategories') }}</span>
             </div>
           </template>
           <template v-else>
@@ -287,13 +290,13 @@ const handleSidebarKeydown = (event) => {
               tabindex="0"
               :aria-current="isCategoryActive(c.name) ? 'page' : undefined"
               :class="{ active: isCategoryActive(c.name) }"
-              :title="isCollapsed ? c.name : undefined"
+              :title="isCollapsed ? getLocalizedCategoryName(c.name) : undefined"
               @click="selectCategory(c.name)"
               @keydown.enter.prevent="selectCategory(c.name)"
               @keydown.space.prevent="selectCategory(c.name)"
             >
               <BrandGlyph :kind="CATEGORY_GLYPHS[c.name] || 'folder'" :size="16" />
-              <span v-if="!isCollapsed" class="sidebar-label truncate">{{ c.name }}</span>
+              <span v-if="!isCollapsed" class="sidebar-label truncate">{{ getLocalizedCategoryName(c.name) }}</span>
             </div>
           </template>
         </div>
@@ -323,14 +326,14 @@ const handleSidebarKeydown = (event) => {
           tabindex="0"
           :aria-current="isFeedbackActive ? 'page' : undefined"
           :class="{ active: isFeedbackActive }"
-          :title="isCollapsed ? feedbackEntry.title : undefined"
+          :title="isCollapsed ? (feedbackEntry.titleKey ? t(feedbackEntry.titleKey) : feedbackEntry.title) : undefined"
           @click="openFeedback"
           @keydown.enter.prevent="openFeedback"
           @keydown.space.prevent="openFeedback"
         >
           <MessageSquareIcon class="w-4 h-4" />
           <span v-if="!isCollapsed" class="sidebar-label flex items-center gap-1.5 flex-1 min-w-0">
-            <span class="truncate">{{ feedbackEntry.title }}</span>
+            <span class="truncate">{{ feedbackEntry.titleKey ? t(feedbackEntry.titleKey) : feedbackEntry.title }}</span>
             <span
               v-if="hasUnreadFeedback"
               class="unread-dot ml-auto"
@@ -348,14 +351,14 @@ const handleSidebarKeydown = (event) => {
           tabindex="0"
           :aria-current="isSettingsActive ? 'page' : undefined"
           :class="{ active: isSettingsActive }"
-          :title="isCollapsed ? '设置' : undefined"
+          :title="isCollapsed ? t('nav.settings') : undefined"
           @click="goAdvancedSettings"
           @keydown.enter.prevent="goAdvancedSettings"
           @keydown.space.prevent="goAdvancedSettings"
         >
           <SettingsIcon class="w-4 h-4" />
           <template v-if="!isCollapsed">
-            <span class="sidebar-label flex-1 truncate">设置</span>
+            <span class="sidebar-label flex-1 truncate">{{ t('nav.settings') }}</span>
             <ShortcutKeys :combo="settingsKey" class="sidebar-kbd" />
           </template>
         </div>
@@ -366,13 +369,13 @@ const handleSidebarKeydown = (event) => {
           tabindex="0"
           :aria-current="isAboutActive ? 'page' : undefined"
           :class="{ active: isAboutActive }"
-          :title="isCollapsed ? '关于' : undefined"
+          :title="isCollapsed ? t('nav.about') : undefined"
           @click="goAbout"
           @keydown.enter.prevent="goAbout"
           @keydown.space.prevent="goAbout"
         >
           <InfoIcon class="w-4 h-4" />
-          <span v-if="!isCollapsed" class="sidebar-label truncate">关于</span>
+          <span v-if="!isCollapsed" class="sidebar-label truncate">{{ t('nav.about') }}</span>
         </div>
       </div>
     </nav>
@@ -381,9 +384,9 @@ const handleSidebarKeydown = (event) => {
     <button
       type="button"
       class="sidebar-toggle-btn"
-      :aria-label="isCollapsed ? '展开侧边栏' : '收起侧边栏'"
+      :aria-label="isCollapsed ? t('nav.expandSidebar') : t('nav.collapseSidebar')"
       :aria-expanded="!isCollapsed"
-      :title="isCollapsed ? `展开侧边栏 (${toggleSidebarHint})` : `收起侧边栏 (${toggleSidebarHint})`"
+      :title="isCollapsed ? `${t('nav.expandSidebar')} (${toggleSidebarHint})` : `${t('nav.collapseSidebar')} (${toggleSidebarHint})`"
       @click="toggleSidebar"
     >
       <ChevronRightIcon v-if="isCollapsed" class="w-3.5 h-3.5" />
@@ -396,11 +399,11 @@ const handleSidebarKeydown = (event) => {
 .sidebar-root {
   position: relative;
   z-index: 10;
-  width: 168px;
+  width: 192px;
   background-color: var(--rc-side);
   border-right: 1px solid var(--rc-border);
   color: var(--rc-text-primary);
-  transition: width 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+  transition: width var(--rc-dur-slow) cubic-bezier(0.4, 0, 0.2, 1);
   will-change: width;
 }
 
@@ -418,13 +421,22 @@ const handleSidebarKeydown = (event) => {
   padding: 12px 8px;
 }
 
-.sidebar-category-item {
-  padding-left: 12px;
+/* 分类属于「插件市场」：图标缩进到上级文字的起点，形成明确的从属层级；
+   左侧选中标记仍与上级同列，保证整栏只有一条标记线 */
+.sidebar-category-item > svg:first-of-type,
+.sidebar-category-item > div:first-of-type {
+  margin-left: 26px;
+}
+
+.sidebar-root.is-collapsed .sidebar-category-item > svg:first-of-type,
+.sidebar-root.is-collapsed .sidebar-category-item > div:first-of-type {
+  margin-left: 0;
 }
 
 .sidebar-item {
   position: relative;
   height: 32px;
+  gap: 8px;
 }
 
 .sidebar-item:focus-visible {
@@ -447,7 +459,7 @@ const handleSidebarKeydown = (event) => {
 .unread-dot {
   width: 6px;
   height: 6px;
-  border-radius: 1.7px;
+  border-radius: var(--rc-marker-radius);
   background: var(--rc-accent);
   box-shadow: var(--rc-marker-glow);
   flex-shrink: 0;
@@ -465,6 +477,7 @@ const handleSidebarKeydown = (event) => {
 
 .sidebar-kbd {
   margin-left: auto;
+  flex-shrink: 0;
   opacity: 0.85;
 }
 
@@ -481,24 +494,24 @@ const handleSidebarKeydown = (event) => {
   height: 32px;
   padding: 0;
   border: 1px solid var(--rc-border);
-  border-radius: 9999px;
+  border-radius: var(--rc-radius-full);
   background-color: var(--rc-surface);
   color: var(--rc-text-muted);
-  box-shadow: var(--rc-shadow-sm, 0 1px 3px rgba(0, 0, 0, 0.08));
+  box-shadow: var(--rc-shadow-sm);
   cursor: pointer;
-  transition: background-color 0.15s ease, color 0.15s ease, border-color 0.15s ease;
+  transition: background-color var(--rc-dur) ease, color var(--rc-dur) ease, border-color var(--rc-dur) ease;
   user-select: none;
 }
 
 .sidebar-toggle-btn:hover {
   background-color: var(--rc-surface-hover);
-  border-color: var(--rc-border-strong, var(--rc-border));
+  border-color: var(--rc-border-highlight);
   color: var(--rc-text-primary);
 }
 
 .sidebar-toggle-btn svg {
   flex-shrink: 0;
   color: currentColor;
-  transition: color 0.15s ease;
+  transition: color var(--rc-dur) ease;
 }
 </style>

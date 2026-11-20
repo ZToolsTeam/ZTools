@@ -49,17 +49,17 @@
 }
 
 .declarative-scrollbar::-webkit-scrollbar-thumb {
-  background: var(--zt-scrollbar-thumb);
-  border-radius: 9999px;
+  background: var(--rc-scrollbar-thumb);
+  border-radius: var(--rc-radius-full);
 }
 
 .declarative-scrollbar::-webkit-scrollbar-thumb:hover {
-  background: var(--zt-scrollbar-thumb-hover);
+  background: var(--rc-scrollbar-thumb-hover);
 }
 
 /* 声明式 Detail 的 Markdown 正文：块间距只在这里控制，不依赖 prose / space-y 工具类 */
 .declarative-markdown {
-  font-size: 13px;
+  font-size: var(--rc-fs-body);
   line-height: 1.7;
   color: var(--rc-text-secondary);
   overflow-wrap: anywhere;

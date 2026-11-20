@@ -15,6 +15,7 @@
  * 释放时先等宽限期（让卸载过程中的保存调用仍带令牌）与在途调用结束（最长 2 秒），再清令牌、发 close。
  */
 import { callHostMethod } from './hostMethods.js'
+import { t } from '@/i18n'
 
 export const SESSION_RELEASE_GRACE_MS = 250
 export const SESSION_INFLIGHT_SETTLE_MAX_MS = 2_000
@@ -53,7 +54,7 @@ export function createPluginSessionHolder(pluginId, options = {}) {
 
   function requireActive() {
     if (invalidated) {
-      throw Object.assign(new Error('插件已更新或停止，请重新打开'), { code: 'PLUGIN_SESSION_EXPIRED' })
+      throw Object.assign(new Error(t('pluginSession.expired')), { code: 'PLUGIN_SESSION_EXPIRED' })
     }
   }
 
@@ -97,7 +98,7 @@ export function createPluginSessionHolder(pluginId, options = {}) {
       const result = await openWithRetry(myGeneration)
       const data = result?.data
       if (!data || typeof data.token !== 'string' || typeof data.sessionId !== 'string') {
-        throw Object.assign(new Error('宿主返回的插件会话无效'), { code: 'HOST_RESPONSE_INVALID' })
+        throw Object.assign(new Error(t('pluginSession.invalidHostSession')), { code: 'HOST_RESPONSE_INVALID' })
       }
       if (myGeneration !== generation || refs === 0) {
         // 打开途中已全部释放：立即关闭，不留残留
@@ -284,7 +285,7 @@ export function createScopedHostBridge(holder, realBridge) {
     methods[name] = async (request) => {
       const requireActive = () => {
         if (holder.invalidated) {
-          throw Object.assign(new Error('插件已更新或停止，请重新打开'), { code: 'PLUGIN_SESSION_EXPIRED' })
+          throw Object.assign(new Error(t('pluginSession.expired')), { code: 'PLUGIN_SESSION_EXPIRED' })
         }
       }
       requireActive()
@@ -300,7 +301,7 @@ export function createScopedHostBridge(holder, realBridge) {
       requireActive()
       const token = holder.token
       if (!token && name === 'system_power_session') {
-        throw Object.assign(new Error('插件会话尚未就绪，请重新打开插件后重试'), { code: 'PLUGIN_SESSION_REQUIRED' })
+        throw Object.assign(new Error(t('pluginSession.notReady')), { code: 'PLUGIN_SESSION_REQUIRED' })
       }
       const result = !token
         ? await original(envelope)
@@ -348,7 +349,7 @@ export function createScopedWindow(realWindow, scopedBridge) {
           // 只为新增的会话型 API 绑定插件通道，不改变已有 SDK 方法的返回契约。
           const transport = { call: async (method, params) => {
             const call = scopedBridge?.transport?.methods?.[method]
-            if (typeof call !== 'function') throw new Error(`宿主不支持方法: ${method}`)
+            if (typeof call !== 'function') throw new Error(t('pluginSession.unsupportedHostMethod', { method }))
             return call({ params })
           } }
           const sys = Object.create(value.sys)

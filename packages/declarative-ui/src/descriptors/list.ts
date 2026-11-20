@@ -3,6 +3,7 @@ import {
   ListProps,
   ListItemProps,
   ListSectionProps,
+  ListEmptyViewProps,
   ListDropdownProps,
   ListDropdownItemProps,
   ListDropdownSectionProps,
@@ -26,6 +27,7 @@ export interface ListComponent {
   (props?: ListProps, ...children: any[]): ViewDescriptor<ListProps>;
   Item: ListItemComponent;
   Section: (props?: ListSectionProps, ...children: any[]) => ViewDescriptor<ListSectionProps>;
+  EmptyView: (props: ListEmptyViewProps) => ViewDescriptor<ListEmptyViewProps>;
   Dropdown: ListDropdownComponent;
 }
 
@@ -114,3 +116,12 @@ List.Section = function ListSection(
 };
 
 List.Dropdown = DropdownComponent;
+
+/**
+ * List.EmptyView 列表为空时的空状态；列表有条目时不显示
+ */
+List.EmptyView = function ListEmptyView(
+  props: ListEmptyViewProps
+): ViewDescriptor<ListEmptyViewProps> {
+  return createDescriptor("List.EmptyView", props);
+};

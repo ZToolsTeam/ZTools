@@ -3,6 +3,7 @@ import { useToast } from '@/composables/useToast'
 import { isPluginVersionIncompatibleError, getPluginVersionIncompatibleMessage } from '@/api/apiserver'
 import { isBundledPlugin } from '@/utils/bundledPlugins'
 import { onAuthRequired } from '@edition'
+import { t } from '@/i18n'
 
 /** 统一安装入口反馈，只有核验成功才显示完成。登录等入口前置条件由调用方提供。 */
 export function usePluginInstall() {
@@ -11,7 +12,7 @@ export function usePluginInstall() {
   async function installWithFeedback(pluginId, beforeInstall) {
     if (!pluginId) return
     if (store.isRevoked(pluginId)) {
-      toastError('无法安装：' + (store.getRevokedReason(pluginId) || '该插件已被官方下架禁用'))
+      toastError(t('market.install.cannotInstall', { reason: store.getRevokedReason(pluginId) || t('market.revokedDefaultReason') }))
       return
     }
     // 已被用户假卸载（隐藏）的内置插件：无需登录或远程下载，直接本地一键还原
@@ -19,25 +20,25 @@ export function usePluginInstall() {
       if (store.isTogglingBundled(pluginId)) return
       try {
         const res = await store.restoreBundledPlugin(pluginId)
-        if (res?.success) toastSuccess('已还原内置插件')
+        if (res?.success) toastSuccess(t('market.install.bundledRestored'))
       } catch (error) {
-        toastError('还原失败: ' + (error?.message || error))
+        toastError(t('market.install.restoreFailed', { reason: error?.message || error }))
       }
       return
     }
     if (store.isInstalling(pluginId)) {
-      toastWarning('该插件正在安装中，请稍候...')
+      toastWarning(t('market.install.alreadyInstalling'))
       return
     }
     try {
       if (beforeInstall && !(await beforeInstall())) return
-      toastSuccess('正在安装插件，请稍候...')
+      toastSuccess(t('market.install.installingToast'))
       const result = await store.installPlugin(pluginId, { autoOpen: true })
-      if (result?.success) toastSuccess('插件安装完成')
-      else toastWarning(result?.message || '安装结果待确认，请刷新插件列表查看')
+      if (result?.success) toastSuccess(t('market.install.installComplete'))
+      else toastWarning(result?.message || t('market.install.installPendingVerify'))
     } catch (error) {
       if (isPluginVersionIncompatibleError(error)) toastWarning(getPluginVersionIncompatibleMessage(error))
-      else if (!onAuthRequired(error, { action: 'install' })) toastError('安装失败: ' + (error.message || error))
+      else if (!onAuthRequired(error, { action: 'install' })) toastError(t('market.installFailed', { reason: error.message || error }))
     }
   }
   return { installWithFeedback }

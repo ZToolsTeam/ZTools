@@ -2,6 +2,8 @@ import { defineStore } from 'pinia'
 import { usePluginsStore } from './plugins'
 import { useUIStore } from './ui'
 import { useThemeStore } from './theme'
+import { useLocaleStore } from './locale'
+import { t } from '@/i18n'
 
 export const useEventsStore = defineStore('events', {
   state: () => ({
@@ -34,6 +36,9 @@ export const useEventsStore = defineStore('events', {
             .subscribe('system.AccentColorChange')
             .catch((err) => console.warn('[EventsStore] 订阅 system.AccentColorChange 失败:', err))
           window.ztools.events
+            .subscribe('system.LocaleChange')
+            .catch((err) => console.warn('[EventsStore] 订阅 system.LocaleChange 失败:', err))
+          window.ztools.events
             .subscribe('plugin_not_installed')
             .catch((err) => console.warn('[EventsStore] 订阅 plugin_not_installed 失败:', err))
 
@@ -56,6 +61,10 @@ export const useEventsStore = defineStore('events', {
           window.ztools.events.on(
             'system.AccentColorChange',
             this.handleAccentColorChange
+          )
+          window.ztools.events.on(
+            'system.LocaleChange',
+            this.handleLocaleChange
           )
           window.ztools.events.on(
             'plugin_not_installed',
@@ -91,6 +100,10 @@ export const useEventsStore = defineStore('events', {
         window.ztools.events.off(
           'system.AccentColorChange',
           this.handleAccentColorChange
+        )
+        window.ztools.events.off(
+          'system.LocaleChange',
+          this.handleLocaleChange
         )
         window.ztools.events.off(
           'plugin_not_installed',
@@ -150,12 +163,21 @@ export const useEventsStore = defineStore('events', {
       }
     },
 
+    handleLocaleChange(envelope) {
+      try {
+        const localeStore = useLocaleStore()
+        localeStore.applyHostLocale(envelope)
+      } catch (e) {
+        console.error('[EventsStore] 处理系统语言变更失败:', e)
+      }
+    },
+
     handlePluginNotInstalled(envelope) {
       // 处理插件未安装事件，导航到插件详情页
       try {
         const payload = envelope?.payload || {}
         const pluginId = payload.pluginId
-        const error = payload.error || '插件未安装'
+        const error = payload.error || t('events.pluginNotInstalled')
 
         if (!pluginId) {
           console.warn('[EventsStore] plugin_not_installed 事件缺少 pluginId')
@@ -169,7 +191,7 @@ export const useEventsStore = defineStore('events', {
           import('../router/routes.js').then(({ routeUtils }) => {
             import('../composables/useToast.js').then(({ useToast }) => {
               const { toastWarning } = useToast()
-              toastWarning(error + '，请重新下载该插件')
+              toastWarning(t('events.pluginNotInstalledReinstall', { error }))
               router.push(routeUtils.toPluginDetails(pluginId))
             })
           })

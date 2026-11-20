@@ -9,6 +9,7 @@
 import { ZToolsHostError, assertSecureStorageKey, SECURE_STORAGE_MAX_VALUE_BYTES } from '@ztools/declarative-ui'
 import { callHostMethod } from './hostMethods.js'
 import { readPlaintextEntry, removePlaintextEntry } from '../utils/pluginStorage.js'
+import { t } from '@/i18n'
 
 const UNAVAILABLE_REASONS = new Set(['encryption-unavailable', 'insecure-backend', 'backend-unknown'])
 const UNSUPPORTED_CODES = new Set(['HOST_METHOD_UNAVAILABLE', 'METHOD_NOT_FOUND'])
@@ -63,35 +64,35 @@ export function createPluginHostApis({ pluginId, methods = null, call = callHost
       result = await invokeCredential('credential_v1_get', { key })
     } catch (error) {
       if (error?.code === 'NOT_SUPPORTED') {
-        throw new ZToolsHostError('SECURE_STORAGE_UNAVAILABLE', '系统加密存储当前不可用')
+        throw new ZToolsHostError('SECURE_STORAGE_UNAVAILABLE', t('secureStorage.unavailable'))
       }
       throw hostError(error)
     }
     const data = result?.data
     if (data?.status === 'missing') return undefined
     if (data?.status !== 'present' || typeof data.value !== 'string') {
-      throw new ZToolsHostError('HOST_RESPONSE_INVALID', '宿主返回的加密数据无效')
+      throw new ZToolsHostError('HOST_RESPONSE_INVALID', t('secureStorage.invalidHostData'))
     }
     try {
       return JSON.parse(data.value)
     } catch {
-      throw new ZToolsHostError('DATA_CORRUPT', `加密存储里的「${key}」不是有效 JSON`)
+      throw new ZToolsHostError('DATA_CORRUPT', t('secureStorage.invalidJsonForKey', { key }))
     }
   }
 
   async function writeItem(key, value, ifAbsent, expected) {
     assertSecureStorageKey(key)
     if (value === undefined || typeof value === 'function' || typeof value === 'symbol') {
-      throw new ZToolsHostError('INVALID_REQUEST', 'SecureStorage 只能保存可 JSON 序列化的值')
+      throw new ZToolsHostError('INVALID_REQUEST', t('secureStorage.jsonSerializableOnly'))
     }
     let text
     try {
       text = stableJson(value)
     } catch {
-      throw new ZToolsHostError('INVALID_REQUEST', 'SecureStorage 只能保存可 JSON 序列化的值')
+      throw new ZToolsHostError('INVALID_REQUEST', t('secureStorage.jsonSerializableOnly'))
     }
     if (new TextEncoder().encode(text).length > SECURE_STORAGE_MAX_VALUE_BYTES) {
-      throw new ZToolsHostError('FILE_TOO_LARGE', `「${key}」超过 64 KiB，无法保存到加密存储`)
+      throw new ZToolsHostError('FILE_TOO_LARGE', t('secureStorage.valueTooLargeForKey', { key }))
     }
     try {
       const conditional = expected !== undefined
@@ -102,7 +103,7 @@ export function createPluginHostApis({ pluginId, methods = null, call = callHost
       return result?.data
     } catch (error) {
       if (error?.code === 'NOT_SUPPORTED') {
-        throw new ZToolsHostError('SECURE_STORAGE_UNAVAILABLE', '系统加密存储当前不可用，为保护数据已停止保存')
+        throw new ZToolsHostError('SECURE_STORAGE_UNAVAILABLE', t('secureStorage.unavailableSaveAborted'))
       }
       throw hostError(error)
     }
@@ -156,7 +157,7 @@ export function createPluginHostApis({ pluginId, methods = null, call = callHost
           // 读回校验一致后才删除明文；任一步失败都不删明文（下次再试），不会出现两边都没有
           const readBack = await getItem(targetKey)
           if (stableJson(readBack) !== stableJson(legacy.value)) {
-            throw new ZToolsHostError('MIGRATION_VERIFY_FAILED', '加密存储读回校验不一致，已保留明文')
+            throw new ZToolsHostError('MIGRATION_VERIFY_FAILED', t('secureStorage.migrationVerifyFailed'))
           }
           await discardLocalStorage(key)
           return { status: 'imported', value: readBack }
@@ -174,7 +175,7 @@ export function createPluginHostApis({ pluginId, methods = null, call = callHost
 
   async function terminateProcess(pid, options = {}) {
     if (!Number.isInteger(pid) || pid < 2 || pid > 0xffff_ffff) {
-      throw new ZToolsHostError('INVALID_REQUEST', 'pid 必须是 2–4294967295 的整数')
+      throw new ZToolsHostError('INVALID_REQUEST', t('secureStorage.invalidPid'))
     }
     const mode = options.mode === 'force' ? 'force' : 'graceful'
     const params = { pid, mode }
@@ -208,7 +209,7 @@ export function createPluginHostApis({ pluginId, methods = null, call = callHost
     },
     async compareAndSet(key, expected, value) {
       const result = await writeItem(key, value, false, { value: expected })
-      if (result !== 'OK' && result !== 'CONFLICT') throw new ZToolsHostError('HOST_RESPONSE_INVALID', '宿主返回的存储结果无效')
+      if (result !== 'OK' && result !== 'CONFLICT') throw new ZToolsHostError('HOST_RESPONSE_INVALID', t('pluginStorage.invalidHostResult'))
       return result === 'OK'
     },
     async updateItem(key, update) {
@@ -220,7 +221,7 @@ export function createPluginHostApis({ pluginId, methods = null, call = callHost
         if (JSON.stringify(next) === before) return next
         if (await SecureStorage.compareAndSet(key, expected, next)) return next
       }
-      throw new ZToolsHostError('STORAGE_CONFLICT', '数据正在被其他窗口修改，请重试')
+      throw new ZToolsHostError('STORAGE_CONFLICT', t('pluginStorage.conflictRetry'))
     },
     removeItem,
     importFromLocalStorage,

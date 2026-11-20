@@ -6,6 +6,8 @@
  * 成功时返回处理函数的原始结果，失败时抛出带 code 的错误，调用方无需关心信封格式。
  */
 
+import { t } from '@/i18n'
+
 let sequence = 0
 
 function nextMessageId(method) {
@@ -39,7 +41,10 @@ export async function callHostMethod(method, params = {}, options = {}) {
   const methods = options.methods || getTransportMethods()
   const fn = methods?.[method]
   if (typeof fn !== 'function') {
-    throw new HostMethodError(method, { code: 'HOST_METHOD_UNAVAILABLE', message: `宿主未提供 ${method}` })
+    throw new HostMethodError(method, {
+      code: 'HOST_METHOD_UNAVAILABLE',
+      message: t('declarativeLoader.hostMethodUnavailable', { method })
+    })
   }
   const envelope = await fn({
     messageId: nextMessageId(method),
@@ -47,7 +52,10 @@ export async function callHostMethod(method, params = {}, options = {}) {
     ...(Number.isInteger(options.timeoutMs) ? { timeoutMs: options.timeoutMs } : {})
   })
   if (!envelope || typeof envelope !== 'object' || !('success' in envelope)) {
-    throw new HostMethodError(method, { code: 'HOST_RESPONSE_INVALID', message: `宿主方法 ${method} 返回了无法识别的结果` })
+    throw new HostMethodError(method, {
+      code: 'HOST_RESPONSE_INVALID',
+      message: t('declarativeLoader.hostMethodInvalidResponse', { method })
+    })
   }
   if (!envelope.success) throw new HostMethodError(method, envelope.error)
   return envelope.data

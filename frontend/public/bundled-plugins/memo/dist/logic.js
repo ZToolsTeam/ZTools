@@ -1,12 +1,14 @@
+import { getLocale } from '@ztools/declarative-ui';
+import { t } from './i18n.js';
 /**
  * 创建新便签
  */
 export function createMemo(items, title, content, tag = '') {
-    const cleanTitle = title.trim() || '无标题便签';
+    const cleanTitle = title.trim() || t('untitledMemo');
     const cleanContent = content.trim();
     const now = Date.now();
     if (typeof globalThis.crypto?.randomUUID !== 'function') {
-        throw new Error('无法生成唯一标识，请重启客户端后重试');
+        throw new Error(t('uuidUnavailableError'));
     }
     const newItem = {
         id: `memo-${now}-${globalThis.crypto.randomUUID()}`,
@@ -167,13 +169,13 @@ export function applyMemoMutation(latest, mutation) {
         const current = sanitizeStoredMemos(found)[0];
         const fields = ['title', 'content', 'tag', 'createTime', 'updateTime'];
         if (found.length !== 1 || !current || fields.some(field => current[field] !== mutation.expected[field])) {
-            throw new Error('这条便签已在其他窗口修改或删除，原数据保留。请重新打开便签后再操作。');
+            throw new Error(t('concurrentModifiedError'));
         }
     }
     switch (mutation.type) {
         case 'create':
             if (base.some(entry => matches(entry, mutation.item.id)))
-                throw new Error('便签标识已存在，请重试');
+                throw new Error(t('duplicateIdError'));
             return [mutation.item, ...base];
         case 'update':
             return base.map(entry => matches(entry, mutation.expected.id)
@@ -193,5 +195,5 @@ export function formatListDate(timestamp, now = Date.now()) {
         return '';
     const date = new Date(timestamp);
     const sameYear = date.getFullYear() === new Date(now).getFullYear();
-    return date.toLocaleDateString([], sameYear ? { month: '2-digit', day: '2-digit' } : { year: 'numeric', month: '2-digit', day: '2-digit' });
+    return date.toLocaleDateString(getLocale(), sameYear ? { month: '2-digit', day: '2-digit' } : { year: 'numeric', month: '2-digit', day: '2-digit' });
 }

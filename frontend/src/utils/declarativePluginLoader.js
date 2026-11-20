@@ -18,6 +18,7 @@ import { createScopedLocalStorage } from './pluginStorage.js'
 import { createScopedHostBridge, createScopedWindow, getPluginSessionHolder } from '../declarative/pluginSession.js'
 import { createPluginHostApis } from '../declarative/pluginSecureStorage.js'
 import { ensureHostBridge } from '../declarative/hostClipboardBridge.js'
+import { t } from '@/i18n'
 
 export const V2_CATALOG_CDN_URL = 'https://cdn.ztools.cn/plugins-v2/catalog.json'
 
@@ -30,7 +31,7 @@ export const V2_CATALOG_CDN_URL = 'https://cdn.ztools.cn/plugins-v2/catalog.json
  */
 function createRendererCryptoModule(pluginId) {
   const unsupported = (name) => () => {
-    const err = new Error(`插件 [${pluginId}] 调用了 crypto.${name}：声明式插件运行在渲染进程，不提供 Node 摘要接口，请改用 WebCrypto 或自带实现`)
+    const err = new Error(t('declarativeLoader.unsupportedCrypto', { pluginId, name }))
     err.code = 'UNSUPPORTED_NODE_API'
     throw err
   }
@@ -278,7 +279,7 @@ function createRendererCryptoModule(pluginId) {
     createDecipheriv: unsupported('createDecipheriv'),
     randomBytes(size) {
       const n = Number(size)
-      if (!Number.isInteger(n) || n < 0 || n > 65536) throw new RangeError('randomBytes 长度必须是 0–65536 的整数')
+      if (!Number.isInteger(n) || n < 0 || n > 65536) throw new RangeError(t('declarativeLoader.invalidRandomBytesSize'))
       const bytes = new Uint8Array(n)
       globalThis.crypto.getRandomValues(bytes)
       return bytes
@@ -314,12 +315,12 @@ const pathShim = {
  */
 export function normalizeRelativeModulePath(entryDir, specifier) {
   if (typeof specifier !== 'string' || !specifier.startsWith('./')) {
-    const err = new Error(`禁止加载非法的模块路径: ${specifier}`)
+    const err = new Error(t('declarativeLoader.invalidModulePath', { specifier }))
     err.code = 'UNAUTHORIZED_MODULE_ACCESS'
     throw err
   }
   if (specifier.includes('..') || specifier.includes('\\')) {
-    const err = new Error(`检测到路径穿越攻击: ${specifier}`)
+    const err = new Error(t('declarativeLoader.pathTraversalBlocked', { specifier }))
     err.code = 'PATH_TRAVERSAL_BLOCKED'
     throw err
   }
@@ -490,7 +491,7 @@ async function defaultReadPluginFile(pluginId, relPath) {
   const url = `ztools://plugins/${cleanId}/${cleanPath}`
   const response = await fetch(url)
   if (!response.ok) {
-    const err = new Error(`无法加载插件资源 [${url}]: HTTP ${response.status}`)
+    const err = new Error(t('declarativeLoader.resourceNotFound', { url, status: response.status }))
     err.status = response.status
     err.code = 'PLUGIN_RESOURCE_NOT_FOUND'
     throw err
@@ -572,7 +573,7 @@ export function clearDeclarativePluginCache(pluginId) {
 export async function loadInstalledDeclarativePlugin(pluginId, options = {}) {
   const pid = String(pluginId || '').trim()
   if (!pid || /[/\\]/.test(pid) || pid.includes('..')) {
-    const err = new Error(`非法的插件标识符: ${pid}`)
+    const err = new Error(t('declarativeLoader.invalidPluginId', { pluginId: pid }))
     err.code = 'INVALID_PLUGIN_ID'
     throw err
   }
@@ -586,7 +587,7 @@ export async function loadInstalledDeclarativePlugin(pluginId, options = {}) {
   const globalGeneration = allLoadsGeneration
   const requireCurrentLoad = () => {
     if (loadGeneration !== (pluginLoadGenerations.get(pid.toLowerCase()) || 0) || globalGeneration !== allLoadsGeneration) {
-      throw Object.assign(new Error('插件已更新或停止，请重新打开'), { code: 'PLUGIN_CHANGED' })
+      throw Object.assign(new Error(t('declarativeLoader.pluginChanged')), { code: 'PLUGIN_CHANGED' })
     }
   }
 
@@ -600,14 +601,14 @@ export async function loadInstalledDeclarativePlugin(pluginId, options = {}) {
   try {
     manifest = JSON.parse(manifestRaw)
   } catch (parseErr) {
-    const err = new Error(`插件 [${pid}] 的 plugin.json 格式损坏: ${parseErr.message}`)
+    const err = new Error(t('declarativeLoader.manifestCorrupt', { pluginId: pid, reason: parseErr.message }))
     err.code = 'INVALID_PLUGIN_MANIFEST'
     throw err
   }
 
   const entryRelPath = String(manifest.entry || 'dist/index.js').replace(/^\/+/, '').replace(/\\/g, '/')
   if (!entryRelPath.endsWith('.js') || entryRelPath.includes('..')) {
-    const err = new Error(`插件 [${pid}] 入口文件不是合法的声明式 JS 模块: ${entryRelPath}`)
+    const err = new Error(t('declarativeLoader.unsupportedEntry', { pluginId: pid, entry: entryRelPath }))
     err.code = 'UNSUPPORTED_PLUGIN_ENTRY'
     throw err
   }
@@ -675,7 +676,7 @@ export async function loadInstalledDeclarativePlugin(pluginId, options = {}) {
 
     const rawCode = sourceMap.get(relPath)
     if (typeof rawCode !== 'string') {
-      const err = new Error(`未找到插件模块源码: ${relPath}`)
+      const err = new Error(t('declarativeLoader.moduleNotFound', { path: relPath }))
       err.code = 'MODULE_NOT_FOUND'
       throw err
     }
@@ -705,8 +706,8 @@ export async function loadInstalledDeclarativePlugin(pluginId, options = {}) {
         return evaluateModule(targetRelPath)
       }
       // fs 模块在渲染进程里没有实现，给出替代方案，方便插件作者定位
-      const hint = /^(node:)?fs(\/promises)?$/.test(String(specifier)) ? '；读写文件请改用宿主 API window.ztools.fs' : ''
-      const err = new Error(`安全沙箱拦截：禁止插件 [${pid}] 加载未授权模块 "${specifier}"${hint}`)
+      const hint = /^(node:)?fs(\/promises)?$/.test(String(specifier)) ? t('declarativeLoader.fsHint') : ''
+      const err = new Error(t('declarativeLoader.unauthorizedModule', { pluginId: pid, specifier, hint }))
       err.code = 'UNAUTHORIZED_MODULE_ACCESS'
       throw err
     }
@@ -724,7 +725,7 @@ export async function loadInstalledDeclarativePlugin(pluginId, options = {}) {
       if (evalErr && (evalErr.code === 'UNAUTHORIZED_MODULE_ACCESS' || evalErr.code === 'PATH_TRAVERSAL_BLOCKED')) {
         throw evalErr
       }
-      const err = new Error(`插件 [${pid}] 模块 (${relPath}) 执行异常: ${evalErr.message}`)
+      const err = new Error(t('declarativeLoader.evaluationError', { pluginId: pid, path: relPath, reason: evalErr.message }))
       err.code = 'PLUGIN_EVALUATION_ERROR'
       err.cause = evalErr
       throw err
@@ -786,7 +787,7 @@ export async function loadInstalledDeclarativePlugin(pluginId, options = {}) {
   }
 
   if (typeof rootCommand !== 'function') {
-    const err = new Error(`插件 [${pid}] 未导出有效的声明式组件函数 (default export)`)
+    const err = new Error(t('declarativeLoader.invalidComponent', { pluginId: pid }))
     err.code = 'INVALID_DECLARATIVE_COMPONENT'
     throw err
   }
@@ -826,6 +827,8 @@ export async function loadInstalledDeclarativePlugin(pluginId, options = {}) {
     featureExplain,
     description: manifest.description || '',
     version: manifest.version || '1.0.0',
+    ...(typeof manifest.defaultLocale === 'string' && manifest.defaultLocale ? { defaultLocale: manifest.defaultLocale } : {}),
+    ...(manifest.i18n && typeof manifest.i18n === 'object' ? { i18n: manifest.i18n } : {}),
     author: typeof manifest.author === 'string' ? manifest.author : (manifest.author?.name || 'ZTools Official'),
     icon: bundled ? getBundledPluginIconUrl(pid, iconRel) : `ztools://plugins/${encodeURIComponent(pid)}/${iconRel}`,
     faIcon: 'fa-bolt',
@@ -880,7 +883,7 @@ export async function executeDeclarativeNoViewCommand(pluginId, options = {}) {
       launchType: 'user-initiated'
     }
     const rawResult = await Promise.resolve(loaded.command(context))
-    let message = `${loaded.title} 已执行`
+    let message = t('declarativeLoader.noViewExecuted', { title: loaded.title })
     if (typeof rawResult === 'string' && rawResult.trim()) {
       message = rawResult.trim()
     } else if (rawResult && typeof rawResult === 'object') {
@@ -898,7 +901,7 @@ export async function executeDeclarativeNoViewCommand(pluginId, options = {}) {
       result: rawResult
     }
   } catch (execErr) {
-    const err = new Error(`执行极速命令 [${loaded.title}] 失败: ${execErr?.message || String(execErr)}`)
+    const err = new Error(t('declarativeLoader.noViewExecutionError', { title: loaded.title, reason: execErr?.message || String(execErr) }))
     err.code = 'NO_VIEW_EXECUTION_ERROR'
     err.cause = execErr
     throw err

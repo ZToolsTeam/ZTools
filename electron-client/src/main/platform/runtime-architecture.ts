@@ -1,7 +1,7 @@
 export type NativeOsArchitecture = 'x86' | 'x64' | 'arm64' | 'unknown'
 
 export interface RuntimeArchitectureInput {
-  platform: NodeJS.Platform
+  platform: NodeJS.Platform | string
   processArch: string
   runningUnderARM64Translation: boolean | null
   processorArchitecture?: string | undefined
@@ -86,5 +86,48 @@ export function resolveRuntimeArchitecture(
     case 'win32': return windowsArchitecture(input)
     case 'darwin': return macosArchitecture(input)
     default: return { nativeOsArch: 'unknown', wow64: null }
+  }
+}
+
+/** 将 Node.js 平台标识规范化为服务端统一口径 */
+export function normalizePlatformName(platform: NodeJS.Platform | string): string {
+  switch (platform) {
+    case 'win32': return 'windows'
+    case 'darwin': return 'macos'
+    default: return platform
+  }
+}
+
+/** 将原生架构规范化为统一口径（x86 -> ia32，unknown 回退进程架构） */
+export function normalizeArchValue(arch: string, fallbackArch = ''): string {
+  switch (arch) {
+    case 'x86':
+    case 'ia32':
+      return 'ia32'
+    case 'x64':
+    case 'arm64':
+      return arch
+    case 'unknown':
+    case '':
+      if (fallbackArch === 'x86') return 'ia32'
+      return fallbackArch || 'unknown'
+    default:
+      return arch
+  }
+}
+
+/** 解析标准化平台名、原生系统架构及归一化架构字符串 */
+export function resolveNormalizedRuntimePlatformAndArch(
+  input: RuntimeArchitectureInput
+): {
+  platform: string
+  nativeOsArch: NativeOsArchitecture
+  arch: string
+} {
+  const { nativeOsArch } = resolveRuntimeArchitecture(input)
+  return {
+    platform: normalizePlatformName(input.platform),
+    nativeOsArch,
+    arch: normalizeArchValue(nativeOsArch, input.processArch)
   }
 }

@@ -9,6 +9,7 @@
   "category": [
     "办公效率"
   ],
+  "categoryId": "productivity",
   "permissions": [
     "clipboard"
   ],
@@ -34,5 +35,20 @@
     "笔记",
     "备忘"
   ],
-  "minAppVersion": "1.1.8.3"
+  "minAppVersion": "1.1.8.3",
+  "defaultLocale": "zh-CN",
+  "i18n": {
+    "en-US": {
+      "name": "Quick Notes",
+      "description": "Lightweight scratchpad notes with Markdown body support, custom tags, and instant search across titles, content, and tags.",
+      "keywords": [
+        "memo",
+        "note",
+        "notes",
+        "markdown",
+        "scratchpad",
+        "tags"
+      ]
+    }
+  }
 }

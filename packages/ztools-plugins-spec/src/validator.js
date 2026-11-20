@@ -48,19 +48,54 @@ export const PERMISSIONS = [
 export const PERMISSION_SET = new Set(PERMISSIONS)
 
 /**
+ * 插件市场 7 大标准分类 slug ↔ 中文映射（客户端与官网统一按此白名单归类）
+ */
+export const PLUGIN_CATEGORY_ID_MAP = Object.freeze({
+  productivity: '办公效率',
+  system: '系统工具',
+  files: '文件管理',
+  media: '图像媒体',
+  developer: '开发工具',
+  network: '网络工具',
+  security: '安全隐私'
+})
+
+export const PLUGIN_CATEGORY_IDS = Object.freeze(Object.keys(PLUGIN_CATEGORY_ID_MAP))
+const PLUGIN_CATEGORY_ID_SET = new Set(PLUGIN_CATEGORY_IDS)
+const PLUGIN_CATEGORY_LABEL_TO_ID = Object.freeze(
+  Object.fromEntries(Object.entries(PLUGIN_CATEGORY_ID_MAP).map(([id, label]) => [label, id]))
+)
+
+/**
  * 插件市场 7 大标准分类（客户端与官网统一按此白名单归类，禁止填「其他工具」或非标英文别名）
  */
-export const PLUGIN_CATEGORIES = Object.freeze([
-  '办公效率',
-  '系统工具',
-  '文件管理',
-  '图像媒体',
-  '开发工具',
-  '网络工具',
-  '安全隐私'
-])
+export const PLUGIN_CATEGORIES = Object.freeze(Object.values(PLUGIN_CATEGORY_ID_MAP))
 
 export const PLUGIN_CATEGORY_SET = new Set(PLUGIN_CATEGORIES)
+
+/**
+ * 将中文分类名或标准英文 slug 归一化为 7 个标准分类 slug 之一；非法值返回 null。
+ * @param {unknown} value
+ * @returns {string | null}
+ */
+export function normalizeCategoryId(value) {
+  if (typeof value !== 'string') return null
+  const trimmed = value.trim()
+  if (!trimmed) return null
+  const lower = trimmed.toLowerCase()
+  if (PLUGIN_CATEGORY_ID_SET.has(lower)) return lower
+  return PLUGIN_CATEGORY_LABEL_TO_ID[trimmed] ?? null
+}
+
+/**
+ * 将标准分类 slug 或中文分类名解析为对应的标准中文分类标签；非法值返回 null。
+ * @param {unknown} value
+ * @returns {string | null}
+ */
+export function resolveCategoryLabel(value) {
+  const id = normalizeCategoryId(value)
+  return id ? PLUGIN_CATEGORY_ID_MAP[id] : null
+}
 
 /**
  * 高危敏感权限集合（需官方人工审核）
@@ -197,7 +232,31 @@ function validateTargets(manifest, errors) {
   }
 }
 
+function validateCategoryIdField(manifest, errors) {
+  if (manifest.categoryId === undefined) return
+  if (typeof manifest.categoryId === 'string') {
+    if (!PLUGIN_CATEGORY_ID_SET.has(manifest.categoryId)) {
+      errors.push(`未知或非标准的 categoryId: "${manifest.categoryId}"。可选标准分类 slug 为: ${PLUGIN_CATEGORY_IDS.join(' / ')}`)
+    }
+    return
+  }
+  if (!Array.isArray(manifest.categoryId) || manifest.categoryId.length === 0 || manifest.categoryId.length > 2) {
+    errors.push(`categoryId 必须为标准分类 slug 或包含 1-2 个标准分类 slug 的数组（可选: ${PLUGIN_CATEGORY_IDS.join(' / ')}）`)
+    return
+  }
+  const seen = new Set()
+  for (const id of manifest.categoryId) {
+    if (typeof id !== 'string' || !PLUGIN_CATEGORY_ID_SET.has(id)) {
+      errors.push(`未知或非标准的 categoryId: "${id}"。可选标准分类 slug 为: ${PLUGIN_CATEGORY_IDS.join(' / ')}`)
+      continue
+    }
+    if (seen.has(id)) errors.push(`categoryId 中存在重复声明的分类: "${id}"`)
+    seen.add(id)
+  }
+}
+
 function validateCategories(manifest, errors) {
+  validateCategoryIdField(manifest, errors)
   if (manifest.revoked === true) return
   if (manifest.category === undefined || manifest.category === null || manifest.category === '') {
     errors.push(`缺少必填字段: category（请选择 1-2 个标准分类: ${PLUGIN_CATEGORIES.join(' / ')}）`)
@@ -207,14 +266,15 @@ function validateCategories(manifest, errors) {
     errors.push(`category 必须为包含 1-2 个标准分类的数组（可选: ${PLUGIN_CATEGORIES.join(' / ')}）`)
     return
   }
-  const seenCats = new Set()
+  const seenIds = new Set()
   for (const cat of manifest.category) {
-    if (typeof cat !== 'string' || !PLUGIN_CATEGORY_SET.has(cat)) {
-      errors.push(`未知或非标准的 category: "${cat}"。可选标准分类为: ${PLUGIN_CATEGORIES.join(' / ')}`)
+    if (typeof cat !== 'string' || (!PLUGIN_CATEGORY_SET.has(cat) && !PLUGIN_CATEGORY_ID_SET.has(cat))) {
+      errors.push(`未知或非标准的 category: "${cat}"。可选标准分类为: ${PLUGIN_CATEGORIES.join(' / ')}（或对应英文 slug: ${PLUGIN_CATEGORY_IDS.join(' / ')}）`)
       continue
     }
-    if (seenCats.has(cat)) errors.push(`category 中存在重复声明的分类: "${cat}"`)
-    seenCats.add(cat)
+    const normalizedId = normalizeCategoryId(cat)
+    if (seenIds.has(normalizedId)) errors.push(`category 中存在重复声明的分类: "${cat}"`)
+    seenIds.add(normalizedId)
   }
 }
 
@@ -470,10 +530,163 @@ export function validatePluginManifest(manifest, options = {}) {
   // 14. 截图（可选）
   validateManifestScreenshots(manifest, options, errors)
 
+  // 15. 多语言元数据（defaultLocale / i18n，可选）
+  validateManifestI18n(manifest, options, errors)
+
   return {
     valid: errors.length === 0,
     errors,
     warnings
+  }
+}
+
+export const LOCALE_TAG_REGEX = /^[a-z]{2,3}(?:-[A-Z][a-z]{3})?(?:-[A-Z]{2}|-[0-9]{3})?$/
+const I18N_ENTRY_KEYS = new Set(['name', 'description', 'keywords', 'revokedReason', 'features', 'screenshots'])
+const I18N_FEATURE_KEYS = new Set(['explain', 'cmds'])
+const I18N_SCREENSHOT_KEYS = new Set(['file', 'title'])
+
+function validateI18nFeatures(features, label, errors) {
+  if (!features || typeof features !== 'object' || Array.isArray(features)) {
+    errors.push(`${label}.features 必须为以功能 code 为键的对象`)
+    return
+  }
+  for (const [code, feat] of Object.entries(features)) {
+    const featLabel = `${label}.features["${code}"]`
+    if (!code.trim()) {
+      errors.push(`${label}.features 包含空的 feature code`)
+      continue
+    }
+    if (!feat || typeof feat !== 'object' || Array.isArray(feat)) {
+      errors.push(`${featLabel} 必须为对象`)
+      continue
+    }
+    const unknownFeatKeys = Object.keys(feat).filter((k) => !I18N_FEATURE_KEYS.has(k))
+    if (unknownFeatKeys.length > 0) {
+      errors.push(`${featLabel} 包含未知字段: ${unknownFeatKeys.join(', ')}`)
+    }
+    if (feat.explain !== undefined) {
+      if (typeof feat.explain !== 'string' || feat.explain.trim().length === 0) {
+        errors.push(`${featLabel}.explain 必须为非空字符串`)
+      }
+    }
+    if (feat.cmds !== undefined) {
+      if (!Array.isArray(feat.cmds)) {
+        errors.push(`${featLabel}.cmds 必须为数组`)
+      } else {
+        for (const [idx, cmd] of feat.cmds.entries()) {
+          const validString = typeof cmd === 'string' && cmd.trim().length > 0
+          const validObject = Boolean(cmd) && typeof cmd === 'object' && !Array.isArray(cmd)
+          if (!validString && !validObject) {
+            errors.push(`${featLabel}.cmds[${idx}] 必须为非空字符串或对象`)
+          }
+        }
+      }
+    }
+  }
+}
+
+function validateI18nScreenshots(list, label, options, errors) {
+  if (!Array.isArray(list)) {
+    errors.push(`${label}.screenshots 必须为数组，例如 [{ "file": "screenshots/en-US/01.png", "title": "Main" }]`)
+    return
+  }
+  if (list.length > SCREENSHOT_LIMITS.maxCount) {
+    errors.push(`${label}.screenshots 最多 ${SCREENSHOT_LIMITS.maxCount} 张，当前 ${list.length} 张`)
+  }
+  const seen = new Set()
+  for (const [idx, shot] of list.entries()) {
+    const shotLabel = `${label}.screenshots[${idx}]`
+    if (!shot || typeof shot !== 'object' || Array.isArray(shot)) {
+      errors.push(`${shotLabel} 必须为对象，例如 { "file": "screenshots/en-US/01.png", "title": "Main" }`)
+      continue
+    }
+    const unknownKeys = Object.keys(shot).filter((k) => !I18N_SCREENSHOT_KEYS.has(k))
+    if (unknownKeys.length > 0) {
+      errors.push(`${shotLabel} 包含未知字段: ${unknownKeys.join(', ')}`)
+    }
+    if (shot.title !== undefined && (typeof shot.title !== 'string' || shot.title.trim().length === 0 || shot.title.length > SCREENSHOT_LIMITS.maxTitleLength)) {
+      errors.push(`${shotLabel}.title 必须为 1-${SCREENSHOT_LIMITS.maxTitleLength} 个字符的非空字符串`)
+    }
+    if (typeof shot.file !== 'string' || !SCREENSHOT_PATH_REGEX.test(shot.file)) {
+      errors.push(`${shotLabel}.file 不合法: "${shot.file}"（必须是 screenshots/ 目录下的 .png 相对路径，禁止绝对路径与 ..）`)
+      continue
+    }
+    if (seen.has(shot.file)) {
+      errors.push(`${shotLabel}.file 重复: ${shot.file}`)
+      continue
+    }
+    seen.add(shot.file)
+    if (options.baseDir) {
+      const result = inspectScreenshotFile(options.baseDir, shot.file)
+      if (!result.ok) errors.push(`${shotLabel}: ${result.error}`)
+    }
+  }
+}
+
+function validateManifestI18n(manifest, options, errors) {
+  if (manifest.defaultLocale !== undefined) {
+    if (typeof manifest.defaultLocale !== 'string' || !LOCALE_TAG_REGEX.test(manifest.defaultLocale)) {
+      errors.push(`defaultLocale 格式无效: "${manifest.defaultLocale}"（应为 BCP-47 语言标签，如 zh-CN、en-US）`)
+    }
+  }
+
+  if (manifest.i18n === undefined) return
+  if (!manifest.i18n || typeof manifest.i18n !== 'object' || Array.isArray(manifest.i18n)) {
+    errors.push('i18n 字段必须为以语言标签为键的对象')
+    return
+  }
+
+  for (const [locale, entry] of Object.entries(manifest.i18n)) {
+    if (!LOCALE_TAG_REGEX.test(locale)) {
+      errors.push(`i18n 语言标签格式不合法: "${locale}"（应为 BCP-47 语言标签，如 en-US、zh-CN、ja）`)
+    }
+    const label = `i18n["${locale}"]`
+    if (!entry || typeof entry !== 'object' || Array.isArray(entry)) {
+      errors.push(`${label} 必须为对象`)
+      continue
+    }
+    const unknownKeys = Object.keys(entry).filter((k) => !I18N_ENTRY_KEYS.has(k))
+    if (unknownKeys.length > 0) {
+      errors.push(`${label} 包含未知字段: ${unknownKeys.join(', ')}`)
+    }
+    if (entry.name !== undefined) {
+      if (typeof entry.name !== 'string' || entry.name.trim().length === 0) {
+        errors.push(`${label}.name 必须为非空字符串`)
+      } else if (entry.name.length > 50) {
+        errors.push(`${label}.name 长度不能超过 50 个字符`)
+      }
+    }
+    if (entry.description !== undefined) {
+      if (typeof entry.description !== 'string' || entry.description.trim().length === 0) {
+        errors.push(`${label}.description 必须为非空字符串`)
+      } else if (entry.description.length > 500) {
+        errors.push(`${label}.description 长度不能超过 500 个字符`)
+      }
+    }
+    if (entry.revokedReason !== undefined) {
+      if (typeof entry.revokedReason !== 'string' || entry.revokedReason.trim().length === 0) {
+        errors.push(`${label}.revokedReason 必须为非空字符串`)
+      }
+    }
+    if (entry.keywords !== undefined) {
+      if (!Array.isArray(entry.keywords)) {
+        errors.push(`${label}.keywords 必须为数组`)
+      } else {
+        for (const [idx, kw] of entry.keywords.entries()) {
+          if (typeof kw !== 'string' || kw.trim().length === 0) {
+            errors.push(`${label}.keywords[${idx}] 必须为非空字符串`)
+          } else if (kw.length > 30) {
+            errors.push(`${label}.keywords[${idx}] 长度不能超过 30 个字符`)
+          }
+        }
+      }
+    }
+    if (entry.features !== undefined) {
+      validateI18nFeatures(entry.features, label, errors)
+    }
+    if (entry.screenshots !== undefined) {
+      validateI18nScreenshots(entry.screenshots, label, options, errors)
+    }
   }
 }
 

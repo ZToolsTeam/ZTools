@@ -1,5 +1,6 @@
 import { setDeclarativeBridge } from "@ztools/declarative-ui";
 import { getHostMethods } from "./hostMethods.js";
+import { t } from "@/i18n";
 
 /**
  * 校验要写入剪贴板 / 粘贴的文本：只接受字符串或数字，空内容直接报错（不能提示“已复制”却什么也没写）。
@@ -7,10 +8,10 @@ import { getHostMethods } from "./hostMethods.js";
 export function assertClipboardText(content) {
   if (typeof content === "number" && Number.isFinite(content)) return String(content);
   if (typeof content !== "string") {
-    throw Object.assign(new Error("要复制的内容不是文本"), { code: "INVALID_PARAMS" });
+    throw Object.assign(new Error(t("declarative.toast.clipboardNotText")), { code: "INVALID_PARAMS" });
   }
   if (content.length === 0) {
-    throw Object.assign(new Error("没有可复制的内容"), { code: "EMPTY_CONTENT" });
+    throw Object.assign(new Error(t("declarative.toast.clipboardEmpty")), { code: "EMPTY_CONTENT" });
   }
   return content;
 }
@@ -45,7 +46,7 @@ export function createHostClipboardBridge(getMethods = getHostMethods) {
         await navigator.clipboard.writeText(content);
         return;
       }
-      throw Object.assign(new Error("当前环境不支持写入剪贴板"), { code: "NOT_SUPPORTED" });
+      throw Object.assign(new Error(t("declarative.toast.clipboardWriteUnsupported")), { code: "NOT_SUPPORTED" });
     },
     clearClipboard: async () => {
       const methods = getMethods();
@@ -57,7 +58,7 @@ export function createHostClipboardBridge(getMethods = getHostMethods) {
         await navigator.clipboard.writeText("");
         return;
       }
-      throw Object.assign(new Error("当前环境不支持清空剪贴板"), { code: "NOT_SUPPORTED" });
+      throw Object.assign(new Error(t("declarative.toast.clipboardClearUnsupported")), { code: "NOT_SUPPORTED" });
     },
     readClipboardText: async () => {
       const methods = getMethods();
@@ -109,9 +110,9 @@ export function createHostClipboardBridge(getMethods = getHostMethods) {
       }
       if (typeof navigator !== "undefined" && navigator.clipboard) {
         await navigator.clipboard.writeText(String(text));
-        throw Object.assign(new Error("当前宿主不支持自动粘贴，内容已复制，请手动粘贴"), { code: "NOT_SUPPORTED" });
+        throw Object.assign(new Error(t("declarative.toast.autoPasteCopiedFallback")), { code: "NOT_SUPPORTED" });
       }
-      throw Object.assign(new Error("当前宿主不支持自动粘贴"), { code: "NOT_SUPPORTED" });
+      throw Object.assign(new Error(t("declarative.toast.autoPasteUnsupported")), { code: "NOT_SUPPORTED" });
     }
   };
 }

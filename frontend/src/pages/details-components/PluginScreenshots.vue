@@ -3,6 +3,9 @@ import { ChevronLeftIcon, ChevronRightIcon } from '@lucide/vue'
 import { computed, onUnmounted, ref, watch } from 'vue'
 import { RcDialog } from '@/components/base'
 import { isComposingEvent } from '@/utils/keymap'
+import { useAppI18n } from '@/i18n'
+
+const { t } = useAppI18n()
 
 const props = defineProps({
   screenshots: {
@@ -63,12 +66,12 @@ onUnmounted(() => window.removeEventListener('keydown', onViewerKeydown))
         <button
           type="button"
           class="screenshot-wrapper"
-          :aria-label="`查看大图：${screenshot.title || `截图 ${index + 1}`}`"
+          :aria-label="t('details.screenshots.zoomAria', { title: screenshot.title || t('details.screenshots.defaultAlt', { index: index + 1 }) })"
           @click="openViewer(index)"
         >
           <img
             :src="screenshot.url"
-            :alt="screenshot.title || `截图 ${index + 1}`"
+            :alt="screenshot.title || t('details.screenshots.defaultAlt', { index: index + 1 })"
             :width="screenshot.width"
             :height="screenshot.height"
             class="screenshot-image"
@@ -84,17 +87,17 @@ onUnmounted(() => window.removeEventListener('keydown', onViewerKeydown))
     <RcDialog v-model:open="viewerOpen" :width="960" wrap-class-name="screenshot-viewer">
       <figure v-if="current" class="viewer">
         <div class="viewer-stage">
-          <img :src="current.url" :alt="current.title || `截图 ${viewerIndex + 1}`" class="viewer-image" />
+          <img :src="current.url" :alt="current.title || t('details.screenshots.defaultAlt', { index: viewerIndex + 1 })" class="viewer-image" />
         </div>
         <figcaption class="viewer-bar">
-          <button v-if="total > 1" type="button" class="viewer-nav" aria-label="上一张" @click="step(-1)">
+          <button v-if="total > 1" type="button" class="viewer-nav" :aria-label="t('details.screenshots.prev')" @click="step(-1)">
             <ChevronLeftIcon aria-hidden="true" />
           </button>
           <span class="viewer-caption">
             <span v-if="current.title" class="viewer-title">{{ current.title }}</span>
             <span class="viewer-count">{{ viewerIndex + 1 }} / {{ total }}</span>
           </span>
-          <button v-if="total > 1" type="button" class="viewer-nav" aria-label="下一张" @click="step(1)">
+          <button v-if="total > 1" type="button" class="viewer-nav" :aria-label="t('details.screenshots.next')" @click="step(1)">
             <ChevronRightIcon aria-hidden="true" />
           </button>
         </figcaption>
@@ -157,7 +160,7 @@ onUnmounted(() => window.removeEventListener('keydown', onViewerKeydown))
   width: 100%;
   padding: 0;
   border: 1px solid var(--rc-border-subtle);
-  border-radius: 12px;
+  border-radius: var(--rc-radius-md);
   overflow: hidden;
   background: var(--rc-canvas);
   aspect-ratio: 16 / 10;
@@ -193,7 +196,7 @@ onUnmounted(() => window.removeEventListener('keydown', onViewerKeydown))
   justify-content: center;
   min-height: 240px;
   max-height: 70vh;
-  border-radius: 10px;
+  border-radius: var(--rc-radius-lg);
   background: var(--rc-surface-subtle);
   overflow: hidden;
 }
@@ -225,7 +228,7 @@ onUnmounted(() => window.removeEventListener('keydown', onViewerKeydown))
 .viewer-title {
   overflow: hidden;
   color: var(--rc-text-primary);
-  font-size: 13px;
+  font-size: var(--rc-fs-body);
   font-weight: 500;
   white-space: nowrap;
   text-overflow: ellipsis;
@@ -233,7 +236,7 @@ onUnmounted(() => window.removeEventListener('keydown', onViewerKeydown))
 
 .viewer-count {
   color: var(--rc-text-muted);
-  font-size: 12px;
+  font-size: var(--rc-fs-small);
   font-variant-numeric: tabular-nums;
 }
 
@@ -247,9 +250,9 @@ onUnmounted(() => window.removeEventListener('keydown', onViewerKeydown))
   border-radius: var(--rc-radius-md);
   background: var(--rc-surface);
   color: var(--rc-text-secondary);
-  font-size: 16px;
+  font-size: var(--rc-fs-title-sm); /* 图标字形尺寸 */
   cursor: pointer;
-  transition: background-color 0.15s ease, color 0.15s ease;
+  transition: background-color var(--rc-dur) ease, color var(--rc-dur) ease;
 }
 
 .viewer-nav:hover {
@@ -258,7 +261,7 @@ onUnmounted(() => window.removeEventListener('keydown', onViewerKeydown))
 }
 
 .screenshot-title {
-  font-size: 13px;
+  font-size: var(--rc-fs-small);
   color: var(--rc-text-secondary);
   text-align: center;
   margin: 10px 0 0;

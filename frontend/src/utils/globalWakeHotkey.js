@@ -2,6 +2,7 @@ import { ref } from 'vue'
 import { getHotkey } from '@/api/apiserver'
 import { DEFAULT_GLOBAL_WAKE_HOTKEY } from '@/api/native'
 import { isDoubleModifierHotkey } from '@/utils/hotkeyRecorder'
+import { t } from '@/i18n'
 
 export { DEFAULT_GLOBAL_WAKE_HOTKEY }
 
@@ -11,18 +12,28 @@ export const DEFAULT_MOUSE_LONG_PRESS_MS = 300
 export const MIN_MOUSE_LONG_PRESS_MS = 200
 export const MAX_MOUSE_LONG_PRESS_MS = 500
 
+function createMouseWakeOption(value, extra = {}) {
+  return Object.freeze({
+    value,
+    ...extra,
+    get label() {
+      return t(`settings.shortcuts.mouseWake.options.${value}`)
+    }
+  })
+}
+
 /**
  * Windows 鼠标快捷唤醒选项（严格禁止右键单击，避免破坏系统上下文菜单）
  */
 export const MOUSE_WAKE_OPTIONS = Object.freeze([
-  { value: 'off', label: '关闭' },
-  { value: 'middle:press', label: '中键单击', button: 'middle', action: 'press' },
-  { value: 'middle:long', label: '中键长按', button: 'middle', action: 'long' },
-  { value: 'right:long', label: '右键长按', button: 'right', action: 'long' },
-  { value: 'backward:press', label: '后退侧键单击', button: 'backward', action: 'press' },
-  { value: 'backward:long', label: '后退侧键长按', button: 'backward', action: 'long' },
-  { value: 'forward:press', label: '前进侧键单击', button: 'forward', action: 'press' },
-  { value: 'forward:long', label: '前进侧键长按', button: 'forward', action: 'long' }
+  createMouseWakeOption('off'),
+  createMouseWakeOption('middle:press', { button: 'middle', action: 'press' }),
+  createMouseWakeOption('middle:long', { button: 'middle', action: 'long' }),
+  createMouseWakeOption('right:long', { button: 'right', action: 'long' }),
+  createMouseWakeOption('backward:press', { button: 'backward', action: 'press' }),
+  createMouseWakeOption('backward:long', { button: 'backward', action: 'long' }),
+  createMouseWakeOption('forward:press', { button: 'forward', action: 'press' }),
+  createMouseWakeOption('forward:long', { button: 'forward', action: 'long' })
 ])
 
 const MOUSE_WAKE_OPTION_MAP = new Map(
@@ -146,11 +157,11 @@ function errorMessage(error) {
 
 function getTriggerList(result) {
   if (isExplicitFailure(result)) {
-    throw new Error(responseErrorMessage(result) || '读取触发器列表失败')
+    throw new Error(responseErrorMessage(result) || t('hotkey.wakeErrors.listFailed'))
   }
   if (Array.isArray(result)) return result
   if (Array.isArray(result?.data)) return result.data
-  throw new Error('触发器列表响应无效')
+  throw new Error(t('hotkey.wakeErrors.invalidListResponse'))
 }
 
 function buildGlobalWakeTrigger(hotkey, fullscreenDnd) {
@@ -262,7 +273,7 @@ export async function syncGlobalWakeHotkey({ hotkey, fullscreenDnd } = {}) {
       return { success: true, hotkey: '' }
     }
     if (typeof triggerApi.unregister !== 'function') {
-      return failureResult('trigger_unavailable', '', '注销快捷键 API 不可用')
+      return failureResult('trigger_unavailable', '', t('hotkey.wakeErrors.unregisterUnavailable'))
     }
 
     try {
@@ -366,7 +377,7 @@ export async function syncMouseWakeHook({
       }
     }
     if (typeof triggerApi.unregister !== 'function') {
-      return failureResult('trigger_unavailable', '', '注销鼠标触发器 API 不可用')
+      return failureResult('trigger_unavailable', '', t('hotkey.wakeErrors.mouseUnregisterUnavailable'))
     }
     try {
       const res = await triggerApi.unregister(MOUSE_WAKE_TRIGGER_ID)
@@ -379,7 +390,7 @@ export async function syncMouseWakeHook({
 
   const payload = buildMouseWakeTrigger({ mode, longPressMs, fullscreenDnd })
   if (!payload) {
-    return failureResult('invalid_mouse_mode', '', '不支持的鼠标触发模式')
+    return failureResult('invalid_mouse_mode', '', t('hotkey.wakeErrors.unsupportedMouseMode'))
   }
 
   try {

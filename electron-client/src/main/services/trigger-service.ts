@@ -27,6 +27,7 @@ import type {
   NativeKeyboardModifier,
   NativeMouseTriggerConfig
 } from '../native-host/native-host-client.js'
+import { t } from '../i18n/index.js'
 
 const TRIGGER_FILE = 'triggers.json'
 
@@ -258,8 +259,8 @@ const DOUBLE_MODIFIER_ACCELERATORS: Record<NativeKeyboardModifier, string> = {
 }
 
 /** 冲突提示里展示占用者：系统内置触发器用功能名，其余显示插件 ID */
-const SYSTEM_TRIGGER_NAMES: Record<string, string> = {
-  global_wake_hotkey: '全局唤醒'
+const SYSTEM_TRIGGER_NAME_KEYS: Record<string, string> = {
+  global_wake_hotkey: 'trigger.owner.globalWake'
 }
 
 /** 旧超级面板键盘热键的触发器 ID：超级面板已移除，加载时清理遗留记录 */
@@ -275,8 +276,12 @@ function isRetiredTrigger(trigger: StoredTrigger): boolean {
 }
 
 function triggerOwnerName(trigger: StoredTrigger): string {
-  if (Object.hasOwn(SYSTEM_TRIGGER_NAMES, trigger.id)) return SYSTEM_TRIGGER_NAMES[trigger.id] as string
-  return trigger.pluginId.toLowerCase() === 'system' ? '系统快捷键' : `插件 ${trigger.pluginId}`
+  if (Object.hasOwn(SYSTEM_TRIGGER_NAME_KEYS, trigger.id)) {
+    return t(SYSTEM_TRIGGER_NAME_KEYS[trigger.id] as string)
+  }
+  return trigger.pluginId.toLowerCase() === 'system'
+    ? t('trigger.owner.systemShortcut')
+    : t('trigger.owner.plugin', { pluginId: trigger.pluginId })
 }
 
 function hasRuntimeAction(trigger: StoredTrigger): boolean {
@@ -448,7 +453,7 @@ export class TriggerService {
         nextAccelerator &&
         !this.#registerWithRestore(trigger.id, nextAccelerator, previousAccelerator)
       ) {
-        throw new ZToolsError(errorCodes.triggerConflict, '操作系统拒绝注册该快捷键')
+        throw new ZToolsError(errorCodes.triggerConflict, t('trigger.conflict.osRejected'))
       }
 
       const next = new Map(this.#triggers)
@@ -585,7 +590,7 @@ export class TriggerService {
           this.#requireSupported(previous, caller)
           await this.#assertNoConflict(previous)
           if (!this.#register(previous.id, currentAccelerator)) {
-            throw new ZToolsError(errorCodes.triggerConflict, '快捷键无效或已被其他程序占用')
+            throw new ZToolsError(errorCodes.triggerConflict, t('trigger.conflict.occupiedByOtherApp'))
           }
         }
         if (params.enabled && previous.type === 'hook' && !this.#isEffectivelyEnabled(previous)) {
@@ -605,7 +610,7 @@ export class TriggerService {
 
       if (trigger.type === 'hotkey') {
         if (params.enabled && (!accelerator || !this.#register(trigger.id, accelerator))) {
-          throw new ZToolsError(errorCodes.triggerConflict, '快捷键无效或已被其他程序占用')
+          throw new ZToolsError(errorCodes.triggerConflict, t('trigger.conflict.occupiedByOtherApp'))
         }
         if (!params.enabled && accelerator) this.#unregister(trigger.id, accelerator)
       }
@@ -1002,7 +1007,7 @@ export class TriggerService {
         trigger.config.button === 'right' &&
         trigger.config.action === 'press'
       ) {
-        throw new ZToolsError(errorCodes.invalidRequest, '为避免破坏系统右键菜单，右键仅支持长按触发')
+        throw new ZToolsError(errorCodes.invalidRequest, t('trigger.error.rightButtonLongPressOnly'))
       }
       if (!parseMouseHookConfig(trigger.config)) {
         throw new ZToolsError(errorCodes.invalidRequest, '鼠标触发器配置无效')
@@ -1054,7 +1059,7 @@ export class TriggerService {
         ) {
           throw new ZToolsError(
             errorCodes.triggerConflict,
-            `鼠标触发器同时只能启用 1 组，当前已被「${triggerOwnerName(trigger)}」占用`
+            t('trigger.conflict.mouseSingleActive', { owner: triggerOwnerName(trigger) })
           )
         }
       }
@@ -1079,7 +1084,7 @@ export class TriggerService {
       ) {
         throw new ZToolsError(
           errorCodes.triggerConflict,
-          `快捷键 ${accelerator} 已被「${triggerOwnerName(trigger)}」占用，请换一个组合键`
+          t('trigger.conflict.hotkeyOccupied', { accelerator, owner: triggerOwnerName(trigger) })
         )
       }
     }

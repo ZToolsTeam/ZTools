@@ -9,6 +9,9 @@ const hasCommercialEdition = existsSync(commercialEditionEntry)
 const editionEntry = hasCommercialEdition
   ? commercialEditionEntry
   : path.resolve(__dirname, 'src/edition-oss/index.js')
+const editionLocalesEntry = hasCommercialEdition
+  ? path.resolve(__dirname, 'src/commercial/locales/index.js')
+  : path.resolve(__dirname, 'src/edition-oss/locales.js')
 
 export default defineConfig({
   plugins: [vue()],
@@ -18,6 +21,7 @@ export default defineConfig({
   test: {
     globals: true,
     environment: 'jsdom',
+    setupFiles: ['./vitest.setup.js'],
     // 官方版测试使用相对路径的后台接口前缀（只是占位，不含真实地址）；开源版不连接任何后台，不注入
     env: hasCommercialEdition ? { VITE_API_BASE_URL: '/api' } : {},
     environmentOptions: {
@@ -34,6 +38,7 @@ export default defineConfig({
   resolve: {
     alias: {
       '@': path.resolve(__dirname, './src'),
+      '@edition-locales': editionLocalesEntry,
       '@edition': editionEntry,
       '@api': path.resolve(__dirname, './src/api'),
       '@components': path.resolve(__dirname, './src/components'),

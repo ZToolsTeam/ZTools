@@ -42,7 +42,7 @@ defineProps({
   justify-content: center;
   margin-bottom: 12px;
   border: 1px solid var(--rc-border);
-  border-radius: 12px;
+  border-radius: var(--rc-radius-lg);
   background: var(--rc-surface);
   color: var(--rc-text-muted);
 }
@@ -56,14 +56,14 @@ defineProps({
 .is-sm .rc-empty-icon {
   width: 36px;
   height: 36px;
-  border-radius: 10px;
+  border-radius: var(--rc-radius-md);
   font-size: 17px;
 }
 
 .rc-empty-title {
   margin: 0;
   color: var(--rc-text-secondary);
-  font-size: 13px;
+  font-size: var(--rc-fs-body);
   font-weight: 500;
 }
 
@@ -71,7 +71,7 @@ defineProps({
   max-width: 360px;
   margin: 4px 0 0;
   color: var(--rc-text-muted);
-  font-size: 12px;
+  font-size: var(--rc-fs-small);
   line-height: 1.5;
 }
 

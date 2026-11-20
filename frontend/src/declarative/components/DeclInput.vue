@@ -97,13 +97,14 @@ function onInput(e) {
   padding: 0 10px;
   border-radius: var(--rc-radius-md);
   border: 1px solid var(--rc-border);
-  background: var(--rc-surface-hover);
+  /* 与 RcSelect 选择框同规格：同底色、同边框、圆角 md、聚焦 --rc-focus-ring */
+  background: var(--rc-surface);
   color: var(--rc-text-primary);
   font-family: var(--rc-font-sans);
-  font-size: 13px;
+  font-size: var(--rc-fs-body);
   line-height: 20px;
   outline: none;
-  transition: border-color 0.12s ease, box-shadow 0.12s ease;
+  transition: border-color var(--rc-dur-fast) ease, box-shadow var(--rc-dur-fast) ease;
 }
 
 .decl-input-wrap.has-trailing .decl-input {
@@ -132,7 +133,7 @@ function onInput(e) {
 
 .decl-input.is-mono {
   font-family: var(--rc-font-mono);
-  font-size: 12px;
+  font-size: var(--rc-fs-small);
 }
 
 .decl-input.is-error,

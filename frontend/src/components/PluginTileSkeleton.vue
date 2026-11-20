@@ -1,7 +1,7 @@
 <script setup>
 /**
- * 工作台磁贴占位：盒模型与 PluginTile 横向双行启动卡严格一致（1px 边框、10px×12px 内边距、36px 图标、18px+16px 双行文本），高度同为 58px。
- * 用于收藏详情加载中的占位，以及给另一个标签预留高度，避免切换标签或数据到达时页面跳动。
+ * 工作台磁贴占位：盒模型与 PluginTile 横向双行启动卡严格一致（1px 边框、10px×12px（右侧 10px）内边距、36px 图标、18px+16px 双行文本），高度同为 58px。
+ * 仅用于收藏详情加载中的占位，避免数据到达时页面跳动。
  */
 </script>
 
@@ -22,7 +22,7 @@
   display: flex;
   align-items: center;
   gap: 10px;
-  padding: 10px 12px;
+  padding: 10px 10px 10px 12px;
   border-radius: var(--rc-radius-lg);
   border: 1px solid var(--rc-border);
   background: var(--rc-surface);
@@ -32,7 +32,7 @@
   flex-shrink: 0;
   width: 36px;
   height: 36px;
-  border-radius: 10px;
+  border-radius: var(--rc-radius-md);
   background: var(--rc-surface-hover);
 }
 
@@ -52,13 +52,13 @@
 
 .skeleton-name {
   width: 52%;
-  font-size: 13px;
+  font-size: var(--rc-fs-body);
   line-height: 18px;
 }
 
 .skeleton-desc {
   width: 78%;
-  font-size: 12px;
+  font-size: var(--rc-fs-small);
   line-height: 16px;
 }
 
@@ -68,7 +68,7 @@
   position: absolute;
   inset: 50% 0 auto;
   transform: translateY(-50%);
-  border-radius: 4px;
+  border-radius: var(--rc-radius-xs);
   background: var(--rc-surface-hover);
 }
 

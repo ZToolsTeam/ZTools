@@ -2,6 +2,7 @@
 import { computed } from 'vue'
 import { AppleLogo, WindowsLogo } from '@/utils/appIcons'
 import { getPluginPlatforms } from '@/utils/platform'
+import { useAppI18n } from '@/i18n'
 
 /**
  * 插件支持的平台：直接显示系统标志（Windows / Apple），两个都支持就并排显示两个。
@@ -11,11 +12,14 @@ const props = defineProps({
   plugin: { type: Object, required: true }
 })
 
+const { t } = useAppI18n()
 const LOGOS = { windows: { icon: WindowsLogo, name: 'Windows' }, macos: { icon: AppleLogo, name: 'macOS' } }
 const platforms = computed(() => (getPluginPlatforms(props.plugin) || []).filter((p) => LOGOS[p]))
 const description = computed(() => {
   const names = platforms.value.map((p) => LOGOS[p].name)
-  return names.length > 1 ? `支持 ${names.join(' 和 ')}` : `仅支持 ${names[0]}`
+  return names.length > 1
+    ? t('platform.supportedBoth', { platforms: names.join(t('platform.andSeparator')) })
+    : t('platform.supportedOnly', { platform: names[0] })
 })
 </script>
 

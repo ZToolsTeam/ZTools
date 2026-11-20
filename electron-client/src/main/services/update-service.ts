@@ -6,6 +6,7 @@ import { errorCodes, ZToolsError } from '../../contracts/errors.js'
 import type { UpdateCheckParams, UpdatePackageParams } from '../../contracts/method-params.js'
 import type { RuntimePaths } from '../runtime/runtime-paths.js'
 import type { WebResourceService } from './web-resource-service.js'
+import { t } from '../i18n/index.js'
 
 const MAX_UPDATE_BYTES = 2 * 1024 * 1024 * 1024
 const DOWNLOAD_TIMEOUT_MS = 10 * 60 * 1000
@@ -167,13 +168,13 @@ async function downloadResponseToFile(
   maxBytes: number,
   onProgress: (downloaded: number, total: number) => void
 ): Promise<{ size: number; checksum: string }> {
-  if (!response.body) throw new ZToolsError(errorCodes.networkError, '更新响应没有内容')
+  if (!response.body) throw new ZToolsError(errorCodes.networkError, t('update.responseEmpty'))
   const contentLength = Number(response.headers.get('content-length') ?? 0)
   if (Number.isFinite(contentLength) && contentLength > maxBytes) {
-    throw new ZToolsError(errorCodes.fileTooLarge, '更新包超过大小限制')
+    throw new ZToolsError(errorCodes.fileTooLarge, t('update.packageTooLarge'))
   }
   if (expectedSize > 0 && contentLength > 0 && contentLength !== expectedSize) {
-    throw new ZToolsError(errorCodes.dataCorrupt, '更新包大小与声明不一致')
+    throw new ZToolsError(errorCodes.dataCorrupt, t('update.packageSizeMismatch'))
   }
   const reader = response.body.getReader()
   const hash = createHash('sha256')
@@ -186,26 +187,26 @@ async function downloadResponseToFile(
       if (signal.aborted) {
         throw signal.reason instanceof Error
           ? signal.reason
-          : new ZToolsError(errorCodes.appStopping, '更新下载已取消')
+          : new ZToolsError(errorCodes.appStopping, t('update.downloadCancelled'))
       }
       const next = await reader.read()
       if (next.done) break
       const chunk = Buffer.from(next.value)
       total += chunk.length
       if (total > maxBytes || (expectedSize > 0 && total > expectedSize)) {
-        throw new ZToolsError(errorCodes.fileTooLarge, '更新包超过大小限制')
+        throw new ZToolsError(errorCodes.fileTooLarge, t('update.packageTooLarge'))
       }
       hash.update(chunk)
       let offset = 0
       while (offset < chunk.length) {
         const written = await opened.write(chunk, offset, chunk.length - offset)
-        if (written.bytesWritten <= 0) throw new ZToolsError(errorCodes.networkError, '更新包写入失败')
+        if (written.bytesWritten <= 0) throw new ZToolsError(errorCodes.networkError, t('update.packageWriteFailed'))
         offset += written.bytesWritten
       }
       onProgress(total, expectedSize || contentLength || 0)
     }
     if (expectedSize > 0 && total !== expectedSize) {
-      throw new ZToolsError(errorCodes.dataCorrupt, '更新包大小与声明不一致')
+      throw new ZToolsError(errorCodes.dataCorrupt, t('update.packageSizeMismatch'))
     }
     await opened.sync()
     return { size: total, checksum: hash.digest('hex') }
@@ -446,7 +447,7 @@ export class UpdateService {
       this.#macUpdater.assertSupported()
       return
     }
-    throw new ZToolsError(errorCodes.notSupported, '当前运行环境不支持此类应用内更新')
+    throw new ZToolsError(errorCodes.notSupported, t('update.unsupportedEnvironment'))
   }
 
   onProgress(listener: UpdateProgressListener): () => void {
@@ -519,7 +520,7 @@ export class UpdateService {
     web: UpdateInfo | null
   }> {
     if (this.#platform !== 'win32' && this.#platform !== 'darwin') {
-      throw new ZToolsError(errorCodes.notSupported, '当前平台不支持更新检查')
+      throw new ZToolsError(errorCodes.notSupported, t('update.unsupportedPlatform'))
     }
     const updateSource = this.#updateSource
     if (updateSource === null) return { success: true, source: params.source, app: null, web: null }
@@ -534,11 +535,11 @@ export class UpdateService {
         source: params.source,
         signal: controller.signal
       })
-      if (!isRecord(envelope)) throw new ZToolsError(errorCodes.dataCorrupt, '更新服务器响应结构无效')
+      if (!isRecord(envelope)) throw new ZToolsError(errorCodes.dataCorrupt, t('update.invalidServerResponse'))
       const app = normalizeUpdate(envelope.app, 'App')
       const web = normalizeUpdate(envelope.web, 'Web')
       if (this.#platform === 'darwin' && web) {
-        throw new ZToolsError(errorCodes.dataCorrupt, 'macOS 更新必须使用完整安装包')
+        throw new ZToolsError(errorCodes.dataCorrupt, t('update.macosFullInstallerRequired'))
       }
       return {
         success: true,
@@ -547,7 +548,7 @@ export class UpdateService {
         web: web && compareVersions(web.version, this.#webVersion) > 0 ? web : null
       }
     } catch (error) {
-      throw networkError(error, '检查更新失败')
+      throw networkError(error, t('update.checkFailed'))
     } finally {
       clearTimeout(timeout)
       controller.abort()
@@ -596,24 +597,25 @@ export class UpdateService {
     const type = updateType(params)
     const version = normalizeVersion(params.version, '更新')
     const currentVersion = type === 'web' ? this.#webVersion : this.#appVersion
+    const targetLabel = type === 'web' ? 'Web' : 'App'
     if (compareVersions(version, currentVersion) <= 0) {
-      throw new ZToolsError(errorCodes.invalidRequest, `不允许下载低于或等于当前版本的${type === 'web' ? 'Web' : 'App'}更新包`)
+      throw new ZToolsError(errorCodes.invalidRequest, t('update.versionNotNewer', { target: targetLabel }))
     }
     const timeoutMs = type === 'app' ? APP_DOWNLOAD_TIMEOUT_MS : DOWNLOAD_TIMEOUT_MS
     const expectedChecksum = normalizeChecksum(params.checksum)
     if (!expectedChecksum) {
-      throw new ZToolsError(errorCodes.dataCorrupt, `${type === 'web' ? 'Web' : 'App'} 更新包缺少 SHA-256 校验值`)
+      throw new ZToolsError(errorCodes.dataCorrupt, t('update.missingChecksum', { target: targetLabel }))
     }
     const validFileSize = Number.isSafeInteger(params.fileSize) && params.fileSize >= 0 && params.fileSize <= MAX_UPDATE_BYTES
     if (type === 'web' && !validFileSize) {
-      throw new ZToolsError(errorCodes.invalidRequest, '更新大小无效')
+      throw new ZToolsError(errorCodes.invalidRequest, t('update.invalidSize'))
     }
     const fileSize = validFileSize ? params.fileSize : 0
     let downloadUrl: URL
     try {
       downloadUrl = new URL(params.downloadUrl)
     } catch {
-      throw new ZToolsError(errorCodes.invalidRequest, '更新地址无效')
+      throw new ZToolsError(errorCodes.invalidRequest, t('update.invalidUrl'))
     }
     const loopback = downloadUrl.hostname === '127.0.0.1' || downloadUrl.hostname === 'localhost' || downloadUrl.hostname === '::1'
     if (
@@ -621,7 +623,7 @@ export class UpdateService {
       downloadUrl.username !== '' ||
       downloadUrl.password !== ''
     ) {
-      throw new ZToolsError(errorCodes.permissionDenied, '更新下载只允许 HTTPS 或本机测试地址')
+      throw new ZToolsError(errorCodes.permissionDenied, t('update.httpsOnly'))
     }
     const downloadRoot = path.join(this.#runtimePaths.transactionRoot, 'Downloads')
     let existing: DownloadOperation | undefined
@@ -682,11 +684,11 @@ export class UpdateService {
       await fs.mkdir(downloadRoot, { recursive: true })
       await persistDownloadMetadata(operation, 'downloading')
       timeout = setTimeout(() => {
-        timeoutController.abort(new ZToolsError(errorCodes.networkError, '下载安装包超时'))
+        timeoutController.abort(new ZToolsError(errorCodes.networkError, t('update.downloadTimeout')))
       }, timeoutMs)
       const signal = AbortSignal.any([controller.signal, timeoutController.signal, requestSignal, this.#stopping.signal])
       const response = await this.#fetch(params.downloadUrl, { signal })
-      if (!response.ok) throw new ZToolsError(errorCodes.networkError, '下载安装包失败: HTTP ' + response.status)
+      if (!response.ok) throw new ZToolsError(errorCodes.networkError, t('update.downloadHttpFailed', { status: response.status }))
       const downloaded = await downloadResponseToFile(
         response,
         temporary,
@@ -704,7 +706,7 @@ export class UpdateService {
         }
       )
       if (expectedChecksum && downloaded.checksum !== expectedChecksum) {
-        throw new ZToolsError(errorCodes.dataCorrupt, '更新包 SHA-256 校验失败')
+        throw new ZToolsError(errorCodes.dataCorrupt, t('update.checksumFailed'))
       }
       await fs.rename(temporary, target)
       operation.state = 'downloaded'
@@ -723,7 +725,7 @@ export class UpdateService {
       await fs.rm(operation.metadataPath, { force: true }).catch(() => undefined)
       this.#operations.delete(operationId)
       if (error instanceof ZToolsError) throw error
-      throw networkError(error, '下载安装包失败')
+      throw networkError(error, t('update.downloadFailed'))
     } finally {
       clearTimeout(timeout)
       // 同一 signal 覆盖响应头和正文；提前拒绝响应时也关闭底层连接。
@@ -794,23 +796,23 @@ export class UpdateService {
     restartRequired: true
   }> {
     signal.throwIfAborted()
-    if (this.#appHandoffStarted) throw new ZToolsError(errorCodes.invalidRequest, 'App 更新已交接，请等待应用重启')
+    if (this.#appHandoffStarted) throw new ZToolsError(errorCodes.invalidRequest, t('update.appHandoffInProgress'))
     const version = normalizeVersion(params.version, '更新')
     if (compareVersions(version, this.#appVersion) <= 0) {
-      throw new ZToolsError(errorCodes.invalidRequest, '不允许安装低于或等于当前版本的 App 更新包')
+      throw new ZToolsError(errorCodes.invalidRequest, t('update.installVersionNotNewer'))
     }
     const requestedChecksum = params.checksum ? normalizeChecksum(params.checksum) : ''
     const download = await this.#resolveDownload(params, 'app', version, requestedChecksum, signal)
-    if (!download) throw new ZToolsError(errorCodes.invalidRequest, '没有可安装的 App 更新包')
+    if (!download) throw new ZToolsError(errorCodes.invalidRequest, t('update.noAppPackage'))
     if (!download.checksum || !(await isUsableDownload(download))) {
       await fs.rm(download.path, { force: true }).catch(() => undefined)
       await fs.rm(download.metadataPath, { force: true }).catch(() => undefined)
       this.#operations.delete(download.operationId)
-      throw new ZToolsError(errorCodes.dataCorrupt, 'App 更新包文件不可用')
+      throw new ZToolsError(errorCodes.dataCorrupt, t('update.appPackageUnavailable'))
     }
     signal.throwIfAborted()
     if (this.#installing.has(download.operationId)) {
-      throw new ZToolsError(errorCodes.invalidRequest, '该 App 更新已在交接中')
+      throw new ZToolsError(errorCodes.invalidRequest, t('update.appPackageInProgress'))
     }
     this.#installing.add(download.operationId)
     const maintenanceRoot = path.join(this.#runtimePaths.transactionRoot, 'Maintenance', randomUUID())
@@ -869,10 +871,10 @@ export class UpdateService {
         }
       }
       if (exitCode === UAC_CANCELLED_EXIT_CODE) {
-        throw new ZToolsError(errorCodes.cancelled, '用户取消了 UAC 授权，更新未安装')
+        throw new ZToolsError(errorCodes.cancelled, t('update.uacCancelled'))
       }
       if (exitCode !== 0) {
-        throw new ZToolsError(errorCodes.processError, `自提权更新器执行失败（退出代码 ${exitCode}）`)
+        throw new ZToolsError(errorCodes.processError, t('update.updaterFailed', { exitCode }))
       }
     } catch (error) {
       download.started = false
@@ -881,7 +883,7 @@ export class UpdateService {
       await persistDownloadMetadata(download, 'downloaded').catch(() => undefined)
       if (error instanceof ZToolsError) throw error
       const detail = error instanceof Error ? error.message.slice(0, 256) : String(error)
-      throw new ZToolsError(errorCodes.processError, '准备应用更新失败: ' + detail)
+      throw new ZToolsError(errorCodes.processError, t('update.prepareFailed', { detail }))
     } finally {
       await fs.rm(maintenanceRoot, { recursive: true, force: true }).catch(() => undefined)
       this.#installing.delete(download.operationId)
@@ -901,33 +903,33 @@ export class UpdateService {
     version: string
   }> {
     if (!this.#webResources) {
-      throw new ZToolsError(errorCodes.notSupported, 'Web 更新资源服务尚未启用')
+      throw new ZToolsError(errorCodes.notSupported, t('update.webResourceDisabled'))
     }
     if (this.#appHandoffStarted) {
-      throw new ZToolsError(errorCodes.invalidRequest, 'App 更新已交接，本次运行不再切换 Web 资源')
+      throw new ZToolsError(errorCodes.invalidRequest, t('update.webBlockedByAppHandoff'))
     }
     const version = normalizeVersion(params.version, '更新')
     const requestedChecksum = normalizeChecksum(params.checksum)
     if (!requestedChecksum) {
-      throw new ZToolsError(errorCodes.dataCorrupt, 'Web 更新包缺少 SHA-256 校验值')
+      throw new ZToolsError(errorCodes.dataCorrupt, t('update.webMissingChecksum'))
     }
     if (params.minAppVersion !== undefined) {
       const minimum = normalizeVersion(params.minAppVersion, 'Web 最低宿主')
       if (compareVersions(this.#appVersion, minimum) < 0) {
-        throw new ZToolsError(errorCodes.notSupported, '当前 App 版本低于 Web 更新要求')
+        throw new ZToolsError(errorCodes.notSupported, t('update.appVersionTooLow'))
       }
     }
     const download = await this.#resolveDownload(params, 'web', version, requestedChecksum, signal)
-    if (!download) throw new ZToolsError(errorCodes.invalidRequest, '没有可安装的已校验 Web 更新包')
+    if (!download) throw new ZToolsError(errorCodes.invalidRequest, t('update.noWebPackage'))
     if (!download.checksum || !(await isUsableDownload(download))) {
       await fs.rm(download.path, { force: true }).catch(() => undefined)
       await fs.rm(download.metadataPath, { force: true }).catch(() => undefined)
       this.#operations.delete(download.operationId)
-      throw new ZToolsError(errorCodes.dataCorrupt, 'Web 更新包已损坏或已被替换')
+      throw new ZToolsError(errorCodes.dataCorrupt, t('update.webPackageCorrupt'))
     }
     signal.throwIfAborted()
     if (this.#installing.has(download.operationId)) {
-      throw new ZToolsError(errorCodes.invalidRequest, '该 Web 更新已在切换中')
+      throw new ZToolsError(errorCodes.invalidRequest, t('update.webPackageInProgress'))
     }
     this.#installing.add(download.operationId)
     try {

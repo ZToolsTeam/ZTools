@@ -110,6 +110,7 @@ test('system service exposes compatible queries and cleans caller-owned blockers
     assert.equal(macInfo.platform, 'macos')
     assert.equal(macInfo.osName, 'macOS')
     assert.equal(macInfo.osVersion, '15.0.1')
+    assert.equal(['x86', 'x64', 'arm64', 'unknown'].includes(String(macInfo.nativeOsArch)), true)
     assert.equal(macInfo.supportsDoubleModifierHotkeys, false)
     assert.equal(macInfo.supportsMouseTriggers, false)
     assert.equal((await winUnavailableService.getInfo(mainCaller)).supportsDoubleModifierHotkeys, false)
@@ -118,6 +119,24 @@ test('system service exposes compatible queries and cleans caller-owned blockers
       const winInfo = await service.getInfo(mainCaller)
       assert.equal(winInfo.supportsDoubleModifierHotkeys, true)
       assert.equal(winInfo.supportsMouseTriggers, true)
+      assert.equal(winInfo.osArch, os.arch())
+      assert.equal(winInfo.processArch, process.arch)
+      assert.equal(['x86', 'x64', 'arm64'].includes(String(winInfo.nativeOsArch)), true)
+    }
+    const rosettaMacService = new SystemService(
+      files,
+      registry,
+      { ...adapter, runningUnderARM64Translation: () => true },
+      'darwin'
+    )
+    try {
+      const rosettaInfo = await rosettaMacService.getInfo(mainCaller)
+      assert.equal(
+        rosettaInfo.nativeOsArch,
+        process.arch === 'x64' ? 'arm64' : 'unknown'
+      )
+    } finally {
+      rosettaMacService.stop()
     }
     assert.equal(Object.hasOwn(macInfo, 'windowsFamily'), false)
     assert.equal(Object.hasOwn(macInfo, 'windowsRelease'), false)

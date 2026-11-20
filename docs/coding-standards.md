@@ -1,3 +1,5 @@
+[English](en/coding-standards.md) | **简体中文**
+
 # 代码规范
 
 本文是客户端仓库的代码规范，适用于 `electron-client/`、`frontend/`、`packages/` 等所有目录。测试怎么写见 [测试](testing.md)，模块分工见 [架构概览](architecture.md)。开发插件时，界面规则另见插件仓库的 [界面规范](https://github.com/ZToolsTeam/ZTools-extensions/blob/main/docs/ui-guidelines.md)。

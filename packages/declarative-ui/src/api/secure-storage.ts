@@ -1,5 +1,6 @@
 import { updateStoredItem } from "./storage-update.js";
 import { getDeclarativeBridge } from "./bridge.js";
+import { tApiError } from "./error-messages.js";
 import { ZToolsHostError } from "./host-error.js";
 
 /**
@@ -48,13 +49,13 @@ export function assertSecureStorageKey(key: unknown): asserts key is string {
   if (typeof key !== "string" || !SECURE_STORAGE_KEY_PATTERN.test(key)) {
     throw new ZToolsHostError(
       "INVALID_STORAGE_KEY",
-      "SecureStorage 的 key 必须是 1–128 个字符，以字母或数字开头，只含字母、数字和 . _ : -"
+      tApiError("secureStorageInvalidKey")
     );
   }
 }
 
 function unavailable(): ZToolsHostError {
-  return new ZToolsHostError("SECURE_STORAGE_UNAVAILABLE", "当前宿主不支持加密存储，请升级 ZTools");
+  return new ZToolsHostError("SECURE_STORAGE_UNAVAILABLE", tApiError("secureStorageUnavailable"));
 }
 
 function implementation(): Partial<SecureStorageApi> | undefined {

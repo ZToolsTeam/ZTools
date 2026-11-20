@@ -1557,3 +1557,68 @@ test('a terminal listener can acquire a directory lease that old operation clean
   assert.equal(readFailure, undefined)
   await assert.rejects(service.startInstall(installParams(archive, '1.0.0'), true), { code: errorCodes.pluginBusy })
 })
+
+test('plugin download and metadata requests include standard User-Agent with platform and native arch', async (context) => {
+  const root = runtimeRoot('plugin-download-ua')
+  const winArchive = pluginZip('1.0.0', ['toolkit-1.0.0'], {
+    targets: [{ id: 'win-x64', platform: 'windows', runtime: 'electron', arch: 'x64' }],
+    nativeComponents: []
+  })
+  const macArchive = pluginZip('1.0.0', [], {
+    targets: [{ id: 'mac-arm64', platform: 'macos', runtime: 'electron', arch: 'arm64' }],
+    nativeComponents: []
+  })
+  const library = createZip([{ name: 'tool.txt', data: 'ok' }])
+  const headersList: Array<{ url: string; userAgent: string | undefined }> = []
+  const fetchImpl = (async (input: string | URL | Request, init?: RequestInit) => {
+    const url = String(input)
+    const headers = (init?.headers ?? {}) as Record<string, string>
+    headersList.push({ url, userAgent: headers['User-Agent'] ?? headers['user-agent'] })
+    if (url === 'https://cdn.example/win-plugin.zip') return response(winArchive)
+    if (url === 'https://cdn.example/mac-plugin.zip') return response(macArchive)
+    if (url === 'https://meta.example/toolkit-1.0.0.json') {
+      return new Response(JSON.stringify({
+        libId: 'toolkit-1.0.0',
+        downloadUrl: 'https://cdn.example/library.zip',
+        fileSize: library.length,
+        checksum: sha256(library)
+      }), { status: 200, headers: { 'content-length': '200' } })
+    }
+    if (url === 'https://cdn.example/library.zip') return response(library)
+    return new Response(null, { status: 404 })
+  }) as typeof fetch
+
+  const winRoot = path.join(root, 'win')
+  const winArm64Service = new PluginInstallService(winRoot, createPublisher([]), {
+    appVersion: 'v1.1.9.0',
+    runtimeTarget: windowsX64Electron,
+    runningUnderARM64Translation: true,
+    libraryMetadata: testLibraryMetadata,
+    fetchImpl
+  })
+  const macRoot = path.join(root, 'mac')
+  const macRosettaService = new PluginInstallService(macRoot, createPublisher([]), {
+    appVersion: 'v1.1.9.0',
+    runtimeTarget: { platform: 'darwin', runtime: 'electron', arch: 'x64' },
+    runningUnderARM64Translation: true,
+    fetchImpl
+  })
+  context.after(async () => {
+    await winArm64Service.stop()
+    await macRosettaService.stop()
+    await fs.rm(root, { recursive: true, force: true })
+  })
+
+  await winArm64Service.startInstall({ ...installParams(winArchive, '1.0.0'), url: 'https://cdn.example/win-plugin.zip' }, false)
+  await winArm64Service.waitForIdle()
+  assert.equal(headersList.length, 3)
+  for (const item of headersList) {
+    assert.equal(item.userAgent, 'ZTools-Electron/1.1.9.0 (windows; arm64)')
+  }
+
+  headersList.length = 0
+  await macRosettaService.startInstall({ ...installParams(macArchive, '1.0.0'), url: 'https://cdn.example/mac-plugin.zip' }, false)
+  await macRosettaService.waitForIdle()
+  assert.equal(headersList.length, 1)
+  assert.equal(headersList[0]?.userAgent, 'ZTools-Electron/1.1.9.0 (macos; arm64)')
+})

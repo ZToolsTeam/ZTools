@@ -31,7 +31,7 @@ const icon = computed(() => ICONS[attrs.type] || InfoIcon)
 :global(.rc-alert .rc-alert-icon) {
   flex-shrink: 0;
   margin-inline-end: 8px;
-  font-size: 14px;
+  font-size: var(--rc-fs-emph);
 }
 
 :global(.rc-alert.ant-alert-with-description .rc-alert-icon) {

@@ -6,6 +6,7 @@
  * - 比特币 / 黄金：api.coingecko.com（bitcoin、tether-gold 的美元价格）
  * 拿不到真实数据时一律抛出 ExchangeRateError，绝不生成任何估算或演示假数据。
  */
+import { t, getCurrencyName } from "./i18n.js";
 export const LATEST_RATES_URL = "https://open.er-api.com/v6/latest/USD";
 export const RATES_URL = LATEST_RATES_URL;
 export const ASSET_QUOTES_URL = "https://api.coingecko.com/api/v3/simple/price?ids=bitcoin,tether-gold&vs_currencies=usd";
@@ -150,16 +151,16 @@ export function parseQuery(input) {
         const amountText = match[1];
         const amount = parseAmount(amountText);
         if (amount === null)
-            return { kind: "error", message: `金额格式无效：${amountText}` };
+            return { kind: "error", message: t("errInvalidAmount", { amount: amountText }) };
         const rawFrom = match[2];
         const rawTo = match[3] ?? match[4];
         const from = rawFrom === undefined ? undefined : resolveCurrencyToken(rawFrom);
         if (rawFrom !== undefined && from === undefined) {
-            return { kind: "error", message: `暂不支持币种 ${rawFrom.toUpperCase()}` };
+            return { kind: "error", message: t("errUnsupportedCurrency", { code: rawFrom.toUpperCase() }) };
         }
         const to = rawTo === undefined ? undefined : resolveCurrencyToken(rawTo);
         if (rawTo !== undefined && to === undefined) {
-            return { kind: "error", message: `暂不支持币种 ${rawTo.toUpperCase()}` };
+            return { kind: "error", message: t("errUnsupportedCurrency", { code: rawTo.toUpperCase() }) };
         }
         return {
             kind: "amount",
@@ -170,7 +171,7 @@ export function parseQuery(input) {
         };
     }
     if (/^[\d.,+-]/.test(text))
-        return { kind: "error", message: "无法识别的输入，示例：100、100 USD、100 USD to CNY" };
+        return { kind: "error", message: t("errUnrecognizedQuery") };
     return { kind: "filter", amount: 1, amountText: "1", text };
 }
 const INLINE_CURRENCY_PATTERN = /^([+-]?[\d.,]+)\s*([a-z\u4e00-\u9fa5]{2,10})\s*(?:to|in|到|转|换|=|->)\s*([a-z\u4e00-\u9fa5]{2,10})$/i;
@@ -194,18 +195,18 @@ export function parseInlineCurrencyQuery(input) {
     if (!from && !to)
         return null;
     if (!from) {
-        return { kind: "error", expression: text, message: `暂不支持源币种 ${rawFrom.toUpperCase()}` };
+        return { kind: "error", expression: text, message: t("errUnsupportedFromCurrency", { code: rawFrom.toUpperCase() }) };
     }
     if (!to) {
-        return { kind: "error", expression: text, message: `暂不支持目标币种 ${rawTo.toUpperCase()}` };
+        return { kind: "error", expression: text, message: t("errUnsupportedToCurrency", { code: rawTo.toUpperCase() }) };
     }
     if (rawAmount.startsWith("-")) {
-        return { kind: "error", expression: text, message: "货币换算金额不能为负数" };
+        return { kind: "error", expression: text, message: t("errNegativeCurrencyAmount") };
     }
     const normalizedAmount = rawAmount.startsWith("+") ? rawAmount.slice(1) : rawAmount;
     const amount = parseAmount(normalizedAmount);
     if (amount === null) {
-        return { kind: "error", expression: text, message: `金额格式不正确: "${rawAmount}"` };
+        return { kind: "error", expression: text, message: t("errMalformedAmount", { amount: rawAmount }) };
     }
     return {
         kind: "convert",
@@ -221,20 +222,30 @@ export function evaluateInlineCurrency(query, snapshot, origin = "network") {
     const rate = calcRate(snapshot.rates, query.from, query.to);
     if (rate === null) {
         const missing = calcRate(snapshot.rates, query.from, "USD") === null ? query.from : query.to;
-        const name = getCurrency(missing)?.name ?? missing;
-        return { formattedAnswer: "", error: `${name} (${missing}) 暂无实时报价，请稍后刷新重试` };
+        const name = getCurrencyName(missing, getCurrency(missing)?.name ?? missing);
+        return { formattedAnswer: "", error: t("errMissingLiveQuote", { name, code: missing }) };
     }
     const fixed = convertAmount(query.amount, rate, query.to);
     if (fixed === null) {
-        return { formattedAnswer: "", error: "换算结果超出可计算范围" };
+        return { formattedAnswer: "", error: t("errConversionOverflow") };
     }
     const formattedAnswer = `${groupDigits(fixed)} ${query.to}`;
     const timeText = formatTime(snapshot.sourceUpdatedAt ?? snapshot.timestamp);
-    const originNote = origin === "stale" ? ` · 刷新失败，显示 ${formatTime(snapshot.timestamp)} 缓存` : origin === "cache" ? " · 缓存" : "";
+    const originNote = origin === "stale"
+        ? t("inlineOriginStale", { time: formatTime(snapshot.timestamp) })
+        : origin === "cache"
+            ? t("inlineOriginCache")
+            : "";
     return {
         formattedAnswer,
         fillText: toInputAmount(fixed),
-        details: `1 ${query.from} = ${formatRate(rate)} ${query.to} · 汇率时间 ${timeText}${originNote}`
+        details: t("inlineDetails", {
+            from: query.from,
+            rate: formatRate(rate),
+            to: query.to,
+            time: timeText,
+            origin: originNote
+        })
     };
 }
 /** 币种是否匹配筛选文本（代码、名称、别名，忽略大小写） */
@@ -242,7 +253,8 @@ export function matchCurrency(info, text) {
     const needle = text.trim().toLowerCase();
     if (needle === "")
         return true;
-    return [info.code, info.name, ...info.keywords].some((v) => v.toLowerCase().includes(needle));
+    const localizedName = getCurrencyName(info.code, info.name);
+    return [info.code, info.name, localizedName, ...info.keywords].some((v) => v.toLowerCase().includes(needle));
 }
 /** 稳定、可展示的错误：不包含原始响应体或请求头 */
 export class ExchangeRateError extends Error {
@@ -250,13 +262,13 @@ export class ExchangeRateError extends Error {
     statusCode;
     constructor(code, statusCode, detail) {
         const messages = {
-            HOST_UNSUPPORTED: "当前客户端不支持插件网络请求，请升级 ZTools",
-            TIMEOUT: "请求汇率超时",
-            TRANSPORT_ERROR: "网络请求失败",
-            HTTP_ERROR: `汇率服务返回 HTTP ${statusCode ?? "错误"}`,
-            INVALID_RESPONSE: "汇率服务返回的数据无效"
+            HOST_UNSUPPORTED: t("errHostUnsupported"),
+            TIMEOUT: t("errRateTimeout"),
+            TRANSPORT_ERROR: t("errRateTransport"),
+            HTTP_ERROR: t("errRateHttp", { status: statusCode ?? t("errRateHttpFallback") }),
+            INVALID_RESPONSE: t("errRateInvalidResponse")
         };
-        super(detail ? `${messages[code]}（${detail}）` : messages[code]);
+        super(detail ? t("errDetailWrap", { base: messages[code], detail }) : messages[code]);
         this.name = "ExchangeRateError";
         this.code = code;
         if (statusCode !== undefined)
@@ -273,7 +285,7 @@ export function parseHostResponse(raw, maxBytes) {
         throw new ExchangeRateError("INVALID_RESPONSE");
     }
     if (value.body.length > maxBytes || new TextEncoder().encode(value.body).byteLength > maxBytes) {
-        throw new ExchangeRateError("INVALID_RESPONSE", undefined, "响应体过大");
+        throw new ExchangeRateError("INVALID_RESPONSE", undefined, t("errResponseTooLarge"));
     }
     return { statusCode: value.statusCode, body: value.body };
 }
@@ -305,7 +317,7 @@ export async function requestJson(request, url, timeoutMs, maxBytes) {
         payload = JSON.parse(response.body);
     }
     catch (error) {
-        throw new ExchangeRateError("INVALID_RESPONSE", undefined, error instanceof SyntaxError ? "不是有效的 JSON" : undefined);
+        throw new ExchangeRateError("INVALID_RESPONSE", undefined, error instanceof SyntaxError ? t("errInvalidJson") : undefined);
     }
     if (!isRecord(payload))
         throw new ExchangeRateError("INVALID_RESPONSE");
@@ -334,7 +346,7 @@ export function validateLatestRates(payload) {
     }
     const rates = normalizeRates(payload.rates);
     if (!rates)
-        throw new ExchangeRateError("INVALID_RESPONSE", undefined, "缺少 USD/CNY 或包含无效汇率");
+        throw new ExchangeRateError("INVALID_RESPONSE", undefined, t("errMissingCoreRates"));
     for (const code of ASSET_CODES)
         delete rates[code];
     const unix = payload.time_last_update_unix;
@@ -421,7 +433,7 @@ export function parseSettings(raw) {
     if (raw === undefined || raw === null)
         return DEFAULT_SETTINGS;
     if (!isRecord(raw))
-        throw new Error("已保存的设置格式无效");
+        throw new Error(t("errInvalidSavedSettings"));
     const base = isSupportedCurrency(raw.base) ? raw.base : DEFAULT_SETTINGS.base;
     const favorites = Array.isArray(raw.favorites)
         ? [...new Set(raw.favorites.filter((code) => isSupportedCurrency(code)))]

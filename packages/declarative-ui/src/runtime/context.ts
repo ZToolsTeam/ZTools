@@ -1,14 +1,15 @@
 import { ViewDescriptor } from "../descriptors/types.js";
 import { NavigationHandler, setActiveNavigation } from "../api/navigation.js";
+import { onLocaleChange } from "./locale.js";
 
 export type EffectCleanup = () => void;
 export type EffectCallback = () => void | EffectCleanup | Promise<void>;
 
 export interface HookRecord {
   type: "state" | "effect" | "memo" | "ref";
-  value?: any;
-  setter?: (newVal: any) => void;
-  deps?: any[];
+  value?: unknown;
+  setter?: (newVal: unknown) => void;
+  deps?: readonly unknown[];
   cleanup?: EffectCleanup;
 }
 
@@ -27,7 +28,7 @@ export interface DeclarativeRenderInstanceOptions {
 /** usePopoutState 登记的一项：值所在的 hook 下标与可选的路径提取函数 */
 interface PopoutRegistration {
   index: number;
-  paths?: (value: any) => unknown;
+  paths?: (value: unknown) => unknown;
 }
 
 export interface CollectedPopoutEntry {
@@ -43,7 +44,7 @@ export interface CollectedPopoutState {
   rejected: string[];
 }
 
-export function areViewTreesEqual(a: any, b: any): boolean {
+export function areViewTreesEqual(a: unknown, b: unknown): boolean {
   if (a === b) return true;
   if (!a || !b || typeof a !== "object" || typeof b !== "object") return false;
   try {
@@ -54,7 +55,7 @@ export function areViewTreesEqual(a: any, b: any): boolean {
 }
 
 export class DeclarativeRenderInstance {
-  private component: () => any;
+  private component: () => unknown;
   private hooks: HookRecord[] = [];
   private currentHookIndex = 0;
   private isQueued = false;
@@ -68,9 +69,10 @@ export class DeclarativeRenderInstance {
   private navigationHandler?: NavigationHandler;
   private popoutSeed: Map<string, unknown> | null = null;
   private popoutRegistry = new Map<string, PopoutRegistration>();
+  private unsubscribeLocale: (() => void) | null = null;
 
   constructor(
-    component: () => any,
+    component: () => unknown,
     options?: DeclarativeRenderInstanceOptions
   ) {
     this.component = component;
@@ -94,6 +96,9 @@ export class DeclarativeRenderInstance {
       // 拷一份 key 表：宿主传入的对象不会被改动，也不受原型链上的属性影响
       this.popoutSeed = new Map(Object.entries(seed));
     }
+    this.unsubscribeLocale = onLocaleChange(() => {
+      this.scheduleRender();
+    });
   }
 
   /** 取出并删除某个 key 的交接初值（只用一次） */
@@ -105,7 +110,7 @@ export class DeclarativeRenderInstance {
   }
 
   /** 登记 usePopoutState；同一实例里 key 重复时只保留第一个，返回 false */
-  registerPopoutState(key: string, index: number, paths?: (value: any) => unknown): boolean {
+  registerPopoutState(key: string, index: number, paths?: (value: unknown) => unknown): boolean {
     const existing = this.popoutRegistry.get(key);
     if (existing && existing.index !== index) return false;
     this.popoutRegistry.set(key, { index, paths });
@@ -262,6 +267,10 @@ export class DeclarativeRenderInstance {
   unmount(): void {
     if (!this.isMounted) return;
     this.isMounted = false;
+    if (this.unsubscribeLocale) {
+      this.unsubscribeLocale();
+      this.unsubscribeLocale = null;
+    }
     for (const hook of this.hooks) {
       if (hook.type === "effect" && typeof hook.cleanup === "function") {
         const cleanup = hook.cleanup;

@@ -293,6 +293,13 @@ import {
 import { PluginSessionManager } from '../windows/plugin-session-manager.js'
 import type { UpdateProgress } from '../services/update-service.js'
 import type { ResourceRoot } from '../protocol/ztools-protocol.js'
+import {
+  getLocaleSetting,
+  setLocale,
+  t,
+  type LocaleSetting,
+  type SupportedLocale
+} from '../i18n/index.js'
 
 /**
  * 把宿主自己产生、即将返回给调用窗口的路径登记为结果授权。只给宿主窗口（type:'main'）；
@@ -406,7 +413,7 @@ export interface ReferenceRuntimeAttachment {
 type RouterAppAdapter = Pick<
   typeof app,
   'getPath' | 'getAppPath' | 'isPackaged' | 'runningUnderARM64Translation' | 'getFileIcon'
->
+> & Partial<Pick<typeof app, 'getLocale'>>
 
 export interface IpcRouterOptions {
   pluginResources: {
@@ -428,6 +435,13 @@ export interface IpcRouterOptions {
   pluginState?: PluginStateService
   onDarkModeChanged?: (enabled: boolean) => void
   onAccentChanged?: (accent: 'ember' | 'glacier' | 'jade' | 'iris' | 'crimson' | 'mono') => void
+  onLocaleChanged?: (locale: SupportedLocale) => void
+  workerPool?: {
+    broadcastLocale(locale: string): Promise<unknown> | void
+  }
+  extensionHost?: {
+    updateLocale(locale: string): Promise<unknown> | void
+  }
   onTrayStatePossiblyChanged?: () => void
   /** 宿主关键子进程 pid（Electron 子进程、侧车、Native Host），结束进程时受保护；缺省按 app.getAppMetrics 等组装 */
   protectedProcessPids?: () => Promise<Iterable<number>> | Iterable<number>
@@ -783,6 +797,11 @@ export class IpcRouter {
   publishAccentColorChange(accent: 'ember' | 'glacier' | 'jade' | 'iris' | 'crimson' | 'mono'): void {
     this.#windows.updateTheme({ accent })
     this.#events.publishHost('system.AccentColorChange', { accent })
+  }
+
+  publishLocaleChange(setting: LocaleSetting, locale: SupportedLocale): void {
+    if (this.#stopping) return
+    this.#events.publishHost('system.LocaleChange', { setting, locale })
   }
 
   publishSuperPanelChanged(): void {
@@ -1195,6 +1214,8 @@ export class IpcRouter {
       new PluginInstallService(services.dataRoot, events, {
         state: this.#pluginState,
         libraryMetadata: services.libraryMetadata,
+        appVersion: services.appVersion,
+        runningUnderARM64Translation: mainApp.runningUnderARM64Translation ?? null,
         analytics: (event, pluginId, data) => {
           // 安装 / 更新 / 卸载完成：旧清单签发的会话立即失效（权限可能已变）
           stopDeclarativePlugin(pluginId)
@@ -1368,6 +1389,7 @@ export class IpcRouter {
       appName: 'ZTools',
       appVersion: services.appVersion,
       isDev: !mainApp.isPackaged,
+      runningUnderARM64Translation: () => mainApp.runningUnderARM64Translation ?? null,
       ...(options.systemPlatformAdapter.getProductVersion
         ? { getProductVersion: options.systemPlatformAdapter.getProductVersion }
         : {}),
@@ -1399,7 +1421,7 @@ export class IpcRouter {
             type: 'info' as const,
             title: params.title || 'ZTools',
             message: params.message,
-            buttons: ['确定'],
+            buttons: [t('dialog.ok')],
             noLink: true
           }
           if (parent) await dialog.showMessageBox(parent, messageBoxOptions)
@@ -1501,6 +1523,23 @@ export class IpcRouter {
         ) {
           options.onAccentChanged?.(input.value)
           this.publishAccentColorChange(input.value)
+        }
+        if (input.file === 'user_settings.json' && input.path === 'ui.locale') {
+          const systemLocale = typeof mainApp.getLocale === 'function' ? mainApp.getLocale() : undefined
+          const resolved = setLocale(input.value, systemLocale)
+          const setting = getLocaleSetting()
+          this.publishLocaleChange(setting, resolved)
+          options.onLocaleChanged?.(resolved)
+          if (options.workerPool) {
+            void Promise.resolve(options.workerPool.broadcastLocale(resolved)).catch((error: unknown) => {
+              console.warn('广播语言变更到 WorkerPool 失败:', error)
+            })
+          }
+          if (options.extensionHost) {
+            void Promise.resolve(options.extensionHost.updateLocale(resolved)).catch((error: unknown) => {
+              console.warn('广播语言变更到 ExtensionHost 失败:', error)
+            })
+          }
         }
         options.onTrayStatePossiblyChanged?.()
         return { success: true }

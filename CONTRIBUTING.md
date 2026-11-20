@@ -1,63 +1,65 @@
-# 贡献指南
+**English** | [简体中文](CONTRIBUTING.zh-CN.md)
 
-欢迎通过 Issue 和 Pull Request 改进 ZTools 客户端。插件相关的贡献请到 [ZTools Extensions](https://github.com/ZToolsTeam/ZTools-extensions/blob/main/CONTRIBUTING.md)。
+# Contributing Guide
 
-## 反馈问题
+Issues and Pull Requests that improve the ZTools desktop client are welcome. For plugin contributions, head over to [ZTools Extensions](https://github.com/ZToolsTeam/ZTools-extensions/blob/main/CONTRIBUTING.md).
 
-在 [Issues](https://github.com/ZToolsTeam/ZTools/issues) 新建，写清楚：
+## Reporting Issues
 
-- 系统版本与架构（如 Windows 11 x64、macOS 15 Apple Silicon）；
-- 客户端版本，从源码运行时附上提交号；
-- 复现步骤、预期结果和实际结果；
-- 相关日志或截图。提交前去掉用户名、路径、令牌等个人信息。
+Open a new issue in [Issues](https://github.com/ZToolsTeam/ZTools/issues) and include:
 
-发现安全问题时，Issue 里只描述影响范围，不要公开利用方法，维护者会联系你确认细节。
+- OS version and architecture (e.g., Windows 11 x64, macOS 15 Apple Silicon);
+- Client version (or commit SHA if running from source);
+- Steps to reproduce, expected behavior, and actual behavior;
+- Relevant logs or screenshots. Scrub personal details such as usernames, local paths, and tokens before posting.
 
-## 提交 Pull Request
+If you find a security vulnerability, describe only the affected scope in the issue without publishing exploit steps. Maintainers will follow up to coordinate details.
 
-1. Fork 本仓库，从 `main` 新建分支。
-2. 修改代码并补上测试，本地运行通过（见下文「提交前检查」）。
-3. 向 `ZToolsTeam/ZTools` 的 `main` 分支发起 Pull Request。
-4. 在 Pull Request 说明里勾选「贡献授权」一项（见下文「贡献授权」），没有勾选的不会被合并。
-5. 维护者审查。需要修改时直接在原分支追加提交。
-6. 审查通过后以 squash 方式合并。
+## Submitting a Pull Request
 
-Pull Request 说明里写：
+1. Fork this repository and create a branch from `main`.
+2. Make your changes, add tests, and verify they pass locally (see [Pre-Submit Checks](#pre-submit-checks)).
+3. Open a Pull Request targeting the `main` branch of `ZToolsTeam/ZTools`.
+4. Check the **Contributor License** checkbox in the PR description (see [Contributor Licensing](#contributor-licensing)). PRs without it checked cannot be merged.
+5. Wait for maintainer review. Push follow-up commits directly to your branch if changes are requested.
+6. Approved PRs are merged via squash.
 
-- 改了什么、为什么改；较大的改动建议先开 Issue 讨论方案；
-- 运行过的测试命令和结果；
-- 手动验证过的系统（Windows / macOS）。
+In your PR description, include:
 
-一个 Pull Request 只做一件事，不要夹带无关的格式化或重构。Issue 和 Pull Request 用中文或英文都可以。
+- What changed and why (for larger changes, open an Issue to discuss the design first);
+- Which test commands you ran and their results;
+- Which platforms you verified manually (Windows / macOS).
 
-## 代码要求
+Keep each PR focused on a single concern without unrelated formatting or refactoring. Both English and Chinese are welcome in Issues and Pull Requests.
 
-- 代码规范见 [代码规范](docs/coding-standards.md)：七项原则（完整、成对、互斥、状态机、边界、防御外部输入、测试覆盖）、各层规则、换行符与提交说明格式。
-- 测试规范见 [测试](docs/testing.md)：默认写集成用例，覆盖崩溃、超时、并发、数据损坏等失败路径。
-- 模块分工见 [架构概览](docs/architecture.md)。
+## Code Requirements
 
-## 提交前检查
+- **Coding Standards**: See [Coding Standards](docs/en/coding-standards.md) for the seven core principles (completeness, paired cleanup, mutual exclusion, state machines, boundaries, untrusted input defense, and test coverage), per-layer rules, line endings, and commit message conventions.
+- **Testing**: See [Testing](docs/en/testing.md). Default to integration tests and cover failure paths such as crashes, timeouts, concurrency, and corrupted data.
+- **Module Boundaries**: See [Architecture Overview](docs/en/architecture.md).
+
+## Pre-Submit Checks
 
 ```bash
 npm run test:quick
 ```
 
-再按改动范围运行对应模块的测试，命令见 [测试](docs/testing.md#按模块运行)。
+Then run the test suite for each module you touched. See [Running Tests by Module](docs/en/testing.md#running-tests-by-module).
 
-## 贡献授权
+## Contributor Licensing
 
-发起 Pull Request 时，模板里有一项必须勾选：
+Every Pull Request template includes one required checkbox:
 
 ```text
 - [x] 我确认本次贡献是我本人的原创作品（或我有权提交），并同意以 GPL-3.0-only 和 MIT 双重许可提供 / I confirm this contribution is my own work (or I have the right to submit it) and I agree to license it under both GPL-3.0-only and MIT
 ```
 
-把 `[ ]` 改成 `[x]` 即可，不要改动文字。没有勾选的 Pull Request 不会被合并。
+Change `[ ]` to `[x]` without modifying the text. Pull Requests without this box checked will not be merged.
 
-为什么要双重许可：本仓库以 GPL-3.0-only 公开，任何人都能拿到源码。项目官方发布的安装包除了这些源码，还可能带有闭源组件（例如账号与在线服务）。GPL 要求和代码组合在一起发布的部分也要开源，MIT 没有这个要求，所以需要你同时以 MIT 授权，官方安装包才能包含你的贡献。公开仓库里的代码仍然按 GPL-3.0-only 发布，你也仍然保留自己贡献的著作权。
+Why dual licensing? This repository is published under `GPL-3.0-only`, so anyone has access to the source code. Official release installers combine this open-source codebase with closed-source components (such as accounts and cloud services). Because GPL requires combined works to be distributed under GPL whereas MIT does not, licensing your contribution under both `GPL-3.0-only` and `MIT` allows official installers to include your work. The public repository remains under `GPL-3.0-only`, and you retain copyright to your contribution.
 
-如果贡献里有别人写的代码，请确认你有权按上面的条款提交，并在说明里注明来源和原许可证。
+If your contribution includes third-party code, ensure you have the right to submit it under these terms and note its source and original license in the PR description.
 
-## 许可
+## License
 
-本仓库的代码以 [GNU GPL v3.0](LICENSE)（GPL-3.0-only）发布；外部贡献同时以 MIT 授权给项目，见上文「贡献授权」。
+This repository is licensed under [GNU GPL v3.0](LICENSE) (`GPL-3.0-only`). External contributions are additionally licensed to the project under MIT as described in [Contributor Licensing](#contributor-licensing).

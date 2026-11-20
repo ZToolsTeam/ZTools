@@ -100,7 +100,10 @@ const STORE_OFFICIAL_META_MAP = new Map(
           name: p.name || p.id,
           title: p.name || p.id,
           description: p.description || '',
-          category: normalizePluginCategory(p.category)
+          category: normalizePluginCategory(p.category),
+          ...(p.categoryId ? { categoryId: p.categoryId } : {}),
+          ...(p.defaultLocale ? { defaultLocale: p.defaultLocale } : {}),
+          ...(p.i18n && typeof p.i18n === 'object' ? { i18n: p.i18n } : {})
         })
       ]
     })
@@ -184,6 +187,9 @@ function toEntry(p) {
     author: p.author || 'ZTools Team',
     // 页面按单一标准分类字符串展示，避免多分类用斜杠拼接成超长分类名
     category: normalizePluginCategory(p.category, '其他工具'),
+    ...(p.categoryId ? { categoryId: p.categoryId } : {}),
+    ...(p.defaultLocale ? { defaultLocale: p.defaultLocale } : {}),
+    ...(p.i18n && typeof p.i18n === 'object' ? { i18n: p.i18n } : {}),
     keywords: Array.isArray(p.keywords) ? p.keywords : [],
     alias: typeof p.alias === 'string' ? p.alias : '',
     features: Array.isArray(p.features) ? p.features : [],

@@ -18,6 +18,11 @@ import DeclarativePage from '@/pages/DeclarativePage.vue'
 import * as apiServer from '@/api/apiserver'
 import { resolvePluginGlyph } from '@/utils/brandIcons'
 import { _resetKeymapForTesting } from '@/utils/keymap'
+import { setI18nLocale } from '@/i18n'
+
+beforeEach(() => {
+  setI18nLocale('zh-CN')
+})
 import { BUNDLED_PLUGIN_IDS, isStoreOfficialPlugin } from '@/utils/bundledPlugins'
 import { isPluginVisible } from '@/utils/pluginVisibility'
 import { isPluginSupportedOnCurrentPlatform } from '@/utils/platform'

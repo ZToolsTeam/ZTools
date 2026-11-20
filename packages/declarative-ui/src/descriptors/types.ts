@@ -140,6 +140,17 @@ export interface ListSectionProps extends BaseProps {
   children?: any;
 }
 
+/**
+ * 列表没有可显示条目时的空状态（居中的图标 + 标题 + 说明，不可选中）。
+ * 放在 List 的子元素里（顶层或 Section 内均可）；列表有条目时宿主忽略它。
+ * 回车、⌘K 等仍执行 List 级 actions，所以「空列表时按回车新建」这类交互不需要占位条目。
+ */
+export interface ListEmptyViewProps extends BaseProps {
+  title: string;
+  description?: string;
+  icon?: IconResolvable;
+}
+
 export interface ListDropdownItemProps extends BaseProps {
   title: string;
   value: string;

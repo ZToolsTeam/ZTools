@@ -66,6 +66,10 @@
   --rc-kbd-border: rgba(24, 24, 27, 0.12);
   --rc-kbd-text: #55555c;
 
+  /* 滚动条滑块 */
+  --rc-scrollbar-thumb: rgba(0, 0, 0, 0.08);
+  --rc-scrollbar-thumb-hover: rgba(0, 0, 0, 0.15);
+
   /* ===== 6. 状态色（大地色系，避免高饱和） ===== */
   --rc-success: #4b6a30;
   --rc-success-subtle: rgba(75, 106, 48, 0.1);
@@ -92,11 +96,14 @@
   --rc-h-line: rgba(0, 0, 0, 0.04);
 
   /* ===== 8. 圆角 ===== */
+  --rc-radius-xs: 4px;
   --rc-radius-sm: 6px;
   --rc-radius-md: 8px;
   --rc-radius-lg: 12px;
   --rc-radius-xl: 16px;
   --rc-radius-full: 9999px;
+  /* 积木标记（侧边栏选中点、未读点等 6px 小方块）专用的微圆角，属于品牌图形 */
+  --rc-marker-radius: 1.7px;
 
   /* ===== 9. 阴影（暖灰，避免冷蓝投影） ===== */
   --rc-shadow-sm: 0 1px 2px 0 rgba(40, 30, 20, 0.05);
@@ -104,7 +111,30 @@
   --rc-shadow-lg: 0 24px 64px rgba(40, 30, 20, 0.16);
   --rc-scrim: rgba(40, 30, 20, 0.14);
 
-  /* ===== 10. 字体 ===== */
+  /* ===== 10. 字号档位（界面只用这 8 档；不使用半像素字号） ===== */
+  --rc-fs-caption: 11px; /* 角标、计数、键帽 */
+  --rc-fs-small: 12px; /* 说明文字、次要信息 */
+  --rc-fs-body: 13px; /* 正文、列表标题、按钮 */
+  --rc-fs-emph: 14px; /* 设置项名称、卡片标题 */
+  --rc-fs-title-sm: 16px; /* 区块标题、弹窗标题 */
+  --rc-fs-title-md: 18px; /* 详情页插件名 */
+  --rc-fs-title: 22px; /* 页面标题 */
+  --rc-fs-display: 28px; /* 关于页品牌名等极少数展示文字 */
+
+  /* ===== 页面外框：所有主窗口页面共用同一套内边距与最大宽度，标题左边缘对齐 ===== */
+  --rc-page-pad-top: 24px;
+  --rc-page-pad-x: 32px;
+  --rc-page-pad-bottom: 40px;
+  --rc-page-max-width: 1080px;
+  --rc-page-narrow-width: 720px;
+
+  /* ===== 动效时长与缓动 ===== */
+  --rc-dur-fast: 0.12s;
+  --rc-dur: 0.15s;
+  --rc-dur-slow: 0.2s;
+  --rc-ease-out: cubic-bezier(0.16, 1, 0.3, 1);
+
+  /* ===== 字体 ===== */
   --rc-font-sans: -apple-system, BlinkMacSystemFont, "PingFang SC", "Segoe UI Variable Text", "Segoe UI", "Microsoft YaHei UI", system-ui, sans-serif;
   --rc-font-mono: "SF Mono", "Cascadia Mono", ui-monospace, Menlo, Consolas, monospace;
   /* ===== 补齐：组件引用但此前未定义的旧标记（原定义在从未被引入、现已删除的 design-tokens.css 中） ===== */
@@ -221,6 +251,9 @@
   --rc-kbd-bg: #222226;
   --rc-kbd-border: rgba(255, 255, 255, 0.1);
   --rc-kbd-text: #a0a0a8;
+
+  --rc-scrollbar-thumb: rgba(255, 255, 255, 0.1);
+  --rc-scrollbar-thumb-hover: rgba(255, 255, 255, 0.2);
 
   --rc-success: #a3c783;
   --rc-success-subtle: rgba(163, 199, 131, 0.12);
@@ -651,7 +684,7 @@
   background: var(--rc-surface);
   border: 1px solid var(--rc-border);
   border-radius: var(--rc-radius-lg);
-  transition: all 0.15s cubic-bezier(0.16, 1, 0.3, 1);
+  transition: background-color var(--rc-dur) var(--rc-ease-out), border-color var(--rc-dur) var(--rc-ease-out), transform var(--rc-dur) var(--rc-ease-out);
 }
 
 .rc-surface-card:hover {
@@ -670,14 +703,14 @@
   min-width: 20px;
   padding: 0 5px 1px;
   font-family: var(--rc-font-sans);
-  font-size: 11px;
+  font-size: var(--rc-fs-caption);
   font-weight: 500;
   line-height: 1;
   letter-spacing: 0;
   white-space: nowrap;
   background: var(--rc-kbd-bg);
   border: 1px solid var(--rc-kbd-border);
-  border-radius: 5px;
+  border-radius: var(--rc-radius-xs);
   color: var(--rc-kbd-text);
   box-shadow: inset 0 -1px 0 var(--rc-kbd-border);
   user-select: none;
@@ -686,13 +719,14 @@
 /* 单字符系统符号（⌘ ⌥ ⇧ ↵ …）字形偏小，单独放大 */
 .rc-kbd.is-symbol {
   padding: 0 3px 1px;
-  font-size: 12.5px;
+  font-size: var(--rc-fs-small);
 }
 
 .rc-squircle-icon {
   display: flex;
   align-items: center;
   justify-content: center;
+  /* 图标底块按 36–40px 尺寸取 10px，保持方圆比例；不并入通用圆角档位 */
   border-radius: 10px;
   background: var(--rc-surface-subtle);
   border: 1px solid var(--rc-border);

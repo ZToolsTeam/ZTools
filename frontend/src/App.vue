@@ -35,6 +35,9 @@ import {
   initWindowMode,
   switchWindowMode
 } from '@/utils/windowMode'
+import { useAppI18n } from '@/i18n'
+
+const { t } = useAppI18n()
 
 const isLauncherWindow = computed(() => {
   if (typeof window === 'undefined') return false
@@ -83,15 +86,15 @@ const transformConflicts = (rawConflicts) => {
   const getTargetName = (id, triggerId = '') => {
     const tid = String(triggerId || '').trim()
     const pid = String(id || '').trim()
-    if (tid === 'global_wake_hotkey') return '全局唤醒快捷键'
-    if (tid === 'mouse_wake_hook') return '鼠标快捷唤醒'
-    if (pid.toLowerCase() === 'system') return '系统快捷键'
+    if (tid === 'global_wake_hotkey') return t('modals.hotkeyConflict.globalWake')
+    if (tid === 'mouse_wake_hook') return t('modals.hotkeyConflict.mouseWake')
+    if (pid.toLowerCase() === 'system') return t('modals.hotkeyConflict.systemHotkey')
     const featureItem = tid ? getPluginFeatureHotkeyItemByTriggerId(tid) : null
     if (featureItem) {
       const pluginLabel = nameMap[String(featureItem.pluginId)] || featureItem.pluginName || featureItem.pluginId
       return `${pluginLabel} · ${featureItem.featureName}`
     }
-    return nameMap[pid] || pid || '未知插件'
+    return nameMap[pid] || pid || t('app.unknownPlugin')
   }
 
   for (const item of rawConflicts) {
@@ -123,16 +126,16 @@ const transformConflicts = (rawConflicts) => {
         pluginId: item.pluginId || '',
         key: item.key || '',
         conflictType: 'system_occupied',
-        conflictWith: item.reason || '系统或其他程序',
+        conflictWith: item.reason || t('modals.hotkeyConflict.systemOrOtherApp'),
         triggerId: item.triggerId || ''
       })
     } else if (item.type === 'keyboard' || item.type === 'mouse') {
       result.push({
-        pluginName: item.type === 'mouse' ? '鼠标快捷唤醒' : '全局唤醒快捷键',
+        pluginName: item.type === 'mouse' ? t('modals.hotkeyConflict.mouseWake') : t('modals.hotkeyConflict.globalWake'),
         pluginId: 'system',
         key: item.key || '',
         conflictType: 'system_occupied',
-        conflictWith: '系统或其他程序',
+        conflictWith: t('modals.hotkeyConflict.systemOrOtherApp'),
         triggerId: item.type === 'mouse' ? 'mouse_wake_hook' : 'global_wake_hotkey'
       })
     } else if ('conflictType' in item || 'pluginName' in item) {
@@ -257,14 +260,14 @@ onMounted(async () => {
     window.__updateComplete = (type, success, message) => {
       if (type === 'web') {
         if (success) {
-          window.__ztoolsToast?.('success', 'Web 资源更新完成')
+          window.__ztoolsToast?.('success', t('app.webUpdateDone'))
           // Delphi 端会自动 LoadURL 刷新页面，无需前端 reload
         } else {
-          window.__ztoolsToast?.('error', message || 'Web 更新失败')
+          window.__ztoolsToast?.('error', message || t('app.webUpdateFailed'))
         }
       } else if (type === 'app') {
         if (!success) {
-          window.__ztoolsToast?.('error', message || 'App 更新失败')
+          window.__ztoolsToast?.('error', message || t('app.appUpdateFailed'))
         }
         // App 更新成功时不需要前端处理，安装程序会自动关闭 ZTools
       }
@@ -284,7 +287,7 @@ onMounted(async () => {
             // Web 更新静默执行，不弹通知
             silentWebUpdate(result.web).catch((error) => {
               console.error('启动时 Web 更新失败:', error)
-              window.__ztoolsToast?.('error', 'Web 更新失败: ' + (error.message || '未知错误'))
+              window.__ztoolsToast?.('error', t('app.webUpdateFailedWithReason', { reason: error.message || t('common.unknownError') }))
             })
           }
         }
@@ -367,7 +370,7 @@ onBeforeUnmount(() => {
 
 .fade-enter-active,
 .fade-leave-active {
-  transition: opacity 0.15s ease;
+  transition: opacity var(--rc-dur) ease;
 }
 
 .fade-enter-from,

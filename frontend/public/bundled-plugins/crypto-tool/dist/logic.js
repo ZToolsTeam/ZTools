@@ -1,14 +1,56 @@
+import { getLocale } from "@ztools/declarative-ui";
 import { digest, hmac, bytesToHex, bytesToBase64, base64ToBytes, utf8ToBytes, bytesToUtf8 } from "./hash.js";
+const CRYPTO_LOGIC_MESSAGES = {
+    "zh-CN": {
+        clientUnsupported: (method) => `当前客户端不支持 ${method}`,
+        methodFailed: (method) => `${method} 调用失败`,
+        filePathEmpty: "文件路径不能为空",
+        fileReadHashFailed: "无法读取文件内容计算哈希",
+        base64DecodeFailed: "Base64 解码失败",
+        decodedNotUtf8: "解码结果不是 UTF-8 文本（可能是图片或其他二进制数据）",
+        noWebCrypto: "当前环境不支持 WebCrypto，无法执行 AES 运算",
+        encryptKeyRequired: "请填写加密口令",
+        aesEncryptFailed: (reason) => `AES 加密失败: ${reason}`,
+        invalidParam: "参数错误",
+        ciphertextEmpty: "密文不能为空",
+        decryptKeyRequired: "请填写解密口令",
+        ciphertextInvalidBase64: "密文不是合法的 Base64",
+        ciphertextInvalidLength: "密文长度不正确，可能不完整或不是 AES-CBC 密文",
+        decryptFailed: "解密失败：口令或 IV 不正确，或密文已被篡改"
+    },
+    "en-US": {
+        clientUnsupported: (method) => `Current client does not support ${method}`,
+        methodFailed: (method) => `${method} call failed`,
+        filePathEmpty: "File path cannot be empty",
+        fileReadHashFailed: "Failed to read file content for hashing",
+        base64DecodeFailed: "Base64 decoding failed",
+        decodedNotUtf8: "Decoded result is not valid UTF-8 text (may be an image or binary data)",
+        noWebCrypto: "WebCrypto is not supported in this environment; AES cannot run",
+        encryptKeyRequired: "Please enter an encryption key",
+        aesEncryptFailed: (reason) => `AES encryption failed: ${reason}`,
+        invalidParam: "Invalid parameters",
+        ciphertextEmpty: "Ciphertext cannot be empty",
+        decryptKeyRequired: "Please enter a decryption key",
+        ciphertextInvalidBase64: "Ciphertext is not valid Base64",
+        ciphertextInvalidLength: "Invalid ciphertext length; data may be truncated or not AES-CBC",
+        decryptFailed: "Decryption failed: incorrect key/IV, or ciphertext has been tampered with"
+    }
+};
+function cryptoLogicStrings() {
+    const locale = getLocale();
+    return CRYPTO_LOGIC_MESSAGES[locale] ?? CRYPTO_LOGIC_MESSAGES["en-US"];
+}
 let fileHashSeq = 0;
 function isRecord(value) {
     return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 async function callHostMethod(method, params) {
+    const s = cryptoLogicStrings();
     const g = globalThis;
     const methods = g.window?.__ztoolsElectron?.transport?.methods ?? g.__ztoolsElectron?.transport?.methods;
     const fn = methods?.[method];
     if (typeof fn !== "function") {
-        throw new Error(`当前客户端不支持 ${method}`);
+        throw new Error(s.clientUnsupported(method));
     }
     fileHashSeq = (fileHashSeq + 1) % 1_000_000;
     const raw = (await fn({
@@ -17,7 +59,7 @@ async function callHostMethod(method, params) {
     }));
     if (isRecord(raw) && raw.success === false) {
         const err = raw.error;
-        const msg = isRecord(err) ? String(err.message || err.code || `${method} 调用失败`) : String(err || `${method} 调用失败`);
+        const msg = isRecord(err) ? String(err.message || err.code || s.methodFailed(method)) : String(err || s.methodFailed(method));
         throw new Error(msg);
     }
     if (isRecord(raw) && "data" in raw && raw.data !== undefined) {
@@ -30,9 +72,10 @@ async function callHostMethod(method, params) {
  * 读取本地文件真实字节计算哈希摘要（或调用宿主 filesearch_sha256），绝不将路径字符串当文本计算
  */
 export async function calculateFileHash(filePath) {
+    const s = cryptoLogicStrings();
     const normalizedPath = (filePath ?? "").trim();
     if (!normalizedPath) {
-        throw new Error("文件路径不能为空");
+        throw new Error(s.filePathEmpty);
     }
     const fileName = normalizedPath.split(/[\\/]/).filter(Boolean).pop() || normalizedPath;
     let readError;
@@ -88,7 +131,7 @@ export async function calculateFileHash(filePath) {
             readError = err instanceof Error ? err : new Error(String(err));
         }
     }
-    throw readError ?? new Error("无法读取文件内容计算哈希");
+    throw readError ?? new Error(s.fileReadHashFailed);
 }
 /**
  * 实时计算所有常用哈希与编码对比（UTF-8 输入）
@@ -115,6 +158,7 @@ export function encodeBase64(text) {
     return bytesToBase64(utf8ToBytes(text ?? ""));
 }
 export function decodeBase64(base64Str) {
+    const s = cryptoLogicStrings();
     const clean = (base64Str ?? "").trim();
     if (!clean)
         return { success: true, result: "" };
@@ -123,13 +167,13 @@ export function decodeBase64(base64Str) {
         bytes = base64ToBytes(clean);
     }
     catch (err) {
-        return { success: false, error: err instanceof Error ? err.message : "Base64 解码失败" };
+        return { success: false, error: err instanceof Error ? err.message : s.base64DecodeFailed };
     }
     try {
         return { success: true, result: bytesToUtf8(bytes) };
     }
     catch {
-        return { success: false, error: "解码结果不是 UTF-8 文本（可能是图片或其他二进制数据）" };
+        return { success: false, error: s.decodedNotUtf8 };
     }
 }
 /**
@@ -144,7 +188,7 @@ function deriveKeyAndIv(key, ivStr) {
 function getSubtle() {
     const subtle = globalThis.crypto?.subtle;
     if (!subtle)
-        throw new Error("当前环境不支持 WebCrypto，无法执行 AES 运算");
+        throw new Error(cryptoLogicStrings().noWebCrypto);
     return subtle;
 }
 async function importAesKey(keyBytes, usage) {
@@ -154,8 +198,9 @@ async function importAesKey(keyBytes, usage) {
  * AES-256-CBC 加密（PKCS#7 填充），输出 Base64 密文
  */
 export async function aesEncrypt(plaintext, key, options = {}) {
+    const s = cryptoLogicStrings();
     if (!key)
-        return { success: false, error: "请填写加密口令" };
+        return { success: false, error: s.encryptKeyRequired };
     try {
         const { keyBytes, ivBytes } = deriveKeyAndIv(key, options.iv);
         const cryptoKey = await importAesKey(keyBytes, "encrypt");
@@ -163,27 +208,28 @@ export async function aesEncrypt(plaintext, key, options = {}) {
         return { success: true, result: bytesToBase64(new Uint8Array(cipher)), iv: bytesToHex(ivBytes) };
     }
     catch (err) {
-        return { success: false, error: `AES 加密失败: ${err instanceof Error ? err.message : "参数错误"}` };
+        return { success: false, error: s.aesEncryptFailed(err instanceof Error ? err.message : s.invalidParam) };
     }
 }
 /**
  * AES-256-CBC 解密：口令错误或密文被篡改时，填充校验会失败并返回错误，不会输出乱码
  */
 export async function aesDecrypt(ciphertextBase64, key, options = {}) {
+    const s = cryptoLogicStrings();
     const raw = (ciphertextBase64 ?? "").trim();
     if (!raw)
-        return { success: false, error: "密文不能为空" };
+        return { success: false, error: s.ciphertextEmpty };
     if (!key)
-        return { success: false, error: "请填写解密口令" };
+        return { success: false, error: s.decryptKeyRequired };
     let cipherBytes;
     try {
         cipherBytes = base64ToBytes(raw);
     }
     catch {
-        return { success: false, error: "密文不是合法的 Base64" };
+        return { success: false, error: s.ciphertextInvalidBase64 };
     }
     if (cipherBytes.length === 0 || cipherBytes.length % 16 !== 0) {
-        return { success: false, error: "密文长度不正确，可能不完整或不是 AES-CBC 密文" };
+        return { success: false, error: s.ciphertextInvalidLength };
     }
     try {
         const { keyBytes, ivBytes } = deriveKeyAndIv(key, options.iv);
@@ -192,7 +238,7 @@ export async function aesDecrypt(ciphertextBase64, key, options = {}) {
         return { success: true, result: bytesToUtf8(new Uint8Array(plain)) };
     }
     catch {
-        return { success: false, error: "解密失败：口令或 IV 不正确，或密文已被篡改" };
+        return { success: false, error: s.decryptFailed };
     }
 }
 /**

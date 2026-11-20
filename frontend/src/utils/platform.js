@@ -2,6 +2,7 @@
  * Platform detection and plugin targeting utilities for Frontend.
  */
 import { getBundledPluginEntry } from './bundledPlugins.js'
+import { t } from '@/i18n'
 
 export function isMacOS() {
   if (typeof globalThis !== 'undefined' && globalThis.__ZTOOLS_PLATFORM_OVERRIDE__) {
@@ -120,8 +121,8 @@ export function getPluginPlatforms(plugin) {
 export function getPluginPlatformLabel(plugin) {
   const platforms = getPluginPlatforms(plugin)
   if (!platforms || platforms.length === 0) return ''
-  if (platforms.length === PLATFORM_ORDER.length) return '跨平台'
-  return platforms[0] === 'windows' ? '仅 Windows' : '仅 macOS'
+  if (platforms.length === PLATFORM_ORDER.length) return t('platform.crossPlatform')
+  return platforms[0] === 'windows' ? t('platform.windowsOnly') : t('platform.macosOnly')
 }
 
 export function isPluginSupportedOnCurrentPlatform(plugin) {
@@ -177,12 +178,17 @@ const MAC_SHORTCUT_SYMBOLS = Object.freeze({
   plus: '+'
 })
 
-const DOUBLE_MODIFIER_LABELS = Object.freeze({
-  doublectrl: { mac: '双击 ⌃', win: '双击 Ctrl' },
-  doublecontrol: { mac: '双击 ⌃', win: '双击 Ctrl' },
-  doublealt: { mac: '双击 ⌥', win: '双击 Alt' },
-  doubleshift: { mac: '双击 ⇧', win: '双击 Shift' }
+const DOUBLE_MODIFIER_KEYS = Object.freeze({
+  doublectrl: { mac: '⌃', win: 'Ctrl' },
+  doublecontrol: { mac: '⌃', win: 'Ctrl' },
+  doublealt: { mac: '⌥', win: 'Alt' },
+  doubleshift: { mac: '⇧', win: 'Shift' }
 })
+
+function formatDoubleModifierLabel(compact, mac) {
+  const key = DOUBLE_MODIFIER_KEYS[compact][mac ? 'mac' : 'win']
+  return t('platform.doubleTap', { key })
+}
 
 /**
  * 界面快捷键提示文案：内部统一用 Windows 写法（Ctrl / Alt），
@@ -194,8 +200,8 @@ const DOUBLE_MODIFIER_LABELS = Object.freeze({
 export function shortcutLabel(combo, mac = isMacOS()) {
   if (typeof combo !== 'string' || !combo.trim()) return ''
   const compact = combo.replace(/[+\s]/g, '').toLowerCase()
-  if (Object.hasOwn(DOUBLE_MODIFIER_LABELS, compact)) {
-    return DOUBLE_MODIFIER_LABELS[compact][mac ? 'mac' : 'win']
+  if (Object.hasOwn(DOUBLE_MODIFIER_KEYS, compact)) {
+    return formatDoubleModifierLabel(compact, mac)
   }
   const tokens = combo.split('+').map((token) => token.trim()).filter(Boolean)
   if (!mac) {
@@ -243,8 +249,8 @@ const KEY_NAMES = Object.freeze({
 export function shortcutKeys(combo, mac = isMacOS()) {
   if (typeof combo !== 'string' || !combo.trim()) return []
   const compact = combo.replace(/[+\s]/g, '').toLowerCase()
-  if (Object.hasOwn(DOUBLE_MODIFIER_LABELS, compact)) {
-    return [DOUBLE_MODIFIER_LABELS[compact][mac ? 'mac' : 'win']]
+  if (Object.hasOwn(DOUBLE_MODIFIER_KEYS, compact)) {
+    return [formatDoubleModifierLabel(compact, mac)]
   }
   return combo.split('+').map((token) => token.trim()).filter(Boolean).map((token) => {
     const key = token.toLowerCase()

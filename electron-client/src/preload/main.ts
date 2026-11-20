@@ -505,8 +505,16 @@ const cancellations = Object.freeze(Object.assign({},
   networkRequestCancellations ?? {}
 ))
 
+const initialLocaleArg = process.argv
+  .find(value => value.startsWith('--ztools-locale='))
+  ?.slice('--ztools-locale='.length)
+const initialLocale = initialLocaleArg === 'zh-CN' || initialLocaleArg === 'en-US'
+  ? initialLocaleArg
+  : 'en-US'
+
 const bridge = Object.freeze({
   contractVersion: referenceTransport ? 2 : SDK_LEGACY_CONTRACT_VERSION,
+  initialLocale,
   setFileInputInterception: (config: unknown) => {
     if (!config || typeof config !== 'object' || Array.isArray(config)) {
       fileInputConfig = { enabled: false, allowImage: false, allowDirectories: false }

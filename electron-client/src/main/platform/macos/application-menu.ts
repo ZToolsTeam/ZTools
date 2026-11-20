@@ -1,5 +1,6 @@
 import { app, Menu, type MenuItemConstructorOptions } from 'electron'
 import { SHELL_SHORTCUTS } from '../../../contracts/hotkey-rules.js'
+import { t } from '../../i18n/index.js'
 
 const MACOS_PREFERENCES_ACCELERATOR = SHELL_SHORTCUTS.OPEN_SETTINGS.replace(/^Ctrl\+/i, 'Command+')
 
@@ -35,7 +36,7 @@ export function macosAppSubmenuItems(options: MacosApplicationMenuOptions = {}):
     appSubmenu.push(
       { type: 'separator' },
       {
-        label: '偏好设置...',
+        label: t('menu.preferences'),
         accelerator: MACOS_PREFERENCES_ACCELERATOR,
         click: () => options.onOpenPreferences?.()
       }
@@ -64,7 +65,7 @@ export function installMacosApplicationMenu(options: MacosApplicationMenuOptions
     },
     { role: 'editMenu' },
     {
-      label: '显示',
+      label: t('menu.view'),
       submenu: macosViewMenuItems(app.isPackaged)
     },
     { role: 'windowMenu' }

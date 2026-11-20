@@ -1,5 +1,8 @@
 <script setup>
 import { computed, ref } from 'vue'
+import { useAppI18n } from '@/i18n'
+
+const { t } = useAppI18n()
 
 /**
  * 分段切换，所有页面的标签切换都用它。两种版式：
@@ -97,7 +100,7 @@ const onGroupKeydown = (event) => {
     >
       <span class="seg-marker" aria-hidden="true"></span>
       <span class="seg-label" :data-label="opt.label">{{ opt.label }}</span>
-      <span v-if="opt.dot" class="seg-dot" role="img" :aria-label="opt.dotLabel || '有新内容'"></span>
+      <span v-if="opt.dot" class="seg-dot" role="img" :aria-label="opt.dotLabel || t('common.newContent')"></span>
       <!-- count 为 null 表示数量还在统计：先占住位置，数字出来时按钮不跳动 -->
       <span v-if="opt.count === null" class="seg-count is-pending" aria-hidden="true"></span>
       <span v-else-if="opt.count !== undefined" class="seg-count">{{ opt.count }}</span>
@@ -122,7 +125,7 @@ const onGroupKeydown = (event) => {
   font: inherit;
   white-space: nowrap;
   cursor: pointer;
-  transition: background-color 0.15s ease, color 0.15s ease;
+  transition: background-color var(--rc-dur) ease, color var(--rc-dur) ease;
 }
 
 .seg-btn:hover {
@@ -158,10 +161,10 @@ const onGroupKeydown = (event) => {
 .seg-marker {
   width: 6px;
   height: 6px;
-  border-radius: 1.7px;
+  border-radius: var(--rc-marker-radius);
   flex-shrink: 0;
   background: transparent;
-  transition: background-color 0.15s ease, box-shadow 0.15s ease;
+  transition: background-color var(--rc-dur) ease, box-shadow var(--rc-dur) ease;
 }
 
 .seg-btn.active .seg-marker {
@@ -177,7 +180,7 @@ const onGroupKeydown = (event) => {
   border-radius: var(--rc-radius-full);
   background: var(--rc-surface-hover);
   color: var(--rc-text-muted);
-  font-size: 11px;
+  font-size: var(--rc-fs-caption);
   font-weight: 500;
   line-height: 16px;
   text-align: center;
@@ -189,7 +192,7 @@ const onGroupKeydown = (event) => {
 }
 
 .seg-hint {
-  font-size: 11px;
+  font-size: var(--rc-fs-caption);
   font-weight: 400;
   color: var(--rc-text-faint);
   font-variant-numeric: tabular-nums;
@@ -206,7 +209,7 @@ const onGroupKeydown = (event) => {
   padding: 0 12px 0 8px;
   border-radius: var(--rc-radius-md);
   color: var(--rc-text-secondary);
-  font-size: 13px;
+  font-size: var(--rc-fs-body);
 }
 
 .is-chips .seg-btn:hover {
@@ -221,7 +224,7 @@ const onGroupKeydown = (event) => {
 .is-marker {
   padding: 3px;
   gap: 2px;
-  border-radius: 9px;
+  border-radius: var(--rc-radius-md);
   border: 1px solid var(--rc-border-highlight);
 }
 
@@ -229,8 +232,8 @@ const onGroupKeydown = (event) => {
   height: 28px;
   gap: 7px;
   padding: 0 12px 0 9px;
-  border-radius: 6px;
-  font-size: 13px;
+  border-radius: var(--rc-radius-sm);
+  font-size: var(--rc-fs-body);
 }
 
 .is-marker .seg-btn.active {

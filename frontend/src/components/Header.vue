@@ -12,7 +12,9 @@ import { useUserStore } from '@edition'
 import { useNavStore } from '@/stores/nav'
 import { useUIStore } from '@/stores/ui'
 import { ROUTES, routeUtils } from '@/router/routes'
+import { useAppI18n } from '@/i18n'
 
+const { t } = useAppI18n()
 const router = useRouter()
 const route = useRoute()
 const userStore = useUserStore()
@@ -27,7 +29,7 @@ const isMacPlatform = ref(
 const keyword = ref(getNavStore()?.headerSearchKeyword || '')
 const searchBarRef = ref(null)
 const homeButtonRef = ref(null)
-const searchPlaceholder = ref('搜索插件、命令与文件')
+const searchPlaceholder = computed(() => t('search.placeholder'))
 let searchFocusTimer = null
 let searchFocusRequest = 0
 let preserveHomeFocus = false
@@ -202,7 +204,7 @@ onUnmounted(() => {
         <!-- Logo -->
         <button
           ref="homeButtonRef"
-          aria-label="返回主页"
+          :aria-label="t('header.backToHome')"
           @click="goHome"
           class="flex items-center hover:opacity-85 transition-opacity"
           style="gap: 10px; cursor: pointer"
@@ -231,7 +233,7 @@ onUnmounted(() => {
             color: 'var(--rc-text-muted)',
             border: '1px solid var(--rc-border)'
           }"
-          title="当前使用 Mock 接口（浏览器开发模式），数据为模拟数据"
+          :title="t('header.mockTooltip')"
         >
           Mock
         </span>

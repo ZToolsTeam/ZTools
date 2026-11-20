@@ -1,18 +1,20 @@
+import { t } from "./i18n.js";
 /**
  * 调用 ZTools 宿主能力（选择文件、读取文本文件）
  */
 let seq = 0;
 async function callHost(method, params = {}) {
-    const methods = globalThis.window?.__ztoolsElectron?.transport?.methods ?? globalThis.__ztoolsElectron?.transport?.methods;
+    const root = globalThis;
+    const methods = root.window?.__ztoolsElectron?.transport?.methods ?? root.__ztoolsElectron?.transport?.methods;
     const fn = methods?.[method];
     if (typeof fn !== "function")
-        throw new Error(`当前环境不支持 ${method}`);
+        throw new Error(t("hostMethodUnsupported", { method }));
     seq = (seq + 1) % 1_000_000;
     const envelope = await fn({ messageId: `cmp_${Date.now()}_${seq}`, params });
     if (!envelope || typeof envelope !== "object")
-        throw new Error("宿主返回了无法识别的结果");
+        throw new Error(t("hostUnrecognizedResult"));
     if (!envelope.success)
-        throw new Error(envelope.error?.message || `${method} 调用失败`);
+        throw new Error(envelope.error?.message || t("hostMethodFailed", { method }));
     return envelope.data;
 }
 /** 单个文本文件读取上限 */
@@ -23,13 +25,14 @@ export const MAX_TEXT_FILE_BYTES = 4 * 1024 * 1024;
 export async function readTextFileByPath(filePath) {
     const sizeRes = await callHost("filesystem_get_file_size", { path: filePath });
     if (Number(sizeRes?.size) > MAX_TEXT_FILE_BYTES)
-        throw new Error("文件超过 4 MB，暂不支持对比");
+        throw new Error(t("fileTooLarge"));
     let read;
     try {
         read = await callHost("filesystem_read_file", { path: filePath, encoding: "utf8" });
     }
     catch (err) {
-        throw new Error(/utf|decode|编码/i.test(String(err?.message)) ? "这个文件不是 UTF-8 文本，无法对比" : err?.message || "读取文件失败");
+        const msg = err instanceof Error ? err.message : String(err ?? "");
+        throw new Error(/utf|decode|编码/i.test(msg) ? t("fileNotUtf8") : msg || t("readFileFailed"));
     }
     return { name: filePath.split(/[\\/]/).pop() || filePath, text: read.content };
 }

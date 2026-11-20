@@ -13,6 +13,9 @@ export { useUserStore } from './userStore.js'
 /** 版本标识 */
 export const EDITION = 'oss'
 
+/** 版本扩展词条（开源版为空，避免任何商业文案进入开源包） */
+export const localeMessages = Object.freeze({})
+
 /** 是否连接官方在线服务 */
 export const isOnline = false
 
@@ -35,6 +38,7 @@ export const layoutExtraComponents = Object.freeze([])
 export const feedbackEntry = Object.freeze({
   visible: true,
   title: '反馈建议',
+  titleKey: 'nav.feedback',
   routeName: '',
   externalUrl: 'https://github.com/ZToolsTeam/ZTools/issues'
 })

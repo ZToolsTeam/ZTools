@@ -32,9 +32,9 @@ defineProps({
     type: String,
     default: ""
   },
-  /** DeclarativeIcon 支持的图标名；也可用 icon 插槽传入任意图标 */
+  /** DeclarativeIcon 支持的图标（图标名，或插件 List.EmptyView 传来的图标对象）；也可用 icon 插槽传入任意图标 */
   icon: {
-    type: String,
+    type: [String, Object],
     default: ""
   },
   /** 加载中：图标换成转圈，不下“没有内容”的结论 */
@@ -94,7 +94,7 @@ defineProps({
 
 .decl-empty-title {
   margin: 0;
-  font-size: 13px;
+  font-size: var(--rc-fs-body);
   font-weight: 500;
   color: var(--rc-text-secondary);
 }
@@ -102,7 +102,7 @@ defineProps({
 .decl-empty-desc {
   margin: 0;
   max-width: 420px;
-  font-size: 12px;
+  font-size: var(--rc-fs-small);
   line-height: 1.6;
   color: var(--rc-text-muted);
   word-break: break-word;

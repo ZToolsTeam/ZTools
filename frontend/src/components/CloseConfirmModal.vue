@@ -4,7 +4,9 @@ import { ref, watch, computed, onBeforeUnmount } from 'vue'
 import { isComposingEvent } from '@/utils/keymap'
 
 import { useUIStore } from '@/stores/ui'
+import { useAppI18n } from '@/i18n'
 
+const { t } = useAppI18n()
 const ui = useUIStore()
 // 默认勾选"下次不再询问"，让用户选择后不再打扰
 const doNotAskAgain = ref(true)
@@ -101,18 +103,18 @@ const onExit = async () => {
 <template>
   <RcDialog
     v-model:open="dialogVisible"
-    title="确定要退出 ZTools 吗？"
+    :title="t('modals.closeConfirm.title')"
     :width="420"
     :mask="false"
     :mask-closable="false"
     wrap-class-name="close-confirm-modal"
     @cancel="onCancel"
   >
-    <a-checkbox v-model:checked="doNotAskAgain">下次不再询问</a-checkbox>
+    <a-checkbox v-model:checked="doNotAskAgain">{{ t('modals.closeConfirm.doNotAskAgain') }}</a-checkbox>
     <template #footer>
       <div class="close-confirm-footer">
-        <RcButton variant="danger" size="md" @click="onExit">立即退出</RcButton>
-        <RcButton variant="primary" size="md" @click="onMinimize">最小化到托盘</RcButton>
+        <RcButton variant="danger" size="md" @click="onExit">{{ t('modals.closeConfirm.exitNow') }}</RcButton>
+        <RcButton variant="primary" size="md" @click="onMinimize">{{ t('modals.closeConfirm.minimizeToTray') }}</RcButton>
       </div>
     </template>
   </RcDialog>
@@ -123,7 +125,7 @@ const onExit = async () => {
   display: flex;
   align-items: center;
   justify-content: flex-end;
-  gap: 12px;
+  gap: 8px;
   width: 100%;
 }
 </style>

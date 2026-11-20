@@ -1,4 +1,5 @@
 import { getDeclarativeBridge } from "./bridge.js";
+import { tApiError } from "./error-messages.js";
 
 let memoryClipboard = "";
 
@@ -50,7 +51,7 @@ export const Clipboard = {
     }
     await this.copy(text);
     // 宿主不支持粘贴到前台应用：内容已复制，但不能让插件以为已经粘贴。
-    throw Object.assign(new Error("当前宿主不支持粘贴到前台应用，内容已复制到剪贴板"), { code: "NOT_SUPPORTED" });
+    throw Object.assign(new Error(tApiError("clipboardPasteUnsupported")), { code: "NOT_SUPPORTED" });
   },
 
   /**

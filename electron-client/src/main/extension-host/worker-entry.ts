@@ -9,28 +9,32 @@
  * 5. 视图树 diff 与空渲染 (renderEmpty) 抑制。
  */
 
-import { parentPort } from 'node:worker_threads'
+import { parentPort, threadId } from 'node:worker_threads'
 import path from 'node:path'
 import { pathToFileURL } from 'node:url'
 
 export interface WorkerMessageRequest {
   type: 'request'
   id: string
-  action: 'initialize' | 'nativeCallback' | 'terminate' | 'ping'
-  payload?: any
+  action: 'initialize' | 'nativeCallback' | 'updateLocale' | 'terminate' | 'ping'
+  payload?: unknown
+}
+
+export interface WorkerUpdateLocalePayload {
+  locale: string
 }
 
 export interface WorkerMessageNotify {
   type: 'notify'
   action: 'ready' | 'promoteTree' | 'renderEmpty' | 'terminate' | 'error' | 'toast'
-  payload?: any
+  payload?: unknown
 }
 
 export interface WorkerMessageResult {
   type: 'result'
   id: string
   success: boolean
-  data?: any
+  data?: unknown
   error?: {
     code: string
     message: string
@@ -48,6 +52,7 @@ export interface WorkerInitializePayload {
   preferences?: Record<string, unknown>
   supportDir?: string
   cacheDir?: string
+  locale?: string
 }
 
 export interface WorkerNativeCallbackPayload {
@@ -55,16 +60,52 @@ export interface WorkerNativeCallbackPayload {
   args?: unknown[]
 }
 
+interface DeclarativeRootHandle {
+  getLatest?: () => unknown
+  updateLocale?: (locale: string) => void
+  rerender?: () => void
+  refresh?: () => void
+  unmount?: () => void
+}
+
+type DeclarativeRenderEvent = {
+  type: string
+  descriptor?: unknown
+}
+
+type RenderDeclarativeRootFn = (
+  component: unknown,
+  options: {
+    onRenderEvent: (event: DeclarativeRenderEvent) => void
+    onUpdate: (desc: unknown) => void
+  }
+) => DeclarativeRootHandle
+
+type WorkerCallbackFn = (...args: unknown[]) => unknown
+
 export class WorkerSession {
-  private activeRoot: any = null
-  private callbackRegistry = new Map<string, Function>()
+  private activeRoot: DeclarativeRootHandle | null = null
+  private callbackRegistry = new Map<string, WorkerCallbackFn>()
+  private localeChangeListeners = new Set<(locale: string) => void>()
+  private currentLocale = 'en-US'
   private isTerminated = false
 
   constructor(
     private readonly postMessage: (msg: WorkerMessageResult | WorkerMessageNotify) => void
   ) {}
 
-  public registerCallback(id: string, fn: Function): void {
+  public getLocale(): string {
+    return this.currentLocale
+  }
+
+  public onLocaleChange(listener: (locale: string) => void): () => void {
+    this.localeChangeListeners.add(listener)
+    return () => {
+      this.localeChangeListeners.delete(listener)
+    }
+  }
+
+  public registerCallback(id: string, fn: WorkerCallbackFn): void {
     this.callbackRegistry.set(id, fn)
   }
 
@@ -85,7 +126,8 @@ export class WorkerSession {
     }
 
     try {
-      switch (action) {
+      const rawAction = action as string
+      switch (rawAction) {
         case 'ping': {
           this.postMessage({
             type: 'result',
@@ -120,6 +162,18 @@ export class WorkerSession {
           return
         }
 
+        case 'updateLocale': {
+          const localePayload = payload as WorkerUpdateLocalePayload | undefined
+          const data = this.updateLocale(localePayload?.locale)
+          this.postMessage({
+            type: 'result',
+            id,
+            success: true,
+            data
+          })
+          return
+        }
+
         case 'terminate': {
           this.terminate()
           this.postMessage({
@@ -131,7 +185,7 @@ export class WorkerSession {
           return
         }
 
-        case 'slowTask' as any: {
+        case 'slowTask': {
           // 模拟卡死/慢任务以供看门狗超时测试
           await new Promise(() => {})
           return
@@ -147,30 +201,42 @@ export class WorkerSession {
           return
         }
       }
-    } catch (err: any) {
+    } catch (err: unknown) {
+      const errObj = err instanceof Error ? err : null
+      const errCode = typeof err === 'object' && err !== null && 'code' in err
+        ? String((err as { code?: unknown }).code ?? 'EXECUTION_ERROR')
+        : 'EXECUTION_ERROR'
       this.postMessage({
         type: 'result',
         id,
         success: false,
         error: {
-          code: err.code || 'EXECUTION_ERROR',
-          message: err.message || String(err),
-          stack: err.stack
+          code: errCode,
+          message: errObj?.message || String(err),
+          ...(errObj?.stack ? { stack: errObj.stack } : {})
         }
       })
     }
   }
 
-  public async initialize(payload: WorkerInitializePayload): Promise<any> {
+  public async initialize(payload: WorkerInitializePayload): Promise<unknown> {
     if (!payload?.entryPath) {
       throw new Error('initialize payload 必须提供 entryPath')
+    }
+    if (typeof payload.locale === 'string' && payload.locale.trim().length > 0) {
+      this.currentLocale = payload.locale.trim()
+      const globalRecord = globalThis as Record<string, unknown>
+      globalRecord.__ztoolsLocale = this.currentLocale
+      if (typeof globalRecord.__ztoolsSetRuntimeLocale === 'function') {
+        ;(globalRecord.__ztoolsSetRuntimeLocale as (locale: string) => void)(this.currentLocale)
+      }
     }
 
     const absPath = path.resolve(payload.entryPath)
     const fileUrl = pathToFileURL(absPath).href
 
     // 动态加载扩展产物模块
-    const mod = await import(fileUrl)
+    const mod = (await import(fileUrl)) as Record<string, unknown>
 
     if (payload.mode === 'no-view') {
       const exportName = payload.exportName || 'default'
@@ -178,7 +244,7 @@ export class WorkerSession {
       if (typeof fn !== 'function') {
         throw new Error(`命令 "${payload.commandName || exportName}" 未导出有效的可执行函数`)
       }
-      const result = await fn(payload.arguments || {})
+      const result = await (fn as (args: Record<string, unknown>) => unknown)(payload.arguments || {})
       return result !== undefined ? result : { success: true }
     }
 
@@ -190,10 +256,13 @@ export class WorkerSession {
     }
 
     // 尝试引入 @raycast/api 运行时的 renderDeclarativeRoot
-    let renderDeclarativeRoot: any
+    let renderDeclarativeRoot: RenderDeclarativeRootFn | null = null
     try {
-      const raycastApi = await import('@raycast/api' as any)
-      renderDeclarativeRoot = (raycastApi as any).renderDeclarativeRoot
+      const raycastModuleName = '@raycast/api'
+      const raycastApi = (await import(raycastModuleName)) as Record<string, unknown>
+      if (typeof raycastApi.renderDeclarativeRoot === 'function') {
+        renderDeclarativeRoot = raycastApi.renderDeclarativeRoot as RenderDeclarativeRootFn
+      }
     } catch {
       // 容错降级
       renderDeclarativeRoot = null
@@ -201,7 +270,7 @@ export class WorkerSession {
 
     if (typeof renderDeclarativeRoot === 'function') {
       this.activeRoot = renderDeclarativeRoot(Component, {
-        onRenderEvent: (event: any) => {
+        onRenderEvent: (event) => {
           if (event.type === 'renderTree') {
             this.postMessage({
               type: 'notify',
@@ -215,7 +284,7 @@ export class WorkerSession {
             })
           }
         },
-        onUpdate: (desc: any) => {
+        onUpdate: (desc) => {
           this.postMessage({
             type: 'notify',
             action: 'promoteTree',
@@ -229,7 +298,7 @@ export class WorkerSession {
 
     // 如果组件本身是直接返回描述符的函数
     if (typeof Component === 'function') {
-      const desc = Component(payload.arguments || {})
+      const desc = (Component as (args: Record<string, unknown>) => unknown)(payload.arguments || {})
       this.postMessage({
         type: 'notify',
         action: 'promoteTree',
@@ -241,7 +310,7 @@ export class WorkerSession {
     return { initialized: true }
   }
 
-  public async dispatchCallback(payload: WorkerNativeCallbackPayload): Promise<any> {
+  public async dispatchCallback(payload: WorkerNativeCallbackPayload): Promise<unknown> {
     const { callbackId, args } = payload
     if (!callbackId) {
       return { handled: false, reason: 'EMPTY_CALLBACK_ID' }
@@ -257,6 +326,35 @@ export class WorkerSession {
     return { handled: true, fallback: true }
   }
 
+  public updateLocale(locale?: string): { updated: boolean; locale: string } {
+    const nextLocale = typeof locale === 'string' && locale.trim().length > 0
+      ? locale.trim()
+      : this.currentLocale
+    this.currentLocale = nextLocale
+    const globalRecord = globalThis as Record<string, unknown>
+    globalRecord.__ztoolsLocale = nextLocale
+    if (typeof globalRecord.__ztoolsSetRuntimeLocale === 'function') {
+      ;(globalRecord.__ztoolsSetRuntimeLocale as (locale: string) => void)(nextLocale)
+    }
+    for (const listener of [...this.localeChangeListeners]) {
+      try {
+        listener(nextLocale)
+      } catch (err) {
+        console.warn('[WorkerSession] Error notifying locale change listener:', err)
+      }
+    }
+    if (this.activeRoot) {
+      if (typeof this.activeRoot.updateLocale === 'function') {
+        this.activeRoot.updateLocale(nextLocale)
+      } else if (typeof this.activeRoot.rerender === 'function') {
+        this.activeRoot.rerender()
+      } else if (typeof this.activeRoot.refresh === 'function') {
+        this.activeRoot.refresh()
+      }
+    }
+    return { updated: true, locale: nextLocale }
+  }
+
   public terminate(): void {
     this.isTerminated = true
     if (this.activeRoot && typeof this.activeRoot.unmount === 'function') {
@@ -268,6 +366,7 @@ export class WorkerSession {
     }
     this.activeRoot = null
     this.callbackRegistry.clear()
+    this.localeChangeListeners.clear()
   }
 }
 
@@ -277,11 +376,12 @@ if (parentPort) {
     parentPort?.postMessage(msg)
   })
 
-  parentPort.on('message', (msg: any) => {
+  parentPort.on('message', (msg: unknown) => {
     if (!msg || typeof msg !== 'object') return
-    if (msg.type === 'request') {
-      void session.handleRequest(msg)
-    } else if (msg.type === 'notify' && msg.action === 'terminate') {
+    const record = msg as { type?: unknown; action?: unknown }
+    if (record.type === 'request') {
+      void session.handleRequest(msg as WorkerMessageRequest)
+    } else if (record.type === 'notify' && record.action === 'terminate') {
       session.terminate()
       process.exit(0)
     }
@@ -291,6 +391,6 @@ if (parentPort) {
   parentPort.postMessage({
     type: 'notify',
     action: 'ready',
-    payload: { pid: process.pid, threadId: (parentPort as any).threadId || 0 }
+    payload: { pid: process.pid, threadId }
   })
 }

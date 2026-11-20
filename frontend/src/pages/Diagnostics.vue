@@ -1309,7 +1309,7 @@ onBeforeUnmount(() => {
           <div v-if="activeTab === '1'" class="diag-stack">
             <RcCard title="系统信息 (sys)">
               <div class="diag-actions">
-                <RcButton variant="primary" @click="getSysInfo">获取系统信息</RcButton>
+                <RcButton variant="secondary" @click="getSysInfo">获取系统信息</RcButton>
                 <RcButton variant="secondary" @click="sendNotify">发送通知</RcButton>
                 <RcButton variant="secondary" @click="getCpuMem">CPU / 内存</RcButton>
               </div>
@@ -1323,7 +1323,7 @@ onBeforeUnmount(() => {
                   :options="sysPathOptions"
                   class="w-36"
                 />
-                <RcButton variant="primary" @click="getSysPath">获取路径</RcButton>
+                <RcButton variant="secondary" @click="getSysPath">获取路径</RcButton>
               </div>
               <div class="diag-output">{{ sysPathResult }}</div>
             </RcCard>
@@ -1371,7 +1371,7 @@ onBeforeUnmount(() => {
               <RcCard title="文件操作 (fs)">
                 <a-input v-model:value="fsPath" addon-before="路径" class="mb-3" />
                 <div class="diag-actions">
-                  <RcButton variant="primary" @click="fsRead">读取</RcButton>
+                  <RcButton variant="secondary" @click="fsRead">读取</RcButton>
                   <RcButton variant="secondary" @click="fsCheckExists">检查存在</RcButton>
                   <RcButton variant="danger" @click="fsDeleteFile">删除</RcButton>
                 </div>
@@ -1380,7 +1380,7 @@ onBeforeUnmount(() => {
 
               <RcCard title="写入文件">
                 <a-textarea v-model:value="fsWriteContent" :rows="2" class="mb-3" />
-                <RcButton variant="primary" @click="fsWrite">写入到上方路径</RcButton>
+                <RcButton variant="secondary" @click="fsWrite">写入到上方路径</RcButton>
               </RcCard>
 
               <RcCard title="目录操作">
@@ -1403,7 +1403,7 @@ onBeforeUnmount(() => {
                 <a-input v-model:value="dbVal" addon-before="值" />
               </div>
               <div class="diag-actions">
-                <RcButton variant="primary" @click="dbOps('set')">写入</RcButton>
+                <RcButton variant="secondary" @click="dbOps('set')">写入</RcButton>
                 <RcButton variant="secondary" @click="dbOps('get')">读取</RcButton>
                 <RcButton variant="secondary" @click="dbOps('delete')">删除</RcButton>
                 <RcButton variant="secondary" @click="dbOps('all')">全部文档</RcButton>
@@ -1436,7 +1436,7 @@ onBeforeUnmount(() => {
                   <template #upIcon><ChevronUpIcon aria-hidden="true" /></template>
                   <template #downIcon><ChevronDownIcon aria-hidden="true" /></template>
                 </a-input-number>
-                <RcButton variant="primary" @click="winTest('setSize')">设置尺寸</RcButton>
+                <RcButton variant="secondary" @click="winTest('setSize')">设置尺寸</RcButton>
               </div>
 
               <div class="flex gap-3 items-center">
@@ -1472,7 +1472,7 @@ onBeforeUnmount(() => {
                 placeholder="要写入剪贴板的文本"
               />
               <div class="diag-actions mb-0">
-                <RcButton variant="primary" @click="clipboardOps('writeText')">写入文本</RcButton>
+                <RcButton variant="secondary" @click="clipboardOps('writeText')">写入文本</RcButton>
                 <RcButton variant="secondary" @click="clipboardOps('readText')">读取文本</RcButton>
                 <RcButton variant="secondary" @click="clipboardOps('readImage')">读取图片</RcButton>
                 <RcButton variant="secondary" @click="clipboardOps('readFiles')">读取文件</RcButton>
@@ -1482,7 +1482,7 @@ onBeforeUnmount(() => {
 
             <RcCard title="Shell 操作 (shell)">
               <a-input v-model:value="externalUrl" addon-before="URL" class="mb-2" />
-              <RcButton variant="primary" class="mb-4" @click="shellOps('openExternal')">打开外部链接</RcButton>
+              <RcButton variant="secondary" class="mb-4" @click="shellOps('openExternal')">打开外部链接</RcButton>
 
               <a-input v-model:value="shellCmd" addon-before="命令" class="mb-2" />
               <div class="diag-actions mb-0">
@@ -1503,7 +1503,7 @@ onBeforeUnmount(() => {
                 placeholder="事件数据 (JSON)"
               />
               <div class="diag-actions">
-                <RcButton variant="primary" @click="eventsOps('emit')">发送事件</RcButton>
+                <RcButton variant="secondary" @click="eventsOps('emit')">发送事件</RcButton>
                 <RcButton variant="secondary" @click="eventsOps('on')">开始监听</RcButton>
                 <RcButton variant="secondary" @click="eventsOps('off')">停止监听</RcButton>
               </div>
@@ -1518,7 +1518,7 @@ onBeforeUnmount(() => {
                 placeholder="例如: Ctrl+Alt+T"
               />
               <div class="diag-actions mb-0">
-                <RcButton variant="primary" @click="triggerOps('register')">注册热键</RcButton>
+                <RcButton variant="secondary" @click="triggerOps('register')">注册热键</RcButton>
                 <RcButton variant="secondary" @click="triggerOps('list')">列出触发器</RcButton>
                 <RcButton variant="danger" @click="triggerOps('clear')">清空所有</RcButton>
               </div>
@@ -1569,7 +1569,7 @@ onBeforeUnmount(() => {
                   </div>
                   <a-input v-model:value="privFileTarget" addon-before="文件" />
                   <div class="diag-actions mb-0">
-                    <RcButton variant="primary" @click="testPrivileged('fileWrite')">提权写入</RcButton>
+                    <RcButton variant="secondary" @click="testPrivileged('fileWrite')">提权写入</RcButton>
                     <RcButton variant="danger" @click="testPrivileged('restartExplorer')">重启 Explorer</RcButton>
                   </div>
                 </div>
@@ -1597,7 +1597,7 @@ onBeforeUnmount(() => {
 
             <RcCard title="网络与进程 (network / process)">
               <a-input v-model:value="httpUrl" addon-before="URL" class="mb-2" />
-              <RcButton variant="primary" class="mb-2" @click="sendHttp">发送 HTTP 请求</RcButton>
+              <RcButton variant="secondary" class="mb-2" @click="sendHttp">发送 HTTP 请求</RcButton>
               <div class="diag-output mb-3">{{ httpResult }}</div>
 
               <RcButton variant="secondary" @click="getProcesses">获取进程列表</RcButton>
@@ -1618,7 +1618,7 @@ onBeforeUnmount(() => {
                 placeholder="参数 (JSON)"
               />
               <div class="diag-actions">
-                <RcButton variant="primary" @click="testDllPlugin">调用 DLL 函数</RcButton>
+                <RcButton variant="secondary" @click="testDllPlugin">调用 DLL 函数</RcButton>
                 <RcButton variant="secondary" @click="getDllList">获取 DLL 列表</RcButton>
               </div>
               <pre class="diag-output">{{ dllResult }}</pre>
@@ -1677,7 +1677,7 @@ onBeforeUnmount(() => {
 
         <!-- 日志列表 -->
         <div class="diag-log-header">
-          <span class="diag-section-title mb-0">实时日志</span>
+          <span class="diag-section-title">实时日志</span>
           <RcButton variant="ghost" size="xs" @click="clearLog">清空</RcButton>
         </div>
 
@@ -1712,11 +1712,13 @@ onBeforeUnmount(() => {
 
 .diag-header {
   display: flex;
-  align-items: flex-end;
+  /* 环境胶囊与标题同一中线，不悬在标题和副标题之间 */
+  align-items: flex-start;
   justify-content: space-between;
   gap: 16px;
   margin-bottom: 0;
-  padding: 22px 24px 16px;
+  /* 与 .rc-page 共用页边距变量，使标题左边缘、上边距与其它页一致 */
+  padding: var(--rc-page-pad-top) var(--rc-page-pad-x) 16px;
   flex-shrink: 0;
 }
 
@@ -1726,12 +1728,14 @@ onBeforeUnmount(() => {
   align-items: center;
   gap: 6px;
   height: 24px;
+  /* 标题行高约 28px，下移 2px 与标题文字同中线 */
+  margin-top: 2px;
   padding: 0 10px;
   border: 1px solid var(--rc-border);
-  border-radius: 999px;
+  border-radius: var(--rc-radius-full);
   background: var(--rc-surface);
   color: var(--rc-text-secondary);
-  font-size: 12px;
+  font-size: var(--rc-fs-small);
   white-space: nowrap;
 }
 
@@ -1762,7 +1766,7 @@ onBeforeUnmount(() => {
 }
 
 .diag-tabs {
-  padding: 12px 20px 0;
+  padding: 12px var(--rc-page-pad-x) 0;
   flex-shrink: 0;
 }
 
@@ -1770,7 +1774,7 @@ onBeforeUnmount(() => {
   flex: 1;
   min-height: 0;
   overflow-y: auto;
-  padding: 16px 24px 24px;
+  padding: 16px var(--rc-page-pad-x) 24px;
 }
 
 .diag-stack {
@@ -1791,7 +1795,7 @@ onBeforeUnmount(() => {
 }
 
 .diag-label {
-  font-size: 12px;
+  font-size: var(--rc-fs-small);
   color: var(--rc-text-secondary);
 }
 
@@ -1807,7 +1811,7 @@ onBeforeUnmount(() => {
   background: var(--rc-surface-subtle);
   color: var(--rc-text-secondary);
   font-family: var(--rc-font-mono);
-  font-size: 12px;
+  font-size: var(--rc-fs-small);
   line-height: 1.5;
   white-space: pre-wrap;
   word-break: break-all;
@@ -1820,7 +1824,7 @@ onBeforeUnmount(() => {
   list-style: disc;
   color: var(--rc-text-secondary);
   font-family: var(--rc-font-mono);
-  font-size: 12px;
+  font-size: var(--rc-fs-small);
 }
 
 /* ---------- 右侧体检与日志 ---------- */
@@ -1840,14 +1844,14 @@ onBeforeUnmount(() => {
 
 .diag-section-title {
   margin: 0 0 12px;
-  font-size: 13px;
+  font-size: var(--rc-fs-body);
   font-weight: 600;
   color: var(--rc-text-primary);
 }
 
 .diag-batch-status {
   margin: 0 0 8px;
-  font-size: 12px;
+  font-size: var(--rc-fs-small);
   color: var(--rc-text-secondary);
 }
 
@@ -1860,7 +1864,7 @@ onBeforeUnmount(() => {
 .diag-stat-row {
   display: flex;
   justify-content: space-between;
-  font-size: 12px;
+  font-size: var(--rc-fs-small);
   color: var(--rc-text-muted);
 }
 
@@ -1878,7 +1882,7 @@ onBeforeUnmount(() => {
 
 .diag-progress {
   height: 6px;
-  border-radius: 999px;
+  border-radius: var(--rc-radius-full);
   background: var(--rc-surface-active);
   overflow: hidden;
 }
@@ -1887,7 +1891,7 @@ onBeforeUnmount(() => {
   height: 100%;
   border-radius: inherit;
   background: var(--rc-accent);
-  transition: width 0.2s ease;
+  transition: width var(--rc-dur-slow) ease;
 }
 
 .diag-log-header {
@@ -1898,6 +1902,12 @@ onBeforeUnmount(() => {
   border-bottom: 1px solid var(--rc-border);
 }
 
+/* 标题自带的下边距会把它顶离按钮的中线；标题行内清零，让「实时日志」与「清空」垂直居中 */
+.diag-log-header .diag-section-title {
+  margin: 0;
+  line-height: 28px;
+}
+
 .diag-log {
   flex: 1;
   min-height: 0;
@@ -1905,7 +1915,7 @@ onBeforeUnmount(() => {
   padding: 8px;
   background: var(--rc-surface-subtle);
   font-family: var(--rc-font-mono);
-  font-size: 12px;
+  font-size: var(--rc-fs-small);
 }
 
 .diag-log-empty {
@@ -1921,7 +1931,7 @@ onBeforeUnmount(() => {
   align-items: flex-start;
   gap: 8px;
   padding: 4px 6px;
-  border-radius: 6px;
+  border-radius: var(--rc-radius-sm);
   color: var(--rc-text-secondary);
 }
 
@@ -1974,7 +1984,7 @@ onBeforeUnmount(() => {
 }
 .diag-log::-webkit-scrollbar-thumb {
   background-color: var(--rc-border-highlight);
-  border-radius: 3px;
+  border-radius: var(--rc-radius-full);
 }
 .diag-log::-webkit-scrollbar-track {
   background-color: transparent;
@@ -1992,6 +2002,6 @@ onBeforeUnmount(() => {
   }
 }
 .animate-fade-in {
-  animation: fadeIn 0.2s ease-out forwards;
+  animation: fadeIn var(--rc-dur-slow) var(--rc-ease-out) forwards;
 }
 </style>

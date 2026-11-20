@@ -5,24 +5,24 @@
     :class="`is-${placement}`"
     @click.self="emit('close')"
   >
-    <div ref="panelRef" class="action-panel" role="dialog" aria-modal="true" aria-label="动作" @keydown.stop="handleKeyDown">
+    <div ref="panelRef" class="action-panel" role="dialog" aria-modal="true" :aria-label="t('declarative.actionPanel.dialogLabel')" @keydown.stop="handleKeyDown">
       <!-- 搜索框 -->
       <div class="action-panel-search">
-        <label for="action-panel-query" class="sr-only">搜索动作</label>
+        <label for="action-panel-query" class="sr-only">{{ t('declarative.actionPanel.searchLabel') }}</label>
         <input
           id="action-panel-query"
           ref="searchInputRef"
           v-model="query"
           type="text"
-          :placeholder="targetTitle ? `搜索「${targetTitle}」的动作` : '搜索动作'"
+          :placeholder="targetTitle ? t('declarative.actionPanel.searchTargetPlaceholder', { target: targetTitle }) : t('declarative.actionPanel.searchPlaceholder')"
           class="action-panel-input"
         />
         <ShortcutKeys combo="Ctrl+K" />
       </div>
 
       <!-- Action 列表 -->
-      <div class="action-panel-list declarative-scrollbar" role="listbox" aria-label="动作列表">
-        <div v-if="filteredActions.length === 0" class="action-panel-empty">无匹配动作</div>
+      <div class="action-panel-list declarative-scrollbar" role="listbox" :aria-label="t('declarative.actionPanel.listLabel')">
+        <div v-if="filteredActions.length === 0" class="action-panel-empty">{{ t('declarative.actionPanel.empty') }}</div>
 
         <template v-for="(action, idx) in filteredActions" :key="idx">
           <div
@@ -55,11 +55,11 @@
       <!-- 底部提示 -->
       <div class="action-panel-foot">
         <span class="action-panel-hint">
-          <ShortcutKeys combo="ArrowUp+ArrowDown" /> 选择
+          <ShortcutKeys combo="ArrowUp+ArrowDown" /> {{ t('declarative.actionPanel.select') }}
           <span class="action-panel-dot">·</span>
-          <ShortcutKeys combo="Enter" /> 执行
+          <ShortcutKeys combo="Enter" /> {{ t('declarative.actionPanel.execute') }}
         </span>
-        <span class="action-panel-hint"><ShortcutKeys combo="Escape" /> 关闭</span>
+        <span class="action-panel-hint"><ShortcutKeys combo="Escape" /> {{ t('declarative.actionPanel.close') }}</span>
       </div>
     </div>
   </div>
@@ -77,6 +77,9 @@ import {
   normalizeEventKeyCombo
 } from "@/utils/keymap.js";
 import { resolveActionKeyBindings, normalizeEventShortcutKey } from "@/utils/actionKeyBindings.js";
+import { useAppI18n } from "@/i18n";
+
+const { t } = useAppI18n();
 
 const props = defineProps({
   visible: {
@@ -470,7 +473,7 @@ function executeAction(action) {
   max-height: min(500px, calc(100vh - 80px));
   display: flex;
   flex-direction: column;
-  border-radius: 14px;
+  border-radius: var(--rc-radius-xl);
   border: 1px solid var(--rc-border-highlight);
   background: var(--rc-surface);
   box-shadow: var(--rc-shadow-lg);
@@ -497,7 +500,7 @@ function executeAction(action) {
   border: none;
   outline: none;
   font: inherit;
-  font-size: 14px;
+  font-size: var(--rc-fs-emph);
   color: var(--rc-text-primary);
   caret-color: var(--rc-accent);
 }
@@ -515,12 +518,12 @@ function executeAction(action) {
 .action-panel-empty {
   padding: 24px;
   text-align: center;
-  font-size: 13px;
+  font-size: var(--rc-fs-body);
   color: var(--rc-text-muted);
 }
 .action-panel-section {
   padding: 10px 10px 4px 24px;
-  font-size: 12px;
+  font-size: var(--rc-fs-small);
   color: var(--rc-text-faint);
   user-select: none;
 }
@@ -531,8 +534,8 @@ function executeAction(action) {
   align-items: center;
   gap: 10px;
   padding: 0 8px;
-  border-radius: 8px;
-  font-size: 13px;
+  border-radius: var(--rc-radius-md);
+  font-size: var(--rc-fs-body);
   color: var(--rc-text-secondary);
   cursor: pointer;
 }
@@ -549,7 +552,7 @@ function executeAction(action) {
 .action-panel-marker {
   width: 6px;
   height: 6px;
-  border-radius: 1.7px;
+  border-radius: var(--rc-marker-radius);
   flex-shrink: 0;
   background: transparent;
 }
@@ -591,7 +594,7 @@ function executeAction(action) {
   justify-content: space-between;
   padding: 0 14px 0 16px;
   border-top: 1px solid var(--rc-border);
-  font-size: 11px;
+  font-size: var(--rc-fs-caption);
   color: var(--rc-text-faint);
 }
 .action-panel-hint {

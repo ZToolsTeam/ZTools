@@ -60,5 +60,43 @@
   ],
   "category": [
     "开发工具"
-  ]
+  ],
+  "categoryId": "developer",
+  "defaultLocale": "zh-CN",
+  "i18n": {
+    "en-US": {
+      "name": "JSON Format",
+      "description": "Validate, format, minify, and escape JSON with syntax highlighting, plus one-click TypeScript, Go, and Rust type generation.",
+      "keywords": [
+        "json",
+        "format",
+        "beautify",
+        "minify",
+        "validate",
+        "typescript",
+        "codegen"
+      ],
+      "features": {
+        "json-beautify": {
+          "explain": "Beautify, minify, and validate JSON syntax",
+          "cmds": [
+            "json",
+            "json format",
+            "json beautify",
+            "json validate",
+            "json minify"
+          ]
+        },
+        "json-codegen": {
+          "explain": "Generate TypeScript, Go, or Rust type definitions from JSON",
+          "cmds": [
+            "json to ts",
+            "json to go",
+            "json to rust",
+            "json codegen"
+          ]
+        }
+      }
+    }
+  }
 }

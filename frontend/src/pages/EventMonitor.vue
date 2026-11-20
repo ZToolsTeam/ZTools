@@ -1,7 +1,9 @@
 <script setup>
 import { ref, onMounted, onBeforeUnmount } from 'vue'
 import { RcButton } from '@/components/base'
+import { useAppI18n } from '@/i18n'
 
+const { t } = useAppI18n()
 const events = ref([])
 
 const handler = (env) => {
@@ -38,18 +40,18 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <div class="event-page">
+  <div class="rc-page event-page">
     <header class="page-header">
-      <h1 class="page-title">事件监视器</h1>
-      <p class="page-subtitle">实时显示宿主广播的全部事件，最多保留最近 200 条</p>
+      <h1 class="page-title">{{ t('eventMonitor.title') }}</h1>
+      <p class="page-subtitle">{{ t('eventMonitor.subtitle') }}</p>
     </header>
 
     <div class="event-toolbar">
-      <RcButton variant="secondary" @click="clear">清空</RcButton>
-      <RcButton variant="secondary" @click="emitTest">发送测试事件</RcButton>
-      <RcButton variant="secondary" @click="setDark(true)">系统暗黑</RcButton>
-      <RcButton variant="secondary" @click="setDark(false)">系统明亮</RcButton>
-      <span class="event-count">总计：{{ events.length }}</span>
+      <RcButton variant="secondary" @click="clear">{{ t('common.clear') }}</RcButton>
+      <RcButton variant="secondary" @click="emitTest">{{ t('eventMonitor.emitTest') }}</RcButton>
+      <RcButton variant="secondary" @click="setDark(true)">{{ t('eventMonitor.systemDark') }}</RcButton>
+      <RcButton variant="secondary" @click="setDark(false)">{{ t('eventMonitor.systemLight') }}</RcButton>
+      <span class="event-count">{{ t('eventMonitor.total', { count: events.length }) }}</span>
     </div>
 
     <div class="event-list">
@@ -59,21 +61,13 @@ onBeforeUnmount(() => {
         </div>
         <pre class="event-body">{{ format(e) }}</pre>
       </div>
-      <div v-if="!events.length" class="event-empty">暂无事件</div>
+      <div v-if="!events.length" class="event-empty">{{ t('eventMonitor.empty') }}</div>
     </div>
   </div>
 </template>
 
 <style scoped>
-.event-page {
-  padding: 22px 32px 32px;
-  color: var(--rc-text-primary);
-}
-
-.event-page .page-header {
-  margin-bottom: 20px;
-}
-
+/* 外框与标题间距由全局 .rc-page / .page-header 提供 */
 .event-toolbar {
   display: flex;
   flex-wrap: wrap;
@@ -84,7 +78,7 @@ onBeforeUnmount(() => {
 
 .event-count {
   margin-left: auto;
-  font-size: 12px;
+  font-size: var(--rc-fs-small);
   color: var(--rc-text-muted);
   font-variant-numeric: tabular-nums;
 }
@@ -110,7 +104,7 @@ onBeforeUnmount(() => {
 
 .event-meta {
   margin-bottom: 4px;
-  font-size: 12px;
+  font-size: var(--rc-fs-small);
   color: var(--rc-text-muted);
 }
 
@@ -118,7 +112,7 @@ onBeforeUnmount(() => {
   margin: 0;
   color: var(--rc-text-secondary);
   font-family: var(--rc-font-mono);
-  font-size: 12px;
+  font-size: var(--rc-fs-small);
   line-height: 1.5;
   white-space: pre-wrap;
   word-break: break-word;
@@ -127,7 +121,7 @@ onBeforeUnmount(() => {
 .event-empty {
   padding: 40px 0;
   text-align: center;
-  font-size: 13px;
+  font-size: var(--rc-fs-body);
   color: var(--rc-text-muted);
 }
 </style>

@@ -61,5 +61,43 @@
   ],
   "category": [
     "开发工具"
-  ]
+  ],
+  "categoryId": "developer",
+  "defaultLocale": "zh-CN",
+  "i18n": {
+    "en-US": {
+      "name": "Timestamp",
+      "description": "Convert Unix second/millisecond timestamps and formatted dates in real time, with global city world clock and timezone offset conversion.",
+      "keywords": [
+        "timestamp",
+        "unix",
+        "epoch",
+        "date",
+        "time",
+        "timezone",
+        "world clock"
+      ],
+      "features": {
+        "tz-convert": {
+          "explain": "Convert between Unix second/millisecond timestamps and human-readable dates",
+          "cmds": [
+            "timestamp",
+            "unix time",
+            "epoch",
+            "ms to date",
+            "date to timestamp"
+          ]
+        },
+        "tz-world": {
+          "explain": "Compare UTC and global timezone clocks side by side",
+          "cmds": [
+            "world clock",
+            "timezone",
+            "utc time",
+            "global time"
+          ]
+        }
+      }
+    }
+  }
 }

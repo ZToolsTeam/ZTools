@@ -12,6 +12,7 @@ import { RcButton } from '@/components/base'
 import SearchResultRow from '@/components/SearchResultRow.vue'
 import { currentGlobalWakeHotkey } from '@/utils/globalWakeHotkey'
 import { executeDeclarativeNoViewCommand } from '@/utils/declarativePluginLoader'
+import { useAppI18n } from '@/i18n'
 
 
 const props = defineProps({
@@ -20,6 +21,7 @@ const props = defineProps({
 })
 const emit = defineEmits(['update:modelValue', 'search'])
 
+const { t } = useAppI18n()
 const uiStore = useUIStore()
 const pluginsStore = usePluginsStore()
 const { success: toastSuccess, error: toastError } = useToast()
@@ -56,10 +58,10 @@ const candidateCommands = computed(() => {
     {
       key: 'market-search',
       type: 'market-search',
-      name: `在插件市场搜索「${keyword}」`,
-      description: '查找可以安装的插件',
-      badge: '插件市场',
-      actionLabel: '搜索',
+      name: t('search.marketSearchTitle', { keyword }),
+      description: t('search.marketSearchDesc'),
+      badge: t('search.marketSearchBadge'),
+      actionLabel: t('common.search'),
       faIcon: 'fa-search',
       omitFromFrecencyTracking: true
     }
@@ -169,11 +171,11 @@ async function handleToggleCandidatePin(item) {
   const nextPinned = !item.pinned
   const res = await setItemPinned(item, nextPinned)
   if (res?.success) {
-    const name = item.name || item.title || '该条目'
+    const name = item.name || item.title || t('search.fallbackItem')
     toastSuccess?.(
       res.pinned
-        ? `已固定「${name}」到悬浮条首屏`
-        : `已取消固定「${name}」`
+        ? t('search.pinSuccess', { name })
+        : t('search.unpinSuccess', { name })
     )
   } else if (res?.error) {
     toastError?.(res.error)
@@ -195,36 +197,36 @@ async function executeCandidate(item) {
   try {
     if (item.type === 'inline-calculator' || item.type === 'inline-color') {
       const copied = await item.action?.()
-      if (copied === false) throw new Error('复制结果失败，请重试')
-      toastSuccess?.(`已复制结果: ${item.answer}`)
+      if (copied === false) throw new Error(t('launcher.copyResultFailed'))
+      toastSuccess?.(t('search.copiedResult', { answer: item.answer }))
     } else if (item.type === 'file') {
       const bridge = typeof window.__ztoolsLauncher?.openPath === 'function'
         ? window.__ztoolsLauncher
         : window.ztools?.shell
-      if (typeof bridge?.openPath !== 'function') throw new Error('文件打开接口不可用')
+      if (typeof bridge?.openPath !== 'function') throw new Error(t('launcher.fileApiUnavailable'))
       // 冷启动时用使用记录占位的程序：等程序列表返回、拿到打开授权后再打开
       const target = item.pendingGrant ? await prepareItemForLaunch(item) : item
-      if (!target) throw new Error('程序列表读取失败或该程序已卸载')
+      if (!target) throw new Error(t('launcher.appListUnavailable'))
       const res = await bridge.openPath(target.path)
       if (res !== true && res?.success !== true) {
-        throw new Error(res?.error?.message || res?.error || '打开文件失败')
+        throw new Error(res?.error?.message || res?.error || t('launcher.openFileFailed'))
       }
     } else if (item.mode === 'no-view' && item.pluginId) {
       // 无界面命令直接执行并提示结果；打开页面视图只会得到一个空白的“未识别视图”页
       await pluginsStore.markRecent?.(item.pluginId)
       const res = await executeDeclarativeNoViewCommand(item.pluginId, { featureCode: item.featureCode || '', query: searchQuery.value })
-      toastSuccess?.(res?.message || `${item.name || item.title} 已执行`)
+      toastSuccess?.(res?.message || t('launcher.commandExecuted', { name: item.name || item.title }))
     } else if (item.pluginId) {
       const result = await pluginsStore.openPlugin(item.pluginId, { featureCode: item.featureCode })
       if (result?.cancelled) return
-      if (result?.success === false) throw new Error(result.error?.message || result.error || result.message || '启动插件失败，请重试')
+      if (result?.success === false) throw new Error(result.error?.message || result.error || result.message || t('launcher.launchPluginFailed'))
       if (result?.isDeclarative) uiStore.focusDeclarative()
       else uiStore.focusGrid()
     } else if (typeof item.action === 'function') {
       await item.action()
     }
   } catch (error) {
-    toastError?.(error?.message || '执行命令失败，请重试')
+    toastError?.(error?.message || t('search.executeFailed'))
   }
 }
 
@@ -310,7 +312,7 @@ defineExpose({ focusInput })
     <a-input
       ref="inputRef"
       v-model:value="localValue"
-      :placeholder="placeholder || '搜索插件、命令与文件'"
+      :placeholder="placeholder || t('search.placeholder')"
       allow-clear
       @press-enter="handleEnter"
       @focus="onFocus"
@@ -318,8 +320,8 @@ defineExpose({ focusInput })
       class="rc-search-input"
       style="
         height: 34px;
-        border-radius: 9px;
-        font-size: 13px;
+        border-radius: var(--rc-radius-md);
+        font-size: var(--rc-fs-body);
       "
     >
       <template #prefix>
@@ -335,8 +337,8 @@ defineExpose({ focusInput })
     <transition name="dropdown-fade">
       <div v-if="isDropdownOpen && candidateCommands.length > 0" class="search-dropdown">
         <div class="search-dropdown-head">
-          <span>命令与快捷启动</span>
-          <span>↑↓ 选择 · ↵ 执行</span>
+          <span>{{ t('search.dropdownTitle') }}</span>
+          <span>{{ t('search.dropdownHint') }}</span>
         </div>
 
         <div class="search-dropdown-list custom-scrollbar">
@@ -361,13 +363,13 @@ defineExpose({ focusInput })
         class="search-hint absolute left-0 right-0 top-full mt-1.5 select-none"
       >
         <span class="truncate">
-          在任何地方按 <ShortcutKeys :combo="currentGlobalWakeHotkey" /> 也能直接搜索
+          {{ t('search.wakeHintBefore') }} <ShortcutKeys :combo="currentGlobalWakeHotkey" /> {{ t('search.wakeHintAfter') }}
         </span>
         <div class="flex items-center gap-1 flex-shrink-0">
           <RcButton variant="primary" size="xs" class="search-hint-btn" @mousedown.prevent="tryGeekLauncher">
-            试一试
+            {{ t('search.tryIt') }}
           </RcButton>
-          <button type="button" class="search-hint-close" title="关闭提示" aria-label="关闭提示" @mousedown.prevent="dismissHint">
+          <button type="button" class="search-hint-close" :title="t('search.closeHint')" :aria-label="t('search.closeHint')" @mousedown.prevent="dismissHint">
             <XIcon class="w-3 h-3" aria-hidden="true" />
           </button>
         </div>
@@ -381,11 +383,11 @@ defineExpose({ focusInput })
 .rc-search-input.ant-input-affix-wrapper {
   background-color: var(--rc-surface) !important;
   border-color: var(--rc-border-highlight) !important;
-  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+  transition: border-color var(--rc-dur) ease, box-shadow var(--rc-dur) ease;
 }
 
 .rc-search-input :deep(.ant-input) {
-  font-size: 13px;
+  font-size: var(--rc-fs-body);
   background: transparent !important;
   color: var(--rc-text-primary);
   caret-color: var(--rc-accent);
@@ -428,7 +430,7 @@ defineExpose({ focusInput })
   justify-content: space-between;
   padding: 7px 14px;
   border-bottom: 1px solid var(--rc-border);
-  font-size: 11px;
+  font-size: var(--rc-fs-caption);
   font-weight: 600;
   color: var(--rc-text-faint);
 }
@@ -453,7 +455,7 @@ defineExpose({ focusInput })
   border: 1px solid var(--rc-border-highlight);
   background: var(--rc-surface);
   box-shadow: var(--rc-shadow-md);
-  font-size: 12px;
+  font-size: var(--rc-fs-small);
   color: var(--rc-text-secondary);
 }
 
@@ -464,7 +466,7 @@ defineExpose({ focusInput })
   align-items: center;
   justify-content: center;
   border: none;
-  border-radius: 6px;
+  border-radius: var(--rc-radius-sm);
   background: transparent;
   color: var(--rc-text-faint);
   cursor: pointer;
@@ -479,7 +481,7 @@ defineExpose({ focusInput })
 .hint-fade-leave-active,
 .dropdown-fade-enter-active,
 .dropdown-fade-leave-active {
-  transition: opacity 0.15s ease, transform 0.15s ease;
+  transition: opacity var(--rc-dur) ease, transform var(--rc-dur) ease;
 }
 
 .hint-fade-enter-from,

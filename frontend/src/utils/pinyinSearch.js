@@ -557,7 +557,17 @@ export function matchItemWithQuery(item, query) {
   itemNames(item).forEach((name, index) => {
     const match = matchText(name, q, allowInner, true)
     if (index === 0 && match.tier !== MATCH_TIERS.NONE) nameMatch = match
-    consider(match.tier, match.secondary, MATCH_FIELDS.NAME, Boolean(match.literal), Boolean(match.shortAcronym))
+    // 英文/多语言模式下，备用名称（altNames）的拼音/首字母命中不压过主名称的英文原文前缀
+    const isAltNonLiteral = index > 0 && !match.literal
+    const isAltPinyinExact = isAltNonLiteral && match.tier === MATCH_TIERS.EXACT
+    const field = isAltNonLiteral ? MATCH_FIELDS.KEYWORD : MATCH_FIELDS.NAME
+    consider(
+      match.tier,
+      match.secondary,
+      field,
+      Boolean(match.literal),
+      Boolean(match.shortAcronym || isAltPinyinExact)
+    )
   })
 
   if (best.tierScore < MATCH_TIER_SCORES.EXACT_LITERAL) {

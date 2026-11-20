@@ -135,5 +135,97 @@
   ],
   "category": [
     "开发工具"
-  ]
+  ],
+  "categoryId": "developer",
+  "defaultLocale": "zh-CN",
+  "i18n": {
+    "en-US": {
+      "name": "Codec",
+      "description": "Encode/decode Base64, URL, Unicode, and Hex; compute MD5/SHA hashes and HMAC signatures; encrypt/decrypt with AES; and batch generate UUID v4.",
+      "keywords": [
+        "base64",
+        "url",
+        "unicode",
+        "hex",
+        "md5",
+        "sha256",
+        "hash",
+        "aes",
+        "hmac",
+        "uuid"
+      ],
+      "features": {
+        "codec-base64": {
+          "explain": "Encode and decode Base64 text",
+          "cmds": [
+            "base64",
+            "base64 encode",
+            "base64 decode"
+          ]
+        },
+        "codec-url": {
+          "explain": "Encode and decode URL components (encodeURIComponent)",
+          "cmds": [
+            "urlencode",
+            "urldecode",
+            "url encode",
+            "url decode"
+          ]
+        },
+        "hash-digest": {
+          "explain": "Compute MD5, SHA-1, SHA-256, and SHA-512 digests",
+          "cmds": [
+            "hash",
+            "md5",
+            "sha1",
+            "sha256",
+            "sha512",
+            "digest"
+          ]
+        },
+        "cipher-aes": {
+          "explain": "AES symmetric encryption and decryption",
+          "cmds": [
+            "aes",
+            "aes encrypt",
+            "aes decrypt",
+            "cipher"
+          ]
+        },
+        "cipher-hmac": {
+          "explain": "Compute HMAC signatures (SHA-256, SHA-512, SHA-1, MD5)",
+          "cmds": [
+            "hmac",
+            "hmac-sha256",
+            "hmac sign"
+          ]
+        },
+        "codec-unicode": {
+          "explain": "Encode and decode Unicode escape sequences",
+          "cmds": [
+            "unicode",
+            "unicode encode",
+            "unicode decode"
+          ]
+        },
+        "codec-hex": {
+          "explain": "Encode and decode UTF-8 Hex strings",
+          "cmds": [
+            "hex",
+            "hex encode",
+            "hex decode"
+          ]
+        },
+        "gen-uuid": {
+          "explain": "Batch generate random UUID v4 identifiers",
+          "cmds": [
+            "uuid",
+            "guid",
+            "generate uuid",
+            "uuid v4"
+          ]
+        }
+      }
+    }
+  }
 }

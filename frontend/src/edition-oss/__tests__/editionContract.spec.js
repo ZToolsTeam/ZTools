@@ -11,6 +11,7 @@ import * as oss from '../index.js'
 const EXPECTED_EXPORTS = {
   EDITION: 'string',
   isOnline: 'boolean',
+  localeMessages: 'object',
   rootRoutes: 'array',
   layoutRoutes: 'array',
   preloadRouteLoaders: 'array',

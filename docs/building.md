@@ -1,3 +1,5 @@
+[English](en/building.md) | **简体中文**
+
 # 从源码构建
 
 本文说明如何在 Windows 或 macOS 上从源码运行和打包 ZTools。模块分工见 [架构概览](architecture.md)，测试命令见 [测试](testing.md)。

@@ -362,7 +362,10 @@ export class LauncherController {
       autoHideMenuBar: true,
       webPreferences: {
         ...secureWebPreferences(),
-        additionalArguments: ['--ztools-window-mode=launcher']
+        additionalArguments: [
+          ...(secureWebPreferences().additionalArguments ?? []),
+          '--ztools-window-mode=launcher'
+        ]
       }
     })
 

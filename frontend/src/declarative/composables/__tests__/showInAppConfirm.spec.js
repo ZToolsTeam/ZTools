@@ -4,6 +4,11 @@ const modal = vi.hoisted(() => ({ confirm: vi.fn() }))
 vi.mock('ant-design-vue', () => ({ Modal: modal }))
 
 import { showInAppConfirm, closeAllConfirms } from '../useDeclarativeStack'
+import { setI18nLocale } from '@/i18n'
+
+beforeEach(() => {
+  setI18nLocale('zh-CN')
+})
 
 const text = (node) => (typeof node === 'string' ? node : node?.children)
 const destroy = vi.fn()

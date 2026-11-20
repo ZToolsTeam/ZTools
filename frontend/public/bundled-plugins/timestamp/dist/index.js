@@ -1,8 +1,10 @@
-import { List, ActionPanel, Action, Icon, showToast, Toast, Clipboard, useState, useEffect, useNavigation } from "@ztools/declarative-ui";
+import { List, ActionPanel, Action, Icon, showToast, Toast, Clipboard, useState, useEffect, useNavigation, useLocale } from "@ztools/declarative-ui";
 import { parseTimeInput } from "./logic.js";
+import { t } from "./i18n.js";
 import WorldClockCommand from "./world-clock.js";
 export { default as tzWorld } from "./world-clock.js";
 export default function TimestampCommand() {
+    useLocale();
     const { push } = useNavigation();
     const [searchText, setSearchText] = useState("");
     // 留空时展示的“当前时间”与输入内容的相对时间都依赖 now：每秒推进一次，卸载时清理
@@ -18,37 +20,37 @@ export default function TimestampCommand() {
     const handleCopy = async (key, label) => {
         const val = String(pick(key) ?? "");
         await Clipboard.copy(val);
-        await showToast(Toast.Style.Success, `已复制 ${label}: ${val}`);
+        await showToast(Toast.Style.Success, t("copiedToast", { label, val }));
     };
     const resetToNow = async () => {
         const wasLive = isLive;
         setSearchText("");
         setNow(Date.now());
-        await showToast(Toast.Style.Success, wasLive ? "已刷新为当前时间" : "已清空输入，恢复为当前时间");
+        await showToast(Toast.Style.Success, wasLive ? t("refreshedLiveToast") : t("resetLiveToast"));
     };
     return List({
-        navigationTitle: "时间戳转换助手",
-        actions: ActionPanel({}, [Action({ title: "世界时钟…", icon: Icon.Globe, onAction: () => push(WorldClockCommand) })]),
-        searchBarPlaceholder: "输入10/13位时间戳或日期字符串 (留空即实时当前时间)...",
+        navigationTitle: t("navTitle"),
+        actions: ActionPanel({}, [Action({ title: t("worldClockAction"), icon: Icon.Globe, onAction: () => push(WorldClockCommand) })]),
+        searchBarPlaceholder: t("searchPlaceholder"),
         searchText,
         onSearchTextChange: (text) => setSearchText(text)
     }, [
         parsed.valid
-            ? List.Section({ title: isLive ? "当前实时时间" : "指定时间解析结果" }, [
+            ? List.Section({ title: isLive ? t("sectionLive") : t("sectionParsed") }, [
                 List.Item({
                     id: "item-seconds",
                     title: String(parsed.unixSeconds),
-                    subtitle: "秒级 Unix 时间戳 (10位)",
+                    subtitle: t("secondsSubtitle"),
                     icon: Icon.Key,
-                    accessories: [{ text: "10位 秒" }],
-                    actions: ActionPanel({ title: "操作" }, [
+                    accessories: [{ text: t("secondsAcc") }],
+                    actions: ActionPanel({ title: t("actionsTitle") }, [
                         Action({
-                            title: "复制秒级时间戳",
+                            title: t("copySeconds"),
                             icon: Icon.CopyClipboard,
-                            onAction: () => handleCopy("unixSeconds", "秒级时间戳")
+                            onAction: () => handleCopy("unixSeconds", t("labelSeconds"))
                         }),
                         Action({
-                            title: "刷新并重置为当前时间",
+                            title: t("refreshNow"),
                             icon: Icon.Repeat,
                             onAction: resetToNow
                         })
@@ -57,17 +59,17 @@ export default function TimestampCommand() {
                 List.Item({
                     id: "item-ms",
                     title: String(parsed.unixMilliseconds),
-                    subtitle: "毫秒级 Unix 时间戳 (13位)",
+                    subtitle: t("msSubtitle"),
                     icon: Icon.Key,
-                    accessories: [{ text: "13位 毫秒" }],
-                    actions: ActionPanel({ title: "操作" }, [
+                    accessories: [{ text: t("msAcc") }],
+                    actions: ActionPanel({ title: t("actionsTitle") }, [
                         Action({
-                            title: "复制毫秒级时间戳",
+                            title: t("copyMs"),
                             icon: Icon.CopyClipboard,
-                            onAction: () => handleCopy("unixMilliseconds", "毫秒级时间戳")
+                            onAction: () => handleCopy("unixMilliseconds", t("labelMs"))
                         }),
                         Action({
-                            title: "刷新并重置为当前时间",
+                            title: t("refreshNow"),
                             icon: Icon.Repeat,
                             onAction: resetToNow
                         })
@@ -76,17 +78,17 @@ export default function TimestampCommand() {
                 List.Item({
                     id: "item-local",
                     title: parsed.localDateTime || "",
-                    subtitle: `本地格式化时间 (${parsed.dayOfWeek})`,
+                    subtitle: t("localSubtitle", { dayOfWeek: parsed.dayOfWeek || "" }),
                     icon: Icon.Calendar,
-                    accessories: [{ text: parsed.dayOfWeek || "本地时间" }],
-                    actions: ActionPanel({ title: "操作" }, [
+                    accessories: [{ text: parsed.dayOfWeek || t("localAccFallback") }],
+                    actions: ActionPanel({ title: t("actionsTitle") }, [
                         Action({
-                            title: "复制本地格式化时间",
+                            title: t("copyLocal"),
                             icon: Icon.CopyClipboard,
-                            onAction: () => handleCopy("localDateTime", "本地时间")
+                            onAction: () => handleCopy("localDateTime", t("labelLocal"))
                         }),
                         Action({
-                            title: "刷新并重置为当前时间",
+                            title: t("refreshNow"),
                             icon: Icon.Repeat,
                             onAction: resetToNow
                         })
@@ -95,56 +97,56 @@ export default function TimestampCommand() {
                 List.Item({
                     id: "item-beijing",
                     title: parsed.beijingDateTime || "",
-                    subtitle: "北京时间 (UTC+8)",
+                    subtitle: t("beijingSubtitle"),
                     icon: Icon.Globe,
                     accessories: [{ text: "UTC+8" }],
-                    actions: ActionPanel({ title: "操作" }, [
+                    actions: ActionPanel({ title: t("actionsTitle") }, [
                         Action({
-                            title: "复制北京时间",
+                            title: t("copyBeijing"),
                             icon: Icon.CopyClipboard,
-                            onAction: () => handleCopy("beijingDateTime", "北京时间")
+                            onAction: () => handleCopy("beijingDateTime", t("labelBeijing"))
                         })
                     ])
                 }),
                 List.Item({
                     id: "item-utc",
                     title: parsed.utcIso || "",
-                    subtitle: "国际标准 ISO 8601 时间 (UTC)",
+                    subtitle: t("utcSubtitle"),
                     icon: Icon.Document,
                     accessories: [{ text: "ISO 8601" }],
-                    actions: ActionPanel({ title: "操作" }, [
+                    actions: ActionPanel({ title: t("actionsTitle") }, [
                         Action({
-                            title: "复制 ISO 8601 时间",
+                            title: t("copyUtc"),
                             icon: Icon.CopyClipboard,
-                            onAction: () => handleCopy("utcIso", "UTC标准时间")
+                            onAction: () => handleCopy("utcIso", t("labelUtc"))
                         })
                     ])
                 }),
                 List.Item({
                     id: "item-relative",
                     title: parsed.relativeTime || "",
-                    subtitle: "相对友好时间",
+                    subtitle: t("relativeSubtitle"),
                     icon: Icon.Clock,
-                    accessories: [{ text: "相对时间" }],
-                    actions: ActionPanel({ title: "操作" }, [
+                    accessories: [{ text: t("relativeAcc") }],
+                    actions: ActionPanel({ title: t("actionsTitle") }, [
                         Action({
-                            title: "复制相对时间",
+                            title: t("copyRelative"),
                             icon: Icon.CopyClipboard,
-                            onAction: () => handleCopy("relativeTime", "相对时间")
+                            onAction: () => handleCopy("relativeTime", t("labelRelative"))
                         })
                     ])
                 })
             ])
-            : List.Section({ title: "解析错误" }, [
+            : List.Section({ title: t("sectionError") }, [
                 List.Item({
                     id: "item-error",
-                    title: parsed.error || "无法解析的时间格式",
+                    title: parsed.error || t("parseErrorFallback"),
                     subtitle: searchText,
                     icon: Icon.ExclamationMark,
-                    accessories: [{ text: "格式异常" }],
-                    actions: ActionPanel({ title: "操作" }, [
+                    accessories: [{ text: t("formatErrorAcc") }],
+                    actions: ActionPanel({ title: t("actionsTitle") }, [
                         Action({
-                            title: "清空输入并恢复当前时间",
+                            title: t("clearAndReset"),
                             icon: Icon.Repeat,
                             onAction: resetToNow
                         })

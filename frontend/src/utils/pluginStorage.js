@@ -7,6 +7,7 @@
  *   会原子迁移旧值；竞争失败重读宿主最新值，迁移或读取失败抛错，旧值保留不删；removeItem 会同时删除旧键。
  */
 import { callHostMethod } from '../declarative/hostMethods.js'
+import { t } from '@/i18n'
 
 const KEY_PREFIX = 'ls:'
 const LEGACY_PREFIX = 'raycast_'
@@ -22,7 +23,7 @@ function storageError(message, code, cause) {
 
 function assertKey(key) {
   if (typeof key !== 'string' || key.length === 0 || key.length > 200) {
-    throw storageError('LocalStorage 的 key 必须是 1–200 个字符的字符串', 'INVALID_STORAGE_KEY')
+    throw storageError(t('pluginStorage.invalidKey'), 'INVALID_STORAGE_KEY')
   }
 }
 
@@ -60,7 +61,7 @@ export async function readPlaintextEntry(namespace, key, call = callHostMethod) 
     }
   } catch (err) {
     if (err?.code !== 'DATABASE_KEY_NOT_FOUND') {
-      throw storageError(`读取插件数据失败：${err?.message || err}`, err?.code || 'STORAGE_READ_FAILED', err)
+      throw storageError(t('pluginStorage.readFailed', { reason: err?.message || err }), err?.code || 'STORAGE_READ_FAILED', err)
     }
   }
   return readLegacy(key)
@@ -73,12 +74,12 @@ export async function removePlaintextEntry(namespace, key, call = callHostMethod
     await call('db_delete', { plugin_id: namespace, key: KEY_PREFIX + key })
   } catch (err) {
     if (err?.code !== 'DATABASE_KEY_NOT_FOUND') {
-      throw storageError(`删除插件数据失败：${err?.message || err}`, err?.code || 'STORAGE_WRITE_FAILED', err)
+      throw storageError(t('pluginStorage.deleteFailed', { reason: err?.message || err }), err?.code || 'STORAGE_WRITE_FAILED', err)
     }
   }
   removeLegacy(key)
   if (readLegacy(key).found) {
-    throw storageError('浏览器旧数据删除失败', 'STORAGE_WRITE_FAILED')
+    throw storageError(t('pluginStorage.legacyDeleteFailed'), 'STORAGE_WRITE_FAILED')
   }
 }
 
@@ -92,20 +93,20 @@ function readLegacy(key) {
       return { found: true, value: raw }
     }
   } catch (err) {
-    throw storageError(`读取旧版插件数据失败：${err?.message || err}`, err?.code || 'STORAGE_READ_FAILED', err)
+    throw storageError(t('pluginStorage.legacyReadFailed', { reason: err?.message || err }), err?.code || 'STORAGE_READ_FAILED', err)
   }
 }
 
 export function createScopedLocalStorage(pluginId, call = callHostMethod) {
   const namespace = String(pluginId || '').trim()
   if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(namespace)) {
-    throw storageError(`非法的插件 ID: ${pluginId}`, 'INVALID_PLUGIN_ID')
+    throw storageError(t('pluginStorage.invalidPluginId', { pluginId }), 'INVALID_PLUGIN_ID')
   }
 
   async function put(key, value) {
     const text = JSON.stringify(value === undefined ? null : value)
     if (new TextEncoder().encode(text).length > MAX_VALUE_BYTES) {
-      throw storageError(`「${key}」超过 4 MB，无法保存`, 'STORAGE_VALUE_TOO_LARGE')
+      throw storageError(t('pluginStorage.valueTooLargeForKey', { key }), 'STORAGE_VALUE_TOO_LARGE')
     }
     await call('db_put', { plugin_id: namespace, key: KEY_PREFIX + key, value: text })
   }
@@ -115,11 +116,11 @@ export function createScopedLocalStorage(pluginId, call = callHostMethod) {
     const text = JSON.stringify(value)
     const before = expected === undefined ? null : JSON.stringify(expected)
     if (typeof text !== 'string' || new TextEncoder().encode(text).length > MAX_VALUE_BYTES) {
-      throw storageError('插件数据无效或超过 4 MB', 'STORAGE_VALUE_TOO_LARGE')
+      throw storageError(t('pluginStorage.valueInvalidOrTooLarge'), 'STORAGE_VALUE_TOO_LARGE')
     }
     const attempt = async (expectedValue) => {
       const result = await call('db_compare_and_set', { plugin_id: namespace, key: KEY_PREFIX + key, expectedValue, value: text })
-      if (typeof result?.data !== 'boolean') throw storageError('宿主返回的存储结果无效', 'HOST_RESPONSE_INVALID')
+      if (typeof result?.data !== 'boolean') throw storageError(t('pluginStorage.invalidHostResult'), 'HOST_RESPONSE_INVALID')
       return result.data
     }
     if (await attempt(before)) return true
@@ -140,7 +141,7 @@ export function createScopedLocalStorage(pluginId, call = callHostMethod) {
         if (JSON.stringify(next) === before) return next
         if (await this.compareAndSet(key, expected, next)) return next
       }
-      throw storageError('数据正在被其他窗口修改，请重试', 'STORAGE_CONFLICT')
+      throw storageError(t('pluginStorage.conflictRetry'), 'STORAGE_CONFLICT')
     },
     async getItem(key) {
       assertKey(key)
@@ -151,7 +152,7 @@ export function createScopedLocalStorage(pluginId, call = callHostMethod) {
           raw = res?.data
         } catch (err) {
           if (err?.code !== 'DATABASE_KEY_NOT_FOUND') {
-            throw storageError(`读取插件数据失败：${err?.message || err}`, err?.code || 'STORAGE_READ_FAILED', err)
+            throw storageError(t('pluginStorage.readFailed', { reason: err?.message || err }), err?.code || 'STORAGE_READ_FAILED', err)
           }
           const legacy = readLegacy(key)
           if (!legacy.found) return undefined
@@ -159,7 +160,7 @@ export function createScopedLocalStorage(pluginId, call = callHostMethod) {
           if (await compareAndSet(key, undefined, legacy.value)) return legacy.value
           continue
         }
-        if (typeof raw !== 'string') throw storageError('宿主返回的存储内容无效', 'HOST_RESPONSE_INVALID')
+        if (typeof raw !== 'string') throw storageError(t('pluginStorage.invalidHostContent'), 'HOST_RESPONSE_INVALID')
         try {
           return JSON.parse(raw)
         } catch {
@@ -167,7 +168,7 @@ export function createScopedLocalStorage(pluginId, call = callHostMethod) {
           return raw
         }
       }
-      throw storageError('数据正在被其他窗口修改，请重试', 'STORAGE_CONFLICT')
+      throw storageError(t('pluginStorage.conflictRetry'), 'STORAGE_CONFLICT')
     },
 
     async setItem(key, value) {
@@ -176,7 +177,7 @@ export function createScopedLocalStorage(pluginId, call = callHostMethod) {
         await put(key, value)
       } catch (err) {
         if (err?.code === 'STORAGE_VALUE_TOO_LARGE') throw err
-        throw storageError(`保存插件数据失败：${err?.message || err}`, err?.code || 'STORAGE_WRITE_FAILED', err)
+        throw storageError(t('pluginStorage.saveFailed', { reason: err?.message || err }), err?.code || 'STORAGE_WRITE_FAILED', err)
       }
     },
 
@@ -186,7 +187,7 @@ export function createScopedLocalStorage(pluginId, call = callHostMethod) {
         await call('db_delete', { plugin_id: namespace, key: KEY_PREFIX + key })
       } catch (err) {
         if (err?.code !== 'DATABASE_KEY_NOT_FOUND') {
-          throw storageError(`删除插件数据失败：${err?.message || err}`, err?.code || 'STORAGE_WRITE_FAILED', err)
+          throw storageError(t('pluginStorage.deleteFailed', { reason: err?.message || err }), err?.code || 'STORAGE_WRITE_FAILED', err)
         }
       }
       // 同时删除浏览器旧键：否则下次 getItem 在宿主库读不到时会把旧值「迁移」回来，删除过的数据复活

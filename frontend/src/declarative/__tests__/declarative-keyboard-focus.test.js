@@ -8,6 +8,11 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { nextTick } from "vue";
 import DeclarativeView from "../DeclarativeView.vue";
 import { List, Detail, Form, ActionPanel, Action } from "@ztools/declarative-ui";
+import { setI18nLocale } from "@/i18n";
+
+beforeEach(() => {
+  setI18nLocale("zh-CN");
+});
 
 const mounted = [];
 

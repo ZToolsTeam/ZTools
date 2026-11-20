@@ -1,9 +1,9 @@
 <template>
   <RcDialog
     v-model:open="visible"
-    title="发现新版本"
-    aria-label="发现新版本"
-    :description="`${updateType === 'app' ? '客户端更新' : '界面更新'} · v${version}`"
+    :title="t('modals.update.title')"
+    :aria-label="t('modals.update.title')"
+    :description="`${updateType === 'app' ? t('modals.update.appUpdate') : t('modals.update.webUpdate')} · v${version}`"
     :width="480"
     :closable="!force && !updating"
     :keyboard="!force && !updating"
@@ -17,18 +17,18 @@
 
     <div class="update-body">
       <div v-if="changelog" class="update-changelog" v-html="formattedChangelog"></div>
-      <p v-else class="update-empty">新版本已就绪，建议更新以获得更好的体验。</p>
+      <p v-else class="update-empty">{{ t('modals.update.emptyChangelog') }}</p>
 
       <p v-if="!updating && updateType === 'app'" class="update-install-hint">
-        更新完成后将自动重启 ZTools。
+        {{ t('modals.update.restartHint') }}
       </p>
 
       <div v-if="updating" class="update-progress" aria-live="polite">
         <div class="update-progress-row">
-          <span>{{ progress < 100 ? '正在下载更新' : '正在校验并准备重启' }}</span>
+          <span>{{ progress < 100 ? t('modals.update.downloading') : t('modals.update.verifying') }}</span>
           <strong>{{ progress }}%</strong>
         </div>
-        <div class="update-progress-track" role="progressbar" aria-label="更新下载进度" :aria-valuenow="progress" aria-valuemin="0" aria-valuemax="100">
+        <div class="update-progress-track" role="progressbar" :aria-label="t('modals.update.progressAria')" :aria-valuenow="progress" aria-valuemin="0" aria-valuemax="100">
           <div class="update-progress-value" :style="{ width: `${progress}%` }"></div>
         </div>
       </div>
@@ -38,17 +38,17 @@
 
     <template #footer>
       <div v-if="!updating" class="update-actions">
-        <button v-if="!force && !updating" type="button" class="update-skip" @click="skipVersion">跳过此版本</button>
+        <button v-if="!force && !updating" type="button" class="update-skip" @click="skipVersion">{{ t('modals.update.skipVersion') }}</button>
         <div class="update-primary-actions">
-          <RcButton v-if="!force && !updating" variant="secondary" size="md" class="update-btn-ghost" @click="remindLater">稍后提醒</RcButton>
-          <RcButton variant="soft" size="md" class="update-btn-primary" :loading="updating" @click="doUpdate">
-            立即更新
+          <RcButton v-if="!force && !updating" variant="secondary" size="md" class="update-btn-ghost" @click="remindLater">{{ t('modals.update.remindLater') }}</RcButton>
+          <RcButton variant="primary" size="md" class="update-btn-primary" :loading="updating" @click="doUpdate">
+            {{ t('modals.update.updateNow') }}
           </RcButton>
         </div>
       </div>
       <div v-else class="update-actions">
-        <RcButton v-if="progress < 100" variant="secondary" size="md" class="update-btn-ghost" :disabled="cancelling" @click="cancelInProgress">取消更新</RcButton>
-        <span v-else class="update-install-hint" role="status">安装准备中，请稍候…</span>
+        <RcButton v-if="progress < 100" variant="secondary" size="md" class="update-btn-ghost" :disabled="cancelling" @click="cancelInProgress">{{ t('modals.update.cancelUpdate') }}</RcButton>
+        <span v-else class="update-install-hint" role="status">{{ t('modals.update.preparingInstall') }}</span>
       </div>
     </template>
   </RcDialog>
@@ -61,6 +61,9 @@ import { ref, computed, onMounted, onBeforeUnmount } from 'vue'
 import { useUpdateStore } from '@/stores/update'
 import { useAppUpdate } from '@/composables/useAppUpdate'
 import { renderMarkdown } from '@/declarative/markdown'
+import { useAppI18n } from '@/i18n'
+
+const { t } = useAppI18n()
 
 // 更新偏好存储 key（LevelDB，pluginId = __system__）
 const SKIP_VERSION_KEY = 'update:skipVersion'
@@ -218,7 +221,7 @@ function cancelInProgress() {
       pendingType = null
       pendingData = null
     } catch (error) {
-      updateError.value = error.message || '取消更新失败'
+      updateError.value = error.message || t('modals.update.cancelFailed')
     } finally {
       cancelling.value = false
     }
@@ -280,26 +283,26 @@ async function doUpdate() {
       visible.value = false
       pendingType = null
       pendingData = null
-      window.__ztoolsToast?.('success', '更新已准备完成，应用即将重启')
+      window.__ztoolsToast?.('success', t('modals.update.readyToRestart'))
     } catch (err) {
       if (cancellationTask) await cancellationTask
       if (revision !== actionRevision) return
       updating.value = false
-      updateError.value = err.message || '未知错误'
+      updateError.value = err.message || t('common.unknownError')
       console.error('App 更新失败:', err)
       const cancelled = err.code === 'CANCELLED'
       window.__ztoolsToast?.(
         cancelled ? 'warning' : 'error',
-        cancelled ? '更新已取消' : '更新失败: ' + (err.message || '未知错误')
+        cancelled ? t('modals.update.updateCancelled') : t('modals.update.updateFailed', { reason: err.message || t('common.unknownError') })
       )
     }
   } else {
     try {
       const started = await silentWebUpdate(data)
-      if (!started) window.__ztoolsToast?.('error', 'Web 资源更新未完成')
+      if (!started) window.__ztoolsToast?.('error', t('modals.update.webIncomplete'))
     } catch (err) {
       console.error('Web 更新失败:', err)
-      window.__ztoolsToast?.('error', 'Web 更新失败: ' + (err.message || '未知错误'))
+      window.__ztoolsToast?.('error', t('modals.update.webFailed', { reason: err.message || t('common.unknownError') }))
     }
   }
 }
@@ -332,7 +335,7 @@ defineExpose({ show, dismiss })
   overscroll-behavior: contain;
   scrollbar-gutter: stable;
   padding-inline-end: 16px;
-  font-size: var(--font-size-body-m);
+  font-size: var(--rc-fs-body);
   line-height: 1.7;
   color: var(--rc-text-secondary);
   overflow-wrap: anywhere;
@@ -348,9 +351,9 @@ defineExpose({ show, dismiss })
   margin-bottom: 10px;
   padding: 0;
   border: 0;
-  font-size: var(--font-size-body-m);
+  font-size: var(--rc-fs-body);
   line-height: 1.5;
-  font-weight: var(--font-weight-semibold);
+  font-weight: 600;
 }
 
 .update-changelog :deep(.space-y-1 > * + *) {
@@ -366,7 +369,7 @@ defineExpose({ show, dismiss })
   padding-top: 14px;
   border-top: 1px solid var(--rc-border-subtle);
   color: var(--rc-text-muted);
-  font-size: var(--font-size-body-m);
+  font-size: var(--rc-fs-body);
   line-height: 1.7;
 }
 
@@ -390,7 +393,7 @@ defineExpose({ show, dismiss })
 .update-progress-track {
   height: 4px;
   overflow: hidden;
-  border-radius: var(--radius-sm);
+  border-radius: var(--rc-radius-full);
   background: var(--rc-border);
 }
 
@@ -398,7 +401,7 @@ defineExpose({ show, dismiss })
   height: 100%;
   border-radius: inherit;
   background: var(--rc-accent);
-  transition: width var(--duration-fast) ease-out;
+  transition: width var(--rc-dur-fast) var(--rc-ease-out);
 }
 
 .update-error {
@@ -412,7 +415,7 @@ defineExpose({ show, dismiss })
   flex-wrap: wrap;
   align-items: center;
   justify-content: flex-end;
-  gap: 12px;
+  gap: 8px;
 }
 
 .update-primary-actions {
@@ -432,10 +435,10 @@ defineExpose({ show, dismiss })
   min-height: 36px;
   padding: 0;
   border: none;
-  border-radius: var(--radius-sm);
+  border-radius: var(--rc-radius-sm);
   background: transparent;
   color: var(--rc-text-muted);
-  font-size: 12px;
+  font-size: var(--rc-fs-small);
   cursor: pointer;
   white-space: nowrap;
 }

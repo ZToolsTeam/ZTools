@@ -1,5 +1,5 @@
 <script setup>
-import { BanIcon, DownloadIcon, RotateCcwIcon, RotateCwIcon, ShieldCheckIcon, StarIcon, Trash2Icon, TriangleAlertIcon } from '@lucide/vue'
+import { BanIcon, DownloadIcon, RotateCcwIcon, RotateCwIcon, StarIcon, Trash2Icon, TriangleAlertIcon } from '@lucide/vue'
 import { GithubLogo, StarFilledIcon } from '@/utils/appIcons'
 import { computed, ref } from 'vue'
 import { downloadPluginUpdate } from '@/api/apiserver'
@@ -9,6 +9,10 @@ import { isOfficialPlugin } from '@/utils/officialPlugins'
 import { isBundledPlugin } from '@/utils/bundledPlugins'
 import { getPluginPlatforms } from '@/utils/platform'
 import { track } from '@edition'
+import { useAppI18n } from '@/i18n'
+import { getLocalizedPluginName, getLocalizedPluginDescription } from '@/utils/pluginI18n'
+
+const { t } = useAppI18n()
 
 const props = defineProps({
   plugin: { type: Object, required: true },
@@ -33,24 +37,29 @@ const pluginsStore = usePluginsStore()
 const isDownloading = computed(() => props.downloading)
 const isBundled = computed(() => isBundledPlugin(props.plugin?.pluginId || props.plugin?.id))
 
+const pluginName = computed(() => getLocalizedPluginName(props.plugin))
+const pluginDesc = computed(() => getLocalizedPluginDescription(props.plugin) || t('common.noDescription'))
+
 const isRevoked = computed(() =>
   Boolean(props.plugin.revoked || pluginsStore.isRevoked(props.plugin.pluginId))
 )
 const revokedReason = computed(() =>
-  props.plugin.revoked_reason || props.plugin.revokedReason || pluginsStore.getRevokedReason(props.plugin.pluginId) || '该插件已被官方下架禁用'
+  props.plugin.revoked_reason || props.plugin.revokedReason || pluginsStore.getRevokedReason(props.plugin.pluginId) || t('market.revokedDefaultReason')
 )
 // 插件目录里的新版本不再支持当前系统时也会禁用，文案与官方下架区分开
 const isPlatformUnsupported = computed(() =>
   !props.plugin.revoked && pluginsStore.getRevokedKind(props.plugin.pluginId) === 'platform'
 )
-const revokedLabel = computed(() => (isPlatformUnsupported.value ? '不支持当前系统' : '已下架'))
+const revokedLabel = computed(() => (isPlatformUnsupported.value ? t('market.card.platformUnsupported') : t('market.card.revoked')))
 const uninstallHint = computed(() =>
-  isPlatformUnsupported.value ? '当前系统已不再支持该插件，可以卸载' : '该插件已被官方下架，建议立即安全卸载'
+  isPlatformUnsupported.value ? t('market.card.uninstallHintPlatform') : t('market.card.uninstallHintRevoked')
 )
 // 官方标记以目录署名为准（与插件市场「官方 / 社区」筛选一致）：
 // 目录明确标为社区的不显示官方；只有没写署名的条目（如随客户端内置的插件）才参考官方名单
 const isOfficial = computed(() => {
   const plugin = props.plugin
+  if (plugin?.is_official === true) return true
+  if (plugin?.is_official === false) return false
   if (isOfficialPluginItem(plugin)) return true
   if (isCommunityPluginItem(plugin)) return false
   return isOfficialPlugin(plugin.pluginId || plugin.id)
@@ -154,14 +163,14 @@ const { pluginGlyph, fallbackGlyph, displayIconUrl, iconFailed, showImgOverlay, 
           style="gap: var(--spacing-xs); display: flex; flex-direction: column"
         >
           <div class="flex items-center min-w-0" style="gap: var(--spacing-xs)">
-            <span class="card-title" :title="plugin.name">{{ plugin.name }}</span>
+            <span class="card-title" :title="pluginName">{{ pluginName }}</span>
             <!-- 支持的平台跟在名称后面，图标角上只保留官方标记 -->
             <PlatformLogos v-if="hasPlatforms" :plugin="plugin" class="card-platforms" />
             <span
               v-if="ratingText"
               class="card-rating"
-              :title="`平均 ${ratingText} / 5，${ratingSummary.count} 人评分`"
-              :aria-label="`评分 ${ratingText}`"
+              :title="t('market.card.ratingTooltip', { score: ratingText, count: ratingSummary.count })"
+              :aria-label="t('market.card.ratingAria', { score: ratingText })"
             >
               <StarFilledIcon class="card-rating-star" aria-hidden="true" />{{ ratingText }}
             </span>
@@ -176,13 +185,13 @@ const { pluginGlyph, fallbackGlyph, displayIconUrl, iconFailed, showImgOverlay, 
             <span
               v-else-if="isIncompatible"
               class="card-mark-status is-incompat"
-              :title="incompatReason || '需升级'"
-              aria-label="需升级"
+              :title="incompatReason || t('market.card.upgradeRequired')"
+              :aria-label="t('market.card.upgradeRequired')"
             >
               <TriangleAlertIcon  aria-hidden="true" />
             </span>
           </div>
-          <p class="card-desc">{{ plugin.description || '暂无描述' }}</p>
+          <p class="card-desc">{{ pluginDesc }}</p>
         </div>
 
         <!-- 右侧操作 -->
@@ -196,7 +205,7 @@ const { pluginGlyph, fallbackGlyph, displayIconUrl, iconFailed, showImgOverlay, 
             :href="plugin.homepage_url || plugin.homepage || plugin.github_url"
             target="_blank"
             class="card-icon-btn"
-            title="查看源码仓库"
+            :title="t('market.card.viewSource')"
             @click.stop
           >
             <GithubLogo  />
@@ -206,7 +215,7 @@ const { pluginGlyph, fallbackGlyph, displayIconUrl, iconFailed, showImgOverlay, 
             v-if="showFavorite"
             class="card-icon-btn"
             :class="{ 'is-active': isFavorite }"
-            :title="isFavorite ? '取消收藏' : '添加收藏'"
+            :title="isFavorite ? t('common.unfavorite') : t('market.card.addFavorite')"
             @click.stop="handleToggleFavorite"
           >
             <component :is="isFavorite ? StarFilledIcon : StarIcon" aria-hidden="true" />
@@ -215,8 +224,8 @@ const { pluginGlyph, fallbackGlyph, displayIconUrl, iconFailed, showImgOverlay, 
           <button
             v-if="hasUpdate"
             class="card-icon-btn update"
-            title="更新"
-            aria-label="更新"
+            :title="t('common.update')"
+            :aria-label="t('common.update')"
             :disabled="isUpdating"
             @click.stop="handleUpdate"
           >
@@ -234,7 +243,7 @@ const { pluginGlyph, fallbackGlyph, displayIconUrl, iconFailed, showImgOverlay, 
               :title="uninstallHint"
               @click.stop="handleUninstall"
             >
-              卸载
+              {{ t('common.uninstall') }}
             </RcButton>
             <RcButton
             class="card-action"
@@ -253,10 +262,10 @@ const { pluginGlyph, fallbackGlyph, displayIconUrl, iconFailed, showImgOverlay, 
             class="card-action"
             v-else-if="isDownloading"
             size="xs"
-            variant="ghost"
+            variant="secondary"
             :loading="true"
           >
-            安装中
+            {{ t('common.installing') }}
           </RcButton>
           <RcButton
             class="card-action"
@@ -264,19 +273,19 @@ const { pluginGlyph, fallbackGlyph, displayIconUrl, iconFailed, showImgOverlay, 
             size="xs"
             variant="danger"
             :icon="RotateCwIcon"
-            :title="installError || '安装失败，点击重试'"
+            :title="installError || t('market.card.installFailedRetry')"
             @click.stop="handleActionClick"
           >
-            重试
+            {{ t('common.retry') }}
           </RcButton>
           <RcButton
             class="card-action"
             v-else-if="isInstalled"
             size="xs"
-            variant="ghost"
+            variant="secondary"
             @click.stop="handleActionClick"
           >
-            打开
+            {{ t('common.open') }}
           </RcButton>
           <RcButton
             class="card-action"
@@ -286,7 +295,7 @@ const { pluginGlyph, fallbackGlyph, displayIconUrl, iconFailed, showImgOverlay, 
             :icon="RotateCcwIcon"
             @click.stop="handleActionClick"
           >
-            还原
+            {{ t('common.restore') }}
           </RcButton>
           <RcButton
             class="card-action"
@@ -296,7 +305,7 @@ const { pluginGlyph, fallbackGlyph, displayIconUrl, iconFailed, showImgOverlay, 
             :icon="DownloadIcon"
             @click.stop="handleActionClick"
           >
-            安装
+            {{ t('common.install') }}
           </RcButton>
         </div>
       </div>
@@ -313,9 +322,9 @@ const { pluginGlyph, fallbackGlyph, displayIconUrl, iconFailed, showImgOverlay, 
 .card-compact {
   background: var(--rc-surface);
   border: 1px solid var(--rc-border);
-  border-radius: var(--rc-radius-lg, 12px);
+  border-radius: var(--rc-radius-lg);
   padding: 12px 14px;
-  transition: border-color 0.15s ease, background-color 0.15s ease;
+  transition: border-color var(--rc-dur) ease, background-color var(--rc-dur) ease;
 }
 
 .card-compact:hover {
@@ -326,7 +335,7 @@ const { pluginGlyph, fallbackGlyph, displayIconUrl, iconFailed, showImgOverlay, 
 .card-title {
   min-width: 0;
   flex: 0 1 auto;
-  font-size: 14px;
+  font-size: var(--rc-fs-emph);
   font-weight: 500;
   line-height: 1.35;
   color: var(--rc-text-primary);
@@ -341,7 +350,7 @@ const { pluginGlyph, fallbackGlyph, displayIconUrl, iconFailed, showImgOverlay, 
 /* 平台标志：名称后的小号灰色标志 */
 .card-platforms {
   flex-shrink: 0;
-  font-size: 11px;
+  font-size: var(--rc-fs-caption);
   color: var(--rc-text-faint);
 }
 
@@ -350,20 +359,22 @@ const { pluginGlyph, fallbackGlyph, displayIconUrl, iconFailed, showImgOverlay, 
   display: inline-flex;
   align-items: center;
   gap: 2px;
-  font-size: 11px;
+  font-size: var(--rc-fs-caption);
   line-height: 1;
   color: var(--rc-text-muted);
   font-variant-numeric: tabular-nums;
 }
 
 .card-rating-star {
-  font-size: 10px;
+  font-size: var(--rc-fs-caption);
   color: var(--rc-accent);
 }
 
-/* 右侧操作按钮固定最小宽度，「安装」「打开」宽度一致，收藏星标列对齐 */
+/* 右侧操作按钮统一规格：同一 secondary 样式、同高同字号、固定最小宽度，
+   有无图标（「安装」带下载图标、「打开」不带）视觉宽度一致，收藏星标列对齐 */
 .card-action {
-  min-width: 56px;
+  min-width: 60px;
+  white-space: nowrap;
 }
 
 .card-mark-status {
@@ -373,7 +384,7 @@ const { pluginGlyph, fallbackGlyph, displayIconUrl, iconFailed, showImgOverlay, 
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  font-size: 11px;
+  font-size: var(--rc-fs-caption);
   line-height: 1;
   cursor: help;
 }
@@ -388,31 +399,9 @@ const { pluginGlyph, fallbackGlyph, displayIconUrl, iconFailed, showImgOverlay, 
   flex-shrink: 0;
 }
 
-/* 官方标记：盾形小标落在图标角上，悬停说明「官方插件」 */
-.card-mark-official {
-  position: absolute;
-  right: -3px;
-  bottom: -3px;
-  width: 14px;
-  height: 14px;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  border-radius: 4px;
-  font-size: 9px;
-  line-height: 1;
-  color: var(--rc-text-secondary);
-  background: var(--rc-kbd-bg);
-  box-shadow: 0 0 0 2px var(--rc-surface);
-  cursor: help;
-}
-
-/* 平台标记：与官方盾标错开，悬停说明「跨平台 / 仅 Windows / 仅 macOS」 */
-
-
 .card-desc {
   min-width: 0;
-  font-size: 12px;
+  font-size: var(--rc-fs-small);
   color: var(--rc-text-muted);
   white-space: nowrap;
   overflow: hidden;
@@ -425,7 +414,7 @@ const { pluginGlyph, fallbackGlyph, displayIconUrl, iconFailed, showImgOverlay, 
 .card-icon-btn {
   width: 28px;
   height: 28px;
-  border-radius: 6px;
+  border-radius: var(--rc-radius-sm);
   border: 1px solid transparent;
   background: transparent;
   color: var(--rc-text-muted);
@@ -433,8 +422,8 @@ const { pluginGlyph, fallbackGlyph, displayIconUrl, iconFailed, showImgOverlay, 
   display: flex;
   align-items: center;
   justify-content: center;
-  font-size: 12px;
-  transition: all 0.15s ease;
+  font-size: var(--rc-fs-small);
+  transition: all var(--rc-dur) ease;
 }
 
 .card-icon-btn:hover {

@@ -13,6 +13,20 @@ import {
 } from "../dist/index.js";
 
 describe("Raycast Declarative View Descriptors", () => {
+  test("List.EmptyView builds a non-item descriptor that sits beside sections", () => {
+    const tree = List({ actions: ActionPanel({}, [Action({ title: "New", onAction: () => {} })]) }, [
+      List.Section({ title: "All (0)" }, []),
+      List.EmptyView({ title: "No todos yet", description: "Type above and press Enter", icon: Icon.CheckCircle })
+    ]);
+    const empty = tree.children[1];
+    assert.equal(isViewDescriptor(empty), true);
+    assert.equal(empty.type, "List.EmptyView");
+    assert.equal(empty.props.title, "No todos yet");
+    assert.equal(empty.props.description, "Type above and press Enter");
+    assert.equal(empty.props.icon, Icon.CheckCircle);
+    assert.equal(empty.children.length, 0);
+  });
+
   test("List & List.Item & List.Section & List.Dropdown should build correct view descriptor tree", () => {
     const dropdown = List.Dropdown({
       tooltip: "Filter Type",

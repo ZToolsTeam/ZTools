@@ -39,6 +39,11 @@ vi.mock('@/composables/useToast', () => ({
 import ThemeProvider from '@/components/ThemeProvider.vue'
 import AppearanceSettings from '../AppearanceSettings.vue'
 import { useThemeStore } from '@/stores/theme'
+import { setI18nLocale } from '@/i18n'
+
+beforeEach(() => {
+  setI18nLocale('zh-CN')
+})
 
 function mountAppearanceIntegration() {
   const Root = defineComponent({

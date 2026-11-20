@@ -1,15 +1,21 @@
 import { describe, expect, it, vi } from 'vitest'
 
 import {
-  HOTKEY_UNSUPPORTED_TEXT,
   formatHotkeyForPlatform,
   getHotkeyHostCapabilities,
   getHotkeyRuleDescription,
+  getHotkeyUnsupportedText,
   getShellReserveWarning,
   isSafeShortcutKeysCombo,
   parseSupportedHotkeyEvent,
   resetHotkeyRecorderState
 } from '../hotkeyRecorder'
+import { setI18nLocale, getCurrentLocale } from '@/i18n'
+import { getPluginPlatformLabel, shortcutLabel, shortcutKeys } from '@/utils/platform'
+import { MOUSE_WAKE_OPTIONS } from '@/utils/globalWakeHotkey'
+import { BUILTIN_SHORTCUT_HINTS } from '@/utils/shellShortcuts'
+import { PLUGIN_FEATURE_HOTKEY_ITEMS } from '@/utils/pluginFeatureHotkeys'
+import { buildCatalogUpdateInfo } from '@/api/pluginCatalog'
 
 const createEvent = ({
   key,
@@ -148,7 +154,7 @@ describe('parseSupportedHotkeyEvent', () => {
     for (const key of ['`', '~']) {
       expect(parseSupportedHotkeyEvent(createEvent({ key, code: 'Backquote' }))).toEqual({
         status: 'invalid',
-        text: HOTKEY_UNSUPPORTED_TEXT
+        text: getHotkeyUnsupportedText('windows', false)
       })
     }
     expect(
@@ -213,7 +219,7 @@ describe('parseSupportedHotkeyEvent', () => {
     for (const event of unsupported) {
       expect(parseSupportedHotkeyEvent(event)).toEqual({
         status: 'invalid',
-        text: HOTKEY_UNSUPPORTED_TEXT
+        text: getHotkeyUnsupportedText('windows', false)
       })
     }
   })
@@ -509,6 +515,35 @@ describe('notifyHotkeyRecorderActive 真实 Events 与主进程 IPC 契约', () 
     } finally {
       window.ztools = previousZtools
       window.__ztoolsElectron = previousElectron
+    }
+  })
+
+  it('switches hotkey, platform, shell shortcuts, feature hotkeys and catalog messages to en-US dynamically', () => {
+    const prevLocale = getCurrentLocale()
+    try {
+      setI18nLocale('en-US')
+      expect(getHotkeyUnsupportedText('windows', false)).toContain('Only Ctrl')
+      expect(getHotkeyRuleDescription('macos', false)).toContain('Supports')
+      expect(formatHotkeyForPlatform('DoubleCtrl', 'windows', true)).toBe('Double Ctrl')
+      expect(formatHotkeyForPlatform('DoubleCtrl', 'macos', false)).toBe('DoubleCtrl (Unsupported by host)')
+      expect(isSafeShortcutKeysCombo('DoubleCtrl (Unsupported by host)', 'windows', true)).toBe(false)
+      expect(getShellReserveWarning('Ctrl+K')).toContain('built-in ZTools shortcut')
+
+      expect(getPluginPlatformLabel({ platforms: ['windows', 'macos'] })).toBe('Cross-platform')
+      expect(getPluginPlatformLabel({ platforms: ['windows'] })).toBe('Windows only')
+      expect(getPluginPlatformLabel({ platforms: ['macos'] })).toBe('macOS only')
+      expect(shortcutLabel('DoubleCtrl', false)).toBe('Double Ctrl')
+      expect(shortcutKeys('DoubleAlt', true)).toEqual(['Double ⌥'])
+
+      expect(MOUSE_WAKE_OPTIONS.find((o) => o.value === 'off')?.label).toBe('Off')
+      expect(MOUSE_WAKE_OPTIONS.find((o) => o.value === 'middle:press')?.label).toBe('Middle Click')
+      expect(BUILTIN_SHORTCUT_HINTS.find((h) => h.id === 'focus-search')?.label).toBe('Focus Search')
+      expect(PLUGIN_FEATURE_HOTKEY_ITEMS[0].featureName).toBe('Screen OCR')
+
+      const info = buildCatalogUpdateInfo({ pluginId: 'demo', version: '1.0.0' }, '1.0.0', 'windows')
+      expect(info.message).toBe('Already up to date')
+    } finally {
+      setI18nLocale(prevLocale)
     }
   })
 })

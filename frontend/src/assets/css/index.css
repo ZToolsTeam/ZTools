@@ -34,18 +34,18 @@
 
   /* 输入框里的 Lucide 图标：清除按钮、前缀搜索图标 */
   .input-clear-icon {
-    font-size: 14px;
+    font-size: var(--rc-fs-emph);
     color: var(--rc-text-faint);
   }
 
   .input-prefix-icon {
-    font-size: 14px;
+    font-size: var(--rc-fs-emph);
     margin-right: 2px;
     color: var(--rc-text-muted);
   }
 
   .popconfirm-icon {
-    font-size: 14px;
+    font-size: var(--rc-fs-emph);
     margin-right: 6px;
     color: var(--rc-warning);
   }
@@ -53,7 +53,7 @@
   /* 统一确认框（utils/confirmDialog.js）：外观与 RcDialog 一致 */
   .rc-confirm-wrap .ant-modal-content {
     border: 1px solid var(--rc-border);
-    border-radius: 18px !important;
+    border-radius: var(--rc-radius-xl) !important;
     background-color: var(--rc-surface) !important;
     box-shadow: var(--rc-shadow-lg) !important;
   }
@@ -68,7 +68,7 @@
 
   /* antd 全局提示里的图标（useToast 传入）：antd 只给自带的 .anticon 留间距 */
   .ant-message .toast-icon {
-    font-size: 16px;
+    font-size: var(--rc-fs-title-sm);
     margin-inline-end: 8px;
   }
 }
@@ -84,12 +84,12 @@
     align-items: center;
     gap: 10px;
     padding: 0 10px 0 6px;
-    height: 34px;
-    border-radius: var(--rc-radius-md, 8px);
+    height: 32px;
+    border-radius: var(--rc-radius-md);
     color: var(--rc-text-secondary);
     cursor: pointer;
-    transition: background-color 0.15s ease, color 0.15s ease;
-    font-size: 13px;
+    transition: background-color var(--rc-dur) ease, color var(--rc-dur) ease;
+    font-size: var(--rc-fs-body);
     font-weight: 400;
     user-select: none;
   }
@@ -98,10 +98,10 @@
     content: '';
     width: 6px;
     height: 6px;
-    border-radius: 1.7px;
+    border-radius: var(--rc-marker-radius);
     flex-shrink: 0;
     background: transparent;
-    transition: background-color 0.15s ease, box-shadow 0.15s ease;
+    transition: background-color var(--rc-dur) ease, box-shadow var(--rc-dur) ease;
   }
 
   .sidebar-item:hover {
@@ -124,7 +124,7 @@
   .sidebar-item svg {
     flex-shrink: 0;
     color: var(--rc-text-muted);
-    transition: color 0.15s ease;
+    transition: color var(--rc-dur) ease;
   }
 
   .sidebar-item:hover svg,
@@ -283,10 +283,10 @@ a:hover {
 .ant-tooltip .ant-tooltip-inner {
   min-height: 0;
   padding: 5px 8px;
-  border-radius: 6px;
+  border-radius: var(--rc-radius-sm);
   background: var(--rc-text-primary);
   color: var(--rc-surface);
-  font-size: 12px;
+  font-size: var(--rc-fs-small);
   line-height: 18px;
   box-shadow: var(--rc-shadow-md);
 }

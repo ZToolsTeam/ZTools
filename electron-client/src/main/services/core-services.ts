@@ -104,6 +104,10 @@ export async function readWebVersion(webRoot: string): Promise<string> {
   return '0'
 }
 
+export interface CoreServicesRuntimeOptions {
+  readonly runningUnderARM64Translation?: boolean | null
+}
+
 export function createCoreServices(
   runtime: RuntimePaths | string,
   appVersion: string,
@@ -113,7 +117,8 @@ export function createCoreServices(
   nativeInput: NativeInputAdapter | null = null,
   webResources: WebResourceService | null = null,
   edition: MainEdition = mainEdition(),
-  macUpdater?: MacUpdateInstaller
+  macUpdater?: MacUpdateInstaller,
+  runtimeOptions?: CoreServicesRuntimeOptions
 ): CoreServices {
   const runtimePaths = typeof runtime === 'string'
     ? runtimePathsForBusinessDataRoot(runtime)
@@ -121,7 +126,15 @@ export function createCoreServices(
   const dataRoot = runtimePaths.businessDataRoot
   // 版本相关的存储文件（例如账号文件）只在需要它的版本里放行
   const store = new JsonFileStore(dataRoot, new Set([...ConfigService.allowedStoreFiles, ...edition.storeFiles]))
-  const { user, analytics, updateSource, libraryMetadata } = edition.createServices({ appVersion, webVersion, dataRoot, store })
+  const { user, analytics, updateSource, libraryMetadata } = edition.createServices({
+    appVersion,
+    webVersion,
+    dataRoot,
+    store,
+    ...(runtimeOptions?.runningUnderARM64Translation !== undefined
+      ? { runningUnderARM64Translation: runtimeOptions.runningUnderARM64Translation }
+      : {})
+  })
   const update = new UpdateService({
     runtimePaths,
     appVersion,

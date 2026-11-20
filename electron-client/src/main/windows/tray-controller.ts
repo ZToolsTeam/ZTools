@@ -1,6 +1,7 @@
 import { Menu, Tray, type MenuItemConstructorOptions } from 'electron'
 import { isDoubleModifier, SHELL_SHORTCUTS } from '../../contracts/hotkey-rules.js'
 import { toElectronAccelerator } from '../platform/common/electron-global-shortcut.js'
+import { getResolvedLocale, t } from '../i18n/index.js'
 
 export const DEFAULT_TRAY_WAKE_ACCELERATOR = 'Alt+Space'
 const MAX_ACCELERATOR_LENGTH = 64
@@ -98,26 +99,26 @@ export function buildTrayMenuTemplate(
   const items: MenuItemConstructorOptions[] = [
     {
       id: 'open-launcher',
-      label: '打开极客搜索',
+      label: t('tray.openLauncher'),
       // 与全局快捷键注册同一套转换：设置里的 Ctrl 在 macOS 上实际是 ⌘，菜单按实际按键显示
       ...(wakeAccelerator ? { accelerator: wakeAccelerator } : {}),
       click: () => context.onOpenLauncher()
     },
     {
       id: 'open-dashboard',
-      label: '打开主工作台',
+      label: t('tray.openDashboard'),
       click: () => context.onShowMainWindow()
     },
     { type: 'separator' },
     {
       id: 'open-settings',
-      label: '偏好设置...',
+      label: t('tray.preferences'),
       accelerator: settingsAccelerator,
       click: () => context.onOpenSettings()
     },
     {
       id: 'open-about',
-      label: '检查更新 / 关于',
+      label: t('tray.checkUpdatesAbout'),
       click: () => context.onOpenAbout()
     },
     { type: 'separator' }
@@ -126,14 +127,14 @@ export function buildTrayMenuTemplate(
   if (typeof context.onRelaunchApp === 'function') {
     items.push({
       id: 'relaunch',
-      label: '重启 ZTools',
+      label: t('tray.relaunch'),
       click: () => context.onRelaunchApp?.()
     })
   }
 
   items.push({
     id: 'quit',
-    label: '退出 ZTools',
+    label: t('tray.quit'),
     click: () => context.onRequestExit()
   })
 
@@ -143,6 +144,7 @@ export function buildTrayMenuTemplate(
 export class TrayController {
   #tray: TrayAdapter | null = null
   #wakeAccelerator: string
+  #locale: string = getResolvedLocale()
   #stopped = false
 
   constructor(private readonly options: TrayControllerOptions) {
@@ -192,6 +194,11 @@ export class TrayController {
         this.#wakeAccelerator = normalized
         changed = true
       }
+    }
+    const currentLocale = getResolvedLocale()
+    if (currentLocale !== this.#locale) {
+      this.#locale = currentLocale
+      changed = true
     }
     if (changed && this.#tray) {
       this.#rebuildContextMenu()

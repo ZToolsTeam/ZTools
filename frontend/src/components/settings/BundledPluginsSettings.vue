@@ -15,7 +15,10 @@ import { useToast } from '@/composables/useToast'
 import { getBundledPluginEntries, isBundledPlugin } from '@/utils/bundledPlugins'
 import { resolveKeywordGlyph, resolvePluginGlyph } from '@/utils/brandIcons'
 import { isPluginSupportedOnCurrentPlatform } from '@/utils/platform'
+import { getLocalizedPluginDescription, getLocalizedPluginName } from '@/utils/pluginI18n'
+import { useAppI18n } from '@/i18n'
 
+const { t } = useAppI18n()
 const pluginsStore = usePluginsStore()
 const { toastSuccess, toastError } = useToast()
 
@@ -86,12 +89,12 @@ async function toggleBundled(item) {
     if (currentlyHidden) {
       const res = await pluginsStore.restoreBundledPlugin(pid)
       if (!isUnmounted && res?.success) {
-        toastSuccess(`已还原「${item.name}」`)
+        toastSuccess(t('settings.bundled.restoredToast', { name: getLocalizedPluginName(item) }))
       }
     } else {
       const res = await pluginsStore.hideBundledPlugin(pid)
       if (!isUnmounted && res?.success) {
-        toastSuccess(`已卸载「${item.name}」，可随时在此还原`)
+        toastSuccess(t('settings.bundled.uninstalledToast', { name: getLocalizedPluginName(item) }))
       }
     }
     await nextTick()
@@ -103,7 +106,11 @@ async function toggleBundled(item) {
     }
   } catch (err) {
     if (!isUnmounted) {
-      toastError((currentlyHidden ? '还原失败: ' : '卸载失败: ') + (err?.message || err))
+      toastError(
+        t(currentlyHidden ? 'settings.bundled.restoreFailed' : 'settings.bundled.uninstallFailed', {
+          reason: err?.message || err
+        })
+      )
     }
   }
 }
@@ -134,8 +141,8 @@ defineExpose({
 <template>
   <div class="settings-card" data-testid="bundled-plugins-settings">
     <div class="card-header">
-      <h2 class="card-title">内置插件</h2>
-      <p class="card-desc">随客户端提供的基础工具，卸载后将从已安装列表与搜索结果中隐藏，本地数据保留且可随时还原</p>
+      <h2 class="card-title">{{ t('settings.bundled.title') }}</h2>
+      <p class="card-desc">{{ t('settings.bundled.desc') }}</p>
     </div>
 
     <div class="bundled-list">
@@ -160,10 +167,10 @@ defineExpose({
           </div>
           <div class="bundled-text">
             <div class="bundled-title-row">
-              <span class="bundled-name">{{ item.name }}</span>
-              <RcTag v-if="isHidden(item.pluginId)" class="bundled-status-tag">已卸载</RcTag>
+              <span class="bundled-name">{{ getLocalizedPluginName(item) }}</span>
+              <RcTag v-if="isHidden(item.pluginId)" class="bundled-status-tag">{{ t('settings.bundled.uninstalledTag') }}</RcTag>
             </div>
-            <span class="bundled-desc">{{ item.description }}</span>
+            <span class="bundled-desc">{{ getLocalizedPluginDescription(item) }}</span>
           </div>
         </div>
 
@@ -171,26 +178,27 @@ defineExpose({
           <RcButton
             v-if="isHidden(item.pluginId)"
             :ref="(el) => setActionBtnRef(item.pluginId, el)"
-            variant="primary"
+            variant="secondary"
             size="xs"
             :icon="RotateCcwIcon"
             :loading="isToggling(item.pluginId)"
             :data-testid="`bundled-restore-${item.pluginId}`"
             @click="toggleBundled(item)"
           >
-            还原
+            {{ t('settings.bundled.restore') }}
           </RcButton>
           <RcButton
             v-else
             :ref="(el) => setActionBtnRef(item.pluginId, el)"
-            variant="danger"
+            variant="secondary"
             size="xs"
+            class="bundled-uninstall-btn"
             :icon="Trash2Icon"
             :loading="isToggling(item.pluginId)"
             :data-testid="`bundled-uninstall-${item.pluginId}`"
             @click="toggleBundled(item)"
           >
-            卸载
+            {{ t('settings.bundled.uninstall') }}
           </RcButton>
         </div>
       </div>
@@ -201,15 +209,19 @@ defineExpose({
 <style scoped>
 .card-desc {
   margin: 4px 0 0;
-  font-size: 12px;
+  font-size: var(--rc-fs-small);
   color: var(--rc-text-muted);
   line-height: 1.5;
 }
 
+/* 与设置页其它分区同一种「分组标题 + 细线 + 细线分隔的行」，不再一行一张卡片 */
 .bundled-list {
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  margin-top: 12px;
+  border-top: 1px solid var(--rc-border);
+  /* 让高亮行的 z-index:-1 背景留在列表内，不落到页面背景之下 */
+  isolation: isolate;
 }
 
 .bundled-item {
@@ -217,20 +229,25 @@ defineExpose({
   align-items: center;
   justify-content: space-between;
   gap: 12px;
-  padding: 10px 12px;
-  border-radius: 8px;
-  border: 1px solid var(--rc-border);
-  background: var(--rc-surface);
-  transition: border-color 0.2s ease, background-color 0.2s ease, opacity 0.2s ease;
+  min-height: 64px;
+  padding: 12px 0;
+  border-bottom: 1px solid var(--rc-border);
+  transition: background-color var(--rc-dur-slow) ease, opacity var(--rc-dur-slow) ease;
 }
 
-.bundled-item:hover {
-  border-color: var(--rc-border-highlight);
+/* 从别处深链定位到某个插件时，用伪元素在行后铺一层强调底（左右各外扩 8px），行本身的盒子与分隔线不变 */
+.bundled-item {
+  position: relative;
 }
 
-.bundled-item.is-highlighted {
-  border-color: var(--rc-accent);
+.bundled-item.is-highlighted::before {
+  content: '';
+  position: absolute;
+  inset: 0 -8px;
+  z-index: -1;
+  border-radius: var(--rc-radius-md);
   background: var(--rc-accent-subtle);
+  pointer-events: none;
 }
 
 .bundled-main {
@@ -243,7 +260,7 @@ defineExpose({
 
 .bundled-icon {
   flex-shrink: 0;
-  transition: opacity 0.2s ease;
+  transition: opacity var(--rc-dur-slow) ease;
 }
 
 .bundled-icon.is-muted {
@@ -265,7 +282,7 @@ defineExpose({
 }
 
 .bundled-name {
-  font-size: 13px;
+  font-size: var(--rc-fs-body);
   font-weight: 500;
   color: var(--rc-text-primary);
   white-space: nowrap;
@@ -282,7 +299,7 @@ defineExpose({
 }
 
 .bundled-desc {
-  font-size: 12px;
+  font-size: var(--rc-fs-small);
   color: var(--rc-text-muted);
   white-space: nowrap;
   overflow: hidden;
@@ -291,5 +308,13 @@ defineExpose({
 
 .bundled-action {
   flex-shrink: 0;
+}
+
+/* 每行都有「卸载」，常态用中性次按钮，避免一屏九个红按钮；悬停或键盘聚焦时才露出危险色 */
+.bundled-uninstall-btn:hover:not(:disabled),
+.bundled-uninstall-btn:focus-visible {
+  color: var(--rc-error);
+  border-color: color-mix(in srgb, var(--rc-error) 40%, var(--rc-border-highlight));
+  background: var(--rc-error-subtle);
 }
 </style>

@@ -1,5 +1,6 @@
 import { useUpdateStore } from '@/stores/update'
 import { compareAppVersions } from '@/utils/version'
+import { t } from '@/i18n'
 
 // 防止 web 静默更新重复触发
 let _webUpdateInProgress = false
@@ -108,7 +109,7 @@ export function useAppUpdate() {
         fileSize: updateStore.versionInfo.fileSize
       })
 
-      if (result?.success !== true) throw new Error(result?.message || '安装器未启动，请重试')
+      if (result?.success !== true) throw new Error(result?.message || t('modals.update.installerNotStarted'))
       return result
     } catch (error) {
       updateStore.setError(error.message)
@@ -122,7 +123,7 @@ export function useAppUpdate() {
    */
   async function cancelUpdate() {
     const result = await window.ztools?.update?.cancel?.()
-    if (result?.success !== true) throw new Error(result?.message || '取消更新失败，请重试')
+    if (result?.success !== true) throw new Error(result?.message || t('modals.update.cancelFailedRetry'))
     if (!result.installing) updateStore.reset()
     return result
   }

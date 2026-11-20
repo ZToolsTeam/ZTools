@@ -1,4 +1,5 @@
-import { List, Form, ActionPanel, Action, Icon, Clipboard, showToast, Toast, useState, useEffect, useRef, useMemo, useNavigation } from '@ztools/declarative-ui';
+import { List, Form, ActionPanel, Action, Icon, Clipboard, showToast, Toast, useState, useEffect, useRef, useMemo, useNavigation, useLocale } from '@ztools/declarative-ui';
+import { t } from './i18n.js';
 import { diffText, formatHunk, formatUnifiedDiff, describeHunk, hunkPreviewMarkdown, splitLines, MAX_DIFF_LINES } from './logic.js';
 import { createCompatFileInputProps, isDeclarativeFileInputSupported } from './host-compat.js';
 import { pickTextFile, readTextFileByPath, extractDroppedFilePaths } from './host.js';
@@ -13,6 +14,16 @@ const isSide = (v) => {
     return typeof s.name === 'string' && typeof s.text === 'string' && (s.source === undefined || s.source === 'text' || s.source === 'clipboard' || s.source === 'file');
 };
 const isFlag = (v) => typeof v === 'boolean';
+const DEFAULT_SIDE_NAMES = new Set(['左侧', '右侧', 'Left', 'Right']);
+const displaySideName = (side, fallbackKey) => {
+    if (side.source === 'file')
+        return side.name;
+    if (side.source === 'clipboard')
+        return t('clipboardName');
+    if (DEFAULT_SIDE_NAMES.has(side.name) || !side.name)
+        return t(fallbackKey);
+    return side.name;
+};
 /**
  * 编辑左右两段文本的表单
  */
@@ -27,32 +38,36 @@ export function actionPanelKey() {
     }
 }
 export function EditTextsForm({ left, right, onSave }) {
+    useLocale();
     const { pop } = useNavigation();
     const [a, setA] = useState(left.text);
     const [b, setB] = useState(right.text);
     return Form({
-        navigationTitle: '填写要对比的两段文本',
-        actions: ActionPanel({ title: '对比' }, [
+        navigationTitle: t('editFormNavTitle'),
+        actions: ActionPanel({ title: t('editFormPanelTitle') }, [
             Action.SubmitForm({
-                title: '开始对比',
+                title: t('startCompareAction'),
                 icon: Icon.Check,
                 onSubmit: () => {
-                    onSave(a === left.text && left.source ? left : { name: '左侧', text: a, source: 'text' }, b === right.text && right.source ? right : { name: '右侧', text: b, source: 'text' });
+                    onSave(a === left.text && left.source ? left : { name: t('sideLeft'), text: a, source: 'text' }, b === right.text && right.source ? right : { name: t('sideRight'), text: b, source: 'text' });
                     pop();
                 }
             })
         ])
     }, [
-        Form.TextArea({ id: 'left', title: '左侧（原文）', placeholder: '粘贴原始文本', value: a, onChange: (v) => setA(v) }),
-        Form.TextArea({ id: 'right', title: '右侧（新文）', placeholder: '粘贴修改后的文本', value: b, onChange: (v) => setB(v) })
+        Form.TextArea({ id: 'left', title: t('sideLeftFull'), placeholder: t('leftPlaceholder'), value: a, onChange: (v) => setA(v) }),
+        Form.TextArea({ id: 'right', title: t('sideRightFull'), placeholder: t('rightPlaceholder'), value: b, onChange: (v) => setB(v) })
     ]);
 }
 export function FileCompareCommand() {
+    const locale = useLocale();
     // 两侧内容与「忽略空白」随独立窗口带走；文件内容已读成文本，不需要转交路径授权
-    const [left, setLeft] = usePopoutValue('left', () => emptySide('左侧'), isSide);
-    const [right, setRight] = usePopoutValue('right', () => emptySide('右侧'), isSide);
+    const [left, setLeft] = usePopoutValue('left', () => emptySide(t('sideLeft')), isSide);
+    const [right, setRight] = usePopoutValue('right', () => emptySide(t('sideRight')), isSide);
     const [ignoreWhitespace, setIgnoreWhitespace] = usePopoutValue('ignoreWhitespace', () => false, isFlag);
     const { push } = useNavigation();
+    const leftName = displaySideName(left, 'sideLeft');
+    const rightName = displaySideName(right, 'sideRight');
     // 两侧都有内容才对比；只有一侧时进入「待选另一侧」状态，不拿空文本做整篇删除的假差异
     const hasLeft = left.source !== undefined || left.text.length > 0;
     const hasRight = right.source !== undefined || right.text.length > 0;
@@ -81,12 +96,12 @@ export function FileCompareCommand() {
             if (targetSide === 'right') {
                 const file = await readTextFileByPath(paths[0]);
                 setRight({ name: file.name, text: file.text, source: 'file' });
-                await showToast(Toast.Style.Success, '已设为右侧');
+                await showToast(Toast.Style.Success, t('setAsRightToast'));
             }
             else if (targetSide === 'left') {
                 const file = await readTextFileByPath(paths[0]);
                 setLeft({ name: file.name, text: file.text, source: 'file' });
-                await showToast(Toast.Style.Success, '已设为左侧');
+                await showToast(Toast.Style.Success, t('setAsLeftToast'));
             }
             else if (paths.length >= 2) {
                 const [first, second] = await Promise.all([
@@ -95,37 +110,37 @@ export function FileCompareCommand() {
                 ]);
                 setLeft({ name: first.name, text: first.text, source: 'file' });
                 setRight({ name: second.name, text: second.text, source: 'file' });
-                await showToast(Toast.Style.Success, '已载入两个文件进行对比');
+                await showToast(Toast.Style.Success, t('loadedTwoFilesToast'));
             }
             else {
                 const file = await readTextFileByPath(paths[0]);
                 if (!hasLeftRef.current || hasRightRef.current) {
                     setLeft({ name: file.name, text: file.text, source: 'file' });
-                    await showToast(Toast.Style.Success, '已设为左侧');
+                    await showToast(Toast.Style.Success, t('setAsLeftToast'));
                 }
                 else {
                     setRight({ name: file.name, text: file.text, source: 'file' });
-                    await showToast(Toast.Style.Success, '已设为右侧');
+                    await showToast(Toast.Style.Success, t('setAsRightToast'));
                 }
             }
         }
         catch (err) {
-            await showToast(Toast.Style.Failure, '读取文件失败', err instanceof Error ? err.message : String(err));
+            await showToast(Toast.Style.Failure, t('readFileFailed'), err instanceof Error ? err.message : String(err));
         }
     };
     const fileInputProps = createCompatFileInputProps((files, payload) => handleInputFiles(files, payload), {
         onTextPaste: async (text) => {
             if (!text) {
-                await showToast(Toast.Style.Failure, '剪贴板里没有文字');
+                await showToast(Toast.Style.Failure, t('clipboardEmptyToast'));
                 return;
             }
             if (!hasLeftRef.current || hasRightRef.current) {
-                setLeft({ name: '剪贴板', text, source: 'clipboard' });
-                await showToast(Toast.Style.Success, '已设为左侧');
+                setLeft({ name: t('clipboardName'), text, source: 'clipboard' });
+                await showToast(Toast.Style.Success, t('setAsLeftToast'));
             }
             else {
-                setRight({ name: '剪贴板', text, source: 'clipboard' });
-                await showToast(Toast.Style.Success, '已设为右侧');
+                setRight({ name: t('clipboardName'), text, source: 'clipboard' });
+                await showToast(Toast.Style.Success, t('setAsRightToast'));
             }
         }
     });
@@ -150,18 +165,18 @@ export function FileCompareCommand() {
                 ztools?.events?.off?.('plugin_files_dropped', handler);
         };
     }, []);
-    // 只在输入变化时重新计算（交换、忽略空白、载入新内容），其余重渲染直接复用结果
+    // 只在输入变化时重新计算（交换、忽略空白、载入新内容、切换语言），其余重渲染直接复用结果
     const { result, error, report } = useMemo(() => {
         if (!ready)
             return { result: null, error: '', report: '' };
         try {
             const r = diffText(left.text, right.text, { ignoreWhitespace });
-            return { result: r, error: '', report: formatUnifiedDiff(r, left.name, right.name) };
+            return { result: r, error: '', report: formatUnifiedDiff(r, leftName, rightName) };
         }
         catch (err) {
             return { result: null, error: err instanceof Error ? err.message : String(err), report: '' };
         }
-    }, [ready, left.text, right.text, left.name, right.name, ignoreWhitespace]);
+    }, [ready, left.text, right.text, leftName, rightName, ignoreWhitespace, locale]);
     const openEditor = () => push(() => EditTextsForm({ left, right, onSave: (l, r) => { setLeft(l); setRight(r); } }));
     const pasteInto = async (side) => {
         let text;
@@ -169,36 +184,36 @@ export function FileCompareCommand() {
             text = await Clipboard.readText();
         }
         catch (err) {
-            await showToast(Toast.Style.Failure, '读取剪贴板失败', err instanceof Error ? err.message : String(err));
+            await showToast(Toast.Style.Failure, t('readClipboardFailed'), err instanceof Error ? err.message : String(err));
             return;
         }
         if (!text) {
-            await showToast(Toast.Style.Failure, '剪贴板里没有文字');
+            await showToast(Toast.Style.Failure, t('clipboardEmptyToast'));
             return;
         }
-        side === 'left' ? setLeft({ name: '剪贴板', text, source: 'clipboard' }) : setRight({ name: '剪贴板', text, source: 'clipboard' });
-        await showToast(Toast.Style.Success, side === 'left' ? '已设为左侧' : '已设为右侧');
+        side === 'left' ? setLeft({ name: t('clipboardName'), text, source: 'clipboard' }) : setRight({ name: t('clipboardName'), text, source: 'clipboard' });
+        await showToast(Toast.Style.Success, side === 'left' ? t('setAsLeftToast') : t('setAsRightToast'));
     };
     const pickFile = async (side) => {
         try {
-            const file = await pickTextFile(side === 'left' ? '选择左侧（原文）文件' : '选择右侧（新文）文件');
+            const file = await pickTextFile(side === 'left' ? t('pickLeftFileTitle') : t('pickRightFileTitle'));
             if (!file)
                 return;
             side === 'left' ? setLeft({ name: file.name, text: file.text, source: 'file' }) : setRight({ name: file.name, text: file.text, source: 'file' });
         }
         catch (err) {
-            await showToast(Toast.Style.Failure, '读取文件失败', err instanceof Error ? err.message : String(err));
+            await showToast(Toast.Style.Failure, t('readFileFailed'), err instanceof Error ? err.message : String(err));
         }
     };
     const sourceActions = [
-        Action({ title: '编辑两段文本…', icon: Icon.Pencil, onAction: openEditor }),
-        Action({ title: '剪贴板内容设为左侧', icon: Icon.CopyClipboard, onAction: () => pasteInto('left') }),
-        Action({ title: '剪贴板内容设为右侧', icon: Icon.CopyClipboard, onAction: () => pasteInto('right') }),
-        Action({ title: '选择文件作为左侧…', icon: Icon.Document, onAction: () => pickFile('left') }),
-        Action({ title: '选择文件作为右侧…', icon: Icon.Document, onAction: () => pickFile('right') }),
-        Action({ title: '交换左右', icon: Icon.Repeat, onAction: () => { const l = left; setLeft(right); setRight(l); } }),
-        Action({ title: ignoreWhitespace ? '恢复比较空白字符' : '忽略空白差异', icon: Icon.Text, onAction: () => setIgnoreWhitespace(!ignoreWhitespace) }),
-        Action({ title: '清空', icon: Icon.Trash, onAction: () => { setLeft(emptySide('左侧')); setRight(emptySide('右侧')); } })
+        Action({ title: t('actionEditTexts'), icon: Icon.Pencil, onAction: openEditor }),
+        Action({ title: t('actionPasteLeft'), icon: Icon.CopyClipboard, onAction: () => pasteInto('left') }),
+        Action({ title: t('actionPasteRight'), icon: Icon.CopyClipboard, onAction: () => pasteInto('right') }),
+        Action({ title: t('actionPickLeft'), icon: Icon.Document, onAction: () => pickFile('left') }),
+        Action({ title: t('actionPickRight'), icon: Icon.Document, onAction: () => pickFile('right') }),
+        Action({ title: t('actionSwap'), icon: Icon.Repeat, onAction: () => { const l = left; setLeft(right); setRight(l); } }),
+        Action({ title: ignoreWhitespace ? t('actionRestoreWhitespace') : t('actionIgnoreWhitespace'), icon: Icon.Text, onAction: () => setIgnoreWhitespace(!ignoreWhitespace) }),
+        Action({ title: t('actionClear'), icon: Icon.Trash, onAction: () => { setLeft(emptySide(t('sideLeft'))); setRight(emptySide(t('sideRight'))); } })
     ];
     /** 复制失败如实提示，不在失败后显示「已复制」 */
     const copyText = async (text, success) => {
@@ -206,20 +221,21 @@ export function FileCompareCommand() {
             await Clipboard.copy(text);
         }
         catch (err) {
-            await showToast(Toast.Style.Failure, '复制失败', err instanceof Error ? err.message : String(err));
+            await showToast(Toast.Style.Failure, t('copyFailed'), err instanceof Error ? err.message : String(err));
             return;
         }
         await showToast(Toast.Style.Success, success);
     };
     const reportActions = report
-        ? [Action({ title: '复制差异报告', icon: Icon.CopyClipboard, onAction: () => copyText(report, '已复制差异报告（unified diff）') })]
+        ? [Action({ title: t('actionCopyReport'), icon: Icon.CopyClipboard, onAction: () => copyText(report, t('copiedReportToast')) })]
         : [];
     let sections;
     if (hasLeft !== hasRight) {
         // 只载入了一侧：主动作沿用已载入一侧的来源补另一侧，次动作换另一种来源，其余收进 ⌘K
         const loaded = hasLeft ? left : right;
+        const loadedName = hasLeft ? leftName : rightName;
         const missing = hasLeft ? 'right' : 'left';
-        const missingLabel = missing === 'left' ? '左侧（原文）' : '右侧（新文）';
+        const missingLabel = missing === 'left' ? t('sideLeftFull') : t('sideRightFull');
         const pickOther = missing === 'left' ? sourceActions[3] : sourceActions[4];
         const pasteOther = missing === 'left' ? sourceActions[1] : sourceActions[2];
         const ordered = loaded.source === 'file' ? [pickOther, pasteOther, sourceActions[0]]
@@ -228,56 +244,65 @@ export function FileCompareCommand() {
         const rest = sourceActions.filter((a) => !ordered.includes(a));
         const loadedLines = splitLines(loaded.text).length;
         sections = loadedLines > MAX_DIFF_LINES
-            ? [List.Section({ title: '无法对比' }, [List.Item({ id: 'error', title: `${loaded.name} 超过 ${MAX_DIFF_LINES} 行，暂不支持对比`, icon: Icon.ExclamationMark, actions: ActionPanel({ title: '操作' }, sourceActions) })])]
+            ? [List.Section({ title: t('sectionCannotCompare') }, [List.Item({ id: 'error', title: t('fileMaxLinesExceeded', { name: loadedName, max: MAX_DIFF_LINES }), icon: Icon.ExclamationMark, actions: ActionPanel({ title: t('panelActions') }, sourceActions) })])]
             : [
-                List.Section({ title: `已载入${hasLeft ? '左侧' : '右侧'}：${loaded.name}（${loadedLines} 行）` }, [
+                List.Section({ title: t('sectionLoadedSide', { side: hasLeft ? t('sideLeft') : t('sideRight'), name: loadedName, lines: loadedLines }) }, [
                     List.Item({
                         id: 'need-other',
-                        title: `还需要${missingLabel}才能对比`,
-                        subtitle: '选择文件、使用剪贴板内容或编辑文本补上另一侧',
+                        title: t('needOtherSideTitle', { side: missingLabel }),
+                        subtitle: t('needOtherSideSubtitle'),
                         icon: Icon.Document,
-                        actions: ActionPanel({ title: '补上另一侧' }, [...ordered, ...rest])
+                        actions: ActionPanel({ title: t('panelFillOtherSide') }, [...ordered, ...rest])
                     })
                 ])
             ];
     }
     else if (!ready) {
         sections = [
-            List.Section({ title: '开始' }, [
-                List.Item({ id: 'start-edit', title: '粘贴两段文本进行对比', subtitle: '按回车打开编辑框', icon: Icon.Pencil, actions: ActionPanel({ title: '开始' }, sourceActions) }),
-                List.Item({ id: 'start-file', title: '选择两个文件对比', subtitle: 'UTF-8 文本文件，单个不超过 4 MB', icon: Icon.Document, actions: ActionPanel({ title: '开始' }, [sourceActions[3], sourceActions[4], sourceActions[0]]) }),
-                List.Item({ id: 'start-clip', title: '用剪贴板内容对比', subtitle: '先复制原文设为左侧，再复制新文设为右侧', icon: Icon.CopyClipboard, actions: ActionPanel({ title: '开始' }, [sourceActions[1], sourceActions[2], sourceActions[0]]) })
+            List.Section({ title: t('sectionStart') }, [
+                List.Item({ id: 'start-edit', title: t('startEditTitle'), subtitle: t('startEditSubtitle'), icon: Icon.Pencil, actions: ActionPanel({ title: t('sectionStart') }, sourceActions) }),
+                List.Item({ id: 'start-file', title: t('startFileTitle'), subtitle: t('startFileSubtitle'), icon: Icon.Document, actions: ActionPanel({ title: t('sectionStart') }, [sourceActions[3], sourceActions[4], sourceActions[0]]) }),
+                List.Item({ id: 'start-clip', title: t('startClipTitle'), subtitle: t('startClipSubtitle'), icon: Icon.CopyClipboard, actions: ActionPanel({ title: t('sectionStart') }, [sourceActions[1], sourceActions[2], sourceActions[0]]) })
             ])
         ];
     }
     else if (error) {
-        sections = [List.Section({ title: '无法对比' }, [List.Item({ id: 'error', title: error, icon: Icon.ExclamationMark, actions: ActionPanel({ title: '操作' }, sourceActions) })])];
+        sections = [List.Section({ title: t('sectionCannotCompare') }, [List.Item({ id: 'error', title: error, icon: Icon.ExclamationMark, actions: ActionPanel({ title: t('panelActions') }, sourceActions) })])];
     }
     else if (result && result.identical) {
         sections = [
-            List.Section({ title: `${left.name} ↔ ${right.name}` }, [
+            List.Section({ title: `${leftName} ↔ ${rightName}` }, [
                 List.Item({
                     id: 'identical',
-                    title: ignoreWhitespace ? '两段文本相同（已忽略空白差异）' : left.text === right.text ? '两段文本完全相同' : '逐行内容相同（换行符或末尾换行不同）',
-                    subtitle: `共 ${result.leftLines} 行`,
+                    title: ignoreWhitespace ? t('identicalIgnoreWs') : left.text === right.text ? t('identicalExact') : t('identicalLineEndingOnly'),
+                    subtitle: t('totalLinesSubtitle', { count: result.leftLines }),
                     icon: Icon.Checkmark,
-                    detail: List.Item.Detail({ markdown: ignoreWhitespace || left.text === right.text ? '两侧内容一致，没有差异。' : '每一行的内容都相同，只有换行符（Windows CRLF 与 LF）或文件末尾是否有空行不同；逐行对比不把它们算作差异。' }),
-                    actions: ActionPanel({ title: '操作' }, sourceActions)
+                    detail: List.Item.Detail({ markdown: ignoreWhitespace || left.text === right.text ? t('identicalDetailExact') : t('identicalDetailLineEnding') }),
+                    actions: ActionPanel({ title: t('panelActions') }, sourceActions)
                 })
             ])
         ];
     }
     else if (result) {
         sections = [
-            List.Section({ title: `${left.name} ↔ ${right.name} · ${result.approximate ? '改动过多，按近似结果显示 · ' : ''}删除 ${result.removed} 行，新增 ${result.added} 行 · ${result.hunks.length} 处差异` }, result.hunks.map((h, i) => List.Item({
+            List.Section({
+                title: t('diffSummarySection', {
+                    left: leftName,
+                    right: rightName,
+                    approx: result.approximate ? t('approximatePrefix') : '',
+                    removed: result.removed,
+                    added: result.added,
+                    hunks: result.hunks.length
+                })
+            }, result.hunks.map((h, i) => List.Item({
                 id: `hunk-${i}`,
-                title: `第 ${Math.max(h.rightStart, 1)} 行附近`,
+                title: t('hunkLineTitle', { line: Math.max(h.rightStart, 1) }),
                 subtitle: describeHunk(h),
                 icon: Icon.Document,
                 detail: List.Item.Detail({ markdown: hunkPreviewMarkdown(h) }),
-                actions: ActionPanel({ title: '差异' }, [
+                actions: ActionPanel({ title: t('panelDiff') }, [
                     ...reportActions,
-                    Action({ title: '复制这一处差异', icon: Icon.CopyClipboard, onAction: () => copyText(formatHunk(h), '已复制这一处差异') }),
+                    Action({ title: t('actionCopyHunk'), icon: Icon.CopyClipboard, onAction: () => copyText(formatHunk(h), t('copiedHunkToast')) }),
                     ...sourceActions
                 ])
             })))
@@ -288,10 +313,12 @@ export function FileCompareCommand() {
     }
     return List({
         ...fileInputProps,
-        navigationTitle: '文本对比',
+        navigationTitle: t('navTitle'),
         isShowingDetail: Boolean(result && result.hunks.length > 0) || Boolean(result?.identical),
-        searchBarPlaceholder: result && result.hunks.length > 0 ? `按回车复制差异报告，${actionPanelKey()} 查看更多操作` : `按回车开始，${actionPanelKey()} 查看更多操作`,
-        actions: ActionPanel({ title: '全局操作' }, [...reportActions, ...sourceActions])
+        searchBarPlaceholder: result && result.hunks.length > 0
+            ? t('searchPlaceholderResult', { key: actionPanelKey() })
+            : t('searchPlaceholderIdle', { key: actionPanelKey() }),
+        actions: ActionPanel({ title: t('panelGlobalActions') }, [...reportActions, ...sourceActions])
     }, sections);
 }
 export default FileCompareCommand;

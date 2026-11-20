@@ -178,7 +178,7 @@ describe('ScreenPermissionPanel', () => {
     })
     await flushPromises()
     expect(f.wrapper.get('[data-testid="screen-permission-status"]').text()).toContain('系统已拒绝')
-    expect(f.wrapper.find('.bg-\\[var\\(--rc-warning-subtle\\)\\]').exists()).toBe(true)
+    expect(f.wrapper.find('.perm-warning').exists()).toBe(true)
     expect(warn.mock.calls.some(args => String(args[0]).includes('Unhandled error during execution of render'))).toBe(false)
     f.wrapper.unmount()
     warn.mockRestore()

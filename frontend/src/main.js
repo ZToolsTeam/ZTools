@@ -3,6 +3,7 @@ import { createPinia } from 'pinia'
 
 import router, { preloadCoreRoutes } from './router'
 import App from './App.vue'
+import i18n from './i18n'
 import '@/assets/css/index.css'
 
 // Ant Design Vue
@@ -10,6 +11,7 @@ import 'ant-design-vue/dist/reset.css'
 
 // Stores
 import { useThemeStore } from './stores/theme'
+import { useLocaleStore } from './stores/locale'
 import { useUserStore } from '@edition'
 import { usePluginsStore } from './stores/plugins'
 import { useNavStore } from './stores/nav'
@@ -28,6 +30,7 @@ const app = createApp(App)
 const pinia = createPinia()
 
 app.use(pinia)
+app.use(i18n)
 app.use(router)
 app.mount('#app')
 
@@ -54,9 +57,11 @@ const isAuxiliaryWindow = detectAuxiliaryWindow()
 // 全局暴露 router 供宿主控制与 CDP 联调
 window.__router = router
 
-// ===== 初始化主题 =====
+// ===== 初始化主题与语言 =====
 const themeStore = useThemeStore(pinia)
 themeStore.init()
+const localeStore = useLocaleStore(pinia)
+localeStore.init()
 
 // ===== 注册全局 Toast 函数（供 CEF-IPC SDK 使用）=====
 const { toast } = useToast()

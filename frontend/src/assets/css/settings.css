@@ -5,24 +5,45 @@
  * 解耦父子组件层级，杜绝 !important 与样式重复维护
  */
 
-/* ===== 1. 页面与容器规范：单栏分组列表（对齐设计稿 Settings） ===== */
+/* ===== 1. 页面外框（全站统一）=====
+ * 主窗口所有页面根节点都用 .rc-page（或沿用 .settings-page），保证标题左边缘、上边距一致。
+ * 阅读型页面（设置、个人中心、反馈）在内部再套 .settings-container 限制行宽，但仍左对齐，不居中。
+ */
+.rc-page,
 .settings-page {
-  min-height: calc(100vh - 12rem);
-  padding: 22px 32px 56px;
+  max-width: var(--rc-page-max-width);
+  margin: 0 auto;
+  padding: var(--rc-page-pad-top) var(--rc-page-pad-x) var(--rc-page-pad-bottom);
+  color: var(--rc-text-primary);
 }
 
 .settings-container {
-  max-width: 720px;
-  margin: 0 auto;
+  max-width: var(--rc-page-narrow-width);
 }
 
-/* 页面头部 */
+/* 窄窗口收紧页边距（原主页在此断点用 12px），让网格多放一列；诊断页等直接引用变量的页面一并生效 */
+@media (max-width: 768px) {
+  :root {
+    --rc-page-pad-top: 16px;
+    --rc-page-pad-x: 16px;
+    --rc-page-pad-bottom: 24px;
+  }
+}
+
+/* 页面头部：标题 + 一行说明；右侧可放一个页面级动作 */
 .page-header {
-  margin-bottom: 32px;
+  margin-bottom: 20px;
+}
+
+.page-header.has-action {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 16px;
 }
 
 .page-title {
-  font-size: 24px;
+  font-size: var(--rc-fs-title);
   font-weight: 600;
   letter-spacing: -0.02em;
   color: var(--rc-text-primary);
@@ -31,10 +52,10 @@
 }
 
 .page-subtitle {
-  font-size: 13px;
+  font-size: var(--rc-fs-body);
   color: var(--rc-text-muted);
   margin: 6px 0 0;
-  line-height: 1.4;
+  line-height: 1.45;
 }
 
 /* ===== 2. 分组 ===== */
@@ -54,7 +75,7 @@
 }
 
 .card-title {
-  font-size: 13px;
+  font-size: var(--rc-fs-body);
   font-weight: 600;
   color: var(--rc-text-primary);
   margin: 0;
@@ -97,25 +118,25 @@
 }
 
 .setting-label {
-  font-size: 14px;
+  font-size: var(--rc-fs-emph);
   font-weight: 500;
   color: var(--rc-text-primary);
   line-height: 1.35;
 }
 
 .setting-desc {
-  font-size: 12px;
+  font-size: var(--rc-fs-small);
   color: var(--rc-text-muted);
   line-height: 1.4;
 }
 
 /* 开关：与设计稿一致的圆角方形开关 */
 .settings-page .ant-switch {
-  border-radius: 6px;
+  border-radius: var(--rc-radius-sm);
 }
 
 .settings-page .ant-switch .ant-switch-handle::before {
-  border-radius: 4px;
+  border-radius: var(--rc-radius-xs);
 }
 
 /* ===== 4. 键帽与通用操作按钮 ===== */
@@ -123,14 +144,14 @@
 
 
 .no-hotkey {
-  font-size: 12px;
+  font-size: var(--rc-fs-small);
   color: var(--rc-text-muted);
 }
 
 .clear-btn {
   width: 28px;
   height: 28px;
-  border-radius: var(--rc-radius-sm, 6px);
+  border-radius: var(--rc-radius-sm);
   border: none;
   background: transparent;
   color: var(--rc-text-muted);
@@ -138,8 +159,8 @@
   display: flex;
   align-items: center;
   justify-content: center;
-  font-size: 12px;
-  transition: all 0.15s ease;
+  font-size: var(--rc-fs-small);
+  transition: background-color var(--rc-dur) ease, color var(--rc-dur) ease;
 }
 
 .clear-btn:hover {
@@ -161,14 +182,14 @@
   margin-top: 8px;
   background: var(--rc-warning-subtle);
   border: 1px solid var(--rc-warning);
-  border-radius: var(--rc-radius-sm, 6px);
-  font-size: 12px;
+  border-radius: var(--rc-radius-sm);
+  font-size: var(--rc-fs-small);
   color: var(--rc-warning);
 }
 
 .conflict-warning i {
   color: var(--rc-warning);
-  font-size: 13px;
+  font-size: var(--rc-fs-body);
 }
 
 /* 设置说明里的错误与行内操作（如「重试」） */

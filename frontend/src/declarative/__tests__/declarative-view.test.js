@@ -2,6 +2,11 @@ import { mount } from "@vue/test-utils";
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { nextTick } from "vue";
 import DeclarativeView from "../DeclarativeView.vue";
+import { setI18nLocale } from "@/i18n";
+
+beforeEach(() => {
+  setI18nLocale("zh-CN");
+});
 import {
   List,
   Detail,

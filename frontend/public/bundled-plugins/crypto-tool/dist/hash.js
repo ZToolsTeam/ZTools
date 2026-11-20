@@ -5,6 +5,25 @@
  * WebCrypto 只有异步接口且不支持 MD5。需要「边输入边出结果」的插件统一使用本模块。
  * 本文件是唯一源码，构建前由各插件复制到自己的 src/ 目录（与 shared/native-ipc.ts 相同的做法）。
  */
+import { getLocale } from "@ztools/declarative-ui";
+const HASH_MESSAGES = {
+    "zh-CN": {
+        invalidHex: "不是合法的十六进制字符串",
+        invalidBase64: "不是合法的 Base64 字符串",
+        invalidBase64Length: "Base64 长度不正确",
+        unsupportedAlgorithm: (algorithm) => `不支持的摘要算法: ${algorithm}`
+    },
+    "en-US": {
+        invalidHex: "Invalid hexadecimal string",
+        invalidBase64: "Invalid Base64 string",
+        invalidBase64Length: "Invalid Base64 length",
+        unsupportedAlgorithm: (algorithm) => `Unsupported hash algorithm: ${algorithm}`
+    }
+};
+function hashStrings() {
+    const locale = getLocale();
+    return HASH_MESSAGES[locale] ?? HASH_MESSAGES["en-US"];
+}
 const encoder = new TextEncoder();
 const decoder = new TextDecoder("utf-8", { fatal: true });
 export function utf8ToBytes(text) {
@@ -23,7 +42,7 @@ export function bytesToHex(bytes) {
 export function hexToBytes(hex) {
     const clean = (hex ?? "").trim();
     if (clean.length % 2 !== 0 || /[^0-9a-fA-F]/.test(clean))
-        throw new Error("不是合法的十六进制字符串");
+        throw new Error(hashStrings().invalidHex);
     const out = new Uint8Array(clean.length / 2);
     for (let i = 0; i < out.length; i++)
         out[i] = parseInt(clean.slice(i * 2, i * 2 + 2), 16);
@@ -41,10 +60,10 @@ export function bytesToBase64(bytes) {
 export function base64ToBytes(base64) {
     let clean = (base64 ?? "").replace(/\s+/g, "").replace(/-/g, "+").replace(/_/g, "/");
     if (!/^[A-Za-z0-9+/]*={0,2}$/.test(clean))
-        throw new Error("不是合法的 Base64 字符串");
+        throw new Error(hashStrings().invalidBase64);
     clean = clean.replace(/=+$/, "");
     if (clean.length % 4 === 1)
-        throw new Error("Base64 长度不正确");
+        throw new Error(hashStrings().invalidBase64Length);
     clean += "=".repeat((4 - (clean.length % 4)) % 4);
     const bin = atob(clean);
     const out = new Uint8Array(bin.length);
@@ -290,7 +309,7 @@ const DIGESTS = {
 function resolve(algorithm) {
     const entry = DIGESTS[String(algorithm).toLowerCase().replace("-", "")];
     if (!entry)
-        throw new Error(`不支持的摘要算法: ${algorithm}`);
+        throw new Error(hashStrings().unsupportedAlgorithm(algorithm));
     return entry;
 }
 export function digest(algorithm, data) {

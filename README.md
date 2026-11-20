@@ -4,64 +4,69 @@
 
 <h1 align="center">ZTools</h1>
 
-<p align="center">面向 Windows 与 macOS 的桌面启动器与插件工具箱</p>
+<p align="center">A desktop launcher and plugin toolbox for Windows and macOS</p>
 
 <p align="center">
-  <a href="https://www.ztools.cn">官网</a> ·
-  <a href="https://github.com/ZToolsTeam/ZTools/releases">版本下载</a> ·
-  <a href="https://github.com/ZToolsTeam/ZTools-extensions">插件源码</a> ·
-  <a href="https://github.com/ZToolsTeam/ZTools/issues">问题反馈</a>
+  <strong>English</strong> | <a href="README.zh-CN.md">简体中文</a>
 </p>
 
-ZTools 把应用搜索、快捷启动和插件工具放进同一个桌面入口：
+<p align="center">
+  <a href="https://www.ztools.cn">Website</a> ·
+  <a href="https://github.com/ZToolsTeam/ZTools/releases">Releases</a> ·
+  <a href="https://github.com/ZToolsTeam/ZTools-extensions">Extensions</a> ·
+  <a href="https://github.com/ZToolsTeam/ZTools/issues">Issues</a>
+</p>
 
-- 两种界面：工作台与悬浮搜索条
-- 全键盘操作，支持明暗主题
-- 插件用声明式组件开发，由客户端统一渲染
+ZTools brings application search, quick launch, and plugin utilities into a single desktop entry point:
 
-本仓库是客户端源码（Electron + Vue）和插件 SDK，插件源码在 [ZTools Extensions](https://github.com/ZToolsTeam/ZTools-extensions)。
+- Two views: a full workspace dashboard and a floating launcher bar
+- Keyboard-first navigation with light and dark themes
+- Multilingual interface (English and Simplified Chinese)
+- Declarative plugins rendered consistently by the desktop client
+
+This repository contains the desktop client (Electron + Vue) and plugin SDKs. Plugin source code lives in [ZTools Extensions](https://github.com/ZToolsTeam/ZTools-extensions).
 
 <p align="center">
-  <img src="assets/screenshots/01-dashboard-workspace.png" width="860" alt="ZTools 工作台主界面">
+  <img src="assets/screenshots/01-dashboard-workspace.png" width="860" alt="ZTools Workspace Dashboard">
   <br>
-  <sub>工作台：已安装工具与热门推荐（macOS 官方版实拍）</sub>
+  <sub>Workspace dashboard: installed tools and featured plugins (macOS official build)</sub>
 </p>
 
 <p align="center">
-  <img src="assets/screenshots/02-geek-launcher-mode.png" width="680" alt="ZTools 悬浮搜索条">
+  <img src="assets/screenshots/02-geek-launcher-mode.png" width="680" alt="ZTools Floating Launcher Bar">
   <br>
-  <sub>悬浮搜索条：输入“计算”后的实际搜索结果（macOS 官方版实拍，⌥ Space 唤醒）</sub>
+  <sub>Floating launcher bar: live search results (macOS official build, invoked with ⌥ Space)</sub>
 </p>
 
-## 开源版与官方版
+## Open-Source Edition vs. Official Releases
 
-本仓库是 ZTools 的**开源版**。
+This repository is the **open-source edition** of ZTools.
 
-| | 官方安装包（Releases） | 从源码构建 |
+| Feature | Official Installers (Releases) | Built from Source |
 | --- | --- | --- |
-| 搜索、启动、工作台与插件市场 | 有 | 有 |
-| 账号登录、反馈建议、插件评论与评分 | 有 | 没有 |
-| 云同步、使用统计、检查更新 | 有 | 没有 |
+| Search, launcher, workspace, and plugin marketplace | Yes | Yes |
+| Account sign-in, in-app feedback, plugin reviews & ratings | Yes | No |
+| Cloud sync, usage telemetry, auto-update checks | Yes | No |
 
-- 官方安装包用同一份源码构建，另外加入了不开源的账号与云服务组件。
-- 从源码构建得到的是离线版：不连接官方后台，插件市场照常可用。
-- 详细区别见 [开源版与官方版](docs/building.md#开源版与官方版)。
+- Official installers are built from this same codebase plus closed-source account and cloud service modules.
+- Building from source produces an offline client: it makes no calls to the official backend, while the public plugin marketplace continues to work as usual.
+- See [Open-Source vs. Official Edition](docs/en/building.md#open-source-vs-official-edition) for details.
 
-## 下载与使用
+## Download
 
-在 [GitHub Releases](https://github.com/ZToolsTeam/ZTools/releases) 选择版本，从 **Assets** 下载对应文件：
+Pick a release from [GitHub Releases](https://github.com/ZToolsTeam/ZTools/releases) and download the installer under **Assets**:
 
-| 平台 | 文件 |
+| Platform | File |
 | --- | --- |
-| Windows x64 | `windows-x64.exe` 安装包，或 `windows-x64-portable.zip` 免安装包 |
-| macOS（Intel / Apple Silicon） | `darwin-universal.dmg` |
+| Windows x64 | `windows-x64.exe` installer, or `windows-x64-portable.zip` portable archive |
+| macOS (Intel / Apple Silicon) | `darwin-universal.dmg` |
 
-- 每个文件都附有 `.sha256` 校验文件。
-- **Source code** 压缩包只是源码，不能直接安装。
+- Every asset ships with a matching `.sha256` checksum file.
+- The **Source code** archives contain source files only and are not installers.
 
-## 快速开始
+## Quick Start
 
-需要 Node.js 24 和 Git，在 Windows 或 macOS 上执行：
+Requires Node.js 24 and Git on Windows or macOS:
 
 ```bash
 git clone https://github.com/ZToolsTeam/ZTools.git
@@ -70,25 +75,25 @@ npm install
 npm run dev
 ```
 
-- `npm run dev` 会先构建再启动客户端，不会监听文件变化，改完代码重新运行即可。
-- 环境要求、打包与常见问题见 [从源码构建](docs/building.md)。
+- `npm run dev` builds and launches the client without a file watcher. After making changes, exit the app and run it again.
+- See [Building from Source](docs/en/building.md) for prerequisites, macOS packaging, and troubleshooting.
 
-## 文档
+## Documentation
 
-| 文档 | 内容 |
+| Document | Description |
 | --- | --- |
-| [从源码构建](docs/building.md) | 环境要求、开发运行、macOS 打包 |
-| [架构概览](docs/architecture.md) | 进程划分、IPC、插件模型与安全边界 |
-| [测试](docs/testing.md) | 各模块的测试命令与用例要求 |
-| [代码规范](docs/coding-standards.md) | 通用原则、各层规则、换行符与提交说明 |
-| [贡献指南](CONTRIBUTING.md) | 反馈问题、提交 Pull Request、贡献授权 |
-| [插件开发](https://github.com/ZToolsTeam/ZTools-extensions) | 创建、调试与投稿插件 |
+| [Building from Source](docs/en/building.md) | Prerequisites, development workflow, and macOS packaging |
+| [Architecture Overview](docs/en/architecture.md) | Process model, IPC, plugin runtime, and security boundaries |
+| [Testing](docs/en/testing.md) | Per-module test commands and test coverage requirements |
+| [Coding Standards](docs/en/coding-standards.md) | Core principles, per-layer rules, line endings, and commit messages |
+| [Contributing Guide](CONTRIBUTING.md) | Reporting issues, submitting pull requests, and contributor licensing |
+| [Plugin Development](https://github.com/ZToolsTeam/ZTools-extensions) | Creating, testing, and submitting plugins |
 
-## 许可证
+## License
 
-- **客户端**：以 [GNU GPL v3.0](LICENSE)（GPL-3.0-only）发布，包括 `packages/ai-mcp`、`packages/sync-crypto`。
-- **插件开发包**：`packages/declarative-ui`、`packages/api`、`packages/ztools-plugins-spec` 以 MIT 发布（见各自 `package.json` 的 `license` 字段）。
-- **插件仓库**：见 [ZTools Extensions LICENSE](https://github.com/ZToolsTeam/ZTools-extensions/blob/main/LICENSE)。
-- **第三方依赖**：以其自身许可为准。
+- **Desktop client**: Released under [GNU GPL v3.0](LICENSE) (`GPL-3.0-only`), including `packages/ai-mcp` and `packages/sync-crypto`.
+- **Plugin SDK packages**: `packages/declarative-ui`, `packages/api`, and `packages/ztools-plugins-spec` are licensed under MIT (see the `license` field in each `package.json`).
+- **Extensions repository**: See [ZTools Extensions LICENSE](https://github.com/ZToolsTeam/ZTools-extensions/blob/main/LICENSE).
+- **Third-party dependencies**: Subject to their respective licenses.
 
-提交 Pull Request 时需要勾选贡献授权，同意以 GPL-3.0-only 和 MIT 双重许可提供贡献，原因见 [贡献指南](CONTRIBUTING.md#贡献授权)。
+When opening a Pull Request, you must check the contributor license confirmation agreeing to license your contribution under both `GPL-3.0-only` and `MIT`. See [Contributor Licensing](CONTRIBUTING.md#contributor-licensing) for why.

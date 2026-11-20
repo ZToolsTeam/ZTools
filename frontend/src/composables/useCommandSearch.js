@@ -10,6 +10,13 @@
 
 import { ref, computed, watch, getCurrentScope, onScopeDispose } from 'vue'
 import { usePluginsStore } from '@/stores/plugins'
+import { i18n, t, getCurrentLocale } from '@/i18n'
+import {
+  getLocalizedPluginField,
+  getLocalizedPluginName,
+  getLocalizedPluginDescription,
+  getLocalizedPluginAltNames
+} from '@/utils/pluginI18n'
 import {
   MATCH_TIERS,
   MATCH_TIER_SCORES,
@@ -92,11 +99,11 @@ export function evaluateInlineCommandItem(rawQuery) {
 
     const isColor = res.type === 'color'
     const badgeMap = {
-      math: '即时计算',
-      unit: '单位换算',
-      currency: '汇率换算',
-      date: '日期推算',
-      color: '色值速查'
+      math: t('launcher.badges.math'),
+      unit: t('launcher.badges.unit'),
+      currency: t('launcher.badges.currency'),
+      date: t('launcher.badges.date'),
+      color: t('launcher.badges.color')
     }
 
     return {
@@ -114,11 +121,11 @@ export function evaluateInlineCommandItem(rawQuery) {
       description:
         res.details ||
         (isColor
-          ? `${res.colorResult?.rgb || ''} · 按 Enter 复制 HEX`
-          : '即时计算结果 · 按 Enter 复制结果'),
-      subtitle: res.details || '即时计算结果',
-      badge: badgeMap[res.type] || '即时计算',
-      actionLabel: '复制结果',
+          ? t('launcher.inline.colorDesc', { rgb: res.colorResult?.rgb || '' })
+          : t('launcher.inline.calcDesc')),
+      subtitle: res.details || t('launcher.inline.calcSubtitle'),
+      badge: badgeMap[res.type] || t('launcher.badges.math'),
+      actionLabel: t('launcher.inline.copyAction'),
       icon: res.colorResult?.svgDataUri || '',
       faIcon: isColor ? 'fa-tint' : 'fa-calculator',
       pluginId: 'calculator',
@@ -139,65 +146,78 @@ export function evaluateInlineCommandItem(rawQuery) {
   }
 }
 
-// 内置快捷工具条目定义（宿主内置指令，处于最低分类权重）
-export const BUILTIN_COMMAND_ITEMS = Object.freeze([
-  {
-    key: 'system-settings',
-    name: '系统设置',
-    description: '查看或配置全局快捷键、窗口呼出形态偏好',
-    badge: '系统',
-    actionLabel: '打开设置',
-    faIcon: 'fa-sliders',
-    action: async () => {
-      const res = await openSettings()
-      if (typeof window === 'undefined' || !window.__ztoolsLauncher?.expandToDashboard) {
+// 内置快捷工具条目定义（宿主内置指令，处于最低分类权重；按当前 locale 动态生成主显示名，另一语言写入 altNames / keywords）
+export function getBuiltinCommandItems(locale = getCurrentLocale()) {
+  const isEn = locale === 'en-US'
+  return [
+    {
+      key: 'system-settings',
+      name: t('launcher.builtins.systemSettingsName'),
+      altNames: isEn ? ['系统设置'] : ['System Settings'],
+      keywords: ['settings', 'preferences', 'config', '偏好设置'],
+      description: t('launcher.builtins.systemSettingsDesc'),
+      badge: t('launcher.badges.system'),
+      actionLabel: t('launcher.builtins.systemSettingsAction'),
+      faIcon: 'fa-sliders',
+      action: async () => {
+        const res = await openSettings()
+        if (typeof window === 'undefined' || !window.__ztoolsLauncher?.expandToDashboard) {
+          switchWindowMode(WINDOW_MODES.DASHBOARD).catch((err) => console.warn('[useCommandSearch] 切换窗口模式失败:', err))
+        }
+        return res
+      }
+    },
+    {
+      key: 'system-dashboard',
+      name: t('launcher.builtins.dashboardName'),
+      altNames: isEn ? ['打开插件中心', '工作台'] : ['Open Plugin Hub', 'Workspace'],
+      keywords: ['workspace', 'dashboard', 'hub', '工作台', '插件中心'],
+      description: t('launcher.builtins.dashboardDesc'),
+      badge: t('launcher.badges.workbench'),
+      actionLabel: t('launcher.builtins.dashboardAction'),
+      faIcon: 'fa-th-large',
+      action: () => {
         switchWindowMode(WINDOW_MODES.DASHBOARD).catch((err) => console.warn('[useCommandSearch] 切换窗口模式失败:', err))
       }
-      return res
-    }
-  },
-  {
-    key: 'system-dashboard',
-    name: '打开插件中心',
-    description: '展开为完整工作台大界面，浏览所有应用卡片',
-    badge: '工作台',
-    actionLabel: '展开',
-    faIcon: 'fa-th-large',
-    action: () => {
-      switchWindowMode(WINDOW_MODES.DASHBOARD).catch((err) => console.warn('[useCommandSearch] 切换窗口模式失败:', err))
-    }
-  },
-  {
-    key: 'developer-create-extension',
-    name: '创建新扩展 (Create Extension)',
-    description: '基于声明式 UI 标准 5 分钟快速开发你的专属 ZTools 插件',
-    badge: '开发者',
-    actionLabel: '开发指南',
-    faIcon: 'fa-code',
-    action: () => {
-      if (window.ztools?.shell?.openExternal) {
-        window.ztools.shell.openExternal('https://github.com/ZToolsTeam/ZTools-extensions')
-      } else {
-        window.open('https://github.com/ZToolsTeam/ZTools-extensions', '_blank')
+    },
+    {
+      key: 'developer-create-extension',
+      name: t('launcher.builtins.createExtensionName'),
+      altNames: isEn ? ['创建新扩展'] : ['Create Extension'],
+      keywords: ['extension', 'plugin', 'dev', '扩展', '插件开发'],
+      description: t('launcher.builtins.createExtensionDesc'),
+      badge: t('launcher.badges.developer'),
+      actionLabel: t('launcher.builtins.createExtensionAction'),
+      faIcon: 'fa-code',
+      action: () => {
+        if (window.ztools?.shell?.openExternal) {
+          window.ztools.shell.openExternal('https://github.com/ZToolsTeam/ZTools-extensions')
+        } else {
+          window.open('https://github.com/ZToolsTeam/ZTools-extensions', '_blank')
+        }
+      }
+    },
+    {
+      key: 'developer-github-repo',
+      name: t('launcher.builtins.githubRepoName'),
+      altNames: isEn ? ['开源插件生态大仓'] : ['ZTools Extensions'],
+      keywords: ['github', 'extensions', 'open source', '开源', '插件仓库'],
+      description: t('launcher.builtins.githubRepoDesc'),
+      badge: t('launcher.badges.openSource'),
+      actionLabel: t('launcher.builtins.githubRepoAction'),
+      faIcon: 'fa-github',
+      action: () => {
+        if (window.ztools?.shell?.openExternal) {
+          window.ztools.shell.openExternal('https://github.com/ZToolsTeam/ZTools-extensions')
+        } else {
+          window.open('https://github.com/ZToolsTeam/ZTools-extensions', '_blank')
+        }
       }
     }
-  },
-  {
-    key: 'developer-github-repo',
-    name: '开源插件生态大仓 (ZTools Extensions)',
-    description: '在 GitHub 上查看开源插件源码和投稿指南',
-    badge: '开源',
-    actionLabel: '前往 GitHub',
-    faIcon: 'fa-github',
-    action: () => {
-      if (window.ztools?.shell?.openExternal) {
-        window.ztools.shell.openExternal('https://github.com/ZToolsTeam/ZTools-extensions')
-      } else {
-        window.open('https://github.com/ZToolsTeam/ZTools-extensions', '_blank')
-      }
-    }
-  }
-])
+  ]
+}
+
+export const BUILTIN_COMMAND_ITEMS = Object.freeze(getBuiltinCommandItems())
 
 const BUILTIN_COMMAND_KEY_SET = new Set(BUILTIN_COMMAND_ITEMS.map((item) => item.key))
 
@@ -735,7 +755,12 @@ export function normalizePluginFeatures(plugin) {
   for (const feat of rawFeatures) {
     if (!feat || typeof feat !== 'object') continue
     const code = String(feat.code || '').trim()
-    const explain = String(feat.explain || feat.title || feat.name || '').trim()
+    const explain = (
+      getLocalizedPluginField(feat, 'explain') ||
+      getLocalizedPluginField(feat, 'title') ||
+      getLocalizedPluginField(feat, 'name') ||
+      String(feat.explain || feat.title || feat.name || '').trim()
+    )
     if (!code || !explain || seenCodes.has(code)) continue
     seenCodes.add(code)
 
@@ -892,11 +917,11 @@ function toFileItem(f) {
     altNames: rawStem && rawStem !== name ? [rawStem] : [],
     size: f.size,
     mtime: f.mtime,
-    badge: isApplication ? '应用' : f.is_dir ? '文件夹' : '文件',
+    badge: isApplication ? t('launcher.badges.app') : f.is_dir ? t('launcher.badges.folder') : t('launcher.badges.file'),
     faIcon: isApplication ? 'fa-th-large' : resolveFileFaIcon(f.name, f.is_dir),
     description: truncatePath(parentPath),
     subtitle: truncatePath(parentPath),
-    actionLabel: '打开',
+    actionLabel: t('launcher.commandActions.open'),
     icon: ''
   }
 }
@@ -923,20 +948,27 @@ function buildCommandCandidates(pluginsStore) {
     const alias = String(p.alias || p.manifest?.alias || '').trim()
     const features = normalizePluginFeatures(p)
     const isDeclarative = isDeclarativePluginItem(p)
-    const pluginName = p.name || p.title || key
+    const locale = getCurrentLocale()
+    const pluginName = getLocalizedPluginName(p, locale) || p.name || p.title || key
+    const pluginDesc = getLocalizedPluginDescription(p, locale) || p.description || ''
+    const altNames = getLocalizedPluginAltNames(p, pluginName)
 
     installed.push({
       ...p,
       key,
       pluginId: key,
       type: 'plugin',
+      name: pluginName,
+      title: pluginName,
+      description: pluginDesc,
+      altNames,
       mode,
       alias,
       features,
       isDeclarative,
-      badge: p.badge || (mode === 'no-view' ? '极速动作' : '插件'),
-      faIcon: p.faIcon || resolveCommandFaIcon(p.name, p.category),
-      actionLabel: mode === 'no-view' ? '执行' : '启动'
+      badge: p.badge || (mode === 'no-view' ? t('launcher.badges.quickAction') : t('launcher.badges.plugin')),
+      faIcon: p.faIcon || resolveCommandFaIcon(p.name || pluginName, p.category),
+      actionLabel: mode === 'no-view' ? t('launcher.commandActions.run') : t('launcher.commandActions.launch')
     })
 
     features.forEach((feat, index) => {
@@ -950,23 +982,25 @@ function buildCommandCandidates(pluginsStore) {
         featureCode: feat.code,
         name: feat.explain,
         title: feat.explain,
-        description: `${p.name || key}${feat.alias ? ` · 别名 ${feat.alias}` : ''}`,
-        subtitle: p.name || key,
+        description: `${pluginName || key}${feat.alias ? t('launcher.commandActions.aliasSuffix', { alias: feat.alias }) : ''}`,
+        subtitle: pluginName || key,
         alias: feat.alias,
         mode: feat.mode,
         shortcut: feat.shortcut,
         cmds: feat.cmds,
         icon: feat.icon || p.icon,
         faIcon: p.faIcon || resolveCommandFaIcon(feat.explain, p.category),
-        badge: feat.mode === 'no-view' ? '极速动作' : (p.name || '子命令'),
-        actionLabel: feat.mode === 'no-view' ? '执行' : '打开',
+        badge: feat.mode === 'no-view' ? t('launcher.badges.quickAction') : (pluginName || t('launcher.badges.subcommand')),
+        // 子命令行的标签是所属插件名（来源），不是类型；悬浮条据此把它显示得比类型标签弱一档
+        badgeKind: feat.mode === 'no-view' ? 'type' : 'source',
+        actionLabel: feat.mode === 'no-view' ? t('launcher.commandActions.run') : t('launcher.commandActions.open'),
         isDeclarative
       })
     })
   }
 
   const installedKeys = new Set(installed.map((item) => item.key))
-  const remainingBuiltins = BUILTIN_COMMAND_ITEMS.filter((item) => !installedKeys.has(item.key))
+  const remainingBuiltins = getBuiltinCommandItems().filter((item) => !installedKeys.has(item.key))
   return [...installed, ...featureItems, ...remainingBuiltins]
 }
 
@@ -1083,16 +1117,16 @@ function restorePinnedEntryRecord(record, ctx) {
         type: 'plugin',
         name: entry.pluginId,
         title: entry.pluginId,
-        description: '该插件已卸载或不可用',
-        subtitle: '该插件已卸载或不可用',
-        badge: '已失效',
+        description: t('launcher.pinnedErrors.pluginUnavailableDesc'),
+        subtitle: t('launcher.pinnedErrors.pluginUnavailableDesc'),
+        badge: t('launcher.unavailableTag'),
         faIcon: 'fa-cube',
         icon: record.iconUrl || '',
         pinned: true,
         pinKey,
         pinEntry: entry,
         available: false,
-        unavailableReason: `插件「${entry.pluginId}」已卸载`
+        unavailableReason: t('launcher.pinnedErrors.pluginUnavailableReason', { id: entry.pluginId })
       }
     }
 
@@ -1112,8 +1146,11 @@ function restorePinnedEntryRecord(record, ctx) {
       }
       const featureKey = `${entry.pluginId}:${entry.featureCode}`
       const reason = rawPlugin
-        ? `插件子命令「${entry.featureCode}」已不存在`
-        : `插件「${entry.pluginId}」已卸载`
+        ? t('launcher.pinnedErrors.featureMissingReason', { code: entry.featureCode })
+        : t('launcher.pinnedErrors.pluginUnavailableReason', { id: entry.pluginId })
+      const featureDesc = rawPlugin
+        ? t('launcher.pinnedErrors.featureMissingDesc')
+        : t('launcher.pinnedErrors.featurePluginUninstalledDesc')
       return {
         key: featureKey,
         id: featureKey,
@@ -1122,9 +1159,9 @@ function restorePinnedEntryRecord(record, ctx) {
         type: 'plugin-feature',
         name: entry.featureCode,
         title: entry.featureCode,
-        description: rawPlugin ? '该插件子命令已不存在' : '所属插件已卸载',
-        subtitle: rawPlugin ? '该插件子命令已不存在' : '所属插件已卸载',
-        badge: '已失效',
+        description: featureDesc,
+        subtitle: featureDesc,
+        badge: t('launcher.unavailableTag'),
         faIcon: 'fa-cube',
         icon: record.iconUrl || rawPlugin?.icon || '',
         pinned: true,
@@ -1152,16 +1189,16 @@ function restorePinnedEntryRecord(record, ctx) {
         type: 'builtin-command',
         name: entry.commandKey,
         title: entry.commandKey,
-        description: '该内置指令已失效',
-        subtitle: '该内置指令已失效',
-        badge: '已失效',
+        description: t('launcher.pinnedErrors.builtinUnavailableDesc'),
+        subtitle: t('launcher.pinnedErrors.builtinUnavailableDesc'),
+        badge: t('launcher.unavailableTag'),
         faIcon: 'fa-sliders',
         icon: record.iconUrl || '',
         pinned: true,
         pinKey,
         pinEntry: entry,
         available: false,
-        unavailableReason: `内置指令「${entry.commandKey}」不可用`
+        unavailableReason: t('launcher.pinnedErrors.builtinUnavailableReason', { key: entry.commandKey })
       }
     }
 
@@ -1184,16 +1221,16 @@ function restorePinnedEntryRecord(record, ctx) {
         panelItemType: 'system_tool',
         name: candidate?.name || entry.toolId,
         title: candidate?.title || candidate?.name || entry.toolId,
-        description: '该系统工具当前不可用',
-        subtitle: '该系统工具当前不可用',
-        badge: '已失效',
+        description: t('launcher.pinnedErrors.systemToolUnavailableDesc'),
+        subtitle: t('launcher.pinnedErrors.systemToolUnavailableDesc'),
+        badge: t('launcher.unavailableTag'),
         faIcon: 'fa-cog',
         icon: record.iconUrl || candidate?.icon || '',
         pinned: true,
         pinKey,
         pinEntry: entry,
         available: false,
-        unavailableReason: `系统工具「${candidate?.name || entry.toolId}」不可用`
+        unavailableReason: t('launcher.pinnedErrors.systemToolUnavailableReason', { name: candidate?.name || entry.toolId })
       }
     }
 
@@ -1205,7 +1242,7 @@ function restorePinnedEntryRecord(record, ctx) {
       const parentPath = entry.path.replace(/[\\/][^\\/]+$/, '')
       const cachedIcon = entry.isApplication && available ? (resolvedApplicationIcons.get(entry.path) || '') : ''
       const icon = record.iconUrl || matchedApp?.icon || cachedIcon
-      const kindLabel = entry.isApplication ? '应用' : entry.isDir ? '文件夹' : '文件'
+      const kindLabel = entry.isApplication ? t('launcher.badges.app') : entry.isDir ? t('launcher.badges.folder') : t('launcher.badges.file')
       return {
         ...(matchedApp || {}),
         key: 'file:' + (matchedApp?.path || entry.path),
@@ -1216,18 +1253,18 @@ function restorePinnedEntryRecord(record, ctx) {
         path: entry.path,
         isDir: Boolean(entry.isDir),
         isApplication: Boolean(entry.isApplication),
-        badge: available ? kindLabel : '已失效',
+        badge: available ? kindLabel : t('launcher.unavailableTag'),
         faIcon: entry.isApplication ? 'fa-th-large' : resolveFileFaIcon(fileName, Boolean(entry.isDir)),
-        description: available ? truncatePath(parentPath) : '原文件或文件夹已不存在',
-        subtitle: available ? truncatePath(parentPath) : '原文件或文件夹已不存在',
-        actionLabel: '打开',
+        description: available ? truncatePath(parentPath) : t('launcher.pinnedErrors.fileMissingDesc'),
+        subtitle: available ? truncatePath(parentPath) : t('launcher.pinnedErrors.fileMissingDesc'),
+        actionLabel: t('launcher.commandActions.open'),
         icon,
         pinned: true,
         pinKey,
         pinEntry: entry,
         isPinnedTile: true,
         available,
-        ...(available ? {} : { unavailableReason: `${kindLabel}「${displayName}」不存在或已移动` })
+        ...(available ? {} : { unavailableReason: t('launcher.pinnedErrors.fileMissingReason', { kind: kindLabel, name: displayName }) })
       }
     }
 
@@ -1378,7 +1415,7 @@ export function useCommandSearch(options = {}) {
           hasStructuredPinnedEntries.value = prevStructured
           return {
             success: false,
-            error: data?.error?.message || data?.error || res?.error?.message || res?.error || '切换固定状态失败'
+            error: data?.error?.message || data?.error || res?.error?.message || res?.error || t('launcher.pinnedErrors.togglePinFailed')
           }
         }
         if (Array.isArray(data?.pinnedEntries)) {
@@ -1396,7 +1433,7 @@ export function useCommandSearch(options = {}) {
         panelRawItems.value = prevRawItems
         hasStructuredPinnedEntries.value = prevStructured
         console.warn('[useCommandSearch] 设置固定状态失败:', err)
-        return { success: false, error: err?.message || '切换固定状态失败' }
+        return { success: false, error: err?.message || t('launcher.pinnedErrors.togglePinFailed') }
       }
     }
 
@@ -1412,7 +1449,7 @@ export function useCommandSearch(options = {}) {
         panelRawItems.value = prevRawItems
         hasStructuredPinnedEntries.value = prevStructured
         console.warn('[useCommandSearch] 切换固定状态失败:', err)
-        return { success: false, error: err?.message || '切换固定状态失败' }
+        return { success: false, error: err?.message || t('launcher.pinnedErrors.togglePinFailed') }
       }
     }
 
@@ -1451,7 +1488,7 @@ export function useCommandSearch(options = {}) {
   /** 提交完整 pinKey 数组到主进程并同步最新顺序，遇到 stale 或失败时回滚 */
   async function reorderPinned(order, reorderOptions = {}) {
     if (!Array.isArray(order) || order.length === 0) {
-      return { success: false, error: '无效的排序列表' }
+      return { success: false, error: t('launcher.pinnedErrors.invalidOrder') }
     }
     const normalizedOrder = order.map((k) => String(k || '').trim()).filter(Boolean)
     const prevEntries = Array.isArray(reorderOptions.baselineEntries)
@@ -1493,7 +1530,7 @@ export function useCommandSearch(options = {}) {
           return {
             success: false,
             stale: Boolean(data?.stale),
-            error: data?.error?.message || data?.error || res?.error?.message || res?.error || (data?.stale ? '固定列表已变更，已同步最新顺序' : '调整固定排序失败'),
+            error: data?.error?.message || data?.error || res?.error?.message || res?.error || (data?.stale ? t('launcher.pinnedErrors.orderStale') : t('launcher.pinnedErrors.reorderFailed')),
             pinnedEntries: pinnedEntries.value
           }
         }
@@ -1506,7 +1543,7 @@ export function useCommandSearch(options = {}) {
       } catch (err) {
         pinnedEntries.value = prevEntries
         console.warn('[useCommandSearch] 调整固定排序失败:', err)
-        return { success: false, error: err?.message || '调整固定排序失败', pinnedEntries: pinnedEntries.value }
+        return { success: false, error: err?.message || t('launcher.pinnedErrors.reorderFailed'), pinnedEntries: pinnedEntries.value }
       }
     }
 
@@ -1595,7 +1632,7 @@ export function useCommandSearch(options = {}) {
     } catch (err) {
       if (currentReq === searchRequestId) {
         fileResults.value = []
-        fileSearchError.value = '文件搜索暂不可用，请重试'
+        fileSearchError.value = t('launcher.pinnedErrors.fileSearchUnavailable')
       }
       console.warn('[useCommandSearch] 本地文件检索异常:', err)
     } finally {
@@ -1764,8 +1801,9 @@ export function useCommandSearch(options = {}) {
     }
   })
 
-  const panelSystemToolItems = computed(() =>
-    panelRawItems.value
+  const panelSystemToolItems = computed(() => {
+    void i18n.global.locale.value
+    return panelRawItems.value
       .filter((item) => item?.type === 'system_tool' && item.id)
       .map((item) => {
         const rawId = String(item.id)
@@ -1779,19 +1817,20 @@ export function useCommandSearch(options = {}) {
           panelItemType: 'system_tool',
           name: String(item.name || rawId),
           title: String(item.name || rawId),
-          description: String(item.description || '系统内置工具'),
-          subtitle: String(item.description || '系统内置工具'),
+          description: String(item.description || t('launcher.systemToolDefaultDesc')),
+          subtitle: String(item.description || t('launcher.systemToolDefaultDesc')),
           icon: String(item.iconUrl || ''),
           faIcon: resolveCommandFaIcon(item.name || rawId, 'system'),
           keywords: Array.isArray(item.keywords) ? item.keywords : [],
           cmds: Array.isArray(item.keywords) ? item.keywords : [],
-          badge: '系统工具',
-          actionLabel: '打开'
+          badge: t('launcher.badges.systemTool'),
+          actionLabel: t('launcher.commandActions.open')
         }
       })
-  )
+  })
 
   const commandCandidates = computed(() => {
+    void i18n.global.locale.value
     const base = buildCommandCandidates(pluginsStore)
     const pinKeys = pinnedKeySet.value
     return [...base, ...panelSystemToolItems.value]
@@ -2089,6 +2128,6 @@ export function useCommandSearch(options = {}) {
     reorderPinned,
     swapPinnedKeys,
     restorePinnedEntries,
-    builtinSystemItems: BUILTIN_COMMAND_ITEMS
+    builtinSystemItems: getBuiltinCommandItems()
   }
 }

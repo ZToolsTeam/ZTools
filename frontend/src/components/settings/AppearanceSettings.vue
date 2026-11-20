@@ -4,8 +4,10 @@ import { storeToRefs } from 'pinia'
 import { useToast } from '@/composables/useToast'
 import { useThemeStore } from '@/stores/theme'
 import { ACCENT_OPTIONS, THEME_MODES } from '@/constants/themes'
+import { useAppI18n } from '@/i18n'
 
 /** 设置页「外观」卡片：跟随系统 / 浅色 / 深色 + 6 款固定主题色（无自定义取色器） */
+const { t } = useAppI18n()
 const themeStore = useThemeStore()
 const { isDark, mode: themeMode, accent: accentTheme } = storeToRefs(themeStore)
 const { error } = useToast()
@@ -14,27 +16,28 @@ const accentSaving = ref(false)
 const themeSwitcherRef = ref(null)
 const accentSwitcherRef = ref(null)
 
-const THEME_LABELS = {
-  system: '跟随系统',
-  light: '浅色',
-  dark: '深色'
-}
+const themeOptions = computed(() =>
+  THEME_MODES.map((value) => ({
+    value,
+    label: t(`settings.appearance.theme.${value}`)
+  }))
+)
 
-const themeOptions = THEME_MODES.map((value) => ({
-  value,
-  label: THEME_LABELS[value]
-}))
-
-const accentOptions = ACCENT_OPTIONS
+const accentOptions = computed(() =>
+  ACCENT_OPTIONS.map((item) => ({
+    ...item,
+    label: t(`settings.appearance.accents.${item.value}`)
+  }))
+)
 
 // WAI-ARIA radiogroup 游走焦点下标
 const activeThemeIndex = computed(() => {
-  const idx = themeOptions.findIndex((opt) => opt.value === themeMode.value)
+  const idx = themeOptions.value.findIndex((opt) => opt.value === themeMode.value)
   return idx >= 0 ? idx : 0
 })
 
 const activeAccentIndex = computed(() => {
-  const idx = accentOptions.findIndex((opt) => opt.value === accentTheme.value)
+  const idx = accentOptions.value.findIndex((opt) => opt.value === accentTheme.value)
   return idx >= 0 ? idx : 0
 })
 
@@ -51,7 +54,7 @@ const pickTheme = async (value) => {
   try {
     await themeStore.setTheme(value)
   } catch (err) {
-    error('主题设置保存失败：' + (err?.message || '未知错误'))
+    error(t('settings.appearance.themeSaveFailed', { reason: err?.message || t('common.unknownError') }))
   } finally {
     themeSaving.value = false
   }
@@ -63,7 +66,7 @@ const pickAccent = async (value) => {
   try {
     await themeStore.setAccent(value)
   } catch (err) {
-    error('主题色设置保存失败：' + (err?.message || '未知错误'))
+    error(t('settings.appearance.accentSaveFailed', { reason: err?.message || t('common.unknownError') }))
   } finally {
     accentSaving.value = false
   }
@@ -125,7 +128,7 @@ const handleRadioGroupKeydown = async (event, { containerRef, options, activeInd
 const onThemeKeydown = (event) => {
   void handleRadioGroupKeydown(event, {
     containerRef: themeSwitcherRef,
-    options: themeOptions,
+    options: themeOptions.value,
     activeIndex: activeThemeIndex.value,
     saving: themeSaving.value,
     onPick: pickTheme
@@ -135,7 +138,7 @@ const onThemeKeydown = (event) => {
 const onAccentKeydown = (event) => {
   void handleRadioGroupKeydown(event, {
     containerRef: accentSwitcherRef,
-    options: accentOptions,
+    options: accentOptions.value,
     activeIndex: activeAccentIndex.value,
     saving: accentSaving.value,
     onPick: pickAccent
@@ -146,7 +149,7 @@ const onAccentKeydown = (event) => {
 <template>
   <div class="settings-card">
     <div class="card-header">
-      <h2 class="card-title">外观</h2>
+      <h2 class="card-title">{{ t('settings.appearance.title') }}</h2>
     </div>
 
     <div class="settings-list">
@@ -155,7 +158,7 @@ const onAccentKeydown = (event) => {
           ref="themeSwitcherRef"
           class="theme-switcher"
           role="radiogroup"
-          aria-label="界面主题"
+          :aria-label="t('settings.appearance.themeAriaLabel')"
           @keydown="onThemeKeydown"
         >
           <button
@@ -191,15 +194,15 @@ const onAccentKeydown = (event) => {
       <div class="setting-item accent-setting-item">
         <div class="setting-info">
           <div class="setting-text">
-            <span class="setting-label">主题色</span>
-            <span class="setting-desc">用于标志、选中标记、主按钮与搜索框聚焦光晕</span>
+            <span class="setting-label">{{ t('settings.appearance.accentLabel') }}</span>
+            <span class="setting-desc">{{ t('settings.appearance.accentDesc') }}</span>
           </div>
         </div>
         <div
           ref="accentSwitcherRef"
           class="accent-switcher"
           role="radiogroup"
-          aria-label="主题色"
+          :aria-label="t('settings.appearance.accentAriaLabel')"
           @keydown="onAccentKeydown"
         >
           <button
@@ -230,7 +233,7 @@ const onAccentKeydown = (event) => {
   border-bottom: 1px solid var(--rc-border);
 }
 
-/* 主题选择：选中项用当前主题强调色方块标记 */
+/* 主题选择：选中项用强调色边框 + 名称前的积木标记（与侧边栏、分段标签同一套选中语言） */
 .theme-switcher {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
@@ -242,14 +245,14 @@ const onAccentKeydown = (event) => {
   flex-direction: column;
   gap: 10px;
   padding: 8px 8px 10px;
-  border-radius: 12px;
+  border-radius: var(--rc-radius-lg);
   border: 1px solid var(--rc-border);
   background: var(--rc-surface);
   color: var(--rc-text-secondary);
   font: inherit;
   text-align: left;
   cursor: pointer;
-  transition: border-color 0.15s ease;
+  transition: border-color var(--rc-dur) ease;
 }
 
 .theme-btn:hover {
@@ -273,7 +276,7 @@ const onAccentKeydown = (event) => {
   flex: 1;
   min-width: 0;
   height: 78px;
-  border-radius: 8px;
+  border-radius: var(--rc-radius-md);
   padding: 10px;
   box-sizing: border-box;
   display: flex;
@@ -296,7 +299,7 @@ const onAccentKeydown = (event) => {
 
 .preview-bar {
   height: 14px;
-  border-radius: 4px;
+  border-radius: var(--rc-radius-xs);
   display: flex;
   align-items: center;
   padding-left: 5px;
@@ -306,13 +309,13 @@ const onAccentKeydown = (event) => {
 .preview-mark {
   width: 4px;
   height: 4px;
-  border-radius: 1px;
+  border-radius: var(--rc-marker-radius);
   background: var(--rc-accent);
 }
 
 .preview-line {
   height: 6px;
-  border-radius: 2px;
+  border-radius: var(--rc-radius-full);
   background: var(--rc-border-highlight);
 }
 
@@ -321,7 +324,7 @@ const onAccentKeydown = (event) => {
   align-items: center;
   gap: 8px;
   padding: 0 2px;
-  font-size: 13px;
+  font-size: var(--rc-fs-body);
 }
 
 .theme-btn.active .theme-name {
@@ -332,7 +335,7 @@ const onAccentKeydown = (event) => {
 .theme-marker {
   width: 6px;
   height: 6px;
-  border-radius: 1.7px;
+  border-radius: var(--rc-marker-radius);
   flex-shrink: 0;
   background: transparent;
 }
@@ -355,14 +358,14 @@ const onAccentKeydown = (event) => {
   gap: 6px;
   height: 30px;
   padding: 0 10px;
-  border-radius: 8px;
+  border-radius: var(--rc-radius-md);
   border: 1px solid var(--rc-border);
   background: var(--rc-surface);
   color: var(--rc-text-secondary);
   font: inherit;
-  font-size: 12px;
+  font-size: var(--rc-fs-small);
   cursor: pointer;
-  transition: border-color 0.15s ease, background-color 0.15s ease, color 0.15s ease;
+  transition: border-color var(--rc-dur) ease, background-color var(--rc-dur) ease, color var(--rc-dur) ease;
 }
 
 .accent-btn:hover:not(:disabled) {
@@ -371,8 +374,9 @@ const onAccentKeydown = (event) => {
 }
 
 .accent-btn.active {
+  /* 与主题预览卡同一种选中写法：强调色描边，不铺浅橙底 */
   border-color: var(--rc-accent);
-  background: var(--rc-accent-subtle);
+  background: var(--rc-surface);
   color: var(--rc-text-primary);
   font-weight: 600;
 }
@@ -390,7 +394,7 @@ const onAccentKeydown = (event) => {
 .accent-swatch {
   width: 11px;
   height: 11px;
-  border-radius: 9999px;
+  border-radius: var(--rc-radius-full);
   flex-shrink: 0;
   background: var(--rc-accent);
   box-shadow: inset 0 0 0 1px var(--rc-h-line);

@@ -67,8 +67,8 @@
       <DeclEmptyState
         v-else
         icon="document"
-        title="没有可显示的内容"
-        description="插件没有返回可识别的视图，或视图已关闭。"
+        :title="t('declarative.empty.noContentTitle')"
+        :description="t('declarative.empty.noContentDesc')"
       />
     </div>
 
@@ -80,34 +80,34 @@
           v-if="canGoBack"
           type="button"
           class="decl-foot-link"
-          title="返回上一级 (Esc)"
+          :title="t('declarative.footer.backTitle')"
           data-decl-back
           @click="handleBack"
         >
-          <span>返回</span>
+          <span>{{ t('declarative.footer.back') }}</span>
           <ShortcutKeys combo="Escape" />
         </button>
         <button
           v-else-if="!isPopout"
           type="button"
           class="decl-foot-link"
-          title="返回工作台 (Esc)"
+          :title="t('declarative.footer.backToWorkspaceTitle')"
           data-decl-exit
           @click="emit('exit')"
         >
-          <span>返回工作台</span>
+          <span>{{ t('declarative.footer.backToWorkspace') }}</span>
           <ShortcutKeys combo="Escape" />
         </button>
         <span
           v-else
-          class="flex items-center gap-1 text-[11px] text-[var(--rc-text-muted)] flex-shrink-0"
-          title="独立窗口里按 Esc 只清空搜索框，不会关闭窗口"
+          class="flex items-center gap-1 text-[length:var(--rc-fs-caption)] text-[var(--rc-text-muted)] flex-shrink-0"
+          :title="t('declarative.footer.popoutHintTitle')"
           data-decl-popout-hint
         >
-          <span>独立窗口</span>
+          <span>{{ t('declarative.footer.popoutWindow') }}</span>
           <span class="text-[var(--rc-text-faint)]">·</span>
           <ShortcutKeys combo="Escape" />
-          <span>只清空搜索</span>
+          <span>{{ t('declarative.footer.popoutClearSearch') }}</span>
         </span>
 
         <button
@@ -132,7 +132,7 @@
           class="decl-foot-btn"
           :class="isDestructiveAction(primaryAction) ? 'is-destructive' : 'is-primary'"
           :kbd="primaryShortcutCombo"
-          :title="`执行首要动作 (${primaryShortcutCombo})`"
+          :title="t('declarative.footer.primaryTitle', { shortcut: primaryShortcutCombo })"
           data-decl-primary
           @click="executeAction(primaryAction)"
         >
@@ -146,7 +146,7 @@
           class="decl-foot-btn"
           :class="isDestructiveAction(secondaryAction) ? 'is-destructive' : 'is-neutral'"
           :kbd="secondaryShortcutCombo"
-          :title="`执行次要动作 (${secondaryShortcutCombo})`"
+          :title="t('declarative.footer.secondaryTitle', { shortcut: secondaryShortcutCombo })"
           data-decl-secondary
           @click="executeAction(secondaryAction)"
         >
@@ -160,11 +160,11 @@
           size="sm"
           class="decl-foot-btn is-neutral"
           kbd="Ctrl+K"
-          title="动作面板 (Ctrl+K)"
+          :title="t('declarative.footer.actionPanelTitle')"
           data-decl-action-panel
           @click="toggleActionPanel"
         >
-          <span>动作面板 ({{ collapsedActionCount }})</span>
+          <span>{{ t('declarative.footer.actionPanel', { count: collapsedActionCount }) }}</span>
         </RcButton>
       </div>
     </div>
@@ -184,7 +184,7 @@
     <div
       v-if="isFileDragging"
       data-decl-drop-overlay
-      class="pointer-events-none absolute inset-2 z-50 flex flex-col items-center justify-center rounded-xl border border-dashed border-[var(--rc-border-strong,var(--rc-border))] bg-[var(--rc-surface-elevated,var(--rc-surface-subtle))]/90 backdrop-blur-sm transition-opacity"
+      class="pointer-events-none absolute inset-2 z-50 flex flex-col items-center justify-center rounded-xl border border-dashed border-[var(--rc-border-highlight)] bg-[var(--rc-surface-subtle)]/90 backdrop-blur-sm transition-opacity"
     >
       <div class="text-sm font-medium text-[var(--rc-text-primary)]">{{ dropOverlayTitle }}</div>
       <div class="mt-1 text-xs text-[var(--rc-text-muted)]">{{ dropOverlaySubtitle }}</div>
@@ -230,6 +230,9 @@ import {
 } from "@/utils/keymap.js";
 import { isMacOS } from "@/utils/platform.js";
 import { useUIStore } from "@/stores/ui.js";
+import { useAppI18n } from "@/i18n";
+
+const { t } = useAppI18n();
 
 const props = defineProps({
   rootComponent: {
@@ -375,13 +378,13 @@ const isFileInputActive = computed(() => {
 const dropOverlayTitle = computed(() => {
   const cfg = topFileInputConfig.value;
   if (cfg?.dropTitle) return String(cfg.dropTitle);
-  return cfg?.allowDirectories ? "松开鼠标添加文件或文件夹" : "松开鼠标添加文件";
+  return cfg?.allowDirectories ? t("declarative.drop.filesOrDirs") : t("declarative.drop.files");
 });
 
 const dropOverlaySubtitle = computed(() => {
   const cfg = topFileInputConfig.value;
   if (cfg?.dropSubtitle) return String(cfg.dropSubtitle);
-  return "支持拖入或按 Ctrl+V / ⌘V 粘贴输入";
+  return t("declarative.drop.subtitle");
 });
 
 const fileInputOwnerId = ++nextFileInputOwnerId;
@@ -439,14 +442,14 @@ function handleHostFilesDropped(envelopeOrPayload) {
   if (acceptedFiles.length === 0) {
     if (extRejected > 0 && Array.isArray(cfg?.extensions) && cfg.extensions.length > 0) {
       showToast?.({
-        title: "文件格式不匹配",
-        message: `当前工具仅支持 ${cfg.extensions.join(" / ")} 格式`,
+        title: t("declarative.drop.unsupportedFormatTitle"),
+        message: t("declarative.drop.unsupportedFormatMsg", { extensions: cfg.extensions.join(" / ") }),
         style: "FAILURE"
       });
     } else if (hostErrors.length > 0) {
-      const firstErr = hostErrors[0]?.message || "无法读取所选文件或文件夹";
+      const firstErr = hostErrors[0]?.message || t("declarative.drop.fileInputFailedDefault");
       showToast?.({
-        title: "文件输入未生效",
+        title: t("declarative.drop.fileInputFailedTitle"),
         message: String(firstErr),
         style: "FAILURE"
       });
@@ -456,7 +459,7 @@ function handleHostFilesDropped(envelopeOrPayload) {
 
   if (totalRejected > 0) {
     showToast?.({
-      title: `已接收 ${acceptedFiles.length} 项，忽略 ${totalRejected} 项不兼容内容`,
+      title: t("declarative.drop.partialAccepted", { accepted: acceptedFiles.length, rejected: totalRejected }),
       style: "SUCCESS"
     });
   }
@@ -724,7 +727,7 @@ const activeActions = computed(() => {
   extract(panel);
   if (fallbackPanel) {
     itemActionKeys = new Set([...flat, ...submenuFlat].map((node) => `${node.type}\u0000${node.props?.title ?? ""}`));
-    extract(fallbackPanel, "全局操作");
+    extract(fallbackPanel, t("declarative.actions.globalSection"));
   }
   return [...flat, ...submenuFlat];
 });
@@ -764,18 +767,43 @@ const panelTargetTitle = computed(() => {
 });
 
 // 详情分栏切换动作：只在列表视图、且插件为它声明了未冲突非保留快捷键时放到底栏左侧；
-// 按键由通用的动作快捷键处理（handleActionShortcut）负责，不再写死 Ctrl+D
+// 按键由通用的动作快捷键处理（handleActionShortcut）负责，不再写死 Ctrl+D；
+// 优先识别结构化语义字段（role / actionId），并向后兼容历史中/英文标题。
+const DETAIL_TOGGLE_LEGACY_TITLES = Object.freeze([
+  "显示详情",
+  "隐藏详情",
+  "Show Details",
+  "Hide Details"
+]);
 const DETAIL_TOGGLE_TITLE = /详情预览分栏|预览分栏|详情分栏|Toggle Details?/i;
+
+function isToggleDetailSemantic(act) {
+  const props = act?.props;
+  return Boolean(props && (props.role === "toggle-detail" || props.actionId === "toggle-detail"));
+}
+
+function isToggleDetailLegacyTitle(act) {
+  const title = String(act?.props?.title || "").trim();
+  if (!title) return false;
+  const lower = title.toLowerCase();
+  if (DETAIL_TOGGLE_LEGACY_TITLES.some((candidate) => lower === candidate.toLowerCase())) {
+    return true;
+  }
+  return DETAIL_TOGGLE_TITLE.test(title);
+}
+
 const toggleDetailAction = computed(() => {
   if (currentDescriptor.value?.type !== "List") return null;
+  const candidates = directActions.value.filter(
+    (act) =>
+      act !== primaryAction.value &&
+      act !== secondaryAction.value &&
+      Boolean(resolvedBindings.value.hintOf(act))
+  );
   return (
-    directActions.value.find(
-      (act) =>
-        act !== primaryAction.value &&
-        act !== secondaryAction.value &&
-        DETAIL_TOGGLE_TITLE.test(String(act.props?.title || "")) &&
-        Boolean(resolvedBindings.value.hintOf(act))
-    ) || null
+    candidates.find((act) => isToggleDetailSemantic(act)) ||
+    candidates.find((act) => isToggleDetailLegacyTitle(act)) ||
+    null
   );
 });
 
@@ -861,16 +889,16 @@ function handleBack() {
 }
 
 function fileManagerName() {
-  return isMacOS() ? "访达" : "资源管理器";
+  return isMacOS() ? t("declarative.fileManager.finder") : t("declarative.fileManager.explorer");
 }
 
 function onActionError(err) {
-  showToast?.({ title: "操作失败", message: failureMessage(err), style: "FAILURE" });
+  showToast?.({ title: t("declarative.toast.actionFailed"), message: failureMessage(err), style: "FAILURE" });
 }
 
 function failureMessage(err) {
   const message = err && typeof err.message === "string" ? err.message.trim() : "";
-  return message || "未知错误";
+  return message || t("common.unknownError");
 }
 
 // 执行指定 Action
@@ -910,19 +938,19 @@ async function executeAction(action) {
       } else if (typeof navigator !== "undefined" && navigator.clipboard) {
         await navigator.clipboard.writeText(content);
       } else {
-        throw Object.assign(new Error("当前环境不支持写入剪贴板"), { code: "NOT_SUPPORTED" });
+        throw Object.assign(new Error(t("declarative.toast.clipboardWriteUnsupported")), { code: "NOT_SUPPORTED" });
       }
       props?.onCopy?.(content);
-      showToast?.({ title: "已复制到剪贴板", message: content.slice(0, 64), style: "SUCCESS" });
+      showToast?.({ title: t("declarative.toast.copied"), message: content.slice(0, 64), style: "SUCCESS" });
     } else if (type === "Action.Paste") {
       const content = assertClipboardText(props?.content);
       if (electronMethods?.clipboard_hide_and_paste_text) {
         await electronMethods.clipboard_hide_and_paste_text({ text: content });
       } else {
-        throw Object.assign(new Error("当前系统不支持粘贴到前台应用"), { code: "NOT_SUPPORTED" });
+        throw Object.assign(new Error(t("declarative.toast.pasteUnsupported")), { code: "NOT_SUPPORTED" });
       }
       props?.onPaste?.(content);
-      showToast?.({ title: "已发送粘贴请求", message: content.slice(0, 64), style: "SUCCESS" });
+      showToast?.({ title: t("declarative.toast.pasteSent"), message: content.slice(0, 64), style: "SUCCESS" });
     } else if (type === "Action.OpenInBrowser") {
       if (props?.url) {
         if (electronMethods?.shell_open_external) {
@@ -936,12 +964,16 @@ async function executeAction(action) {
       const targetPath = props?.path || props?.target;
       if (targetPath) {
         // 宿主失败会抛错，由下方 catch 如实提示；没有该能力时不能报“已定位”
-        if (!electronMethods?.shell_show_item_in_folder) throw new Error("当前客户端不支持在文件管理器中定位");
+        if (!electronMethods?.shell_show_item_in_folder) throw new Error(t("declarative.toast.showInFolderUnsupported"));
         await electronMethods.shell_show_item_in_folder({ fullPath: String(targetPath) });
       }
       props?.onShow?.(targetPath);
       if (targetPath) {
-        showToast?.({ title: `已在${fileManagerName()}中显示`, message: String(targetPath), style: "SUCCESS" });
+        showToast?.({
+          title: t("declarative.toast.shownInFileManager", { fileManager: fileManagerName() }),
+          message: String(targetPath),
+          style: "SUCCESS"
+        });
       }
     } else if (type === "Action.Open" || type === "Action.OpenWith") {
       const targetPath = props?.target || props?.path;
@@ -973,7 +1005,7 @@ async function executeAction(action) {
     console.error("[DeclarativeView] Error executing action:", err);
     // 失败一律如实提示，不能让用户以为操作已经成功
     showToast?.({
-      title: type === "Action.Paste" ? "粘贴失败" : "操作失败",
+      title: type === "Action.Paste" ? t("declarative.toast.pasteFailed") : t("declarative.toast.actionFailed"),
       message: failureMessage(err),
       style: "FAILURE"
     });
@@ -1267,9 +1299,16 @@ useKeymap(KEYMAP_SCOPES.DECLARATIVE, {
       listRendererRef.value?.toggleItemCheck?.(checkable);
       return true;
     }
-    const quickLookAction = activeActions.value.find((act) => {
-      return act.props?.title?.includes("Quick Look") || act.props?.title?.includes("即时预览");
-    });
+    const isQuickLookSemantic = (act) =>
+      Boolean(act?.props && (act.props.role === "quick-look" || act.props.actionId === "quick-look"));
+    const isQuickLookLegacyTitle = (act) => {
+      const title = String(act?.props?.title || "").trim().toLowerCase();
+      if (!title) return false;
+      return title.includes("quick look") || title.includes("即时预览");
+    };
+    const quickLookAction =
+      activeActions.value.find(isQuickLookSemantic) ||
+      activeActions.value.find(isQuickLookLegacyTitle);
     if (quickLookAction) {
       executeAction(quickLookAction);
       return true;
@@ -1285,7 +1324,7 @@ watch(
     if (!uiStore) return;
     if (act) {
       uiStore.setDeclarativePrimaryAction({
-        title: act.props?.title || (act.type === 'Action.SubmitForm' ? '提交' : '执行'),
+        title: act.props?.title || (act.type === 'Action.SubmitForm' ? t('declarative.actions.submit') : t('declarative.actions.execute')),
         type: act.type
       });
     } else {
@@ -1339,7 +1378,7 @@ defineExpose({
   color: var(--rc-text-muted);
   font: inherit;
   cursor: pointer;
-  transition: color 0.12s ease;
+  transition: color var(--rc-dur-fast) ease;
 }
 
 .decl-foot-link:hover {

@@ -1,8 +1,18 @@
 <script setup>
 import { ref, computed, onMounted, onUnmounted, provide } from 'vue'
+import { getActivePinia } from 'pinia'
 import { ConfigProvider, theme as antdTheme } from 'ant-design-vue'
 import zhCN from 'ant-design-vue/es/locale/zh_CN'
+import enUS from 'ant-design-vue/es/locale/en_US'
 import { ANTD_THEME_TOKENS, normalizeAccent } from '@/constants/themes'
+import { useLocaleStore } from '@/stores/locale'
+import { i18n } from '@/i18n'
+
+const localeStore = getActivePinia() ? useLocaleStore() : null
+const antdLocale = computed(() => {
+  const current = localeStore ? localeStore.locale : i18n.global.locale.value
+  return current === 'en-US' ? enUS : zhCN
+})
 
 // 检测当前暗黑模式与固定主题色
 const isDarkMode = ref(document.documentElement.classList.contains('dark'))
@@ -67,7 +77,7 @@ provide('isDarkMode', isDarkMode)
 </script>
 
 <template>
-  <ConfigProvider :locale="zhCN" :theme="themeConfig">
+  <ConfigProvider :locale="antdLocale" :theme="themeConfig">
     <slot></slot>
   </ConfigProvider>
 </template>

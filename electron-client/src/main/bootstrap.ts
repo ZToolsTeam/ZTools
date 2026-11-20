@@ -79,6 +79,7 @@ import {
   parseLaunchIntent,
   type LaunchIntent
 } from './runtime/launch-intent.js'
+import { setLocale, t } from './i18n/index.js'
 
 function commandLineValue(prefix: string): string | undefined {
   const argument = process.argv.find((item) => item.startsWith(prefix))
@@ -830,18 +831,18 @@ async function showNativeCloseConfirmation(): Promise<void> {
     lifecycleLog('INFO', 'Native close confirmation shown')
     result = await dialog.showMessageBox(window, {
       type: 'question',
-      title: '退出 ZTools',
+      title: t('dialog.close.title'),
       // Windows 关掉托盘图标后没有托盘可去，改说「在后台运行」（仍可用全局快捷键或再次打开 ZTools 唤起）
       message: !lifecyclePolicy.useSystemTray
-        ? '要退出应用还是隐藏到 Dock？'
-        : tray ? '要退出应用还是最小化到系统托盘？' : '要退出应用还是在后台运行？',
+        ? t('dialog.close.messageDock')
+        : tray ? t('dialog.close.messageTray') : t('dialog.close.messageBackground'),
       buttons: !lifecyclePolicy.useSystemTray
-        ? ['立即退出', '隐藏到 Dock', '取消']
-        : ['立即退出', tray ? '最小化到托盘' : '在后台运行', '取消'],
+        ? [t('dialog.close.exitNow'), t('dialog.close.hideToDock'), t('dialog.close.cancel')]
+        : [t('dialog.close.exitNow'), tray ? t('dialog.close.minimizeToTray') : t('dialog.close.runInBackground'), t('dialog.close.cancel')],
       defaultId: 1,
       cancelId: 2,
       noLink: true,
-      checkboxLabel: '下次不再询问',
+      checkboxLabel: t('dialog.close.dontAskAgain'),
       checkboxChecked: true
     })
     lifecycleLog('INFO', 'Native close confirmation resolved', {
@@ -976,6 +977,7 @@ if (!app.requestSingleInstanceLock()) {
       return
     }
     if (!applicationLifecycle.canContinueStartup()) return
+    setLocale('system', app.getLocale())
     if (process.platform === 'darwin') {
       installMacosApplicationMenu({ onOpenPreferences: () => openMainWindowAt('/advanced-settings') })
     } else {
@@ -1038,7 +1040,10 @@ if (!app.requestSingleInstanceLock()) {
         requestQuit: () => app.quit(),
         reportRestartError: (error) => {
           lifecycleLog('ERROR', 'macOS 更新重启失败', undefined, error)
-          dialog.showErrorBox('更新未完成', '无法重启安装更新，请重新打开 ZTools 后重试。\n' + error.message)
+          dialog.showErrorBox(
+            t('dialog.updateRestartFailed.title'),
+            t('dialog.updateRestartFailed.message', { detail: error.message })
+          )
           app.exit(1)
         }
       })
@@ -1052,7 +1057,12 @@ if (!app.requestSingleInstanceLock()) {
       nativeRuntime.nativeInput ?? null,
       resources,
       undefined,
-      macAppUpdater
+      macAppUpdater,
+      {
+        runningUnderARM64Translation: typeof app.runningUnderARM64Translation === 'boolean'
+          ? app.runningUnderARM64Translation
+          : null
+      }
     ))
     services = createdServices
     createdServices.focus.setNotificationHandler(showDesktopNotification)
@@ -1087,12 +1097,18 @@ if (!app.requestSingleInstanceLock()) {
     })
     let persistedTheme = ''
     let persistedAccent: unknown = 'ember'
+    let persistedLocale: unknown = 'system'
     try {
       persistedTheme = await createdServices.config.get('user_settings.json', 'ui.theme', '')
       persistedAccent = await createdServices.config.get('user_settings.json', 'ui.accent', 'ember')
+      persistedLocale = await createdServices.config.get('user_settings.json', 'ui.locale', 'system')
       await createdServices.config.get('user_settings.json', 'ui.wake_preference', 'dashboard').catch(() => 'dashboard')
     } catch (error) {
       console.warn('读取主题设置失败，将跟随系统:', error)
+    }
+    setLocale(persistedLocale, app.getLocale())
+    if (process.platform === 'darwin') {
+      installMacosApplicationMenu({ onOpenPreferences: () => openMainWindowAt('/advanced-settings') })
     }
     currentAccent = normalizeAccentTheme(persistedAccent)
     nativeTheme.themeSource = persistedTheme === 'dark' || persistedTheme === 'light'
@@ -1141,6 +1157,12 @@ if (!app.requestSingleInstanceLock()) {
     router = await runLifecyclePhase('ipc-router.create', () => IpcRouter.create(registry, createdServices, {
       pluginResources: { webRoot: () => activeWebRoot(), pluginRoot },
       pluginState, onDarkModeChanged: applyDarkMode, onAccentChanged: applyAccentTheme,
+      onLocaleChanged: () => {
+        syncTrayState()
+        if (process.platform === 'darwin') {
+          installMacosApplicationMenu({ onOpenPreferences: () => openMainWindowAt('/advanced-settings') })
+        }
+      },
       onTrayStatePossiblyChanged: syncTrayState,
       initialWakeHotkey,
       reloadMainWindow: async () => {

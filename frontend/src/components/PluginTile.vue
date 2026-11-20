@@ -4,6 +4,10 @@ import { computed } from 'vue'
 import { RcSquircle, RcTag } from '@/components/base'
 import ShortcutKeys from '@/components/base/ShortcutKeys.vue'
 import { usePluginIcon } from '@/composables/usePluginIcon'
+import { useAppI18n } from '@/i18n'
+import { getLocalizedPluginName, getLocalizedPluginDescription, getLocalizedCategoryName } from '@/utils/pluginI18n'
+
+const { t } = useAppI18n()
 
 /**
  * 工作台「已安装 / 收藏」横向紧凑启动卡（方案 A）：
@@ -16,7 +20,7 @@ const props = defineProps({
   pinned: { type: Boolean, default: false },
   revoked: { type: Boolean, default: false },
   /** 禁用时的标签文字（官方下架为「已下架」，新版本不支持当前系统时为「不支持当前系统」） */
-  revokedText: { type: String, default: '已下架' },
+  revokedText: { type: String, default: '' },
   hasUpdate: { type: Boolean, default: false },
   installed: { type: Boolean, default: true },
   /** 插件启动快捷键（触发器中保存的写法，如 'Alt+V'、'CommandOrControl+Shift+J'、'DoubleCtrl'） */
@@ -27,32 +31,35 @@ const emit = defineEmits(['open', 'menu'])
 
 const { pluginGlyph, fallbackGlyph, displayIconUrl, iconFailed } = usePluginIcon(() => props.plugin)
 
+const pluginName = computed(() => getLocalizedPluginName(props.plugin) || props.plugin?.pluginId || '')
+const pluginDesc = computed(() => getLocalizedPluginDescription(props.plugin))
+
 const badgeStatus = computed(() => {
-  if (props.revoked) return { text: props.revokedText || '已下架', tone: 'error' }
-  if (props.hasUpdate) return { text: '可更新', tone: 'accent' }
+  if (props.revoked) return { text: props.revokedText || t('market.card.revoked'), tone: 'error' }
+  if (props.hasUpdate) return { text: t('myPage.tile.hasUpdate'), tone: 'accent' }
   return null
 })
 
 // 双击修饰键无法拆成键帽，用文字表达
 const doubleTapLabel = computed(() => {
   const match = /^double\s*\+?\s*(ctrl|control|alt|option|shift|cmd|command)$/i.exec(props.hotkey.trim())
-  return match ? `双击 ${match[1][0].toUpperCase()}${match[1].slice(1).toLowerCase()}` : ''
+  return match ? t('myPage.tile.doubleTap', { key: `${match[1][0].toUpperCase()}${match[1].slice(1).toLowerCase()}` }) : ''
 })
 
 // 第二行副标题：未安装收藏项明确提示，已安装优先显示插件简介，缺失时回退分类名保持双行高度稳定
 const subtitle = computed(() => {
   if (!props.installed && !props.revoked) {
-    return '未安装 · 点击查看详情'
+    return t('myPage.tile.uninstalledHint')
   }
-  const desc = String(props.plugin?.description || '').trim()
+  const desc = pluginDesc.value
   if (desc) return desc
   const cat = String(props.plugin?.category || '').trim()
-  return cat || '点击立即打开'
+  return (cat ? getLocalizedCategoryName(cat) : '') || t('myPage.tile.clickToOpen')
 })
 
 const title = computed(() => {
-  const name = props.plugin?.name || props.plugin?.pluginId || ''
-  const desc = props.plugin?.description || ''
+  const name = pluginName.value
+  const desc = pluginDesc.value
   return desc ? `${name}\n${desc}` : name
 })
 
@@ -86,8 +93,6 @@ function onMoreClick(event) {
     @keydown.space.prevent="onTileOpen"
     @contextmenu.prevent="onContextMenu"
   >
-    <span class="tile-marker" aria-hidden="true"></span>
-
     <span class="tile-icon-wrap">
       <RcSquircle
         :glyph="pluginGlyph"
@@ -99,8 +104,8 @@ function onMoreClick(event) {
 
     <span class="tile-body">
       <span class="tile-head">
-        <span class="tile-name">{{ plugin.name || plugin.pluginId }}</span>
-        <span v-if="pinned" class="tile-pin" title="已固定" aria-label="已固定">
+        <span class="tile-name">{{ pluginName }}</span>
+        <span v-if="pinned" class="tile-pin" :title="t('common.pinned')" :aria-label="t('common.pinned')">
           <PinIcon class="w-3 h-3" style="stroke-width: 2.2" aria-hidden="true" />
         </span>
       </span>
@@ -115,7 +120,7 @@ function onMoreClick(event) {
         <span
           v-else-if="!installed"
           class="tile-uninstalled-badge"
-          title="尚未安装"
+          :title="t('myPage.tile.notInstalled')"
           aria-hidden="true"
         >
           <DownloadIcon class="w-3 h-3" />
@@ -129,8 +134,8 @@ function onMoreClick(event) {
       <button
         type="button"
         class="tile-more-btn"
-        title="更多操作"
-        aria-label="更多操作"
+        :title="t('common.moreActions')"
+        :aria-label="t('common.moreActions')"
         @click.stop="onMoreClick"
         @keydown.enter.stop
         @keydown.space.stop
@@ -149,7 +154,7 @@ function onMoreClick(event) {
   display: flex;
   align-items: center;
   gap: 10px;
-  padding: 10px 12px;
+  padding: 10px 10px 10px 12px;
   border-radius: var(--rc-radius-lg);
   border: 1px solid var(--rc-border);
   background: var(--rc-surface);
@@ -160,9 +165,9 @@ function onMoreClick(event) {
   cursor: pointer;
   user-select: none;
   transition:
-    border-color 0.15s ease,
-    background-color 0.15s ease,
-    box-shadow 0.15s ease;
+    border-color var(--rc-dur) ease,
+    background-color var(--rc-dur) ease,
+    box-shadow var(--rc-dur) ease;
 }
 
 .plugin-tile:hover {
@@ -186,7 +191,7 @@ function onMoreClick(event) {
 
 .plugin-tile.is-uninstalled .tile-icon-wrap {
   opacity: 0.78;
-  transition: opacity 0.15s ease;
+  transition: opacity var(--rc-dur) ease;
 }
 
 .plugin-tile.is-uninstalled:hover .tile-icon-wrap {
@@ -206,29 +211,6 @@ function onMoreClick(event) {
 
 .plugin-tile.is-revoked {
   opacity: 0.6;
-}
-
-/* 右上角积木标记：键盘聚焦时点亮，悬停显示快捷菜单按钮时自动隐退避免重叠 */
-.tile-marker {
-  position: absolute;
-  top: 8px;
-  right: 8px;
-  width: 6px;
-  height: 6px;
-  border-radius: 1.7px;
-  background: transparent;
-  pointer-events: none;
-  transition: opacity 0.14s ease;
-}
-
-.is-focused .tile-marker {
-  background: var(--rc-accent);
-  box-shadow: var(--rc-marker-glow);
-}
-
-.plugin-tile:hover .tile-marker,
-.plugin-tile:focus-within .tile-more-btn:focus-visible ~ .tile-marker {
-  opacity: 0;
 }
 
 .tile-icon-wrap {
@@ -253,7 +235,7 @@ function onMoreClick(event) {
 
 .tile-name {
   min-width: 0;
-  font-size: 13px;
+  font-size: var(--rc-fs-body);
   font-weight: 600;
   line-height: 18px;
   color: var(--rc-text-primary);
@@ -271,7 +253,7 @@ function onMoreClick(event) {
 
 .tile-desc {
   min-width: 0;
-  font-size: 12px;
+  font-size: var(--rc-fs-small);
   line-height: 16px;
   color: var(--rc-text-muted);
   white-space: nowrap;
@@ -283,11 +265,14 @@ function onMoreClick(event) {
   color: var(--rc-text-faint);
 }
 
-/* 右侧状态与悬浮更多按钮同槽叠放：常态展示标签/键帽，悬停切换为「···」快捷菜单入口 */
+/* 右侧状态与悬浮更多按钮同槽叠放：常态展示标签/键帽，悬停切换为「···」快捷菜单入口。
+   没有状态/键帽时右槽不占宽度，把空间让给简介；悬停或聚焦时才撑出按钮位 */
 .tile-side {
   position: relative;
   flex-shrink: 0;
-  min-width: 24px;
+  /* 常态不占宽度，把空间留给描述；悬停出现的「···」按钮绝对定位盖在右侧，
+     不改变槽宽，描述的省略位置就不会随悬停跳动 */
+  min-width: 0;
   min-height: 24px;
   display: inline-flex;
   align-items: center;
@@ -297,7 +282,7 @@ function onMoreClick(event) {
 .tile-meta {
   display: inline-flex;
   align-items: center;
-  transition: opacity 0.14s ease;
+  transition: opacity var(--rc-dur) ease;
 }
 
 .tile-hotkey {
@@ -335,10 +320,10 @@ function onMoreClick(event) {
   opacity: 0;
   pointer-events: none;
   transition:
-    opacity 0.14s ease,
-    background-color 0.14s ease,
-    border-color 0.14s ease,
-    color 0.14s ease;
+    opacity var(--rc-dur) ease,
+    background-color var(--rc-dur) ease,
+    border-color var(--rc-dur) ease,
+    color var(--rc-dur) ease;
 }
 
 .plugin-tile:hover .tile-meta,

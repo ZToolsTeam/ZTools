@@ -1,9 +1,11 @@
 <script setup>
-import { RcAlert, RcButton } from '@/components/base'
+import { RcAlert, RcButton, RcTag } from '@/components/base'
 import { RotateCwIcon, TriangleAlertIcon } from '@lucide/vue'
 import { ref, computed, onMounted, onBeforeUnmount } from 'vue'
 import { createScreenPermissionController } from '@/utils/screenPermissionController'
+import { useAppI18n } from '@/i18n'
 
+const { t } = useAppI18n()
 const state = ref({ loading: false, snapshot: null, error: '' })
 const grantState = ref({ loading: false, grants: [], error: '' })
 const revokingGrantIds = ref(new Set())
@@ -14,16 +16,18 @@ let grantEventListener
 let grantQueryGeneration = 0
 let panelActive = false
 
-const labels = {
-  'not-required': '系统原生支持，无需申请',
-  'not-determined': '尚未申请',
-  granted: '已允许',
-  denied: '系统已拒绝',
-  restricted: '受到系统限制',
-  unknown: '状态未知'
-}
-
-const statusText = computed(() => labels[state.value.snapshot?.osPermission] ?? '尚未读取')
+const statusText = computed(() => {
+  const keyMap = {
+    'not-required': 'privacy.status.notRequired',
+    'not-determined': 'privacy.status.notDetermined',
+    granted: 'privacy.status.granted',
+    denied: 'privacy.status.denied',
+    restricted: 'privacy.status.restricted',
+    unknown: 'privacy.status.unknown'
+  }
+  const key = keyMap[state.value.snapshot?.osPermission]
+  return key ? t(key) : t('privacy.status.unread')
+})
 const isMac = computed(() => state.value.snapshot?.target.platform === 'macos')
 
 const refreshGrants = async () => {
@@ -37,7 +41,7 @@ const refreshGrants = async () => {
     grantState.value = { loading: false, grants: result.grants, error: '' }
   } catch {
     if (!panelActive || generation !== grantQueryGeneration) return
-    grantState.value = { ...grantState.value, loading: false, error: '获取已授权插件失败，请稍后重试。' }
+    grantState.value = { ...grantState.value, loading: false, error: t('privacy.loadGrantsFailed') }
   }
 }
 
@@ -47,14 +51,14 @@ const revokeGrant = async grantId => {
   try {
     const result = await sdkInstance.sys.revokeCapabilityGrant(grantId)
     if (result?.success !== true || result.revoked !== true) {
-      throw new Error(typeof result?.error?.message === 'string' ? result.error.message : '主程序未确认撤销操作')
+      throw new Error(typeof result?.error?.message === 'string' ? result.error.message : t('privacy.revokeUnconfirmed'))
     }
     if (!panelActive) return
     await refreshGrants()
   } catch (error) {
     if (panelActive) {
-      const detail = typeof error?.message === 'string' && error.message.trim() ? error.message.trim() : '主程序未确认撤销操作'
-      grantState.value = { ...grantState.value, error: `撤销失败：${detail}，请重试。` }
+      const detail = typeof error?.message === 'string' && error.message.trim() ? error.message.trim() : t('privacy.revokeUnconfirmed')
+      grantState.value = { ...grantState.value, error: t('privacy.revokeFailed', { detail }) }
     }
   } finally {
     if (panelActive) {
@@ -73,14 +77,14 @@ onMounted(() => {
     sdkInstance = sdk
     controller = createScreenPermissionController(sdk, value => { state.value = value })
     canQuery.value = true
-    void controller.start().catch(() => { state.value.error = '获取系统权限失败，请重试。' })
+    void controller.start().catch(() => { state.value.error = t('privacy.loadPermissionFailed') })
     grantEventListener = envelope => {
       if (envelope?.source?.kind === 'host' && envelope.payload?.capability === 'screen.capture') void refreshGrants()
     }
     sdk.events.on('runtime_permission_changed', grantEventListener)
     void refreshGrants()
   } catch {
-    state.value.error = '获取系统权限失败，请重试。'
+    state.value.error = t('privacy.loadPermissionFailed')
   }
 })
 
@@ -98,7 +102,7 @@ onBeforeUnmount(() => {
   <div class="settings-card" data-testid="screen-permission-panel">
     <!-- 卡片头部 -->
     <div class="card-header">
-      <h2 class="card-title">隐私与权限</h2>
+      <h2 class="card-title">{{ t('privacy.title') }}</h2>
     </div>
 
     <div class="settings-list">
@@ -106,7 +110,7 @@ onBeforeUnmount(() => {
       <div class="setting-item">
         <div class="setting-info">
           <div class="setting-text">
-            <span class="setting-label">屏幕截取权限</span>
+            <span class="setting-label">{{ t('privacy.screenCapture') }}</span>
             <span class="setting-desc" data-testid="screen-permission-status">
               {{ statusText }}
             </span>
@@ -114,7 +118,7 @@ onBeforeUnmount(() => {
         </div>
         <RcButton variant="secondary" size="sm" :loading="state.loading" :disabled="!canQuery" @click="controller?.refresh()">
           <RotateCwIcon class="mr-1" :class="{ 'animate-spin': state.loading }" />
-          重新检查
+          {{ t('privacy.recheck') }}
         </RcButton>
       </div>
 
@@ -122,57 +126,56 @@ onBeforeUnmount(() => {
       <div class="setting-item">
         <div class="setting-info">
           <div class="setting-text">
-            <span class="setting-label">插件授权保护</span>
+            <span class="setting-label">{{ t('privacy.grantProtection') }}</span>
             <span class="setting-desc" data-testid="screen-authorization-status">
-              窗口关闭自动释放，按插件单独管理
+              {{ t('privacy.grantProtectionDesc') }}
             </span>
           </div>
         </div>
-        <span class="text-xs px-2 py-0.5 rounded bg-[var(--rc-surface-subtle)] text-[var(--rc-text-secondary)] border border-[var(--rc-border)] select-none">
-          临时授权
-        </span>
+        <!-- 只读的模式说明，不是按钮：用纯文字标签，不做灰底块 -->
+        <RcTag variant="text" class="select-none">{{ t('privacy.tempGrant') }}</RcTag>
       </div>
 
-      <RcAlert v-if="state.error" class="my-1 text-xs" type="warning" :message="state.error" show-icon />
+      <RcAlert v-if="state.error" class="perm-alert" type="warning" :message="state.error" show-icon />
 
       <!-- macOS 权限异常时的极简引导 -->
-      <div v-if="isMac && state.snapshot?.osPermission === 'denied'" class="flex items-center gap-2 px-3 py-2 rounded-lg bg-[var(--rc-warning-subtle)] border border-[var(--rc-border)] text-xs text-[var(--rc-warning)] my-1">
-        <TriangleAlertIcon  />
-        <span>请前往“系统设置 > 隐私与安全性 > 屏幕录制”允许 ZTools</span>
+      <div v-if="isMac && state.snapshot?.osPermission === 'denied'" class="perm-warning">
+        <TriangleAlertIcon aria-hidden="true" />
+        <span>{{ t('privacy.macDeniedGuide') }}</span>
       </div>
 
       <!-- 已授权插件列表 -->
-      <div class="pt-4 pb-2" data-testid="screen-permission-grants">
-        <div class="flex items-center justify-between mb-2">
-          <span class="text-xs font-semibold text-[var(--rc-text-primary)]">已授权插件</span>
+      <div class="perm-grants" data-testid="screen-permission-grants">
+        <div class="perm-grants-header">
+          <span class="perm-grants-title">{{ t('privacy.grantedPlugins') }}</span>
           <RcButton variant="secondary" size="sm" :loading="grantState.loading" @click="refreshGrants">
             <RotateCwIcon class="mr-1" :class="{ 'animate-spin': grantState.loading }" />
-            刷新
+            {{ t('common.refresh') }}
           </RcButton>
         </div>
 
-        <RcAlert v-if="grantState.error" class="my-1 text-xs" type="warning" :message="grantState.error" show-icon />
+        <RcAlert v-if="grantState.error" class="perm-alert" type="warning" :message="grantState.error" show-icon />
 
-        <div v-if="!grantState.loading && !grantState.error && grantState.grants.length === 0" class="py-3 text-center text-xs text-[var(--rc-text-secondary)] opacity-60">
-          当前没有已授权的插件
+        <div v-if="!grantState.loading && !grantState.error && grantState.grants.length === 0" class="perm-empty">
+          {{ t('privacy.noGrants') }}
         </div>
 
         <div
           v-for="grant in grantState.grants"
           :key="grant.grantId"
           data-testid="screen-permission-grant"
-          class="flex items-center justify-between gap-3 p-2 rounded-lg bg-[var(--rc-surface-subtle)] border border-[var(--rc-border)] mt-1.5"
+          class="perm-grant"
         >
           <div class="min-w-0 flex-1">
-            <div data-testid="screen-permission-grant-plugin" class="text-xs font-medium text-[var(--rc-text-primary)] truncate">
+            <div data-testid="screen-permission-grant-plugin" class="perm-grant-name">
               {{ grant.pluginName }}
             </div>
-            <div class="text-[11px] text-[var(--rc-text-secondary)] opacity-70 mt-0.5">
-              <code>{{ grant.pluginId }}</code> · <span data-testid="screen-permission-grant-capability">屏幕采集</span>
+            <div class="perm-grant-meta">
+              <code>{{ grant.pluginId }}</code> · <span data-testid="screen-permission-grant-capability">{{ t('privacy.capabilityScreenCapture') }}</span>
             </div>
           </div>
           <RcButton variant="danger" size="sm" data-testid="screen-permission-grant-revoke" :loading="revokingGrantIds.has(grant.grantId)" :disabled="grantState.loading || revokingGrantIds.has(grant.grantId)" @click="revokeGrant(grant.grantId)">
-            撤销
+            {{ t('privacy.revoke') }}
           </RcButton>
         </div>
       </div>
@@ -180,3 +183,77 @@ onBeforeUnmount(() => {
   </div>
 </template>
 
+<style scoped>
+.perm-alert {
+  margin: 12px 0;
+  font-size: var(--rc-fs-small);
+}
+
+.perm-warning {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 12px 0;
+  padding: 8px 12px;
+  border: 1px solid var(--rc-border);
+  border-radius: var(--rc-radius-md);
+  background: var(--rc-warning-subtle);
+  color: var(--rc-warning);
+  font-size: var(--rc-fs-small);
+}
+
+.perm-grants {
+  padding: 12px 0 8px;
+}
+
+/* 与上方设置分组同一种「标题 + 细线」 */
+.perm-grants-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding-bottom: 8px;
+  margin-bottom: 8px;
+  border-bottom: 1px solid var(--rc-border);
+}
+
+
+.perm-grants-title {
+  font-size: var(--rc-fs-small);
+  font-weight: 600;
+  color: var(--rc-text-primary);
+}
+
+.perm-empty {
+  padding: 12px 0;
+  text-align: center;
+  font-size: var(--rc-fs-small);
+  color: var(--rc-text-muted);
+}
+
+.perm-grant {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: 6px;
+  padding: 8px 10px;
+  border: 1px solid var(--rc-border);
+  border-radius: var(--rc-radius-md);
+  background: var(--rc-surface-subtle);
+}
+
+.perm-grant-name {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  font-size: var(--rc-fs-body);
+  font-weight: 500;
+  color: var(--rc-text-primary);
+}
+
+.perm-grant-meta {
+  margin-top: 2px;
+  font-size: var(--rc-fs-caption);
+  color: var(--rc-text-muted);
+}
+</style>

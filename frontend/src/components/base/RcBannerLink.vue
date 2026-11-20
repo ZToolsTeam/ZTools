@@ -37,7 +37,7 @@ defineEmits(['click'])
   font: inherit;
   text-align: left;
   cursor: pointer;
-  transition: border-color 0.15s ease;
+  transition: border-color var(--rc-dur) ease;
 }
 
 .rc-banner-link:hover {
@@ -63,13 +63,13 @@ defineEmits(['click'])
 
 .rc-banner-title {
   color: var(--rc-text-primary);
-  font-size: 13px;
+  font-size: var(--rc-fs-body);
   font-weight: 500;
 }
 
 .rc-banner-desc {
   color: var(--rc-text-muted);
-  font-size: 12px;
+  font-size: var(--rc-fs-small);
 }
 
 .rc-banner-action {
@@ -78,11 +78,11 @@ defineEmits(['click'])
   align-items: center;
   gap: 4px;
   color: var(--rc-accent-text);
-  font-size: 13px;
+  font-size: var(--rc-fs-body);
 }
 
 .rc-banner-action :deep(.lucide) {
-  font-size: 14px;
-  transition: transform 0.15s ease;
+  font-size: var(--rc-fs-emph);
+  transition: transform var(--rc-dur) ease;
 }
 </style>

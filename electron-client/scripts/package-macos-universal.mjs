@@ -172,6 +172,8 @@ export function createMacUniversalPackagerOptions({ sourceRoot, outputRoot, appB
     // 未指定时打包器会使用 Electron 默认图标
     icon: macApplicationIconPath(sourceRoot),
     extendInfo: {
+      CFBundleDevelopmentRegion: 'en',
+      CFBundleLocalizations: ['en', 'zh_CN'],
       CFBundleURLTypes: [{ CFBundleURLName: 'ZTools plugin open', CFBundleURLSchemes: ['ztools'] }],
       // 签名后启用加固运行时，通过 osascript 控制其他应用时系统会弹窗询问，这里是弹窗里的说明
       NSAppleEventsUsageDescription: 'ZTools 需要控制其他应用，用于切换窗口、粘贴内容和读取应用图标。',
@@ -329,6 +331,33 @@ function validatedResourcesRoot(fsApi, appBundlePath) {
 
   const canonicalResourcesPath = fsApi.realpathSync(resourcesPath)
   return canonicalResourcesPath
+}
+
+export function writeMacLocalizationResources(fsApi, appBundlePath) {
+  const canonicalResourcesPath = validatedResourcesRoot(fsApi, appBundlePath)
+  const localizations = [
+    {
+      dir: 'en.lproj',
+      description: 'ZTools needs to control other applications to switch windows, paste content, and read application icons.'
+    },
+    {
+      dir: 'zh-Hans.lproj',
+      description: 'ZTools 需要控制其他应用，用于切换窗口、粘贴内容和读取应用图标。'
+    }
+  ]
+  const writtenPaths = []
+  for (const { dir, description } of localizations) {
+    const lprojDir = path.join(canonicalResourcesPath, dir)
+    fsApi.mkdirSync(lprojDir, { recursive: true })
+    const stringsPath = path.join(lprojDir, 'InfoPlist.strings')
+    fsApi.writeFileSync(
+      stringsPath,
+      `"NSAppleEventsUsageDescription" = "${description}";\n`,
+      { encoding: 'utf8' }
+    )
+    writtenPaths.push(stringsPath)
+  }
+  return writtenPaths
 }
 
 function writeRuntimeTargetManifest(fsApi, appBundlePath, versions) {
@@ -507,6 +536,7 @@ export async function stageMacUniversal({
     }
   }
   verifyPackagedAppVersion(fsApi, appBundlePath, sourcePackage.version)
+  writeMacLocalizationResources(fsApi, appBundlePath)
   const runtimeTargetManifestPath = writeRuntimeTargetManifest(fsApi, appBundlePath, {
     appVersion: sourcePackage.version,
     shortVersion,

@@ -56,6 +56,33 @@ import {
 } from '@/utils/hotkeyRecorder'
 import { buildLaunchHotkeyMap } from '@/utils/launchHotkeyTargets'
 import { BUILTIN_SHORTCUT_HINTS } from '@/utils/shellShortcuts'
+import { LOCALE_OPTIONS } from '@/utils/locale'
+import { useLocaleStore } from '@/stores/locale'
+import { useAppI18n } from '@/i18n'
+
+const { t } = useAppI18n()
+const localeStore = useLocaleStore()
+const localeSaving = ref(false)
+const localeOptions = computed(() =>
+  LOCALE_OPTIONS.map((item) => ({
+    value: item.value,
+    label: t(item.labelKey)
+  }))
+)
+
+const onLocaleChange = async (nextLocale) => {
+  if (localeSaving.value || localeStore.setting === nextLocale) return
+  localeSaving.value = true
+  try {
+    await localeStore.setLocale(nextLocale)
+    success(t('settings.language.saved'))
+    track('settings_change', '', { type: 'locale', value: nextLocale })
+  } catch (err) {
+    error(t('settings.language.saveFailed', { reason: err?.message || t('common.unknownError') }))
+  } finally {
+    localeSaving.value = false
+  }
+}
 
 const { success, error, warning } = useToast()
 const {
@@ -82,12 +109,12 @@ const autostartStatus = ref('')
 const autostartKnown = ref(false)
 const autostartSaving = ref(false)
 const autostartDescription = computed(() => ({
-  unavailable: '无法读取登录项状态',
-  'dev-unsupported': '开发版不支持开机启动，安装正式版后可用',
-  'requires-approval': '请在系统设置的登录项中允许 ZTools；系统批准前不会自动启动',
-  'not-found': '系统未找到登录项，请重新设置并检查应用安装位置',
-  'not-registered': '未开启自启动'
-})[autostartStatus.value] || '登录系统时自动运行 ZTools')
+  unavailable: t('settings.general.autostart.unavailable'),
+  'dev-unsupported': t('settings.general.autostart.devUnsupported'),
+  'requires-approval': t('settings.general.autostart.requiresApproval'),
+  'not-found': t('settings.general.autostart.notFound'),
+  'not-registered': t('settings.general.autostart.notRegistered')
+})[autostartStatus.value] || t('settings.general.autostart.defaultDesc'))
 const refreshAutostartStatus = async () => {
   try {
     const status = await window.ztools?.config?.get('system.autostartStatus', '')
@@ -96,11 +123,11 @@ const refreshAutostartStatus = async () => {
 }
 
 // 设置页 4 个主 Tab 及其查询参数别名映射（唯一信源）
-const SETTINGS_TAB_OPTIONS = Object.freeze([
-  { value: 'general', label: '常规与外观' },
-  { value: 'shortcuts', label: '快捷键' },
-  { value: 'bundled', label: '内置插件' },
-  { value: 'privacy', label: '隐私与权限' }
+const settingsTabOptions = computed(() => [
+  { value: 'general', label: t('settings.tabs.general') },
+  { value: 'shortcuts', label: t('settings.tabs.shortcuts') },
+  { value: 'bundled', label: t('settings.tabs.bundled') },
+  { value: 'privacy', label: t('settings.tabs.privacy') }
 ])
 
 const SETTINGS_TAB_ALIASES = Object.freeze({
@@ -124,7 +151,7 @@ function resolveSettingsTab(rawTab) {
 
 const activeTab = ref(resolveSettingsTab(route?.query?.tab) || 'general')
 const activeTabLabel = computed(
-  () => SETTINGS_TAB_OPTIONS.find((item) => item.value === activeTab.value)?.label || '常规与外观'
+  () => settingsTabOptions.value.find((item) => item.value === activeTab.value)?.label || t('settings.tabs.general')
 )
 
 // 启动快捷键弹窗引用
@@ -213,7 +240,7 @@ const loadSettings = async () => {
       settings.hotkey = await getHotkey()
     } catch (e) {
       console.error('Failed to load wake hotkey:', e)
-      error('读取全局唤醒快捷键失败')
+      error(t('settings.shortcuts.wakeHotkey.loadFailed'))
     }
     // 以下两项读取失败时保留默认值，开关仍可操作并重新保存
     try {
@@ -232,21 +259,37 @@ const loadSettings = async () => {
     await loadTriggerWakePreferences()
   } catch (e) {
     console.error('Failed to load settings:', e)
-    error('加载设置失败')
+    error(t('settings.loadFailed'))
   }
 }
 
-const wakeOptions = [
-  { value: 'launcher', label: '悬浮条' },
-  { value: 'dashboard', label: '工作台' }
-]
+const wakeOptions = computed(() => [
+  { value: 'launcher', label: t('settings.shortcuts.wakePreference.launcher') },
+  { value: 'dashboard', label: t('settings.shortcuts.wakePreference.dashboard') }
+])
+const mouseWakeOptions = computed(() =>
+  MOUSE_WAKE_OPTIONS.map((item) => ({
+    ...item,
+    label: t(`settings.shortcuts.mouseWake.options.${item.value}`)
+  }))
+)
+const builtinShortcutHints = computed(() =>
+  BUILTIN_SHORTCUT_HINTS.map((item) => ({
+    ...item,
+    label: item.id ? t(`settings.shortcuts.builtins.${item.id}`) : item.label
+  }))
+)
 const onWakePreferenceChange = (val) => {
   try {
     settings.wakePreference = val
     setWakePreference(val)
-    success(val === 'launcher' ? '已设置为极客悬浮条模式' : '已设置为应用工作台模式')
+    success(
+      val === 'launcher'
+        ? t('settings.shortcuts.wakePreference.savedLauncher')
+        : t('settings.shortcuts.wakePreference.savedDashboard')
+    )
   } catch (err) {
-    error('保存偏好失败: ' + err.message)
+    error(t('settings.shortcuts.wakePreference.saveFailed', { reason: err.message }))
   }
 }
 
@@ -254,10 +297,14 @@ const saveAutostart = async enabled => {
   if (!autostartKnown.value || autostartSaving.value) return
   autostartSaving.value = true
   try {
-    if (!(await setAutostart(enabled))) throw new Error('登录启动设置未保存')
+    if (!(await setAutostart(enabled))) throw new Error('autostart save failed')
     settings.autostart = await getAutostart()
     await refreshAutostartStatus()
-    success(autostartStatus.value === 'requires-approval' ? '登录项等待系统批准' : '登录启动设置已保存')
+    success(
+      autostartStatus.value === 'requires-approval'
+        ? t('settings.general.autostart.requiresApprovalToast')
+        : t('settings.general.autostart.saved')
+    )
   } catch {
     try {
       settings.autostart = await getAutostart()
@@ -266,7 +313,7 @@ const saveAutostart = async enabled => {
       autostartKnown.value = false
       autostartStatus.value = 'unavailable'
     }
-    error('登录启动设置未保存，请检查当前系统状态')
+    error(t('settings.general.autostart.saveFailed'))
   } finally {
     autostartSaving.value = false
   }
@@ -298,9 +345,9 @@ const saveWakeHotkey = async (nextHotkey = settings.hotkey) => {
       const conflictData = conflictResult?.data || conflictResult || {}
       if (conflictData.hasConflict && conflictData.conflicts?.length > 0) {
         const names = conflictData.conflicts
-          .map((item) => item.pluginName || item.pluginId || '系统内置功能')
-          .join('、')
-        error(`全局唤醒快捷键与「${names}」冲突，请更换其他组合键`)
+          .map((item) => item.pluginName || item.pluginId || t('settings.shortcuts.wakeHotkey.builtinFallbackName'))
+          .join(t('settings.shortcuts.wakeHotkey.listSeparator'))
+        error(t('settings.shortcuts.wakeHotkey.conflict', { names }))
         return false
       }
     }
@@ -308,7 +355,7 @@ const saveWakeHotkey = async (nextHotkey = settings.hotkey) => {
     settings.hotkey = targetHotkey
     if (!(await setHotkey(targetHotkey))) {
       settings.hotkey = previousHotkey
-      error('全局唤醒快捷键保存失败')
+      error(t('settings.shortcuts.wakeHotkey.saveFailed'))
       return false
     }
     let result
@@ -319,25 +366,25 @@ const saveWakeHotkey = async (nextHotkey = settings.hotkey) => {
       })
     } catch (err) {
       console.error('同步全局快捷键失败:', err)
-      error('快捷键注册失败: ' + (err?.message || '未知错误'))
+      error(t('settings.shortcuts.wakeHotkey.registerFailed', { reason: err?.message || t('common.unknownError') }))
       return false
     }
     if (!result.success) {
       const reasonMessages = {
-        trigger_unavailable: '快捷键服务暂不可用',
-        trigger_list_failed: '读取已有快捷键失败',
-        trigger_register_failed: '新快捷键注册失败，已尝试恢复原注册',
-        trigger_unregister_failed: '注销快捷键失败'
+        trigger_unavailable: t('settings.shortcuts.wakeHotkey.reasons.trigger_unavailable'),
+        trigger_list_failed: t('settings.shortcuts.wakeHotkey.reasons.trigger_list_failed'),
+        trigger_register_failed: t('settings.shortcuts.wakeHotkey.reasons.trigger_register_failed'),
+        trigger_unregister_failed: t('settings.shortcuts.wakeHotkey.reasons.trigger_unregister_failed')
       }
-      let message = reasonMessages[result.reason] || '快捷键服务返回失败'
+      let message = reasonMessages[result.reason] || t('settings.shortcuts.wakeHotkey.reasons.default')
       if (result.message) message += `：${result.message}`
-      if (result.rollbackFailed) message += '；恢复原快捷键也失败，请重新设置'
+      if (result.rollbackFailed) message += t('settings.shortcuts.wakeHotkey.rollbackFailedSuffix')
       console.warn('全局唤醒快捷键同步失败:', result)
-      error(`设置已保存，但全局唤醒快捷键同步失败：${message}`)
+      error(t('settings.shortcuts.wakeHotkey.syncFailed', { reason: message }))
       return false
     }
     await reloadHostHotkeys()
-    success(targetHotkey ? '全局唤醒快捷键已保存' : '已关闭全局唤醒快捷键')
+    success(targetHotkey ? t('settings.shortcuts.wakeHotkey.saved') : t('settings.shortcuts.wakeHotkey.disabled'))
     const reserveWarning = getShellReserveWarning(targetHotkey)
     if (reserveWarning) {
       warning(reserveWarning)
@@ -366,16 +413,24 @@ const saveMouseWakeSetting = async () => {
     })
     if (!result.success) {
       await loadTriggerWakePreferences()
-      error(`鼠标快捷唤醒设置失败${result.message ? `：${result.message}` : ''}`)
+      error(
+        result.message
+          ? t('settings.shortcuts.mouseWake.saveFailedWithReason', { reason: result.message })
+          : t('settings.shortcuts.mouseWake.saveFailed')
+      )
       return
     }
     await reloadHostHotkeys()
-    success(settings.mouseWakeMode === 'off' ? '已关闭鼠标快捷唤醒' : '鼠标快捷唤醒设置已保存')
+    success(
+      settings.mouseWakeMode === 'off'
+        ? t('settings.shortcuts.mouseWake.disabled')
+        : t('settings.shortcuts.mouseWake.saved')
+    )
     track('settings_change', '', { type: 'mouse_wake_hook' })
   } catch (err) {
     console.error('保存鼠标快捷唤醒失败:', err)
     await loadTriggerWakePreferences()
-    error('鼠标快捷唤醒设置失败: ' + (err?.message || '未知错误'))
+    error(t('settings.shortcuts.mouseWake.saveFailedWithReason', { reason: err?.message || t('common.unknownError') }))
   } finally {
     mouseWakeSaving.value = false
   }
@@ -391,36 +446,56 @@ const saveFullscreenDnd = async (checked) => {
     const result = await syncFullscreenDndToTriggers(enabled)
     if (!result.success) {
       settings.fullscreenDnd = previous
-      error(`保存全屏免打扰设置失败${result.message ? `：${result.message}` : ''}`)
+      error(
+        result.message
+          ? t('settings.shortcuts.fullscreenDnd.saveFailedWithReason', { reason: result.message })
+          : t('settings.shortcuts.fullscreenDnd.saveFailed')
+      )
       return
     }
     settings.fullscreenDnd = enabled
     await reloadHostHotkeys()
-    success(enabled ? '已开启全屏游戏 / 演示免打扰' : '已关闭全屏游戏 / 演示免打扰')
+    success(
+      enabled
+        ? t('settings.shortcuts.fullscreenDnd.enabled')
+        : t('settings.shortcuts.fullscreenDnd.disabled')
+    )
     track('settings_change', '', { type: 'fullscreen_dnd' })
   } catch (err) {
     console.error('保存全屏免打扰设置失败:', err)
     settings.fullscreenDnd = previous
-    error('保存全屏免打扰设置失败: ' + (err?.message || '未知错误'))
+    error(t('settings.shortcuts.fullscreenDnd.saveFailedWithReason', { reason: err?.message || t('common.unknownError') }))
   } finally {
     fullscreenDndSaving.value = false
   }
 }
 
 // 托盘图标的叫法随系统：macOS 是顶部菜单栏，Windows 是任务栏右下角
-const trayIconLabel = isMacOS() ? '菜单栏图标' : '托盘图标'
-const trayIconDesc = isMacOS() ? '在屏幕顶部菜单栏显示 ZTools 图标' : '在任务栏右下角显示 ZTools 图标'
-const minimizeToTrayLabel = isMacOS() ? '关闭后在后台运行' : '最小化到托盘'
-const closeConfirmDesc = isMacOS() ? '关闭主窗口时询问退出还是在后台继续运行' : '关闭主窗口时询问退出或最小化到托盘'
+const trayIconLabel = computed(() =>
+  isMacOS() ? t('settings.general.tray.iconLabelMac') : t('settings.general.tray.iconLabelWin')
+)
+const trayIconDesc = computed(() =>
+  isMacOS() ? t('settings.general.tray.iconDescMac') : t('settings.general.tray.iconDescWin')
+)
+const minimizeToTrayLabel = computed(() =>
+  isMacOS() ? t('settings.general.tray.minimizeLabelMac') : t('settings.general.tray.minimizeLabelWin')
+)
+const closeConfirmDesc = computed(() =>
+  isMacOS() ? t('settings.general.tray.closeConfirmDescMac') : t('settings.general.tray.closeConfirmDescWin')
+)
 
 const saveShowTrayIcon = async (checked) => {
   const ok = await setShowTrayIcon(!!checked)
   if (!ok) {
     settings.showTrayIcon = !checked
-    error(`保存${trayIconLabel}设置失败`)
+    error(t('settings.general.tray.iconSaveFailed', { label: trayIconLabel.value }))
     return
   }
-  success(checked ? `已显示${trayIconLabel}` : `已隐藏${trayIconLabel}`)
+  success(
+    checked
+      ? t('settings.general.tray.iconShown', { label: trayIconLabel.value })
+      : t('settings.general.tray.iconHidden', { label: trayIconLabel.value })
+  )
   track('settings_change', '', { type: 'tray_icon' })
 }
 
@@ -431,10 +506,10 @@ const saveTraySettings = async () => {
   if (!saved) {
     settings.minimizeToTray = await getMinimizeToTray()
     settings.closeConfirm = await getCloseConfirm()
-    error('关闭窗口设置保存失败')
+    error(t('settings.general.tray.windowCloseSaveFailed'))
     return
   }
-  success('关闭窗口设置已保存')
+  success(t('settings.general.tray.windowCloseSaved'))
   track('settings_change', '', { type: 'tray' })
 }
 
@@ -700,8 +775,8 @@ onBeforeUnmount(() => {
     <div class="settings-container">
       <!-- 页面标题 -->
       <div class="page-header settings-page-header">
-        <h1 class="page-title">设置</h1>
-        <p class="page-subtitle">修改后立即生效并自动保存</p>
+        <h1 class="page-title">{{ t('settings.title') }}</h1>
+        <p class="page-subtitle">{{ t('settings.subtitle') }}</p>
       </div>
 
       <!-- 顶部 Tab 分段槽 -->
@@ -709,9 +784,9 @@ onBeforeUnmount(() => {
         <RcSegmented
           v-model="activeTab"
           variant="marker"
-          aria-label="设置分类"
+          :aria-label="t('settings.tabs.ariaLabel')"
           data-testid="settings-tabs"
-          :options="SETTINGS_TAB_OPTIONS"
+          :options="settingsTabOptions"
         />
       </div>
 
@@ -725,15 +800,35 @@ onBeforeUnmount(() => {
           <!-- 常规设置卡片 -->
           <div class="settings-card">
             <div class="card-header">
-              <h2 class="card-title">通用</h2>
+              <h2 class="card-title">{{ t('settings.general.title') }}</h2>
             </div>
 
             <div class="settings-list">
+              <!-- 界面语言 -->
+              <div class="setting-item">
+                <div class="setting-info">
+                  <div class="setting-text">
+                    <span class="setting-label">{{ t('settings.language.label') }}</span>
+                    <span class="setting-desc">{{ t('settings.language.desc') }}</span>
+                  </div>
+                </div>
+                <div class="setting-control locale-select-control">
+                  <RcSelect
+                    :value="localeStore.setting"
+                    :options="localeOptions"
+                    :disabled="localeSaving"
+                    :aria-label="t('settings.language.ariaLabel')"
+                    data-testid="locale-select"
+                    @update:value="onLocaleChange"
+                  />
+                </div>
+              </div>
+
               <!-- 开机自动启动 -->
               <div class="setting-item">
                 <div class="setting-info">
                   <div class="setting-text">
-                    <span class="setting-label">开机自动启动</span>
+                    <span class="setting-label">{{ t('settings.general.autostart.label') }}</span>
                     <span
                       class="setting-desc"
                       :class="{ 'is-error': autostartStatus === 'unavailable' }"
@@ -746,7 +841,7 @@ onBeforeUnmount(() => {
                         class="setting-inline-link"
                         data-testid="autostart-retry"
                         @click="loadAutostart"
-                      >重试</button>
+                      >{{ t('common.retry') }}</button>
                     </span>
                   </div>
                 </div>
@@ -782,7 +877,7 @@ onBeforeUnmount(() => {
               <div class="setting-item">
                 <div class="setting-info">
                   <div class="setting-text">
-                    <span class="setting-label">退出确认</span>
+                    <span class="setting-label">{{ t('settings.general.tray.closeConfirmLabel') }}</span>
                     <span class="setting-desc">{{ closeConfirmDesc }}</span>
                   </div>
                 </div>
@@ -799,7 +894,7 @@ onBeforeUnmount(() => {
                 <div class="setting-info">
                   <div class="setting-text">
                     <span class="setting-label">{{ minimizeToTrayLabel }}</span>
-                    <span class="setting-desc">关闭窗口后在后台继续运行</span>
+                    <span class="setting-desc">{{ t('settings.general.tray.minimizeDesc') }}</span>
                   </div>
                 </div>
                 <a-switch
@@ -818,7 +913,7 @@ onBeforeUnmount(() => {
           <!-- 快捷键设置卡片 -->
           <div class="settings-card wide-card">
             <div class="card-header">
-              <h2 class="card-title">快捷键</h2>
+              <h2 class="card-title">{{ t('settings.shortcuts.title') }}</h2>
             </div>
 
             <div class="settings-list">
@@ -826,10 +921,8 @@ onBeforeUnmount(() => {
               <div class="setting-item hotkey-item">
                 <div class="setting-info">
                   <div class="setting-text">
-                    <span class="setting-label">全局唤醒快捷键</span>
-                    <span class="setting-desc"
-                      >使用组合键快速呼出或隐藏主界面</span
-                    >
+                    <span class="setting-label">{{ t('settings.shortcuts.wakeHotkey.label') }}</span>
+                    <span class="setting-desc">{{ t('settings.shortcuts.wakeHotkey.desc') }}</span>
                   </div>
                 </div>
                 <div class="hotkey-input-group">
@@ -843,20 +936,20 @@ onBeforeUnmount(() => {
                     :recording-text="hotkeyRecordingText"
                     :recording-is-keys="hotkeyRecordingIsKeys"
                     :wait-text="getHotkeyWaitText(hotkeyPlatform, supportsDoubleModifierHotkeys)"
-                    empty-text="点击设置"
+                    :empty-text="t('settings.shortcuts.wakeHotkey.emptyText')"
                     @start="startHotkeyRecording"
                     @cancel="stopHotkeyRecording(false)"
                     @keydown="handleWakeHotkeyKeydown"
                     @clear="clearHotkey"
                   />
                   <RcButton
-                    variant="ghost"
+                    variant="secondary"
                     size="sm"
                     data-testid="restore-default-wake-hotkey"
                     :disabled="settings.hotkey === DEFAULT_GLOBAL_WAKE_HOTKEY || hotkeySaving"
                     @click="restoreDefaultHotkey"
                   >
-                    恢复默认
+                    {{ t('settings.shortcuts.wakeHotkey.restoreDefault') }}
                   </RcButton>
                 </div>
               </div>
@@ -865,16 +958,16 @@ onBeforeUnmount(() => {
               <div v-if="showWindowsWakeExtensions && supportsMouseTriggers" class="setting-item">
                 <div class="setting-info">
                   <div class="setting-text">
-                    <span class="setting-label">鼠标快捷唤醒</span>
-                    <span class="setting-desc">使用鼠标中键、侧键或右键长按快速呼出与隐藏窗口</span>
+                    <span class="setting-label">{{ t('settings.shortcuts.mouseWake.label') }}</span>
+                    <span class="setting-desc">{{ t('settings.shortcuts.mouseWake.desc') }}</span>
                   </div>
                 </div>
                 <div class="setting-control mouse-wake-control">
                   <RcSelect
                     v-model:value="settings.mouseWakeMode"
-                    :options="MOUSE_WAKE_OPTIONS"
+                    :options="mouseWakeOptions"
                     :disabled="mouseWakeSaving"
-                    aria-label="鼠标快捷唤醒模式"
+                    :aria-label="t('settings.shortcuts.mouseWake.ariaLabel')"
                     data-testid="mouse-wake-select"
                     @change="saveMouseWakeSetting"
                   />
@@ -888,8 +981,8 @@ onBeforeUnmount(() => {
               >
                 <div class="setting-info">
                   <div class="setting-text">
-                    <span class="setting-label">长按触发阈值</span>
-                    <span class="setting-desc">长按鼠标按键达到该时长后触发唤醒（200 ~ 500 毫秒）</span>
+                    <span class="setting-label">{{ t('settings.shortcuts.mouseWake.longPressLabel') }}</span>
+                    <span class="setting-desc">{{ t('settings.shortcuts.mouseWake.longPressDesc') }}</span>
                   </div>
                 </div>
                 <div class="setting-control slider-control">
@@ -910,8 +1003,8 @@ onBeforeUnmount(() => {
               <div v-if="showWindowsWakeExtensions" class="setting-item">
                 <div class="setting-info">
                   <div class="setting-text">
-                    <span class="setting-label">全屏游戏 / 演示免打扰</span>
-                    <span class="setting-desc">检测到全屏独占游戏或演示时，暂停双击修饰键与鼠标快捷唤醒</span>
+                    <span class="setting-label">{{ t('settings.shortcuts.fullscreenDnd.label') }}</span>
+                    <span class="setting-desc">{{ t('settings.shortcuts.fullscreenDnd.desc') }}</span>
                   </div>
                 </div>
                 <a-switch
@@ -928,14 +1021,14 @@ onBeforeUnmount(() => {
               <div class="setting-item">
                 <div class="setting-info">
                   <div class="setting-text">
-                    <span class="setting-label">默认呼出形态</span>
-                    <span class="setting-desc">按全局热键唤醒时的窗口展示模式</span>
+                    <span class="setting-label">{{ t('settings.shortcuts.wakePreference.label') }}</span>
+                    <span class="setting-desc">{{ t('settings.shortcuts.wakePreference.desc') }}</span>
                   </div>
                 </div>
                 <div class="setting-control">
                   <RcSegmented
                     variant="marker"
-                    aria-label="默认呼出形态"
+                    :aria-label="t('settings.shortcuts.wakePreference.ariaLabel')"
                     :model-value="settings.wakePreference"
                     :options="wakeOptions"
                     @change="onWakePreferenceChange"
@@ -947,13 +1040,13 @@ onBeforeUnmount(() => {
               <div class="setting-item" style="cursor: pointer" @click="openPluginHotkeyModal()">
                 <div class="setting-info">
                   <div class="setting-text">
-                    <span class="setting-label">启动快捷键</span>
-                    <span class="setting-desc">为指定插件或本地应用设置全局独立启动热键</span>
+                    <span class="setting-label">{{ t('settings.shortcuts.pluginLaunch.label') }}</span>
+                    <span class="setting-desc">{{ t('settings.shortcuts.pluginLaunch.desc') }}</span>
                   </div>
                 </div>
-                <span style="font-size: 12px; color: var(--rc-text-secondary)">
-                  已配置 {{ pluginHotkeyCount }} 个快捷键
-                  <ChevronRightIcon  style="margin-left: 4px; font-size: 10px" />
+                <span class="setting-meta">
+                  {{ t('settings.shortcuts.pluginLaunch.configuredCount', { count: pluginHotkeyCount }) }}
+                  <ChevronRightIcon class="setting-meta-icon" />
                 </span>
               </div>
 
@@ -964,13 +1057,13 @@ onBeforeUnmount(() => {
               >
                 <div class="setting-info">
                   <div class="setting-text">
-                    <span class="setting-label">功能快捷键</span>
-                    <span class="setting-desc">为插件内置功能（如截图、文字识别）设置全局热键</span>
+                    <span class="setting-label">{{ t('settings.shortcuts.pluginFeature.label') }}</span>
+                    <span class="setting-desc">{{ t('settings.shortcuts.pluginFeature.desc') }}</span>
                   </div>
                 </div>
-                <span style="font-size: 12px; color: var(--rc-text-secondary)">
-                  已配置 {{ pluginFeatureHotkeyCount }} 个快捷键
-                  <ChevronRightIcon  style="margin-left: 4px; font-size: 10px" />
+                <span class="setting-meta">
+                  {{ t('settings.shortcuts.pluginFeature.configuredCount', { count: pluginFeatureHotkeyCount }) }}
+                  <ChevronRightIcon class="setting-meta-icon" />
                 </span>
               </div>
             </div>
@@ -979,10 +1072,10 @@ onBeforeUnmount(() => {
           <!-- 常用快捷键（只读）：与 shellShortcuts 唯一信源保持一致 -->
           <div class="settings-card">
             <div class="card-header">
-              <h2 class="card-title">常用快捷键</h2>
+              <h2 class="card-title">{{ t('settings.shortcuts.commonTitle') }}</h2>
             </div>
             <div class="settings-list">
-              <div v-for="item in BUILTIN_SHORTCUT_HINTS" :key="item.id || item.combo" class="setting-item compact">
+              <div v-for="item in builtinShortcutHints" :key="item.id || item.combo" class="setting-item compact">
                 <span class="setting-label">{{ item.label }}</span>
                 <ShortcutKeys :combo="item.combo" />
               </div>
@@ -1013,11 +1106,7 @@ onBeforeUnmount(() => {
 </template>
 
 <style scoped>
-/* 顶部标题与分段 Tab 槽 */
-.settings-page-header {
-  margin-bottom: 16px;
-}
-
+/* 分段 Tab 槽：标题区间距沿用全局 .page-header（20px），Tab 下留 24px 进入内容 */
 .settings-tabs-bar {
   margin-bottom: 24px;
 }
@@ -1034,7 +1123,8 @@ onBeforeUnmount(() => {
   gap: 8px;
 }
 
-.mouse-wake-control {
+.mouse-wake-control,
+.locale-select-control {
   min-width: 180px;
 }
 
@@ -1050,9 +1140,19 @@ onBeforeUnmount(() => {
   margin: 0;
 }
 
+.setting-meta {
+  font-size: var(--rc-fs-small);
+  color: var(--rc-text-secondary);
+}
+
+.setting-meta-icon {
+  margin-left: 4px;
+  font-size: 10px; /* 图标字形尺寸 */
+}
+
 .slider-value {
   min-width: 52px;
-  font-size: 12px;
+  font-size: var(--rc-fs-small);
   color: var(--rc-text-secondary);
   text-align: right;
   font-variant-numeric: tabular-nums;

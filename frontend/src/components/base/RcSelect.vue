@@ -45,7 +45,7 @@ const popupClass = computed(() => ['rc-select-popup', props.popupClassName].filt
   background: var(--rc-surface) !important;
   color: var(--rc-text-primary);
   box-shadow: none !important;
-  transition: border-color 0.15s ease, box-shadow 0.15s ease, background-color 0.15s ease !important;
+  transition: border-color var(--rc-dur) ease, box-shadow var(--rc-dur) ease, background-color var(--rc-dur) ease !important;
 }
 
 :global(.rc-select.ant-select:not(.ant-select-disabled):hover .ant-select-selector) {
@@ -59,12 +59,12 @@ const popupClass = computed(() => ['rc-select-popup', props.popupClassName].filt
 }
 
 :global(.rc-select.ant-select .ant-select-selection-item) {
-  font-size: 13px;
+  font-size: var(--rc-fs-body);
 }
 
 :global(.rc-select.ant-select-sm .ant-select-selection-item),
 :global(.rc-select.ant-select-sm .ant-select-selection-placeholder) {
-  font-size: 12px;
+  font-size: var(--rc-fs-small);
 }
 
 :global(.rc-select.ant-select .ant-select-selection-placeholder) {
@@ -78,8 +78,8 @@ const popupClass = computed(() => ['rc-select-popup', props.popupClassName].filt
 }
 
 :global(.rc-select .rc-select-arrow) {
-  font-size: 14px;
-  transition: transform 0.2s ease;
+  font-size: var(--rc-fs-emph);
+  transition: transform var(--rc-dur-slow) ease;
 }
 
 :global(.rc-select.ant-select-open .rc-select-arrow) {
@@ -90,7 +90,7 @@ const popupClass = computed(() => ['rc-select-popup', props.popupClassName].filt
 :global(.rc-select-popup.ant-select-dropdown) {
   padding: 4px;
   border: 1px solid var(--rc-border);
-  border-radius: 10px;
+  border-radius: var(--rc-radius-md);
   background: var(--rc-surface);
   box-shadow: var(--rc-shadow-lg);
 }
@@ -98,9 +98,9 @@ const popupClass = computed(() => ['rc-select-popup', props.popupClassName].filt
 :global(.rc-select-popup .ant-select-item) {
   min-height: 30px;
   padding: 5px 8px 5px 10px;
-  border-radius: 6px;
+  border-radius: var(--rc-radius-sm);
   color: var(--rc-text-secondary);
-  font-size: 13px;
+  font-size: var(--rc-fs-body);
   line-height: 20px;
 }
 
@@ -125,7 +125,7 @@ const popupClass = computed(() => ['rc-select-popup', props.popupClassName].filt
 }
 
 :global(.rc-select-popup .rc-select-check) {
-  font-size: 14px;
+  font-size: var(--rc-fs-emph);
   color: var(--rc-accent);
   stroke-width: 2.25;
 }
@@ -134,7 +134,7 @@ const popupClass = computed(() => ['rc-select-popup', props.popupClassName].filt
   min-height: 26px;
   padding: 8px 10px 2px;
   color: var(--rc-text-faint);
-  font-size: 11px;
+  font-size: var(--rc-fs-caption);
   font-weight: 500;
   letter-spacing: 0.02em;
 }
@@ -145,6 +145,6 @@ const popupClass = computed(() => ['rc-select-popup', props.popupClassName].filt
 
 :global(.rc-select-popup .ant-select-item-empty) {
   color: var(--rc-text-muted);
-  font-size: 12px;
+  font-size: var(--rc-fs-small);
 }
 </style>

@@ -57,5 +57,41 @@
   "category": [
     "办公效率"
   ],
-  "minAppVersion": "1.1.8.5"
+  "categoryId": "productivity",
+  "minAppVersion": "1.1.8.5",
+  "defaultLocale": "zh-CN",
+  "i18n": {
+    "en-US": {
+      "name": "QR Code",
+      "description": "Generate crisp QR codes in real time from URLs or text, create Wi-Fi join QR codes, copy images to clipboard, and export PNG files.",
+      "keywords": [
+        "qr",
+        "qrcode",
+        "wifi",
+        "barcode",
+        "png",
+        "generator"
+      ],
+      "features": {
+        "qr-text": {
+          "explain": "Generate QR codes from text or URLs",
+          "cmds": [
+            "qr",
+            "qrcode",
+            "qr code",
+            "generate qr",
+            "url to qr"
+          ]
+        },
+        "qr-wifi": {
+          "explain": "Generate a scannable Wi-Fi network connection QR code",
+          "cmds": [
+            "wifi qr",
+            "wifi qrcode",
+            "share wifi"
+          ]
+        }
+      }
+    }
+  }
 }

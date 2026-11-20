@@ -63,5 +63,46 @@
   "category": [
     "图像媒体"
   ],
-  "minAppVersion": "1.1.8.3"
+  "categoryId": "media",
+  "minAppVersion": "1.1.8.3",
+  "defaultLocale": "zh-CN",
+  "i18n": {
+    "en-US": {
+      "name": "Color Picker",
+      "description": "Convert between HEX, RGB, HSL, OKLCH, and CMYK color formats in real time, check WCAG accessibility contrast ratios, and save favorite palettes.",
+      "keywords": [
+        "color",
+        "hex",
+        "rgb",
+        "hsl",
+        "oklch",
+        "cmyk",
+        "wcag",
+        "contrast",
+        "palette"
+      ],
+      "features": {
+        "convert-color": {
+          "explain": "Convert color values between HEX, RGB, HSL, OKLCH, and CMYK",
+          "cmds": [
+            "color convert",
+            "hex to rgb",
+            "rgb to hex",
+            "oklch",
+            "cmyk",
+            "hsl"
+          ]
+        },
+        "contrast-check": {
+          "explain": "Check WCAG accessibility contrast ratio between foreground and background colors",
+          "cmds": [
+            "contrast",
+            "wcag",
+            "contrast check",
+            "color accessibility"
+          ]
+        }
+      }
+    }
+  }
 }

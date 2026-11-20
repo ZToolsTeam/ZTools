@@ -2,6 +2,9 @@
 import { XIcon } from '@lucide/vue'
 import { Modal } from 'ant-design-vue'
 import { useId } from 'vue'
+import { useAppI18n } from '@/i18n'
+
+const { t } = useAppI18n()
 
 /**
  * 统一对话框。两种版式：
@@ -52,7 +55,7 @@ const close = (event) => {
       role="document"
       :aria-labelledby="title ? titleId : undefined"
     >
-      <button v-if="closable" type="button" class="rc-dialog-close" aria-label="关闭" @click="close">
+      <button v-if="closable" type="button" class="rc-dialog-close" :aria-label="t('common.close')" @click="close">
         <XIcon aria-hidden="true" />
       </button>
       <header v-if="title || $slots.icon" class="rc-dialog-header">
@@ -96,7 +99,7 @@ const close = (event) => {
   color: var(--rc-text-muted);
   font-size: 16px;
   cursor: pointer;
-  transition: background-color 0.15s ease, color 0.15s ease;
+  transition: background-color var(--rc-dur) ease, color var(--rc-dur) ease;
 }
 
 .rc-dialog-close:hover {
@@ -136,13 +139,13 @@ const close = (event) => {
 }
 
 .is-default .rc-dialog-title {
-  font-size: 15px;
+  font-size: var(--rc-fs-title-sm);
   line-height: 22px;
 }
 
 .is-default .rc-dialog-description {
   margin-top: 2px;
-  font-size: 12.5px;
+  font-size: var(--rc-fs-small);
   line-height: 18px;
 }
 
@@ -178,7 +181,7 @@ const close = (event) => {
   height: 52px;
   margin-bottom: 16px;
   border: 1px solid var(--rc-border);
-  border-radius: 15px;
+  border-radius: var(--rc-radius-lg);
   background: var(--rc-surface);
   box-shadow: var(--rc-shadow-md), inset 0 1px 0 rgba(255, 255, 255, 0.06);
   color: var(--rc-text-primary);
@@ -186,14 +189,14 @@ const close = (event) => {
 }
 
 .is-hero .rc-dialog-title {
-  font-size: 18px;
+  font-size: var(--rc-fs-title-md);
   line-height: 26px;
   letter-spacing: -0.01em;
 }
 
 .is-hero .rc-dialog-description {
   margin-top: 6px;
-  font-size: 13px;
+  font-size: var(--rc-fs-body);
   line-height: 20px;
 }
 
@@ -218,7 +221,7 @@ const close = (event) => {
   padding: 0 !important;
   overflow: hidden;
   border: 1px solid var(--rc-border);
-  border-radius: 18px !important;
+  border-radius: var(--rc-radius-xl) !important;
   background-color: var(--rc-surface) !important;
   box-shadow: var(--rc-shadow-lg), inset 0 1px 0 rgba(255, 255, 255, 0.04) !important;
 }

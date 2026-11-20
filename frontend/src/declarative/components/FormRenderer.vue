@@ -6,7 +6,7 @@
         v-for="(field, fIdx) in formFields"
         :key="field.props?.id || fIdx"
         :data-decl-field-id="field.props?.id || field.id || undefined"
-        class="space-y-1.5 text-[13px]"
+        class="space-y-1.5 text-[length:var(--rc-fs-body)]"
       >
         <!-- 标签：插件没写 title 时不显示标签行，不拿字段 id 充当标签 -->
         <label
@@ -39,7 +39,7 @@
           data-form-text-field
           :data-autofocus="field.props?.autoFocus ? '' : null"
           :model-value="fieldText(field)"
-          :placeholder="field.props?.placeholder || '请输入密码'"
+          :placeholder="field.props?.placeholder || t('declarative.form.passwordPlaceholder')"
           :invalid="Boolean(field.props?.error)"
           :describedby="describedBy(field)"
           @update:model-value="value => updateFieldValue(field, value)"
@@ -51,7 +51,7 @@
               :aria-pressed="revealedPasswords[field.props?.id] ? 'true' : 'false'"
               @click="togglePasswordReveal(field.props?.id)"
             >
-              {{ revealedPasswords[field.props?.id] ? '隐藏' : '显示' }}
+              {{ revealedPasswords[field.props?.id] ? t('declarative.form.hide') : t('declarative.form.show') }}
             </button>
           </template>
         </DeclInput>
@@ -86,7 +86,7 @@
             />
             <label
               :for="field.props?.id"
-              class="text-[13px] text-[var(--rc-text-secondary)] cursor-pointer select-none"
+              class="text-[length:var(--rc-fs-body)] text-[var(--rc-text-secondary)] cursor-pointer select-none"
             >
               {{ field.props?.label }}
             </label>
@@ -150,6 +150,9 @@ import { ref, computed, watch, onMounted, nextTick } from "vue";
 import DeclInput from "./DeclInput.vue";
 import DeclCheckbox from "./DeclCheckbox.vue";
 import MarkdownContent from "./MarkdownContent.vue";
+import { useAppI18n } from "@/i18n";
+
+const { t } = useAppI18n();
 
 const props = defineProps({
   descriptor: {
@@ -346,7 +349,7 @@ defineExpose({
   border: 1px solid var(--rc-border);
   background: var(--rc-surface-subtle);
   color: var(--rc-text-muted);
-  font-size: 12px;
+  font-size: var(--rc-fs-small);
   cursor: pointer;
 }
 

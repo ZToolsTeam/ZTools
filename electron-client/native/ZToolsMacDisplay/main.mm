@@ -139,7 +139,7 @@ struct Display {
   explicit Display(CGDirectDisplayID value): id(value), uid(identifier(value)), name([NSString stringWithFormat:@"显示器 %u", value]) {
     float level = 0; apple = api.getBrightness && api.setBrightness && api.getBrightness(id, &level) == 0 && std::isfinite(level) && level >= 0 && level <= 1;
     if (!apple) ddc = std::make_unique<Ddc>(id);
-    for (NSScreen* screen in NSScreen.screens) if ([screen.deviceDescription[@"NSScreenNumber"] unsignedIntValue] == id) name = screen.localizedName;
+    for (NSScreen* screen in NSScreen.screens) if ([screen.deviceDescription[@"NSScreenNumber"] unsignedIntValue] == id && screen.localizedName.length > 0) name = screen.localizedName;
   }
   void connected() { require(CGDisplayIsOnline(id) && [identifier(id) isEqual:uid], "DISPLAY_DISCONNECTED"); }
   std::optional<display_ddc::Value> raw(uint8_t code) {

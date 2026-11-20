@@ -13,6 +13,7 @@ import { Worker } from 'node:worker_threads'
 import path from 'node:path'
 import { randomUUID } from 'node:crypto'
 import fs from 'node:fs'
+import { getResolvedLocale } from '../i18n/index.js'
 
 const currentDir = typeof __dirname !== 'undefined' ? __dirname : process.cwd()
 
@@ -26,9 +27,22 @@ export interface WorkerPoolOptions {
 }
 
 export interface WorkerPendingRequest {
-  resolve: (value: any) => void
-  reject: (reason: any) => void
+  resolve: (value: unknown) => void
+  reject: (reason: unknown) => void
   watchdogTimer?: NodeJS.Timeout
+}
+
+interface WorkerIncomingMessage {
+  type?: string
+  id?: string
+  action?: string
+  payload?: unknown
+  success?: boolean
+  data?: unknown
+  error?: {
+    code?: string
+    message?: string
+  }
 }
 
 export class PooledWorker {
@@ -36,17 +50,18 @@ export class PooledWorker {
   public readonly worker: Worker
   public isReady = false
   public isTerminated = false
-  public onNotify?: (action: string, payload: any) => void
+  public onNotify?: (action: string, payload: unknown) => void
   private pending = new Map<string, WorkerPendingRequest>()
 
   constructor(worker: Worker, id = randomUUID()) {
     this.id = id
     this.worker = worker
 
-    this.worker.on('message', (msg: any) => {
-      if (!msg || typeof msg !== 'object') return
+    this.worker.on('message', (rawMsg: unknown) => {
+      if (!rawMsg || typeof rawMsg !== 'object') return
+      const msg = rawMsg as WorkerIncomingMessage
 
-      if (msg.type === 'notify') {
+      if (msg.type === 'notify' && typeof msg.action === 'string') {
         if (msg.action === 'ready') {
           this.isReady = true
         }
@@ -54,7 +69,7 @@ export class PooledWorker {
         return
       }
 
-      if (msg.type === 'result') {
+      if (msg.type === 'result' && typeof msg.id === 'string') {
         const req = this.pending.get(msg.id)
         if (!req) return
         this.pending.delete(msg.id)
@@ -63,8 +78,8 @@ export class PooledWorker {
         if (msg.success) {
           req.resolve(msg.data)
         } else {
-          const err = new Error(msg.error?.message || 'Worker execution failed')
-          if (msg.error?.code) (err as any).code = msg.error.code
+          const err = new Error(msg.error?.message || 'Worker execution failed') as Error & { code?: string }
+          if (msg.error?.code) err.code = msg.error.code
           req.reject(err)
         }
       }
@@ -93,7 +108,7 @@ export class PooledWorker {
   /**
    * 发送指令请求，绑定看门狗超时监控
    */
-  public postRequest<T = any>(action: string, payload?: any, timeoutMs = 30_000): Promise<T> {
+  public postRequest<T = unknown>(action: string, payload?: unknown, timeoutMs = 30_000): Promise<T> {
     if (this.isTerminated) {
       return Promise.reject(new Error('Cannot send request to a terminated worker'))
     }
@@ -106,7 +121,11 @@ export class PooledWorker {
         reject(new Error(`WATCHDOG_TIMEOUT: Command [${action}] exceeded watchdog limit of ${timeoutMs}ms`))
       }, timeoutMs)
 
-      this.pending.set(id, { resolve, reject, watchdogTimer })
+      this.pending.set(id, {
+        resolve: (value) => resolve(value as T),
+        reject,
+        watchdogTimer
+      })
       this.worker.postMessage({
         type: 'request',
         id,
@@ -116,7 +135,7 @@ export class PooledWorker {
     })
   }
 
-  public notify(action: string, payload?: any): void {
+  public notify(action: string, payload?: unknown): void {
     if (this.isTerminated) return
     this.worker.postMessage({
       type: 'notify',
@@ -134,6 +153,7 @@ export class PooledWorker {
 
 export class WorkerPool {
   private pool: PooledWorker[] = []
+  private activeWorkers = new Set<PooledWorker>()
   private refilling = false
   private isClosed = false
   private readonly poolSize: number
@@ -194,6 +214,10 @@ export class WorkerPool {
     if (!worker || worker.isTerminated) {
       worker = await this.createWorker()
     }
+    this.activeWorkers.add(worker)
+    worker.worker.once('exit', () => {
+      this.activeWorkers.delete(worker!)
+    })
 
     // 借出后异步补充预热池
     setImmediate(() => {
@@ -235,7 +259,9 @@ export class WorkerPool {
     if (!fs.existsSync(this.compileCacheDir)) {
       try {
         fs.mkdirSync(this.compileCacheDir, { recursive: true })
-      } catch {}
+      } catch (err) {
+        console.warn('[WorkerPool] Failed to create compile cache directory:', err)
+      }
     }
 
     const worker = new Worker(this.workerEntryPath, {
@@ -274,9 +300,24 @@ export class WorkerPool {
   /**
    * 借出 Worker 并执行指令，使用看门狗超时监控
    */
-  public async executeCommand<T = any>(action: string, payload?: any, timeoutMs?: number): Promise<T> {
+  public async executeCommand<T = unknown>(action: string, payload?: unknown, timeoutMs?: number): Promise<T> {
     const worker = await this.getFromPool()
-    return worker.postRequest<T>(action, payload, timeoutMs || this.defaultTimeoutMs)
+    const effectivePayload =
+      action === 'initialize' && payload && typeof payload === 'object' && !('locale' in payload)
+        ? { ...(payload as Record<string, unknown>), locale: getResolvedLocale() }
+        : payload
+    return worker.postRequest<T>(action, effectivePayload, timeoutMs || this.defaultTimeoutMs)
+  }
+
+  /**
+   * 向所有活跃 Worker 广播语言切换指令
+   */
+  public async broadcastLocale(locale: string): Promise<void> {
+    const targets = [...this.activeWorkers].filter((worker) => !worker.isTerminated)
+    if (targets.length === 0) return
+    await Promise.allSettled(
+      targets.map((worker) => worker.postRequest('updateLocale', { locale }, this.defaultTimeoutMs))
+    )
   }
 
   /**
@@ -293,6 +334,8 @@ export class WorkerPool {
    */
   public async close(): Promise<void> {
     this.isClosed = true
-    await this.flush()
+    const active = [...this.activeWorkers]
+    this.activeWorkers.clear()
+    await Promise.all([...active.map(w => w.terminate()), this.flush()])
   }
 }

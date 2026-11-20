@@ -1,4 +1,24 @@
-import { LocalStorage } from "@ztools/declarative-ui";
+import { LocalStorage, getLocale } from "@ztools/declarative-ui";
+const CONVERTER_MESSAGES = {
+    "zh-CN": {
+        paletteCorrupted: "调色板数据损坏，原数据已保留，请先恢复数据后重试",
+        upgradeZtoolsPalette: "请升级 ZTools 以安全保存调色板",
+        paletteLimitExceeded: "调色板最多保存 100 个颜色，请先删除一些",
+        previewLargeText: "大字 Aa 24px",
+        previewBodyText: "正文示例 The quick brown fox 0123"
+    },
+    "en-US": {
+        paletteCorrupted: "Palette data is corrupted; original data was preserved. Please restore it before retrying.",
+        upgradeZtoolsPalette: "Please upgrade ZTools to safely save palettes",
+        paletteLimitExceeded: "Palette can store up to 100 colors; please remove some first",
+        previewLargeText: "Large Aa 24px",
+        previewBodyText: "Body sample The quick brown fox 0123"
+    }
+};
+function converterStrings() {
+    const locale = getLocale();
+    return CONVERTER_MESSAGES[locale] ?? CONVERTER_MESSAGES["en-US"];
+}
 const PALETTE_STORAGE_KEY = "color_picker_palette";
 const NAMED_COLORS = {
     black: "#000000",
@@ -505,12 +525,12 @@ function sanitizePalette(list) {
     if (!Array.isArray(list) || list.some(c => !c || typeof c.id !== "string" || !c.id || typeof c.name !== "string" ||
         typeof c.savedAt !== "string" || typeof c.hex !== "string" || !/^#[0-9A-Fa-f]{6}(?:[0-9A-Fa-f]{2})?$/.test(c.hex)) ||
         new Set(list.map(c => c.id)).size !== list.length)
-        throw new Error("调色板数据损坏，原数据已保留，请先恢复数据后重试");
+        throw new Error(converterStrings().paletteCorrupted);
     return list;
 }
 async function changePalette(update) {
     if (typeof LocalStorage.updateItem !== "function")
-        throw new Error("请升级 ZTools 以安全保存调色板");
+        throw new Error(converterStrings().upgradeZtoolsPalette);
     return LocalStorage.updateItem(PALETTE_STORAGE_KEY, raw => update(sanitizePalette(raw)));
 }
 /** 读取调色板；存储读失败时抛错（写入前必须用这个，避免读失败后把空列表覆盖回去） */
@@ -535,7 +555,7 @@ export async function saveColorToPalette(name, hex) {
     return changePalette(current => {
         const rest = current.filter(c => c.hex !== newItem.hex);
         if (rest.length >= 100)
-            throw new Error("调色板最多保存 100 个颜色，请先删除一些");
+            throw new Error(converterStrings().paletteLimitExceeded);
         return [newItem, ...rest];
     });
 }
@@ -573,12 +593,13 @@ export function splitColorInputs(input) {
 }
 /** 对比度预览图：背景色上用前景色写一行正文与一行大字（均按不透明颜色绘制） */
 export function generateContrastPreviewSvg(foregroundHex, backgroundHex, width = 360, height = 120) {
+    const s = converterStrings();
     const fg = normalizeHex(foregroundHex).slice(0, 7);
     const bg = normalizeHex(backgroundHex).slice(0, 7);
     const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}">
     <rect width="${width}" height="${height}" rx="12" fill="${bg}" stroke="#888888" stroke-opacity="0.35"/>
-    <text x="20" y="50" fill="${fg}" font-size="28" font-weight="bold" font-family="sans-serif">大字 Aa 24px</text>
-    <text x="20" y="88" fill="${fg}" font-size="15" font-family="sans-serif">正文示例 The quick brown fox 0123</text>
+    <text x="20" y="50" fill="${fg}" font-size="28" font-weight="bold" font-family="sans-serif">${s.previewLargeText}</text>
+    <text x="20" y="88" fill="${fg}" font-size="15" font-family="sans-serif">${s.previewBodyText}</text>
   </svg>`;
     return `data:image/svg+xml;utf8,${encodeURIComponent(svg).replace(/\(/g, "%28").replace(/\)/g, "%29")}`;
 }

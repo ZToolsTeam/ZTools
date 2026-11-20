@@ -15,8 +15,9 @@ import { OPEN_SETTINGS_SHORTCUT, SHELL_SHORTCUTS, TOGGLE_MODE_SHORTCUT } from '@
 import { switchWindowMode, WINDOW_MODES } from '@/utils/windowMode'
 import { layoutExtraComponents } from '@edition'
 import { ROUTES } from '@/router/routes'
+import { useAppI18n } from '@/i18n'
 
-
+const { t } = useAppI18n()
 const route = useRoute()
 const router = useRouter()
 const nav = useNavStore()
@@ -174,12 +175,13 @@ useKeymap(KEYMAP_SCOPES.GLOBAL, {
     <Header v-if="!isDeclarativeView" />
     <div class="flex flex-1 overflow-hidden">
       <Sidebar v-if="!isDeclarativeView" />
+      <!-- 页面内边距统一由 .rc-page / --rc-page-pad-* 提供，main 自身不再叠加一层 -->
       <main
         ref="mainScrollRef"
         class="flex-1 overflow-y-auto custom-scrollbar"
         :style="{
           background: 'var(--rc-canvas)',
-          padding: isDeclarativeView ? '0' : '14px 18px'
+          padding: '0'
         }"
         @scroll.passive="onMainScroll"
       >
@@ -195,7 +197,7 @@ useKeymap(KEYMAP_SCOPES.GLOBAL, {
     <footer v-if="!isDeclarativeView" class="action-bar select-none">
       <div class="flex items-center gap-4">
         <span v-if="showOpenHint" class="action-hint is-primary">
-          打开
+          {{ t('common.open') }}
           <ShortcutKeys combo="Enter" />
         </span>
         <button
@@ -204,18 +206,18 @@ useKeymap(KEYMAP_SCOPES.GLOBAL, {
           class="action-hint"
           @click="isDetails ? goBackFromDetails() : handleBackToHome()"
         >
-          {{ isDetails ? '返回' : '返回主页' }}
+          {{ isDetails ? t('common.back') : t('nav.backToHome') }}
           <ShortcutKeys combo="Escape" />
         </button>
       </div>
 
       <div class="flex items-center gap-1">
         <button v-if="showActionPanelBtn" type="button" class="action-btn" @click="openGlobalActions">
-          动作
+          {{ t('nav.actions') }}
           <ShortcutKeys :combo="SHELL_SHORTCUTS.ACTION_PANEL" />
         </button>
         <button type="button" class="action-btn" @click="openSearchOrActions">
-          搜索
+          {{ t('common.search') }}
           <ShortcutKeys :combo="SHELL_SHORTCUTS.FOCUS_SEARCH" />
         </button>
       </div>
@@ -240,7 +242,7 @@ useKeymap(KEYMAP_SCOPES.GLOBAL, {
   padding: 0 10px 0 18px;
   border-top: 1px solid var(--rc-border);
   background: var(--rc-head);
-  font-size: 12px;
+  font-size: var(--rc-fs-small);
   color: var(--rc-text-muted);
 }
 
@@ -275,12 +277,12 @@ button.action-hint:hover {
   height: 26px;
   padding: 0 8px;
   border: none;
-  border-radius: 6px;
+  border-radius: var(--rc-radius-sm);
   background: transparent;
   font: inherit;
   color: var(--rc-text-muted);
   cursor: pointer;
-  transition: background-color 0.15s ease, color 0.15s ease;
+  transition: background-color var(--rc-dur) ease, color var(--rc-dur) ease;
 }
 
 .action-btn:hover {

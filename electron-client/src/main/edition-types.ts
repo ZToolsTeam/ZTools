@@ -53,6 +53,8 @@ export interface MainEditionContext {
   readonly dataRoot: string
   /** 已按 `MainEdition.storeFiles` 放行对应文件的 JSON 存储 */
   readonly store: JsonFileStore
+  /** 当前进程是否运行在 ARM64 转译环境（来自 Electron app.runningUnderARM64Translation） */
+  readonly runningUnderARM64Translation?: boolean | null
 }
 
 export interface MainEditionServices {

@@ -2,6 +2,7 @@ import { getStoreOfficialPluginMeta } from './bundledPlugins'
 import { getPluginCategories, normalizeCategoryNames } from './pluginCategories'
 import { compareMatches, matchItemWithQuery } from './pinyinSearch'
 import { normalizeCatalogScreenshots } from './pluginScreenshots'
+import { t } from '@/i18n'
 /**
  * storeCatalogManager.js
  * ZTools 对齐 Raycast 标杆体系的 Local-First 扩展商店数据管理器
@@ -20,7 +21,7 @@ export const REMOTE_FETCH_TIMEOUT_MS = 8000
 function withTimeout(promise, ms) {
   let timer
   const timeout = new Promise((_, reject) => {
-    timer = setTimeout(() => reject(new Error(`远程插件清单请求超时（${ms}ms）`)), ms)
+    timer = setTimeout(() => reject(new Error(t('pluginCatalog.remoteTimeout', { ms }))), ms)
   })
   return Promise.race([promise, timeout]).finally(() => clearTimeout(timer))
 }
@@ -369,7 +370,7 @@ export class StoreCatalogManager {
       if (item.revoked) {
         newRevokedMap[pid] = {
           revoked: true,
-          reason: item.revoked_reason || item.revokedReason || '该插件已被官方下架禁用'
+          reason: item.revoked_reason || item.revokedReason || t('pluginCatalog.revokedDisabledReason')
         }
       }
 
@@ -571,7 +572,7 @@ export class StoreCatalogManager {
    * @param {string} pluginId
    * @param {string} [reason]
    */
-  markRevoked(pluginId, reason = '该插件已被官方下架禁用') {
+  markRevoked(pluginId, reason = t('pluginCatalog.revokedDisabledReason')) {
     const pid = normalizePluginId(pluginId).toLowerCase()
     if (!pid) return
     this._revokedMap[pid] = { revoked: true, reason }

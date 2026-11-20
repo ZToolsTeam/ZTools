@@ -62,12 +62,12 @@ function handleClick(e) {
   align-items: center;
   justify-content: center;
   padding: 0;
-  border-radius: 4px;
+  border-radius: var(--rc-radius-xs);
   border: 1px solid var(--rc-border-highlight);
   background: var(--rc-surface);
   color: var(--rc-accent-contrast);
   cursor: pointer;
-  transition: background-color 0.12s ease, border-color 0.12s ease;
+  transition: background-color var(--rc-dur-fast) ease, border-color var(--rc-dur-fast) ease;
 }
 
 .decl-checkbox:hover:not(:disabled) {

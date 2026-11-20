@@ -7,6 +7,7 @@
  */
 
 import router from '@/router'
+import { t } from '@/i18n'
 
 /**
  * 内置插件唯一标识
@@ -21,7 +22,9 @@ export const INTERNAL_PLUGINS = Object.freeze({
 export const INTERNAL_PLUGIN_DEFINITIONS = Object.freeze({
   [INTERNAL_PLUGINS.SETTINGS]: Object.freeze({
     pluginId: INTERNAL_PLUGINS.SETTINGS,
-    name: '系统设置',
+    get name() {
+      return t('launcher.builtins.systemSettingsName')
+    },
     fallbackRoute: Object.freeze({ name: 'advanced-settings' })
   })
 })
@@ -68,16 +71,16 @@ function isDetachedAuxiliaryWindow() {
 function normalizePayload(payload) {
   if (payload === undefined || payload === null) return undefined
   if (typeof payload !== 'object' || Array.isArray(payload)) {
-    throw new TypeError('internal plugin payload 必须是一个纯对象')
+    throw new TypeError(t('internalPlugins.payloadMustBeObject'))
   }
   let serialized
   try {
     serialized = JSON.stringify(payload)
   } catch (err) {
-    throw new TypeError(`internal plugin payload 无法序列化: ${err.message}`)
+    throw new TypeError(t('internalPlugins.payloadNotSerializable', { reason: err.message }))
   }
   if (serialized.length > 64 * 1024) {
-    throw new RangeError('internal plugin payload 超过 64KB 限制')
+    throw new RangeError(t('internalPlugins.payloadTooLarge'))
   }
   return payload
 }
@@ -95,7 +98,7 @@ function normalizePayload(payload) {
  */
 export async function openInternalPlugin(pluginId, payload, options = {}) {
   if (!pluginId || typeof pluginId !== 'string') {
-    throw new TypeError('pluginId 必须是非空字符串')
+    throw new TypeError(t('internalPlugins.invalidPluginId'))
   }
 
   const validPayload = normalizePayload(payload)
@@ -166,7 +169,7 @@ export async function openInternalPlugin(pluginId, payload, options = {}) {
 
   // 3. 兜底友好提示
   const promptMessage =
-    options.prompt || `内置功能 [${def?.name || pluginId}] 仅在完整桌面客户端中可用`
+    options.prompt || t('internalPlugins.desktopOnlyPrompt', { name: def?.name || pluginId })
   if (typeof window !== 'undefined' && typeof window.__ztoolsToast === 'function') {
     window.__ztoolsToast('info', promptMessage)
   } else {

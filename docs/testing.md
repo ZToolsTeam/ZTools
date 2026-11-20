@@ -1,3 +1,5 @@
+[English](en/testing.md) | **简体中文**
+
 # 测试
 
 本文列出各模块的测试命令，以及新用例需要覆盖的情况。先按 [从源码构建](building.md) 执行过 `npm install`。

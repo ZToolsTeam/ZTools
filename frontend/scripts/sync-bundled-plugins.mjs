@@ -66,7 +66,10 @@ function officialPluginGroups() {
         id: manifest.id,
         name: manifest.name || manifest.id,
         description: manifest.description || '',
-        category: manifest.category || []
+        category: manifest.category || [],
+        ...(manifest.categoryId ? { categoryId: manifest.categoryId } : {}),
+        ...(typeof manifest.defaultLocale === 'string' && manifest.defaultLocale ? { defaultLocale: manifest.defaultLocale } : {}),
+        ...(manifest.i18n && typeof manifest.i18n === 'object' ? { i18n: manifest.i18n } : {})
       })
     }
   }
@@ -240,6 +243,9 @@ function toIndexRecord(id, dir, files, screenshots, manifest) {
     author: manifest.author || 'ZTools Team',
     icon: String(manifest.icon || 'icon.svg').replace(/^\/+/, ''),
     category: manifest.category || [],
+    ...(manifest.categoryId ? { categoryId: manifest.categoryId } : {}),
+    ...(typeof manifest.defaultLocale === 'string' && manifest.defaultLocale ? { defaultLocale: manifest.defaultLocale } : {}),
+    ...(manifest.i18n && typeof manifest.i18n === 'object' ? { i18n: manifest.i18n } : {}),
     keywords: manifest.keywords || [],
     alias: typeof manifest.alias === 'string' ? manifest.alias : '',
     features: Array.isArray(manifest.features) ? manifest.features : [],

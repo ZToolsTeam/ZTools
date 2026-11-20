@@ -1,8 +1,4 @@
-/**
- * 文本行级差异对比（线性空间 Myers O(ND) 算法）
- *
- * 纯函数，无宿主依赖：输入两段文本，输出逐行差异、按上下文合并的差异块与统一格式（unified diff）报告。
- */
+import { t } from "./i18n.js";
 /** 单侧最多比较的行数 */
 export const MAX_DIFF_LINES = 20000;
 /**
@@ -239,7 +235,7 @@ export function diffText(left, right, options = {}) {
     const a = splitLines(left, true);
     const b = splitLines(right, true);
     if (a.length > MAX_DIFF_LINES || b.length > MAX_DIFF_LINES) {
-        throw new Error(`文本超过 ${MAX_DIFF_LINES} 行，暂不支持对比`);
+        throw new Error(t("maxLinesExceeded", { max: MAX_DIFF_LINES }));
     }
     const leftUnterminated = a.length > 0 && !left.endsWith("\n");
     const rightUnterminated = b.length > 0 && !right.endsWith("\n");
@@ -343,10 +339,10 @@ export function hunkPreviewMarkdown(h) {
         return fencedDiffMarkdown(formatHunk(h));
     const shown = { ...h, lines: h.lines.slice(0, MAX_PREVIEW_LINES) };
     const body = formatHunk(shown).split("\n").slice(1).join("\n");
-    return `${fencedDiffMarkdown(`${hunkHeader(h)}\n${body}`)}\n\n这一处共 ${h.lines.length} 行，预览只显示前 ${MAX_PREVIEW_LINES} 行；完整内容请复制这一处差异或差异报告。`;
+    return `${fencedDiffMarkdown(`${hunkHeader(h)}\n${body}`)}\n\n${t("previewTruncated", { total: h.lines.length, shown: MAX_PREVIEW_LINES })}`;
 }
 /** 统一格式（unified diff）报告，可直接粘贴到代码评审或 git apply */
-export function formatUnifiedDiff(result, leftName = "左侧", rightName = "右侧") {
+export function formatUnifiedDiff(result, leftName = t("sideLeft"), rightName = t("sideRight")) {
     if (result.identical)
         return "";
     return [`--- ${leftName}`, `+++ ${rightName}`, ...result.hunks.map(formatHunk), ""].join("\n");
@@ -354,8 +350,8 @@ export function formatUnifiedDiff(result, leftName = "左侧", rightName = "右�
 export function describeHunk(h) {
     const parts = [];
     if (h.removed)
-        parts.push(`删除 ${h.removed} 行`);
+        parts.push(t("hunkRemoved", { count: h.removed }));
     if (h.added)
-        parts.push(`新增 ${h.added} 行`);
-    return parts.join("，");
+        parts.push(t("hunkAdded", { count: h.added }));
+    return parts.join(t("hunkJoiner"));
 }

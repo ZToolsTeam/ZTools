@@ -91,5 +91,52 @@
   "category": [
     "办公效率"
   ],
-  "minAppVersion": "1.1.8.3"
+  "categoryId": "productivity",
+  "minAppVersion": "1.1.8.3",
+  "defaultLocale": "zh-CN",
+  "i18n": {
+    "en-US": {
+      "name": "Calculator",
+      "description": "Instant expression calculator with scientific functions, unit conversions, live multi-currency exchange rates (including gold and Bitcoin), Chinese RMB uppercase formatting, and date math.",
+      "keywords": [
+        "calc",
+        "calculator",
+        "math",
+        "unit",
+        "currency",
+        "exchange rate",
+        "gold",
+        "bitcoin"
+      ],
+      "features": {
+        "calc-unit": {
+          "explain": "Convert length, weight, storage, and temperature units",
+          "cmds": [
+            "unit convert",
+            "length convert",
+            "weight convert",
+            "temperature convert"
+          ]
+        },
+        "calc-currency": {
+          "explain": "Live exchange rates and multi-currency conversion (including gold and Bitcoin)",
+          "cmds": [
+            "exchange rate",
+            "currency",
+            "currency converter",
+            "gold price",
+            "btc price"
+          ]
+        },
+        "calc-rmb": {
+          "explain": "Convert numbers to Chinese financial uppercase RMB format",
+          "cmds": [
+            "rmb uppercase",
+            "chinese currency",
+            "financial uppercase"
+          ]
+        }
+      }
+    }
+  }
 }

@@ -27,7 +27,9 @@ import type {
 } from '../../contracts/method-params.js'
 import { FileSystemService } from './file-system-service.js'
 import { readSystemAvailableMemoryBytes } from '../platform/macos/memory.js'
+import { resolveRuntimeArchitecture, type NativeOsArchitecture } from '../platform/runtime-architecture.js'
 import type { WindowRegistry } from '../windows/window-registry.js'
+import { getResolvedLocale, type SupportedLocale } from '../i18n/index.js'
 
 type StaticSystemPath = Exclude<SystemPathName, 'cache' | 'temp'>
 const execFileAsync = promisify(execFile)
@@ -138,12 +140,33 @@ const ALLOWED_BREW_ACTIONS = new Set<BrewAction>([
 
 const SAFE_BREW_PKG_REGEX = /^[A-Za-z0-9@._+-]+$/
 
+export interface SystemInfo extends Record<string, unknown> {
+  success: true
+  platform: 'windows' | 'macos' | 'linux'
+  osName: string
+  osVersion: string | null
+  osArch: string
+  processArch: string
+  nativeOsArch: NativeOsArchitecture
+  appName: string
+  appVersion: string
+  locale: SupportedLocale
+  darkMode: boolean
+  binPath: string
+  cachePath: string
+  debug: boolean
+  supportsDoubleModifierHotkeys: boolean
+  supportsMouseTriggers: boolean
+}
+
 export interface SystemAdapter {
   appName: string
   appVersion: string
   isDev: boolean
   paths: Record<StaticSystemPath, string>
   getProductVersion?(): string
+  /** 当前进程是否运行在 ARM64 转译环境（来自 Electron app.runningUnderARM64Translation） */
+  runningUnderARM64Translation?: boolean | null | (() => boolean | null)
   isDarkMode(): boolean
   setDarkMode(enabled: boolean): void
   showNotification(params: SystemNotifyParams, caller: CallerIdentity): Promise<void>
@@ -516,7 +539,7 @@ export class SystemService {
     return { success: true, dark: enabled }
   }
 
-  async getInfo(caller: CallerIdentity): Promise<Record<string, unknown>> {
+  async getInfo(caller: CallerIdentity): Promise<SystemInfo> {
     const release = os.release()
     const isWindows = this.runtimePlatform === 'win32'
     const productVersion = this.runtimePlatform === 'darwin'
@@ -526,6 +549,13 @@ export class SystemService {
       ? release.split('.').slice(0, 3).map((part) => Number.parseInt(part, 10) || 0)
       : undefined
     const nativeInputAvailable = this.#isNativeInputAvailable()
+    const { nativeOsArch } = resolveRuntimeArchitecture({
+      platform: this.runtimePlatform,
+      processArch: process.arch,
+      runningUnderARM64Translation: this.#isRunningUnderARM64Translation(),
+      processorArchitecture: process.env.PROCESSOR_ARCHITECTURE,
+      processorArchitew6432: process.env.PROCESSOR_ARCHITEW6432
+    })
     return {
       success: true,
       platform: platformName(this.runtimePlatform),
@@ -545,8 +575,10 @@ export class SystemService {
       } : { kernelRelease: release }),
       osArch: os.arch(),
       processArch: process.arch,
+      nativeOsArch,
       appName: this.adapter.appName,
       appVersion: this.adapter.appVersion,
+      locale: getResolvedLocale(),
       darkMode: this.adapter.isDarkMode(),
       binPath: this.adapter.paths.app,
       cachePath: await this.files.getScopedCachePath(caller),
@@ -554,6 +586,15 @@ export class SystemService {
       supportsDoubleModifierHotkeys: Boolean(this.runtimePlatform === 'win32' && nativeInputAvailable),
       supportsMouseTriggers: Boolean(this.runtimePlatform === 'win32' && nativeInputAvailable)
     }
+  }
+
+  #isRunningUnderARM64Translation(): boolean | null {
+    const source = this.adapter.runningUnderARM64Translation
+    if (typeof source === 'function') {
+      const value = source()
+      return typeof value === 'boolean' ? value : null
+    }
+    return typeof source === 'boolean' ? source : null
   }
 
   #isNativeInputAvailable(): boolean {

@@ -1,6 +1,7 @@
 import { currentInstance, isEvaluatingChildElement, EffectCallback } from "./context.js";
+import { getLocale, onLocaleChange } from "./locale.js";
 
-function areDepsEqual(prevDeps?: any[], nextDeps?: any[]): boolean {
+function areDepsEqual(prevDeps?: readonly unknown[], nextDeps?: readonly unknown[]): boolean {
   if (!prevDeps || !nextDeps) return false;
   if (prevDeps.length !== nextDeps.length) return false;
   for (let i = 0; i < prevDeps.length; i++) {
@@ -29,7 +30,7 @@ function useStateSlot<T>(initial: () => T): { value: T; setter: StateSetter<T>; 
     created = true;
     const setter: StateSetter<T> = (action) => {
       const hookRecord = hooks[index];
-      const prevVal = hookRecord.value;
+      const prevVal = hookRecord.value as T;
       const nextVal = typeof action === "function" ? (action as (p: T) => T)(prevVal) : action;
 
       if (!Object.is(prevVal, nextVal)) {
@@ -41,12 +42,17 @@ function useStateSlot<T>(initial: () => T): { value: T; setter: StateSetter<T>; 
     hooks[index] = {
       type: "state",
       value: initial(),
-      setter
+      setter: setter as (newVal: unknown) => void
     };
   }
 
   const currentHook = hooks[index];
-  return { value: currentHook.value, setter: currentHook.setter!, index, created };
+  return {
+    value: currentHook.value as T,
+    setter: currentHook.setter as StateSetter<T>,
+    index,
+    created
+  };
 }
 
 /**
@@ -103,7 +109,7 @@ export function usePopoutState<T>(
   });
   if (!validKey) {
     if (slot.created) console.warn(`[usePopoutState] key 无效（需要 1–${MAX_POPOUT_KEY_LENGTH} 个字符），按普通 useState 处理:`, key);
-  } else if (!instance.registerPopoutState(key, slot.index, options?.paths) && slot.created) {
+  } else if (!instance.registerPopoutState(key, slot.index, options?.paths as ((value: unknown) => unknown) | undefined) && slot.created) {
     console.warn(`[usePopoutState] key "${key}" 在同一页面重复使用，只有第一个会带到独立窗口`);
   }
   return [slot.value, slot.setter];
@@ -112,7 +118,7 @@ export function usePopoutState<T>(
 /**
  * 声明式微副作用 Hook: useEffect
  */
-export function useEffect(effect: EffectCallback, deps?: any[]): void {
+export function useEffect(effect: EffectCallback, deps?: readonly unknown[]): void {
   if (isEvaluatingChildElement) {
     return;
   }
@@ -152,7 +158,7 @@ export function useEffect(effect: EffectCallback, deps?: any[]): void {
 /**
  * 声明式记忆化 Hook: useMemo
  */
-export function useMemo<T>(factory: () => T, deps?: any[]): T {
+export function useMemo<T>(factory: () => T, deps?: readonly unknown[]): T {
   const instance = currentInstance;
   if (!instance) {
     return factory();
@@ -182,13 +188,16 @@ export function useMemo<T>(factory: () => T, deps?: any[]): T {
     return value;
   }
 
-  return prevHook.value;
+  return prevHook.value as T;
 }
 
 /**
  * 声明式回调 Hook: useCallback
  */
-export function useCallback<T extends (...args: any[]) => any>(callback: T, deps?: any[]): T {
+export function useCallback<T extends (...args: never[]) => unknown>(
+  callback: T,
+  deps?: readonly unknown[]
+): T {
   return useMemo(() => callback, deps);
 }
 
@@ -214,5 +223,23 @@ export function useRef<T>(initialValue: T): { current: T } {
     return ref;
   }
 
-  return hooks[index].value;
+  return hooks[index].value as { current: T };
+}
+
+/**
+ * 声明式语言 Hook: useLocale
+ * 订阅运行时语言变更，语言切换时自动触发组件重绘，卸载时成对清理监听器。
+ */
+export function useLocale(): string {
+  const [locale, setLocale] = useState<string>(() => getLocale());
+
+  useEffect(() => {
+    const latest = getLocale();
+    setLocale((prev) => (prev === latest ? prev : latest));
+    return onLocaleChange((nextLocale) => {
+      setLocale(nextLocale);
+    });
+  }, []);
+
+  return locale;
 }

@@ -1,5 +1,10 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, beforeEach } from 'vitest';
 import { createScreenColorPicker } from '../screenColorPicker.js';
+import { setI18nLocale } from '@/i18n';
+
+beforeEach(() => {
+  setI18nLocale('zh-CN');
+});
 
 describe('宿主交互取色', () => {
   it('只在选点完成后返回色值', async () => {

@@ -66,7 +66,7 @@ function safeHref(target) {
   display: flex;
   flex-direction: column;
   gap: 2px;
-  font-size: 12px;
+  font-size: var(--rc-fs-small);
 }
 
 .decl-meta-row {
@@ -151,7 +151,7 @@ function safeHref(target) {
   border: 1px solid var(--rc-border);
   background: var(--rc-surface-hover);
   color: var(--rc-text-secondary);
-  font-size: 11px;
+  font-size: var(--rc-fs-caption);
   line-height: 18px;
   font-weight: 500;
 }

@@ -61,6 +61,11 @@ import * as api from '@/api/apiserver'
 import { useThemeStore } from '@/stores/theme'
 import { BUILTIN_SHORTCUT_HINTS } from '@/utils/shellShortcuts'
 import { MOUSE_WAKE_OPTIONS } from '@/utils/globalWakeHotkey'
+import { setI18nLocale } from '@/i18n'
+
+beforeEach(() => {
+  setI18nLocale('zh-CN')
+})
 
 const PluginHotkeyModalStub = defineComponent({
   name: 'PluginHotkeyModal',
@@ -644,6 +649,28 @@ describe('AdvancedSettings 设置页（4 Tab 带外框分段槽版式）', () =>
       expect(reloadHotkeysMock).toHaveBeenCalled()
 
       winWrapper.unmount()
+    })
+
+    it('常规与外观页提供界面语言选择项，切换为 English 后即时刷新设置页文案并持久化', async () => {
+      const configSet = vi.fn().mockResolvedValue(true)
+      global.window.ztools = {
+        config: { get: vi.fn().mockResolvedValue(null), set: configSet }
+      }
+      const wrapper = mountPage()
+      await flushPromises()
+
+      expect(wrapper.find('.page-title').text()).toBe('设置')
+      const localeSelect = wrapper.findComponent('[data-testid="locale-select"]')
+      expect(localeSelect.exists()).toBe(true)
+
+      await localeSelect.vm.$emit('update:value', 'en-US')
+      await flushPromises()
+
+      expect(configSet).toHaveBeenCalledWith('ui.locale', 'en-US', true, 'user_settings.json')
+      expect(wrapper.find('.page-title').text()).toBe('Settings')
+      expect(wrapper.findAll('[data-testid="settings-tabs"] .seg-btn')[0].text()).toBe('General & Appearance')
+
+      wrapper.unmount()
     })
   })
 })

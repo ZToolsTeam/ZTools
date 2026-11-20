@@ -4,6 +4,7 @@
 import { isOfficialPlugin } from '@/utils/officialPlugins'
 import { normalizeCategoryNames } from '@/utils/pluginCategories'
 import { isMacOS } from '@/utils/platform'
+import { t } from '@/i18n'
 
 /**
  * Check if the native bridge is available
@@ -32,18 +33,18 @@ export const DEFAULT_GLOBAL_WAKE_HOTKEY = 'Alt+Space'
  */
 function getNativeModule(moduleName) {
   if (!window.ztools) {
-    throw new Error('ZTools API 未初始化')
+    throw new Error(t('nativeApi.notInitialized'))
   }
   if (moduleName === 'win' || moduleName === 'window') {
     const winModule = window.ztools.window || window.ztools.win
     if (!winModule) {
-      throw new Error('ZTools window API 不可用')
+      throw new Error(t('nativeApi.moduleUnavailable', { module: 'window' }))
     }
     return winModule
   }
   const module = window.ztools[moduleName]
   if (!module) {
-    throw new Error(`ZTools ${moduleName} API 不可用`)
+    throw new Error(t('nativeApi.moduleUnavailable', { module: moduleName }))
   }
   return module
 }
@@ -97,7 +98,7 @@ const native = {
       if (resData?.action === 'navigate_to_detail') {
         return {
           success: false,
-          error: resData.error || '插件未安装',
+          error: resData.error || t('nativeApi.pluginNotInstalled'),
           action: 'navigate_to_detail',
           pluginId: resData.pluginId || pluginId
         }
@@ -106,7 +107,7 @@ const native = {
       if (resData?.success === false) {
         return {
           success: false,
-          error: resData.error || '打开失败',
+          error: resData.error || t('nativeApi.openFailed'),
           pluginId: resData.pluginId || pluginId
         }
       }
@@ -220,7 +221,7 @@ const native = {
       if (typeof sys.getAutostart === 'function') {
         const result = await withTimeout(sys.getAutostart())
         if (result?.success !== true || typeof result.enabled !== 'boolean') {
-          throw new Error('获取开机启动状态失败')
+          throw new Error(t('nativeApi.getAutostartFailed'))
         }
         return result.enabled
       }

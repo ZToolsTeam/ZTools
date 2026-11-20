@@ -39,7 +39,7 @@ defineProps({
   width: 22px;
   height: 22px;
   border: 0 solid var(--rc-accent);
-  transition: border-color 0.2s ease;
+  transition: border-color var(--rc-dur-slow) ease;
 }
 
 .qr-corner.is-tl { top: 0; left: 0; border-top-width: 2px; border-left-width: 2px; border-top-left-radius: 10px; }
@@ -55,7 +55,7 @@ defineProps({
   position: relative;
   padding: 12px;
   box-sizing: border-box;
-  border-radius: 12px;
+  border-radius: var(--rc-radius-lg);
   background: var(--rc-qr-surface);
   box-shadow:
     0 0 0 1px rgba(0, 0, 0, 0.06),
@@ -81,8 +81,8 @@ defineProps({
   text-align: center;
   background: var(--rc-surface);
   color: var(--rc-text-secondary);
-  font-size: 13px;
-  animation: qr-overlay-in 0.2s ease;
+  font-size: var(--rc-fs-body);
+  animation: qr-overlay-in var(--rc-dur-slow) ease;
 }
 
 @keyframes qr-overlay-in {

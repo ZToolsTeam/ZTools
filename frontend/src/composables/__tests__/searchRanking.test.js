@@ -126,8 +126,8 @@ describe('空查询排序', () => {
     expect(list.slice(-4)).toEqual([
       '系统设置',
       '打开插件中心',
-      '创建新扩展 (Create Extension)',
-      '开源插件生态大仓 (ZTools Extensions)'
+      '创建新扩展',
+      '开源插件生态大仓'
     ])
   })
 
@@ -135,7 +135,7 @@ describe('空查询排序', () => {
     const state = create()
     await settle()
     expect(names(state)[0]).toBe('JSON 格式化')
-    expect(names(state).at(-1)).toBe('开源插件生态大仓 (ZTools Extensions)')
+    expect(names(state).at(-1)).toBe('开源插件生态大仓')
     const raw = JSON.stringify({ 'system-settings': { count: 1, score: 1, lastUsed: Date.now() } })
     localStorage.setItem(FRECENCY_KEY, raw)
     window.dispatchEvent(new StorageEvent('storage', { key: FRECENCY_KEY, newValue: raw }))
@@ -294,8 +294,8 @@ describe('分类与固定标记', () => {
       'JSON 生成类型',
       '系统设置',
       '打开插件中心',
-      '创建新扩展 (Create Extension)',
-      '开源插件生态大仓 (ZTools Extensions)'
+      '创建新扩展',
+      '开源插件生态大仓'
     ])
   })
 

@@ -76,11 +76,14 @@ defineEmits([
 import { usePluginIcon } from '@/composables/usePluginIcon'
 import { PlatformLogos, RcSquircle, RcTag } from '@/components/base'
 import { computed } from 'vue'
-import { normalizeCategoryNames } from '@/utils/pluginCategories'
 import { formatBytes } from '@/utils/formatBytes'
 import { getPluginPlatforms } from '@/utils/platform'
+import { useAppI18n, getCurrentLocale } from '@/i18n'
+import { getLocalizedPluginName, getLocalizedCategoryNames } from '@/utils/pluginI18n'
 
+const { t } = useAppI18n()
 const { pluginGlyph, fallbackGlyph, displayIconUrl, iconFailed } = usePluginIcon(() => props.plugin)
+const pluginName = computed(() => getLocalizedPluginName(props.plugin))
 
 /**
  * 名称下方一行元信息：开发者 · 版本 · 分类 · 大小 · 安装量 / 内置 · 评分，最后是支持的平台标志。
@@ -91,15 +94,17 @@ const metaItems = computed(() => {
   const items = []
   if (p.author) items.push({ key: 'author', text: p.author })
   if (p.version) items.push({ key: 'version', text: `v${p.version}` })
-  const category = normalizeCategoryNames(p.category).join(' · ')
+  const category = getLocalizedCategoryNames(p.category).join(' · ')
   if (category) items.push({ key: 'category', text: category })
   const size = formatBytes(p.size ?? p.fileSize ?? p.file_size)
-  if (size) items.push({ key: 'size', text: size, title: p.builtin ? '随客户端分发的文件大小' : '安装包大小' })
+  if (size) items.push({ key: 'size', text: size, title: p.builtin ? t('details.meta.bundledSizeTitle') : t('details.meta.packageSizeTitle') })
   if (p.builtin || p.bundled) {
-    items.push({ key: 'builtin', text: '随客户端内置' })
+    items.push({ key: 'builtin', text: t('details.meta.bundled') })
   } else {
     const downloads = Number(p.downloads)
-    if (Number.isFinite(downloads) && downloads > 0) items.push({ key: 'downloads', text: `${downloads.toLocaleString('zh-CN')} 次安装` })
+    if (Number.isFinite(downloads) && downloads > 0) {
+      items.push({ key: 'downloads', text: t('details.meta.installs', { count: downloads.toLocaleString(getCurrentLocale()) }) })
+    }
   }
   return items
 })
@@ -113,10 +118,18 @@ const rating = computed(() => {
   const value = Number(summary.average)
   const count = Math.max(0, Math.floor(Number(summary.count) || 0))
   if (summary.average === null || summary.average === undefined || !Number.isFinite(value) || value <= 0 || value > 5) {
-    return { score: '', text: '评分人数不足', title: count > 0 ? `已有 ${count} 人评分，满 3 人后显示平均分` : '还没有人评分' }
+    return {
+      score: '',
+      text: t('details.meta.ratingInsufficient'),
+      title: count > 0 ? t('details.meta.ratingInsufficientTitle', { count }) : t('details.meta.ratingNoneTitle')
+    }
   }
   const score = value.toFixed(1)
-  return { score, text: `${score}（${count} 人评分）`, title: `平均 ${score} / 5，${count} 人评分` }
+  return {
+    score,
+    text: t('details.meta.ratingText', { score, count }),
+    title: t('details.meta.ratingTitle', { score, count })
+  }
 })
 </script>
 
@@ -135,16 +148,17 @@ const rating = computed(() => {
       <!-- 插件信息 -->
       <div class="plugin-info">
         <div class="title-row">
-          <h1 class="plugin-name">{{ plugin.name }}</h1>
+          <h1 class="plugin-name">{{ pluginName }}</h1>
+          <RcTag v-if="plugin.is_official" tone="neutral" class="status-tag">{{ t('common.official') }}</RcTag>
           <!-- 只放需要用户留意的状态；「已安装」由右侧「打开」按钮表达 -->
           <RcTag
             v-if="plugin.revoked || isRevoked"
             tone="error"
             class="status-tag"
-            :title="revokedReason || plugin.revoked_reason || '该插件已被官方下架禁用'"
-          >已下架</RcTag>
-          <RcTag v-if="hasUpdate" tone="accent" class="status-tag">有新版本</RcTag>
-          <RcTag v-else-if="updateInfo?.incompatible" tone="warning" class="status-tag" :title="updateInfo.incompatReason">需升级客户端</RcTag>
+            :title="revokedReason || plugin.revoked_reason || t('market.revokedDefaultReason')"
+          >{{ t('market.card.revoked') }}</RcTag>
+          <RcTag v-if="hasUpdate" tone="accent" class="status-tag">{{ t('details.meta.hasUpdate') }}</RcTag>
+          <RcTag v-else-if="updateInfo?.incompatible" tone="warning" class="status-tag" :title="updateInfo.incompatReason">{{ t('details.meta.upgradeClient') }}</RcTag>
         </div>
         <ul v-if="metaItems.length || rating || hasPlatforms" class="plugin-meta">
           <li v-for="item in metaItems" :key="item.key" :class="`meta-${item.key}`" :title="item.title">{{ item.text }}</li>
@@ -193,7 +207,7 @@ const rating = computed(() => {
 .detail-header {
   background: var(--rc-surface);
   border: 1px solid var(--rc-border);
-  border-radius: 12px;
+  border-radius: var(--rc-radius-lg);
   padding: 20px;
   margin-bottom: 12px;
 }
@@ -220,7 +234,7 @@ const rating = computed(() => {
 .plugin-name {
   margin: 0;
   color: var(--rc-text-primary);
-  font-size: 20px;
+  font-size: var(--rc-fs-title-md);
   font-weight: 600;
   letter-spacing: -0.01em;
   line-height: 28px;
@@ -239,7 +253,7 @@ const rating = computed(() => {
   padding: 0;
   list-style: none;
   color: var(--rc-text-muted);
-  font-size: 13px;
+  font-size: var(--rc-fs-small);
   line-height: 20px;
 }
 
@@ -265,12 +279,12 @@ const rating = computed(() => {
 }
 
 .meta-platform {
-  font-size: 13px;
+  font-size: var(--rc-fs-small);
 }
 
 .meta-star {
-  margin-right: 3px;
-  font-size: 12px;
+  margin-right: 4px;
+  font-size: var(--rc-fs-small);
   color: var(--rc-accent);
 }
 

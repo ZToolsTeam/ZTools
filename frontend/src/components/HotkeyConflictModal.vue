@@ -17,7 +17,9 @@ import {
   getPluginFeatureHotkeyItemByTriggerId,
   isPluginFeatureHotkeyTriggerId
 } from '@/utils/pluginFeatureHotkeys'
+import { useAppI18n } from '@/i18n'
 
+const { t } = useAppI18n()
 const router = useRouter()
 const visible = ref(false)
 const conflicts = ref([])
@@ -30,16 +32,16 @@ const isSystemTarget = (item) => {
 
 const resolveRawItemTitle = (item) => {
   const tid = String(item?.triggerId || '').trim()
-  if (tid === 'global_wake_hotkey') return '全局唤醒快捷键'
-  if (tid === 'mouse_wake_hook') return '鼠标快捷唤醒'
+  if (tid === 'global_wake_hotkey') return t('modals.hotkeyConflict.globalWake')
+  if (tid === 'mouse_wake_hook') return t('modals.hotkeyConflict.mouseWake')
   const featureItem = tid ? getPluginFeatureHotkeyItemByTriggerId(tid) : null
   if (featureItem) return `${featureItem.pluginName} · ${featureItem.featureName}`
-  if (String(item?.pluginId || '').trim().toLowerCase() === 'system') return '系统快捷键'
+  if (String(item?.pluginId || '').trim().toLowerCase() === 'system') return t('modals.hotkeyConflict.systemHotkey')
   if (item?.pluginName) return item.pluginName
   if (item?.pluginId) return item.pluginId
-  if (item?.type === 'mouse') return '鼠标快捷唤醒'
-  if (item?.type === 'keyboard') return '全局唤醒快捷键'
-  return '未知触发器'
+  if (item?.type === 'mouse') return t('modals.hotkeyConflict.mouseWake')
+  if (item?.type === 'keyboard') return t('modals.hotkeyConflict.globalWake')
+  return t('modals.hotkeyConflict.unknownTrigger')
 }
 
 /** 将不同来源的冲突记录归一化为统一展示结构 */
@@ -49,11 +51,11 @@ const normalizeConflictItem = (item) => {
   // 兼容旧版系统冲突格式 { type: 'keyboard' | 'mouse', key }
   if ((item.type === 'keyboard' || item.type === 'mouse') && !('conflictType' in item)) {
     return {
-      pluginName: item.type === 'mouse' ? '鼠标快捷唤醒' : '全局唤醒快捷键',
+      pluginName: item.type === 'mouse' ? t('modals.hotkeyConflict.mouseWake') : t('modals.hotkeyConflict.globalWake'),
       pluginId: 'system',
       key: item.key || '',
       conflictType: 'system_occupied',
-      conflictWith: '系统或其他程序',
+      conflictWith: t('modals.hotkeyConflict.systemOrOtherApp'),
       triggerId: item.type === 'mouse' ? 'mouse_wake_hook' : 'global_wake_hotkey',
       conflictTriggerId: ''
     }
@@ -66,7 +68,7 @@ const normalizeConflictItem = (item) => {
       pluginId: item.pluginId || '',
       key: item.key || '',
       conflictType: 'system_occupied',
-      conflictWith: item.reason || '系统或其他程序',
+      conflictWith: item.reason || t('modals.hotkeyConflict.systemOrOtherApp'),
       triggerId: item.triggerId || '',
       conflictTriggerId: ''
     }
@@ -80,7 +82,7 @@ const normalizeConflictItem = (item) => {
     pluginId: item.pluginId || '',
     key: item.key || '',
     conflictType: normalizedType,
-    conflictWith: item.conflictWith || (normalizedType === 'system_occupied' ? '系统或其他程序' : '其他快捷键'),
+    conflictWith: item.conflictWith || (normalizedType === 'system_occupied' ? t('modals.hotkeyConflict.systemOrOtherApp') : t('modals.hotkeyConflict.otherHotkey')),
     triggerId: item.triggerId || '',
     conflictTriggerId: item.conflictTriggerId || ''
   }
@@ -185,37 +187,37 @@ const goSettings = () => {
 /** 弹窗标题 */
 const modalTitle = computed(() => {
   if (systemOccupiedConflicts.value.length > 0 && duplicateConflicts.value.length > 0) {
-    return '快捷键冲突提醒'
+    return t('modals.hotkeyConflict.titleMixed')
   }
   if (systemOccupiedConflicts.value.length > 0) {
-    return hasPluginConflict.value ? '快捷键被占用冲突' : '快捷键冲突'
+    return hasPluginConflict.value ? t('modals.hotkeyConflict.titleOccupiedPlugin') : t('modals.hotkeyConflict.titleOccupied')
   }
-  return '启动快捷键冲突'
+  return t('modals.hotkeyConflict.titleDuplicate')
 })
 
 /** 弹窗描述文本 */
 const descText = computed(() => {
   if (systemOccupiedConflicts.value.length > 0 && duplicateConflicts.value.length > 0) {
-    return '以下全局快捷键存在系统占用或重复绑定，部分快捷键可能无法正常生效：'
+    return t('modals.hotkeyConflict.descMixed')
   }
   if (systemOccupiedConflicts.value.length > 0) {
-    return '以下快捷键已被系统或其他程序占用，无法正常使用：'
+    return t('modals.hotkeyConflict.descOccupied')
   }
-  return '以下启动快捷键存在重复冲突，可能无法正常使用：'
+  return t('modals.hotkeyConflict.descDuplicate')
 })
 
 /** 提示文本 */
 const tipText = computed(() => {
   if (hasSystemWakeConflict.value && hasPluginConflict.value) {
-    return '请前往快捷键设置调整全局唤醒或插件启动快捷键，或关闭占用该热键的外部程序。'
+    return t('modals.hotkeyConflict.tipBoth')
   }
   if (hasSystemWakeConflict.value) {
-    return '请前往设置修改唤醒快捷键，或关闭占用该快捷键的程序后重试。'
+    return t('modals.hotkeyConflict.tipSystem')
   }
   if (hasFeatureHotkeyConflict.value) {
-    return '请前往设置修改冲突的插件内功能快捷键。'
+    return t('modals.hotkeyConflict.tipFeature')
   }
-  return '请前往设置修改冲突的启动快捷键。'
+  return t('modals.hotkeyConflict.tipPlugin')
 })
 
 const canRenderCombo = (key) => isSafeShortcutKeysCombo(key, 'windows', true)
@@ -239,7 +241,7 @@ defineExpose({ show, close })
       <div class="conflict-sections">
         <!-- 系统占用冲突区块 -->
         <section v-if="systemOccupiedConflicts.length > 0" class="conflict-section" data-testid="system-conflicts-section">
-          <h3 v-if="duplicateConflicts.length > 0" class="conflict-section-title">系统占用冲突</h3>
+          <h3 v-if="duplicateConflicts.length > 0" class="conflict-section-title">{{ t('modals.hotkeyConflict.sectionSystem') }}</h3>
           <div class="conflict-list">
             <div
               v-for="(item, index) in systemOccupiedConflicts"
@@ -252,8 +254,8 @@ defineExpose({ show, close })
                 <span v-else-if="item.key" class="conflict-key-text">{{ item.key }}</span>
               </div>
               <div class="plugin-conflict-detail">
-                <RcTag tone="error">系统占用</RcTag>
-                <span class="conflict-with">与「{{ item.conflictWith }}」冲突</span>
+                <RcTag tone="error">{{ t('modals.hotkeyConflict.tagSystem') }}</RcTag>
+                <span class="conflict-with">{{ t('modals.hotkeyConflict.conflictWith', { name: item.conflictWith }) }}</span>
               </div>
             </div>
           </div>
@@ -261,7 +263,7 @@ defineExpose({ show, close })
 
         <!-- 插件重复冲突区块 -->
         <section v-if="duplicateConflicts.length > 0" class="conflict-section" data-testid="duplicate-conflicts-section">
-          <h3 v-if="systemOccupiedConflicts.length > 0" class="conflict-section-title">插件重复冲突</h3>
+          <h3 v-if="systemOccupiedConflicts.length > 0" class="conflict-section-title">{{ t('modals.hotkeyConflict.sectionDuplicate') }}</h3>
           <div class="conflict-list">
             <div
               v-for="(item, index) in duplicateConflicts"
@@ -274,8 +276,8 @@ defineExpose({ show, close })
                 <span v-else-if="item.key" class="conflict-key-text">{{ item.key }}</span>
               </div>
               <div class="plugin-conflict-detail">
-                <RcTag tone="warning">快捷键重复</RcTag>
-                <span class="conflict-with">与「{{ item.conflictWith }}」冲突</span>
+                <RcTag tone="warning">{{ t('modals.hotkeyConflict.tagDuplicate') }}</RcTag>
+                <span class="conflict-with">{{ t('modals.hotkeyConflict.conflictWith', { name: item.conflictWith }) }}</span>
               </div>
             </div>
           </div>
@@ -284,10 +286,10 @@ defineExpose({ show, close })
 
       <p class="conflict-tip">{{ tipText }}</p>
     </div>
-    <div class="conflict-actions">
-      <RcButton variant="secondary" size="md" @click="close">关闭</RcButton>
-      <RcButton variant="primary" size="md" @click="goSettings">去设置</RcButton>
-    </div>
+    <template #footer>
+      <RcButton variant="secondary" size="md" @click="close">{{ t('common.close') }}</RcButton>
+      <RcButton variant="primary" size="md" @click="goSettings">{{ t('modals.hotkeyConflict.goSettings') }}</RcButton>
+    </template>
   </RcDialog>
 </template>
 
@@ -298,12 +300,12 @@ defineExpose({ show, close })
 }
 .conflict-icon {
   display: inline-flex;
-  font-size: 48px;
+  font-size: 48px; /* 图标字形尺寸 */
   color: var(--rc-warning);
   margin-bottom: 12px;
 }
 .conflict-desc {
-  font-size: 14px;
+  font-size: var(--rc-fs-body);
   color: var(--rc-text-primary);
   margin-bottom: 14px;
 }
@@ -324,7 +326,7 @@ defineExpose({ show, close })
   margin: 0;
   padding-left: 2px;
   text-align: left;
-  font-size: 12px;
+  font-size: var(--rc-fs-small);
   font-weight: 600;
   color: var(--rc-text-secondary);
 }
@@ -340,7 +342,7 @@ defineExpose({ show, close })
   gap: 12px;
   padding: 8px 14px;
   background: var(--rc-canvas);
-  border-radius: 8px;
+  border-radius: var(--rc-radius-md);
 }
 /* 冲突项：纵向布局 */
 .plugin-conflict-item {
@@ -356,7 +358,7 @@ defineExpose({ show, close })
   gap: 8px;
 }
 .plugin-name {
-  font-size: 13px;
+  font-size: var(--rc-fs-body);
   font-weight: 500;
   color: var(--rc-text-primary);
   overflow: hidden;
@@ -367,7 +369,7 @@ defineExpose({ show, close })
   display: flex;
   align-items: center;
   gap: 8px;
-  font-size: 12px;
+  font-size: var(--rc-fs-small);
 }
 .conflict-with {
   color: var(--rc-text-secondary);
@@ -378,18 +380,12 @@ defineExpose({ show, close })
   flex-shrink: 0;
 }
 .conflict-key-text {
-  font-size: 12px;
+  font-size: var(--rc-fs-small);
   color: var(--rc-text-secondary);
 }
 .conflict-tip {
-  font-size: 12px;
+  font-size: var(--rc-fs-small);
   color: var(--rc-text-secondary);
   margin-bottom: 0;
-}
-.conflict-actions {
-  display: flex;
-  justify-content: flex-end;
-  gap: 8px;
-  margin-top: 16px;
 }
 </style>

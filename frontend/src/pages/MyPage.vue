@@ -45,6 +45,10 @@ import {
   isModalOpen,
   isInteractiveControlTarget
 } from '@/utils/keymap'
+import { useAppI18n } from '@/i18n'
+import { getLocalizedPluginName, getLocalizedPluginDescription, getLocalizedCategoryName } from '@/utils/pluginI18n'
+
+const { t } = useAppI18n()
 
 // Stores
 const pluginsStore = usePluginsStore()
@@ -472,7 +476,7 @@ async function savePinnedList(list) {
       )
     }
   } catch (e) {
-    error('保存固定列表失败: ' + e.message)
+    error(t('myPage.savePinnedFailed', { reason: e.message }))
   }
 }
 
@@ -512,7 +516,7 @@ async function saveRecentOrder(order) {
       )
     }
   } catch (e) {
-    error('保存排序失败: ' + e.message)
+    error(t('myPage.saveOrderFailed', { reason: e.message }))
   }
 }
 
@@ -538,7 +542,7 @@ async function persistCurrentOrder() {
 
 async function pinPlugin(pluginId) {
   if (!canPin.value) {
-    warning(`最多只能固定 ${MAX_PINNED_COUNT} 个插件`)
+    warning(t('myPage.maxPinnedWarning', { count: MAX_PINNED_COUNT }))
     return
   }
 
@@ -548,7 +552,7 @@ async function pinPlugin(pluginId) {
     await savePinnedList(pinned)
     // 固定后立即持久化当前排序，防止重启后丢失
     await persistCurrentOrder()
-    success('已固定')
+    success(t('common.pinned'))
 
     if (userStore.isLoggedIn) {
       syncPinnedToCloud()
@@ -564,7 +568,7 @@ async function unpinPlugin(pluginId) {
     await savePinnedList(pinned)
     // 取消固定后立即持久化当前排序
     await persistCurrentOrder()
-    success('已取消固定')
+    success(t('common.unpin'))
 
     if (userStore.isLoggedIn) {
       syncPinnedToCloud()
@@ -680,7 +684,7 @@ function reorderPlugins(plugin, toIndex) {
 
   reorderDebounceTimer = setTimeout(async () => {
     await saveRecentOrder(nextOrder)
-    success('排序已保存')
+    success(t('myPage.orderSaved'))
 
     if (userStore.isLoggedIn) {
       syncOrderToCloud()
@@ -728,18 +732,18 @@ async function handleOpenPlugin(pluginId) {
   const id = getPluginId(pluginId)
   if (!id) return
   if (pluginsStore.isRevoked(id)) {
-    const reason = pluginsStore.getRevokedReason(id) || '该插件已被官方下架禁用'
-    toastError('无法启动：' + reason)
+    const reason = pluginsStore.getRevokedReason(id) || t('market.revokedDefaultReason')
+    toastError(t('market.cannotLaunch', { reason }))
     return
   }
   try {
     const res = await pluginsStore.openPlugin(id)
     if (res?.action === 'navigate_to_detail') {
-      toastWarning(res.error || '插件未安装，请重新安装')
+      toastWarning(res.error || t('details.notInstalledReinstall'))
       router.push(routeUtils.toPluginDetails(res.pluginId || id))
     }
   } catch (e) {
-    toastError('启动失败: ' + (e.message || e))
+    toastError(t('details.launchFailed', { reason: e.message || e }))
   }
 }
 
@@ -754,8 +758,8 @@ async function openApp(id) {
   if (!pluginId) return
 
   if (pluginsStore.isRevoked(pluginId)) {
-    const reason = pluginsStore.getRevokedReason(pluginId) || '该插件已被官方下架禁用'
-    toastError('无法启动：' + reason)
+    const reason = pluginsStore.getRevokedReason(pluginId) || t('market.revokedDefaultReason')
+    toastError(t('market.cannotLaunch', { reason }))
     return
   }
 
@@ -766,18 +770,18 @@ async function openApp(id) {
 
     // 检查是否需要导航到详情页（插件已卸载的情况）
     if (res?.action === 'navigate_to_detail') {
-      toastWarning(res.error || '插件未安装，请重新安装')
+      toastWarning(res.error || t('details.notInstalledReinstall'))
       router.push(routeUtils.toPluginDetails(res.pluginId || id))
       return
     }
 
     if (res?.success) {
-      toastSuccess('已打开插件')
+      toastSuccess(t('market.pluginOpened'))
     } else {
-      toastError('打开失败')
+      toastError(t('market.openFailed'))
     }
   } catch (e) {
-    toastError('打开失败: ' + (e.message || e))
+    toastError(t('market.openFailedWithReason', { reason: e.message || e }))
   }
 }
 
@@ -794,16 +798,16 @@ async function handleToggleFavorite(pluginId) {
   try {
     const id = getPluginId(pluginId)
     if (!id) {
-      toastError('插件标识符不存在')
+      toastError(t('details.pluginIdMissing'))
       return
     }
     const wasFavorite = pluginsStore.isFavorite(id)
     await pluginsStore.toggleFavorite(id)
-    toastSuccess(wasFavorite ? '已取消收藏' : '已加入收藏')
+    toastSuccess(wasFavorite ? t('market.favoriteRemoved') : t('market.favoriteAdded'))
   } catch (e) {
     if (!onAuthRequired(e)) {
       console.error('toggleFavorite error:', e)
-      toastError('操作失败: ' + (e.message || e))
+      toastError(t('market.operationFailed', { reason: e.message || e }))
     }
   }
 }
@@ -819,7 +823,7 @@ function canUninstallPlugin(pluginId) {
 
 function navigateToBundledManage(pluginId) {
   if (showMenu.value) hideMenu()
-  info('请在设置中卸载或还原内置插件')
+  info(t('details.manageBundledInSettings'))
   router.push({
     ...ROUTES.ADVANCED_SETTINGS,
     query: { manageBundled: pluginId }
@@ -834,7 +838,7 @@ function handleUninstallPlugin(pluginId, options = {}) {
   if (!canUninstallPlugin(pluginId)) {
     // 键盘 Delete 触发时菜单并没有打开，不能顺手清掉当前选中的插件
     if (showMenu.value) hideMenu()
-    toastError('内置插件随客户端提供，不能卸载')
+    toastError(t('details.builtinCannotUninstall'))
     return
   }
   if (isBundledPlugin(pluginId)) {
@@ -843,10 +847,10 @@ function handleUninstallPlugin(pluginId, options = {}) {
       return
     }
     confirmDialog({
-      title: '前往设置管理内置插件',
-      content: '内置插件随客户端提供，可在设置中卸载隐藏，并支持随时还原。是否前往设置？',
-      okText: '前往设置',
-      cancelText: '取消',
+      title: t('myPage.manageBundledTitle'),
+      content: t('myPage.manageBundledContent'),
+      okText: t('myPage.goToSettings'),
+      cancelText: t('common.cancel'),
       onOk() {
         navigateToBundledManage(pluginId)
       }
@@ -854,21 +858,21 @@ function handleUninstallPlugin(pluginId, options = {}) {
     return
   }
   confirmDialog({
-    title: '确认卸载',
-    content: '确定要卸载此插件吗？',
-    okText: '卸载',
-    cancelText: '取消',
+    title: t('myPage.confirmUninstallTitle'),
+    content: t('myPage.confirmUninstallContent'),
+    okText: t('common.uninstall'),
+    cancelText: t('common.cancel'),
     async onOk() {
       hideMenu()
       try {
         const result = await pluginsStore.uninstallPlugin(pluginId)
         if (!result?.success) {
-          throw new Error(result?.error || result?.message || '未知错误')
+          throw new Error(result?.error || result?.message || t('common.unknownError'))
         }
         clampFocusedCardIndex()
-        toastSuccess('插件已卸载')
+        toastSuccess(t('market.uninstallSuccess'))
       } catch (e) {
-        toastError('卸载失败: ' + (e?.message || e))
+        toastError(t('market.uninstallFailed', { reason: e?.message || e }))
       }
     }
   })
@@ -900,12 +904,12 @@ function handlePluginInstalled(event) {
       })
       // 根据 isUpdate 区分安装和更新的提示
       if (payload.isUpdate) {
-        toastSuccess('插件更新完成')
+        toastSuccess(t('market.updateComplete'))
       } else {
-        info('插件已安装')
+        info(t('myPage.pluginInstalled'))
       }
     } else {
-      toastError('插件安装失败: ' + (payload.error || '未知错误'))
+      toastError(t('myPage.pluginInstallFailed', { reason: payload.error || t('common.unknownError') }))
     }
   }
 }
@@ -937,7 +941,7 @@ function handlePluginUninstalled(event) {
         })
       }
     })
-    info('插件已卸载')
+    info(t('market.uninstallSuccess'))
   }
 }
 
@@ -1080,8 +1084,8 @@ const contextMenuItems = computed(() => {
       key: 'revoked',
       label:
         pluginsStore.getRevokedKind(pid) === 'platform'
-          ? '不支持当前系统（禁止启动）'
-          : '已下架（禁止启动）',
+          ? t('myPage.menu.platformUnsupported')
+          : t('myPage.menu.revoked'),
       disabled: true,
       title: pluginsStore.getRevokedReason(pid),
       style: 'opacity: 0.5; cursor: not-allowed; color: var(--rc-error);'
@@ -1089,7 +1093,7 @@ const contextMenuItems = computed(() => {
   } else if (installedSet.value.has(pid)) {
     items.push({
       key: 'open',
-      label: '打开',
+      label: t('common.open'),
       disabled: false,
       action: () => {
         handleOpenPlugin(pid)
@@ -1099,14 +1103,14 @@ const contextMenuItems = computed(() => {
   } else if (downloadingSet.value.has(pid)) {
     items.push({
       key: 'downloading',
-      label: '安装中...',
+      label: t('myPage.menu.installing'),
       disabled: true,
       style: 'opacity: 0.6; cursor: not-allowed;'
     })
   } else {
     items.push({
       key: 'install',
-      label: '安装',
+      label: t('common.install'),
       disabled: false,
       action: () => {
         handleDownload(pid)
@@ -1117,7 +1121,7 @@ const contextMenuItems = computed(() => {
 
   items.push({
     key: 'details',
-    label: '查看详情',
+    label: t('myPage.menu.viewDetails'),
     disabled: false,
     action: () => {
       goDetails(pid)
@@ -1127,7 +1131,7 @@ const contextMenuItems = computed(() => {
 
   items.push({
     key: 'favorite',
-    label: pluginsStore.isFavorite(pid) ? '取消收藏' : '收藏',
+    label: pluginsStore.isFavorite(pid) ? t('common.unfavorite') : t('common.favorite'),
     disabled: false,
     action: () => {
       handleToggleFavorite(pid)
@@ -1138,7 +1142,7 @@ const contextMenuItems = computed(() => {
   if (installedSet.value.has(pid)) {
     items.push({
       key: 'pin',
-      label: isPinned(pid) ? '取消固定' : '固定到最前',
+      label: isPinned(pid) ? t('common.unpin') : t('myPage.menu.pinTop'),
       disabled: false,
       action: () => {
         togglePin(pid)
@@ -1150,7 +1154,7 @@ const contextMenuItems = computed(() => {
   if (canUninstallPlugin(pid)) {
     items.push({
       key: 'uninstall',
-      label: '卸载',
+      label: t('common.uninstall'),
       danger: true,
       dividerBefore: true,
       disabled: false,
@@ -1531,7 +1535,7 @@ onUnmounted(() => {
 </script>
 
 <template>
-  <div ref="myPageRootRef" class="my-page" @mousemove="gridNav.handlePointerMove">
+  <div ref="myPageRootRef" class="rc-page my-page" @mousemove="gridNav.handlePointerMove">
     <!-- 加载状态 -->
     <div v-if="loading" class="loading-container">
       <RcLoading />
@@ -1545,14 +1549,14 @@ onUnmounted(() => {
           <div class="welcome-icon">
             <RocketIcon style="font-size: 48px; color: var(--rc-accent)" />
           </div>
-          <h2 class="welcome-title">欢迎使用 ZTools</h2>
+          <h2 class="welcome-title">{{ t('myPage.welcomeTitle') }}</h2>
           <p class="welcome-desc">
-            ZTools 是一个强大的插件化工具平台，帮助你提升工作效率。<br />
-            快来探索丰富的插件生态吧！
+            {{ t('myPage.welcomeDescLine1') }}<br />
+            {{ t('myPage.welcomeDescLine2') }}
           </p>
           <div class="welcome-actions">
             <Button type="primary" size="large" @click="goToMarket">
-              <LayoutGridIcon /> 浏览插件市场
+              <LayoutGridIcon /> {{ t('myPage.browseMarket') }}
             </Button>
           </div>
         </div>
@@ -1566,10 +1570,10 @@ onUnmounted(() => {
         <div class="section-header">
           <RcSegmented
             v-model="activeTab"
-            aria-label="我的插件"
+            :aria-label="t('myPage.myPluginsAria')"
             :options="[
-              { label: '已安装', value: 'plugins', count: installedCount },
-              { label: '收藏', value: 'favorites', count: favoritesCount }
+              { label: t('myPage.tabInstalled'), value: 'plugins', count: installedCount },
+              { label: t('myPage.tabFavorites'), value: 'favorites', count: favoritesCount }
             ]"
             @change="switchTab"
           />
@@ -1577,10 +1581,10 @@ onUnmounted(() => {
             v-if="hasMorePlugins"
             type="link"
             size="small"
-            style="font-size: 12px; color: var(--rc-text-muted);"
+            style="font-size: var(--rc-fs-small); color: var(--rc-text-muted);"
             @click="toggleShowAllPlugins"
           >
-            {{ showAllPlugins ? '收起' : `查看全部` }}
+            {{ showAllPlugins ? t('myPage.collapse') : t('myPage.viewAll') }}
           </Button>
         </div>
 
@@ -1630,7 +1634,7 @@ onUnmounted(() => {
                   :focused="!uiStore.isSearchInputActive && focusedCardIndex === index"
                   :pinned="isPinned(getPluginId(plugin))"
                   :revoked="pluginsStore.isRevoked(getPluginId(plugin))"
-                  :revokedText="pluginsStore.getRevokedKind(getPluginId(plugin)) === 'platform' ? '不支持当前系统' : '已下架'"
+                  :revokedText="pluginsStore.getRevokedKind(getPluginId(plugin)) === 'platform' ? t('market.card.platformUnsupported') : t('market.card.revoked')"
                   :hasUpdate="hasUsableUpdate(getPluginId(plugin))"
                   :hotkey="launchHotkeys[getPluginId(plugin)] || ''"
                   :installed="installedSet.has(getPluginId(plugin))"
@@ -1645,10 +1649,10 @@ onUnmounted(() => {
               v-else-if="placeholderTileCount(tab) === 0"
               class="my-plugins-empty"
               :icon="tab === 'plugins' ? LayoutGridIcon : StarIcon"
-              :title="tab === 'plugins' ? '暂无已安装插件' : '还没有收藏的插件'"
+              :title="tab === 'plugins' ? t('myPage.emptyInstalled') : t('myPage.emptyFavorites')"
             >
               <template #action>
-                <RcButton variant="secondary" size="md" @click="goToMarket">浏览插件市场</RcButton>
+                <RcButton variant="secondary" size="md" @click="goToMarket">{{ t('myPage.browseMarket') }}</RcButton>
               </template>
             </RcEmpty>
 
@@ -1667,7 +1671,7 @@ onUnmounted(() => {
       <!-- 最近使用：紧凑列表 -->
       <section v-if="!isNewUser && recentPlugins.length > 0" class="plugin-section">
         <div class="section-header">
-          <h2 class="section-title">最近使用</h2>
+          <h2 class="section-title">{{ t('myPage.recentTitle') }}</h2>
         </div>
         <div class="recent-list">
           <button
@@ -1685,24 +1689,24 @@ onUnmounted(() => {
           >
             <RcSquircle
               :glyph="resolvePluginGlyph(plugin)"
-              :fallback-glyph="resolveKeywordGlyph(plugin.name)"
+              :fallback-glyph="resolveKeywordGlyph(getLocalizedPluginName(plugin))"
               :src="plugin.localIconPath || (String(plugin.icon || '').startsWith('http') ? plugin.icon : '')"
               :size="30"
             />
             <span class="recent-text">
-              <span class="recent-name">{{ plugin.name || getPluginId(plugin) }}</span>
-              <span class="recent-desc">{{ plugin.description || '暂无描述' }}</span>
+              <span class="recent-name">{{ getLocalizedPluginName(plugin) || getPluginId(plugin) }}</span>
+              <span class="recent-desc">{{ getLocalizedPluginDescription(plugin) || t('common.noDescription') }}</span>
             </span>
-            <span class="recent-cat">{{ plugin.category || '' }}</span>
+            <span class="recent-cat">{{ plugin.category ? getLocalizedCategoryName(plugin.category) : '' }}</span>
             <span class="recent-time">{{ recentTimeLabel(plugin) }}</span>
-            <span class="recent-open">打开 <ShortcutKeys combo="Enter" /></span>
+            <span class="recent-open">{{ t('common.open') }} <ShortcutKeys combo="Enter" /></span>
           </button>
         </div>
       </section>
 
       <!-- 热门推荐：只在拿到推荐数据时显示，避免空状态占位 -->
       <section v-if="recommendedPlugins.length > 0" class="plugin-section">
-        <h2 class="section-title">热门推荐</h2>
+        <h2 class="section-title">{{ t('myPage.recommendedTitle') }}</h2>
         <div class="plugin-grid-3d">
           <div
             v-for="(plugin, recIdx) in recommendedPlugins"
@@ -1737,9 +1741,9 @@ onUnmounted(() => {
       <RcBannerLink
         v-if="!isNewUser"
         class="market-banner"
-        title="再拼一块"
-        description="插件市场里的插件都经过官方审核，源码公开，免费安装"
-        link-text="去插件市场"
+        :title="t('myPage.marketBannerTitle')"
+        :description="t('myPage.marketBannerDesc')"
+        :link-text="t('myPage.marketBannerLink')"
         @click="goToMarket"
       />
 
@@ -1775,19 +1779,13 @@ onUnmounted(() => {
       <!-- 同步状态 -->
       <div v-if="syncing" class="sync-indicator">
         <SpinnerIcon aria-hidden="true" />
-        <span>同步中...</span>
+        <span>{{ t('myPage.syncing') }}</span>
       </div>
     </template>
   </div>
 </template>
 
 <style scoped>
-.my-page {
-  padding: 18px 22px 32px;
-  max-width: 1040px;
-  margin: 0 auto;
-}
-
 /* 加载状态 */
 .loading-container {
   display: flex;
@@ -1809,7 +1807,7 @@ onUnmounted(() => {
     var(--rc-canvas) 100%
   );
   border: 1px solid var(--rc-border);
-  border-radius: 16px;
+  border-radius: var(--rc-radius-xl);
   padding: 32px 24px;
   text-align: center;
 }
@@ -1819,14 +1817,14 @@ onUnmounted(() => {
 }
 
 .welcome-title {
-  font-size: 24px;
+  font-size: var(--rc-fs-title);
   font-weight: 600;
   margin-bottom: 12px;
   color: var(--rc-text-primary);
 }
 
 .welcome-desc {
-  font-size: 15px;
+  font-size: var(--rc-fs-emph);
   color: var(--rc-text-secondary);
   margin-bottom: 24px;
   line-height: 1.6;
@@ -1851,26 +1849,13 @@ onUnmounted(() => {
 }
 
 .section-title {
-  font-size: 13px;
+  font-size: var(--rc-fs-body);
   font-weight: 600;
   margin: 0 0 12px 0;
   color: var(--rc-text-primary);
 }
 
-/* 标签切换 */
-.tab-switcher {
-  display: flex;
-  gap: 2px;
-  background: var(--rc-surface-subtle);
-  padding: 2px;
-  border-radius: var(--rc-radius-md, 8px);
-  border: 1px solid var(--rc-border);
-}
-
-
-
-
-/* 我的插件：两个标签叠放在同一格，高度取较高的一个 */
+/* 我的插件：两个标签叠放在同一格，高度只跟随当前标签的实际内容 */
 .my-plugins-body {
   display: grid;
 }
@@ -1882,14 +1867,12 @@ onUnmounted(() => {
   flex-direction: column;
 }
 
+/* 非当前标签不占高度：只保留宽度供列数测量，避免另一个标签（如收藏空状态）把已安装两行撑出大片空白 */
 .my-plugins-pane:not(.is-active) {
   visibility: hidden;
   pointer-events: none;
-}
-
-/* 空状态在预留高度里垂直居中 */
-.my-plugins-empty {
-  margin: auto 0;
+  height: 0;
+  overflow: hidden;
 }
 
 /* 「已安装 / 收藏」横向启动卡网格（minmax(184px, 1fr)，常规窗口 4 列，间距 8px） */
@@ -1918,7 +1901,7 @@ onUnmounted(() => {
   font: inherit;
   text-align: left;
   cursor: pointer;
-  transition: background-color 0.15s ease;
+  transition: background-color var(--rc-dur) ease;
 }
 
 .recent-row:hover {
@@ -1934,13 +1917,13 @@ onUnmounted(() => {
 }
 
 .recent-name {
-  font-size: 13px;
+  font-size: var(--rc-fs-body);
   font-weight: 500;
   color: var(--rc-text-primary);
 }
 
 .recent-desc {
-  font-size: 12px;
+  font-size: var(--rc-fs-small);
   color: var(--rc-text-muted);
   white-space: nowrap;
   overflow: hidden;
@@ -1948,18 +1931,23 @@ onUnmounted(() => {
 }
 
 .recent-cat {
-  width: 72px;
+  min-width: 72px;
+  max-width: 110px;
   flex-shrink: 0;
-  font-size: 12px;
+  font-size: var(--rc-fs-small);
   color: var(--rc-text-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .recent-time {
-  width: 64px;
+  min-width: 64px;
   flex-shrink: 0;
   text-align: right;
-  font-size: 12px;
+  font-size: var(--rc-fs-small);
   color: var(--rc-text-faint);
+  white-space: nowrap;
 }
 
 .recent-open {
@@ -1967,10 +1955,10 @@ onUnmounted(() => {
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  font-size: 12px;
+  font-size: var(--rc-fs-small);
   color: var(--rc-text-faint);
   opacity: 0;
-  transition: opacity 0.15s ease;
+  transition: opacity var(--rc-dur) ease;
 }
 
 /* 「打开 Enter」跟随键盘聚焦行展示，避免与顶栏搜索框或悬停态同时双亮 */
@@ -2003,8 +1991,8 @@ onUnmounted(() => {
 .draggable-card {
   min-width: 0;
   transition:
-    transform 0.15s ease,
-    opacity 0.15s ease;
+    transform var(--rc-dur) ease,
+    opacity var(--rc-dur) ease;
 }
 
 .draggable-card.is-draggable {
@@ -2032,16 +2020,12 @@ onUnmounted(() => {
     gap: 12px;
   }
 
-  .my-page {
-    padding: 12px;
-  }
-
   .welcome-card {
     padding: 32px 20px;
   }
 
   .welcome-title {
-    font-size: 20px;
+    font-size: var(--rc-fs-title-md);
   }
 }
 
@@ -2050,7 +2034,7 @@ onUnmounted(() => {
   position: fixed;
   background: var(--rc-surface);
   border: 1px solid var(--rc-border-highlight);
-  border-radius: 10px;
+  border-radius: var(--rc-radius-md);
   box-shadow: var(--rc-shadow-lg);
   z-index: 1000;
   min-width: 168px;
@@ -2062,11 +2046,11 @@ onUnmounted(() => {
   display: flex;
   align-items: center;
   padding: 0 10px;
-  border-radius: 6px;
+  border-radius: var(--rc-radius-sm);
   cursor: pointer;
   color: var(--rc-text-primary);
-  transition: background-color 0.15s ease;
-  font-size: 13px;
+  transition: background-color var(--rc-dur) ease;
+  font-size: var(--rc-fs-body);
 }
 
 .menu-item:hover,
@@ -2103,19 +2087,19 @@ onUnmounted(() => {
   gap: 8px;
   padding: 12px 16px;
   background: var(--rc-surface);
-  border-radius: 8px;
-  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.15);
-  font-size: 14px;
+  border-radius: var(--rc-radius-md);
+  box-shadow: var(--rc-shadow-md);
+  font-size: var(--rc-fs-emph);
   color: var(--rc-text-secondary);
 }
 
 .is-card-focused {
-  border-radius: var(--rc-radius-lg, 12px);
+  border-radius: var(--rc-radius-lg);
 }
 
 .plugin-grid-3d .is-card-focused,
 .is-card-focused:not(.draggable-card) {
-  border-radius: var(--rc-radius-lg, 12px);
+  border-radius: var(--rc-radius-lg);
   box-shadow: var(--rc-focus-ring);
 }
 

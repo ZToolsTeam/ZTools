@@ -3,6 +3,9 @@ import { ref, computed, watch, onMounted, onUnmounted } from 'vue'
 import { ClipboardPasteIcon, CopyIcon, RotateCwIcon, ScissorsIcon, WrenchIcon } from '@lucide/vue'
 import { isHostDevBuild, toggleHostDevTools } from '@/utils/hostDevTools'
 import { registerKeyHandler, KEYMAP_SCOPES } from '@/utils/keymap'
+import { useAppI18n } from '@/i18n'
+
+const { t } = useAppI18n()
 
 const visible = ref(false)
 const x = ref(0)
@@ -20,13 +23,13 @@ const menuItems = computed(() => {
   if (selectedText.value) {
     items.push(
       {
-        label: '复制',
+        label: t('contextMenu.copy'),
         icon: CopyIcon,
         action: 'copy',
         disabled: false
       },
       {
-        label: '剪切',
+        label: t('contextMenu.cut'),
         icon: ScissorsIcon,
         action: 'cut',
         disabled: false
@@ -40,7 +43,7 @@ const menuItems = computed(() => {
   // 通用选项
   items.push(
     {
-      label: '粘贴',
+      label: t('contextMenu.paste'),
       icon: ClipboardPasteIcon,
       action: 'paste',
       disabled: false
@@ -49,7 +52,7 @@ const menuItems = computed(() => {
       type: 'separator'
     },
     {
-      label: '刷新页面',
+      label: t('contextMenu.reload'),
       icon: RotateCwIcon,
       action: 'reload',
       disabled: false
@@ -57,7 +60,7 @@ const menuItems = computed(() => {
   )
   if (showDevTools.value) {
     items.push({
-      label: '开发者工具',
+      label: t('contextMenu.devtools'),
       icon: WrenchIcon,
       action: 'devtools',
       disabled: false
@@ -271,11 +274,11 @@ defineExpose({ show, hide, visible, focusedIndex })
   min-width: 180px;
   background: var(--rc-surface);
   border: 1px solid var(--rc-border-highlight);
-  border-radius: 10px;
+  border-radius: var(--rc-radius-md);
   box-shadow: var(--rc-shadow-lg);
   padding: 4px;
   user-select: none;
-  font-size: 13px;
+  font-size: var(--rc-fs-body);
 }
 
 .menu-item {
@@ -284,9 +287,9 @@ defineExpose({ show, hide, visible, focusedIndex })
   gap: 10px;
   height: 32px;
   padding: 0 10px;
-  border-radius: 6px;
+  border-radius: var(--rc-radius-sm);
   cursor: pointer;
-  transition: background-color 0.15s ease;
+  transition: background-color var(--rc-dur) ease;
   color: var(--rc-text-primary);
 }
 
@@ -310,7 +313,7 @@ defineExpose({ show, hide, visible, focusedIndex })
 }
 
 .menu-icon {
-  font-size: 16px;
+  font-size: 16px; /* 图标字形尺寸 */
   flex-shrink: 0;
 }
 
@@ -325,12 +328,12 @@ defineExpose({ show, hide, visible, focusedIndex })
   margin: 4px 6px;
 }
 
-/* 动画效果 */
+/* 动画效果；外框/菜单项圆角与 RcMenu 一致（md / sm） */
 .context-menu-fade-enter-active,
 .context-menu-fade-leave-active {
   transition:
-    opacity 0.15s ease,
-    transform 0.15s ease;
+    opacity var(--rc-dur) ease,
+    transform var(--rc-dur) ease;
 }
 
 .context-menu-fade-enter-from {

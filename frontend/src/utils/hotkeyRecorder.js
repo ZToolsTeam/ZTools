@@ -1,11 +1,10 @@
 import { BUILTIN_SHORTCUT_HINTS, SHELL_SHORTCUTS } from '@/utils/shellShortcuts'
+import { t } from '@/i18n'
 
-export const HOTKEY_RULE_DESCRIPTION =
-  '支持 Ctrl / Shift / Alt + A-Z、Space、反引号（`）、波浪号（~）或 F1-F24。'
+export const HOTKEY_RULE_DESCRIPTION = t('hotkey.recorder.ruleBase')
 
-export const HOTKEY_WAIT_TEXT = '按下快捷键'
-export const HOTKEY_UNSUPPORTED_TEXT =
-  '仅支持 Ctrl、Shift、Alt 与 A-Z / Space / ` / ~ / F1-F24 组合'
+export const HOTKEY_WAIT_TEXT = t('hotkey.recorder.waitDefault')
+export const HOTKEY_UNSUPPORTED_TEXT = t('hotkey.recorder.unsupportedWin')
 
 const DOUBLE_MODIFIER_CANONICAL = Object.freeze({
   doublectrl: 'DoubleCtrl',
@@ -87,14 +86,14 @@ export async function getHotkeyHostCapabilities() {
 
 export function getHotkeyUnsupportedText(platform = 'unknown', allowDoubleTap = false) {
   if (platform !== 'windows' && platform !== 'macos') {
-    return '无法识别宿主平台，快捷键录制暂不可用'
+    return t('hotkey.recorder.unknownPlatformUnsupported')
   }
   if (platform === 'macos') {
-    return '仅支持 ⌘ / ⌃ / ⌥ / ⇧ 与 A-Z / Space / ` / ~ / F1-F24 组合'
+    return t('hotkey.recorder.unsupportedMac')
   }
   return allowDoubleTap
-    ? `${HOTKEY_UNSUPPORTED_TEXT}，或双击 Ctrl / Alt / Shift`
-    : HOTKEY_UNSUPPORTED_TEXT
+    ? t('hotkey.recorder.unsupportedWinDouble')
+    : t('hotkey.recorder.unsupportedWin')
 }
 
 export function formatHotkeyForPlatform(
@@ -108,15 +107,18 @@ export function formatHotkeyForPlatform(
   const doubleModifier = /^double(ctrl|control|alt|shift)$/i.exec(compactValue)
   if (doubleModifier) {
     if (!supportsDoubleModifierHotkeys) {
-      const reason = platform === 'unknown' ? '平台未识别' : '当前宿主不支持'
-      return `${value}（${reason}）`
+      const reason =
+        platform === 'unknown'
+          ? t('hotkey.recorder.platformUnknown')
+          : t('hotkey.recorder.hostUnsupported')
+      return t('hotkey.recorder.unsupportedWithReason', { hotkey: value, reason })
     }
     const modifier = doubleModifier[1].toLowerCase()
     const label =
       modifier === 'ctrl' || modifier === 'control'
         ? 'Ctrl'
         : modifier[0].toUpperCase() + modifier.slice(1)
-    return `双击 ${label}`
+    return t('platform.doubleTap', { key: label })
   }
   if (platform !== 'macos') return value
   const symbols = {
@@ -214,25 +216,25 @@ export function getSystemHotkeyBlacklistReason(hotkey, platform = 'windows') {
   if (platform === 'macos') {
     if (MACOS_BLACKLISTED_HOTKEYS.has(canonical)) {
       const display = formatHotkeyForPlatform(hotkey, 'macos')
-      return `快捷键 ${display} 为 macOS 系统关键组合键，禁止注册为全局热键`
+      return t('hotkey.recorder.blacklistMac', { key: display })
     }
     return ''
   }
   if (WINDOWS_BLACKLISTED_HOTKEYS.has(canonical)) {
-    return `快捷键 ${String(hotkey).trim()} 为 Windows 系统关键组合键，禁止注册为全局热键`
+    return t('hotkey.recorder.blacklistWin', { key: String(hotkey).trim() })
   }
   return ''
 }
 
-const SHELL_SHORTCUT_LABELS = (() => {
+const SHELL_SHORTCUT_LABEL_KEYS = (() => {
   const map = new Map()
   for (const hint of BUILTIN_SHORTCUT_HINTS) {
     const key = canonicalizeHotkeyForCompare(hint.combo, 'windows')
-    if (key) map.set(key, hint.label)
+    if (key && hint.id) map.set(key, `settings.shortcuts.builtins.${hint.id}`)
   }
   const pinKey = canonicalizeHotkeyForCompare(SHELL_SHORTCUTS.PIN_ITEM, 'windows')
   if (pinKey && !map.has(pinKey)) {
-    map.set(pinKey, '固定 / 取消固定插件')
+    map.set(pinKey, 'hotkey.recorder.pinItemLabel')
   }
   return map
 })()
@@ -244,18 +246,18 @@ export function getShellReserveWarning(hotkey) {
   if (typeof hotkey !== 'string' || !hotkey.trim()) return ''
   const canonical = canonicalizeHotkeyForCompare(hotkey, 'windows')
   if (!canonical) return ''
-  const label = SHELL_SHORTCUT_LABELS.get(canonical)
-  if (!label) return ''
-  return `该快捷键与 ZTools 内置快捷键（${label}）重名，启用后在窗口内可能会遮蔽内置操作`
+  const labelKey = SHELL_SHORTCUT_LABEL_KEYS.get(canonical)
+  if (!labelKey) return ''
+  return t('hotkey.recorder.shellReserveWarning', { label: t(labelKey) })
 }
 
 /**
- * 判断快捷键字符串是否可安全传给 <ShortcutKeys>（禁止传入含中文说明文字的错误字符串）
+ * 判断快捷键字符串是否可安全传给 <ShortcutKeys>（禁止传入含本地化说明文字的错误字符串）
  */
 export function isSafeShortcutKeysCombo(hotkey, platform = 'unknown', supportsDoubleModifierHotkeys = false) {
   if (typeof hotkey !== 'string' || !hotkey.trim()) return false
-  // 排除包含全角括号或非双击前缀的中文提示字符串（如「平台未识别」「当前宿主不支持」）
-  if (/[\u4e00-\u9fff（）]/.test(hotkey)) return false
+  // 排除包含全角/半角括号或中文提示的说明字符串（如「平台未识别」「Unsupported by host」）
+  if (/[\u4e00-\u9fff（）()]/.test(hotkey)) return false
   if (isDoubleModifierHotkey(hotkey)) {
     return platform === 'windows' && Boolean(supportsDoubleModifierHotkeys)
   }
@@ -264,22 +266,22 @@ export function isSafeShortcutKeysCombo(hotkey, platform = 'unknown', supportsDo
 
 export function getHotkeyWaitText(platform = 'unknown', allowDoubleTap = false) {
   if (platform !== 'windows' && platform !== 'macos') {
-    return '无法识别宿主平台，快捷键录制暂不可用'
+    return t('hotkey.recorder.unknownPlatformUnsupported')
   }
-  if (platform === 'macos') return '按下快捷键 (⌘ / ⌃ / ⌥ / ⇧)'
-  return allowDoubleTap ? '按下快捷键或双击 Ctrl / Alt / Shift' : HOTKEY_WAIT_TEXT
+  if (platform === 'macos') return t('hotkey.recorder.waitMac')
+  return allowDoubleTap ? t('hotkey.recorder.waitWinDouble') : t('hotkey.recorder.waitDefault')
 }
 
 export function getHotkeyRuleDescription(platform = 'unknown', allowDoubleTap = false) {
   if (platform !== 'windows' && platform !== 'macos') {
-    return '无法识别宿主平台，暂不能录制快捷键。'
+    return t('hotkey.recorder.unknownPlatformRule')
   }
   if (platform === 'macos') {
-    return '支持 ⌘ / ⌃ / ⌥ / ⇧ + A-Z、Space、反引号（`）、波浪号（~）或 F1-F24；不支持双击修饰键、方向键或数字。'
+    return t('hotkey.recorder.ruleMac')
   }
   return allowDoubleTap
-    ? '支持 Ctrl / Shift / Alt + A-Z、Space、反引号（`）、波浪号（~）、F1-F24，或双击 Ctrl / Alt / Shift。'
-    : `${HOTKEY_RULE_DESCRIPTION} 当前宿主不支持双击修饰键。`
+    ? t('hotkey.recorder.ruleWinDouble')
+    : t('hotkey.recorder.ruleWinNoDouble')
 }
 
 const SUPPORTED_MODIFIER_KEYS = ['Control', 'Alt', 'Shift']
@@ -528,7 +530,7 @@ export function interpretRecorderKeydown(event, options = {}) {
   const isKeys =
     result.status === 'pending' &&
     String(result.text).endsWith('...') &&
-    !/[\u4e00-\u9fff（）]/.test(String(result.text))
+    !/[\u4e00-\u9fff（）()]/.test(String(result.text))
   return { action: result.status, hotkey: result.hotkey, text: result.text, isKeys }
 }
 

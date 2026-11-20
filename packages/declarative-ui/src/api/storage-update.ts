@@ -1,3 +1,4 @@
+import { tApiError } from "./error-messages.js";
 import { ZToolsHostError } from "./host-error.js";
 
 export interface AtomicStorage {
@@ -19,5 +20,5 @@ export async function updateStoredItem<T>(
     if (JSON.stringify(next) === before) return next;
     if (await storage.compareAndSet(key, expected, next)) return next;
   }
-  throw new ZToolsHostError("STORAGE_CONFLICT", "数据正在被其他窗口修改，请重试");
+  throw new ZToolsHostError("STORAGE_CONFLICT", tApiError("storageConflict"));
 }

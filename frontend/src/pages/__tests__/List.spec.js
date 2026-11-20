@@ -606,18 +606,18 @@ describe('List page', () => {
     })
     await flushPromises()
 
-    expect(wrapper.find('.market-title').text()).toBe('插件市场')
+    expect(wrapper.find('.page-title').text()).toBe('插件市场')
     expect(wrapper.find('[aria-label="分类"]').exists()).toBe(false)
     expect(wrapper.find('[aria-label="来源"]').exists()).toBe(false)
 
     await router.push({ name: 'list', params: { category: '系统工具' } })
     await flushPromises()
     expect(router.currentRoute.value.params.category).toBe('系统工具')
-    expect(wrapper.find('.market-title').text()).toBe('系统工具')
+    expect(wrapper.find('.page-title').text()).toBe('系统工具')
 
     await router.push({ name: 'list', query: { q: 'json' } })
     await flushPromises()
-    expect(wrapper.find('.market-title').text()).toBe('搜索「json」')
+    expect(wrapper.find('.page-title').text()).toBe('搜索「json」')
   })
   it.each(['pending', 'busy'])('安装%s时不误报完成', async state => {
     pluginsStore.installPlugin = vi.fn().mockResolvedValue({ success: false, [state]: true, message: '安装结果待确认' })

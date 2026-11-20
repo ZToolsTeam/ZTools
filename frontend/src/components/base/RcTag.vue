@@ -26,7 +26,7 @@ defineProps({
   display: inline-flex;
   align-items: center;
   flex-shrink: 0;
-  font-size: 11.5px;
+  font-size: var(--rc-fs-small);
   font-weight: 500;
   white-space: nowrap;
 }
@@ -40,7 +40,7 @@ defineProps({
 .is-soft {
   height: 20px;
   padding: 0 7px;
-  border-radius: 5px;
+  border-radius: var(--rc-radius-xs);
   background: var(--tag-bg);
   color: var(--tag-fg);
 }
@@ -48,7 +48,7 @@ defineProps({
 .is-dot {
   gap: 6px;
   color: var(--rc-text-secondary);
-  font-size: 12px;
+  font-size: var(--rc-fs-small);
 }
 
 .is-dot::before {
@@ -61,7 +61,7 @@ defineProps({
 
 .is-text {
   color: var(--tag-fg);
-  font-size: 11px;
+  font-size: var(--rc-fs-caption);
 }
 
 .is-text.tone-neutral {

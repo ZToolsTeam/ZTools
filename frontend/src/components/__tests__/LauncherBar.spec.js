@@ -348,7 +348,7 @@ describe('LauncherBar 文件搜索结果执行', () => {
     expect(hide).not.toHaveBeenCalled()
     await wrapper.find('.launcher-row').trigger('click')
     await flushPromises()
-    expect(wrapper.text()).toContain('文件操作接口不可用')
+    expect(wrapper.text()).toContain('文件打开接口不可用')
     expect(hide).not.toHaveBeenCalled()
     wrapper.unmount()
   })

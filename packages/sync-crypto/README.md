@@ -1,27 +1,29 @@
 # @ztools/sync-crypto
 
-ZTools 去中心化端到端加密同步引擎 (E2EE Sync Engine with Argon2id, AES-256-GCM, WebDAV & GitHub Gist)。
+Decentralized end-to-end encrypted (E2EE) sync engine for ZTools, built on Argon2id, AES-256-GCM, WebDAV, and GitHub Gist.
 
-## 架构能力
+ZTools 去中心化端到端加密同步引擎（基于 Argon2id、AES-256-GCM、WebDAV 与 GitHub Gist）。
 
-1. **E2EE 密码学核心 (`src/crypto/`)**
-   - **Argon2id 密钥衍生**：基于 RFC 9106 规范，具备数据无关与数据依赖寻址双重抗性（有效抵御侧信道与 GPU/ASIC 暴破），从用户主密码与盐值派生 256 位高强度对称密钥。
-   - **AES-256-GCM 认证加密**：采用 96-bit 随机 IV 与 128-bit 消息认证码（Tag），支持 AAD 附加认证数据，具备完备的防重放与防篡改感知能力。
-   - **配置与剪贴板密文封包**：支持全量应用设置、插件元数据及富文本/多模态剪贴板历史的安全加密与序列化。
+## Capabilities / 架构能力
 
-2. **去中心化存储协议适配器 (`src/adapters/`)**
-   - **WebDAV 适配器**：全面支持坚果云、Nextcloud、群晖/私有 NAS。支持 `PROPFIND`（深度与元数据检索）、`MKCOL`（目录递归创建）、`GET`、`PUT`（基于 `If-Match` ETag 的乐观锁并发控制）以及 `DELETE`。
-   - **GitHub Gist 适配器**：基于 GitHub Personal Access Token (PAT) 的私有 Gist 读写，具备高精度版本比对与并发冲突检测（`GistConflictError`）。
+1. **E2EE Cryptography (`src/crypto/`) / E2EE 密码学核心**
+   - **Argon2id Key Derivation / 密钥衍生**：RFC 9106 compliant hybrid key derivation from user passphrase + salt to a 256-bit symmetric key. / 基于 RFC 9106 从主密码与盐值派生 256 位对称密钥。
+   - **AES-256-GCM Authenticated Encryption / 认证加密**：96-bit random IV, 128-bit auth tag, and AAD support against replay and tampering. / 采用 96-bit 随机 IV、128-bit 认证标签与 AAD 防篡改。
+   - **Encrypted Envelopes / 密文封包**：Serializes and encrypts app settings, plugin metadata, and clipboard history. / 支持应用设置、插件元数据及剪贴板历史的安全加密封包。
 
-3. **端到端同步编排器 (`src/engine/`)**
-   - **E2eeSyncEngine**：一站式主控，串联密钥派生、密文打包与远端云存储的双向同步链路。
+2. **Storage Adapters (`src/adapters/`) / 去中心化存储适配器**
+   - **WebDAV**：Supports Jianguoyun, Nextcloud, Synology, and private NAS (`PROPFIND`, `MKCOL`, `GET`, `PUT` with `If-Match` ETag optimistic locking, `DELETE`). / 支持坚果云、Nextcloud、群晖/私有 NAS 及 ETag 乐观锁并发控制。
+   - **GitHub Gist**：Private Gist sync via Personal Access Token (PAT) with version diffing and `GistConflictError` detection. / 基于 PAT 的私有 Gist 读写与并发冲突检测。
 
-## 测试与构建
+3. **Sync Orchestrator (`src/engine/`) / 同步编排器**
+   - **`E2eeSyncEngine`**：Coordinates key derivation, payload encryption, and two-way remote sync. / 串联密钥派生、密文打包与远端双向同步链路。
+
+## Build & Test / 构建与测试
 
 ```bash
-# 编译 TypeScript
+# Build TypeScript / 编译 TypeScript
 npm run build
 
-# 运行全量单元测试
+# Run unit tests / 运行全量单元测试
 npm test
 ```

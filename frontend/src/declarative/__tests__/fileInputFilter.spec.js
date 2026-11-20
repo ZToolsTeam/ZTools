@@ -5,6 +5,11 @@ import { List, Action } from '@ztools/declarative-ui'
 import DeclarativeView from '../DeclarativeView.vue'
 import { resolveActionTitle } from '../uiText.js'
 import { filterIncomingFiles, normalizeAllowedExtension } from '../fileInputFilter.js'
+import { setI18nLocale } from '@/i18n'
+
+beforeEach(() => {
+  setI18nLocale('zh-CN')
+})
 
 describe('声明式视图文件输入过滤', () => {
   it('名称带点的文件夹以主进程确认的 directories 为准放行，不按后缀误拦', () => {

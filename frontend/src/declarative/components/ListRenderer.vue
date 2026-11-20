@@ -8,8 +8,8 @@
         data-decl-role="search-input"
         :value="descriptor.props?.searchText ?? localSearchText"
         type="text"
-        :placeholder="descriptor.props?.searchBarPlaceholder || '搜索...'"
-        :aria-label="descriptor.props?.searchBarPlaceholder || '搜索'"
+        :placeholder="descriptor.props?.searchBarPlaceholder || t('declarative.list.searchPlaceholder')"
+        :aria-label="descriptor.props?.searchBarPlaceholder || t('declarative.list.searchAriaLabel')"
         class="flex-1 min-w-[140px] bg-transparent text-sm text-[var(--rc-text-primary)] placeholder:text-[var(--rc-text-faint)] outline-none"
         @input="handleSearchInput"
         @mousedown="markSearchEditMode"
@@ -24,7 +24,7 @@
       <div
         v-if="!searchBarAccessory && !workbenchPanelData && segmentedControlData?.options && segmentedControlData.options.length > 0"
         role="radiogroup"
-        :aria-label="cleanUiText(segmentedControlData.ariaLabel || segmentedControlData.title || '视图切换')"
+        :aria-label="cleanUiText(segmentedControlData.ariaLabel || segmentedControlData.title || t('declarative.list.viewSwitch'))"
         class="flex items-center gap-1 bg-[var(--rc-surface-hover)] p-0.5 rounded-lg border border-[var(--rc-border)] flex-shrink-0"
       >
         <button
@@ -35,7 +35,7 @@
           role="radio"
           :aria-checked="isSegmentOptionSelected(opt, optIdx) ? 'true' : 'false'"
           :tabindex="isSegmentOptionSelected(opt, optIdx) ? 0 : -1"
-          class="px-2 py-0.5 rounded-md text-[11px] font-medium transition-all duration-150 flex items-center gap-1 flex-shrink-0"
+          class="px-2 py-0.5 rounded-md text-[length:var(--rc-fs-caption)] font-medium transition-all duration-150 flex items-center gap-1 flex-shrink-0"
           :class="[
             segmentedControlData.value === opt.value
               ? 'bg-[var(--rc-surface-active)] text-[var(--rc-text-primary)] border border-[var(--rc-border-highlight)] shadow-sm'
@@ -49,7 +49,7 @@
           <span>{{ cleanUiText(opt.label) }}</span>
           <span
             v-if="opt.badge !== undefined"
-            class="px-1 rounded text-[10px] tabular-nums opacity-80"
+            class="px-1 rounded text-[length:var(--rc-fs-caption)] tabular-nums opacity-80"
           >
             {{ opt.badge }}
           </span>
@@ -65,7 +65,7 @@
           :options="dropdownSelectOptions"
           :dropdown-match-select-width="false"
           placement="bottomRight"
-          :aria-label="cleanUiText(searchBarAccessory.props?.tooltip || searchBarAccessory.props?.title || '筛选')"
+          :aria-label="cleanUiText(searchBarAccessory.props?.tooltip || searchBarAccessory.props?.title || t('declarative.list.filter'))"
           @update:value="handleDropdownChange"
         />
       </div>
@@ -77,13 +77,13 @@
     <!-- 第一段 Row 2：单行极简全局状态条 (28px，左摘要 + 右 1~2 个全局动作，遵循黄金法则 1/2/3) -->
     <div
       v-if="hasCompactSubHeader"
-      class="px-3.5 py-1.5 border-b border-[var(--rc-border)] bg-[var(--rc-surface-subtle)] flex items-center justify-between gap-2 text-[11px] min-w-0 flex-shrink-0"
+      class="px-3.5 py-1.5 border-b border-[var(--rc-border)] bg-[var(--rc-surface-subtle)] flex items-center justify-between gap-2 text-[length:var(--rc-fs-caption)] min-w-0 flex-shrink-0"
     >
       <div class="flex items-center gap-2 min-w-0 flex-1 overflow-hidden">
         <!-- 优先展示单行融合摘要 summaryText -->
         <span
           v-if="filterBarData?.summaryText"
-          class="text-[11px] tabular-nums text-[var(--rc-text-secondary)] truncate decl-summary-text"
+          class="text-[length:var(--rc-fs-caption)] tabular-nums text-[var(--rc-text-secondary)] truncate decl-summary-text"
           :title="cleanUiText(filterBarData.summaryText)"
         >
           {{ cleanUiText(filterBarData.summaryText) }}
@@ -91,7 +91,7 @@
         <!-- 若未传 summaryText 但传了 metricGrid，则内联为紧凑单行指标文本 -->
         <div
           v-else-if="metricGridData?.items && metricGridData.items.length > 0"
-          class="flex items-center gap-2 overflow-x-auto no-scrollbar text-[11px] tabular-nums truncate decl-summary-metrics"
+          class="flex items-center gap-2 overflow-x-auto no-scrollbar text-[length:var(--rc-fs-caption)] tabular-nums truncate decl-summary-metrics"
         >
           <span
             v-for="(m, mIdx) in metricGridData.items"
@@ -115,14 +115,14 @@
           :key="act.id || act.label || act.title"
           type="button"
           :disabled="act.disabled"
-          class="px-2 py-0.5 rounded-md text-[11px] font-medium transition-all flex items-center gap-1 border bg-[var(--rc-surface-hover)] text-[var(--rc-text-secondary)] border-[var(--rc-border)] hover:text-[var(--rc-text-primary)] hover:bg-[var(--rc-surface-active)]"
+          class="px-2 py-0.5 rounded-md text-[length:var(--rc-fs-caption)] font-medium transition-all flex items-center gap-1 border bg-[var(--rc-surface-hover)] text-[var(--rc-text-secondary)] border-[var(--rc-border)] hover:text-[var(--rc-text-primary)] hover:bg-[var(--rc-surface-active)]"
           :class="{
             'opacity-40 cursor-not-allowed': act.disabled
           }"
           @click="runGlobalAction(act)"
         >
           <span>{{ cleanUiText(act.label || act.title) }}</span>
-          <span v-if="act.badge !== undefined" class="tabular-nums text-[10px] px-1 rounded bg-[var(--rc-surface-subtle)]">{{ act.badge }}</span>
+          <span v-if="act.badge !== undefined" class="tabular-nums text-[length:var(--rc-fs-caption)] px-1 rounded bg-[var(--rc-surface-subtle)]">{{ act.badge }}</span>
         </button>
       </div>
     </div>
@@ -157,7 +157,7 @@
             <span v-if="workbenchPanelData.title" class="text-xs font-semibold text-[var(--rc-text-primary)] break-words decl-workbench-title">
               {{ cleanUiText(workbenchPanelData.title) }}
             </span>
-            <span v-if="workbenchPanelData.subtitle" class="text-[10px] tabular-nums text-[var(--rc-text-muted)] break-words decl-workbench-subtitle">
+            <span v-if="workbenchPanelData.subtitle" class="text-[length:var(--rc-fs-caption)] tabular-nums text-[var(--rc-text-muted)] break-words decl-workbench-subtitle">
               {{ cleanUiText(workbenchPanelData.subtitle) }}
             </span>
           </div>
@@ -168,7 +168,7 @@
               v-for="field in workbenchPanelData.fields || []"
               :key="field.id"
               :data-decl-field-id="field.id || undefined"
-              class="flex items-start justify-between gap-2 py-1 border-b border-[var(--rc-border)]/50 last:border-b-0"
+              class="flex items-start justify-between gap-2 py-1 border-b border-[var(--rc-border-subtle)] last:border-b-0"
             >
               <span class="text-xs text-[var(--rc-text-secondary)] font-medium flex-shrink-0 pt-0.5">
                 {{ cleanUiText(field.label) }}
@@ -190,27 +190,27 @@
               <!-- 布尔开关型参数：与列表复选框同一套主题样式 -->
               <label
                 v-else-if="field.type === 'toggle'"
-                class="flex items-center gap-1.5 text-[11px] text-[var(--rc-text-secondary)] cursor-pointer decl-field-toggle"
+                class="flex items-center gap-1.5 text-[length:var(--rc-fs-caption)] text-[var(--rc-text-secondary)] cursor-pointer decl-field-toggle"
               >
                 <DeclCheckbox
                   :checked="Boolean(field.value)"
                   :aria-label="cleanUiText(field.label)"
                   @change="value => field.onChange && field.onChange(value)"
                 />
-                <span>{{ field.value ? '已开启' : '已关闭' }}</span>
+                <span>{{ field.value ? t('declarative.list.enabled') : t('declarative.list.disabled') }}</span>
               </label>
 
               <!-- 文本/只读展示型参数：短的代码型值（如 1920x1080、H.264）等宽单行；说明性文字用正文字体换行显示 -->
               <span
                 v-else-if="isCodeLikeValue(field.value)"
-                class="px-2 py-0.5 text-[11px] font-mono text-[var(--rc-text-secondary)] bg-[var(--rc-surface-hover)] border border-[var(--rc-border)] rounded-md truncate max-w-[175px] decl-field-code"
+                class="px-2 py-0.5 text-[length:var(--rc-fs-caption)] font-mono text-[var(--rc-text-secondary)] bg-[var(--rc-surface-hover)] border border-[var(--rc-border)] rounded-md truncate max-w-[175px] decl-field-code"
                 :title="displayText(field.value)"
               >
                 {{ displayText(field.value) }}
               </span>
               <span
                 v-else
-                class="px-2 py-0.5 text-[11px] leading-snug text-right text-[var(--rc-text-secondary)] bg-[var(--rc-surface-hover)] border border-[var(--rc-border)] rounded-md min-w-0 whitespace-normal break-words decl-field-text"
+                class="px-2 py-0.5 text-[length:var(--rc-fs-caption)] leading-snug text-right text-[var(--rc-text-secondary)] bg-[var(--rc-surface-hover)] border border-[var(--rc-border)] rounded-md min-w-0 whitespace-normal break-words decl-field-text"
               >
                 {{ displayText(field.value) }}
               </span>
@@ -228,12 +228,12 @@
               </span>
               <span
                 v-if="workbenchPanelData.previewCard.badge"
-                class="px-1.5 py-0.5 text-[10px] tabular-nums rounded bg-[var(--rc-surface-active)] text-[var(--rc-text-secondary)] border border-[var(--rc-border)]"
+                class="px-1.5 py-0.5 text-[length:var(--rc-fs-caption)] tabular-nums rounded bg-[var(--rc-surface-active)] text-[var(--rc-text-secondary)] border border-[var(--rc-border)]"
               >
                 {{ cleanUiText(workbenchPanelData.previewCard.badge) }}
               </span>
             </div>
-            <p v-if="workbenchPanelData.previewCard.subtitle" class="text-[11px] text-[var(--rc-text-muted)] leading-snug">
+            <p v-if="workbenchPanelData.previewCard.subtitle" class="text-[length:var(--rc-fs-caption)] text-[var(--rc-text-muted)] leading-snug">
               {{ cleanUiText(workbenchPanelData.previewCard.subtitle) }}
             </p>
             <div
@@ -245,7 +245,7 @@
                 :key="mIdx"
                 class="px-2 py-1.5 rounded-lg bg-[var(--rc-canvas)]/50 border border-[var(--rc-border)] flex flex-col"
               >
-                <span class="text-[10px] text-[var(--rc-text-muted)]">{{ cleanUiText(m.label) }}</span>
+                <span class="text-[length:var(--rc-fs-caption)] text-[var(--rc-text-muted)]">{{ cleanUiText(m.label) }}</span>
                 <span class="text-xs tabular-nums font-semibold text-[var(--rc-text-primary)]">
                   {{ m.value }}
                 </span>
@@ -259,7 +259,7 @@
           v-if="!workbenchPanelData"
           class="space-y-2.5"
           role="listbox"
-          :aria-label="subListData ? '导航' : '结果'"
+          :aria-label="subListData ? t('declarative.list.navAriaLabel') : t('declarative.list.resultsAriaLabel')"
           data-decl-listbox
         >
           <div
@@ -272,18 +272,18 @@
             <!-- 分组标题：11px 弱化纯文字，不加背景与边框 -->
             <div
               v-if="sec.title"
-              class="decl-section-title px-2.5 pt-1 pb-0.5 text-[11px] font-medium text-[var(--rc-text-muted)] flex items-center justify-between gap-2"
+              class="decl-section-title px-2.5 pt-1 pb-0.5 text-[length:var(--rc-fs-caption)] font-medium text-[var(--rc-text-muted)] flex items-center justify-between gap-2"
             >
               <div class="flex items-center gap-2 min-w-0">
                 <DeclCheckbox
                   v-if="sec.checkable"
                   :checked="sec.checked"
-                  :aria-label="`全选 ${cleanUiText(sec.title)}`"
+                  :aria-label="t('declarative.list.selectAllSection', { title: cleanUiText(sec.title) })"
                   @change="value => sec.onCheckChange && sec.onCheckChange(value)"
                 />
                 <span class="truncate">{{ cleanUiText(sec.title) }}</span>
               </div>
-              <span v-if="sec.subtitle" class="text-[11px] tabular-nums text-[var(--rc-text-faint)] flex-shrink-0">{{ cleanUiText(sec.subtitle) }}</span>
+              <span v-if="sec.subtitle" class="text-[length:var(--rc-fs-caption)] tabular-nums text-[var(--rc-text-faint)] flex-shrink-0">{{ cleanUiText(sec.subtitle) }}</span>
             </div>
 
             <!-- Items 遍历 -->
@@ -293,7 +293,7 @@
               :ref="el => registerItemEl(item, el)"
               role="option"
               :aria-selected="selectedItem === item ? 'true' : 'false'"
-              class="decl-row flex items-center justify-between pl-2 pr-2.5 py-2 rounded-[10px] text-sm cursor-pointer transition-colors duration-100"
+              class="decl-row flex items-center justify-between pl-2 pr-2.5 py-2 rounded-[var(--rc-radius-md)] text-sm cursor-pointer transition-colors duration-100"
               :class="{
                 'is-selected': selectedItem === item,
                 'is-dim': selectedItem === item && hasNavPane && !isNavPaneActive
@@ -309,7 +309,7 @@
                 <DeclCheckbox
                   v-if="item.props?.checkable"
                   :checked="item.props?.checked ?? false"
-                  :aria-label="`勾选 ${displayText(item.props?.title)}`"
+                  :aria-label="t('declarative.list.checkItem', { title: displayText(item.props?.title) })"
                   @change="toggleItemCheck(item)"
                 />
                 <DeclarativeIcon
@@ -319,10 +319,10 @@
                   :class="selectedItem === item ? 'text-[var(--rc-text-primary)]' : 'text-[var(--rc-text-muted)]'"
                 />
                 <div class="flex flex-col justify-center min-w-0 flex-1 overflow-hidden">
-                  <span class="truncate font-medium text-[var(--rc-text-primary)] leading-snug text-[13px]">{{ displayText(item.props?.title) }}</span>
+                  <span class="truncate font-medium text-[var(--rc-text-primary)] leading-snug text-[length:var(--rc-fs-body)]">{{ displayText(item.props?.title) }}</span>
                   <span
                     v-if="item.props?.subtitle"
-                    class="text-[11px] text-[var(--rc-text-muted)] truncate leading-tight"
+                    class="text-[length:var(--rc-fs-caption)] text-[var(--rc-text-muted)] truncate leading-tight"
                   >
                     {{ displayText(item.props.subtitle) }}
                   </span>
@@ -336,13 +336,15 @@
             </div>
           </div>
 
+          <!-- 插件用 List.EmptyView 声明了空状态时用它的图标、标题和说明；加载中仍先显示转圈，不下结论 -->
           <DeclEmptyState
             v-if="flatItems.length === 0"
             class="decl-list-empty"
             compact
             :loading="Boolean(descriptor.props?.isLoading)"
-            :icon="hasSearchText() ? 'magnifying-glass' : ''"
-            :title="listEmptyText"
+            :icon="pluginEmptyView?.icon || (hasSearchText() ? 'magnifying-glass' : '')"
+            :title="pluginEmptyView && !descriptor.props?.isLoading ? pluginEmptyView.title : listEmptyText"
+            :description="pluginEmptyView && !descriptor.props?.isLoading ? pluginEmptyView.description : ''"
           />
         </div>
       </div>
@@ -362,12 +364,12 @@
             <DeclCheckbox
               v-if="subListData.checkable"
               :checked="subListData.checked ?? false"
-              aria-label="全选"
+              :aria-label="t('declarative.list.selectAll')"
               @change="value => subListData.onCheckChange && subListData.onCheckChange(value)"
             />
             <span v-if="subListData.title" class="text-xs font-semibold text-[var(--rc-text-primary)] truncate">{{ cleanUiText(subListData.title) }}</span>
           </div>
-          <span v-if="subListData.subtitle" class="text-[11px] tabular-nums text-[var(--rc-text-muted)] flex-shrink-0">
+          <span v-if="subListData.subtitle" class="text-[length:var(--rc-fs-caption)] tabular-nums text-[var(--rc-text-muted)] flex-shrink-0">
             {{ cleanUiText(subListData.subtitle) }}
           </span>
         </div>
@@ -376,7 +378,7 @@
         <div
           class="flex-1 overflow-y-auto declarative-scrollbar p-2 space-y-0.5"
           role="listbox"
-          :aria-label="cleanUiText(subListData.title) || '明细'"
+          :aria-label="cleanUiText(subListData.title) || t('declarative.list.detailsAriaLabel')"
           aria-multiselectable="true"
           data-decl-sublistbox
         >
@@ -386,7 +388,7 @@
             :ref="el => registerSubItemEl(fItem, el)"
             role="option"
             :aria-selected="selectedSubItem === fItem ? 'true' : 'false'"
-            class="decl-row flex items-center justify-between pl-2 pr-3 py-2 rounded-[10px] text-sm cursor-pointer transition-colors duration-100"
+            class="decl-row flex items-center justify-between pl-2 pr-3 py-2 rounded-[var(--rc-radius-md)] text-sm cursor-pointer transition-colors duration-100"
             :class="{
               'is-selected': selectedSubItem === fItem,
               'is-dim': selectedSubItem === fItem && isNavPaneActive
@@ -402,7 +404,7 @@
               <DeclCheckbox
                 v-if="fItem.props?.checkable"
                 :checked="fItem.props?.checked ?? false"
-                :aria-label="`勾选 ${displayText(fItem.props?.title)}`"
+                :aria-label="t('declarative.list.checkItem', { title: displayText(fItem.props?.title) })"
                 @change="toggleItemCheck(fItem)"
               />
               <!-- 只有插件明确声明不可勾选（checkable: false）或给出锁定原因时才显示锁；未设置 checkable 的普通行不显示 -->
@@ -420,10 +422,10 @@
                 :class="selectedSubItem === fItem ? 'text-[var(--rc-text-primary)]' : 'text-[var(--rc-text-muted)]'"
               />
               <div class="flex flex-col justify-center min-w-0 flex-1 overflow-hidden">
-                <span class="truncate font-medium text-[var(--rc-text-primary)] leading-snug text-[13px]">{{ displayText(fItem.props?.title) }}</span>
+                <span class="truncate font-medium text-[var(--rc-text-primary)] leading-snug text-[length:var(--rc-fs-body)]">{{ displayText(fItem.props?.title) }}</span>
                 <span
                   v-if="fItem.props?.subtitle"
-                  class="text-[11px] text-[var(--rc-text-muted)] truncate leading-tight"
+                  class="text-[length:var(--rc-fs-caption)] text-[var(--rc-text-muted)] truncate leading-tight"
                 >
                   {{ displayText(fItem.props.subtitle) }}
                 </span>
@@ -473,6 +475,9 @@ import DeclCheckbox from "./DeclCheckbox.vue";
 import DeclEmptyState from "./DeclEmptyState.vue";
 import ListAccessory from "./ListAccessory.vue";
 import { cleanUiText, displayText } from "../uiText.js";
+import { useAppI18n } from "@/i18n";
+
+const { t } = useAppI18n();
 
 const props = defineProps({
   descriptor: {
@@ -876,14 +881,33 @@ function isSubItemLocked(item) {
 
 function subItemLockedReason(item) {
   const reason = item?.props?.lockedReason;
-  return typeof reason === "string" && reason.trim() ? cleanUiText(reason.trim()) : "受保护，不可选择";
+  return typeof reason === "string" && reason.trim() ? cleanUiText(reason.trim()) : t("declarative.list.lockedDefault");
 }
+
+// 插件声明的空状态（List.EmptyView）：放在顶层或某个 Section 里都认；只取第一个，标题为空时视为未声明
+const pluginEmptyView = computed(() => {
+  const findIn = (children) => (children || []).find((child) => child?.type === "List.EmptyView");
+  const children = props.descriptor.children || [];
+  let node = findIn(children);
+  if (!node) {
+    for (const child of children) {
+      if (child?.type === "List.Section") {
+        node = findIn(child.children);
+        if (node) break;
+      }
+    }
+  }
+  const title = typeof node?.props?.title === "string" ? cleanUiText(node.props.title.trim()) : "";
+  if (!title) return null;
+  const description = typeof node.props.description === "string" ? cleanUiText(node.props.description.trim()) : "";
+  return { title, description, icon: node.props.icon || "" };
+});
 
 // 列表为空时的提示：加载中不下结论；有搜索词才说"未找到匹配"；否则是中性的"暂无内容"
 const listEmptyText = computed(() => {
-  if (props.descriptor.props?.isLoading) return "正在加载…";
-  if (hasSearchText()) return "未找到匹配条目";
-  return "暂无内容";
+  if (props.descriptor.props?.isLoading) return t("declarative.empty.loading");
+  if (hasSearchText()) return t("declarative.empty.noMatch");
+  return t("declarative.empty.noItems");
 });
 
 function clearSearch() {
@@ -1377,7 +1401,7 @@ defineExpose({
   width: 6px;
   height: 6px;
   flex-shrink: 0;
-  border-radius: 1.7px;
+  border-radius: var(--rc-marker-radius);
   background: transparent;
 }
 

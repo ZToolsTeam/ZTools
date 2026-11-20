@@ -224,6 +224,8 @@ test('configures the locked Universal target and skips a second lipo of classic-
   assert.equal(options.appBundleId, 'org.example.ztools')
   assert.equal(options.appVersion, '1.1.7')
   assert.equal(options.buildVersion, '1171')
+  assert.equal(options.extendInfo.CFBundleDevelopmentRegion, 'en')
+  assert.deepEqual(options.extendInfo.CFBundleLocalizations, ['en', 'zh_CN'])
   assert.deepEqual(options.extendInfo.CFBundleURLTypes, [
     { CFBundleURLName: 'ZTools plugin open', CFBundleURLSchemes: ['ztools'] }
   ])

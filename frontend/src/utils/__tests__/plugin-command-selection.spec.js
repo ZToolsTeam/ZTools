@@ -1,6 +1,7 @@
-import { describe, expect, it } from 'vitest'
+import { beforeEach, describe, expect, it } from 'vitest'
 import fs from 'node:fs/promises'
 import path from 'node:path'
+import { setRuntimeLocale } from '@ztools/declarative-ui'
 import { loadInstalledDeclarativePlugin } from '@/utils/declarativePluginLoader'
 
 async function loadCommand(source, featureCode = 'convert-color') {
@@ -13,6 +14,10 @@ async function loadCommand(source, featureCode = 'convert-color') {
 }
 
 describe('声明式插件命令选择', () => {
+  beforeEach(() => {
+    setRuntimeLocale('zh-CN')
+  })
+
   it.each(['commands', 'features'])('显式 %s 映射优先于同名工具函数', async (mapping) => {
     const plugin = await loadCommand(`
       export function convertColor() { throw new Error('工具函数不是界面入口') }

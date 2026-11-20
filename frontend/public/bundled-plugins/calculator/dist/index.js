@@ -1,7 +1,8 @@
 import React from "@ztools/declarative-ui";
 import { confirmAlert } from "@ztools/declarative-ui";
 import { List, ActionPanel, Action, Icon, showToast, Toast, Clipboard } from "@ztools/declarative-ui";
-import { useState, useEffect, useMemo, useNavigation } from "@ztools/declarative-ui";
+import { useState, useEffect, useMemo, useNavigation, useLocale } from "@ztools/declarative-ui";
+import { t } from "./i18n.js";
 import RmbCommand from "./rmb.js";
 import CurrencyCommand, { useRates } from "./currency.js";
 export { default as calcRmb } from "./rmb.js";
@@ -11,34 +12,34 @@ import { evaluateCalculatorQuery, getCalculatorHistory, addCalculatorHistory, to
 import { usePopoutValue } from "./popout-state.js";
 export * from "./calculator-engine.js";
 const DEFAULT_CALC_EXAMPLES = [
-    { expr: "1024 * 768", desc: "分辨率像素点四则运算", category: "数学" },
-    { expr: "sqrt(65536)", desc: "平方根函数计算", category: "数学" },
-    { expr: "2 ^ 16", desc: "指数幂运算", category: "数学" },
-    { expr: "sin(pi / 2)", desc: "三角函数与常数", category: "数学" },
-    { expr: "32px to rem", desc: "前端 CSS px 与 rem 极客换算", category: "换算" },
-    { expr: "2.5rem to px", desc: "CSS rem 转像素（基于 16px）", category: "换算" },
-    { expr: "10km to miles", desc: "公制与英制度量衡换算", category: "换算" },
-    { expr: "5kg to lbs", desc: "重量单位千克转磅", category: "换算" },
-    { expr: "100c to f", desc: "摄氏度与华氏度互转", category: "换算" },
-    { expr: "1024mb to gb", desc: "计算机存储容量二进制换算", category: "换算" },
-    { expr: "0xFF to dec", desc: "十六进制转十进制", category: "进制" },
-    { expr: "255 to hex", desc: "十进制转十六进制（0xFF）", category: "进制" },
-    { expr: "255 to bin", desc: "十进制转二进制（0b11111111）", category: "进制" },
-    { expr: "now + 2 weeks", desc: "未来相对日期与时间推算", category: "日期" },
-    { expr: "#3B82F6", desc: "HEX 颜色预览、互转与 WCAG 对比度", category: "色彩" },
-    { expr: "rgb(59, 130, 246)", desc: "RGB 格式色彩即时检测", category: "色彩" },
-    { expr: "100 usd to cny", desc: "实时汇率与黄金/比特币即时换算", category: "汇率" }
+    { expr: "1024 * 768", descKey: "eg0Desc", categoryKey: "catMath" },
+    { expr: "sqrt(65536)", descKey: "eg1Desc", categoryKey: "catMath" },
+    { expr: "2 ^ 16", descKey: "eg2Desc", categoryKey: "catMath" },
+    { expr: "sin(pi / 2)", descKey: "eg3Desc", categoryKey: "catMath" },
+    { expr: "32px to rem", descKey: "eg4Desc", categoryKey: "catUnit", isUnit: true },
+    { expr: "2.5rem to px", descKey: "eg5Desc", categoryKey: "catUnit", isUnit: true },
+    { expr: "10km to miles", descKey: "eg6Desc", categoryKey: "catUnit", isUnit: true },
+    { expr: "5kg to lbs", descKey: "eg7Desc", categoryKey: "catUnit", isUnit: true },
+    { expr: "100c to f", descKey: "eg8Desc", categoryKey: "catUnit", isUnit: true },
+    { expr: "1024mb to gb", descKey: "eg9Desc", categoryKey: "catUnit", isUnit: true },
+    { expr: "0xFF to dec", descKey: "eg10Desc", categoryKey: "catRadix" },
+    { expr: "255 to hex", descKey: "eg11Desc", categoryKey: "catRadix" },
+    { expr: "255 to bin", descKey: "eg12Desc", categoryKey: "catRadix" },
+    { expr: "now + 2 weeks", descKey: "eg13Desc", categoryKey: "catDate" },
+    { expr: "#3B82F6", descKey: "eg14Desc", categoryKey: "catColor" },
+    { expr: "rgb(59, 130, 246)", descKey: "eg15Desc", categoryKey: "catColor" },
+    { expr: "100 usd to cny", descKey: "eg16Desc", categoryKey: "catCurrency" }
 ];
-const HISTORY_TYPE_LABELS = {
-    math: "计算",
-    unit: "换算",
-    currency: "汇率",
-    date: "日期",
-    color: "色彩"
+const HISTORY_TYPE_KEYS = {
+    math: "historyTypeMath",
+    unit: "historyTypeUnit",
+    currency: "historyTypeCurrency",
+    date: "historyTypeDate",
+    color: "historyTypeColor"
 };
 /** 融合本地同步计算与按需实时汇率结果；无真实汇率时绝不返回估算值 */
-function resolveQueryWithCurrency(input, snapshot, origin, loading, rateError) {
-    const syncResult = evaluateCalculatorQuery(input);
+function resolveQueryWithCurrency(input, snapshot, origin, loading, rateError, locale) {
+    const syncResult = evaluateCalculatorQuery(input, { locale });
     if (syncResult.type !== "none" && !(syncResult.type === "math" && Boolean(syncResult.error))) {
         return syncResult;
     }
@@ -60,7 +61,7 @@ function resolveQueryWithCurrency(input, snapshot, origin, loading, rateError) {
                 type: "currency",
                 expression: inlineCurrency.expression,
                 formattedAnswer: "",
-                error: `${rateError}（不使用估算汇率）`
+                error: t("currencyNoEstimateError", { error: rateError })
             };
         }
         return {
@@ -116,10 +117,11 @@ export function calcUnit() {
     return CalculatorCommand({ unitOnly: true });
 }
 export default function CalculatorCommand(props) {
+    const locale = useLocale();
     const unitOnly = props?.unitOnly === true;
     const examples = DEFAULT_CALC_EXAMPLES
         .map((eg, idx) => ({ ...eg, idx }))
-        .filter((eg) => !unitOnly || eg.category === "换算");
+        .filter((eg) => !unitOnly || eg.isUnit === true);
     const { push } = useNavigation();
     // 当前算式与历史随独立窗口带走：新窗口首帧就能显示，不闪空列表
     const [searchText, setSearchText] = usePopoutValue("searchText", () => "", isText);
@@ -128,12 +130,12 @@ export default function CalculatorCommand(props) {
     const [history, setHistory] = usePopoutValue("history", () => [], isHistory);
     // 仅当用户输入匹配汇率换算算式时才按需加载实时汇率；普通四则运算与单位换算零网络开销
     const inlineCurrencyCandidate = useMemo(() => {
-        const sync = evaluateCalculatorQuery(searchText);
+        const sync = evaluateCalculatorQuery(searchText, { locale });
         if (sync.type === "none" || (sync.type === "math" && Boolean(sync.error))) {
             return parseInlineCurrencyQuery(searchText);
         }
         return null;
-    }, [searchText]);
+    }, [searchText, locale]);
     const { snapshot: rateSnapshot, origin: rateOrigin, rateError, loading: rateLoading, loadRates } = useRates({
         enabled: inlineCurrencyCandidate?.kind === "convert",
         silentToast: true
@@ -148,14 +150,14 @@ export default function CalculatorCommand(props) {
         })
             .catch((error) => {
             if (active) {
-                void showToast(Toast.Style.Failure, "读取计算历史失败，原数据保留", error instanceof Error ? error.message : String(error));
+                void showToast(Toast.Style.Failure, t("historyLoadFailedTitle"), error instanceof Error ? error.message : String(error));
             }
         });
         return () => {
             active = false;
         };
     }, []);
-    const queryResult = useMemo(() => resolveQueryWithCurrency(searchText, rateSnapshot, rateOrigin, rateLoading, rateError), [searchText, rateSnapshot, rateOrigin, rateLoading, rateError]);
+    const queryResult = useMemo(() => resolveQueryWithCurrency(searchText, rateSnapshot, rateOrigin, rateLoading, rateError, locale), [searchText, rateSnapshot, rateOrigin, rateLoading, rateError, locale]);
     // 用户在输入框里打字：只更新文字，选中项由渲染器重置到第一项
     const handleSearchTextChange = (text) => {
         setSearchText(text);
@@ -166,7 +168,7 @@ export default function CalculatorCommand(props) {
     // 避免渲染器默认落到第一条不相关的历史记录。
     const fillSearch = (text, sourceItemId) => {
         setSearchText(text);
-        const immediate = resolveQueryWithCurrency(text, rateSnapshot, rateOrigin, rateLoading, rateError);
+        const immediate = resolveQueryWithCurrency(text, rateSnapshot, rateOrigin, rateLoading, rateError, locale);
         // 若来自历史条目且当前因缺少汇率报错，优先选中来源历史项本身以支持直接回车复制原值
         if (sourceItemId && immediate.type === "currency" && (immediate.error || immediate.loadingCurrency)) {
             setSelectedItemId(sourceItemId);
@@ -181,7 +183,7 @@ export default function CalculatorCommand(props) {
             return true;
         }
         catch (err) {
-            await showToast(Toast.Style.Failure, "历史记录保存失败", err instanceof Error ? err.message : String(err));
+            await showToast(Toast.Style.Failure, t("historySaveFailedTitle"), err instanceof Error ? err.message : String(err));
             return false;
         }
     };
@@ -195,13 +197,13 @@ export default function CalculatorCommand(props) {
     // 复制历史项、置顶项或示例时不能把输入框里另一条无关算式顺带写进历史
     const handleCopy = async (text, label, record = true) => {
         await Clipboard.copy(text);
-        await showToast(Toast.Style.Success, `已复制 ${label}`, text);
+        await showToast(Toast.Style.Success, t("copiedToastTitle", { label }), text);
         if (record)
             await recordCurrentQuery();
     };
     const handlePaste = async (text, record = true) => {
         await Clipboard.paste(text);
-        await showToast(Toast.Style.Success, "已发送粘贴请求", text);
+        await showToast(Toast.Style.Success, t("pastedToastTitle"), text);
         if (record)
             await recordCurrentQuery();
     };
@@ -210,15 +212,15 @@ export default function CalculatorCommand(props) {
     };
     const handleDeleteHistory = async (id) => {
         if (await updateHistory(() => deleteCalculatorHistory(id))) {
-            await showToast(Toast.Style.Success, "已删除历史记录");
+            await showToast(Toast.Style.Success, t("deletedHistoryToast"));
         }
     };
     const handleClearHistory = async () => {
         const confirmed = await confirmAlert({
-            title: "清空全部计算历史？",
-            message: `将删除全部 ${history.length} 条记录（含已固定的），且无法恢复。`,
-            primaryAction: { title: "清空", style: "destructive" },
-            dismissAction: { title: "取消" }
+            title: t("clearHistoryConfirmTitle"),
+            message: t("clearHistoryConfirmMessage", { count: history.length }),
+            primaryAction: { title: t("clearHistoryConfirmPrimary"), style: "destructive" },
+            dismissAction: { title: t("cancel") }
         });
         if (!confirmed)
             return;
@@ -226,7 +228,7 @@ export default function CalculatorCommand(props) {
             await clearCalculatorHistory();
             return [];
         })) {
-            await showToast(Toast.Style.Success, "已清空所有历史计算记录");
+            await showToast(Toast.Style.Success, t("clearedHistoryToast"));
         }
     };
     const openCurrencyBoard = (initialQuery) => {
@@ -235,57 +237,60 @@ export default function CalculatorCommand(props) {
     const pinnedItems = history.filter((item) => item.pinned);
     const recentItems = history.filter((item) => !item.pinned);
     return (React.createElement(List, { isLoading: Boolean(queryResult.loadingCurrency), actions: ActionPanel({}, [
-            Action({ title: "人民币大写…", icon: Icon.Text, onAction: () => push(RmbCommand) }),
-            Action({ title: "汇率换算…", icon: Icon.Globe, onAction: () => openCurrencyBoard() })
+            Action({ title: t("actionOpenRmb"), icon: Icon.Text, onAction: () => push(RmbCommand) }),
+            Action({ title: t("actionOpenCurrency"), icon: Icon.Globe, onAction: () => openCurrencyBoard() })
         ]), searchBarPlaceholder: unitOnly
-            ? "输入换算，如 10km to miles、5kg to lbs、100c to f、1024mb to gb"
-            : "输入算式，如 128*1024、32px to rem、0xFF to dec、now + 2 weeks", searchText: searchText, onSearchTextChange: handleSearchTextChange, selectedItemId: selectedItemId, onSelectionChange: () => setSelectedItemId(undefined) },
-        queryResult.type === "color" && queryResult.colorResult && (React.createElement(List.Section, { title: "\u8272\u5F69\u8BC6\u522B\u4E0E\u5373\u65F6\u8F6C\u6362" },
-            React.createElement(List.Item, { id: "color-hex", title: queryResult.colorResult.hex, subtitle: `HEX 色彩代码 | 对比度 白:${queryResult.colorResult.contrastWhite}:1 黑:${queryResult.colorResult.contrastBlack}:1`, icon: Icon.Eye, accessories: [{ text: "HEX" }], actions: React.createElement(ActionPanel, { title: "\u8272\u5F69\u52A8\u4F5C" },
-                    React.createElement(Action, { title: "\u590D\u5236 HEX", icon: Icon.CopyClipboard, onAction: () => handleCopy(queryResult.colorResult.hex, "HEX") }),
-                    React.createElement(Action, { title: "\u590D\u5236 RGB", icon: Icon.CopyClipboard, onAction: () => handleCopy(queryResult.colorResult.rgb, "RGB") }),
-                    React.createElement(Action, { title: "\u590D\u5236 HSL", icon: Icon.CopyClipboard, onAction: () => handleCopy(queryResult.colorResult.hsl, "HSL") }),
-                    React.createElement(Action, { title: "\u590D\u5236 CMYK", icon: Icon.CopyClipboard, onAction: () => handleCopy(queryResult.colorResult.cmyk, "CMYK") }),
-                    React.createElement(Action, { title: "\u7C98\u8D34\u5230\u524D\u53F0\u5E94\u7528", icon: Icon.Checkmark, onAction: () => handlePaste(queryResult.colorResult.hex) })) }),
-            React.createElement(List.Item, { id: "color-rgb", title: queryResult.colorResult.rgb, subtitle: "RGB \u683C\u5F0F", icon: Icon.Document, accessories: [{ text: "RGB" }], actions: React.createElement(ActionPanel, { title: "\u8272\u5F69\u52A8\u4F5C" },
-                    React.createElement(Action, { title: "\u590D\u5236 RGB", icon: Icon.CopyClipboard, onAction: () => handleCopy(queryResult.colorResult.rgb, "RGB") })) }),
-            React.createElement(List.Item, { id: "color-hsl", title: queryResult.colorResult.hsl, subtitle: "HSL \u683C\u5F0F", icon: Icon.Document, accessories: [{ text: "HSL" }], actions: React.createElement(ActionPanel, { title: "\u8272\u5F69\u52A8\u4F5C" },
-                    React.createElement(Action, { title: "\u590D\u5236 HSL", icon: Icon.CopyClipboard, onAction: () => handleCopy(queryResult.colorResult.hsl, "HSL") })) }),
-            React.createElement(List.Item, { id: "color-cmyk", title: queryResult.colorResult.cmyk, subtitle: "\u5370\u5237 CMYK \u683C\u5F0F", icon: Icon.Document, accessories: [{ text: "CMYK" }], actions: React.createElement(ActionPanel, { title: "\u8272\u5F69\u52A8\u4F5C" },
-                    React.createElement(Action, { title: "\u590D\u5236 CMYK", icon: Icon.CopyClipboard, onAction: () => handleCopy(queryResult.colorResult.cmyk, "CMYK") })) }))),
-        queryResult.type !== "none" && queryResult.type !== "color" && (React.createElement(List.Section, { title: "\u8BA1\u7B97\u4E0E\u6362\u7B97\u7ED3\u679C" }, queryResult.loadingCurrency ? (React.createElement(List.Item, { id: "calc-loading", title: "\u6B63\u5728\u83B7\u53D6\u5B9E\u65F6\u6C47\u7387\u2026", subtitle: queryResult.expression, icon: Icon.Globe })) : queryResult.error ? (React.createElement(List.Item, { id: "calc-error", title: queryResult.type === "currency" ? "汇率换算无法完成" : "输入算式有误", subtitle: queryResult.error, icon: Icon.ExclamationMark, actions: queryResult.type === "currency" ? (React.createElement(ActionPanel, { title: "\u6C47\u7387\u64CD\u4F5C" },
-                React.createElement(Action, { title: "\u5237\u65B0\u5B9E\u65F6\u6C47\u7387", icon: Icon.ArrowClockwise, onAction: () => loadRates(true) }),
-                React.createElement(Action, { title: "\u6253\u5F00\u6C47\u7387\u6362\u7B97\u770B\u677F\u2026", icon: Icon.Globe, onAction: () => openCurrencyBoard(queryResult.expression) }))) : undefined })) : (React.createElement(List.Item, { id: "calc-success", title: `= ${queryResult.formattedAnswer}`, subtitle: queryResult.details
+            ? t("placeholderUnitOnly")
+            : t("placeholderDefault"), searchText: searchText, onSearchTextChange: handleSearchTextChange, selectedItemId: selectedItemId, onSelectionChange: () => setSelectedItemId(undefined) },
+        queryResult.type === "color" && queryResult.colorResult && (React.createElement(List.Section, { title: t("sectionColor") },
+            React.createElement(List.Item, { id: "color-hex", title: queryResult.colorResult.hex, subtitle: t("colorHexSubtitle", {
+                    white: queryResult.colorResult.contrastWhite,
+                    black: queryResult.colorResult.contrastBlack
+                }), icon: Icon.Eye, accessories: [{ text: "HEX" }], actions: React.createElement(ActionPanel, { title: t("panelColorActions") },
+                    React.createElement(Action, { title: t("actionCopyHex"), icon: Icon.CopyClipboard, onAction: () => handleCopy(queryResult.colorResult.hex, "HEX") }),
+                    React.createElement(Action, { title: t("actionCopyRgb"), icon: Icon.CopyClipboard, onAction: () => handleCopy(queryResult.colorResult.rgb, "RGB") }),
+                    React.createElement(Action, { title: t("actionCopyHsl"), icon: Icon.CopyClipboard, onAction: () => handleCopy(queryResult.colorResult.hsl, "HSL") }),
+                    React.createElement(Action, { title: t("actionCopyCmyk"), icon: Icon.CopyClipboard, onAction: () => handleCopy(queryResult.colorResult.cmyk, "CMYK") }),
+                    React.createElement(Action, { title: t("actionPasteToApp"), icon: Icon.Checkmark, onAction: () => handlePaste(queryResult.colorResult.hex) })) }),
+            React.createElement(List.Item, { id: "color-rgb", title: queryResult.colorResult.rgb, subtitle: t("colorRgbSubtitle"), icon: Icon.Document, accessories: [{ text: "RGB" }], actions: React.createElement(ActionPanel, { title: t("panelColorActions") },
+                    React.createElement(Action, { title: t("actionCopyRgb"), icon: Icon.CopyClipboard, onAction: () => handleCopy(queryResult.colorResult.rgb, "RGB") })) }),
+            React.createElement(List.Item, { id: "color-hsl", title: queryResult.colorResult.hsl, subtitle: t("colorHslSubtitle"), icon: Icon.Document, accessories: [{ text: "HSL" }], actions: React.createElement(ActionPanel, { title: t("panelColorActions") },
+                    React.createElement(Action, { title: t("actionCopyHsl"), icon: Icon.CopyClipboard, onAction: () => handleCopy(queryResult.colorResult.hsl, "HSL") })) }),
+            React.createElement(List.Item, { id: "color-cmyk", title: queryResult.colorResult.cmyk, subtitle: t("colorCmykSubtitle"), icon: Icon.Document, accessories: [{ text: "CMYK" }], actions: React.createElement(ActionPanel, { title: t("panelColorActions") },
+                    React.createElement(Action, { title: t("actionCopyCmyk"), icon: Icon.CopyClipboard, onAction: () => handleCopy(queryResult.colorResult.cmyk, "CMYK") })) }))),
+        queryResult.type !== "none" && queryResult.type !== "color" && (React.createElement(List.Section, { title: t("sectionResult") }, queryResult.loadingCurrency ? (React.createElement(List.Item, { id: "calc-loading", title: t("loadingCurrencyTitle"), subtitle: queryResult.expression, icon: Icon.Globe })) : queryResult.error ? (React.createElement(List.Item, { id: "calc-error", title: queryResult.type === "currency" ? t("currencyErrorTitle") : t("mathErrorTitle"), subtitle: queryResult.error, icon: Icon.ExclamationMark, actions: queryResult.type === "currency" ? (React.createElement(ActionPanel, { title: t("panelCurrencyActions") },
+                React.createElement(Action, { title: t("actionRefreshLiveRates"), icon: Icon.ArrowClockwise, onAction: () => loadRates(true) }),
+                React.createElement(Action, { title: t("actionOpenCurrencyBoard"), icon: Icon.Globe, onAction: () => openCurrencyBoard(queryResult.expression) }))) : undefined })) : (React.createElement(List.Item, { id: "calc-success", title: `= ${queryResult.formattedAnswer}`, subtitle: queryResult.details
                 ? `${queryResult.expression} (${queryResult.details})`
-                : queryResult.expression, icon: queryResult.type === "currency" ? Icon.Globe : Icon.Terminal, accessories: [{ text: "回车复制结果" }], actions: React.createElement(ActionPanel, { title: "\u8BA1\u7B97\u5668\u64CD\u4F5C" },
-                React.createElement(Action, { title: "\u590D\u5236\u8BA1\u7B97\u7ED3\u679C", icon: Icon.CopyClipboard, onAction: () => handleCopy(queryResult.formattedAnswer, "计算结果") }),
-                React.createElement(Action, { title: "\u7C98\u8D34\u5230\u524D\u53F0\u5E94\u7528", icon: Icon.Checkmark, shortcut: { modifiers: ["ctrl", "shift"], key: "v" }, onAction: () => handlePaste(queryResult.formattedAnswer) }),
-                React.createElement(Action, { title: "\u590D\u5236\u5B8C\u6574\u7B97\u5F0F\u4E0E\u7ED3\u679C", icon: Icon.CopyClipboard, shortcut: { modifiers: ["ctrl", "alt"], key: "c" }, onAction: () => handleCopy(`${queryResult.expression} = ${queryResult.formattedAnswer}`, "完整算式") }),
-                queryResult.fillText !== undefined && (React.createElement(Action, { title: "\u5C06\u7ED3\u679C\u586B\u5165\u8F93\u5165\u6846", icon: Icon.Pencil, shortcut: { modifiers: ["ctrl"], key: "e" }, onAction: () => fillSearch(queryResult.fillText) })),
-                React.createElement(Action, { title: "\u4FDD\u5B58\u5230\u5386\u53F2\u7B97\u5F0F", icon: Icon.Pin, shortcut: { modifiers: ["ctrl"], key: "p" }, onAction: async () => {
+                : queryResult.expression, icon: queryResult.type === "currency" ? Icon.Globe : Icon.Terminal, accessories: [{ text: t("accessoryEnterCopy") }], actions: React.createElement(ActionPanel, { title: t("panelCalcActions") },
+                React.createElement(Action, { title: t("actionCopyResult"), icon: Icon.CopyClipboard, onAction: () => handleCopy(queryResult.formattedAnswer, t("labelCalcResult")) }),
+                React.createElement(Action, { title: t("actionPasteToApp"), icon: Icon.Checkmark, shortcut: { modifiers: ["ctrl", "shift"], key: "v" }, onAction: () => handlePaste(queryResult.formattedAnswer) }),
+                React.createElement(Action, { title: t("actionCopyFullExpr"), icon: Icon.CopyClipboard, shortcut: { modifiers: ["ctrl", "alt"], key: "c" }, onAction: () => handleCopy(`${queryResult.expression} = ${queryResult.formattedAnswer}`, t("labelFullExpr")) }),
+                queryResult.fillText !== undefined && (React.createElement(Action, { title: t("actionFillInput"), icon: Icon.Pencil, shortcut: { modifiers: ["ctrl"], key: "e" }, onAction: () => fillSearch(queryResult.fillText) })),
+                React.createElement(Action, { title: t("actionSaveToHistory"), icon: Icon.Pin, shortcut: { modifiers: ["ctrl"], key: "p" }, onAction: async () => {
                         const saved = await updateHistory(() => addCalculatorHistory(queryResult.expression, queryResult.formattedAnswer, (queryResult.type === "none" ? "math" : queryResult.type)));
                         if (saved)
-                            await showToast(Toast.Style.Success, "已保存到历史记录");
+                            await showToast(Toast.Style.Success, t("savedToHistoryToast"));
                     } }),
-                queryResult.type === "currency" && (React.createElement(Action, { title: "\u5728\u6C47\u7387\u770B\u677F\u4E2D\u67E5\u770B\u5168\u90E8\u5E01\u79CD\u2026", icon: Icon.Globe, shortcut: { modifiers: ["ctrl"], key: "r" }, onAction: () => openCurrencyBoard(inlineCurrencyCandidate?.kind === "convert"
+                queryResult.type === "currency" && (React.createElement(Action, { title: t("actionViewAllCurrencies"), icon: Icon.Globe, shortcut: { modifiers: ["ctrl"], key: "r" }, onAction: () => openCurrencyBoard(inlineCurrencyCandidate?.kind === "convert"
                         ? `${inlineCurrencyCandidate.amountText} ${inlineCurrencyCandidate.from}`
                         : queryResult.expression) }))) })))),
-        pinnedItems.length > 0 && (React.createElement(List.Section, { title: "\u5DF2\u7F6E\u9876\u5E38\u7528\u6570\u5B57\u4E0E\u7B97\u5F0F" }, pinnedItems.map((item) => (React.createElement(List.Item, { key: item.id, id: item.id, title: `= ${item.answer}`, subtitle: item.expression, icon: Icon.Pin, accessories: [{ text: "置顶" }], actions: React.createElement(ActionPanel, { title: "\u7F6E\u9876\u9879\u64CD\u4F5C" },
-                React.createElement(Action, { title: "\u590D\u5236\u7ED3\u679C", icon: Icon.CopyClipboard, onAction: () => handleCopy(item.answer, "置顶结果", false) }),
-                React.createElement(Action, { title: "\u7C98\u8D34\u5230\u524D\u53F0", icon: Icon.Checkmark, onAction: () => handlePaste(item.answer, false) }),
-                React.createElement(Action, { title: "\u53D6\u6D88\u7F6E\u9876", icon: Icon.Pin, onAction: () => handleTogglePin(item.id) }),
-                React.createElement(Action, { title: "\u586B\u5165\u641C\u7D22\u6846", icon: Icon.Pencil, onAction: () => fillSearch(item.expression, item.id) }),
-                React.createElement(Action, { title: "\u5220\u9664\u6B64\u9879", icon: Icon.Trash, onAction: () => handleDeleteHistory(item.id) })) }))))),
-        recentItems.length > 0 && (React.createElement(List.Section, { title: "\u8FD1\u671F\u8BA1\u7B97\u5386\u53F2" }, recentItems.slice(0, 15).map((item) => (React.createElement(List.Item, { key: item.id, id: item.id, title: `= ${item.answer}`, subtitle: item.expression, icon: Icon.Clock, accessories: [{ text: HISTORY_TYPE_LABELS[item.type] ?? "计算" }], actions: React.createElement(ActionPanel, { title: "\u5386\u53F2\u9879\u64CD\u4F5C" },
-                React.createElement(Action, { title: "\u590D\u5236\u7ED3\u679C", icon: Icon.CopyClipboard, onAction: () => handleCopy(item.answer, "历史结果", false) }),
-                React.createElement(Action, { title: "\u7C98\u8D34\u5230\u524D\u53F0", icon: Icon.Checkmark, onAction: () => handlePaste(item.answer, false) }),
-                React.createElement(Action, { title: "\u7F6E\u9876\u6B64\u7B97\u5F0F", icon: Icon.Pin, shortcut: { modifiers: ["ctrl"], key: "p" }, onAction: () => handleTogglePin(item.id) }),
-                React.createElement(Action, { title: "\u586B\u5165\u641C\u7D22\u6846", icon: Icon.Pencil, onAction: () => fillSearch(item.expression, item.id) }),
-                React.createElement(Action, { title: "\u5220\u9664\u6B64\u9879", icon: Icon.Trash, shortcut: { modifiers: ["ctrl"], key: "x" }, onAction: () => handleDeleteHistory(item.id) }),
-                React.createElement(Action, { title: "\u6E05\u7A7A\u5168\u90E8\u5386\u53F2\u8BB0\u5F55", icon: Icon.Trash, onAction: handleClearHistory })) }))))),
-        React.createElement(List.Section, { title: unitOnly ? "单位换算示例" : "计算、单位换算与语法示例" }, examples.map(({ idx, ...eg }) => (React.createElement(List.Item, { key: idx, id: `eg-${idx}`, title: eg.expr, subtitle: eg.desc, icon: Icon.Terminal, 
+        pinnedItems.length > 0 && (React.createElement(List.Section, { title: t("sectionPinned") }, pinnedItems.map((item) => (React.createElement(List.Item, { key: item.id, id: item.id, title: `= ${item.answer}`, subtitle: item.expression, icon: Icon.Pin, accessories: [{ text: t("accessoryPinned") }], actions: React.createElement(ActionPanel, { title: t("panelPinnedActions") },
+                React.createElement(Action, { title: t("actionCopyShort"), icon: Icon.CopyClipboard, onAction: () => handleCopy(item.answer, t("labelPinnedResult"), false) }),
+                React.createElement(Action, { title: t("actionPasteShort"), icon: Icon.Checkmark, onAction: () => handlePaste(item.answer, false) }),
+                React.createElement(Action, { title: t("actionUnpin"), icon: Icon.Pin, onAction: () => handleTogglePin(item.id) }),
+                React.createElement(Action, { title: t("actionFillSearch"), icon: Icon.Pencil, onAction: () => fillSearch(item.expression, item.id) }),
+                React.createElement(Action, { title: t("actionDeleteItem"), icon: Icon.Trash, onAction: () => handleDeleteHistory(item.id) })) }))))),
+        recentItems.length > 0 && (React.createElement(List.Section, { title: t("sectionRecent") }, recentItems.slice(0, 15).map((item) => (React.createElement(List.Item, { key: item.id, id: item.id, title: `= ${item.answer}`, subtitle: item.expression, icon: Icon.Clock, accessories: [{ text: t(HISTORY_TYPE_KEYS[item.type] ?? "historyTypeMath") }], actions: React.createElement(ActionPanel, { title: t("panelHistoryActions") },
+                React.createElement(Action, { title: t("actionCopyShort"), icon: Icon.CopyClipboard, onAction: () => handleCopy(item.answer, t("labelHistoryResult"), false) }),
+                React.createElement(Action, { title: t("actionPasteShort"), icon: Icon.Checkmark, onAction: () => handlePaste(item.answer, false) }),
+                React.createElement(Action, { title: t("actionPinExpr"), icon: Icon.Pin, shortcut: { modifiers: ["ctrl"], key: "p" }, onAction: () => handleTogglePin(item.id) }),
+                React.createElement(Action, { title: t("actionFillSearch"), icon: Icon.Pencil, onAction: () => fillSearch(item.expression, item.id) }),
+                React.createElement(Action, { title: t("actionDeleteItem"), icon: Icon.Trash, shortcut: { modifiers: ["ctrl"], key: "x" }, onAction: () => handleDeleteHistory(item.id) }),
+                React.createElement(Action, { title: t("actionClearAllHistory"), icon: Icon.Trash, onAction: handleClearHistory })) }))))),
+        React.createElement(List.Section, { title: unitOnly ? t("sectionExamplesUnit") : t("sectionExamplesAll") }, examples.map(({ idx, ...eg }) => (React.createElement(List.Item, { key: idx, id: `eg-${idx}`, title: eg.expr, subtitle: t(eg.descKey), icon: Icon.Terminal, 
             // 单位换算入口里每一行都是“换算”，标签不提供区分信息，只在混合示例里显示分类
-            accessories: unitOnly ? [] : [{ text: eg.category }], actions: React.createElement(ActionPanel, { title: "\u5FEB\u901F\u793A\u4F8B" },
-                React.createElement(Action, { title: "\u586B\u5165\u641C\u7D22\u6846\u5E76\u8BA1\u7B97", icon: Icon.Pencil, onAction: () => fillSearch(eg.expr, `eg-${idx}`) }),
-                React.createElement(Action, { title: "\u590D\u5236\u8868\u8FBE\u5F0F", icon: Icon.CopyClipboard, onAction: () => handleCopy(eg.expr, "表达式", false) })) }))))));
+            accessories: unitOnly ? [] : [{ text: t(eg.categoryKey) }], actions: React.createElement(ActionPanel, { title: t("panelExamples") },
+                React.createElement(Action, { title: t("actionFillAndCalc"), icon: Icon.Pencil, onAction: () => fillSearch(eg.expr, `eg-${idx}`) }),
+                React.createElement(Action, { title: t("actionCopyExpr"), icon: Icon.CopyClipboard, onAction: () => handleCopy(eg.expr, t("labelExpr"), false) })) }))))));
 }

@@ -14,7 +14,7 @@
     <div class="p-6 flex-shrink-0" data-decl-detail-body>
       <div v-if="descriptor.props?.isLoading" class="decl-detail-loading">
         <SpinnerIcon class="w-4 h-4" aria-hidden="true" />
-        <span>加载中…</span>
+        <span>{{ t('declarative.detail.loading') }}</span>
       </div>
       <!-- 块间距由 .declarative-markdown 自己的样式控制 -->
       <MarkdownContent :markdown="descriptor.props?.markdown || ''" />
@@ -39,7 +39,7 @@
     >
       <div v-if="descriptor.props?.isLoading" class="decl-detail-loading">
         <SpinnerIcon class="w-4 h-4" aria-hidden="true" />
-        <span>加载中…</span>
+        <span>{{ t('declarative.detail.loading') }}</span>
       </div>
       <MarkdownContent :markdown="descriptor.props?.markdown || ''" />
     </div>
@@ -59,6 +59,9 @@ import { SpinnerIcon } from '@/utils/appIcons'
 import { ref, computed } from "vue";
 import DetailMetadata from "./DetailMetadata.vue";
 import MarkdownContent from "./MarkdownContent.vue";
+import { useAppI18n } from "@/i18n";
+
+const { t } = useAppI18n();
 
 const props = defineProps({
   descriptor: {
@@ -98,7 +101,7 @@ defineExpose({
   align-items: center;
   gap: 8px;
   margin-bottom: 12px;
-  font-size: 13px;
+  font-size: var(--rc-fs-body);
   color: var(--rc-text-muted);
 }
 </style>

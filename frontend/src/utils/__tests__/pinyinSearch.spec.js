@@ -12,6 +12,8 @@ import {
   matchItemWithQuery,
   splitHighlightParts
 } from '../pinyinSearch.js'
+import { getBuiltinCommandItems } from '@/composables/useCommandSearch'
+import { setI18nLocale } from '@/i18n'
 
 const plugin = (pluginId, name, extra = {}) => ({ key: pluginId, pluginId, name, type: 'plugin', ...extra })
 const app = (name, english) => ({ key: `file:/Applications/${english}.app`, name, altNames: english !== name ? [english] : [], isApplication: true, type: 'file' })
@@ -193,5 +195,44 @@ describe('拼音工具与高亮区间', () => {
     expect(splitHighlightParts('abc', [5, 9])).toEqual([{ text: 'abc', hit: false }])
     expect(splitHighlightParts('abc', null)).toEqual([{ text: 'abc', hit: false }])
     expect(splitHighlightParts('', [0, 1])).toEqual([{ text: '', hit: false }])
+  })
+})
+
+describe('双语内置命令检索与 3+ 字中文 altNames 排序约束', () => {
+  it('英文模式下搜 settings 与 shezhi 均命中 System Settings', () => {
+    setI18nLocale('en-US')
+    const builtins = getBuiltinCommandItems('en-US')
+    const settingsEntry = builtins.find((item) => item.key === 'system-settings')
+    expect(settingsEntry).toBeTruthy()
+    expect(settingsEntry.name).toBe('System Settings')
+    expect(settingsEntry.altNames).toContain('系统设置')
+
+    const byEnglish = filterAndRankItems(builtins, 'settings')
+    expect(byEnglish[0]?.name).toBe('System Settings')
+
+    const byPinyin = filterAndRankItems(builtins, 'shezhi')
+    expect(byPinyin[0]?.name).toBe('System Settings')
+  })
+
+  it('3+ 字中文 altNames 纯首字母或拼音命中不得压过英文原文前缀排序', () => {
+    const englishPrefixApp = { key: 'xtsz-app', name: 'XtszApp', type: 'file' }
+    const englishSettingsWithZhAlt = {
+      key: 'system-settings',
+      name: 'System Settings',
+      altNames: ['系统设置'],
+      type: 'builtin'
+    }
+    const rankedXtsz = filterAndRankItems([englishSettingsWithZhAlt, englishPrefixApp], 'xtsz')
+    expect(rankedXtsz.map((item) => item.name)).toEqual(['XtszApp', 'System Settings'])
+
+    const jsQuick = { key: 'jsq-app', name: 'JSQuick', type: 'file' }
+    const calculatorWithZhAlt = {
+      key: 'calc',
+      name: 'Calculator',
+      altNames: ['计算器'],
+      type: 'file'
+    }
+    const rankedJsq = filterAndRankItems([calculatorWithZhAlt, jsQuick], 'jsq')
+    expect(rankedJsq.map((item) => item.name)).toEqual(['JSQuick', 'Calculator'])
   })
 })

@@ -8,6 +8,9 @@ import {
   notifyHotkeyRecorderActive
 } from '@/utils/hotkeyRecorder'
 import ShortcutKeys from '@/components/base/ShortcutKeys.vue'
+import { useAppI18n } from '@/i18n'
+
+const { t } = useAppI18n()
 
 /**
  * 快捷键录入框（启动快捷键、插件功能快捷键、全局唤醒共用）：显示已绑定的组合键，点击或键盘触发进入录入，
@@ -24,8 +27,8 @@ const props = defineProps({
   // 录入中的显示：isKeys 为 true 时是已按下的组合键（键帽），否则是提示语
   recordingText: { type: String, default: '' },
   recordingIsKeys: { type: Boolean, default: false },
-  waitText: { type: String, default: '按下快捷键' },
-  emptyText: { type: String, default: '未设置' }
+  waitText: { type: String, default: '' },
+  emptyText: { type: String, default: '' }
 })
 const emit = defineEmits(['start', 'cancel', 'keydown', 'clear'])
 const recorder = ref(null)
@@ -176,7 +179,7 @@ defineExpose({ blurInput, focusTrigger })
       role="button"
       :tabindex="disabled || loading || recording ? -1 : 0"
       :aria-disabled="disabled || undefined"
-      :aria-label="hotkey ? `当前快捷键 ${hotkey}，按回车重新录入` : '按回车录入快捷键'"
+      :aria-label="hotkey ? t('hotkeyCapture.ariaCurrent', { hotkey }) : t('hotkeyCapture.ariaEmpty')"
       @click="onClick"
       @keydown.enter.self.prevent="onClick"
       @keydown.space.self.prevent="onClick"
@@ -190,32 +193,32 @@ defineExpose({ blurInput, focusTrigger })
         spellcheck="false"
         :tabindex="recording ? 0 : -1"
         :style="{ pointerEvents: recording ? 'auto' : 'none' }"
-        :aria-label="hotkey ? `当前快捷键 ${hotkey}，点击重新录入` : '点击录入快捷键'"
+        :aria-label="hotkey ? t('hotkeyCapture.inputAriaCurrent', { hotkey }) : t('hotkeyCapture.inputAriaEmpty')"
         @keydown="onKeydown"
         @blur="onBlur"
       />
       <template v-if="recording">
-        <span v-if="loading" class="recording-text">保存中…</span>
+        <span v-if="loading" class="recording-text">{{ t('common.saving') }}</span>
         <span v-else-if="canRenderRecordingKeys" class="recording-keys">
           <ShortcutKeys :combo="pendingKeys(recordingText)" />
           <span v-if="recordingText.endsWith('...')" class="recording-more" aria-hidden="true">…</span>
         </span>
         <span v-else class="recording-text">
           <span class="recording-dot" aria-hidden="true"></span>
-          {{ recordingText || waitText }}
+          {{ recordingText || waitText || t('hotkeyCapture.waitText') }}
         </span>
       </template>
       <ShortcutKeys v-else-if="canRenderHotkeyKeys" class="hotkey-keys" :combo="hotkey" />
       <span v-else-if="fallbackHotkeyText" class="unsupported-hotkey">{{ fallbackHotkeyText }}</span>
-      <span v-else class="no-hotkey">{{ emptyText }}</span>
+      <span v-else class="no-hotkey">{{ emptyText || t('hotkeyCapture.emptyText') }}</span>
     </div>
 
     <button
       v-if="hotkey && !recording"
       type="button"
       class="clear-btn"
-      title="清除快捷键"
-      aria-label="清除快捷键"
+      :title="t('hotkeyCapture.clearTitle')"
+      :aria-label="t('hotkeyCapture.clearTitle')"
       @click.stop="emit('clear')"
     >
       <XIcon aria-hidden="true" />
@@ -243,7 +246,7 @@ defineExpose({ blurInput, focusTrigger })
   border-radius: var(--rc-radius-md);
   background: var(--rc-surface);
   cursor: pointer;
-  transition: border-color 0.15s ease, background-color 0.15s ease;
+  transition: border-color var(--rc-dur) ease, background-color var(--rc-dur) ease;
 }
 
 .hotkey-recorder:hover {
@@ -284,7 +287,7 @@ defineExpose({ blurInput, focusTrigger })
   align-items: center;
   gap: 6px;
   color: var(--rc-accent-text);
-  font-size: 12px;
+  font-size: var(--rc-fs-small);
   font-weight: 500;
 }
 
@@ -314,7 +317,7 @@ defineExpose({ blurInput, focusTrigger })
 .no-hotkey,
 .unsupported-hotkey {
   color: var(--rc-text-muted);
-  font-size: 12px;
+  font-size: var(--rc-fs-small);
 }
 
 .clear-btn {
@@ -324,11 +327,11 @@ defineExpose({ blurInput, focusTrigger })
   align-items: center;
   justify-content: center;
   border: none;
-  border-radius: var(--rc-radius-sm);
+  border-radius: var(--rc-radius-md);
   background: transparent;
   color: var(--rc-text-muted);
   cursor: pointer;
-  transition: background-color 0.15s ease, color 0.15s ease;
+  transition: background-color var(--rc-dur) ease, color var(--rc-dur) ease;
 }
 
 .clear-btn:hover {

@@ -12,6 +12,7 @@ import {
 import type { WindowRegistry } from '../windows/window-registry.js'
 import { suppressWindowsSystemMenu } from '../windows/main-window.js'
 import type { RuntimeCapabilityPromptPort } from './runtime-capability-authorization-service.js'
+import { getResolvedLocale, t } from '../i18n/index.js'
 
 const PROMPT_TIMEOUT_MS = 110_000
 
@@ -73,6 +74,7 @@ export class RuntimeCapabilityPromptService implements RuntimeCapabilityPromptPo
         show: false,
         webPreferences: {
           preload: path.resolve(__dirname, '../../preload/runtime-capability-prompt.js'),
+          additionalArguments: [`--ztools-locale=${getResolvedLocale()}`],
           nodeIntegration: false,
           contextIsolation: true,
           sandbox: true,
@@ -85,7 +87,7 @@ export class RuntimeCapabilityPromptService implements RuntimeCapabilityPromptPo
       const request: RuntimeCapabilityPromptRequest = {
         pluginName: pluginName.slice(0, 128),
         pluginId: owner.pluginId!,
-        purpose: '读取屏幕画面以完成插件发起的截图操作。'
+        purpose: t('capability.screenCapturePurpose')
       }
       const pending: PendingPrompt = {
         nonce,

@@ -1,4 +1,5 @@
-import { List, ActionPanel, Action, Icon, LocalStorage, showToast, Toast, getHostTransport, useState, useEffect, useRef } from "@ztools/declarative-ui";
+import { List, ActionPanel, Action, Icon, LocalStorage, showToast, Toast, getHostTransport, useState, useEffect, useRef, useLocale } from "@ztools/declarative-ui";
+import { t, getCurrencyName } from "./i18n.js";
 import { CURRENCIES, DEFAULT_SETTINGS, NETWORK_POLICY, RATE_CACHE_KEY, SETTINGS_KEY, ExchangeRateError, buildRows, calcRate, fetchRateSnapshot, formatRate, formatTime, getCurrency, groupDigits, isSupportedCurrency, parseCachedSnapshot, parseQuery, parseSettings, toInputAmount, toggleFavorite } from "./currency-rates.js";
 let preloadReqSeq = 0;
 /**
@@ -26,7 +27,7 @@ export function createHostRequester() {
             if (envelope.error?.code === "NOT_SUPPORTED") {
                 throw new ExchangeRateError("HOST_UNSUPPORTED");
             }
-            const err = new Error(envelope.error?.message || "网络请求失败");
+            const err = new Error(envelope.error?.message || t("currencyNetworkFailed"));
             if (envelope.error?.code)
                 err.code = envelope.error.code;
             throw err;
@@ -75,7 +76,7 @@ export function useRates(options) {
             return await LocalStorage.getItem(RATE_CACHE_KEY);
         }
         catch (error) {
-            await notifyFailure(isCurrent, "汇率缓存读取失败", errorMessage(error));
+            await notifyFailure(isCurrent, t("currencyCacheReadFailed"), errorMessage(error));
             return undefined;
         }
     };
@@ -106,10 +107,10 @@ export function useRates(options) {
                 await LocalStorage.setItem(RATE_CACHE_KEY, next);
             }
             catch (error) {
-                await notifyFailure(isCurrent, "汇率已更新，但缓存未保存", errorMessage(error));
+                await notifyFailure(isCurrent, t("currencyCacheSaveFailed"), errorMessage(error));
             }
             if (next.assetsStatus === "partial") {
-                await notifyFailure(isCurrent, "黄金或比特币报价获取失败", "对应币种暂无报价，其余汇率正常");
+                await notifyFailure(isCurrent, t("currencyAssetsPartialTitle"), t("currencyAssetsPartialMessage"));
             }
         }
         catch (error) {
@@ -121,7 +122,7 @@ export function useRates(options) {
             const stale = snapshotRef.current ?? parseCachedSnapshot(cachedRaw, now, NETWORK_POLICY.staleMaxAgeMs);
             if (stale)
                 applySnapshot(stale, "stale");
-            await notifyFailure(isCurrent, "获取汇率失败", message);
+            await notifyFailure(isCurrent, t("currencyFetchFailedTitle"), message);
         }
         finally {
             if (isCurrent())
@@ -159,7 +160,7 @@ function useCurrencySettings() {
         }
         catch (error) {
             if (mounted.current)
-                await showToast(Toast.Style.Failure, "源币种保存失败", errorMessage(error));
+                await showToast(Toast.Style.Failure, t("currencyBaseSaveFailed"), errorMessage(error));
         }
     };
     const load = async () => {
@@ -178,7 +179,7 @@ function useCurrencySettings() {
             if (!mounted.current)
                 return;
             setFailed(true);
-            await showToast(Toast.Style.Failure, "设置读取失败，本次修改不会保存", errorMessage(error));
+            await showToast(Toast.Style.Failure, t("currencySettingsLoadFailed"), errorMessage(error));
         }
     };
     useEffect(() => {
@@ -200,7 +201,7 @@ function useCurrencySettings() {
     /** 收藏 / 取消收藏：先写入成功再更新界面；失败抛错，由客户端提示操作失败 */
     const toggle = async (code) => {
         if (!ready)
-            throw new Error(failed ? "设置读取失败，暂不能保存修改" : "设置尚未加载完成");
+            throw new Error(failed ? t("currencySettingsCannotSave") : t("currencySettingsNotReady"));
         const current = settingsRef.current;
         const wasFavorite = current.favorites.includes(code);
         const next = { ...current, favorites: toggleFavorite(current.favorites, code) };
@@ -208,28 +209,30 @@ function useCurrencySettings() {
         if (!mounted.current)
             return;
         apply(next);
-        await showToast(Toast.Style.Success, wasFavorite ? "已取消收藏" : "已收藏，置顶显示");
+        await showToast(Toast.Style.Success, wasFavorite ? t("currencyUnfavoritedToast") : t("currencyFavoritedToast"));
     };
     return { settings, changeBase, toggle };
 }
 /** 单行状态条：金额与源币种、汇率时间、缓存 / 刷新失败 / 报价缺失标注 */
 function buildSummary(snapshot, origin, loading, amountText, base) {
     if (!snapshot)
-        return loading ? "正在获取实时汇率…" : "汇率获取失败";
-    const parts = [`${groupDigits(amountText)} ${base} ${getCurrency(base)?.name ?? ""}`.trim()];
-    parts.push(`汇率时间 ${formatTime(snapshot.sourceUpdatedAt ?? snapshot.timestamp)}`);
+        return loading ? t("currencySummaryLoading") : t("currencySummaryFailed");
+    const baseName = getCurrencyName(base, getCurrency(base)?.name ?? "");
+    const parts = [`${groupDigits(amountText)} ${base} ${baseName}`.trim()];
+    parts.push(t("currencySummaryRateTime", { time: formatTime(snapshot.sourceUpdatedAt ?? snapshot.timestamp) }));
     if (origin === "stale")
-        parts.push(`刷新失败，显示 ${formatTime(snapshot.timestamp)} 获取的缓存`);
+        parts.push(t("currencySummaryStale", { time: formatTime(snapshot.timestamp) }));
     else if (origin === "cache")
-        parts.push(`缓存于 ${formatTime(snapshot.timestamp)}`);
+        parts.push(t("currencySummaryCached", { time: formatTime(snapshot.timestamp) }));
     if (snapshot.assetsStatus === "partial")
-        parts.push("黄金/比特币报价暂缺");
+        parts.push(t("currencySummaryPartial"));
     return parts.join(" · ");
 }
 function errorItem(id, title, subtitle, actions) {
     return List.Item({ id, title, subtitle, icon: Icon.ExclamationMark, actions: ActionPanel({}, actions) });
 }
 export default function CurrencyCommand(props) {
+    useLocale();
     const [searchText, setSearchText] = useState(props?.initialQuery ?? "");
     const { snapshot, origin, rateError, loading, loadRates } = useRates();
     const { settings, changeBase, toggle } = useCurrencySettings();
@@ -238,18 +241,19 @@ export default function CurrencyCommand(props) {
     const amount = query.kind === "error" ? 1 : query.amount;
     const amountText = query.kind === "error" ? "1" : query.amountText;
     const refreshAction = Action({
-        title: "刷新汇率",
+        title: t("currencyActionRefresh"),
         icon: Icon.ArrowClockwise,
         shortcut: { modifiers: ["ctrl"], key: "r" },
         onAction: () => loadRates(true)
     });
     const openSourceAction = Action.OpenInBrowser({
-        title: "打开汇率来源（ExchangeRate-API）",
+        title: t("currencyActionOpenSource"),
         url: "https://www.exchangerate-api.com"
     });
     const rowItem = (row) => {
+        const localizedName = getCurrencyName(row.code, row.info.name);
         const favoriteAction = Action({
-            title: row.favorite ? "取消收藏" : "收藏（置顶）",
+            title: row.favorite ? t("currencyActionUnfavorite") : t("currencyActionFavorite"),
             icon: row.favorite ? Icon.StarDisabled : Icon.Star,
             shortcut: { modifiers: ["ctrl"], key: "d" },
             onAction: () => toggle(row.code)
@@ -258,25 +262,25 @@ export default function CurrencyCommand(props) {
         if (value === null) {
             return List.Item({
                 id: `rate-${row.code}`,
-                title: `暂无报价 ${row.code}`,
-                subtitle: row.info.name,
+                title: t("currencyUnavailableTitle", { code: row.code }),
+                subtitle: localizedName,
                 icon: Icon.ExclamationMark,
-                accessories: [{ text: "数据源未返回该币种报价" }],
+                accessories: [{ text: t("currencyUnavailableAccessory") }],
                 actions: ActionPanel({}, [refreshAction, favoriteAction, openSourceAction])
             });
         }
         return List.Item({
             id: `rate-${row.code}`,
             title: `${groupDigits(value)} ${row.code}`,
-            subtitle: row.info.name,
+            subtitle: localizedName,
             icon: row.favorite ? Icon.Star : Icon.Circle,
-            keywords: [row.code, row.info.name, ...row.info.keywords],
+            keywords: [row.code, row.info.name, localizedName, ...row.info.keywords],
             accessories: [{ text: `1 ${row.code} = ${formatRate(row.reverseRate)} ${base}` }],
             actions: ActionPanel({}, [
-                Action.CopyToClipboard({ title: "复制换算结果", content: value }),
-                Action.CopyToClipboard({ title: "复制换算等式", content: `${amountText} ${base} = ${value} ${row.code}` }),
+                Action.CopyToClipboard({ title: t("currencyActionCopyValue"), content: value }),
+                Action.CopyToClipboard({ title: t("currencyActionCopyEquation"), content: `${amountText} ${base} = ${value} ${row.code}` }),
                 Action({
-                    title: `以 ${row.code} 为源币种`,
+                    title: t("currencyActionSetBase", { code: row.code }),
                     icon: Icon.ArrowRight,
                     onAction: async () => {
                         setSearchText(toInputAmount(value));
@@ -291,23 +295,23 @@ export default function CurrencyCommand(props) {
     };
     const items = [];
     if (query.kind === "error") {
-        const clear = Action({ title: "清空输入", icon: Icon.Repeat, onAction: () => setSearchText("") });
-        items.push(errorItem("query-error", query.message, "示例：100、100 USD、100 USD to CNY；输入币种名可筛选", [
+        const clear = Action({ title: t("currencyActionClearInput"), icon: Icon.Repeat, onAction: () => setSearchText("") });
+        items.push(errorItem("query-error", query.message, t("currencyQueryExampleHint"), [
             clear,
             openSourceAction
         ]));
     }
     else if (!snapshot) {
         if (rateError) {
-            items.push(errorItem("rate-error", rateError, "未获取到真实汇率，不使用估算数据；按 Enter 重试", [
+            items.push(errorItem("rate-error", rateError, t("currencyRateErrorHint"), [
                 refreshAction,
                 openSourceAction
             ]));
         }
     }
     else if (calcRate(snapshot.rates, base, "USD") === null) {
-        const name = getCurrency(base)?.name ?? base;
-        items.push(errorItem("base-unavailable", `源币种 ${name} 暂无报价`, "数据源未返回该币种报价，请刷新或切换源币种", [
+        const name = getCurrencyName(base, getCurrency(base)?.name ?? base);
+        items.push(errorItem("base-unavailable", t("currencyBaseUnavailableTitle", { name }), t("currencyBaseUnavailableHint"), [
             refreshAction,
             openSourceAction
         ]));
@@ -320,22 +324,22 @@ export default function CurrencyCommand(props) {
         const favorites = rows.filter((r) => r.favorite);
         const others = rows.filter((r) => !r.favorite);
         if (favorites.length > 0)
-            items.push(List.Section({ title: "收藏" }, favorites.map(rowItem)));
+            items.push(List.Section({ title: t("currencySectionFavorites") }, favorites.map(rowItem)));
         if (others.length > 0) {
-            items.push(List.Section({ title: favorites.length > 0 ? "其他币种" : "换算结果" }, others.map(rowItem)));
+            items.push(List.Section({ title: favorites.length > 0 ? t("currencySectionOthers") : t("currencySectionResults") }, others.map(rowItem)));
         }
     }
     return List({
-        navigationTitle: "汇率换算",
-        searchBarPlaceholder: `输入金额换算（源币种 ${base}），如 100 或 100 USD to CNY；输入币种名筛选`,
+        navigationTitle: t("currencyNavTitle"),
+        searchBarPlaceholder: t("currencySearchPlaceholder", { base }),
         searchText,
         onSearchTextChange: setSearchText,
         isLoading: loading,
         isShowingDetail: false,
-        searchBarAccessory: List.Dropdown({ tooltip: "源币种", value: settings.base, onChange: (value) => void changeBase(value) }, CURRENCIES.map((c) => List.Dropdown.Item({ key: c.code, title: `${c.code} ${c.name}`, value: c.code }))),
+        searchBarAccessory: List.Dropdown({ tooltip: t("currencyBaseTooltip"), value: settings.base, onChange: (value) => void changeBase(value) }, CURRENCIES.map((c) => List.Dropdown.Item({ key: c.code, title: `${c.code} ${getCurrencyName(c.code, c.name)}`, value: c.code }))),
         filterBar: {
             summaryText: buildSummary(snapshot, origin, loading, amountText, base),
-            actions: [{ id: "refresh", title: "刷新汇率", icon: Icon.ArrowClockwise, onAction: () => loadRates(true) }]
+            actions: [{ id: "refresh", title: t("currencyActionRefresh"), icon: Icon.ArrowClockwise, onAction: () => loadRates(true) }]
         },
         actions: ActionPanel({}, [refreshAction, openSourceAction])
     }, items);

@@ -23,7 +23,10 @@ import { getOfficialPlugin, isClientProvidedPlugin } from '@/utils/officialPlugi
 import { getBundledPluginEntry, isBundledPlugin } from '@/utils/bundledPlugins'
 import { loadInstalledDeclarativePlugin } from '@/utils/declarativePluginLoader'
 import { normalizeCatalogScreenshots } from '@/utils/pluginScreenshots'
+import { useAppI18n } from '@/i18n'
+import { getLocalizedPluginDescription } from '@/utils/pluginI18n'
 
+const { t } = useAppI18n()
 const route = useRoute()
 const router = useRouter()
 const nav = useNavStore()
@@ -180,7 +183,7 @@ const load = async () => {
 
   if (!pid) {
     loading.value = false
-    error.value = '插件标识符不存在'
+    error.value = t('details.pluginIdMissing')
     return
   }
 
@@ -236,7 +239,7 @@ const load = async () => {
       // 目录不可用时详情来自已安装插件的 plugin.json，其中的 screenshots 只有相对路径，这里只保留可展示的 https 地址
       plugin.value = { ...results[0].value, screenshots: normalizeCatalogScreenshots(results[0].value?.screenshots) }
       if (!isPluginSupportedOnCurrentPlatform(plugin.value)) {
-        error.value = '该插件不支持当前操作系统平台'
+        error.value = t('details.platformUnsupported')
         loading.value = false
         return
       }
@@ -317,7 +320,7 @@ const load = async () => {
   } catch (e) {
     if (requestId !== loadRequestId) return
     error.value = e.message || String(e)
-    toastError('加载插件详情失败: ' + (e.message || e))
+    toastError(t('details.loadFailedToast', { reason: e.message || e }))
   } finally {
     if (requestId === loadRequestId) {
       loading.value = false
@@ -402,7 +405,7 @@ const open = async () => {
   if (!pid) return
 
   if (isRevoked.value) {
-    toastError('无法启动：' + (revokedReason.value || '该插件已被官方下架禁用'))
+    toastError(t('market.cannotLaunch', { reason: revokedReason.value || t('market.revokedDefaultReason') }))
     return
   }
 
@@ -414,7 +417,7 @@ const open = async () => {
 
     // 检查是否需要导航到详情页（插件已卸载的情况）
     if (result?.action === 'navigate_to_detail') {
-      toastWarning(result.error || '插件未安装，请重新安装')
+      toastWarning(result.error || t('details.notInstalledReinstall'))
       // 如果当前不在详情页，则跳转到详情页
       if (
         route.name !== 'details' ||
@@ -429,12 +432,12 @@ const open = async () => {
     }
 
     if (result?.success) {
-      toastSuccess('已启动插件')
+      toastSuccess(t('details.pluginLaunched'))
     } else {
-      toastError('启动失败: ' + (result?.error || '未知错误'))
+      toastError(t('details.launchFailed', { reason: result?.error || t('common.unknownError') }))
     }
   } catch (e) {
-    toastError('启动失败: ' + (e.message || e))
+    toastError(t('details.launchFailed', { reason: e.message || e }))
   }
 }
 
@@ -442,17 +445,17 @@ const toggleFavorite = async () => {
   try {
     const pid = pluginId.value
     if (!pid) {
-      toastError('插件标识符不存在')
+      toastError(t('details.pluginIdMissing'))
       return
     }
 
     await pluginsStore.toggleFavorite(pid)
     // 从 Store 更新收藏状态
     isFavorite.value = pluginsStore.isFavorite(pid)
-    toastSuccess(isFavorite.value ? '已加入收藏' : '已取消收藏')
+    toastSuccess(isFavorite.value ? t('market.favoriteAdded') : t('market.favoriteRemoved'))
   } catch (e) {
     if (!onAuthRequired(e)) {
-      toastError('操作失败: ' + (e.message || e))
+      toastError(t('market.operationFailed', { reason: e.message || e }))
     }
   }
 }
@@ -465,15 +468,15 @@ const downloadPlugin = () => installWithFeedback(pluginId.value, async () => {
 
 const updatePlugin = async () => {
   confirmDialog({
-    title: '确定要更新该插件吗？',
-    content: '更新过程中可能会暂时中断服务。',
-    okText: '更新',
-    cancelText: '取消',
+    title: t('details.updateConfirmTitle'),
+    content: t('details.updateConfirmContent'),
+    okText: t('common.update'),
+    cancelText: t('common.cancel'),
     onOk: async () => {
       const pid = pluginId.value
 
       if (!updateInfo.value) {
-        toastError('无更新信息')
+        toastError(t('details.noUpdateInfo'))
         return
       }
 
@@ -485,13 +488,13 @@ const updatePlugin = async () => {
         // 使用更新流程（走 plugin_update IPC，Delphi 会先停止旧插件→备份→原子替换）
         await downloadPluginUpdate(pid, updateInfo.value)
 
-        toastSuccess('开始更新插件，请稍候...')
+        toastSuccess(t('details.updateStarted'))
         // 注意：不在这里清除 hasUpdate / updateInfo
         // 下载完成后由 handleInstallComplete 回调清除，避免按钮提前变成"打开"
       } catch (e) {
         // 出错时清除下载状态
         pluginsStore.endDownload(pid)
-        toastError('更新失败: ' + (e.message || e))
+        toastError(t('details.updateFailed', { reason: e.message || e }))
       }
     }
   })
@@ -499,11 +502,11 @@ const updatePlugin = async () => {
 
 const uninstall = async () => {
   if (!canUninstall.value) {
-    toastError('内置插件随客户端提供，不能卸载')
+    toastError(t('details.builtinCannotUninstall'))
     return
   }
   if (isBundled.value) {
-    toastInfo?.('请在设置中卸载或还原内置插件')
+    toastInfo?.(t('details.manageBundledInSettings'))
     router.push({
       ...ROUTES.ADVANCED_SETTINGS,
       query: { manageBundled: pluginId.value }
@@ -511,17 +514,17 @@ const uninstall = async () => {
     return
   }
   confirmDialog({
-    title: '确定要卸载该插件吗？',
-    content: '卸载后插件文件将被删除。',
-    okText: '卸载',
-    cancelText: '取消',
+    title: t('details.uninstallConfirmTitle'),
+    content: t('details.uninstallConfirmContent'),
+    okText: t('common.uninstall'),
+    cancelText: t('common.cancel'),
     okType: 'danger',
     onOk: async () => {
       const pid = pluginId.value
       try {
         const res = await uninstallPluginNative(pid)
         if (res && res.success) {
-          toastSuccess('插件已卸载')
+          toastSuccess(t('market.uninstallSuccess'))
           // Store will be updated by event, but we can optimistically update here if needed
           // Actually event loop is fast enough.
 
@@ -531,10 +534,10 @@ const uninstall = async () => {
               .catch(() => {})
           }
         } else {
-          toastError('卸载失败: ' + (res?.error || '未知错误'))
+          toastError(t('market.uninstallFailed', { reason: res?.error || t('common.unknownError') }))
         }
       } catch (e) {
-        toastError('卸载失败: ' + (e.message || e))
+        toastError(t('market.uninstallFailed', { reason: e.message || e }))
       }
     }
   })
@@ -542,7 +545,7 @@ const uninstall = async () => {
 
 const createShortcut = async () => {
   if (!isInstalled.value) {
-    toastError('请先安装该插件后再创建快捷方式')
+    toastError(t('details.installBeforeShortcut'))
     return
   }
   if (creatingShortcut.value) return
@@ -551,14 +554,14 @@ const createShortcut = async () => {
   try {
     const res = await apiCreateShortcut(pluginId.value)
     if (res && res.success) {
-      toastSuccess('桌面快捷方式已生成')
+      toastSuccess(t('details.shortcutCreated'))
       // 埋点：创建桌面快捷方式
       track('shortcut_create', pluginId.value)
     } else {
-      toastError('生成失败: ' + (res?.error || '未知错误'))
+      toastError(t('details.shortcutFailed', { reason: res?.error || t('common.unknownError') }))
     }
   } catch (e) {
-    toastError('生成失败: ' + (e.message || e))
+    toastError(t('details.shortcutFailed', { reason: e.message || e }))
   } finally {
     creatingShortcut.value = false
   }
@@ -612,12 +615,13 @@ const handleInstallComplete = async (envelope) => {
           hasUpdate.value = false
           updateInfo.value = null
         }
-        toastSuccess(payload.isUpdate ? '插件更新成功' : '插件安装成功')
+        toastSuccess(payload.isUpdate ? t('details.updateSuccess') : t('details.installSuccess'))
         // eventsStore 已经通过 onInstallComplete 更新了 installedSet 和 downloadingSet
         // 无需再次调用 fetchInstalledPlugins，避免竞态条件
         // isInstalled 和 downloading 计算属性会自动响应状态变化
       } else {
-        toastError((payload.isUpdate ? '更新失败: ' : '安装失败: ') + (payload.error || '未知错误'))
+        const reason = payload.error || t('common.unknownError')
+        toastError(payload.isUpdate ? t('details.updateFailed', { reason }) : t('market.installFailed', { reason }))
       }
     }
   } catch (e) {
@@ -673,12 +677,12 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <div class="details-page">
+  <div class="details-page rc-page">
     <!-- 返回按钮 -->
     <div class="back-nav">
       <button class="back-btn" @click="goBack">
         <ArrowLeftIcon  />
-        <span>返回</span>
+        <span>{{ t('common.back') }}</span>
       </button>
     </div>
 
@@ -702,9 +706,9 @@ onBeforeUnmount(() => {
       <div class="error-icon">
         <TriangleAlertIcon  />
       </div>
-      <h3 class="error-title">加载失败</h3>
+      <h3 class="error-title">{{ t('details.loadFailed') }}</h3>
       <p class="error-message">{{ error }}</p>
-      <RcButton variant="primary" size="md" class="retry-btn" :icon="RotateCwIcon" @click="load">重试</RcButton>
+      <RcButton variant="primary" size="md" class="retry-btn" :icon="RotateCwIcon" @click="load">{{ t('common.retry') }}</RcButton>
     </div>
 
     <!-- 正常内容 -->
@@ -745,10 +749,10 @@ onBeforeUnmount(() => {
       <section class="detail-card" data-section="detail">
         <h2 class="card-title">
           <FileTextIcon aria-hidden="true" />
-          插件详情
+          {{ t('details.sectionTitle') }}
         </h2>
         <PluginScreenshots :screenshots="plugin.screenshots" />
-        <PluginDescription :description="plugin.description" />
+        <PluginDescription :description="getLocalizedPluginDescription(plugin)" />
         <component
           :is="section.component"
           v-for="section in detailSections"
@@ -782,21 +786,27 @@ onBeforeUnmount(() => {
 
 /* 返回导航 */
 .back-nav {
-  margin-bottom: 8px;
+  margin-bottom: 12px;
 }
 
 .back-btn {
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  padding: 4px 12px;
+  height: 28px;
+  padding: 0 12px;
   background: var(--rc-kbd-bg);
   border: none;
-  border-radius: 6px;
-  font-size: 12px;
+  border-radius: var(--rc-radius-sm);
+  font-size: var(--rc-fs-small);
   color: var(--rc-text-secondary);
   cursor: pointer;
-  transition: all 0.2s ease;
+  transition: all var(--rc-dur-slow) ease;
+}
+
+.back-btn:focus-visible {
+  outline: none;
+  box-shadow: var(--rc-focus-ring);
 }
 
 .back-btn:hover {
@@ -818,13 +828,13 @@ onBeforeUnmount(() => {
   padding: 16px;
   background: var(--rc-surface);
   border: 1px solid var(--rc-border);
-  border-radius: 12px;
+  border-radius: var(--rc-radius-lg);
 }
 
 .skeleton-icon {
   width: 72px;
   height: 72px;
-  border-radius: 16px;
+  border-radius: var(--rc-radius-xl);
   background: linear-gradient(90deg, var(--rc-surface-subtle) 25%, var(--rc-surface-active) 50%, var(--rc-surface-subtle) 75%);
   background-size: 200% 100%;
   animation: shimmer 1.5s infinite;
@@ -840,7 +850,7 @@ onBeforeUnmount(() => {
 .skeleton-title {
   width: 40%;
   height: 24px;
-  border-radius: 6px;
+  border-radius: var(--rc-radius-sm);
   background: linear-gradient(90deg, var(--rc-surface-subtle) 25%, var(--rc-surface-active) 50%, var(--rc-surface-subtle) 75%);
   background-size: 200% 100%;
   animation: shimmer 1.5s infinite;
@@ -849,7 +859,7 @@ onBeforeUnmount(() => {
 .skeleton-subtitle {
   width: 60%;
   height: 16px;
-  border-radius: 4px;
+  border-radius: var(--rc-radius-xs);
   background: linear-gradient(90deg, var(--rc-surface-subtle) 25%, var(--rc-surface-active) 50%, var(--rc-surface-subtle) 75%);
   background-size: 200% 100%;
   animation: shimmer 1.5s infinite;
@@ -864,7 +874,7 @@ onBeforeUnmount(() => {
 
 .skeleton-stat {
   height: 60px;
-  border-radius: 10px;
+  border-radius: var(--rc-radius-lg);
   background: linear-gradient(90deg, var(--rc-surface-subtle) 25%, var(--rc-surface-active) 50%, var(--rc-surface-subtle) 75%);
   background-size: 200% 100%;
   animation: shimmer 1.5s infinite;
@@ -872,7 +882,7 @@ onBeforeUnmount(() => {
 
 .skeleton-content {
   height: 300px;
-  border-radius: 16px;
+  border-radius: var(--rc-radius-lg);
   background: linear-gradient(90deg, var(--rc-surface-subtle) 25%, var(--rc-surface-active) 50%, var(--rc-surface-subtle) 75%);
   background-size: 200% 100%;
   animation: shimmer 1.5s infinite;
@@ -896,7 +906,7 @@ onBeforeUnmount(() => {
   padding: 32px 16px;
   background: var(--rc-surface);
   border: 1px solid var(--rc-border);
-  border-radius: 16px;
+  border-radius: var(--rc-radius-lg);
   text-align: center;
 }
 
@@ -908,30 +918,30 @@ onBeforeUnmount(() => {
   display: flex;
   align-items: center;
   justify-content: center;
-  font-size: 28px;
+  font-size: var(--rc-fs-display); /* 图标字形尺寸 */
   color: var(--rc-error);
   margin-bottom: 20px;
 }
 
 .error-title {
-  font-size: 18px;
+  font-size: var(--rc-fs-title-md);
   font-weight: 600;
   color: var(--rc-text-primary);
   margin: 0 0 8px;
 }
 
 .error-message {
-  font-size: 14px;
+  font-size: var(--rc-fs-body);
   color: var(--rc-text-secondary);
   margin: 0 0 20px;
 }
 
-/* 内容卡片：插件详情卡与版本附加的独立卡片，垂直排列 */
+/* 内容卡片：插件详情卡与版本附加的独立卡片，垂直排列（与头部卡同圆角、同内边距、同间距） */
 .detail-card {
   background: var(--rc-surface);
   border: 1px solid var(--rc-border);
-  border-radius: 12px;
-  padding: 16px 20px 20px;
+  border-radius: var(--rc-radius-lg);
+  padding: 20px;
 }
 
 .detail-card + .detail-card {
@@ -942,9 +952,9 @@ onBeforeUnmount(() => {
   display: flex;
   align-items: center;
   gap: 8px;
-  margin: 0 0 14px;
+  margin: 0 0 16px;
   color: var(--rc-text-primary);
-  font-size: 14px;
+  font-size: var(--rc-fs-emph);
   font-weight: 600;
 }
 

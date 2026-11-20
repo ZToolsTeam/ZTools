@@ -4,29 +4,30 @@
  */
 import { isMacOS } from "@/utils/platform.js";
 import { normalizeActionShortcutCombo, resolveActionKeyBindings } from "@/utils/actionKeyBindings.js";
+import { t } from "@/i18n";
 
-/** 解析动作标题；插件未显式传 title 时按内置动作类型返回规范中文名称 */
+/** 解析动作标题；插件未显式传 title 时按内置动作类型返回当前语言的规范名称 */
 export function resolveActionTitle(action, mac = isMacOS()) {
   const explicit = cleanUiText(action?.props?.title);
   if (explicit) return explicit;
   switch (action?.type) {
     case "Action.ShowInFinder":
-      return mac ? "在访达中显示" : "在资源管理器中显示";
+      return mac ? t("declarative.actions.showInFinder") : t("declarative.actions.showInExplorer");
     case "Action.OpenInBrowser":
-      return "在浏览器中打开";
+      return t("declarative.actions.openInBrowser");
     case "Action.CopyToClipboard":
-      return "复制到剪贴板";
+      return t("declarative.actions.copyToClipboard");
     case "Action.Paste":
-      return "粘贴";
+      return t("declarative.actions.paste");
     case "Action.SubmitForm":
-      return "提交";
+      return t("declarative.actions.submit");
     case "Action.Open":
     case "Action.OpenWith":
-      return "打开";
+      return t("declarative.actions.open");
     case "Action.Push":
-      return "打开详情";
+      return t("declarative.actions.openDetail");
     default:
-      return "执行";
+      return t("declarative.actions.execute");
   }
 }
 

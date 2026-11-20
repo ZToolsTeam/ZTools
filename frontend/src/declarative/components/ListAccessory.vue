@@ -66,7 +66,7 @@ const tagStyle = computed(() => {
   border-radius: var(--rc-radius-sm);
   border: 1px solid transparent;
   font-family: var(--rc-font-sans);
-  font-size: 11px;
+  font-size: var(--rc-fs-caption);
   line-height: 16px;
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
@@ -87,14 +87,14 @@ const tagStyle = computed(() => {
 .decl-acc-progress {
   width: 56px;
   height: 6px;
-  border-radius: 9999px;
+  border-radius: var(--rc-radius-full);
   overflow: hidden;
   flex-shrink: 0;
 }
 
 .decl-acc-progress-fill {
   height: 100%;
-  border-radius: 9999px;
+  border-radius: var(--rc-radius-full);
   transition: width 0.3s ease;
 }
 </style>

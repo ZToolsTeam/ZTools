@@ -3,6 +3,9 @@ import { ArrowUpIcon, BanIcon, CirclePlayIcon, DownloadIcon, EllipsisIcon, Exter
 import { computed } from 'vue'
 import { SpinnerIcon, StarFilledIcon } from '@/utils/appIcons'
 import { RcButton, RcMenu } from '@/components/base'
+import { useAppI18n } from '@/i18n'
+
+const { t } = useAppI18n()
 const props = defineProps({
   isInstalled: Boolean,
   isBundled: {
@@ -65,25 +68,29 @@ const emit = defineEmits([
 
 // 「更多」菜单：快捷键（已绑定时右侧显示当前组合键）、桌面快捷方式（仅 Windows）、卸载（内置插件不能卸载）
 const moreItems = computed(() => {
-  const items = [{ key: 'hotkey', label: props.hotkeyText ? '修改快捷键' : '设置快捷键', icon: KeyboardIcon, kbd: props.hotkeyText }]
+  const items = [{ key: 'hotkey', label: props.hotkeyText ? t('details.actions.editHotkey') : t('details.actions.setHotkey'), icon: KeyboardIcon, kbd: props.hotkeyText }]
   if (props.canCreateShortcut) {
     items.push({
       key: 'shortcut',
-      label: props.creatingShortcut ? '正在生成…' : '生成桌面快捷方式',
+      label: props.creatingShortcut ? t('details.actions.creatingShortcut') : t('details.actions.createShortcut'),
       icon: props.creatingShortcut ? SpinnerIcon : ExternalLinkIcon,
       disabled: props.creatingShortcut
     })
   }
   if (props.canUninstall) {
-    items.push({ type: 'separator' }, { key: 'uninstall', label: '卸载', icon: Trash2Icon, danger: true })
+    items.push({ type: 'separator' }, { key: 'uninstall', label: t('common.uninstall'), icon: Trash2Icon, danger: true })
   }
   return items
 })
 
 // 安装 / 更新进行中的按钮文案：依赖库阶段显示第几个，下载阶段显示百分比
 const progressText = (verb) => {
-  if (props.downloadPhase === 'library') return `安装依赖库 (${props.libIndex}/${props.libTotal})… ${props.downloadProgress}%`
-  return props.downloadProgress > 0 ? `${verb}中 ${props.downloadProgress}%` : `${verb}中…`
+  if (props.downloadPhase === 'library') {
+    return t('details.actions.installingLib', { index: props.libIndex, total: props.libTotal, progress: props.downloadProgress })
+  }
+  return props.downloadProgress > 0
+    ? t('details.actions.progressing', { verb, progress: props.downloadProgress })
+    : t('details.actions.progressingEllipsis', { verb })
 }
 
 const MORE_EVENTS = { hotkey: 'set-hotkey', shortcut: 'create-shortcut', uninstall: 'uninstall' }
@@ -95,20 +102,20 @@ const onMoreSelect = (key) => {
 <template>
   <div class="flex flex-wrap items-center justify-end gap-2">
     <!-- 有留言时给一个滚动到「评价与留言」卡片的轻量入口；没有留言时不占位 -->
-    <a-tooltip v-if="commentsCount > 0" title="查看留言" placement="top">
+    <a-tooltip v-if="commentsCount > 0" :title="t('details.actions.viewComments')" placement="top">
       <RcButton variant="ghost" size="md" class="comments-entry" :icon="MessageSquareIcon" @click="$emit('show-comments')">
         {{ commentsCount }}
       </RcButton>
     </a-tooltip>
 
     <!-- 下架状态强拦截：置灰禁用并展示下架原因 -->
-    <a-tooltip v-if="isRevoked" :title="revokedReason || '该插件已被官方下架禁用'">
-      <RcButton variant="danger" size="md" :icon="BanIcon" disabled>已下架</RcButton>
+    <a-tooltip v-if="isRevoked" :title="revokedReason || t('market.revokedDefaultReason')">
+      <RcButton variant="danger" size="md" :icon="BanIcon" disabled>{{ t('market.card.revoked') }}</RcButton>
     </a-tooltip>
 
     <!-- 正常已安装且无更新：打开 -->
     <RcButton v-else-if="isInstalled && !hasUpdate" variant="primary" size="md" :icon="CirclePlayIcon" @click="$emit('open')">
-      打开
+      {{ t('common.open') }}
     </RcButton>
 
     <!-- 已安装且有更新：更新 -->
@@ -120,12 +127,12 @@ const onMoreSelect = (key) => {
       :loading="downloading"
       @click="$emit('update')"
     >
-      {{ downloading ? progressText('更新') : '更新' }}
+      {{ downloading ? progressText(t('common.update')) : t('common.update') }}
     </RcButton>
 
     <!-- 未安装且安装失败：展示重试及原因提示 -->
-    <a-tooltip v-else-if="!isInstalled && installFailed && !downloading" :title="installError || '安装失败，点击重试'">
-      <RcButton variant="danger" size="md" :icon="RotateCwIcon" @click="$emit('download')">重试</RcButton>
+    <a-tooltip v-else-if="!isInstalled && installFailed && !downloading" :title="installError || t('market.card.installFailedRetry')">
+      <RcButton variant="danger" size="md" :icon="RotateCwIcon" @click="$emit('download')">{{ t('common.retry') }}</RcButton>
     </a-tooltip>
 
     <!-- 已假卸载的内置插件：一键还原 -->
@@ -137,7 +144,7 @@ const onMoreSelect = (key) => {
       :loading="downloading"
       @click="$emit('download')"
     >
-      还原
+      {{ t('common.restore') }}
     </RcButton>
 
     <!-- 未安装：一键静默安装 -->
@@ -149,7 +156,7 @@ const onMoreSelect = (key) => {
       :loading="downloading"
       @click="$emit('download')"
     >
-      {{ downloading ? progressText('安装') : '安装' }}
+      {{ downloading ? progressText(t('common.install')) : t('common.install') }}
     </RcButton>
 
     <RcButton
@@ -158,13 +165,13 @@ const onMoreSelect = (key) => {
       class="icon-only"
       :class="{ 'is-favorite': isFavorite }"
       :icon="isFavorite ? StarFilledIcon : StarIcon"
-      :title="isFavorite ? '取消收藏' : '收藏'"
-      :aria-label="isFavorite ? '取消收藏' : '收藏'"
+      :title="isFavorite ? t('common.unfavorite') : t('common.favorite')"
+      :aria-label="isFavorite ? t('common.unfavorite') : t('common.favorite')"
       :aria-pressed="isFavorite"
       @click="$emit('toggle-favorite')"
     />
     <RcMenu v-if="isInstalled" :items="moreItems" @select="onMoreSelect">
-      <RcButton variant="secondary" size="md" class="icon-only" :icon="EllipsisIcon" title="更多操作" aria-label="更多操作" />
+      <RcButton variant="secondary" size="md" class="icon-only" :icon="EllipsisIcon" :title="t('common.moreActions')" :aria-label="t('common.moreActions')" />
     </RcMenu>
   </div>
 </template>

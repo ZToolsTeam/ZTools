@@ -53,6 +53,8 @@ function setHost(platform = 'macos', localPlugins = []) {
 // 静态目录在模块里有 60 秒缓存，每个用例重新加载模块，互不影响
 async function loadApis() {
   vi.resetModules()
+  const { setI18nLocale } = await import('@/i18n')
+  setI18nLocale('zh-CN')
   const plugins = await import('@/api/plugins')
   const update = await import('@/api/update')
   return { plugins, update }

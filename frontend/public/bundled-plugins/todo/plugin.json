@@ -1,7 +1,7 @@
 {
   "id": "todo",
   "name": "待办清单",
-  "version": "1.0.8",
+  "version": "1.0.9",
   "description": "极简任务待办清单，回车快速添加任务，支持高优标记与完成状态筛选",
   "author": "ZTools Team",
   "entry": "dist/index.js",
@@ -32,5 +32,20 @@
   ],
   "category": [
     "办公效率"
-  ]
+  ],
+  "categoryId": "productivity",
+  "defaultLocale": "zh-CN",
+  "i18n": {
+    "en-US": {
+      "name": "To-Do",
+      "description": "Minimalist task list with quick Enter-to-add, high-priority flagging, and completion status filtering.",
+      "keywords": [
+        "todo",
+        "tasks",
+        "checklist",
+        "reminders",
+        "productivity"
+      ]
+    }
+  }
 }

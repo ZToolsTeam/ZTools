@@ -7,6 +7,7 @@ import { selectFileResourceRoute } from '../protocol/file-resource-dispatch.js'
 import type { ReferenceFileResources } from '../protocol/reference-file-resources.js'
 import { ensureBoundsVisible } from './display-bounds.js'
 import { doubleModifierOf } from '../../contracts/hotkey-rules.js'
+import { getResolvedLocale } from '../i18n/index.js'
 
 export function isWindows11OrLater(): boolean {
   if (process.platform !== 'win32') return false
@@ -197,6 +198,7 @@ export interface MainWindowOptions {
 export function secureWebPreferences(): Electron.WebPreferences {
   return {
     preload: path.resolve(__dirname, '../../preload/main.js'),
+    additionalArguments: [`--ztools-locale=${getResolvedLocale()}`],
     nodeIntegration: false,
     contextIsolation: true,
     sandbox: true,

@@ -8,6 +8,11 @@ import { nextTick } from "vue";
 import { Select } from "ant-design-vue";
 import DeclarativeView from "../DeclarativeView.vue";
 import DetailRenderer from "../components/DetailRenderer.vue";
+import { setI18nLocale } from "@/i18n";
+
+beforeEach(() => {
+  setI18nLocale("zh-CN");
+});
 import { renderMarkdown } from "../markdown.js";
 import {
   List,

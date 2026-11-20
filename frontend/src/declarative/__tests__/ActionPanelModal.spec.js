@@ -1,7 +1,12 @@
-import { describe, it, expect, vi } from 'vitest'
+import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { mount } from '@vue/test-utils'
 import { nextTick } from 'vue'
 import ActionPanelModal from '../components/ActionPanelModal.vue'
+import { setI18nLocale } from '@/i18n'
+
+beforeEach(() => {
+  setI18nLocale('zh-CN')
+})
 
 const action = (title, extra = {}) => ({ type: 'Action', props: { title, ...extra } })
 

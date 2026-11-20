@@ -5,6 +5,41 @@
  * 选最小可用版本 → 拼数据位流 → 按块计算 Reed-Solomon 纠错码并交织 → 放置功能图形与数据 →
  * 8 种掩码逐一评分取最优 → 写入格式信息与版本信息。
  */
+/*
+ * QR Code generator library (TypeScript)
+ *
+ * Copyright (c) Project Nayuki. (MIT License)
+ * https://www.nayuki.io/page/qr-code-generator-library
+ *
+ * Permission is hereby granted, free of charge, to any person obtaining a copy of
+ * this software and associated documentation files (the "Software"), to deal in
+ * the Software without restriction, including without limitation the rights to
+ * use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of
+ * the Software, and to permit persons to whom the Software is furnished to do so,
+ * subject to the following conditions:
+ * - The above copyright notice and this permission notice shall be included in
+ *   all copies or substantial portions of the Software.
+ * - The Software is provided "as is", without warranty of any kind, express or
+ *   implied, including but not limited to the warranties of merchantability,
+ *   fitness for a particular purpose and noninfringement. In no event shall the
+ *   authors or copyright holders be liable for any claim, damages or other
+ *   liability, whether in an action of contract, tort or otherwise, arising from,
+ *   out of or in connection with the Software or the use or other dealings in the
+ *   Software.
+ */
+import { getLocale } from "@ztools/declarative-ui";
+const QR_ENCODER_MESSAGES = {
+    "zh-CN": {
+        capacityExceeded: (bytes) => `内容太长（${bytes} 字节），超出二维码最大容量`
+    },
+    "en-US": {
+        capacityExceeded: (bytes) => `Content is too long (${bytes} bytes), exceeding maximum QR code capacity`
+    }
+};
+function qrEncoderStrings() {
+    const locale = getLocale();
+    return QR_ENCODER_MESSAGES[locale] ?? QR_ENCODER_MESSAGES["en-US"];
+}
 const ECC_ORDINAL = { L: 0, M: 1, Q: 2, H: 3 };
 /** 格式信息里的纠错等级编码（与序号不同） */
 const ECC_FORMAT_BITS = { L: 1, M: 0, Q: 3, H: 2 };
@@ -89,7 +124,7 @@ export function encodeQr(text, ecl = "M") {
     let dataCapacityBits = 0;
     for (;; version++) {
         if (version > 40)
-            throw new Error(`内容太长（${data.length} 字节），超出二维码最大容量`);
+            throw new Error(qrEncoderStrings().capacityExceeded(data.length));
         dataCapacityBits = getNumDataCodewords(version, ecl) * 8;
         const ccBits = version < 10 ? 8 : 16;
         if (4 + ccBits + data.length * 8 <= dataCapacityBits)

@@ -29,7 +29,7 @@ defineProps({
   gap: 10px;
   padding: 40px 16px;
   color: var(--rc-text-muted);
-  font-size: 12px;
+  font-size: var(--rc-fs-small);
 }
 
 .rc-loading-icon {

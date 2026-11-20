@@ -1,3 +1,6 @@
+import { t } from '@/i18n'
+import { getLocalizedPluginField, getLocalizedPluginName } from '@/utils/pluginI18n'
+
 export const PLUGIN_FEATURE_HOTKEY_QUERY_KEY = 'openPluginFeatureHotkey'
 
 export const OCR_CAPTURE_TRIGGER_ID = 'ocr_capture_hotkey'
@@ -12,47 +15,50 @@ export const SCREENSHOT_HOTKEY_TRIGGER_IDS = Object.freeze({
   window: 'screenshot_capture_window_hotkey'
 })
 
+function createBuiltinFeatureItem(base) {
+  return Object.freeze({
+    ...base,
+    get pluginName() {
+      return t(`hotkey.features.items.${base.id}.pluginName`)
+    },
+    get featureName() {
+      return t(`hotkey.features.items.${base.id}.featureName`)
+    },
+    get description() {
+      return t(`hotkey.features.items.${base.id}.description`)
+    }
+  })
+}
+
 export const PLUGIN_FEATURE_HOTKEY_ITEMS = Object.freeze([
-  {
+  createBuiltinFeatureItem({
     id: 'ocr_capture',
     pluginId: 'ocr',
-    pluginName: 'OCR',
-    featureName: '截图识别',
-    description: '触发后打开 OCR，并立即进入截图识别。',
     triggerId: OCR_CAPTURE_TRIGGER_ID
-  },
-  {
+  }),
+  createBuiltinFeatureItem({
     id: 'screenshot_region',
     pluginId: 'screenshot',
-    pluginName: '截图工具',
-    featureName: '区域截图',
-    description: '直接进入框选截图，并覆盖插件缓存中的上一张截图。',
     triggerId: SCREENSHOT_HOTKEY_TRIGGER_IDS.region,
     captureMode: 'region'
-  }
+  })
 ])
 
 export const DEPRECATED_PLUGIN_FEATURE_HOTKEY_ITEMS = Object.freeze([
-  {
+  createBuiltinFeatureItem({
     id: 'screenshot_screen',
     pluginId: 'screenshot',
-    pluginName: '截图工具',
-    featureName: '全屏截图',
-    description: '按当前多屏选择直接保存，并覆盖上一张缓存截图。',
     triggerId: SCREENSHOT_HOTKEY_TRIGGER_IDS.screen,
     captureMode: 'screen',
     deprecated: true
-  },
-  {
+  }),
+  createBuiltinFeatureItem({
     id: 'screenshot_window',
     pluginId: 'screenshot',
-    pluginName: '截图工具',
-    featureName: '窗口截图',
-    description: '按当前窗口选择直接截图，并覆盖上一张缓存截图。',
     triggerId: SCREENSHOT_HOTKEY_TRIGGER_IDS.window,
     captureMode: 'window',
     deprecated: true
-  }
+  })
 ])
 
 const ALL_PLUGIN_FEATURE_HOTKEY_ITEMS = Object.freeze([
@@ -89,9 +95,9 @@ export function buildPluginFeatureTriggerId(pluginId, featureCode) {
 
 function resolveFeatureName(feature, featureCode) {
   const candidates = [
-    feature?.name,
-    feature?.title,
-    feature?.featureName,
+    getLocalizedPluginField(feature, 'name'),
+    getLocalizedPluginField(feature, 'title'),
+    getLocalizedPluginField(feature, 'featureName'),
     Array.isArray(feature?.cmds)
       ? feature.cmds.find((cmd) => typeof cmd === 'string' && cmd.trim()) ||
         feature.cmds.find((cmd) => cmd && typeof cmd.label === 'string' && cmd.label.trim())?.label
@@ -118,7 +124,7 @@ export function buildPluginFeatureHotkeyItems(installedPlugins = []) {
     if (!plugin || typeof plugin !== 'object') continue
     const pluginId = String(plugin.pluginId || plugin.id || '').trim()
     if (!pluginId || !Array.isArray(plugin.features) || plugin.features.length === 0) continue
-    const pluginName = String(plugin.name || plugin.title || pluginId).trim() || pluginId
+    const pluginName = getLocalizedPluginName(plugin) || String(plugin.name || plugin.title || pluginId).trim() || pluginId
 
     for (const feature of plugin.features) {
       if (!feature || typeof feature !== 'object') continue
@@ -136,9 +142,9 @@ export function buildPluginFeatureHotkeyItems(installedPlugins = []) {
 
       const featureName = resolveFeatureName(feature, featureCode)
       const description =
-        (typeof feature.explain === 'string' && feature.explain.trim()) ||
-        (typeof feature.description === 'string' && feature.description.trim()) ||
-        `打开「${pluginName}」并直接进入 ${featureName}。`
+        getLocalizedPluginField(feature, 'explain') ||
+        getLocalizedPluginField(feature, 'description') ||
+        t('hotkey.features.dynamicDesc', { pluginName, featureName })
 
       items.push({
         id: `${DYNAMIC_FEATURE_TRIGGER_PREFIX}${pluginId}:${featureCode}`,
@@ -255,9 +261,9 @@ export const getPluginFeatureHotkeyItemByTrigger = (
     return {
       id: trigger.id || buildPluginFeatureTriggerId(resolvedPluginId, featureCode),
       pluginId: resolvedPluginId,
-      pluginName: resolvedPluginId || '插件',
+      pluginName: resolvedPluginId || t('hotkey.features.fallbackPlugin'),
       featureCode,
-      featureName: featureCode || '功能快捷启动',
+      featureName: featureCode || t('hotkey.features.fallbackFeature'),
       description: '',
       triggerId: trigger.id || buildPluginFeatureTriggerId(resolvedPluginId, featureCode),
       source: PLUGIN_FEATURE_HOTKEY_SOURCE,

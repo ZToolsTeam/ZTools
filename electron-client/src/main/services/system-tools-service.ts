@@ -2,6 +2,7 @@ import { app, shell } from 'electron'
 import { spawn } from 'node:child_process'
 import os from 'node:os'
 import path from 'node:path'
+import { getResolvedLocale, SUPPORTED_LOCALES, t } from '../i18n/index.js'
 
 export interface SystemToolTarget {
   id: string
@@ -9,6 +10,7 @@ export interface SystemToolTarget {
   category: string
   description: string
   iconSource: string
+  altNames?: string[]
 }
 
 export interface SystemToolsListResult {
@@ -553,17 +555,27 @@ export class SystemToolsService implements SystemToolsProvider {
 
   async listTargets(): Promise<SystemToolsListResult> {
     const os = osInformation(this.platform)
+    const currentLocale = getResolvedLocale()
+    const alternateLocales = SUPPORTED_LOCALES.filter((locale) => locale !== currentLocale)
     return {
       success: true,
       os,
       targets: this.platform === 'win32'
-        ? systemTools.map(({ id, name, category, description, iconSource }) => ({
-          id,
-          name,
-          category,
-          description,
-          iconSource
-        }))
+        ? systemTools.map(({ id, category, iconSource }) => {
+          const name = t(`systemTools.${id}.name`, undefined, currentLocale)
+          const description = t(`systemTools.${id}.description`, undefined, currentLocale)
+          const altNames = alternateLocales
+            .map((locale) => t(`systemTools.${id}.name`, undefined, locale))
+            .filter((alt, index, list) => alt !== name && list.indexOf(alt) === index)
+          return {
+            id,
+            name,
+            category,
+            description,
+            iconSource,
+            ...(altNames.length > 0 ? { altNames } : {})
+          }
+        })
         : []
     }
   }

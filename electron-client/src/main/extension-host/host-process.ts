@@ -14,7 +14,8 @@ import { EventEmitter } from 'node:events'
 import { randomUUID } from 'node:crypto'
 import path from 'node:path'
 import fs from 'node:fs'
-import { fork as cpFork } from 'node:child_process'
+import { fork as cpFork, type Serializable } from 'node:child_process'
+import { getResolvedLocale } from '../i18n/index.js'
 
 const currentDir = typeof __dirname !== 'undefined' ? __dirname : process.cwd()
 
@@ -36,9 +37,23 @@ export interface ExtensionHostProcessOptions {
 }
 
 interface PendingRequest {
-  resolve: (value: any) => void
-  reject: (reason: any) => void
+  resolve: (value: unknown) => void
+  reject: (reason: unknown) => void
   timer?: NodeJS.Timeout
+}
+
+interface HostIncomingMessage {
+  type?: string
+  id?: string
+  action?: string
+  sessionId?: string
+  payload?: unknown
+  success?: boolean
+  data?: unknown
+  error?: {
+    code?: string
+    message?: string
+  }
 }
 
 export class ExtensionHostProcess extends EventEmitter {
@@ -117,7 +132,7 @@ export class ExtensionHostProcess extends EventEmitter {
     try {
       this.bridge = this.createBridge()
 
-      this.bridge.onMessage((msg: any) => {
+      this.bridge.onMessage((msg: unknown) => {
         this.handleMessage(msg)
       })
 
@@ -136,7 +151,7 @@ export class ExtensionHostProcess extends EventEmitter {
           resolve()
         }
 
-        const onError = (err: any) => {
+        const onError = (err: unknown) => {
           clearTimeout(timeout)
           reject(err)
         }
@@ -161,7 +176,20 @@ export class ExtensionHostProcess extends EventEmitter {
 
     // 1. 如果在 Electron 渲染/主进程环境下且支持 utilityProcess
     try {
-      const electron = require('electron')
+      const electron = require('electron') as {
+        utilityProcess?: {
+          fork?: (
+            modulePath: string,
+            args: string[],
+            options: { serviceName: string; env: NodeJS.ProcessEnv }
+          ) => {
+            postMessage: (data: unknown) => void
+            on: (event: string, listener: (...args: unknown[]) => void) => void
+            kill: () => void
+            pid?: number
+          }
+        }
+      }
       if (electron?.utilityProcess?.fork) {
         const child = electron.utilityProcess.fork(this.hostEntryPath, [], {
           serviceName: 'ztools-extension-host',
@@ -171,10 +199,10 @@ export class ExtensionHostProcess extends EventEmitter {
         return {
           postMessage: (data: unknown) => child.postMessage(data),
           onMessage: (handler: (data: unknown) => void) => {
-            child.on('message', handler)
+            child.on('message', (data: unknown) => handler(data))
           },
           onExit: (handler: (code: number | null) => void) => {
-            child.on('exit', handler)
+            child.on('exit', (code: unknown) => handler(typeof code === 'number' ? code : null))
           },
           kill: (_signal?: string) => {
             child.kill()
@@ -182,7 +210,9 @@ export class ExtensionHostProcess extends EventEmitter {
           pid: child.pid
         }
       }
-    } catch {}
+    } catch {
+      // 非 Electron 运行时环境下回退到 Node child_process.fork
+    }
 
     // 2. 纯 Node.js 测试环境平滑降级为 child_process.fork
     const cp = cpFork(this.hostEntryPath, [], {
@@ -193,7 +223,7 @@ export class ExtensionHostProcess extends EventEmitter {
     const bridge: ProcessBridge = {
       postMessage: (data: unknown) => {
         if (cp.send) {
-          cp.send(data as any)
+          cp.send(data as Serializable)
         }
       },
       onMessage: (handler: (data: unknown) => void) => {
@@ -203,17 +233,18 @@ export class ExtensionHostProcess extends EventEmitter {
         cp.on('exit', handler)
       },
       kill: (signal?: string) => {
-        cp.kill((signal as any) || 'SIGTERM')
+        cp.kill((signal as NodeJS.Signals | undefined) || 'SIGTERM')
       },
       ...(typeof cp.pid === 'number' ? { pid: cp.pid } : {})
     }
     return bridge
   }
 
-  private handleMessage(msg: any): void {
-    if (!msg || typeof msg !== 'object') return
+  private handleMessage(rawMsg: unknown): void {
+    if (!rawMsg || typeof rawMsg !== 'object') return
+    const msg = rawMsg as HostIncomingMessage
 
-    if (msg.type === 'notify') {
+    if (msg.type === 'notify' && typeof msg.action === 'string') {
       if (msg.action === 'ready') {
         this.emit('ready', msg.payload)
       }
@@ -222,7 +253,7 @@ export class ExtensionHostProcess extends EventEmitter {
       return
     }
 
-    if (msg.type === 'result') {
+    if (msg.type === 'result' && typeof msg.id === 'string') {
       const req = this.pendingRequests.get(msg.id)
       if (!req) return
       this.pendingRequests.delete(msg.id)
@@ -231,8 +262,8 @@ export class ExtensionHostProcess extends EventEmitter {
       if (msg.success) {
         req.resolve(msg.data)
       } else {
-        const err = new Error(msg.error?.message || '宿主指令执行失败')
-        if (msg.error?.code) (err as any).code = msg.error.code
+        const err = new Error(msg.error?.message || '宿主指令执行失败') as Error & { code?: string }
+        if (msg.error?.code) err.code = msg.error.code
         req.reject(err)
       }
     }
@@ -289,7 +320,7 @@ export class ExtensionHostProcess extends EventEmitter {
   /**
    * 发送 RPC 请求给宿主进程
    */
-  public async sendRequest<T = any>(action: string, payload?: any, timeoutMs?: number): Promise<T> {
+  public async sendRequest<T = unknown>(action: string, payload?: unknown, timeoutMs?: number): Promise<T> {
     if (this.isDisabled) {
       throw new Error('[ExtensionHostProcess] 扩展宿主进程已停用')
     }
@@ -308,7 +339,11 @@ export class ExtensionHostProcess extends EventEmitter {
         reject(new Error(`[ExtensionHostProcess] Action [${action}] 请求超时 (${effectiveTimeout}ms)`))
       }, effectiveTimeout)
 
-      this.pendingRequests.set(id, { resolve, reject, timer })
+      this.pendingRequests.set(id, {
+        resolve: (value) => resolve(value as T),
+        reject,
+        timer
+      })
       this.bridge?.postMessage({
         type: 'request',
         id,
@@ -332,21 +367,33 @@ export class ExtensionHostProcess extends EventEmitter {
     preferences?: Record<string, unknown>
     supportDir?: string
     cacheDir?: string
-  }): Promise<any> {
-    return this.sendRequest('startCommand', payload)
+    locale?: string
+  }): Promise<unknown> {
+    return this.sendRequest('startCommand', {
+      ...payload,
+      locale: payload.locale ?? getResolvedLocale()
+    })
+  }
+
+  /**
+   * 广播语言切换给所有活跃扩展会话
+   */
+  public async updateLocale(locale: string): Promise<unknown> {
+    if (!this.isRunning) return { updated: 0, locale }
+    return this.sendRequest('updateLocale', { locale })
   }
 
   /**
    * 分发前端回传的 nativeCallback
    */
-  public async dispatchNativeCallback(sessionId: string, callbackId: string, args?: unknown[]): Promise<any> {
+  public async dispatchNativeCallback(sessionId: string, callbackId: string, args?: unknown[]): Promise<unknown> {
     return this.sendRequest('nativeCallback', { sessionId, callbackId, args })
   }
 
   /**
    * 销毁指定会话
    */
-  public async terminateSession(sessionId: string): Promise<any> {
+  public async terminateSession(sessionId: string): Promise<unknown> {
     return this.sendRequest('terminateSession', { sessionId })
   }
 
@@ -392,17 +439,22 @@ export class ExtensionHostProcess extends EventEmitter {
       const forceKillTimer = setTimeout(() => {
         try {
           bridge.kill('SIGKILL')
-        } catch {}
+        } catch (err) {
+          console.warn('[ExtensionHostProcess] Force kill failed:', err)
+        }
         done()
       }, this.shutdownTimeoutMs)
 
       try {
         bridge.onExit(() => done())
         bridge.postMessage({ type: 'notify', action: 'terminate' })
-      } catch {
+      } catch (err) {
+        console.warn('[ExtensionHostProcess] Graceful terminate failed:', err)
         try {
           bridge.kill('SIGKILL')
-        } catch {}
+        } catch (killErr) {
+          console.warn('[ExtensionHostProcess] Fallback SIGKILL failed:', killErr)
+        }
         done()
       }
     })

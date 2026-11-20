@@ -35,5 +35,20 @@
   ],
   "category": [
     "开发工具"
-  ]
+  ],
+  "categoryId": "developer",
+  "defaultLocale": "zh-CN",
+  "i18n": {
+    "en-US": {
+      "name": "Text Diff",
+      "description": "Compare two text blocks, code snippets, or config files line by line, highlight additions and deletions, ignore whitespace, and copy unified diff output.",
+      "keywords": [
+        "diff",
+        "compare",
+        "text diff",
+        "patch",
+        "unified diff"
+      ]
+    }
+  }
 }

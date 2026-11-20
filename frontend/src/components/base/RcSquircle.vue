@@ -91,7 +91,7 @@ const onImgLoad = () => {
   object-fit: contain;
   padding: 18%;
   opacity: 0;
-  transition: opacity 0.15s ease;
+  transition: opacity var(--rc-dur) ease;
 }
 
 .rc-squircle-img.is-loaded {

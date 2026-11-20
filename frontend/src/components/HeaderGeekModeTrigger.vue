@@ -9,15 +9,15 @@
       ref="triggerBtnRef"
       type="button"
       class="launcher-trigger"
-      :title="`切到悬浮条 ${switchLabel}`"
-      aria-label="切到悬浮条"
+      :title="t('geekTrigger.switchTitle', { shortcut: switchLabel })"
+      :aria-label="t('geekTrigger.switchAria')"
       @click="triggerGeekMode"
     >
       <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
         <rect x="3" y="9" width="18" height="6" rx="2" />
         <path d="M7 12h6" />
       </svg>
-      <span class="launcher-trigger-text">悬浮条</span>
+      <span class="launcher-trigger-text whitespace-nowrap">{{ t('geekTrigger.label') }}</span>
       <!-- 这里显示的是「切到悬浮条」本身的快捷键；全局唤醒键在悬停说明里介绍 -->
       <ShortcutKeys :combo="TOGGLE_MODE_SHORTCUT" />
     </button>
@@ -26,7 +26,7 @@
     <transition name="popover-fade">
       <div
         v-if="showGuidePopover"
-        class="absolute right-0 top-full pt-2 w-72 z-50 text-xs select-none"
+        class="absolute right-0 top-full pt-2 w-72 z-50 text-[length:var(--rc-fs-small)] select-none"
         @mouseenter="handleMouseEnter"
         @mouseleave="handleMouseLeave"
       >
@@ -37,8 +37,8 @@
           <div class="guide-head">
             <BrandMark :size="16" />
             <div class="guide-head-text">
-              <span class="guide-title">悬浮搜索条</span>
-              <span class="guide-sub">收起工作台，只留屏幕中央一条搜索框</span>
+              <span class="guide-title">{{ t('geekTrigger.guideTitle') }}</span>
+              <span class="guide-sub">{{ t('geekTrigger.guideSubtitle') }}</span>
             </div>
           </div>
 
@@ -47,25 +47,25 @@
             <div class="guide-bar">
               <SearchIcon class="guide-bar-icon" />
               <span class="guide-caret"></span>
-              <span class="guide-placeholder">搜索插件、命令与文件</span>
+              <span class="guide-placeholder">{{ t('search.placeholder') }}</span>
             </div>
           </div>
 
           <dl class="guide-keys">
             <div class="guide-key-row">
-              <dt>随处唤起</dt>
+              <dt>{{ t('geekTrigger.wakeEverywhere') }}</dt>
               <dd>
                 <ShortcutKeys v-if="wakeHotkey" :combo="wakeHotkey" />
-                <span v-else class="guide-key-off">未开启，可在设置中开启</span>
+                <span v-else class="guide-key-off">{{ t('geekTrigger.wakeDisabled') }}</span>
               </dd>
             </div>
             <div class="guide-key-row">
-              <dt>回到工作台</dt>
+              <dt>{{ t('geekTrigger.backToWorkspace') }}</dt>
               <dd><ShortcutKeys :combo="TOGGLE_MODE_SHORTCUT" /></dd>
             </div>
           </dl>
 
-          <RcButton variant="primary" size="md" class="guide-btn" @click="triggerGeekMode">切到悬浮条</RcButton>
+          <RcButton variant="primary" size="md" class="guide-btn" @click="triggerGeekMode">{{ t('geekTrigger.switchBtn') }}</RcButton>
         </div>
       </div>
     </transition>
@@ -82,6 +82,9 @@ import { switchWindowMode, WINDOW_MODES } from '@/utils/windowMode'
 import { shortcutLabel } from '@/utils/platform'
 import { TOGGLE_MODE_SHORTCUT } from '@/utils/shellShortcuts'
 import { currentGlobalWakeHotkey, refreshCurrentGlobalWakeHotkey } from '@/utils/globalWakeHotkey'
+import { useAppI18n } from '@/i18n'
+
+const { t } = useAppI18n()
 
 // 显示用户实际设置的唤醒键，而不是写死的默认值
 const wakeHotkey = currentGlobalWakeHotkey
@@ -160,9 +163,9 @@ onBeforeUnmount(() => {
   border-radius: var(--rc-radius-md);
   background: transparent;
   color: var(--rc-text-muted);
-  font-size: 12px;
+  font-size: var(--rc-fs-small);
   cursor: pointer;
-  transition: background-color 0.15s ease, color 0.15s ease;
+  transition: background-color var(--rc-dur) ease, color var(--rc-dur) ease;
 }
 
 .launcher-trigger:hover {
@@ -205,13 +208,13 @@ onBeforeUnmount(() => {
 }
 
 .guide-title {
-  font-size: 13px;
+  font-size: var(--rc-fs-body);
   font-weight: 600;
   color: var(--rc-text-primary);
 }
 
 .guide-sub {
-  font-size: 12px;
+  font-size: var(--rc-fs-small);
   color: var(--rc-text-muted);
 }
 
@@ -231,18 +234,18 @@ onBeforeUnmount(() => {
   display: flex;
   align-items: center;
   padding: 0 10px;
-  border-radius: 8px;
+  border-radius: var(--rc-radius-md);
   background: var(--rc-surface);
   border: 1px solid var(--rc-border-highlight);
   box-shadow: var(--rc-shadow-lg);
   color: var(--rc-text-faint);
-  font-size: 11.5px;
+  font-size: var(--rc-fs-small);
 }
 
 .guide-bar-icon {
   flex-shrink: 0;
   margin-right: 7px;
-  font-size: 13px;
+  font-size: var(--rc-fs-body);
   color: var(--rc-text-muted);
 }
 
@@ -251,7 +254,7 @@ onBeforeUnmount(() => {
   width: 1.5px;
   height: 13px;
   margin-right: 1px;
-  border-radius: 1px;
+  border-radius: var(--rc-radius-full);
   background: var(--rc-accent);
   animation: guide-blink 1.1s steps(2, start) infinite;
 }
@@ -278,7 +281,7 @@ onBeforeUnmount(() => {
 }
 
 .guide-key-row dt {
-  font-size: 12px;
+  font-size: var(--rc-fs-small);
   color: var(--rc-text-secondary);
 }
 
@@ -288,7 +291,7 @@ onBeforeUnmount(() => {
 }
 
 .guide-key-off {
-  font-size: 11px;
+  font-size: var(--rc-fs-caption);
   color: var(--rc-text-faint);
 }
 
@@ -306,7 +309,7 @@ onBeforeUnmount(() => {
 
 .popover-fade-enter-active,
 .popover-fade-leave-active {
-  transition: opacity 0.15s ease, transform 0.15s ease;
+  transition: opacity var(--rc-dur) ease, transform var(--rc-dur) ease;
 }
 
 .popover-fade-enter-from,

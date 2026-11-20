@@ -1480,6 +1480,21 @@
        * Mock DLL Plugin API
        */
       _mockDLLPlugin(method, params) {
+        const mockUnavailableMsg = (() => {
+          let raw = 'en-US'
+          try {
+            raw = (typeof document !== 'undefined' && document.documentElement?.lang)
+              || (typeof localStorage !== 'undefined' && localStorage.getItem('ztools_locale'))
+              || (typeof navigator !== 'undefined' && navigator.language)
+              || 'en-US'
+          } catch (_err) { /* 沙盒或受限环境无法访问 localStorage，回退默认语言 */ }
+          const isZh = /^zh(?:$|[-_])/i.test(String(raw).trim())
+          const dict = {
+            'zh-CN': 'DLL 插件在 Mock 环境下不可用，请在 ZTools 应用中运行',
+            'en-US': 'DLL plugins are unavailable in browser/mock mode. Please run inside the ZTools desktop app.'
+          }
+          return isZh ? dict['zh-CN'] : dict['en-US']
+        })()
         const handlers = {
           dllplugin_list: () => ({
             success: true,
@@ -1487,11 +1502,11 @@
           }),
           dllplugin_call: () => ({
             success: false,
-            error: 'DLL 插件在 Mock 环境下不可用，请在 ZTools 应用中运行'
+            error: mockUnavailableMsg
           }),
           dllplugin_call_async: () => ({
             success: false,
-            error: 'DLL 插件在 Mock 环境下不可用，请在 ZTools 应用中运行'
+            error: mockUnavailableMsg
           }),
           dllplugin_query_task: () => ({
             success: true,

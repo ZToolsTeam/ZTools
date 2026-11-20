@@ -13,6 +13,11 @@ import ListAccessory from "../components/ListAccessory.vue";
 import ToastOverlay from "../components/ToastOverlay.vue";
 import { cleanUiText, displayText, formatActionShortcut, actionKeyHint, isDestructiveAction } from "../uiText.js";
 import { List, Detail, Form, ActionPanel, Action } from "@ztools/declarative-ui";
+import { setI18nLocale } from "@/i18n";
+
+beforeEach(() => {
+  setI18nLocale("zh-CN");
+});
 
 const mounted = [];
 

@@ -4,7 +4,25 @@
  * - 插件里的 `@ztools/declarative-ui` 由客户端在运行时提供，SDK 里新增的方法在旧客户端上并不存在；
  * - 宿主接口在旧客户端上不存在时返回「未知方法」，这里统一换成用户看得懂的升级提示。
  */
-export const HOST_UPGRADE_HINT = '当前 ZTools 版本过低，请升级到最新版本后再试';
+import { getLocale } from '@ztools/declarative-ui';
+const HOST_COMPAT_MESSAGES = {
+    'zh-CN': {
+        upgradeHint: '当前 ZTools 版本过低，请升级到最新版本后再试',
+        featureUpgradeError: (feature, hint) => `${feature}需要新版 ZTools，${hint}`
+    },
+    'en-US': {
+        upgradeHint: 'Your ZTools version is too old. Please upgrade to the latest version and try again.',
+        featureUpgradeError: (feature, hint) => `${feature} requires a newer version of ZTools. ${hint}`
+    }
+};
+function hostCompatStrings() {
+    const locale = getLocale();
+    return HOST_COMPAT_MESSAGES[locale] ?? HOST_COMPAT_MESSAGES['en-US'];
+}
+export function getHostUpgradeHint() {
+    return hostCompatStrings().upgradeHint;
+}
+export const HOST_UPGRADE_HINT = getHostUpgradeHint();
 /** 宿主是否因为不认识这个接口而失败（旧客户端） */
 export function isHostMethodMissing(error) {
     const text = error instanceof Error ? error.message : String(error ?? '');
@@ -12,7 +30,8 @@ export function isHostMethodMissing(error) {
 }
 /** 生成「某功能需要新版客户端」的报错 */
 export function hostUpgradeError(feature) {
-    return new Error(`${feature}需要新版 ZTools，${HOST_UPGRADE_HINT}`);
+    const s = hostCompatStrings();
+    return new Error(s.featureUpgradeError(feature, s.upgradeHint));
 }
 /**
  * 读出最新值、修改后写回。

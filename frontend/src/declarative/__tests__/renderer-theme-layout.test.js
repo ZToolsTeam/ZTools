@@ -15,6 +15,11 @@ import DeclarativeView from "../DeclarativeView.vue";
 import DeclarativeIcon from "../components/DeclarativeIcon.vue";
 import { resolveThemeColor, semanticColorName } from "../colors.js";
 import { List, Detail, Form, ActionPanel, Action, Icon } from "@ztools/declarative-ui";
+import { setI18nLocale } from "@/i18n";
+
+beforeEach(() => {
+  setI18nLocale("zh-CN");
+});
 
 const COLORS_TS = path.resolve(__dirname, "../../../../packages/declarative-ui/src/constants/colors.ts");
 const THEME_CSS = path.resolve(__dirname, "../../assets/css/theme.css");

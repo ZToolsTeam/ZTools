@@ -4,6 +4,7 @@ import { setDeclarativeBridge, renderDeclarativeRoot, getComponentFactory } from
 import { createScreenColorPicker } from "../screenColorPicker.js";
 import { getHostMethods } from "../hostMethods.js";
 import { createHostClipboardBridge, markPageBridgeInstalled } from "../hostClipboardBridge.js";
+import { t } from "@/i18n";
 
 export { assertClipboardText } from "../hostClipboardBridge.js";
 
@@ -32,7 +33,7 @@ function buttonText(text) {
  * - 确认框打开期间先拦下键盘事件：Esc 只关确认框，其余按键也不再触发页面快捷键（如 Esc 返回、⌘K）
  */
 export function showInAppConfirm(options = {}) {
-  const title = typeof options.title === "string" && options.title.trim() ? options.title : "确认操作";
+  const title = typeof options.title === "string" && options.title.trim() ? options.title : t("declarative.confirm.defaultTitle");
   const primary = options.primaryAction || {};
   const dismiss = options.dismissAction || {};
   const destructive = primary.style === "destructive";
@@ -77,8 +78,8 @@ export function showInAppConfirm(options = {}) {
       instance = confirmDialog({
         title,
         content: typeof options.message === "string" ? options.message : undefined,
-        okText: buttonText(primary.title || "确定"),
-        cancelText: buttonText(dismiss.title || "取消"),
+        okText: buttonText(primary.title || t("declarative.confirm.ok")),
+        cancelText: buttonText(dismiss.title || t("declarative.confirm.cancel")),
         okButtonProps: destructive ? { danger: true } : undefined,
         autoFocusButton: destructive ? "cancel" : "ok",
         maskClosable: true,

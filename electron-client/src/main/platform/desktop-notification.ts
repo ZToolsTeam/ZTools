@@ -1,5 +1,6 @@
 import { Notification } from 'electron'
 import { errorCodes, ZToolsError } from '../../contracts/errors.js'
+import { t } from '../i18n/index.js'
 
 interface DesktopNotification {
   show(): void
@@ -24,15 +25,15 @@ const MAX_ACTIVE_NOTIFICATIONS = 64
 
 export function closeDesktopNotifications(): void {
   for (const close of [...activeNotifications.values()]) {
-    close(new ZToolsError(errorCodes.appStopping, '应用正在退出，通知已关闭'))
+    close(new ZToolsError(errorCodes.appStopping, t('notification.appStopping')))
   }
 }
 
 /** 等待系统接收回执；回执不保证用户看到横幅，显示仍受系统通知设置约束。 */
 export async function showDesktopNotification(title: string, body: string, api = electronNotifications): Promise<void> {
-  if (!api.isSupported()) throw new ZToolsError(errorCodes.notSupported, '当前系统不支持桌面通知')
+  if (!api.isSupported()) throw new ZToolsError(errorCodes.notSupported, t('notification.notSupported'))
   // macOS 只有注册了关闭动作的通知类别才会报告用户主动移除通知。
-  const notification = api.create({ title, body, closeButtonText: '关闭' })
+  const notification = api.create({ title, body, closeButtonText: t('notification.closeButton') })
   await new Promise<void>((resolve, reject) => {
     let settled = false
     let released = false
@@ -45,7 +46,7 @@ export async function showDesktopNotification(title: string, body: string, api =
     const release = (error?: ZToolsError, closeNative = true) => {
       if (released) return
       released = true
-      finish(error ?? new ZToolsError(errorCodes.cancelled, '通知已关闭'))
+      finish(error ?? new ZToolsError(errorCodes.cancelled, t('notification.closed')))
       notification.removeAllListeners()
       activeNotifications.delete(notification)
       if (closeNative) {
@@ -53,20 +54,20 @@ export async function showDesktopNotification(title: string, body: string, api =
         catch (closeError) { console.warn('关闭系统通知失败', closeError) }
       }
     }
-    const timer = setTimeout(() => release(new ZToolsError(errorCodes.requestTimeout, '系统未确认接收通知，请检查通知权限')), 5000)
+    const timer = setTimeout(() => release(new ZToolsError(errorCodes.requestTimeout, t('notification.timeout'))), 5000)
     timer.unref()
     try {
       if (activeNotifications.size >= MAX_ACTIVE_NOTIFICATIONS) {
-        activeNotifications.values().next().value?.(new ZToolsError(errorCodes.cancelled, '通知数量达到上限，旧通知已关闭'))
+        activeNotifications.values().next().value?.(new ZToolsError(errorCodes.cancelled, t('notification.limitReached')))
       }
       activeNotifications.set(notification, error => release(error))
       notification.once('show', () => finish())
       notification.once('close', () => release(undefined, false))
       notification.once('click', () => release())
-      notification.once('failed', () => release(new ZToolsError(errorCodes.nativeHostError, '系统未能接收通知，请检查通知权限')))
+      notification.once('failed', () => release(new ZToolsError(errorCodes.nativeHostError, t('notification.failed'))))
       notification.show()
     } catch {
-      release(new ZToolsError(errorCodes.nativeHostError, '系统未能接收通知，请检查通知权限'))
+      release(new ZToolsError(errorCodes.nativeHostError, t('notification.failed')))
     }
   })
 }

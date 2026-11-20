@@ -56,7 +56,7 @@
   --zt-spacing-xl: 32px;
 
   /* ===== 过渡 ===== */
-  --zt-transition-fast: 0.15s ease;
+  --zt-transition-fast: var(--rc-dur) ease;
   --zt-transition: 0.3s ease;
   --zt-transition-slow: 0.5s ease;
 
@@ -66,8 +66,8 @@
   --zt-header-height: 48px;
 
   /* ===== 滚动条 - 更柔和的颜色 ===== */
-  --zt-scrollbar-thumb: rgba(0, 0, 0, 0.08);
-  --zt-scrollbar-thumb-hover: rgba(0, 0, 0, 0.15);
+  --zt-scrollbar-thumb: var(--rc-scrollbar-thumb);
+  --zt-scrollbar-thumb-hover: var(--rc-scrollbar-thumb-hover);
   --zt-scrollbar-track: transparent;
 
   /* ===== 兼容 plugin 变量名（供共用组件使用）===== */
@@ -136,8 +136,8 @@
   --zt-shadow-strong: 0 4px 16px rgba(0, 0, 0, 0.2);
 
   /* 滚动条 - 暗黑模式 */
-  --zt-scrollbar-thumb: rgba(255, 255, 255, 0.1);
-  --zt-scrollbar-thumb-hover: rgba(255, 255, 255, 0.2);
+  --zt-scrollbar-thumb: var(--rc-scrollbar-thumb);
+  --zt-scrollbar-thumb-hover: var(--rc-scrollbar-thumb-hover);
 }
 
 /* ===== 全局滚动条美化 - 简洁风格 ===== */
@@ -201,7 +201,7 @@
   min-width: 20px;
   height: 20px;
   padding: 0 6px;
-  font-size: 12px;
+  font-size: var(--rc-fs-small);
   line-height: 20px;
   border-radius: 10px;
   background-color: var(--rc-accent);
@@ -299,14 +299,14 @@
   border-radius: var(--rc-radius-md);
   border: 1px solid transparent;
   background: transparent;
-  transition: background-color 0.15s ease, color 0.15s ease;
+  transition: background-color var(--rc-dur) ease, color var(--rc-dur) ease;
   margin: 0;
 }
 
 .ant-pagination .ant-pagination-item a {
   color: var(--rc-text-muted);
   font-weight: 500;
-  font-size: 13px;
+  font-size: var(--rc-fs-body);
 }
 
 .ant-pagination .ant-pagination-item:hover,

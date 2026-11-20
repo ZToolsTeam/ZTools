@@ -41,6 +41,7 @@ import {
 } from '@/utils/bundledPlugins'
 import { isPluginVisible } from '@/utils/pluginVisibility'
 import { runPluginInstall } from '@/utils/pluginInstallOperation'
+import { t } from '@/i18n'
 
 /** 安装 / 卸载通知交给版本处理；版本钩子出错只记日志，不影响安装状态 */
 function notifyLifecycle(name, pluginId) {
@@ -215,7 +216,7 @@ export const usePluginsStore = defineStore('plugins', {
     // 获取下架原因
     getRevokedReason: (state) => (pluginId) => {
       const pid = normalizePluginId(pluginId)
-      return state.revokedMap[pid]?.reason || '该插件已被官方下架禁用'
+      return state.revokedMap[pid]?.reason || t('pluginCatalog.revokedDisabledReason')
     },
 
     // 禁用原因的类别：'platform' 表示插件目录里的新版本不再支持当前系统，其余为官方下架
@@ -476,7 +477,7 @@ export const usePluginsStore = defineStore('plugins', {
         // 市场数据到位后，补充已安装插件的远程 icon URL
         this._patchInstalledIcons()
       } catch (err) {
-        this.error = err.message || '加载插件失败'
+        this.error = err.message || t('pluginsStore.loadFailed')
         console.error('[PluginsStore] 加载插件失败:', err)
         throw err
       } finally {
@@ -579,7 +580,7 @@ export const usePluginsStore = defineStore('plugins', {
         })
         this.recommendedItems = list || []
       } catch (err) {
-        this.recommendedError = err.message || '加载推荐插件失败'
+        this.recommendedError = err.message || t('pluginsStore.loadRecommendedFailed')
         console.error('[PluginsStore] 加载推荐插件失败:', err)
       } finally {
         this.recommendedLoading = false
@@ -656,7 +657,7 @@ export const usePluginsStore = defineStore('plugins', {
     async toggleFavorite(pluginId) {
       const normalizedId = normalizePluginId(pluginId)
       if (!normalizedId) {
-        throw new Error('插件标识符不存在')
+        throw new Error(t('pluginsStore.pluginIdMissing'))
       }
 
       const wasFavorite = this.favorites.has(normalizedId)
@@ -789,7 +790,7 @@ export const usePluginsStore = defineStore('plugins', {
         const pid = normalizePluginId(item.pluginId || item.id)
         if (!pid) continue
         if (item.revoked) {
-          const reason = item.revoked_reason || item.revokedReason || '该插件已被官方下架禁用'
+          const reason = item.revoked_reason || item.revokedReason || t('pluginCatalog.revokedDisabledReason')
           if (!this.revokedMap[pid] || this.revokedMap[pid].reason !== reason) {
             this.revokedMap = {
               ...this.revokedMap,
@@ -841,7 +842,9 @@ export const usePluginsStore = defineStore('plugins', {
         // 不看是否已安装：目录可能先于已装列表返回；未安装的这类条目本来就不会出现在当前系统的插件市场里
         if (!isPluginSupportedOnCurrentPlatform(item)) {
           const label = getPluginPlatformLabel(item)
-          const reason = `${label ? `插件目录里的新版本${label}，` : ''}当前系统已不再支持`
+          const reason = label
+            ? t('pluginsStore.platformUnsupportedWithLabel', { label })
+            : t('pluginsStore.platformUnsupported')
           if (!current || current.reason !== reason) {
             next[pid] = { revoked: true, reason, kind: 'platform' }
             changed = true
@@ -895,7 +898,7 @@ export const usePluginsStore = defineStore('plugins', {
           const pid = normalizePluginId(p.pluginId || p.id)
           if (!pid) continue
           if (p.revoked) {
-            const reason = p.revoked_reason || p.revokedReason || '该插件已被官方下架禁用'
+            const reason = p.revoked_reason || p.revokedReason || t('pluginCatalog.revokedDisabledReason')
             this.revokedMap = {
               ...this.revokedMap,
               [pid]: { revoked: true, reason }
@@ -1164,14 +1167,14 @@ export const usePluginsStore = defineStore('plugins', {
         const normalizedId = normalizePluginId(resolveBundledReplacement(normalizePluginId(pluginId)))
         const featureCode = resolveBundledReplacementFeature(normalizePluginId(pluginId), options?.featureCode)
         if (!normalizedId) {
-          throw new Error('插件标识符不存在')
+          throw new Error(t('pluginsStore.pluginIdMissing'))
         }
 
         // 下架防御性拦截（M1-8）
         if (this.isRevoked(normalizedId)) {
-          const reason = this.getRevokedReason(normalizedId) || '该插件已被官方下架禁用'
-          if (this.getRevokedKind(normalizedId) === 'platform') throw new Error(`无法启动：${reason}`)
-          throw new Error(`无法启动：该插件已被官方下架禁用（原因：${reason}）`)
+          const reason = this.getRevokedReason(normalizedId) || t('pluginCatalog.revokedDisabledReason')
+          if (this.getRevokedKind(normalizedId) === 'platform') throw new Error(t('pluginsStore.cannotLaunchWithReason', { reason }))
+          throw new Error(t('pluginsStore.cannotLaunchRevoked', { reason }))
         }
 
         // 已被用户在设置中假卸载（隐藏）的内置插件：引导前往详情页一键还原
@@ -1180,7 +1183,7 @@ export const usePluginsStore = defineStore('plugins', {
             success: false,
             action: 'navigate_to_detail',
             pluginId: normalizedId,
-            error: '该内置插件已卸载，还原后即可使用'
+            error: t('pluginsStore.bundledHiddenError')
           }
         }
 
@@ -1200,12 +1203,12 @@ export const usePluginsStore = defineStore('plugins', {
         // 暂未开放的插件（未完成真实实现）不允许从旧快捷方式、历史记录等入口打开
         const targetPlugin = installedMatch || catalogMatch || normalizedId
         if (!isPluginVisible(targetPlugin)) {
-          throw new Error('无法启动：该插件暂未开放')
+          throw new Error(t('pluginsStore.cannotLaunchNotPublic'))
         }
 
         // 当前系统上不能真正工作的插件不允许启动，避免展示示例数据或假成功
         if (!isPluginSupportedOnCurrentPlatform(targetPlugin)) {
-          throw new Error('无法启动：该插件在当前系统上暂不可用')
+          throw new Error(t('pluginsStore.cannotLaunchUnsupportedPlatform'))
         }
 
         const isDeclarativePlugin = Boolean(
@@ -1230,7 +1233,7 @@ export const usePluginsStore = defineStore('plugins', {
           ) {
             const launched = await window.__ztoolsOpenLauncherDeclarative(normalizedId, { featureCode })
             if (launched?.cancelled) return launched
-            if (launched?.success !== true) throw new Error(launched?.error || '启动插件失败，请重试')
+            if (launched?.success !== true) throw new Error(launched?.error || t('launcher.launchPluginFailed'))
             return { success: true, isDeclarative: true, pluginId: normalizedId }
           }
 
@@ -1269,19 +1272,19 @@ export const usePluginsStore = defineStore('plugins', {
     async installPlugin(pluginId, options = {}) {
       const pid = normalizePluginId(pluginId)
       if (!pid) {
-        throw new Error('插件标识符不存在')
+        throw new Error(t('pluginsStore.pluginIdMissing'))
       }
 
       // 1. 下架强拦截（M1-8）
       if (this.isRevoked(pid)) {
         const reason = this.getRevokedReason(pid)
-        throw new Error(`无法安装：该插件已被官方下架禁用（原因：${reason}）`)
+        throw new Error(t('pluginsStore.cannotInstallRevoked', { reason }))
       }
 
       // 2. 并发防重互斥拦截：若已在安装或下载中，严禁重复并发触发
       if (this.installingSet.has(pid) || this.downloadingSet.has(pid)) {
         console.warn('[plugins.installPlugin] 插件正在安装中，忽略重复并发点击:', pid)
-        return { success: false, busy: true, message: '正在安装中' }
+        return { success: false, busy: true, message: t('pluginsStore.installingBusy') }
       }
 
       // 3. 互斥加锁与重置状态
@@ -1303,7 +1306,7 @@ export const usePluginsStore = defineStore('plugins', {
         const downloadInfo = await getDownloadSign(pid)
         const downloadUrl = downloadInfo?.downloadUrl
         if (!downloadUrl) {
-          throw new Error('无法获取插件下载地址')
+          throw new Error(t('pluginsStore.downloadUrlMissing'))
         }
 
         // 5. 校验平台与版本兼容性（fetchVersions / checkCompat 不会抛错，不兼容时必须中止安装）
@@ -1311,7 +1314,7 @@ export const usePluginsStore = defineStore('plugins', {
           const ver = await fetchVersions()
           const compat = checkCompat(downloadInfo, ver.appVersion, ver.webVersion)
           if (!compat.compatible) {
-            throw new Error(compat.reason || '当前应用版本不满足该插件兼容性要求')
+            throw new Error(compat.reason || t('pluginsStore.versionIncompatible'))
           }
         }
 
@@ -1363,7 +1366,7 @@ export const usePluginsStore = defineStore('plugins', {
         return { success: true, pluginId: pid }
       } catch (err) {
         console.error('[plugins.installPlugin] 安装失败:', pid, err)
-        const errMsg = err?.message || String(err) || '安装失败'
+        const errMsg = err?.message || String(err) || t('pluginsStore.installFailed')
         this.installErrorMap = {
           ...this.installErrorMap,
           [pid]: errMsg
@@ -1388,10 +1391,10 @@ export const usePluginsStore = defineStore('plugins', {
     async hideBundledPlugin(pluginId) {
       const canonicalId = normalizePluginId(pluginId).toLowerCase()
       if (!canonicalId || !isBundledPlugin(canonicalId)) {
-        throw new Error('仅随客户端内置的插件支持此操作')
+        throw new Error(t('pluginsStore.bundledOnlyAction'))
       }
       if (this._togglingBundledSet.has(canonicalId)) {
-        return { success: false, busy: true, message: '操作处理中' }
+        return { success: false, busy: true, message: t('pluginsStore.operationInProgress') }
       }
 
       const locking = new Set(this._togglingBundledSet)
@@ -1411,7 +1414,7 @@ export const usePluginsStore = defineStore('plugins', {
             'user_settings.json'
           )
           if (saved === false) {
-            throw new Error('保存内置插件卸载状态失败')
+            throw new Error(t('pluginsStore.saveHideBundledFailed'))
           }
         }
 
@@ -1450,10 +1453,10 @@ export const usePluginsStore = defineStore('plugins', {
     async restoreBundledPlugin(pluginId) {
       const canonicalId = normalizePluginId(pluginId).toLowerCase()
       if (!canonicalId || !isBundledPlugin(canonicalId)) {
-        throw new Error('仅随客户端内置的插件支持还原')
+        throw new Error(t('pluginsStore.bundledOnlyRestore'))
       }
       if (this._togglingBundledSet.has(canonicalId)) {
-        return { success: false, busy: true, message: '操作处理中' }
+        return { success: false, busy: true, message: t('pluginsStore.operationInProgress') }
       }
 
       const locking = new Set(this._togglingBundledSet)
@@ -1473,7 +1476,7 @@ export const usePluginsStore = defineStore('plugins', {
             'user_settings.json'
           )
           if (saved === false) {
-            throw new Error('保存内置插件还原状态失败')
+            throw new Error(t('pluginsStore.saveRestoreBundledFailed'))
           }
         }
 
@@ -1519,7 +1522,7 @@ export const usePluginsStore = defineStore('plugins', {
     async uninstallPlugin(pluginId) {
       try {
         if (isClientProvidedPlugin(pluginId)) {
-          throw new Error('内置插件随客户端提供，不能卸载')
+          throw new Error(t('details.builtinCannotUninstall'))
         }
 
         if (window.ztools && window.ztools.plugin) {
@@ -1532,7 +1535,7 @@ export const usePluginsStore = defineStore('plugins', {
           }
           return result
         }
-        throw new Error('ZTools plugin API 不可用')
+        throw new Error(t('nativeApi.moduleUnavailable', { module: 'plugin' }))
       } catch (err) {
         console.error('[plugins] 卸载插件失败:', err)
         throw err

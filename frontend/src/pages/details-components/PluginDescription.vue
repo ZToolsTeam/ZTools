@@ -1,4 +1,7 @@
 <script setup>
+import { useAppI18n } from '@/i18n'
+
+const { t } = useAppI18n()
 defineProps({
   description: String
 })
@@ -6,6 +9,6 @@ defineProps({
 
 <template>
   <p class="leading-relaxed whitespace-pre-wrap" style="color: var(--rc-text-primary)">
-    {{ description || '暂无介绍' }}
+    {{ description || t('details.noDescription') }}
   </p>
 </template>

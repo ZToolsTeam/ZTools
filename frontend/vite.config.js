@@ -13,6 +13,9 @@ const hasCommercialEdition = existsSync(commercialEditionEntry)
 const editionEntry = hasCommercialEdition
   ? commercialEditionEntry
   : path.resolve(__dirname, 'src/edition-oss/index.js')
+const editionLocalesEntry = hasCommercialEdition
+  ? path.resolve(__dirname, 'src/commercial/locales/index.js')
+  : path.resolve(__dirname, 'src/edition-oss/locales.js')
 
 /**
  * 开发服务器的 /api 代理目标：由 ZTOOLS_DEV_API_PROXY_TARGET 指定（环境变量或 .env.development，
@@ -61,6 +64,8 @@ export default defineConfig(({ mode }) => ({
   resolve: {
     alias: {
       '@': path.resolve(__dirname, './src'),
+      // 词条别名必须在 @edition 之前，避免前缀匹配到 edition 入口并消除与 @/i18n 的循环依赖
+      '@edition-locales': editionLocalesEntry,
       '@edition': editionEntry,
       // 宿主专用入口（插件缓存作用域工厂等），必须写在包入口别名之前，否则会被前缀匹配成 dist/index.js/host
       '@ztools/declarative-ui/host': path.resolve(__dirname, '../packages/declarative-ui/dist/host/index.js'),

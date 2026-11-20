@@ -10,7 +10,25 @@
     "name": { "type": "string", "minLength": 1 },
     "version": { "type": "string", "pattern": "^\\d+\\.\\d+\\.\\d+(?:-[0-9A-Za-z.-]+)?$" },
     "description": { "type": "string", "minLength": 1 },
+    "defaultLocale": { "$ref": "#/$defs/localeTag" },
     "category": { "type": "array", "items": { "type": "string" }, "default": [] },
+    "categoryId": {
+      "anyOf": [
+        { "$ref": "#/$defs/categorySlug" },
+        {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 2,
+          "uniqueItems": true,
+          "items": { "$ref": "#/$defs/categorySlug" }
+        }
+      ]
+    },
+    "i18n": {
+      "type": "object",
+      "propertyNames": { "$ref": "#/$defs/localeTag" },
+      "additionalProperties": { "$ref": "#/$defs/i18nEntry" }
+    },
     "author": { "type": "string", "minLength": 1 },
     "entry": { "$ref": "#/$defs/relativePath" },
     "keyword": { "type": "string", "minLength": 1 },
@@ -106,7 +124,10 @@
             "name",
             "version",
             "description",
+            "defaultLocale",
             "category",
+            "categoryId",
+            "i18n",
             "author",
             "entry",
             "keyword",
@@ -128,6 +149,65 @@
     }
   ],
   "$defs": {
+    "localeTag": {
+      "type": "string",
+      "pattern": "^[a-z]{2,3}(?:-[A-Z][a-z]{3})?(?:-[A-Z]{2}|-[0-9]{3})?$"
+    },
+    "categorySlug": {
+      "type": "string",
+      "enum": ["productivity", "system", "files", "media", "developer", "network", "security"]
+    },
+    "i18nEntry": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "name": { "type": "string", "minLength": 1, "maxLength": 50 },
+        "description": { "type": "string", "minLength": 1, "maxLength": 500 },
+        "keywords": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1, "maxLength": 30 }
+        },
+        "revokedReason": { "type": "string", "minLength": 1 },
+        "features": {
+          "type": "object",
+          "propertyNames": { "minLength": 1 },
+          "additionalProperties": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "explain": { "type": "string", "minLength": 1 },
+              "cmds": {
+                "type": "array",
+                "items": {
+                  "anyOf": [
+                    { "type": "string", "minLength": 1 },
+                    { "type": "object" }
+                  ]
+                }
+              }
+            }
+          }
+        },
+        "screenshots": {
+          "type": "array",
+          "maxItems": 5,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["file"],
+            "properties": {
+              "file": {
+                "allOf": [
+                  { "$ref": "#/$defs/relativePath" },
+                  { "pattern": "^screenshots/(?:[A-Za-z0-9_-]+/)*[A-Za-z0-9_-]+(?:\\.[A-Za-z0-9_-]+)*\\.png$" }
+                ]
+              },
+              "title": { "type": "string", "minLength": 1, "maxLength": 60 }
+            }
+          }
+        }
+      }
+    },
     "relativePath": {
       "type": "string",
       "minLength": 1,

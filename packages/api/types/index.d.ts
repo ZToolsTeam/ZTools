@@ -325,6 +325,21 @@ export interface SystemInfo extends AnyRecord {
   darkMode?: boolean
   platform?: string
   appVersion?: string
+  /** 当前宿主界面语言（BCP-47，如 'zh-CN' | 'en-US'） */
+  locale?: string
+}
+
+export type SysInfo = SystemInfo
+
+/** 宿主语言变更事件名（通过 `ztools.events.on('system.LocaleChange', handler)` 监听） */
+export type SystemLocaleChangeEventType = 'system.LocaleChange'
+
+/** `system.LocaleChange` 事件载荷 */
+export interface LocaleChangeEvent {
+  /** 变更后的有效语言（如 'zh-CN' | 'en-US'） */
+  locale: string
+  /** 变更前的有效语言（可选） */
+  previousLocale?: string
 }
 
 export interface WindowAPI {
@@ -444,8 +459,11 @@ export interface EventsCleanupResult {
 
 export interface EventsAPI {
   dispatchEnvelope(envelope: EventEnvelope): void
+  on(eventType: SystemLocaleChangeEventType, handler: EventHandler<LocaleChangeEvent>): void
   on<T = unknown>(eventType: string, handler: EventHandler<T>): void
+  off(eventType: SystemLocaleChangeEventType, handler: EventHandler<LocaleChangeEvent>): void
   off<T = unknown>(eventType: string, handler: EventHandler<T>): void
+  subscribeConfirmed(eventType: SystemLocaleChangeEventType, handler: EventHandler<LocaleChangeEvent>): Promise<() => Promise<void>>
   subscribeConfirmed<T = unknown>(eventType: string, handler: EventHandler<T>): Promise<() => Promise<void>>
   emit(eventType: string, payload: unknown, options?: AnyRecord): Promise<unknown>
   subscribe(channel: string): Promise<unknown>

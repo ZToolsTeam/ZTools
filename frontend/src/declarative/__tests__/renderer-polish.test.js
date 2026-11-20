@@ -13,6 +13,11 @@ import DeclarativeIcon from "../components/DeclarativeIcon.vue";
 import { ICONS, FALLBACK_ICON, normalizeIconName, resolveIconShape } from "../icons.js";
 import { renderMarkdown } from "../markdown.js";
 import { List, Form, ActionPanel, Action } from "@ztools/declarative-ui";
+import { setI18nLocale } from "@/i18n";
+
+beforeEach(() => {
+  setI18nLocale("zh-CN");
+});
 
 const ICONS_TS = path.resolve(__dirname, "../../../../packages/declarative-ui/src/constants/icons.ts");
 
@@ -169,6 +174,41 @@ describe("列表空状态文案", () => {
     const wrapper = mountView(emptyList({ searchText: "   " }));
     await flush();
     expect(wrapper.find(".decl-list-empty").text()).toBe("暂无内容");
+  });
+
+  it("插件用 List.EmptyView 声明空状态时显示它的标题与说明，不渲染成可选中的行", async () => {
+    const wrapper = mountView(() =>
+      List({ actions: ActionPanel({}, [Action({ title: "新建", onAction: () => {} })]) }, [
+        List.EmptyView({ title: "还没有待办", description: "在上方输入内容后按回车即可添加" })
+      ])
+    );
+    await flush();
+    const empty = wrapper.find(".decl-list-empty");
+    expect(empty.find(".decl-empty-title").text()).toBe("还没有待办");
+    expect(empty.find(".decl-empty-desc").text()).toBe("在上方输入内容后按回车即可添加");
+    expect(wrapper.find("[role=option]").exists()).toBe(false);
+  });
+
+  it("List.EmptyView 放在 Section 里也认，分组标题照常保留", async () => {
+    const wrapper = mountView(() =>
+      List({}, [List.Section({ title: "翻译历史 (0)" }, [List.EmptyView({ title: "还没有翻译记录" })])])
+    );
+    await flush();
+    expect(wrapper.find(".decl-list-empty .decl-empty-title").text()).toBe("还没有翻译记录");
+    expect(wrapper.text()).toContain("翻译历史 (0)");
+  });
+
+  it("List.EmptyView 在加载中不下结论，仍显示“正在加载…”", async () => {
+    const wrapper = mountView(() => List({ isLoading: true }, [List.EmptyView({ title: "还没有待办" })]));
+    await flush();
+    expect(wrapper.find(".decl-list-empty").text()).toBe("正在加载…");
+  });
+
+  it("列表有条目时忽略 List.EmptyView", async () => {
+    const wrapper = mountView(() => List({}, [List.Item({ id: "a", title: "买牛奶" }), List.EmptyView({ title: "还没有待办" })]));
+    await flush();
+    expect(wrapper.find(".decl-list-empty").exists()).toBe(false);
+    expect(wrapper.text()).toContain("买牛奶");
   });
 });
 

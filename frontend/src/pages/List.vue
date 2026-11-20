@@ -21,7 +21,10 @@ import { useVisualGridNav } from '@/composables/useVisualGridNav'
 import { routeUtils, ROUTES } from '@/router/routes'
 import { isPluginSupportedOnCurrentPlatform } from '@/utils/platform'
 import { useKeymap, KEYMAP_SCOPES, isInteractiveControlTarget } from '@/utils/keymap'
+import { useAppI18n } from '@/i18n'
+import { getLocalizedCategoryName, getLocalizedPluginName } from '@/utils/pluginI18n'
 
+const { t } = useAppI18n()
 const nav = useNavStore()
 const uiStore = useUIStore()
 const pluginsStore = usePluginsStore()
@@ -245,10 +248,10 @@ const load = async () => {
       }
 
       if (failedCount === groups.length && groups.length > 0) {
-        throw new Error('分类预览加载失败')
+        throw new Error(t('market.categoryPreviewFailed'))
       }
       if (failedCount > 0) {
-        toastWarning(`有 ${failedCount} 个分类加载失败，请稍后重试`)
+        toastWarning(t('market.partialCategoryFailed', { count: failedCount }))
       }
 
       previewGroups.value = nextGroups
@@ -293,7 +296,7 @@ const load = async () => {
   } catch (e) {
     if (requestId !== loadRequestId) return
     error.value = e.message || String(e)
-    toastError('加载列表失败: ' + error.value)
+    toastError(t('market.loadListFailed', { reason: error.value }))
   } finally {
     if (requestId === loadRequestId) {
       loading.value = false
@@ -327,12 +330,12 @@ const toggleFavorite = async (pluginId) => {
     const id = getPluginId(pluginId)
     const wasFavorite = pluginsStore.isFavorite(id)
     await pluginsStore.toggleFavorite(id)
-    toastSuccess(wasFavorite ? '已取消收藏' : '已加入收藏')
+    toastSuccess(wasFavorite ? t('market.favoriteRemoved') : t('market.favoriteAdded'))
     if (category.value === 'favorites') await load()
   } catch (e) {
     if (!onAuthRequired(e)) {
       console.error('toggleFavorite error:', e)
-      toastError('操作失败: ' + (e.message || e))
+      toastError(t('market.operationFailed', { reason: e.message || e }))
     }
   }
 }
@@ -356,8 +359,8 @@ const openApp = async (id) => {
   if (!pluginId) return
 
   if (pluginsStore.isRevoked(pluginId)) {
-    const reason = pluginsStore.getRevokedReason(pluginId) || '该插件已被官方下架禁用'
-    toastError('无法启动：' + reason)
+    const reason = pluginsStore.getRevokedReason(pluginId) || t('market.revokedDefaultReason')
+    toastError(t('market.cannotLaunch', { reason }))
     return
   }
 
@@ -368,18 +371,18 @@ const openApp = async (id) => {
 
     // 检查是否需要导航到详情页（插件已卸载的情况）
     if (res?.action === 'navigate_to_detail') {
-      toastWarning(res.error || '插件未安装，请重新下载')
+      toastWarning(res.error || t('market.notInstalledReinstall'))
       router.push(routeUtils.toPluginDetails(res.pluginId || id))
       return
     }
 
     if (res?.success) {
-      toastSuccess('已打开插件')
+      toastSuccess(t('market.pluginOpened'))
     } else {
-      toastError('打开失败')
+      toastError(t('market.openFailed'))
     }
   } catch (e) {
-    toastError('打开失败: ' + (e.message || e))
+    toastError(t('market.openFailedWithReason', { reason: e.message || e }))
   }
 }
 
@@ -496,7 +499,7 @@ const activePluginActions = computed(() => {
       actions.push({
         type: 'Action',
         props: {
-          title: '打开插件',
+          title: t('market.actionOpenPlugin'),
           icon: 'arrow-right-circle',
           onAction: () => openApp(pid)
         }
@@ -505,7 +508,7 @@ const activePluginActions = computed(() => {
       actions.push({
         type: 'Action',
         props: {
-          title: '安装插件',
+          title: t('market.actionInstallPlugin'),
           icon: 'download',
           onAction: () => handleDownload(pid)
         }
@@ -516,7 +519,7 @@ const activePluginActions = computed(() => {
   actions.push({
     type: 'Action',
     props: {
-      title: '查看插件详情',
+      title: t('market.actionViewDetails'),
       icon: 'eye',
       onAction: () => goDetails(pid)
     }
@@ -525,7 +528,7 @@ const activePluginActions = computed(() => {
   actions.push({
     type: 'Action',
     props: {
-      title: isFav ? '取消收藏' : '加入收藏',
+      title: isFav ? t('common.unfavorite') : t('market.card.addFavorite'),
       icon: isFav ? 'star-disabled' : 'star',
       onAction: () => toggleFavorite(pid)
     }
@@ -535,19 +538,19 @@ const activePluginActions = computed(() => {
     actions.push({
       type: 'Action',
       props: {
-        title: '卸载插件',
+        title: t('market.actionUninstallPlugin'),
         icon: 'trash',
         style: 'destructive',
         onAction: async () => {
           try {
             const res = await pluginsStore.uninstallPlugin(pid)
             if (res?.success === false) {
-              toastError('卸载失败: ' + (res.error || res.message || '未知错误'))
+              toastError(t('market.uninstallFailed', { reason: res.error || res.message || t('common.unknownError') }))
             } else {
-              toastSuccess('插件已卸载')
+              toastSuccess(t('market.uninstallSuccess'))
             }
           } catch (err) {
-            toastError('卸载失败: ' + (err?.message || err))
+            toastError(t('market.uninstallFailed', { reason: err?.message || err }))
           }
         }
       }
@@ -672,11 +675,11 @@ const handleInstallComplete = async (envelope) => {
       console.debug('[List] 插件安装完成:', pid)
       // 根据 isUpdate 区分安装和更新
       if (payload.isUpdate) {
-        toastSuccess('插件更新完成')
+        toastSuccess(t('market.updateComplete'))
         await load()
       }
     } else if (pid) {
-      toastError('安装失败: ' + (payload.error || '未知错误'))
+      toastError(t('market.installFailed', { reason: payload.error || t('common.unknownError') }))
     }
   } catch (e) {
     console.error('[List] 处理安装完成事件失败:', e)
@@ -752,30 +755,25 @@ onBeforeUnmount(() => {
 <template>
   <div
     ref="listContainerRef"
+    class="rc-page market-page"
     @mousemove="gridNav.handlePointerMove"
-    style="
-      display: flex;
-      flex-direction: column;
-      gap: var(--spacing-sm);
-      color: var(--rc-text-primary);
-    "
   >
     <!-- 页头：插件市场 / 当前分类 / 搜索词 -->
-    <header class="market-head">
+    <header class="page-header has-action">
       <div class="market-head-text">
-        <h1 class="market-title">{{ category || (searchKeyword ? `搜索「${searchKeyword}」` : '插件市场') }}</h1>
-        <p class="market-subtitle">每个插件都经过官方审核，源码公开，免费安装。</p>
+        <h1 class="page-title">{{ category ? getLocalizedCategoryName(category) : (searchKeyword ? t('market.searchTitle', { keyword: searchKeyword }) : t('market.title')) }}</h1>
+        <p class="page-subtitle">{{ t('market.subtitle') }}</p>
       </div>
-      <!-- 页面主操作：淡强调色；只放一个外链图标，表示会在浏览器打开 GitHub -->
+      <!-- 页面级动作：中性次按钮（橙色克制，本页不放实心/淡橙按钮）；外链图标表示会在浏览器打开 GitHub -->
       <RcButton
-        variant="soft"
+        variant="secondary"
         size="md"
         :icon="ExternalLinkIcon"
         class="market-submit"
-        title="插件投稿即向开源插件大仓提交 PR，官方审核后上架"
+        :title="t('market.submitTooltip')"
         @click="openExtensionsRepo"
       >
-        提交插件
+        {{ t('market.submitPlugin') }}
       </RcButton>
     </header>
     <!-- 加载骨架屏：等分类和插件列表都就绪后再渲染 -->
@@ -809,20 +807,20 @@ onBeforeUnmount(() => {
           style="margin-bottom: 8px; margin-top: 10px;"
         >
           <div class="flex items-center gap-2">
-            <span class="text-xs font-semibold text-[var(--rc-text-primary)] tracking-wide">
-              {{ group.name }}
+            <span class="text-[length:var(--rc-fs-small)] font-semibold text-[var(--rc-text-primary)] tracking-wide">
+              {{ getLocalizedCategoryName(group.name) }}
             </span>
-            <span class="text-[11px] font-mono text-[var(--rc-text-muted)]">
+            <span class="text-[length:var(--rc-fs-caption)] font-mono text-[var(--rc-text-muted)]">
               {{ group.total }}
             </span>
           </div>
           <button
             type="button"
-            class="category-view-all-btn text-[11px] text-[var(--rc-text-secondary)] hover:text-[var(--rc-text-primary)] flex items-center gap-1 cursor-pointer bg-transparent border-0 p-0 transition-colors"
+            class="category-view-all-btn text-[length:var(--rc-fs-caption)] text-[var(--rc-text-secondary)] hover:text-[var(--rc-text-primary)] flex items-center gap-1 cursor-pointer bg-transparent border-0 p-0 transition-colors whitespace-nowrap"
             @click="goCategory(group.name)"
           >
-            <span>全部</span>
-            <ChevronRightIcon class="text-[10px]" />
+            <span>{{ t('market.viewAll') }}</span>
+            <ChevronRightIcon class="text-[length:var(--rc-fs-caption)]" />
           </button>
         </div>
         <!-- 该分类下的插件网格 -->
@@ -836,7 +834,7 @@ onBeforeUnmount(() => {
           <PluginCard3D
             v-for="(p, index) in group.plugins"
             :key="getPluginId(p)"
-            class="transition-all rounded-xl"
+            class="transition-all rounded-[var(--rc-radius-lg)]"
             :class="{ 'is-list-card-focused': !uiStore.isSearchInputActive && focusedCardIndex === previewFlatIndex(groupIndex, index) }"
             :data-nav-index="previewFlatIndex(groupIndex, index)"
             :data-nav-group="group.name"
@@ -857,13 +855,13 @@ onBeforeUnmount(() => {
     <RcEmpty
       v-else-if="categoriesReady && !loading && items.length === 0"
       :icon="SearchIcon"
-      :title="route.query.q ? `没有找到与「${route.query.q}」相关的插件` : '暂无插件'"
-      :description="route.query.q ? '换个关键词试试；也可以自己写一个：基于声明式 UI，几分钟就能做出来，投稿后经官方审核发布。' : '稍后再来看看'"
+      :title="route.query.q ? t('market.emptySearchTitle', { keyword: route.query.q }) : t('market.emptyTitle')"
+      :description="route.query.q ? t('market.emptySearchDesc') : t('market.emptyDesc')"
     >
       <template v-if="route.query.q" #action>
         <div class="flex items-center gap-2">
-          <RcButton variant="secondary" size="sm" :icon="GithubLogo" @click="openExtensionsRepo">插件仓库</RcButton>
-          <RcButton variant="ghost" size="sm" @click="openDevGuide">开发入门指南</RcButton>
+          <RcButton variant="secondary" size="sm" :icon="GithubLogo" @click="openExtensionsRepo">{{ t('market.pluginRepo') }}</RcButton>
+          <RcButton variant="ghost" size="sm" @click="openDevGuide">{{ t('market.devGuide') }}</RcButton>
         </div>
       </template>
     </RcEmpty>
@@ -880,7 +878,7 @@ onBeforeUnmount(() => {
       <div
         v-for="(p, index) in items"
         :key="getPluginId(p)"
-        class="transition-all rounded-xl"
+        class="transition-all rounded-[var(--rc-radius-lg)]"
         :class="{ 'is-list-card-focused': !uiStore.isSearchInputActive && focusedCardIndex === index }"
         :data-nav-index="index"
         data-nav-group="flat"
@@ -899,7 +897,7 @@ onBeforeUnmount(() => {
     </div>
     <div
       v-if="error"
-      style="font-size: var(--font-size-body-s); color: var(--rc-error)"
+      style="font-size: var(--rc-fs-small); color: var(--rc-error)"
     >
       {{ error }}
     </div>
@@ -918,9 +916,9 @@ onBeforeUnmount(() => {
       >
         <!-- 上一页 / 下一页换成 Lucide 图标，其余页码沿用默认渲染 -->
         <template #itemRender="{ type, originalElement }">
-          <button v-if="type === 'prev'" type="button" class="ant-pagination-item-link" aria-label="上一页"><ChevronLeftIcon aria-hidden="true" /></button>
-          <button v-else-if="type === 'next'" type="button" class="ant-pagination-item-link" aria-label="下一页"><ChevronRightIcon aria-hidden="true" /></button>
-          <a v-else-if="type === 'jump-prev' || type === 'jump-next'" class="ant-pagination-item-link" :aria-label="type === 'jump-prev' ? '向前 5 页' : '向后 5 页'">
+          <button v-if="type === 'prev'" type="button" class="ant-pagination-item-link" :aria-label="t('market.prevPage')"><ChevronLeftIcon aria-hidden="true" /></button>
+          <button v-else-if="type === 'next'" type="button" class="ant-pagination-item-link" :aria-label="t('market.nextPage')"><ChevronRightIcon aria-hidden="true" /></button>
+          <a v-else-if="type === 'jump-prev' || type === 'jump-next'" class="ant-pagination-item-link" :aria-label="type === 'jump-prev' ? t('market.jumpPrev5') : t('market.jumpNext5')">
             <div class="ant-pagination-item-container">
               <component :is="type === 'jump-prev' ? ChevronsLeftIcon : ChevronsRightIcon" class="ant-pagination-item-link-icon" aria-hidden="true" />
               <span class="ant-pagination-item-ellipsis">•••</span>
@@ -934,9 +932,9 @@ onBeforeUnmount(() => {
     <!-- 底部：开源插件大仓直达 -->
     <RcBannerLink
       class="market-repo-banner"
-      title="没找到想要的工具？"
-      description="插件源码全部开源，投稿即提交 PR，5 分钟就能写一个自己的插件"
-      link-text="访问插件仓库"
+      :title="t('market.repoBannerTitle')"
+      :description="t('market.repoBannerDesc')"
+      :link-text="t('market.repoBannerLink')"
       @click="openExtensionsRepo"
     />
 
@@ -944,7 +942,7 @@ onBeforeUnmount(() => {
     <ActionPanelModal
       :visible="actionPanelVisible"
       :actions="activePluginActions"
-      :target-title="focusedPlugin?.name || ''"
+      :target-title="focusedPlugin ? getLocalizedPluginName(focusedPlugin) : ''"
       placement="corner"
       @close="actionPanelVisible = false"
       @trigger="(act) => act?.props?.onAction?.()"
@@ -953,74 +951,32 @@ onBeforeUnmount(() => {
 </template>
 
 <style scoped>
-.market-head {
+.market-page {
   display: flex;
-  align-items: flex-end;
-  justify-content: space-between;
-  gap: 16px;
-  flex-wrap: wrap;
-  padding-bottom: 10px;
-  border-bottom: 1px solid var(--rc-border);
+  flex-direction: column;
+  gap: var(--spacing-sm);
 }
 
-.market-title {
-  margin: 0;
-  font-size: 22px;
-  font-weight: 600;
-  letter-spacing: -0.02em;
-  color: var(--rc-text-primary);
+/* 外框（.rc-page）与页头（.page-header/.page-title/.page-subtitle）用全局样式；
+   页头在 flex 列里，下边距 12 + 列间距 8 = 与其它页一致的 20px */
+.market-page > .page-header {
+  margin-bottom: 12px;
 }
 
-.market-subtitle {
-  margin: 6px 0 0;
-  font-size: 13px;
-  color: var(--rc-text-muted);
+.market-head-text {
+  min-width: 0;
 }
 
 .market-submit {
   flex-shrink: 0;
 }
 
-.market-filters {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  flex-wrap: wrap;
-  margin-top: 6px;
-  padding-bottom: 6px;
-  border-bottom: 1px solid var(--rc-border);
-}
-
-
-
-
-
-
-
-.market-filters-side {
-  margin-left: auto;
-  display: flex;
-  align-items: center;
-  gap: 12px;
-}
-
-
-
-
-
-
-
-
-
-
-
-
 .market-repo-banner {
   margin: 28px 0 12px;
 }
 
 .is-list-card-focused {
-  border-radius: var(--rc-radius-lg, 12px);
+  border-radius: var(--rc-radius-lg);
   box-shadow: var(--rc-focus-ring);
 }
 

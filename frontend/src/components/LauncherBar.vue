@@ -21,14 +21,14 @@
       <template v-else-if="loadingDeclarative || declarativeLoadError">
         <div class="launcher-empty flex-1">
           <template v-if="loadingDeclarative">
-            <p class="launcher-empty-title">正在加载声明式扩展...</p>
-            <p class="launcher-empty-desc">按 Esc 可随时取消并返回搜索</p>
+            <p class="launcher-empty-title">{{ t('launcher.loadingDeclarative') }}</p>
+            <p class="launcher-empty-desc">{{ t('launcher.loadingDeclarativeDesc') }}</p>
           </template>
           <template v-else>
-            <p class="launcher-empty-title">无法打开该扩展</p>
+            <p class="launcher-empty-title">{{ t('launcher.openFailedTitle') }}</p>
             <p class="launcher-empty-desc">{{ declarativeLoadError }}</p>
             <RcButton variant="primary" size="sm" class="launcher-primary-btn" kbd="Escape" @click="exitDeclarative">
-              返回搜索
+              {{ t('launcher.backToSearch') }}
             </RcButton>
           </template>
         </div>
@@ -38,13 +38,13 @@
         <!-- 1. 搜索栏 -->
         <div class="launcher-head">
           <BrandMark :size="22" />
-          <label for="launcherQuery" class="sr-only">搜索</label>
+          <label for="launcherQuery" class="sr-only">{{ t('common.search') }}</label>
           <input
             id="launcherQuery"
             ref="inputRef"
             v-model="query"
             type="text"
-            placeholder="搜索插件、本地软件、系统工具或文件"
+            :placeholder="t('launcher.placeholder')"
             class="launcher-input"
             autocomplete="off"
             spellcheck="false"
@@ -54,8 +54,8 @@
             v-if="query"
             type="button"
             class="launcher-icon-btn"
-            title="清空"
-            aria-label="清空"
+            :title="t('common.clear')"
+            :aria-label="t('common.clear')"
             @click="clearQuery"
           >
             <XIcon class="w-3.5 h-3.5" aria-hidden="true" />
@@ -63,10 +63,10 @@
           <button
             type="button"
             class="launcher-workbench-btn"
-            :title="`展开为工作台 ${workbenchHint}`"
+            :title="t('launcher.workbenchTooltip', { shortcut: workbenchHint })"
             @click="expandToDashboard()"
           >
-            工作台
+            {{ t('launcher.workbenchBtn') }}
             <ShortcutKeys :combo="TOGGLE_MODE_SHORTCUT" />
           </button>
         </div>
@@ -76,10 +76,10 @@
         <div
           v-if="!query.trim() && displayedPinnedItems.length > 0"
           class="launcher-pinned-section"
-          aria-label="固定常用"
+          :aria-label="t('launcher.pinnedSectionAria')"
         >
           <div class="launcher-pinned-header">
-            <span class="launcher-pinned-title">固定常用 ({{ displayedPinnedItems.length }})</span>
+            <span class="launcher-pinned-title">{{ t('launcher.pinnedTitle', { count: displayedPinnedItems.length }) }}</span>
             <span class="launcher-pinned-hint">{{ pinnedHeaderHint }}</span>
           </div>
           <div
@@ -97,15 +97,15 @@
               data-nav-group="pinned"
               role="button"
               tabindex="-1"
-              :title="pinItem.available === false ? `${pinItem.name || pinItem.title}（已失效）` : (pinItem.name || pinItem.title)"
+              :title="pinItem.available === false ? t('launcher.unavailableSuffix', { name: pinItem.name || pinItem.title }) : (pinItem.name || pinItem.title)"
               @click="executeItem(pinItem)"
             >
               <button
                 type="button"
                 tabindex="-1"
                 class="launcher-pinned-unpin"
-                title="取消固定"
-                aria-label="取消固定"
+                :title="t('common.unpin')"
+                :aria-label="t('common.unpin')"
                 @click.stop="handleTogglePin(pinItem)"
               >
                 ×
@@ -126,7 +126,7 @@
                 :size="24"
               />
               <span class="launcher-pinned-name">{{ pinItem.name || pinItem.title }}</span>
-              <span v-if="pinItem.available === false" class="launcher-pinned-unavailable-tag">已失效</span>
+              <span v-if="pinItem.available === false" class="launcher-pinned-unavailable-tag">{{ t('launcher.unavailableTag') }}</span>
             </div>
           </div>
         </div>
@@ -142,7 +142,7 @@
               v-for="(item, index) in visibleItems"
               :key="item.key || item.pluginId || index"
               :ref="el => registerItemEl(index, el)"
-              :item="item"
+              :item="displayItems[index]"
               :active="pinnedFocusIndex < 0 && activeIndex === index"
               :parts="highlightParts(item)"
               @mouseenter="pinnedFocusIndex = -1; activeIndex = index"
@@ -151,36 +151,36 @@
           </template>
 
           <div v-else class="launcher-empty" role="status">
-            <p v-if="isSearching" class="launcher-empty-title">正在搜索文件与应用…</p>
+            <p v-if="isSearching" class="launcher-empty-title">{{ t('launcher.searching') }}</p>
             <p v-else-if="fileSearchError" class="launcher-empty-title">{{ fileSearchError }}</p>
-            <p v-else class="launcher-empty-title">未找到与「{{ query }}」匹配的结果</p>
+            <p v-else class="launcher-empty-title">{{ t('launcher.noResults', { query }) }}</p>
             <p v-if="!isSearching && !fileSearchError" class="launcher-empty-desc">
-              {{ fileSearchDegraded ? '系统索引暂不可用，当前结果可能不完整' : '试试文件名、应用名或扩展名；也可以到插件市场查找工具' }}
+              {{ fileSearchDegraded ? t('launcher.degradedHint') : t('launcher.emptyDesc') }}
             </p>
             <RcButton v-if="!isSearching && !fileSearchError" variant="primary" size="sm" class="launcher-primary-btn" kbd="Enter" @click="searchInMarket">
-              在插件市场搜索
+              {{ t('launcher.searchInMarket') }}
             </RcButton>
           </div>
         </div>
 
         <!-- 3. 底栏 -->
         <div class="launcher-foot">
-          <span v-if="noViewStatus" :class="noViewStatus.isError ? 'text-[var(--rc-error)]' : 'text-[var(--rc-accent-text)]'">
+          <span v-if="noViewStatus" class="truncate min-w-0" :class="noViewStatus.isError ? 'text-[var(--rc-error)]' : 'text-[var(--rc-accent-text)]'">
             {{ noViewStatus.text }}
           </span>
-          <span v-else-if="isSearching" role="status">正在搜索…</span>
-          <span v-else-if="fileSearchError" role="status">{{ fileSearchError }}</span>
-          <span v-else-if="fileSearchDegraded" role="status">{{ filteredItems.length }} 个结果 · 系统索引暂不可用，结果可能不完整</span>
-          <span v-else>{{ filteredItems.length }} 个结果</span>
-          <div class="flex items-center gap-4">
-            <span class="launcher-foot-hint is-primary">打开 <ShortcutKeys combo="Enter" /></span>
+          <span v-else-if="isSearching" class="truncate min-w-0" role="status">{{ t('launcher.searchingShort') }}</span>
+          <span v-else-if="fileSearchError" class="truncate min-w-0" role="status">{{ fileSearchError }}</span>
+          <span v-else-if="fileSearchDegraded" class="truncate min-w-0" role="status">{{ t('launcher.resultsCountDegraded', { count: filteredItems.length }) }}</span>
+          <span v-else class="truncate min-w-0">{{ t('launcher.resultsCount', { count: filteredItems.length }) }}</span>
+          <div class="flex items-center gap-3 flex-shrink-0">
+            <span class="launcher-foot-hint is-primary">{{ t('launcher.footOpen') }} <ShortcutKeys combo="Enter" /></span>
             <button
               v-if="currentFocusedItem?.type === 'file' && currentFocusedItem?.available !== false"
               type="button"
               class="launcher-foot-hint"
               @click="revealFocusedFile"
             >
-              定位 <ShortcutKeys combo="Ctrl+Enter" />
+              {{ t('launcher.footLocate') }} <ShortcutKeys combo="Ctrl+Enter" />
             </button>
             <button
               v-if="canPinActiveItem"
@@ -188,12 +188,12 @@
               class="launcher-foot-hint"
               @click="handleTogglePin(currentFocusedItem)"
             >
-              {{ currentFocusedItem?.pinned ? '取消固定' : '固定' }} <ShortcutKeys combo="Ctrl+P" />
+              {{ currentFocusedItem?.pinned ? t('launcher.footUnpin') : t('launcher.footPin') }} <ShortcutKeys combo="Ctrl+P" />
             </button>
             <button type="button" class="launcher-foot-hint" @click="toggleActionPanel">
-              动作 <ShortcutKeys combo="Ctrl+K" />
+              {{ t('launcher.footActions') }} <ShortcutKeys combo="Ctrl+K" />
             </button>
-            <span class="launcher-foot-hint">关闭 <ShortcutKeys combo="Escape" /></span>
+            <span class="launcher-foot-hint">{{ t('launcher.footClose') }} <ShortcutKeys combo="Escape" /></span>
           </div>
         </div>
       </template>
@@ -265,7 +265,9 @@ import SearchResultRow from '@/components/SearchResultRow.vue'
 import { shortcutLabel, isMacOS, isPluginSupportedOnCurrentPlatform } from '@/utils/platform'
 import { win as nativeWin } from '@/api/apiserver'
 import { track } from '@edition'
+import { useAppI18n } from '@/i18n'
 
+const { t } = useAppI18n()
 const router = useRouter()
 const pluginsStore = usePluginsStore()
 // 由宿主选择圆角策略；系统裁切时页面铺满窗口，避免两层圆角和边框互相露底。
@@ -347,9 +349,9 @@ const pinnedHeaderHint = computed(() => {
     const reorderShortcut = isMacOS()
       ? `${shortcutLabel('Ctrl+Shift')}←/→`
       : `${shortcutLabel('Ctrl+Shift')}+←/→`
-    return `方向键选择 · Enter 打开 · ${reorderShortcut} 调整顺序 · ${pinShortcut} 取消固定`
+    return t('launcher.pinnedHintFocused', { reorder: reorderShortcut, pin: pinShortcut })
   }
-  return `↑ 进入固定区 · ${pinShortcut} 固定/取消`
+  return t('launcher.pinnedHintIdle', { pin: pinShortcut })
 })
 
 async function handleTogglePin(item) {
@@ -359,8 +361,8 @@ async function handleTogglePin(item) {
   if (res?.success) {
     showNoViewFeedback(
       res.pinned
-        ? `✓ 已固定「${item.name || item.title}」到悬浮条首屏`
-        : `✓ 已取消固定「${item.name || item.title}」`,
+        ? t('launcher.pinSuccess', { name: item.name || item.title })
+        : t('launcher.unpinSuccess', { name: item.name || item.title }),
       false
     )
   } else if (res?.error) {
@@ -371,6 +373,26 @@ async function handleTogglePin(item) {
 // 结果再多也只渲染前 50 条：键盘上下选择、Enter 与动作面板都只在这 50 条里进行
 const MAX_VISIBLE_ITEMS = 50
 const visibleItems = computed(() => filteredItems.value.slice(0, MAX_VISIBLE_ITEMS))
+
+// 类型标签只在结果混合了不同类型（插件 / 软件 / 系统工具 / 文件…）时才有区分意义；
+// 结果里全是同一类型时，每行都写一遍「插件」只是噪音，隐藏。
+// 只隐藏固定的类型标签；「已失效」是状态，子命令行的标签是所属插件名，都带信息，始终保留。
+// 少于 2 条结果时不隐藏：单条结果没有「全部同类」可言，类型本身就是有用信息。
+const TYPE_BADGES = new Set(['插件', '应用', '文件', '文件夹', '系统工具', '系统', '极速动作'])
+const isUniformResultType = computed(() => {
+  const typeBadges = visibleItems.value.map(item => item?.badge || '').filter(badge => TYPE_BADGES.has(badge))
+  return visibleItems.value.length >= 2 && typeBadges.length === visibleItems.value.length && new Set(typeBadges).size === 1
+})
+
+// 渲染用副本只在结果或分组判断变化时重建，避免每次悬停都给全部行传入新对象、整列重绘；执行和选中仍用原始 item
+// 类型标签（插件/应用/系统…）与来源名（子命令所属插件）在同一列：来源名由搜索层标记为 badgeKind='source'，降一档显示
+const displayItems = computed(() =>
+  visibleItems.value.map(item => {
+    if (isUniformResultType.value) return { ...item, badge: '' }
+    if (item?.badge && item.badgeKind === 'source') return { ...item, badgeQuiet: true }
+    return item
+  })
+)
 
 const currentFocusedItem = computed(() => {
   if (pinnedFocusIndex.value >= 0 && displayedPinnedItems.value[pinnedFocusIndex.value]) {
@@ -428,11 +450,13 @@ const runLauncherAction = (action) => {
 
 function appendPinnedTileActions(actions, item) {
   if (pinnedFocusIndex.value < 0) return
-  if (canPinItem(item) && !actions.some((a) => a.props?.title === '从悬浮条首屏取消固定' || a.props?.title === '固定到悬浮条首屏')) {
+  const pinTitle = t('launcher.actionPin')
+  const unpinTitle = t('launcher.actionUnpin')
+  if (canPinItem(item) && !actions.some((a) => a.props?.title === unpinTitle || a.props?.title === pinTitle)) {
     actions.push({
       type: 'Action',
       props: {
-        title: item.pinned ? '从悬浮条首屏取消固定' : '固定到悬浮条首屏',
+        title: item.pinned ? unpinTitle : pinTitle,
         shortcut: { modifiers: ['Ctrl'], key: 'P' },
         onAction: () => {
           actionPanelVisible.value = false
@@ -447,7 +471,7 @@ function appendPinnedTileActions(actions, item) {
     actions.push({
       type: 'Action',
       props: {
-        title: '前移',
+        title: t('launcher.actionMoveEarlier'),
         shortcut: { modifiers: ['Ctrl', 'Shift'], key: 'ArrowLeft' },
         onAction: () => {
           actionPanelVisible.value = false
@@ -460,7 +484,7 @@ function appendPinnedTileActions(actions, item) {
     actions.push({
       type: 'Action',
       props: {
-        title: '后移',
+        title: t('launcher.actionMoveLater'),
         shortcut: { modifiers: ['Ctrl', 'Shift'], key: 'ArrowRight' },
         onAction: () => {
           actionPanelVisible.value = false
@@ -486,7 +510,7 @@ const activeItemActions = computed(() => {
       {
         type: 'Action',
         props: {
-          title: `复制结果 (${item.answer})`,
+          title: t('launcher.actionCopyResult', { answer: item.answer }),
           shortcut: { modifiers: [], key: 'Enter' },
           onAction: () => {
             actionPanelVisible.value = false
@@ -497,16 +521,16 @@ const activeItemActions = computed(() => {
       {
         type: 'Action',
         props: {
-          title: `复制完整等式 (${item.expression} = ${item.answer})`,
+          title: t('launcher.actionCopyEquation', { expression: item.expression, answer: item.answer }),
           shortcut: { modifiers: ['Ctrl', 'Shift'], key: 'C' },
           onAction: async () => {
             actionPanelVisible.value = false
             const eq = `${item.expression} = ${item.answer}`
             const ok = await copyInlineAnswerToClipboard(eq)
             if (ok !== false) {
-              showNoViewFeedback(`✓ 已复制等式: ${eq}`, false)
+              showNoViewFeedback(t('launcher.copiedEquation', { equation: eq }), false)
             } else {
-              showNoViewFeedback("复制等式失败，请重试", true)
+              showNoViewFeedback(t('launcher.copyEquationFailed'), true)
             }
           }
         }
@@ -518,14 +542,14 @@ const activeItemActions = computed(() => {
         {
           type: 'Action',
           props: {
-            title: `复制 RGB (${item.colorResult.rgb})`,
+            title: t('launcher.actionCopyRgb', { rgb: item.colorResult.rgb }),
             onAction: async () => {
               actionPanelVisible.value = false
               const ok = await copyInlineAnswerToClipboard(item.colorResult.rgb)
               if (ok !== false) {
-                showNoViewFeedback(`✓ 已复制 RGB: ${item.colorResult.rgb}`, false)
+                showNoViewFeedback(t('launcher.copiedRgb', { rgb: item.colorResult.rgb }), false)
               } else {
-                showNoViewFeedback("复制 RGB 失败，请重试", true)
+                showNoViewFeedback(t('launcher.copyRgbFailed'), true)
               }
             }
           }
@@ -533,14 +557,14 @@ const activeItemActions = computed(() => {
         {
           type: 'Action',
           props: {
-            title: `复制 HSL (${item.colorResult.hsl})`,
+            title: t('launcher.actionCopyHsl', { hsl: item.colorResult.hsl }),
             onAction: async () => {
               actionPanelVisible.value = false
               const ok = await copyInlineAnswerToClipboard(item.colorResult.hsl)
               if (ok !== false) {
-                showNoViewFeedback(`✓ 已复制 HSL: ${item.colorResult.hsl}`, false)
+                showNoViewFeedback(t('launcher.copiedHsl', { hsl: item.colorResult.hsl }), false)
               } else {
-                showNoViewFeedback("复制 HSL 失败，请重试", true)
+                showNoViewFeedback(t('launcher.copyHslFailed'), true)
               }
             }
           }
@@ -551,7 +575,7 @@ const activeItemActions = computed(() => {
     calcActions.push({
       type: 'Action',
       props: {
-        title: '打开完整计算器与历史视图',
+        title: t('launcher.actionOpenCalculator'),
         shortcut: { modifiers: ['Ctrl'], key: 'O' },
         onAction: () => {
           actionPanelVisible.value = false
@@ -568,7 +592,7 @@ const activeItemActions = computed(() => {
       {
         type: 'Action',
         props: {
-          title: item.isApplication ? '打开应用' : item.isDir ? '打开文件夹' : '打开文件',
+          title: item.isApplication ? t('launcher.actionOpenApp') : item.isDir ? t('launcher.actionOpenFolder') : t('launcher.actionOpenFile'),
           onAction: () => {
             actionPanelVisible.value = false
             if (item.isPinnedTile && item.pinKey) {
@@ -582,7 +606,7 @@ const activeItemActions = computed(() => {
       {
         type: 'Action',
         props: {
-          title: isMacOS() ? '在访达中显示' : '在资源管理器中定位',
+          title: isMacOS() ? t('launcher.actionRevealFinder') : t('launcher.actionRevealExplorer'),
           shortcut: { modifiers: ['Ctrl'], key: 'Enter' },
           onAction: () => {
             actionPanelVisible.value = false
@@ -597,22 +621,22 @@ const activeItemActions = computed(() => {
       {
         type: 'Action',
         props: {
-          title: '复制文件绝对路径',
+          title: t('launcher.actionCopyFilePath'),
           shortcut: { modifiers: ['Ctrl', 'Shift'], key: 'C' },
           onAction: () => {
             actionPanelVisible.value = false
-            copyFileText(item.path, '文件路径')
+            copyFileText(item.path, t('launcher.labelFilePath'))
           }
         }
       },
       {
         type: 'Action',
         props: {
-          title: '复制文件名',
+          title: t('launcher.actionCopyFileName'),
           shortcut: { modifiers: ['Ctrl'], key: 'C' },
           onAction: () => {
             actionPanelVisible.value = false
-            copyFileText(item.fileName || item.name, '文件名')
+            copyFileText(item.fileName || item.name, t('launcher.labelFileName'))
           }
         }
       }
@@ -621,7 +645,7 @@ const activeItemActions = computed(() => {
       fileActions.push({
         type: 'Action',
         props: {
-          title: item.pinned ? '从悬浮条首屏取消固定' : '固定到悬浮条首屏',
+          title: item.pinned ? t('launcher.actionUnpin') : t('launcher.actionPin'),
           shortcut: { modifiers: ['Ctrl'], key: 'P' },
           onAction: () => {
             actionPanelVisible.value = false
@@ -634,7 +658,7 @@ const activeItemActions = computed(() => {
     fileActions.push({
       type: 'Action',
       props: {
-        title: '展开为完整工作台',
+        title: t('launcher.actionExpandWorkspace'),
         shortcut: { modifiers: ['Ctrl'], key: 'U' },
         onAction: () => {
           actionPanelVisible.value = false
@@ -649,7 +673,7 @@ const activeItemActions = computed(() => {
     {
       type: 'Action',
       props: {
-        title: item.actionLabel || '执行操作',
+        title: item.actionLabel || t('launcher.actionExecute'),
         onAction: () => {
           actionPanelVisible.value = false
           executeItem(item)
@@ -670,7 +694,9 @@ const activeItemActions = computed(() => {
     actions.push({
       type: 'Action',
       props: {
-        title: `${feat.mode === 'no-view' ? '执行' : '打开'}：${feat.explain}`,
+        title: feat.mode === 'no-view'
+          ? t('launcher.actionRunFeature', { name: feat.explain })
+          : t('launcher.actionOpenFeature', { name: feat.explain }),
         onAction: () => {
           actionPanelVisible.value = false
           executeItem({
@@ -691,7 +717,7 @@ const activeItemActions = computed(() => {
     actions.push({
       type: 'Action',
       props: {
-        title: '在独立常驻窗口中打开',
+        title: t('launcher.actionOpenPopout'),
         shortcut: { modifiers: ['Ctrl', 'Shift'], key: 'P' },
         onAction: () => {
           actionPanelVisible.value = false
@@ -705,7 +731,7 @@ const activeItemActions = computed(() => {
     actions.push({
       type: 'Action',
       props: {
-        title: item.pinned ? '从悬浮条首屏取消固定' : '固定到悬浮条首屏',
+        title: item.pinned ? t('launcher.actionUnpin') : t('launcher.actionPin'),
         shortcut: { modifiers: ['Ctrl'], key: 'P' },
         onAction: () => {
           actionPanelVisible.value = false
@@ -721,7 +747,7 @@ const activeItemActions = computed(() => {
     actions.push({
       type: 'Action',
       props: {
-        title: '在完整工作台查看详情',
+        title: t('launcher.actionViewDetails'),
         shortcut: { modifiers: ['Ctrl'], key: 'O' },
         onAction: () => {
           actionPanelVisible.value = false
@@ -734,7 +760,7 @@ const activeItemActions = computed(() => {
   actions.push({
     type: 'Action',
     props: {
-      title: '展开为完整应用中心大窗口',
+      title: t('launcher.actionExpandFullWindow'),
       shortcut: { modifiers: ['Ctrl'], key: 'U' },
       onAction: () => {
         actionPanelVisible.value = false
@@ -1113,7 +1139,7 @@ async function commitPinnedReorder(order, kind, baseline, generation) {
       if (!Array.isArray(res?.pinnedEntries) && baseline && typeof restorePinnedEntries === 'function') {
         restorePinnedEntries(baseline)
       }
-      showNoViewFeedback(res?.error || '调整固定顺序失败，已恢复原顺序', true)
+      showNoViewFeedback(res?.error || t('launcher.reorderFailed'), true)
     }
   }
 }
@@ -1378,7 +1404,10 @@ function finishExternalLaunch(searchAtStart) {
 
 async function copyFileText(text, label) {
   const copied = await copyInlineAnswerToClipboard(text)
-  showNoViewFeedback(copied ? `已复制${label}` : `复制${label}失败，请重试`, !copied)
+  showNoViewFeedback(
+    copied ? t('launcher.copiedLabel', { label }) : t('launcher.copyLabelFailed', { label }),
+    !copied
+  )
 }
 
 async function runFileAction(filePath, action, failureMessage) {
@@ -1388,7 +1417,7 @@ async function runFileAction(filePath, action, failureMessage) {
   try {
     const bridge = typeof window.__ztoolsLauncher?.[action] === 'function'
       ? window.__ztoolsLauncher : window.ztools?.shell
-    if (typeof bridge?.[action] !== 'function') throw new Error('文件操作接口不可用')
+    if (typeof bridge?.[action] !== 'function') throw new Error(t('launcher.fileApiUnavailable'))
     const result = await bridge[action](filePath)
     if (result !== true && result?.success !== true) {
       throw new Error(result?.error?.message || result?.error || failureMessage)
@@ -1403,32 +1432,32 @@ async function runFileAction(filePath, action, failureMessage) {
 }
 
 function openFile(filePath) {
-  return runFileAction(filePath, 'openPath', '打开文件失败')
+  return runFileAction(filePath, 'openPath', t('launcher.openFileFailed'))
 }
 
 /** 冷启动时用使用记录占位的程序：等程序列表返回、拿到打开授权后再打开 */
 async function openPendingApplication(item) {
   const ready = await prepareItemForLaunch(item)
   if (!ready) {
-    showNoViewFeedback('程序列表读取失败或该程序已卸载', true)
+    showNoViewFeedback(t('launcher.appListUnavailable'), true)
     return
   }
   await openFile(ready.path)
 }
 
 function showInFolder(filePath) {
-  return runFileAction(filePath, 'showItemInFolder', '定位文件失败')
+  return runFileAction(filePath, 'showItemInFolder', t('launcher.revealFileFailed'))
 }
 
 async function openPinnedFileItem(item, action = 'open') {
   if (!item?.pinKey || fileActionPending) return
   fileActionPending = true
   const searchAtStart = query.value
-  const failureMessage = action === 'reveal' ? '定位文件失败' : '打开文件失败'
+  const failureMessage = action === 'reveal' ? t('launcher.revealFileFailed') : t('launcher.openFileFailed')
   try {
     const bridge = window.__ztoolsLauncher
     if (typeof bridge?.openPanelItem !== 'function') {
-      throw new Error('当前环境不支持启动该条目')
+      throw new Error(t('launcher.launchItemUnsupported'))
     }
     const res = await bridge.openPanelItem(item.pinKey, 'pinned', '', action)
     if (res?.success === false) {
@@ -1449,24 +1478,24 @@ async function openPanelEntry(item) {
   try {
     const bridge = window.__ztoolsLauncher
     if (typeof bridge?.openPanelItem !== 'function') {
-      throw new Error('当前环境不支持启动该条目')
+      throw new Error(t('launcher.launchItemUnsupported'))
     }
     const itemType = item.panelItemType || 'system_tool'
     const res = await bridge.openPanelItem(item.id, itemType, query.value)
     if (res?.success === false) {
-      throw new Error(res?.error?.message || res?.error || '打开条目失败')
+      throw new Error(res?.error?.message || res?.error || t('launcher.openItemFailed'))
     }
     finishExternalLaunch(searchAtStart)
   } catch (err) {
     console.warn('[LauncherBar] 打开面板条目失败:', err)
-    showNoViewFeedback(err?.message || '打开条目失败', true)
+    showNoViewFeedback(err?.message || t('launcher.openItemFailed'), true)
   }
 }
 
 function executeItem(item) {
   if (!item) return
   if (item.available === false) {
-    showNoViewFeedback(item.unavailableReason || '该固定项已失效，可按 Ctrl+P 或点击 × 取消固定', true)
+    showNoViewFeedback(item.unavailableReason || t('launcher.pinnedItemUnavailable'), true)
     return
   }
   if (!item.omitFromFrecencyTracking) {
@@ -1475,9 +1504,9 @@ function executeItem(item) {
   if (item.type === 'inline-calculator' || item.type === 'inline-color') {
     Promise.resolve(item.action?.()).then((ok) => {
       if (ok !== false) {
-        showNoViewFeedback(`✓ 已复制结果: ${item.answer}`, false)
+        showNoViewFeedback(t('launcher.copiedResult', { answer: item.answer }), false)
       } else {
-        showNoViewFeedback("复制结果失败，请重试", true)
+        showNoViewFeedback(t('launcher.copyResultFailed'), true)
       }
     })
     return
@@ -1517,9 +1546,9 @@ async function runNoViewCommand(item) {
       featureCode: item.featureCode || '',
       query: query.value
     })
-    showNoViewFeedback(`✓ ${res.message || `${item.name || item.title} 已执行`}`, false)
+    showNoViewFeedback(`✓ ${res.message || t('launcher.commandExecuted', { name: item.name || item.title })}`, false)
   } catch (err) {
-    showNoViewFeedback(err?.message || '执行极速动作失败', true)
+    showNoViewFeedback(err?.message || t('launcher.runNoViewFailed'), true)
   } finally {
     if (executingNoViewKey === lockKey) {
       executingNoViewKey = ''
@@ -1531,16 +1560,16 @@ async function launchPlugin(pluginId, options = {}) {
   // 已合并进内置插件的旧插件（如 notes → memo, dictionary → translator:translate-dict）直接打开保留的那个
   const rawPluginId = String(pluginId || '').trim()
   const pid = resolveBundledReplacement(rawPluginId)
-  if (!pid) return { success: false, error: '插件标识符不存在' }
+  if (!pid) return { success: false, error: t('launcher.pluginIdMissing') }
 
   const featureCode = resolveBundledReplacementFeature(rawPluginId, options.featureCode)
   if (!isPluginVisible(pid)) {
-    declarativeLoadError.value = '该插件暂未开放'
+    declarativeLoadError.value = t('launcher.pluginNotPublic')
     return { success: false, error: declarativeLoadError.value }
   }
   // 别名跳转、历史记录可能指向当前系统不支持的插件（例如只声明了 Windows 的内置插件）
   if (!isPluginSupportedOnCurrentPlatform(pid)) {
-    declarativeLoadError.value = '该插件在当前系统上暂不可用'
+    declarativeLoadError.value = t('launcher.pluginUnsupportedPlatform')
     return { success: false, error: declarativeLoadError.value }
   }
   const official = getOfficialPlugin(pid)
@@ -1573,7 +1602,7 @@ async function launchPlugin(pluginId, options = {}) {
       return { success: true }
     } catch (err) {
       if (token !== declarativeLoadToken) return { success: false, cancelled: true }
-      declarativeLoadError.value = err?.message || String(err) || '加载声明式扩展失败'
+      declarativeLoadError.value = err?.message || String(err) || t('launcher.loadDeclarativeFailed')
       return { success: false, error: declarativeLoadError.value }
     } finally {
       if (token === declarativeLoadToken) {
@@ -1591,13 +1620,13 @@ async function launchPlugin(pluginId, options = {}) {
     if (result?.success === true && !result.isDeclarative) {
       finishExternalLaunch(searchAtStart)
     } else if (result?.success !== true && !result?.cancelled) {
-      showNoViewFeedback(result?.error?.message || result?.error || '启动插件失败，请重试', true)
+      showNoViewFeedback(result?.error?.message || result?.error || t('launcher.launchPluginFailed'), true)
     }
     return result
   } catch (err) {
     console.error('[Launcher] 启动插件失败:', err)
-    showNoViewFeedback(err?.message || '启动插件失败，请重试', true)
-    return { success: false, error: err?.message || '启动插件失败' }
+    showNoViewFeedback(err?.message || t('launcher.launchPluginFailed'), true)
+    return { success: false, error: err?.message || t('launcher.launchPluginFailedShort') }
   } finally {
     externalPluginPending = false
   }
@@ -1766,7 +1795,7 @@ watch(
   display: flex;
   flex-direction: column;
   overflow: hidden;
-  border-radius: 14px;
+  border-radius: var(--rc-radius-xl);
   border: 1px solid var(--rc-border-highlight);
   background: var(--rc-surface);
   color: var(--rc-text-secondary);
@@ -1794,7 +1823,7 @@ watch(
   outline: none;
   background: transparent;
   font: inherit;
-  font-size: 18px;
+  font-size: var(--rc-fs-title-md);
   letter-spacing: -0.01em;
   color: var(--rc-text-primary);
   caret-color: var(--rc-accent);
@@ -1811,7 +1840,7 @@ watch(
   align-items: center;
   justify-content: center;
   border: none;
-  border-radius: 6px;
+  border-radius: var(--rc-radius-sm);
   background: transparent;
   color: var(--rc-text-faint);
   cursor: pointer;
@@ -1829,12 +1858,14 @@ watch(
   height: 28px;
   padding: 0 4px 0 8px;
   border: none;
-  border-radius: 7px;
+  border-radius: var(--rc-radius-md);
   background: transparent;
   font: inherit;
-  font-size: 12px;
+  font-size: var(--rc-fs-small);
   color: var(--rc-text-muted);
   cursor: pointer;
+  white-space: nowrap;
+  flex-shrink: 0;
 }
 
 .launcher-workbench-btn:hover {
@@ -1846,7 +1877,7 @@ watch(
 .launcher-hairline {
   height: 1px;
   flex-shrink: 0;
-  background: linear-gradient(90deg, rgba(var(--rc-accent-rgb), 0), rgba(var(--rc-accent-rgb), 0.42) 14%, rgba(var(--rc-accent-rgb), 0) 55%);
+  background: linear-gradient(90deg, transparent, color-mix(in srgb, var(--rc-accent) 42%, transparent) 14%, transparent 55%);
 }
 
 .launcher-pinned-section {
@@ -1865,13 +1896,13 @@ watch(
 }
 
 .launcher-pinned-title {
-  font-size: 11px;
+  font-size: var(--rc-fs-caption);
   font-weight: 600;
   color: var(--rc-text-muted);
 }
 
 .launcher-pinned-hint {
-  font-size: 11px;
+  font-size: var(--rc-fs-caption);
   color: var(--rc-text-faint);
 }
 
@@ -1903,11 +1934,11 @@ watch(
   justify-content: center;
   gap: 4px;
   padding: 6px 4px 5px;
-  border-radius: 8px;
+  border-radius: var(--rc-radius-md);
   border: 1px solid var(--rc-border);
   background: var(--rc-surface-hover);
   cursor: pointer;
-  transition: background-color 0.12s ease, border-color 0.12s ease, box-shadow 0.12s ease;
+  transition: background-color var(--rc-dur-fast) ease, border-color var(--rc-dur-fast) ease, box-shadow var(--rc-dur-fast) ease;
 }
 
 .launcher-pinned-tile:hover {
@@ -1943,10 +1974,10 @@ watch(
   top: 2px;
   left: 3px;
   padding: 0 3px;
-  border-radius: 3px;
+  border-radius: var(--rc-radius-xs);
   border: 1px solid var(--rc-border);
   background: var(--rc-surface);
-  font-size: 9px;
+  font-size: var(--rc-fs-caption);
   line-height: 12px;
   color: var(--rc-text-faint);
   pointer-events: none;
@@ -1962,10 +1993,10 @@ watch(
   align-items: center;
   justify-content: center;
   border: none;
-  border-radius: 4px;
+  border-radius: var(--rc-radius-xs);
   background: transparent;
   color: var(--rc-text-faint);
-  font-size: 12px;
+  font-size: var(--rc-fs-small);
   line-height: 1;
   opacity: 0;
   cursor: pointer;
@@ -1983,7 +2014,7 @@ watch(
 
 .launcher-pinned-name {
   max-width: 100%;
-  font-size: 11px;
+  font-size: var(--rc-fs-caption);
   line-height: 14px;
   color: var(--rc-text-primary);
   white-space: nowrap;
@@ -2011,7 +2042,7 @@ watch(
   border: 4px solid transparent;
   border-top: 0;
   border-bottom: 0;
-  border-radius: 7px;
+  border-radius: var(--rc-radius-md);
   background-clip: padding-box;
 }
 
@@ -2025,14 +2056,14 @@ watch(
 }
 
 .launcher-empty-title {
-  font-size: 14px;
+  font-size: var(--rc-fs-emph);
   font-weight: 500;
   color: var(--rc-text-primary);
 }
 
 .launcher-empty-desc {
   margin: 4px 0 14px;
-  font-size: 12px;
+  font-size: var(--rc-fs-small);
   color: var(--rc-text-muted);
 }
 
@@ -2042,9 +2073,10 @@ watch(
   display: flex;
   align-items: center;
   justify-content: space-between;
+  gap: 12px;
   padding: 0 14px 0 20px;
   border-top: 1px solid var(--rc-border);
-  font-size: 12px;
+  font-size: var(--rc-fs-small);
   color: var(--rc-text-muted);
 }
 
@@ -2057,6 +2089,8 @@ watch(
   background: transparent;
   font: inherit;
   color: var(--rc-text-muted);
+  white-space: nowrap;
+  flex-shrink: 0;
 }
 
 button.launcher-foot-hint {

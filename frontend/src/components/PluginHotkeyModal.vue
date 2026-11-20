@@ -1,7 +1,8 @@
 <script setup>
 import HotkeyCaptureField from '@/components/HotkeyCaptureField.vue'
-import { RcDialog } from '@/components/base'
-import { CircleXIcon, SearchIcon, SquarePlusIcon } from '@lucide/vue'
+import { CircleXIcon, SearchIcon } from '@lucide/vue'
+import { RcDialog, RcSquircle } from '@/components/base'
+import { resolveKeywordGlyph, resolvePluginGlyph } from '@/utils/brandIcons'
 /**
  * 启动快捷键管理弹窗
  * 展示所有已安装插件，支持设置/修改/清除全局快捷键
@@ -9,6 +10,8 @@ import { CircleXIcon, SearchIcon, SquarePlusIcon } from '@lucide/vue'
  */
 import { ref, computed, nextTick, onBeforeUnmount } from 'vue'
 import { usePluginsStore } from '@/stores/plugins'
+import { useAppI18n } from '@/i18n'
+import { getLocalizedPluginName, getLocalizedPluginAltNames } from '@/utils/pluginI18n'
 import { storeToRefs } from 'pinia'
 import { message } from 'ant-design-vue'
 import { getHotkey } from '@/api/apiserver'
@@ -27,6 +30,7 @@ import {
 } from '@/utils/hotkeyRecorder'
 
 const emit = defineEmits(['update:count'])
+const { t } = useAppI18n()
 
 const visible = ref(false)
 const hotkeyPlatform = ref('unknown')
@@ -69,20 +73,24 @@ const { installedPlugins } = storeToRefs(pluginsStore)
 const launchTargets = computed(() => {
   return (installedPlugins.value || []).map(plugin => ({
     id: String(plugin.pluginId),
+    pluginId: String(plugin.pluginId),
     kind: 'plugin',
-    name: plugin.name || plugin.pluginId,
-    iconPath: plugin.iconPath || '',
+    name: getLocalizedPluginName(plugin) || plugin.name || plugin.pluginId,
+    i18n: plugin.i18n,
+    altNames: getLocalizedPluginAltNames(plugin),
+    iconPath: plugin.iconPath || plugin.localIconPath || '',
     icon: plugin.icon || ''
   }))
 })
 
-/** 按搜索关键词过滤启动目标（支持名称与 ID 匹配） */
+/** 按搜索关键词过滤启动目标（支持名称、多语言别名与 ID 匹配） */
 const filteredTargets = computed(() => {
   const keyword = searchText.value.trim().toLowerCase()
   if (!keyword) return launchTargets.value
   return launchTargets.value.filter(target =>
-    target.name.toLowerCase().includes(keyword) ||
-    target.id.toLowerCase().includes(keyword)
+    getLocalizedPluginName(target).toLowerCase().includes(keyword) ||
+    target.id.toLowerCase().includes(keyword) ||
+    (Array.isArray(target.altNames) && target.altNames.some(alt => alt.toLowerCase().includes(keyword)))
   )
 })
 
@@ -94,14 +102,13 @@ const getPluginHotkey = (targetId) => {
 /** 获取插件图标 URL */
 const getPluginIcon = (target) => {
   if (target.kind !== 'plugin') return ''
-  // 优先使用本地图标，其次远程图标
-  if (target.iconPath) return target.iconPath
+  // 与主页卡片（usePluginIcon）同一优先级：远程图标优先，其次本地图标；都没有时由 RcSquircle 显示品牌图形
   if (target.icon && target.icon.startsWith('http')) return target.icon
+  if (target.iconPath) return target.iconPath
   return ''
 }
 
-const getTargetTypeName = () => '插件'
-
+const getTargetTypeName = () => t('hotkey.launchModal.targetPlugin')
 // ========== 弹窗生命周期 ==========
 
 /** 显示弹窗；每次都从触发器注册表读取最新数据，支持按传入 pluginId 自动填充搜索并高亮定位目标行。 */
@@ -236,10 +243,15 @@ async function hasSameTargetHotkeyConflict(target, hotkeyStr) {
       const featureItem = getPluginFeatureHotkeyItemByTrigger(trigger)
       if (featureItem) {
         message.warning(
-          `该快捷键与「${featureItem.pluginName} - ${featureItem.featureName}」冲突`
+          t('hotkey.featureModal.conflictFeature', {
+            plugin: featureItem.pluginName,
+            feature: featureItem.featureName
+          })
         )
       } else {
-        message.warning(`该快捷键与该${getTargetTypeName(target)}的其他快捷键冲突`)
+        message.warning(
+          t('hotkey.launchModal.conflictSameTarget', { type: getTargetTypeName(target) })
+        )
       }
       return true
     }
@@ -258,7 +270,7 @@ async function handleHotkeyRecorded(target, hotkeyStr) {
     // 1. 本地检测：与全局唤醒快捷键冲突
     const globalHotkey = await getGlobalWakeHotkey()
     if (globalHotkey && globalHotkey.toLowerCase() === hotkeyStr.toLowerCase()) {
-      message.warning('该快捷键与全局唤醒快捷键冲突')
+      message.warning(t('hotkey.featureModal.conflictGlobalWake'))
       cancelRecording()
       return
     }
@@ -278,8 +290,10 @@ async function handleHotkeyRecorded(target, hotkeyStr) {
         : await window.ztools.trigger.checkConflict(hotkeyStr, ownerId)
       const data = conflictResult?.data || conflictResult || {}
       if (data.hasConflict && data.conflicts?.length > 0) {
-        const names = data.conflicts.map(c => c.pluginName || c.pluginId).join('、')
-        message.warning(`该快捷键与启动项「${names}」冲突`)
+        const names = data.conflicts
+          .map(c => c.pluginName || c.pluginId)
+          .join(t('settings.shortcuts.wakeHotkey.listSeparator'))
+        message.warning(t('hotkey.launchModal.conflictTargets', { names }))
         cancelRecording(true)
         return
       }
@@ -308,13 +322,13 @@ async function handleHotkeyRecorded(target, hotkeyStr) {
         ...registered,
         triggerIds: [newTriggerId, ...failedCleanupIds]
       }
-      message.warning('新快捷键已启用，但部分历史快捷键未清理；可重试清除')
+      message.warning(t('hotkey.launchModal.cleanupPartialWarning'))
     }
 
     cancelRecording(true)
   } catch (e) {
     console.error('快捷键设置失败:', e)
-    message.error('快捷键设置失败: ' + (e.message || '未知错误'))
+    message.error(t('hotkey.launchModal.setFailed', { reason: e.message || t('common.unknownError') }))
     cancelRecording(true)
   } finally {
     loadingPluginId.value = null
@@ -337,7 +351,7 @@ async function getGlobalWakeHotkey() {
 /** 注册新的启动快捷键触发器 */
 async function doRegister(target, hotkeyStr) {
   if (!window.ztools?.trigger) {
-    throw new Error('trigger API 不可用')
+    throw new Error(t('hotkey.launchModal.triggerApiUnavailable'))
   }
 
   const result = await window.ztools.trigger.register(
@@ -348,13 +362,17 @@ async function doRegister(target, hotkeyStr) {
 
   // 检查注册是否成功
   if (result === false || data.success === false || data.error) {
-    const detail = typeof data.error === 'string' ? `: ${data.error}` : ''
-    throw new Error(`快捷键注册失败，可能被其他程序占用${detail}`)
+    const detail = typeof data.error === 'string' ? data.error : ''
+    throw new Error(
+      detail
+        ? t('hotkey.launchModal.registerOccupiedWithDetail', { detail })
+        : t('hotkey.launchModal.registerOccupied')
+    )
   }
 
   const triggerId = data.triggerId || data.id
   if (typeof triggerId !== 'string' || !triggerId) {
-    throw new Error('快捷键注册响应缺少触发器 ID，无法安全替换旧快捷键')
+    throw new Error(t('hotkey.launchModal.missingTriggerId'))
   }
 
   // 注册成功，更新本地映射
@@ -366,7 +384,7 @@ async function doRegister(target, hotkeyStr) {
     ownerId: target.id
   }
   emit('update:count', Object.keys(pluginHotkeyMap.value).length)
-  message.success('快捷键设置成功')
+  message.success(t('hotkey.launchModal.setSuccess'))
   const reserveWarning = getShellReserveWarning(hotkeyStr)
   if (reserveWarning) {
     message.warning(reserveWarning)
@@ -380,8 +398,12 @@ async function doUnregister(triggerId) {
   const result = await window.ztools.trigger.unregister(triggerId)
   const data = result?.data || result || {}
   if (result === false || data.success === false || data.error) {
-    const detail = typeof data.error === 'string' ? `: ${data.error}` : ''
-    throw new Error(`注销快捷键失败${detail}`)
+    const detail = typeof data.error === 'string' ? data.error : ''
+    throw new Error(
+      detail
+        ? t('hotkey.launchModal.unregisterFailedWithDetail', { detail })
+        : t('hotkey.launchModal.unregisterFailed')
+    )
   }
 }
 
@@ -413,10 +435,10 @@ const clearHotkey = async (targetId) => {
     delete pluginHotkeyMap.value[targetId]
     pluginHotkeyMap.value = { ...pluginHotkeyMap.value }
     emit('update:count', Object.keys(pluginHotkeyMap.value).length)
-    message.success('快捷键已清除')
+    message.success(t('hotkey.launchModal.clearSuccess'))
   } catch (e) {
     console.error('清除快捷键失败:', e)
-    message.error('清除快捷键失败')
+    message.error(t('hotkey.launchModal.clearFailed'))
   } finally {
     loadingPluginId.value = null
   }
@@ -446,14 +468,14 @@ defineExpose({ show, hide, updateMap, configuredCount })
 <template>
   <RcDialog
     v-model:open="visible"
-    title="启动快捷键管理"
+    :title="t('hotkey.launchModal.title')"
     :width="560"
     @cancel="handleCancel"
   >
     <!-- 搜索框 -->
     <a-input
       v-model:value="searchText"
-      placeholder="搜索插件..."
+      :placeholder="t('hotkey.launchModal.searchPlaceholder')"
       allow-clear
       class="mb-3"
     >
@@ -468,7 +490,7 @@ defineExpose({ show, hide, updateMap, configuredCount })
     <!-- 启动目标列表 -->
     <div class="plugin-hotkey-list">
       <div v-if="filteredTargets.length === 0" class="empty-tip">
-        {{ searchText ? '未找到匹配的启动项' : '暂无可配置的插件' }}
+        {{ searchText ? t('hotkey.launchModal.emptySearch') : t('hotkey.launchModal.emptyList') }}
       </div>
 
       <div
@@ -480,22 +502,21 @@ defineExpose({ show, hide, updateMap, configuredCount })
         :class="{ invalid: target.invalid, 'is-highlighted': highlightedTargetId === target.id }"
       >
         <!-- 启动项图标 -->
+        <!-- 与主页卡片同一套图标：官方插件用品牌图形，其它插件用自带图标，都没有时按名称挑同风格图形 -->
         <div class="plugin-icon-wrap">
-          <img
-            v-if="getPluginIcon(target)"
+          <RcSquircle
+            :glyph="resolvePluginGlyph(target.id)"
+            :fallback-glyph="resolveKeywordGlyph(target.name)"
             :src="getPluginIcon(target)"
-            class="plugin-icon"
-            :alt="target.name"
+            :size="32"
+            :alt="getLocalizedPluginName(target)"
           />
-          <div v-else class="plugin-icon-placeholder">
-            <SquarePlusIcon aria-hidden="true" />
-          </div>
         </div>
 
         <!-- 启动项名称 -->
         <div class="plugin-name">
-          <span>{{ target.name }}</span>
-          <span class="target-type">{{ getTargetTypeName(target) }}</span>
+          <!-- 列表里只有插件，逐行再写「插件」只是噪音，不再显示类型 -->
+          <span>{{ getLocalizedPluginName(target) }}</span>
         </div>
 
         <!-- 快捷键区域 -->
@@ -510,7 +531,7 @@ defineExpose({ show, hide, updateMap, configuredCount })
           :recording-text="recordingText"
           :recording-is-keys="recordingIsKeys"
           :wait-text="getHotkeyWaitText(hotkeyPlatform, supportsDoubleModifierHotkeys)"
-          empty-text="未设置"
+          :empty-text="t('hotkeyCapture.emptyText')"
           @start="startRecording(target.id)"
           @cancel="cancelRecording(false)"
           @keydown="handleKeydown($event, target)"
@@ -528,13 +549,15 @@ defineExpose({ show, hide, updateMap, configuredCount })
   display: flex;
   flex-direction: column;
   gap: 4px;
+  /* 底部留白，滚到底时最后一行不贴着弹窗圆角被裁断 */
+  padding-bottom: 12px;
 }
 
 .empty-tip {
   text-align: center;
   color: var(--rc-text-secondary);
   padding: 32px 0;
-  font-size: 13px;
+  font-size: var(--rc-fs-body);
 }
 
 .plugin-hotkey-item {
@@ -542,8 +565,8 @@ defineExpose({ show, hide, updateMap, configuredCount })
   align-items: center;
   gap: 10px;
   padding: 8px 10px;
-  border-radius: var(--rc-radius-md, 8px);
-  transition: background 0.15s ease;
+  border-radius: var(--rc-radius-md);
+  transition: background var(--rc-dur) ease;
 }
 
 .plugin-hotkey-item:hover {
@@ -565,29 +588,9 @@ defineExpose({ show, hide, updateMap, configuredCount })
   height: 32px;
 }
 
-.plugin-icon {
-  width: 32px;
-  height: 32px;
-  border-radius: var(--rc-radius-md, 8px);
-  object-fit: cover;
-}
-
-.plugin-icon-placeholder {
-  width: 32px;
-  height: 32px;
-  border-radius: var(--rc-radius-md, 8px);
-  background: var(--rc-surface-subtle);
-  border: 1px solid var(--rc-border);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  color: var(--rc-text-secondary);
-  font-size: 14px;
-}
-
 .plugin-name {
   flex: 1;
-  font-size: 13px;
+  font-size: var(--rc-fs-body);
   font-weight: 500;
   color: var(--rc-text-primary);
   overflow: hidden;
@@ -598,37 +601,14 @@ defineExpose({ show, hide, updateMap, configuredCount })
   gap: 1px;
 }
 
-.target-type {
-  color: var(--rc-text-muted);
-  font-size: 11px;
-  font-weight: 400;
-}
-
-
-
-
-
-
-
-
-
-
 .hotkey-rule-tip {
   margin: -4px 0 12px;
   padding: 8px 10px;
-  border-radius: var(--rc-radius-md, 8px);
+  border-radius: var(--rc-radius-md);
   background: var(--rc-surface-subtle);
   border: 1px solid var(--rc-border);
   color: var(--rc-text-secondary);
-  font-size: 12px;
+  font-size: var(--rc-fs-small);
   line-height: 1.6;
 }
-
-
-
-
-
-
-
-
 </style>

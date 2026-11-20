@@ -5,6 +5,7 @@ import { computed, onBeforeUnmount, ref } from 'vue'
 import { message } from 'ant-design-vue'
 import { storeToRefs } from 'pinia'
 import { usePluginsStore } from '@/stores/plugins'
+import { useAppI18n } from '@/i18n'
 import { getHotkey, openPlugin as apiOpenPlugin } from '@/api/apiserver'
 import {
   getHotkeyHostCapabilities,
@@ -26,15 +27,17 @@ import {
 } from '@/utils/pluginFeatureHotkeys'
 
 const emit = defineEmits(['update:count'])
+const { t, locale } = useAppI18n()
 
 const SCREENSHOT_SETTINGS_KEY = 'settings:preferences'
 const SCREENSHOT_LEGACY_SETTINGS_KEY = 'settings:hideWindow'
 
 const pluginsStore = usePluginsStore()
 const { installedPlugins } = storeToRefs(pluginsStore)
-const featureHotkeyItems = computed(() =>
-  buildPluginFeatureHotkeyItems(installedPlugins.value)
-)
+const featureHotkeyItems = computed(() => {
+  void locale.value
+  return buildPluginFeatureHotkeyItems(installedPlugins.value)
+})
 const fieldRefs = new Map()
 const setFieldRef = (id, el) => {
   const key = String(id)
@@ -75,23 +78,23 @@ const getItemHotkey = (itemId) => featureHotkeyMap.value[itemId]?.key || ''
 
 const getItemStatusText = (item) => {
   if (item.pluginId === 'screenshot') {
-    return '触发时直接执行截图并存入缓存'
+    return t('hotkey.featureModal.statusScreenshot')
   }
   if (item.dynamic) {
-    return '触发时直接打开该插件功能'
+    return t('hotkey.featureModal.statusDynamic')
   }
 
-  return '触发时直接启动并进入截图识别'
+  return t('hotkey.featureModal.statusOcr')
 }
 
 const openPlugin = async (pluginId) => {
   try {
     const result = await apiOpenPlugin(pluginId)
     if (!result?.success) {
-      message.error('打开插件失败: ' + (result?.error || '未知错误'))
+      message.error(t('hotkey.featureModal.openPluginFailed', { reason: result?.error || t('common.unknownError') }))
     }
   } catch (error) {
-    message.error('打开插件失败: ' + (error?.message || '未知错误'))
+    message.error(t('hotkey.featureModal.openPluginFailed', { reason: error?.message || t('common.unknownError') }))
   }
 }
 
@@ -315,15 +318,18 @@ const hasSamePluginHotkeyConflict = async (item, hotkeyStr) => {
       const featureItem = getPluginFeatureHotkeyItemByTrigger(trigger, featureHotkeyItems.value)
       if (featureItem) {
         message.warning(
-          `该快捷键与「${featureItem.pluginName} - ${featureItem.featureName}」冲突`
+          t('hotkey.featureModal.conflictFeature', {
+            plugin: featureItem.pluginName,
+            feature: featureItem.featureName
+          })
         )
       } else {
         const mode = trigger?.action?.mode || trigger?.actionMode || ''
         const target = trigger?.action?.target || trigger?.actionTarget || ''
         if (mode === 'window' && target === item.pluginId) {
-          message.warning('该快捷键与该插件的启动快捷键冲突')
+          message.warning(t('hotkey.featureModal.conflictLaunch'))
         } else {
-          message.warning(`该快捷键与 ${item.pluginName} 的其他快捷键冲突`)
+          message.warning(t('hotkey.featureModal.conflictOther', { plugin: item.pluginName }))
         }
       }
       return true
@@ -337,7 +343,7 @@ const hasSamePluginHotkeyConflict = async (item, hotkeyStr) => {
 
 const registerHotkey = async (item, hotkeyStr) => {
   if (!window.ztools?.trigger?.register) {
-    message.error('全局快捷键功能不可用')
+    message.error(t('hotkey.featureModal.unavailable'))
     return false
   }
 
@@ -361,7 +367,7 @@ const registerHotkey = async (item, hotkeyStr) => {
       globalWakeHotkey &&
       globalWakeHotkey.toLowerCase() === hotkeyStr.toLowerCase()
     ) {
-      message.warning('该快捷键与全局唤醒快捷键冲突')
+      message.warning(t('hotkey.featureModal.conflictGlobalWake'))
       return false
     }
 
@@ -376,8 +382,8 @@ const registerHotkey = async (item, hotkeyStr) => {
       if (data.hasConflict && data.conflicts?.length > 0) {
         const names = data.conflicts
           .map((conflict) => conflict.pluginName || conflict.pluginId)
-          .join('、')
-        message.warning(`该快捷键与插件「${names}」冲突`)
+          .join(t('settings.shortcuts.wakeHotkey.listSeparator'))
+        message.warning(t('hotkey.featureModal.conflictPlugins', { names }))
         return false
       }
     }
@@ -396,7 +402,7 @@ const registerHotkey = async (item, hotkeyStr) => {
     const data = result?.data || result || {}
 
     if (data.success === false || data.error) {
-      message.error('快捷键注册失败，可能被其他程序占用')
+      message.error(t('hotkey.featureModal.registerOccupied'))
       await loadFeatureHotkeys()
       return false
     }
@@ -409,14 +415,19 @@ const registerHotkey = async (item, hotkeyStr) => {
       }
     }
     emit('update:count', Object.keys(featureHotkeyMap.value).length)
-    message.success(`已设置「${item.pluginName} - ${item.featureName}」快捷键`)
+    message.success(
+      t('hotkey.featureModal.setSuccess', {
+        plugin: item.pluginName,
+        feature: item.featureName
+      })
+    )
     const reserveWarning = getShellReserveWarning(hotkeyStr)
     if (reserveWarning) {
       message.warning(reserveWarning)
     }
     return true
   } catch (error) {
-    message.error('设置快捷键失败: ' + (error?.message || '未知错误'))
+    message.error(t('hotkey.featureModal.setFailed', { reason: error?.message || t('common.unknownError') }))
     console.error('设置插件内功能快捷键失败:', error)
     return false
   } finally {
@@ -436,10 +447,15 @@ const clearHotkey = async (item) => {
     delete nextMap[item.id]
     featureHotkeyMap.value = nextMap
     emit('update:count', Object.keys(nextMap).length)
-    message.success(`已清除「${item.pluginName} - ${item.featureName}」快捷键`)
+    message.success(
+      t('hotkey.featureModal.clearSuccess', {
+        plugin: item.pluginName,
+        feature: item.featureName
+      })
+    )
   } catch (error) {
     console.error('清除插件内功能快捷键失败:', error)
-    message.error('清除快捷键失败: ' + (error?.message || '未知错误'))
+    message.error(t('hotkey.featureModal.clearFailed', { reason: error?.message || t('common.unknownError') }))
   } finally {
     loadingItemId.value = ''
   }
@@ -474,14 +490,14 @@ defineExpose({ show, hide, configuredCount })
 <template>
   <RcDialog
     v-model:open="visible"
-    title="功能快捷键管理"
+    :title="t('hotkey.featureModal.title')"
     :width="720"
     @cancel="handleCancel"
   >
     <div class="feature-modal-tip">
-      <div class="feature-modal-tip-title">功能快捷键设置</div>
+      <div class="feature-modal-tip-title">{{ t('hotkey.featureModal.tipTitle') }}</div>
       <div class="feature-modal-tip-desc">
-        为插件内置功能设置全局热键，触发时将直接执行对应动作。
+        {{ t('hotkey.featureModal.tipDesc') }}
       </div>
       <div class="feature-modal-rule">{{
         getHotkeyRuleDescription(hotkeyPlatform, supportsDoubleModifierHotkeys)
@@ -507,7 +523,7 @@ defineExpose({ show, hide, configuredCount })
               class="open-plugin-link"
               @click="openPlugin('screenshot')"
             >
-              打开插件配置
+              {{ t('hotkey.featureModal.openPluginConfig') }}
             </button>
           </div>
           <div class="feature-desc">{{ item.description }}</div>
@@ -524,7 +540,7 @@ defineExpose({ show, hide, configuredCount })
           :recording-text="recordingText"
           :recording-is-keys="recordingIsKeys"
           :wait-text="getHotkeyWaitText(hotkeyPlatform, supportsDoubleModifierHotkeys)"
-          empty-text="点击录入"
+          :empty-text="t('hotkey.featureModal.clickToRecord')"
           @start="startRecording(item)"
           @cancel="stopRecording(false)"
           @keydown="handleKeydown(item, $event)"
@@ -539,19 +555,19 @@ defineExpose({ show, hide, configuredCount })
 .feature-modal-tip {
   padding: 12px 14px;
   margin-bottom: 12px;
-  border-radius: var(--rc-radius-lg, 12px);
+  border-radius: var(--rc-radius-lg);
   background: var(--rc-surface-subtle);
 }
 
 .feature-modal-tip-title {
-  font-size: 13px;
+  font-size: var(--rc-fs-body);
   font-weight: 600;
   color: var(--rc-text-primary);
 }
 
 .feature-modal-tip-desc {
   margin-top: 4px;
-  font-size: 12px;
+  font-size: var(--rc-fs-small);
   line-height: 1.6;
   color: var(--rc-text-secondary);
 }
@@ -560,7 +576,7 @@ defineExpose({ show, hide, configuredCount })
   margin-top: 8px;
   padding-top: 8px;
   border-top: 1px solid var(--rc-border);
-  font-size: 12px;
+  font-size: var(--rc-fs-small);
   line-height: 1.6;
   color: var(--rc-text-secondary);
 }
@@ -576,10 +592,10 @@ defineExpose({ show, hide, configuredCount })
   align-items: center;
   gap: 16px;
   padding: 14px;
-  border-radius: var(--rc-radius-lg, 12px);
+  border-radius: var(--rc-radius-lg);
   border: 1px solid var(--rc-border);
   background: var(--rc-surface);
-  transition: border-color 0.15s ease;
+  transition: border-color var(--rc-dur) ease;
 }
 
 .feature-hotkey-item:hover {
@@ -603,13 +619,14 @@ defineExpose({ show, hide, configuredCount })
   align-items: center;
   gap: 6px;
   min-width: 0;
-  font-size: 14px;
+  font-size: var(--rc-fs-emph);
   font-weight: 600;
   color: var(--rc-text-primary);
 }
 
+/* 插件名用中性次级色，橙色只留给主按钮与选中标记 */
 .feature-plugin {
-  color: var(--rc-accent-text);
+  color: var(--rc-text-secondary);
 }
 
 .feature-separator {
@@ -618,7 +635,7 @@ defineExpose({ show, hide, configuredCount })
 
 .feature-desc {
   margin-top: 4px;
-  font-size: 12px;
+  font-size: var(--rc-fs-small);
   line-height: 1.6;
   color: var(--rc-text-secondary);
 }
@@ -627,22 +644,10 @@ defineExpose({ show, hide, configuredCount })
   padding: 0;
   border: none;
   background: transparent;
-  font-size: 12px;
+  font-size: var(--rc-fs-small);
   color: var(--rc-accent-text);
   cursor: pointer;
 }
-
-
-
-
-
-
-
-
-
-
-
-
 
 @media (max-width: 720px) {
   .feature-hotkey-item {

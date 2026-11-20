@@ -9,12 +9,24 @@
 
 import { WorkerPool, PooledWorker } from './worker-pool.js'
 
+interface ProcessParentPort {
+  postMessage(data: unknown): void
+  on(event: 'message', listener: (event: { data: unknown }) => void): void
+}
+
+interface HostIncomingMessage {
+  id?: string
+  type?: string
+  action?: string
+  payload?: Record<string, unknown>
+}
+
 function getParentChannel() {
-  const pp = (process as any).parentPort
+  const pp = (process as unknown as { parentPort?: ProcessParentPort }).parentPort
   if (pp && typeof pp.postMessage === 'function') {
     return {
       send: (data: unknown) => pp.postMessage(data),
-      on: (fn: (data: unknown) => void) => pp.on('message', (e: any) => fn(e.data))
+      on: (fn: (data: unknown) => void) => pp.on('message', (e) => fn(e.data))
     }
   }
   return {
@@ -27,10 +39,10 @@ const parentChannel = getParentChannel()
 const pool = new WorkerPool({ poolSize: 1 })
 const activeSessions = new Map<string, PooledWorker>()
 
-parentChannel.on(async (msg: any) => {
-  if (!msg || typeof msg !== 'object') return
+parentChannel.on(async (rawMsg: unknown) => {
+  if (!rawMsg || typeof rawMsg !== 'object') return
 
-  const { id, type, action, payload } = msg
+  const { id, type, action, payload } = rawMsg as HostIncomingMessage
 
   if (type === 'notify' && action === 'terminate') {
     await pool.close()
@@ -51,9 +63,21 @@ parentChannel.on(async (msg: any) => {
         }
 
         case 'startCommand': {
-          const { sessionId, mode, entryPath, exportName, extensionId, commandName, arguments: cmdArgs, preferences, supportDir, cacheDir } = payload || {}
+          const {
+            sessionId,
+            mode,
+            entryPath,
+            exportName,
+            extensionId,
+            commandName,
+            arguments: cmdArgs,
+            preferences,
+            supportDir,
+            cacheDir,
+            locale
+          } = payload || {}
           const worker = await pool.getFromPool()
-          if (sessionId) {
+          if (typeof sessionId === 'string' && sessionId) {
             activeSessions.set(sessionId, worker)
           }
 
@@ -76,7 +100,8 @@ parentChannel.on(async (msg: any) => {
             arguments: cmdArgs,
             preferences,
             supportDir,
-            cacheDir
+            cacheDir,
+            ...(typeof locale === 'string' && locale.trim() ? { locale } : {})
           })
 
           parentChannel.send({
@@ -88,15 +113,30 @@ parentChannel.on(async (msg: any) => {
           return
         }
 
+        case 'updateLocale': {
+          const nextLocale = typeof payload?.locale === 'string' ? payload.locale : ''
+          const workers = [...activeSessions.values()].filter(worker => !worker.isTerminated)
+          await Promise.allSettled(
+            workers.map(worker => worker.postRequest('updateLocale', { locale: nextLocale }))
+          )
+          parentChannel.send({
+            type: 'result',
+            id,
+            success: true,
+            data: { updated: workers.length, locale: nextLocale }
+          })
+          return
+        }
+
         case 'nativeCallback': {
           const { sessionId, callbackId, args } = payload || {}
-          const worker = sessionId ? activeSessions.get(sessionId) : null
+          const worker = typeof sessionId === 'string' ? activeSessions.get(sessionId) : null
           if (!worker) {
             parentChannel.send({
               type: 'result',
               id,
               success: false,
-              error: { code: 'SESSION_NOT_FOUND', message: `未找到活跃会话: ${sessionId}` }
+              error: { code: 'SESSION_NOT_FOUND', message: `未找到活跃会话: ${String(sessionId ?? '')}` }
             })
             return
           }
@@ -117,9 +157,9 @@ parentChannel.on(async (msg: any) => {
 
         case 'terminateSession': {
           const { sessionId } = payload || {}
-          const worker = sessionId ? activeSessions.get(sessionId) : null
+          const worker = typeof sessionId === 'string' ? activeSessions.get(sessionId) : null
           if (worker) {
-            activeSessions.delete(sessionId)
+            activeSessions.delete(sessionId as string)
             await worker.terminate()
           }
           parentChannel.send({
@@ -147,20 +187,24 @@ parentChannel.on(async (msg: any) => {
             type: 'result',
             id,
             success: false,
-            error: { code: 'UNKNOWN_ACTION', message: `未知的宿主指令: ${action}` }
+            error: { code: 'UNKNOWN_ACTION', message: `未知的宿主指令: ${String(action ?? '')}` }
           })
           return
         }
       }
-    } catch (err: any) {
+    } catch (err: unknown) {
+      const errObj = err instanceof Error ? err : null
+      const errCode = typeof err === 'object' && err !== null && 'code' in err
+        ? String((err as { code?: unknown }).code ?? 'HOST_ERROR')
+        : 'HOST_ERROR'
       parentChannel.send({
         type: 'result',
         id,
         success: false,
         error: {
-          code: err.code || 'HOST_ERROR',
-          message: err.message || String(err),
-          stack: err.stack
+          code: errCode,
+          message: errObj?.message || String(err),
+          stack: errObj?.stack
         }
       })
     }

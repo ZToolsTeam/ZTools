@@ -1,13 +1,31 @@
+import { getLocale } from "@ztools/declarative-ui";
 /**
  * ZTools 极简待办事项业务逻辑 (纯函数)
  */
+const TODO_LOGIC_MESSAGES = {
+    "zh-CN": {
+        titleRequired: "待办事项标题不能为空",
+        uuidUnavailable: "无法生成唯一标识，请重启客户端后重试",
+        corruptData: "已保存的待办数据损坏，为保护原数据已暂停修改"
+    },
+    "en-US": {
+        titleRequired: "Todo title cannot be empty",
+        uuidUnavailable: "Unable to generate unique ID; please restart the client and try again",
+        corruptData: "Saved todo data is corrupted; modifications are paused to protect original data"
+    }
+};
+function todoLogicStrings() {
+    const locale = getLocale();
+    return TODO_LOGIC_MESSAGES[locale] ?? TODO_LOGIC_MESSAGES["en-US"];
+}
 export function createTodo(title, priority = "medium") {
+    const s = todoLogicStrings();
     const trimmed = (title || "").trim();
     if (!trimmed) {
-        throw new Error("待办事项标题不能为空");
+        throw new Error(s.titleRequired);
     }
     if (typeof globalThis.crypto?.randomUUID !== 'function') {
-        throw new Error('无法生成唯一标识，请重启客户端后重试');
+        throw new Error(s.uuidUnavailable);
     }
     return {
         id: "todo_" + Date.now().toString(36) + "_" + globalThis.crypto.randomUUID(),
@@ -123,7 +141,7 @@ export function sanitizeStoredTodos(raw) {
 export class CorruptTodosError extends Error {
     raw;
     constructor(raw) {
-        super("已保存的待办数据损坏，为保护原数据已暂停修改");
+        super(todoLogicStrings().corruptData);
         this.name = "CorruptTodosError";
         this.raw = raw;
     }

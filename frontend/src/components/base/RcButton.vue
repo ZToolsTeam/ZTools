@@ -25,12 +25,12 @@ const emit = defineEmits(['click'])
 const sizeClasses = computed(() => {
   switch (props.size) {
     case 'xs':
-      return 'h-6 px-2 text-[11px] gap-1 rounded-md'
+      return 'h-6 px-2 text-[length:var(--rc-fs-caption)] leading-4 gap-1 rounded-[var(--rc-radius-sm)]'
     case 'md':
-      return 'h-9 px-3.5 text-sm gap-2 rounded-lg font-medium'
+      return 'h-9 px-3.5 text-[length:var(--rc-fs-emph)] leading-5 gap-2 rounded-[var(--rc-radius-md)] font-medium'
     case 'sm':
     default:
-      return 'h-7 px-2.5 text-xs gap-1.5 rounded-md font-medium'
+      return 'h-7 px-2.5 text-[length:var(--rc-fs-small)] leading-4 gap-1.5 rounded-[var(--rc-radius-sm)] font-medium'
   }
 })
 
@@ -43,16 +43,17 @@ const variantClasses = computed(() => {
       return 'rc-btn-soft bg-[var(--rc-accent-subtle)] text-[var(--rc-accent-text)] border-[var(--rc-border-highlight)]'
     case 'danger':
       return 'rc-btn-danger bg-[var(--rc-error-subtle)] text-[var(--rc-error)] border-transparent'
+    // 次按钮：描边比卡片深一档，放在卡片、灰色面板或暗色底上都有清晰轮廓
     case 'secondary':
-      return 'bg-[var(--rc-surface)] text-[var(--rc-text-primary)] border-[var(--rc-border)] hover:bg-[var(--rc-surface-hover)] hover:border-[var(--rc-border-highlight)]'
+      return 'bg-[var(--rc-surface)] text-[var(--rc-text-primary)] border-[var(--rc-border-highlight)] hover:bg-[var(--rc-surface-active)]'
     case 'ghost':
     default:
       return 'rc-btn-ghost text-[var(--rc-text-primary)]'
   }
 })
 
-// 键帽与按钮文字同色：彩色按钮（实心、淡强调、危险）上键帽跟随文字颜色，中性按钮用默认键帽
-const kbdTone = computed(() => (['primary', 'soft', 'danger'].includes(props.variant) ? 'inherit' : 'default'))
+// 键帽全站保持中性灰（淡强调、危险按钮也一样）；只有实心主按钮的键帽跟随按钮上的白字着色，否则灰键帽压在橙底上看不清
+const kbdTone = computed(() => (props.variant === 'primary' ? 'onAccent' : 'default'))
 
 const handleClick = (e) => {
   if (props.disabled || props.loading) {

@@ -1,4 +1,5 @@
-import { List, Form, ActionPanel, Action, Icon, showToast, Toast, useNavigation, useState, useEffect, useRef, LocalStorage, confirmAlert } from "@ztools/declarative-ui";
+import { List, Form, ActionPanel, Action, Icon, showToast, Toast, useNavigation, useState, useEffect, useRef, useLocale, LocalStorage, confirmAlert } from "@ztools/declarative-ui";
+import { t } from "./i18n.js";
 import { createTodo, deleteTodoItem, clearCompletedTodos, filterAndSearchTodos, readStoredTodos, formatListDate, CorruptTodosError, isBlankQuery, quickAddTitle, TODOS_STORAGE_KEY } from "./logic.js";
 import { updateStorageItem, hostUpgradeError } from "./host-compat.js";
 function errorMessage(err) {
@@ -8,6 +9,7 @@ function errorMessage(err) {
  * 新建待办事项 Form 表单
  */
 export function CreateTodoForm({ onCreated, initialTitle = "" }) {
+    useLocale();
     const { pop } = useNavigation();
     const [title, setTitle] = useState(initialTitle);
     const [priority, setPriority] = useState("medium");
@@ -18,8 +20,8 @@ export function CreateTodoForm({ onCreated, initialTitle = "" }) {
         const todoTitle = typeof values.title === "string" && values.title ? values.title : title;
         const todoPriority = (typeof values.priority === "string" && values.priority ? values.priority : priority);
         if (!todoTitle || !todoTitle.trim()) {
-            setError("待办标题不能为空");
-            await showToast(Toast.Style.Failure, "请输入待办标题");
+            setError(t("titleEmptyError"));
+            await showToast(Toast.Style.Failure, t("titleEmptyToast"));
             return;
         }
         if (submitting.current)
@@ -29,24 +31,24 @@ export function CreateTodoForm({ onCreated, initialTitle = "" }) {
             const newTodo = createTodo(todoTitle, todoPriority);
             if (!(await onCreated(newTodo)))
                 return;
-            await showToast(Toast.Style.Success, "待办事项创建成功");
+            await showToast(Toast.Style.Success, t("createSuccess"));
             pop();
         }
         catch (err) {
             const message = errorMessage(err);
             setError(message);
-            await showToast(Toast.Style.Failure, "创建失败", message);
+            await showToast(Toast.Style.Failure, t("createFailed"), message);
         }
         finally {
             submitting.current = false;
         }
     };
     return Form({
-        navigationTitle: "新建待办事项",
+        navigationTitle: t("formNavTitle"),
         // 只保留「保存」：返回用 Esc，表单里 ⌘↵ 也是保存
-        actions: ActionPanel({ title: "表单操作" }, [
+        actions: ActionPanel({ title: t("formActionsTitle") }, [
             Action.SubmitForm({
-                title: "保存待办",
+                title: t("saveTodo"),
                 icon: Icon.Check,
                 onSubmit: handleSubmit
             })
@@ -54,8 +56,8 @@ export function CreateTodoForm({ onCreated, initialTitle = "" }) {
     }, [
         Form.TextField({
             id: "title",
-            title: "待办标题",
-            placeholder: "输入待办任务内容...",
+            title: t("titleField"),
+            placeholder: t("titlePlaceholder"),
             value: title,
             error,
             onChange: (val) => {
@@ -66,13 +68,13 @@ export function CreateTodoForm({ onCreated, initialTitle = "" }) {
         }),
         Form.Dropdown({
             id: "priority",
-            title: "优先级",
+            title: t("priorityField"),
             value: priority,
             onChange: (val) => setPriority(val)
         }, [
-            Form.Dropdown.Item({ title: "高优先级", value: "high" }),
-            Form.Dropdown.Item({ title: "中优先级", value: "medium" }),
-            Form.Dropdown.Item({ title: "低优先级", value: "low" })
+            Form.Dropdown.Item({ title: t("priorityHigh"), value: "high" }),
+            Form.Dropdown.Item({ title: t("priorityMedium"), value: "medium" }),
+            Form.Dropdown.Item({ title: t("priorityLow"), value: "low" })
         ])
     ]);
 }
@@ -85,6 +87,7 @@ function toLoadError(err) {
  * 待办事项主列表视图
  */
 export default function TodoCommand() {
+    useLocale();
     const [todos, setTodos] = useState([]);
     const [loaded, setLoaded] = useState(false);
     const [loadError, setLoadError] = useState(undefined);
@@ -113,7 +116,7 @@ export default function TodoCommand() {
                 return;
             const failure = toLoadError(err);
             setLoadError(failure);
-            showToast(Toast.Style.Failure, "读取待办失败", failure.message);
+            showToast(Toast.Style.Failure, t("readFailed"), failure.message);
         })
             .finally(() => {
             if (!cancelled)
@@ -129,7 +132,7 @@ export default function TodoCommand() {
     // 先写入存储再更新界面：写入失败时界面保持原样
     const commit = async (mutate) => {
         if (!writable.current) {
-            await showToast(Toast.Style.Failure, "暂不能修改待办", "请先成功读取已有数据");
+            await showToast(Toast.Style.Failure, t("cannotEditTitle"), t("cannotEditDesc"));
             return false;
         }
         try {
@@ -143,7 +146,7 @@ export default function TodoCommand() {
                 writable.current = false;
                 setLoadError(toLoadError(err));
             }
-            await showToast(Toast.Style.Failure, "保存失败", errorMessage(err));
+            await showToast(Toast.Style.Failure, t("saveFailed"), errorMessage(err));
             return false;
         }
     };
@@ -155,15 +158,15 @@ export default function TodoCommand() {
         const completedAt = Date.now();
         if (!(await commit(current => {
             if (!current.some(item => item.id === id))
-                throw new Error("该待办已被其他窗口删除，请重新读取");
+                throw new Error(t("deletedByOtherWindow"));
             return current.map(item => item.id === id ? { ...item, completed, completedAt: completed ? (item.completedAt ?? completedAt) : undefined } : item);
         })))
             return;
-        await showToast(Toast.Style.Success, completed ? "已标为完成" : "已标为未完成");
+        await showToast(Toast.Style.Success, completed ? t("markedCompleted") : t("markedIncomplete"));
     };
     const handleDelete = async (id) => {
         if (await commit(current => deleteTodoItem(current, id)))
-            await showToast(Toast.Style.Success, "待办已删除");
+            await showToast(Toast.Style.Success, t("todoDeleted"));
     };
     const handleClearCompleted = async () => {
         let count = 0;
@@ -171,7 +174,7 @@ export default function TodoCommand() {
             count = current.filter((t) => t.completed).length;
             return clearCompletedTodos(current);
         })) {
-            await showToast(Toast.Style.Success, count > 0 ? `已清空 ${count} 条已完成待办` : "没有已完成的待办");
+            await showToast(Toast.Style.Success, count > 0 ? t("clearedCompleted", { count }) : t("noCompletedTodos"));
         }
     };
     const handleQuickAdd = async (title) => {
@@ -182,11 +185,11 @@ export default function TodoCommand() {
             const item = createTodo(title, "medium");
             if (await commit(current => [item, ...current])) {
                 setSearchText("");
-                await showToast(Toast.Style.Success, "已添加待办");
+                await showToast(Toast.Style.Success, t("todoAdded"));
             }
         }
         catch (err) {
-            await showToast(Toast.Style.Failure, "添加失败", errorMessage(err));
+            await showToast(Toast.Style.Failure, t("addFailed"), errorMessage(err));
         }
         finally {
             adding.current = false;
@@ -194,7 +197,7 @@ export default function TodoCommand() {
     };
     const handleOpenCreateForm = (initialTitle = "") => {
         if (!writable.current) {
-            showToast(Toast.Style.Failure, "暂不能修改待办", "请先成功读取已有数据");
+            showToast(Toast.Style.Failure, t("cannotEditTitle"), t("cannotEditDesc"));
             return;
         }
         push(() => CreateTodoForm({
@@ -206,45 +209,45 @@ export default function TodoCommand() {
     // 数据损坏时：先把原值完整备份到新键并读回核验，再原子地从空列表重新开始（需确认）
     const backupAndReset = async (failure) => {
         const confirmed = await confirmAlert({
-            title: "备份损坏的数据并重新开始？",
-            message: "原数据会完整备份到插件存储的备份项中，然后待办列表从空开始。",
-            primaryAction: { title: "备份并重新开始", style: "destructive" },
-            dismissAction: { title: "取消" }
+            title: t("backupConfirmTitle"),
+            message: t("backupConfirmMsg"),
+            primaryAction: { title: t("backupConfirmPrimary"), style: "destructive" },
+            dismissAction: { title: t("cancel") }
         });
         if (!confirmed)
             return;
         try {
             if (typeof LocalStorage.compareAndSet !== "function")
-                throw hostUpgradeError("备份并重新开始");
+                throw hostUpgradeError(t("backupConfirmPrimary"));
             const current = await LocalStorage.getItem(TODOS_STORAGE_KEY);
             if (JSON.stringify(current) !== JSON.stringify(failure.raw))
-                throw new Error("待办数据已变化，请重新读取；不会覆盖新数据");
+                throw new Error(t("backupChangedError"));
             const backupKey = `${TODOS_STORAGE_KEY}.backup-${Date.now()}`;
             await LocalStorage.setItem(backupKey, current);
             if (JSON.stringify(await LocalStorage.getItem(backupKey)) !== JSON.stringify(current))
-                throw new Error("备份读回核验失败");
+                throw new Error(t("backupVerifyError"));
             if (!(await LocalStorage.compareAndSet(TODOS_STORAGE_KEY, current, [])))
-                throw new Error("备份期间待办数据已变化，请重新读取；不会覆盖新数据");
+                throw new Error(t("backupRaceError"));
         }
         catch (err) {
-            await showToast(Toast.Style.Failure, "备份或重置失败，原数据未改动", err instanceof Error ? err.message : String(err));
+            await showToast(Toast.Style.Failure, t("backupFailed"), err instanceof Error ? err.message : String(err));
             return;
         }
-        await showToast(Toast.Style.Success, "已备份原数据，待办已重新开始");
+        await showToast(Toast.Style.Success, t("backupSuccess"));
         reload();
     };
     // 整个插件的动作只放在 List 级：客户端会把它们以「全局操作」附在每条待办的动作后面，单条待办里不再重复
-    const globalActions = ActionPanel({ title: "全局操作" }, [
-        ...(loadError ? [Action({ title: "重新读取待办", icon: Icon.Repeat, onAction: reload })] : []),
-        ...(loadError?.corrupt ? [Action({ title: "备份原数据并重新开始", icon: Icon.Download, onAction: () => backupAndReset(loadError) })] : []),
+    const globalActions = ActionPanel({ title: t("globalActions") }, [
+        ...(loadError ? [Action({ title: t("reloadTodos"), icon: Icon.Repeat, onAction: reload })] : []),
+        ...(loadError?.corrupt ? [Action({ title: t("backupAndRestart"), icon: Icon.Download, onAction: () => backupAndReset(loadError) })] : []),
         Action({
-            title: "新建待办事项",
+            title: t("newTodo"),
             icon: Icon.Plus,
             onAction: () => handleOpenCreateForm()
         }),
         // 没有已完成项时不提供「清空已完成」，避免空状态下次动作是无效操作
         ...(todos.some((item) => item.completed) ? [Action({
-                title: "清空已完成待办",
+                title: t("clearCompleted"),
                 icon: Icon.Trash,
                 onAction: handleClearCompleted
             })] : [])
@@ -252,85 +255,93 @@ export default function TodoCommand() {
     // 有输入且没有标题完全相同的待办时，「添加待办」始终排第一，回车即添加；
     // 部分匹配的已有待办排在后面，要操作它们用 ↓ 选中
     const quickTitle = loaded && !loadError ? quickAddTitle(filtered, searchText) : null;
+    const emptyTitle = loadError ? (loadError.corrupt ? t("emptyCorrupt") : t("emptyLoadErr")) : blankQuery
+        ? t("emptyBlankQuery")
+        : !loaded
+            ? t("emptyLoading")
+            : todos.length === 0
+                ? t("emptyNone")
+                : t("emptyFilterNone");
+    const emptyDescription = loadError ? (loadError.corrupt ? t("emptyLoadErrCorruptSub", { message: loadError.message }) : t("emptyLoadErrSub", { message: loadError.message })) : blankQuery ? t("emptyBlankQuerySub") : !loaded ? "" : t("emptyHintSub");
     return List({
-        navigationTitle: "极简待办清单",
-        searchBarPlaceholder: "搜索待办事项，或按回车快速添加...",
+        // 读取完成前交给客户端显示加载状态，不提前下「还没有待办」的结论
+        isLoading: !loaded && !loadError,
+        navigationTitle: t("navTitle"),
+        searchBarPlaceholder: t("searchPlaceholder"),
         searchText,
         onSearchTextChange: (text) => setSearchText(text),
         searchBarAccessory: List.Dropdown({
-            tooltip: "筛选待办状态",
+            tooltip: t("filterTooltip"),
             value: filter,
             onChange: (val) => setFilter(val)
         }, [
-            List.Dropdown.Item({ title: "全部待办", value: "all" }),
-            List.Dropdown.Item({ title: "进行中", value: "active" }),
-            List.Dropdown.Item({ title: "已完成", value: "completed" })
+            List.Dropdown.Item({ title: t("filterAll"), value: "all" }),
+            List.Dropdown.Item({ title: t("filterActive"), value: "active" }),
+            List.Dropdown.Item({ title: t("filterCompleted"), value: "completed" })
         ]),
         actions: globalActions
     }, [
-        List.Section({
-            title: filter === "all" ? `全部待办 (${filtered.length})` : filter === "active" ? `进行中 (${filtered.length})` : `已完成 (${filtered.length})`
-        }, [
-            ...(quickTitle
-                ? [
-                    List.Item({
-                        id: "quick-add",
-                        title: `添加待办「${quickTitle}」`,
-                        subtitle: "按回车直接添加（中优先级）",
-                        icon: Icon.Plus,
-                        actions: ActionPanel({ title: "操作" }, [
-                            Action({ title: "添加待办", icon: Icon.Plus, onAction: () => handleQuickAdd(quickTitle) }),
-                            Action({ title: "填写详情后添加…", icon: Icon.Pencil, onAction: () => handleOpenCreateForm(quickTitle) })
-                        ])
-                    })
-                ]
-                : []),
-            ...filtered.map((item) => List.Item({
-                id: item.id,
-                title: item.title,
-                subtitle: item.priority === "high" ? "高优先级" : item.priority === "medium" ? "中优先级" : "低优先级",
-                icon: item.completed ? Icon.Check : Icon.Circle,
-                accessories: [
-                    {
-                        text: item.completed ? "已完成" : "待处理"
-                    },
-                    ...(item.createdAt > 0 ? [{ text: formatListDate(item.createdAt) }] : [])
-                ],
-                actions: ActionPanel({ title: "待办操作" }, [
-                    Action({
-                        title: item.completed ? "标为未完成" : "标为已完成",
-                        icon: item.completed ? Icon.Circle : Icon.Check,
-                        onAction: () => handleToggle(item.id)
-                    }),
-                    Action.CopyToClipboard({
-                        title: "复制待办标题",
-                        content: item.title,
-                        icon: Icon.CopyClipboard
-                    }),
-                    Action({
-                        title: "删除此待办",
-                        icon: Icon.Trash,
-                        onAction: () => handleDelete(item.id)
-                    })
-                ])
-            })),
-            ...(!quickTitle && filtered.length === 0
-                ? [
-                    List.Item({
-                        id: "empty-item",
-                        title: loadError ? (loadError.corrupt ? "待办数据已损坏，已暂停修改" : "读取待办失败，已暂停修改") : blankQuery
-                            ? "请输入待办内容"
-                            : !loaded
-                                ? "正在读取待办…"
-                                : todos.length === 0
-                                    ? "还没有待办"
-                                    : "这个分类下没有待办",
-                        subtitle: loadError ? `${loadError.message}；按回车${loadError.corrupt ? "重新读取，⌘K 可备份后重新开始" : "重新读取"}` : blankQuery ? "只输入空格不会添加或修改待办" : "在上方输入内容后按回车即可添加",
-                        icon: Icon.Document
-                        // 不传 actions：客户端回退到 List 级动作，避免同名动作在动作面板里出现两次
-                    })
-                ]
-                : [])
-        ])
+        // 没有任何条目时不输出分组：否则空状态上方会多一个「全部待办 (0)」标题
+        ...(quickTitle || filtered.length > 0 ? [List.Section({
+                title: filter === "all" ? t("sectionAll", { count: filtered.length }) : filter === "active" ? t("sectionActive", { count: filtered.length }) : t("sectionCompleted", { count: filtered.length })
+            }, [
+                ...(quickTitle
+                    ? [
+                        List.Item({
+                            id: "quick-add",
+                            title: t("quickAddTitle", { title: quickTitle }),
+                            subtitle: t("quickAddSubtitle"),
+                            icon: Icon.Plus,
+                            actions: ActionPanel({ title: t("actionsTitle") }, [
+                                Action({ title: t("quickAddAction"), icon: Icon.Plus, onAction: () => handleQuickAdd(quickTitle) }),
+                                Action({ title: t("addWithDetailsAction"), icon: Icon.Pencil, onAction: () => handleOpenCreateForm(quickTitle) })
+                            ])
+                        })
+                    ]
+                    : []),
+                ...filtered.map((item) => List.Item({
+                    id: item.id,
+                    title: item.title,
+                    subtitle: item.priority === "high" ? t("priorityHigh") : item.priority === "medium" ? t("priorityMedium") : t("priorityLow"),
+                    icon: item.completed ? Icon.Check : Icon.Circle,
+                    accessories: [
+                        {
+                            text: item.completed ? t("statusCompleted") : t("statusPending")
+                        },
+                        ...(item.createdAt > 0 ? [{ text: formatListDate(item.createdAt) }] : [])
+                    ],
+                    actions: ActionPanel({ title: t("todoActionsTitle") }, [
+                        Action({
+                            title: item.completed ? t("markIncomplete") : t("markCompleted"),
+                            icon: item.completed ? Icon.Circle : Icon.Check,
+                            onAction: () => handleToggle(item.id)
+                        }),
+                        Action.CopyToClipboard({
+                            title: t("copyTitle"),
+                            content: item.title,
+                            icon: Icon.CopyClipboard
+                        }),
+                        Action({
+                            title: t("deleteTodo"),
+                            icon: Icon.Trash,
+                            onAction: () => handleDelete(item.id)
+                        })
+                    ])
+                }))
+            ])] : []),
+        // 没有可显示的待办时用空状态说明原因与下一步，不再塞一条可选中的占位行；
+        // 空列表时回车、⌘K 由客户端回退到上面的 List 级动作（新建 / 重新读取）
+        ...(!quickTitle && filtered.length === 0 ? [renderEmptyState(emptyTitle, emptyDescription, loadError ? Icon.ExclamationMark : Icon.CheckCircle)] : [])
     ]);
+}
+/**
+ * 空列表时的空状态。客户端在运行时提供 SDK：新版客户端有 List.EmptyView，渲染成居中、不可选中的空状态；
+ * 旧版客户端没有它，退回一条不带动作的占位条目（与旧版插件行为一致，回车仍走 List 级动作）。
+ */
+function renderEmptyState(title, description, icon) {
+    const emptyView = List.EmptyView;
+    if (typeof emptyView === "function") {
+        return emptyView({ title, description: description || undefined, icon });
+    }
+    return List.Item({ id: "empty-item", title, subtitle: description || undefined, icon: Icon.Document });
 }

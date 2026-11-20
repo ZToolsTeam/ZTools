@@ -1,11 +1,19 @@
-import { List, Form, ActionPanel, Action, Icon, Clipboard, showToast, Toast, useState, useEffect, useNavigation, confirmAlert } from "@ztools/declarative-ui";
+import { List, Form, ActionPanel, Action, Icon, Clipboard, showToast, Toast, useState, useEffect, useNavigation, useLocale, getLocale, confirmAlert } from "@ztools/declarative-ui";
+import { t } from "./i18n.js";
 import { generateQrSvg, generateQrPngBase64, detectQrContentType, buildWifiPayload, getQrHistory, saveQrItem, toggleFavoriteQrItem, deleteQrItem, clearQrHistory } from "./qr-generator.js";
 import { copyPngToClipboard, savePngFile, decodeQrImageFile } from "./host.js";
 import { createCompatFileInputProps } from "./host-compat.js";
 export * from "./qr-generator.js";
-const LEVEL_LABEL = { L: "低（7%）", M: "中（15%）", Q: "较高（25%）", H: "高（30%）" };
+function levelLabel(lv) {
+    switch (lv) {
+        case "L": return t("levelL");
+        case "M": return t("levelM");
+        case "Q": return t("levelQ");
+        case "H": return t("levelH");
+    }
+}
 /**
- * 预览缓存（LRU）：key = 纠错等级 + 内容。每次渲染都会为所有匹配的历史项生成预览，
+ * 预览缓存（LRU）：key = locale + 纠错等级 + 内容。每次渲染都会为所有匹配的历史项生成预览，
  * 历史最多 100 条，不缓存时每次按键都要把它们全部重新编码。
  * 条数上限覆盖满额历史 + 最近输入；字符预算防止大量第 40 版大码占满内存。
  */
@@ -15,7 +23,7 @@ const previewCache = new Map();
 let previewCacheChars = 0;
 const previewSize = (p) => (p.ok ? p.markdown.length : p.error.length);
 export function previewMarkdown(content, lv) {
-    const key = `${lv}\u0000${content}`;
+    const key = `${getLocale()}\u0000${lv}\u0000${content}`;
     const hit = previewCache.get(key);
     if (hit) {
         // 命中后移到队尾，保持最近使用顺序
@@ -28,7 +36,13 @@ export function previewMarkdown(content, lv) {
         const { dataUrl, qr } = generateQrSvg(content, lv);
         result = {
             ok: true,
-            markdown: `![二维码](${dataUrl})\n\n${detectQrContentType(content).label} · ${new TextEncoder().encode(content).length} 字节 · 版本 ${qr.version}（${qr.size}×${qr.size}）· 纠错 ${LEVEL_LABEL[lv]}`
+            markdown: `![${t("qrAlt")}](${dataUrl})\n\n${t("previewMeta", {
+                type: detectQrContentType(content).label,
+                bytes: new TextEncoder().encode(content).length,
+                version: qr.version,
+                size: qr.size,
+                level: levelLabel(lv)
+            })}`
         };
     }
     catch (err) {
@@ -65,6 +79,7 @@ function newItem(content, level, title) {
  * Wi-Fi 二维码表单：手机扫码即可连接
  */
 export function WifiQrForm({ onCreated }) {
+    useLocale();
     const { pop } = useNavigation();
     const [ssid, setSsid] = useState("");
     const [password, setPassword] = useState("");
@@ -80,7 +95,7 @@ export function WifiQrForm({ onCreated }) {
         catch (err) {
             const message = err instanceof Error ? err.message : String(err);
             // 密码相关的错误显示在密码框下，名称相关的显示在名称框下
-            if (/密码/.test(message))
+            if (/密码|password/i.test(message))
                 setPasswordError(message);
             else
                 setError(message);
@@ -90,22 +105,23 @@ export function WifiQrForm({ onCreated }) {
             pop();
     };
     return Form({
-        navigationTitle: "Wi-Fi 二维码",
+        navigationTitle: t("wifiFormTitle"),
         actions: ActionPanel({ title: "Wi-Fi" }, [
-            Action.SubmitForm({ title: "生成并保存", icon: Icon.Check, onSubmit: submit })
+            Action.SubmitForm({ title: t("wifiSubmit"), icon: Icon.Check, onSubmit: submit })
         ])
     }, [
-        Form.TextField({ id: "ssid", title: "Wi-Fi 名称", placeholder: "区分大小写", value: ssid, error, onChange: (v) => { setSsid(v); setError(undefined); } }),
-        Form.PasswordField({ id: "password", title: "密码", placeholder: "无密码网络可留空", value: password, error: passwordError, onChange: (v) => { setPassword(v); setPasswordError(undefined); } }),
-        Form.Dropdown({ id: "security", title: "加密方式", value: security, onChange: (v) => { setSecurity(v === "WEP" || v === "nopass" ? v : "WPA"); setPasswordError(undefined); } }, [
+        Form.TextField({ id: "ssid", title: t("wifiSsidTitle"), placeholder: t("wifiSsidPlaceholder"), value: ssid, error, onChange: (v) => { setSsid(v); setError(undefined); } }),
+        Form.PasswordField({ id: "password", title: t("wifiPassTitle"), placeholder: t("wifiPassPlaceholder"), value: password, error: passwordError, onChange: (v) => { setPassword(v); setPasswordError(undefined); } }),
+        Form.Dropdown({ id: "security", title: t("wifiSecTitle"), value: security, onChange: (v) => { setSecurity(v === "WEP" || v === "nopass" ? v : "WPA"); setPasswordError(undefined); } }, [
             Form.Dropdown.Item({ title: "WPA / WPA2 / WPA3", value: "WPA" }),
             Form.Dropdown.Item({ title: "WEP", value: "WEP" }),
-            Form.Dropdown.Item({ title: "无密码", value: "nopass" })
+            Form.Dropdown.Item({ title: t("wifiSecNoPass"), value: "nopass" })
         ]),
-        Form.Checkbox({ id: "hidden", title: "隐藏网络", label: "该网络不广播名称", value: hidden, onChange: (v) => setHidden(v) })
+        Form.Checkbox({ id: "hidden", title: t("wifiHiddenTitle"), label: t("wifiHiddenLabel"), value: hidden, onChange: (v) => setHidden(v) })
     ]);
 }
 export default function QrCodeCommand({ initialWifi = false } = {}) {
+    useLocale();
     const [searchText, setSearchText] = useState("");
     const [level, setLevel] = useState("M");
     const [history, setHistory] = useState([]);
@@ -116,7 +132,7 @@ export default function QrCodeCommand({ initialWifi = false } = {}) {
         getQrHistory()
             .then((items) => { if (!cancelled)
             setHistory(items); })
-            .catch((err) => showToast(Toast.Style.Failure, "读取历史失败", err instanceof Error ? err.message : String(err)))
+            .catch((err) => showToast(Toast.Style.Failure, t("readHistoryFailed"), err instanceof Error ? err.message : String(err)))
             .finally(() => { if (!cancelled)
             setLoaded(true); });
         return () => { cancelled = true; };
@@ -129,41 +145,41 @@ export default function QrCodeCommand({ initialWifi = false } = {}) {
             return true;
         }
         catch (err) {
-            await showToast(Toast.Style.Failure, "保存失败", err instanceof Error ? err.message : String(err));
+            await showToast(Toast.Style.Failure, t("saveFailed"), err instanceof Error ? err.message : String(err));
             return false;
         }
     };
     const copyImage = async (content, lv, remember) => {
         try {
             await copyPngToClipboard(generateQrPngBase64(content, lv));
-            await showToast(Toast.Style.Success, "已复制二维码图片", "可以直接粘贴到聊天或文档里");
+            await showToast(Toast.Style.Success, t("copiedImgTitle"), t("copiedImgDesc"));
             if (remember)
                 await run(() => saveQrItem(newItem(content, lv)), "");
         }
         catch (err) {
-            await showToast(Toast.Style.Failure, "复制图片失败", err instanceof Error ? err.message : String(err));
+            await showToast(Toast.Style.Failure, t("copyImgFailed"), err instanceof Error ? err.message : String(err));
         }
     };
     const saveFile = async (content, lv) => {
         try {
             const path = await savePngFile(generateQrPngBase64(content, lv), "qrcode.png");
             if (path)
-                await showToast(Toast.Style.Success, "已保存", path);
+                await showToast(Toast.Style.Success, t("savedToast"), path);
         }
         catch (err) {
-            await showToast(Toast.Style.Failure, "保存图片失败", err instanceof Error ? err.message : String(err));
+            await showToast(Toast.Style.Failure, t("saveImgFailed"), err instanceof Error ? err.message : String(err));
         }
     };
     const fromClipboard = async () => {
         const text = (await Clipboard.readText()).trim();
         if (!text) {
-            await showToast(Toast.Style.Failure, "剪贴板里没有文字");
+            await showToast(Toast.Style.Failure, t("clipboardEmpty"));
             return;
         }
         setSearchText(text);
     };
     const openWifiForm = () => push(() => WifiQrForm({ onCreated: async (item) => {
-            const saved = await run(() => saveQrItem(item), "已生成 Wi-Fi 二维码");
+            const saved = await run(() => saveQrItem(item), t("wifiCreatedToast"));
             if (saved) {
                 setSearchText(item.content);
                 setLevel(item.level);
@@ -176,20 +192,20 @@ export default function QrCodeCommand({ initialWifi = false } = {}) {
     }, [initialWifi]);
     const clearAll = async () => {
         const ok = await confirmAlert({
-            title: `清空 ${history.length} 条二维码历史？`,
-            message: "收藏的也会一起清空，无法恢复。",
-            primaryAction: { title: "清空", style: "destructive" },
-            dismissAction: { title: "取消" }
+            title: t("clearConfirmTitle", { count: history.length }),
+            message: t("clearConfirmMsg"),
+            primaryAction: { title: t("clearConfirmBtn"), style: "destructive" },
+            dismissAction: { title: t("cancel") }
         });
         if (!ok)
             return;
         try {
             await clearQrHistory();
             setHistory([]);
-            await showToast(Toast.Style.Success, "已清空历史");
+            await showToast(Toast.Style.Success, t("clearedToast"));
         }
         catch (err) {
-            await showToast(Toast.Style.Failure, "清空失败", err instanceof Error ? err.message : String(err));
+            await showToast(Toast.Style.Failure, t("clearFailed"), err instanceof Error ? err.message : String(err));
         }
     };
     // 生成预览；内容超出二维码容量时给出明确提示。编码结果走模块级缓存，避免每次按键为全部历史重新编码
@@ -200,36 +216,36 @@ export default function QrCodeCommand({ initialWifi = false } = {}) {
             : { ok: false, error: p.error, detail: List.Item.Detail({ markdown: "" }) };
     };
     const globalActions = [
-        Action({ title: "用剪贴板内容生成", icon: Icon.Clipboard, onAction: fromClipboard }),
-        Action({ title: "生成 Wi-Fi 二维码…", icon: Icon.Shield, onAction: openWifiForm })
+        Action({ title: t("fromClipboard"), icon: Icon.Clipboard, onAction: fromClipboard }),
+        Action({ title: t("openWifiForm"), icon: Icon.Shield, onAction: openWifiForm })
     ];
     const sections = [];
     const text = searchText.trim();
     if (text) {
         const p = preview(text, level);
-        sections.push(List.Section({ title: "当前输入" }, [
+        sections.push(List.Section({ title: t("sectionCurrent") }, [
             p.ok
                 ? List.Item({
                     id: "live",
                     title: text.length > 60 ? text.slice(0, 60) + "…" : text,
-                    subtitle: "按回车复制二维码图片",
+                    subtitle: t("liveSubtitle"),
                     icon: detectQrContentType(text).icon,
                     detail: p.detail,
-                    actions: ActionPanel({ title: "二维码" }, [
-                        Action({ title: "复制二维码图片", icon: Icon.CopyClipboard, onAction: () => copyImage(text, level, true) }),
-                        Action({ title: "保存到历史", icon: Icon.Star, onAction: async () => { await run(() => saveQrItem(newItem(text, level)), "已保存到历史"); } }),
-                        Action({ title: "另存为 PNG…", icon: Icon.Download, onAction: () => saveFile(text, level) }),
+                    actions: ActionPanel({ title: t("qrPanelTitle") }, [
+                        Action({ title: t("copyQrImg"), icon: Icon.CopyClipboard, onAction: () => copyImage(text, level, true) }),
+                        Action({ title: t("saveToHistory"), icon: Icon.Star, onAction: async () => { await run(() => saveQrItem(newItem(text, level)), t("savedToHistoryToast")); } }),
+                        Action({ title: t("saveAsPng"), icon: Icon.Download, onAction: () => saveFile(text, level) }),
                         ...globalActions
                     ])
                 })
-                : List.Item({ id: "live-error", title: p.error, subtitle: "请缩短内容，或把纠错等级调低", icon: Icon.ExclamationMark, detail: p.detail })
+                : List.Item({ id: "live-error", title: p.error, subtitle: t("liveErrorSub"), icon: Icon.ExclamationMark, detail: p.detail })
         ]));
     }
     else {
-        sections.push(List.Section({ title: "开始" }, [
+        sections.push(List.Section({ title: t("sectionStart") }, [
             // 引导条目不带详情：首屏没有可预览的二维码，避免右侧留出半屏空白
-            List.Item({ id: "hint", title: "在上方输入网址或文字，实时生成二维码", subtitle: "回车用剪贴板里的文字生成", icon: Icon.QrCode, actions: ActionPanel({ title: "开始" }, globalActions) }),
-            List.Item({ id: "wifi", title: "生成 Wi-Fi 二维码", subtitle: "手机扫码直接连网", icon: Icon.Shield, actions: ActionPanel({ title: "开始" }, [globalActions[1], globalActions[0]]) })
+            List.Item({ id: "hint", title: t("hintTitle"), subtitle: t("hintSub"), icon: Icon.QrCode, actions: ActionPanel({ title: t("sectionStart") }, globalActions) }),
+            List.Item({ id: "wifi", title: t("wifiItemTitle"), subtitle: t("wifiItemSub"), icon: Icon.Shield, actions: ActionPanel({ title: t("sectionStart") }, [globalActions[1], globalActions[0]]) })
         ]));
     }
     const q = text.toLowerCase();
@@ -237,7 +253,7 @@ export default function QrCodeCommand({ initialWifi = false } = {}) {
         .filter((it) => !q || it.content.toLowerCase().includes(q) || it.title.toLowerCase().includes(q))
         .sort((a, b) => Number(Boolean(b.favorite)) - Number(Boolean(a.favorite)));
     if (matches.length > 0) {
-        sections.push(List.Section({ title: `历史（${history.length}）` }, matches.map((it) => List.Item({
+        sections.push(List.Section({ title: t("sectionHistory", { count: history.length }) }, matches.map((it) => List.Item({
             id: it.id,
             title: it.title,
             subtitle: it.title !== it.content ? it.content : undefined,
@@ -245,12 +261,12 @@ export default function QrCodeCommand({ initialWifi = false } = {}) {
             accessories: [{ text: it.createdAt }],
             detail: preview(it.content, it.level).detail,
             actions: ActionPanel({ title: it.title }, [
-                Action({ title: "复制二维码图片", icon: Icon.CopyClipboard, onAction: () => copyImage(it.content, it.level, false) }),
-                Action({ title: "复制内容文字", icon: Icon.Clipboard, onAction: async () => { await Clipboard.copy(it.content); await showToast(Toast.Style.Success, "已复制内容"); } }),
-                Action({ title: "另存为 PNG…", icon: Icon.Download, onAction: () => saveFile(it.content, it.level) }),
-                Action({ title: it.favorite ? "取消收藏" : "收藏", icon: Icon.Star, onAction: async () => { await run(() => toggleFavoriteQrItem(it.id), ""); } }),
-                Action({ title: "删除", icon: Icon.Trash, onAction: async () => { await run(() => deleteQrItem(it.id), "已删除"); } }),
-                Action({ title: "清空历史", icon: Icon.Trash, onAction: clearAll })
+                Action({ title: t("copyQrImg"), icon: Icon.CopyClipboard, onAction: () => copyImage(it.content, it.level, false) }),
+                Action({ title: t("copyTextAction"), icon: Icon.Clipboard, onAction: async () => { await Clipboard.copy(it.content); await showToast(Toast.Style.Success, t("copiedTextToast")); } }),
+                Action({ title: t("saveAsPng"), icon: Icon.Download, onAction: () => saveFile(it.content, it.level) }),
+                Action({ title: it.favorite ? t("unfavorite") : t("favorite"), icon: Icon.Star, onAction: async () => { await run(() => toggleFavoriteQrItem(it.id), ""); } }),
+                Action({ title: t("deleteAction"), icon: Icon.Trash, onAction: async () => { await run(() => deleteQrItem(it.id), t("deletedToast")); } }),
+                Action({ title: t("clearHistoryAction"), icon: Icon.Trash, onAction: clearAll })
             ])
         }))));
     }
@@ -261,10 +277,10 @@ export default function QrCodeCommand({ initialWifi = false } = {}) {
         try {
             const decoded = (await decodeQrImageFile(targetPath)).trim();
             setSearchText(decoded);
-            await showToast(Toast.Style.Success, "已识别二维码内容", decoded.slice(0, 60));
+            await showToast(Toast.Style.Success, t("decodedToast"), decoded.slice(0, 60));
         }
         catch (err) {
-            await showToast(Toast.Style.Failure, "识别二维码图片失败", err instanceof Error ? err.message : String(err));
+            await showToast(Toast.Style.Failure, t("decodeFailedToast"), err instanceof Error ? err.message : String(err));
         }
     }, {
         extensions: [".png", ".jpg", ".jpeg", ".webp", ".bmp", ".gif"],
@@ -277,14 +293,14 @@ export default function QrCodeCommand({ initialWifi = false } = {}) {
     });
     return List({
         ...fileInputProps,
-        navigationTitle: "二维码生成",
+        navigationTitle: t("navTitle"),
         // 只有在有二维码可预览（当前输入或历史）时才显示右侧详情栏
         isShowingDetail: Boolean(text) || matches.length > 0,
-        searchBarPlaceholder: "输入网址或文字，实时生成二维码…",
+        searchBarPlaceholder: t("searchPlaceholder"),
         searchText,
         onSearchTextChange: (v) => setSearchText(v),
-        searchBarAccessory: List.Dropdown({ tooltip: "纠错等级", value: level, onChange: (v) => setLevel(v) }, ["L", "M", "Q", "H"].map((l) => List.Dropdown.Item({ title: `纠错 ${LEVEL_LABEL[l]}`, value: l }))),
-        actions: ActionPanel({ title: "二维码" }, globalActions)
+        searchBarAccessory: List.Dropdown({ tooltip: t("ecTooltip"), value: level, onChange: (v) => setLevel(v) }, ["L", "M", "Q", "H"].map((l) => List.Dropdown.Item({ title: t("ecOption", { level: levelLabel(l) }), value: l }))),
+        actions: ActionPanel({ title: t("qrPanelTitle") }, globalActions)
     }, sections);
 }
 export const commands = {

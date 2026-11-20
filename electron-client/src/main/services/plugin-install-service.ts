@@ -24,6 +24,7 @@ import {
 } from './plugin-data-recovery-service.js'
 import { isCommonPluginRoot } from './common-plugin-registry.js'
 import { PluginStateService } from './plugin-state-service.js'
+import { resolveNormalizedRuntimePlatformAndArch } from '../platform/runtime-architecture.js'
 
 const PLUGIN_ARCHIVE_LIMIT = 100 * 1024 * 1024
 const LIBRARY_ARCHIVE_LIMIT = 500 * 1024 * 1024
@@ -101,6 +102,10 @@ export interface PluginInstallServiceOptions {
   libraryMetadata?: LibraryMetadataSource
   renameImpl?: typeof fs.rename
   runtimeTarget?: PluginRuntimeIdentity
+  /** 宿主版本号（用于构造请求 User-Agent） */
+  appVersion?: string
+  /** 当前进程是否运行在 ARM64 转译环境（来自 Electron app.runningUnderARM64Translation） */
+  runningUnderARM64Translation?: boolean | null
   hostMaximumSdkContractVersion?: number
   referenceRuntimeReady?: () => boolean
   macNativeCatalogLookup?: MacNativeCatalogLookup
@@ -271,6 +276,7 @@ export class PluginInstallService implements PluginDirectoryProvider {
   readonly #rename: typeof fs.rename
   readonly #preparePluginReplace: PluginInstallServiceOptions['preparePluginReplace']
   readonly #runtimeTarget: PluginRuntimeIdentity
+  readonly #userAgent: string
   readonly #hostMaximumSdkContractVersion: SdkApiLane
   readonly #referenceRuntimeReady: () => boolean
   readonly #macNativeCatalogLookup: MacNativeCatalogLookup | undefined
@@ -310,6 +316,15 @@ export class PluginInstallService implements PluginDirectoryProvider {
       runtime: 'electron',
       arch: process.arch
     }
+    const appVersion = (options.appVersion ?? '').trim().replace(/^v/i, '') || '0.0.0'
+    const { platform, arch } = resolveNormalizedRuntimePlatformAndArch({
+      platform: this.#runtimeTarget.platform,
+      processArch: this.#runtimeTarget.arch,
+      runningUnderARM64Translation: options.runningUnderARM64Translation ?? null,
+      processorArchitecture: process.env.PROCESSOR_ARCHITECTURE,
+      processorArchitew6432: process.env.PROCESSOR_ARCHITEW6432
+    })
+    this.#userAgent = `ZTools-Electron/${appVersion} (${platform}; ${arch})`
     this.#pluginState = options.state ?? new PluginStateService(dataRoot)
     this.#analytics = options.analytics
     this.#ready = this.#initialize()
@@ -1000,7 +1015,7 @@ export class PluginInstallService implements PluginDirectoryProvider {
           method: 'GET',
           redirect: 'manual',
           signal: combined,
-          headers: { 'User-Agent': 'ZTools-Electron' }
+          headers: { 'User-Agent': this.#userAgent }
         })
       } catch (error) {
         requireNotAborted(signal)
